@@ -21,10 +21,15 @@ const S: Settings = {
 };
 const NOW = new Date('2026-07-10T12:00:00Z');
 
-function input(over: Partial<Parameters<typeof decideAutoReply>[0]> = {}, headers = 'From: a@ext.example\r\nSubject: Hi\r\n\r\n') {
+// The recipient is addressed in To: unless a case overrides the recipient fields (RFC 3834 §2).
+function input(
+  over: Partial<Parameters<typeof decideAutoReply>[0]> = {},
+  headers = 'From: a@ext.example\r\nSubject: Hi\r\n\r\n',
+  recipientFields = 'To: Bob <bob@local.example>\r\n',
+) {
   return {
     settings: S, envelopeFrom: 'a@ext.example', ownAddresses: ['bob@local.example', 'info@local.example'],
-    headers: parseHeaderBlock(headers), deliveredToJunk: false, senderIsInternal: false, senderIsContact: false, now: NOW,
+    headers: parseHeaderBlock(recipientFields + headers), deliveredToJunk: false, senderIsInternal: false, senderIsContact: false, now: NOW,
     ...over,
   };
 }
@@ -62,6 +67,10 @@ test('RFC 3834 decision table', () => {
     ['external only contacts, contact', input({ settings: { ...S, oofExternalOnlyContacts: true }, senderIsContact: true }), true],
     ['internal unaffected by external switch', input({ settings: { ...S, oofExternalEnabled: false }, senderIsInternal: true }), true],
     ['empty text', input({ settings: { ...S, oofExternal: '  ' } }), 'no external text'],
+    ['only Bcc (no recipient field)', input({}, 'Subject: Hi\r\n\r\n', 'To: undisclosed-recipients:;\r\n'), 'not addressed explicitly'],
+    ['list without List-* headers', input({}, 'Subject: Hi\r\n\r\n', 'To: all-staff@lists.example\r\n'), 'not addressed explicitly'],
+    ['alias in Cc', input({}, 'Subject: Hi\r\n\r\n', 'To: x@ext.example\r\nCc: "Info" <INFO@local.example>\r\n'), true],
+    ['Resent-To', input({}, 'Subject: Hi\r\n\r\n', 'To: x@ext.example\r\nResent-To: bob@local.example\r\n'), true],
   ];
   for (const [name, i, expected] of cases) {
     const d = decideAutoReply(i);

@@ -1,137 +1,181 @@
 /**
  * DSN (Delivery Status Notification, RFC 3464) — bounce generator.
  *
- * When a mail could not be delivered after all retries are exhausted (or on an
- * immediate 5xx), the mail server sends a standardized bounce mail back to
- * MAIL FROM. Without DSN, senders would never learn that their mail did not
- * arrive — the gold standard for every RFC-compliant MTA.
+ * When mail that was accepted with 250 cannot be delivered (permanent reply,
+ * retries exhausted), the server MUST notify the envelope sender (RFC 5321
+ * §6.1). The bounce is a multipart/report with a message/delivery-status part,
+ * sent with a null reverse-path so it can never bounce again.
  */
 
 import { storeInboundMessage } from '../handlers/message.js';
 import { createLogger } from '@coremail/core';
 import { prisma } from '@coremail/storage';
+import { formatRfc5322Date } from '../handlers/trace.js';
 
 const log = createLogger('smtp:dsn');
 
 /**
- * Heuristic: given an error string (e.g. nodemailer exception), extract
- * the SMTP reply code if present, otherwise null.
+ * Extracts the SMTP reply code of a delivery error. Only nodemailer's
+ * `responseCode` or a reply code at the very start of the message counts —
+ * a port number in a network error ("connect ETIMEDOUT 10.0.0.5:587") is not
+ * a reply code. Without a reply code the failure is transient.
  */
 export function extractSmtpCode(err: unknown): { code: number | null; isPermanent: boolean } {
-  const msg = err instanceof Error ? err.message : String(err);
-  // Look for a 3-digit SMTP code (common patterns):
-  //   "550 5.1.1 User unknown"
-  //   "421 4.7.0 Try again later"
-  //   "smtp: 553 sorry, ..."
-  const m = /\b([2-5])(\d{2})\b/.exec(msg);
-  if (!m) return { code: null, isPermanent: false };
-  const code = parseInt(m[0]!, 10);
-  // 5xx = permanent (RFC 5321 §4.2.1)
-  // 4xx = transient (try again)
-  // 2xx = success (should not occur here)
-  const isPermanent = code >= 500 && code < 600;
-  return { code, isPermanent };
+  const rc = (err as { responseCode?: unknown } | null)?.responseCode;
+  let code: number | null = typeof rc === 'number' && rc >= 200 && rc < 600 ? rc : null;
+  if (code === null) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const m = /^\s*([245]\d\d)(?:[ -]|$)/.exec(msg);
+    code = m ? parseInt(m[1]!, 10) : null;
+  }
+  return { code, isPermanent: code !== null && code >= 500 };
+}
+
+/** One failed recipient of a DSN. */
+export interface DsnRecipient {
+  rcpt:       string;
+  /** RFC 3463 enhanced status code, e.g. "5.1.1". */
+  status:     string;
+  /** Remote reply / local reason (one line). */
+  diagnostic: string;
+  /** Reply came from a remote SMTP server ("smtp" diagnostic type). */
+  remote?:    boolean;
+}
+
+export interface DsnOptions {
+  originalFrom:      string;
+  originalTo:        string[];
+  originalSubject:   string;
+  originalMessageId: string | null;
+  failureReason:     string;
+  smtpCode:          number | null;
+  serverHostname:    string;
+  /**
+   * Per-recipient results. When omitted every `originalTo` entry is reported
+   * with `failureReason` / `smtpCode`.
+   */
+  recipients?:       DsnRecipient[];
+  /**
+   * Also deliver the DSN to an EXTERNAL sender (via the outbound queue with a
+   * null envelope sender). Required for every failure after the server
+   * answered 250 (RFC 5321 §6.1).
+   */
+  deliverExternal?:  boolean;
+}
+
+function oneLine(text: string): string {
+  return text.replace(/[\r\n]+/g, ' ').trim();
+}
+
+/** RFC 2047 encoded-word for non-ASCII header text. */
+export function encodeHeaderWord(text: string): string {
+  const clean = oneLine(text);
+  // eslint-disable-next-line no-control-regex
+  if (/^[\x20-\x7e]*$/.test(clean)) return clean;
+  return `=?UTF-8?B?${Buffer.from(clean, 'utf8').toString('base64')}?=`;
+}
+
+function statusFromCode(code: number | null): string {
+  if (code === null) return '5.0.0';
+  const klass = Math.floor(code / 100);
+  return klass === 4 || klass === 5 ? `${klass}.0.0` : '5.0.0';
+}
+
+/** Pure: builds the RFC 3464 report (CRLF line endings). */
+export function buildDsnMessage(opts: DsnOptions, now = new Date(), random = Math.random): Buffer {
+  const date = formatRfc5322Date(now);
+  const nonce = `${now.getTime()}-${random().toString(36).slice(2, 10)}`;
+  const dsnMessageId = `<dsn-${nonce}@${opts.serverHostname}>`;
+  const boundary = `dsn-boundary-${nonce}`;
+  const recipients: DsnRecipient[] = opts.recipients ?? opts.originalTo.map((rcpt) => ({
+    rcpt,
+    status: statusFromCode(opts.smtpCode),
+    diagnostic: opts.smtpCode ? `${opts.smtpCode} ${oneLine(opts.failureReason)}` : oneLine(opts.failureReason),
+    remote: opts.smtpCode !== null,
+  }));
+
+  const human = [
+    'This is the mail delivery system. Your message could not be delivered',
+    'to one or more recipients:',
+    '',
+    ...recipients.map((r) => `  <${oneLine(r.rcpt)}>: ${oneLine(r.diagnostic)}`),
+    '',
+    `Reporting server: ${opts.serverHostname}`,
+    '',
+  ].join('\r\n');
+
+  // RFC 3464 §2.2: per-message fields, a blank line, then one block per
+  // recipient (§2.3). Only the failed recipients are listed.
+  const report = [
+    `Reporting-MTA: dns; ${opts.serverHostname}`,
+    `Arrival-Date: ${date}`,
+    '',
+    recipients.map((r) => [
+      `Final-Recipient: rfc822; ${oneLine(r.rcpt)}`,
+      'Action: failed',
+      `Status: ${r.status}`,
+      `Diagnostic-Code: ${r.remote ? 'smtp' : 'x-local'}; ${oneLine(r.diagnostic)}`,
+    ].join('\r\n')).join('\r\n\r\n'),
+    '',
+  ].join('\r\n');
+
+  const subject = encodeHeaderWord(`Undelivered Mail Returned to Sender: ${opts.originalSubject || '(no subject)'}`);
+  const refs = opts.originalMessageId
+    ? [`In-Reply-To: ${oneLine(opts.originalMessageId)}`, `References: ${oneLine(opts.originalMessageId)}`]
+    : [];
+
+  const raw = [
+    `From: Mail Delivery System <MAILER-DAEMON@${opts.serverHostname}>`,
+    `To: <${oneLine(opts.originalFrom)}>`,
+    `Subject: ${subject}`,
+    `Date: ${date}`,
+    `Message-ID: ${dsnMessageId}`,
+    ...refs,
+    'MIME-Version: 1.0',
+    `Content-Type: multipart/report; report-type=delivery-status; boundary="${boundary}"`,
+    'Auto-Submitted: auto-replied',
+    '',
+    `--${boundary}`,
+    'Content-Type: text/plain; charset=utf-8',
+    'Content-Transfer-Encoding: 8bit',
+    '',
+    human,
+    `--${boundary}`,
+    'Content-Type: message/delivery-status',
+    '',
+    report,
+    `--${boundary}--`,
+    '',
+  ].join('\r\n');
+  return Buffer.from(raw, 'utf8');
 }
 
 /**
- * Generates an RFC 3464-compliant bounce mail and delivers it locally via
- * storeInboundMessage() to MAIL FROM (if local) or discards it
- * (if external — otherwise bounce loops would be possible; external senders
- * usually get the info from the MX server via synchronous reject anyway).
+ * Sends a bounce to MAIL FROM: local senders get it stored directly, external
+ * senders only with `deliverExternal` (via the outbound queue, null sender).
  *
- * If MAIL FROM is empty (= already a bounce mail!) → null sender, do not
- * generate a new bounce (RFC 5321 §6.1, "double-bounce prevention").
+ * If MAIL FROM is empty (= already a bounce mail!) no new bounce is generated
+ * (RFC 5321 §6.1, "double-bounce prevention").
  */
-export async function sendDsnBounce(opts: {
-  originalFrom:     string;
-  originalTo:       string[];
-  originalSubject:  string;
-  originalMessageId: string | null;
-  failureReason:    string;
-  smtpCode:         number | null;
-  serverHostname:   string;
-  /**
-   * Also deliver the DSN to an EXTERNAL sender (via the outbound queue with a
-   * null envelope sender). Used for post-acceptance rejects (transport rule
-   * `reject` after SMTP already answered 250) where no MX-side bounce exists.
-   */
-  deliverExternal?: boolean;
-}): Promise<void> {
+export async function sendDsnBounce(opts: DsnOptions): Promise<void> {
   // RFC 5321 §6.1: no bounce for empty MAIL FROM (= "<>" bounce mail itself)
   if (!opts.originalFrom || opts.originalFrom === '<>') {
     log.info({ originalTo: opts.originalTo }, 'DSN suppressed: empty MAIL FROM (double-bounce protection)');
     return;
   }
 
-  // Only to local recipients → for external ones the MX bounce is more reliable
-  const [, domain] = opts.originalFrom.toLowerCase().split('@');
-  if (!domain) return;
+  const domain = opts.originalFrom.slice(opts.originalFrom.lastIndexOf('@') + 1).toLowerCase();
+  if (!opts.originalFrom.includes('@') || !domain) return;
   const localDomain = await prisma.domain.findFirst({
     where: { name: domain, active: true },
     select: { id: true },
   });
   if (!localDomain && !opts.deliverExternal) {
-    log.info({ to: opts.originalFrom }, 'DSN suppressed: external sender (MX server delivers its own bounce)');
+    log.info({ to: opts.originalFrom }, 'DSN suppressed: external sender of a message that was never accepted here');
     return;
   }
 
-  const date = new Date().toUTCString();
-  const dsnMessageId = `<dsn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@${opts.serverHostname}>`;
-  const codeLine = opts.smtpCode ? `${opts.smtpCode}` : 'unbekannt';
-  const recipients = opts.originalTo.join(', ');
-
-  // multipart/report format (RFC 3464)
-  const boundary = `dsn-boundary-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-  const subject = `Unzustellbar: ${opts.originalSubject || '(kein Betreff)'}`;
-  const refsLine = opts.originalMessageId ? `References: ${opts.originalMessageId}\r\nIn-Reply-To: ${opts.originalMessageId}\r\n` : '';
-
-  const humanReadable =
-`Ihre Nachricht konnte nicht zugestellt werden.
-
-  Empfänger:        ${recipients}
-  Fehlercode:       ${codeLine}
-  Fehlermeldung:    ${opts.failureReason}
-  Zeitpunkt:        ${date}
-
-Diese Nachricht wurde nach mehreren erfolglosen Zustellversuchen vom Mailserver
-${opts.serverHostname} automatisch generiert. Bitte kontaktieren Sie den
-Empfänger über einen alternativen Weg oder versuchen Sie die Adresse zu prüfen.
-
-— CoreMail Mail Delivery System
-`;
-
-  const reportPart =
-`Reporting-MTA: dns; ${opts.serverHostname}
-${opts.originalMessageId ? `Original-Message-ID: ${opts.originalMessageId}` : ''}
-Arrival-Date: ${date}
-
-${opts.originalTo.map((rcpt) => `Final-Recipient: rfc822; ${rcpt}
-Action: failed
-Status: ${opts.smtpCode ? `${Math.floor(opts.smtpCode / 100)}.${Math.floor((opts.smtpCode % 100) / 10)}.${opts.smtpCode % 10}` : '5.0.0'}
-${opts.smtpCode ? `Diagnostic-Code: smtp; ${opts.smtpCode} ${opts.failureReason}` : `Diagnostic-Code: ${opts.failureReason}`}`).join('\n\n')}
-`;
-
-  const raw =
-`From: Mail Delivery System <MAILER-DAEMON@${opts.serverHostname}>
-To: ${opts.originalFrom}
-Subject: ${subject}
-Date: ${date}
-Message-ID: ${dsnMessageId}
-${refsLine}MIME-Version: 1.0
-Content-Type: multipart/report; report-type=delivery-status; boundary="${boundary}"
-Auto-Submitted: auto-replied
-
---${boundary}
-Content-Type: text/plain; charset=utf-8
-Content-Transfer-Encoding: 8bit
-
-${humanReadable}
---${boundary}
-Content-Type: message/delivery-status
-
-${reportPart}
---${boundary}--
-`;
+  const raw = buildDsnMessage(opts);
 
   if (!localDomain) {
     try {
@@ -141,7 +185,7 @@ ${reportPart}
         messageId:  `dsn-${Date.now()}`,
         from:       '',                       // null sender (RFC 5321 §4.5.5)
         to:         [opts.originalFrom],
-        rawMessage: Buffer.from(raw, 'utf8').toString('base64'),
+        rawMessage: raw.toString('base64'),
       });
       log.info({ to: opts.originalFrom, code: opts.smtpCode }, 'DSN bounce enqueued to external sender');
     } catch (err) {
@@ -151,7 +195,7 @@ ${reportPart}
   }
 
   try {
-    await storeInboundMessage(Buffer.from(raw, 'utf8'), {
+    await storeInboundMessage(raw, {
       fromAddr: '',     // null sender for bounce (RFC 5321)
       rcptTo:   opts.originalFrom,
       toJunk:   false,

@@ -32,8 +32,24 @@ export interface SmtpHandlers {
    * session passes it, port 25 runs greylisting here instead of after DATA.
    */
   onRcptTo(to: string, from: string, authUser: AuthUser | null, ip?: string): Promise<string | null>;
-  /** Called after DATA terminator — throw to signal temporary failure */
-  onMessage(raw: Buffer, from: string, to: string[], authUser: AuthUser | null, ip: string): Promise<void>;
+  /**
+   * Called after DATA terminator — throw to signal temporary failure.
+   * `meta` (session trace data for the `Received:` header) is optional for
+   * backwards compatibility; SmtpSession always passes it.
+   */
+  onMessage(raw: Buffer, from: string, to: string[], authUser: AuthUser | null, ip: string, meta?: MessageMeta): Promise<void>;
+}
+
+/** Session data a handler needs for the trace header (RFC 5321 §4.4). */
+export interface MessageMeta {
+  /** Argument of EHLO/HELO as sent by the client. */
+  helo: string;
+  /** RFC 3848 "with" keyword: SMTP, ESMTP, ESMTPS, ESMTPA, ESMTPSA. */
+  protocol: 'SMTP' | 'ESMTP' | 'ESMTPS' | 'ESMTPA' | 'ESMTPSA';
+  /** Our own host name (220 greeting / EHLO). */
+  hostname: string;
+  /** Session id (trace header `id` clause, logs). */
+  sessionId: string;
 }
 
 /**
@@ -64,6 +80,9 @@ export const DEFAULT_ESMTP_EXTENSIONS: EsmtpExtensions = {
   //   CHUNKING (RFC 3030) — BDAT command is not recognized by the parser
   authCramMd5: false, smtputf8: false, dsn: false, chunking: false,
 };
+
+/** Bare `RCPT TO:<Postmaster>` (RFC 5321 §4.1.1.3) is passed to the handlers as this value. */
+export const BARE_POSTMASTER = 'postmaster';
 
 export interface SmtpSessionConfig {
   hostname: string;

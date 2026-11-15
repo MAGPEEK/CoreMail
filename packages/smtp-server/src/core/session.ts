@@ -16,16 +16,20 @@ import net from 'node:net';
 import tls from 'node:tls';
 import crypto from 'node:crypto';
 import { createLogger } from '@coremail/core';
-import type { SmtpState, AuthMechanism, AuthUser, Transaction, SmtpSessionConfig } from './types.js';
+import type { SmtpState, AuthMechanism, AuthUser, Transaction, SmtpSessionConfig, MessageMeta } from './types.js';
 import { DEFAULT_ESMTP_EXTENSIONS } from './types.js';
 import { smtpLiveSessions } from './live-sessions.js';
+import { parseMailFrom, parseRcptTo, decodeBase64Strict, oneLine, isValidDomain } from './envelope.js';
 
 const log = createLogger('smtp:session');
 
 // RFC 5321 §4.5.3.2 timeouts (milliseconds)
 const T_GREETING = 5 * 60_000;
 const T_COMMAND  = 5 * 60_000;
+/** Data block timeout: restarted for every received chunk (§4.5.3.2.6). */
 const T_DATA     = 10 * 60_000;
+/** STARTTLS: the client must complete the TLS handshake within this time. */
+const T_TLS_HANDSHAKE = 60_000;
 
 // RFC 5321 §4.5.3.1 — max command line length (octets)
 const MAX_LINE = 1000;
@@ -44,26 +48,34 @@ const MAX_UNTERMINATED_COMMAND = 64 * 1024;
  * (RFC 3463 §2, RFC 2034 §4); 4yz must stay transient (RFC 5321 §4.2.1).
  */
 export function formatRejectReply(reject: string, permanentCode = 550, transientCode = 451): string {
-  const text = reject.trim();
-  if (/^[45]\d\d(?: |-|$)/.test(text)) return text;
+  // One reply line only: an embedded CR/LF would break the reply framing (§4.2).
+  const text = oneLine(reject);
+  if (/^[45]\d\d(?: |-|$)/.test(text)) return text.replace(/^(\d{3})-/, '$1 ');
   if (/^4\.\d{1,3}\.\d{1,3}\b/.test(text)) return `${transientCode} ${text}`;
   return `${permanentCode} ${text}`;
 }
 
 /**
- * Parse MAIL FROM:<addr> or RCPT TO:<addr> argument.
- * Returns:
- *  - lowercase normalized email string on success
- *  - '' (empty string) for null sender <> when prefix === 'FROM'
- *  - null on parse error
+ * RFC 5321 §4.2 / §4.3.1 — greeting = "220 " (Domain / address-literal) [SP textstring].
+ * A configured banner replaces the text; when it does not start with a domain
+ * of its own, the server host name is put in front so the greeting always
+ * identifies the host.
  */
-function parseAddress(arg: string, prefix: 'FROM' | 'TO'): string | null {
-  const match = /^(?:FROM|TO):\s*<([^>]*)>/i.exec(arg.trim());
-  if (!match) return null;
-  const addr = (match[1] ?? '').toLowerCase().trim();
-  if (addr === '' && prefix === 'FROM') return ''; // Null sender ok
-  if (addr && !addr.includes('@')) return null;
-  return addr || null;
+export function greetingText(hostname: string, bannerText?: string): string {
+  const banner = oneLine(bannerText ?? '');
+  if (!banner) return `${hostname} ESMTP CoreMail`;
+  const first = banner.split(' ')[0] ?? '';
+  return first.includes('.') && isValidDomain(first) ? banner : `${hostname} ${banner}`;
+}
+
+function sameIdentity(authzid: string, ...identities: string[]): boolean {
+  const wanted = authzid.trim().toLowerCase();
+  return identities.some((id) => id.trim().toLowerCase() === wanted);
+}
+
+/** True when a handler error carries an SMTP reply ("550 …" or an enhanced code "5.7.1 …"). */
+function isReplyError(message: string): boolean {
+  return /^[45]\d\d(?: |-|$)/.test(message) || /^[45]\.\d{1,3}\.\d{1,3}\b/.test(message);
 }
 
 /**
@@ -76,13 +88,15 @@ interface AuthCtx {
 }
 
 export class SmtpSession {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private socket: net.Socket | tls.TLSSocket;
   private readonly config: SmtpSessionConfig;
   private readonly id: string;
 
   private state: SmtpState = 'INIT';
+  /** EHLO/HELO argument (trace header). */
   private greeting: string = '';
+  /** The client greeted with EHLO (ESMTP) rather than HELO. */
+  private esmtpSession = false;
   private authUser: AuthUser | null = null;
   private authCtx: AuthCtx | null = null;
   private transaction: Transaction | null = null;
@@ -158,10 +172,7 @@ export class SmtpSession {
     });
 
     this.resetTimer(T_GREETING);
-    // RFC 5321 §4.2 — 220 Greeting: "220 <domain> <text>"
-    // bannerText overrides the default text when configured in the admin panel.
-    const bannerBody = this.config.bannerText?.trim() || `${this.config.hostname} ESMTP CoreMail`;
-    this.send(`220 ${bannerBody}`);
+    this.send(`220 ${greetingText(this.config.hostname, this.config.bannerText)}`);
   }
 
   // ─── Timer ──────────────────────────────────────────────────────────────────
@@ -216,6 +227,9 @@ export class SmtpSession {
 
   private onData(chunk: string): void {
     if (this.closing) return;
+    // RFC 5321 §4.5.3.2.6: the data block timeout runs per received chunk, not
+    // for the whole message — a slow but progressing upload must not time out.
+    if (this.inData) this.resetTimer(T_DATA);
     this.lineBuffer += chunk;
 
     while (true) {
@@ -291,8 +305,9 @@ export class SmtpSession {
       return;
     }
 
-    // Dot-stuffing: remove leading extra dot (RFC 5321 §4.5.2)
-    const actual = line.startsWith('..') ? line.slice(1) : line;
+    // Transparency (RFC 5321 §4.5.2): the first character of a line that starts
+    // with a period is deleted — not only for "..".
+    const actual = line.startsWith('.') ? line.slice(1) : line;
     const raw = Buffer.from(actual + '\r\n', 'binary');
 
     if (this.transaction) {
@@ -325,6 +340,7 @@ export class SmtpSession {
     const to = [...tx.rcptTo];
     const authUser = this.authUser;
     const ip = this.ip;
+    const meta = this.messageMeta();
 
     // Reset transaction state before calling handler (handler may take time)
     this.transaction = null;
@@ -332,21 +348,26 @@ export class SmtpSession {
     this.resetTimer(T_COMMAND);
 
     try {
-      await this.config.handlers.onMessage(raw, from, to, authUser, ip);
+      await this.config.handlers.onMessage(raw, from, to, authUser, ip, meta);
       this.send('250 2.0.0 OK');
       log.info({ id: this.id, from, rcpt: to, size: raw.length }, 'Message accepted');
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Temporary failure';
-      // If the error message starts with its own 4yz/5yz reply code, pass it
-      // through unchanged (a reply line carries exactly one code, RFC 5321 §4.2);
-      // a bare enhanced code keeps its class; anything else is a temporary 451.
-      if (/^[45]\d\d(?: |-|$)/.test(msg) || /^[45]\.\d{1,3}\.\d{1,3}\b/.test(msg)) {
-        this.send(formatRejectReply(msg, 554, 451));
-      } else {
-        this.send(`451 4.3.0 ${msg}`);
-      }
+      const msg = err instanceof Error ? err.message : '';
+      // A message that starts with its own 4yz/5yz reply code is a deliberate
+      // reply (a reply line carries exactly one code, RFC 5321 §4.2); a bare
+      // enhanced code keeps its class. Anything else is an internal error:
+      // a fixed 451 text, never the raw message (multi-line, internals).
+      this.send(isReplyError(msg) ? formatRejectReply(msg, 554, 451) : '451 4.3.0 Temporary local problem, try again later');
       log.error({ id: this.id, err }, 'onMessage handler error');
     }
+  }
+
+  /** Trace data for the Received: header (RFC 5321 §4.4, RFC 3848). */
+  private messageMeta(): MessageMeta {
+    const protocol: MessageMeta['protocol'] = !this.esmtpSession
+      ? 'SMTP'
+      : `ESMTP${this.tlsUpgraded ? 'S' : ''}${this.authUser ? 'A' : ''}` as MessageMeta['protocol'];
+    return { helo: this.greeting, protocol, hostname: this.config.hostname, sessionId: this.id };
   }
 
   // ─── Command dispatch ────────────────────────────────────────────────────────
@@ -382,13 +403,17 @@ export class SmtpSession {
       case 'EHLO':    this.enqueueCommand(() => this.handleEhlo(args)); break;
       case 'HELO':    this.enqueueCommand(() => this.handleHelo(args)); break;
       case 'AUTH':    this.enqueueCommand(() => this.handleAuth(args)); break;
-      case 'STARTTLS':this.enqueueCommand(() => this.handleStarttls()); break;
+      case 'STARTTLS':this.enqueueCommand(() => this.handleStarttls(args)); break;
       case 'MAIL':    this.enqueueCommand(() => this.handleMailFrom(args)); break;
       case 'RCPT':    this.enqueueCommand(() => this.handleRcptTo(args)); break;
       case 'DATA':    this.enqueueCommand(() => this.handleDataCommand()); break;
       case 'RSET':    this.enqueueCommand(() => this.handleRset()); break;
       case 'NOOP':    this.enqueueCommand(() => { this.send('250 2.0.0 OK'); }); break;
-      case 'VRFY':    this.enqueueCommand(() => { this.send('502 5.5.1 VRFY not supported'); }); break;
+      // RFC 5321 §3.5.3 / §7.3: VRFY is part of the minimum implementation; a
+      // server that does not verify addresses answers 252, never 502.
+      case 'VRFY':    this.enqueueCommand(() => {
+        this.send(args ? '252 2.5.0 Cannot VRFY user, but will accept message and attempt delivery' : '501 5.5.4 Syntax: VRFY <address>');
+      }); break;
       case 'EXPN':    this.enqueueCommand(() => { this.send('502 5.5.1 EXPN not supported'); }); break;
       case 'QUIT':    this.enqueueCommand(() => this.handleQuit()); break;
       default:
@@ -399,7 +424,13 @@ export class SmtpSession {
   // ─── EHLO ────────────────────────────────────────────────────────────────────
 
   private handleEhlo(clientName: string): void {
+    // RFC 5321 §4.1.1.1: ehlo = "EHLO" SP ( Domain / address-literal ) — mandatory.
+    if (!clientName) {
+      this.send('501 5.5.4 Syntax: EHLO <domain>');
+      return;
+    }
     this.greeting = clientName;
+    this.esmtpSession = true;
     this.transaction = null;
 
     const esmtp = this.config.esmtp ?? DEFAULT_ESMTP_EXTENSIONS;
@@ -446,7 +477,12 @@ export class SmtpSession {
   // ─── HELO ────────────────────────────────────────────────────────────────────
 
   private handleHelo(clientName: string): void {
+    if (!clientName) {
+      this.send('501 5.5.4 Syntax: HELO <domain>');
+      return;
+    }
     this.greeting = clientName;
+    this.esmtpSession = false;
     this.transaction = null;
     this.send(`250 ${this.config.hostname}`);
     this.state = 'READY';
@@ -507,10 +543,15 @@ export class SmtpSession {
     if (initialResponse && initialResponse !== '=') {
       // "AUTH LOGIN <base64 username>" — widespread client behaviour: continue
       // directly with the password prompt.
+      const username = decodeBase64Strict(initialResponse);
+      if (!username) {
+        this.send('501 5.5.2 Cannot decode response');
+        return;
+      }
       this.authCtx = {
         mechanism: 'LOGIN',
         step: 2,
-        username: Buffer.from(initialResponse, 'base64').toString('utf8'),
+        username: username.toString('utf8'),
       };
       this.state = 'AUTH_WAIT';
       this.send('334 UGFzc3dvcmQ6');
@@ -543,56 +584,51 @@ export class SmtpSession {
       this.state = 'READY';
       await this.verifyPlainCredentials(line);
     } else if (ctx.mechanism === 'LOGIN') {
+      // RFC 4954 §4: a response that is not valid base64 → 501, exchange ends.
+      const decoded = decodeBase64Strict(line);
+      if (!decoded) {
+        this.authCtx = null;
+        this.state = 'READY';
+        this.send('501 5.5.2 Cannot decode response');
+        return;
+      }
       if (ctx.step === 1) {
-        // Received username (base64)
-        try {
-          ctx.username = Buffer.from(line, 'base64').toString('utf8');
-        } catch {
-          ctx.username = line;
-        }
+        ctx.username = decoded.toString('utf8');
         ctx.step = 2;
         // "Password:"
         this.send('334 UGFzc3dvcmQ6');
       } else {
-        // Received password (base64)
         const username = ctx.username ?? '';
-        let password: string;
-        try {
-          password = Buffer.from(line, 'base64').toString('utf8');
-        } catch {
-          password = line;
-        }
         this.authCtx = null;
         this.state = 'READY';
-        await this.verifyCredentials(username, password);
+        await this.verifyCredentials(username, decoded.toString('utf8'));
       }
     }
   }
 
   private async verifyPlainCredentials(b64: string): Promise<void> {
-    try {
-      const decoded = Buffer.from(b64, 'base64').toString('utf8');
-      // Format: [authzid]\0authcid\0password
-      const parts = decoded.split('\0');
-      let username: string;
-      let password: string;
-      if (parts.length === 3) {
-        username = parts[1] ?? '';
-        password = parts[2] ?? '';
-      } else if (parts.length === 2) {
-        username = parts[0] ?? '';
-        password = parts[1] ?? '';
-      } else {
-        this.send('535 5.7.8 Authentication credentials invalid');
-        return;
-      }
-      await this.verifyCredentials(username, password);
-    } catch {
-      this.send('535 5.7.8 Authentication credentials invalid');
+    const decoded = decodeBase64Strict(b64);
+    if (!decoded) {
+      this.send('501 5.5.2 Cannot decode response');
+      return;
     }
+    // RFC 4616 §2: message = [authzid] UTF8NUL authcid UTF8NUL passwd — exactly
+    // three fields; anything else is a malformed message and fails.
+    const parts = decoded.toString('utf8').split('\0');
+    if (parts.length !== 3) {
+      this.send('535 5.7.8 Authentication credentials invalid');
+      return;
+    }
+    const [authzid = '', username = '', password = ''] = parts;
+    await this.verifyCredentials(username, password, authzid);
   }
 
-  private async verifyCredentials(username: string, password: string): Promise<void> {
+  /**
+   * @param authzid PLAIN authorization identity. CoreMail has no proxy
+   *   authorization: a non-empty authzid must name the authenticated user
+   *   (RFC 4616 §2 — otherwise the authentication fails).
+   */
+  private async verifyCredentials(username: string, password: string, authzid = ''): Promise<void> {
     if (!this.config.verifyCredentials) {
       this.send('535 5.7.8 Authentication credentials invalid');
       return;
@@ -608,6 +644,10 @@ export class SmtpSession {
           : '454 4.7.0 Temporary authentication failure');
         log.warn({ id: this.id, username, failure: result.failure }, 'SMTP auth not possible');
         if (result.failure === 'locked') this.countAuthFailure();
+      } else if (result && authzid && !sameIdentity(authzid, username, result.email)) {
+        this.send('535 5.7.8 Authentication credentials invalid');
+        log.warn({ id: this.id, username, authzid }, 'SMTP auth: authorization identity not allowed');
+        this.countAuthFailure();
       } else if (result) {
         this.authUser = result;
         this.registerLive(result, authStartedAt);
@@ -682,9 +722,15 @@ export class SmtpSession {
 
   // ─── STARTTLS ────────────────────────────────────────────────────────────────
 
-  private async handleStarttls(): Promise<void> {
+  private async handleStarttls(args = ''): Promise<void> {
     if (!this.config.tls || this.config.advertiseStarttls === false) {
       this.send('502 5.5.1 STARTTLS not supported');
+      return;
+    }
+
+    // RFC 3207 §4: STARTTLS takes no parameters → 501.
+    if (args) {
+      this.send('501 5.5.4 Syntax error (no parameters allowed)');
       return;
     }
 
@@ -705,25 +751,34 @@ export class SmtpSession {
     this.lineBuffer = '';
 
     this.send('220 2.0.0 Ready to start TLS');
-    this.clearTimer();
 
     // Remove existing data listener before upgrading
     this.socket.removeAllListeners('data');
 
-    const tlsSocket = new tls.TLSSocket(this.socket, {
+    const plainSocket = this.socket;
+    const tlsSocket = new tls.TLSSocket(plainSocket, {
       isServer: true,
       cert: this.config.tls.cert,
       key: this.config.tls.key,
       minVersion: 'TLSv1.2',
     });
 
+    // A client that never completes the handshake must not hold the
+    // connection forever (no SMTP reply is possible inside the handshake).
+    this.clearTimer();
+    this.timer = setTimeout(() => {
+      log.info({ id: this.id, ip: this.ip }, 'STARTTLS handshake timed out');
+      tlsSocket.destroy();
+      plainSocket.destroy();
+    }, T_TLS_HANDSHAKE);
+
     tlsSocket.once('secure', () => {
       // After TLS handshake: reset state per RFC 3207
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (this as any).socket = tlsSocket;
+      this.socket = tlsSocket;
       this.tlsUpgraded = true;
       this.state = 'INIT';
       this.greeting = '';
+      this.esmtpSession = false;
       this.transaction = null;
       this.lineBuffer = '';
       this.authUser = null;
@@ -759,22 +814,20 @@ export class SmtpSession {
       return;
     }
 
-    // Parse address (supports SIZE= param suffix)
-    const argsNorm = args.replace(/\s+SIZE=\d+\s*$/i, '').replace(/\s+[A-Z0-9]+=\S*\s*/gi, ' ').trim();
-    const addr = parseAddress(argsNorm, 'FROM');
-    if (addr === null) {
-      this.send('501 5.1.7 Bad sender address syntax');
+    // RFC 5321 §4.1.1.2: "MAIL FROM:" keyword, path, then only parameters of
+    // advertised extensions (SIZE, BODY, AUTH) — anything else is 555 (§4.1.1.11).
+    const parsed = parseMailFrom(args);
+    if (!parsed.ok) {
+      this.send(parsed.reply);
       return;
     }
+    const addr = parsed.address;
 
-    // Parse SIZE= parameter
-    const sizeMatch = /\bSIZE=(\d+)\b/i.exec(args);
-    if (sizeMatch) {
-      const declaredSize = parseInt(sizeMatch[1] ?? '0', 10);
-      if (declaredSize > this.config.maxSize) {
-        this.send('552 5.3.4 Message exceeds maximum size');
-        return;
-      }
+    // RFC 1870 §6.1: a declared SIZE above the limit is refused up front.
+    const declaredSize = Number(parsed.params.get('SIZE') ?? '0');
+    if (declaredSize > this.config.maxSize) {
+      this.send('552 5.3.4 Message exceeds maximum size');
+      return;
     }
 
     try {
@@ -813,13 +866,14 @@ export class SmtpSession {
       return;
     }
 
-    // Strip known RCPT TO params (NOTIFY, ORCPT, etc.)
-    const argsNorm = args.replace(/\s+[A-Z0-9]+=\S*\s*/gi, ' ').trim();
-    const addr = parseAddress(argsNorm, 'TO');
-    if (addr === null || addr === '') {
-      this.send('501 5.1.3 Bad recipient address syntax');
+    // RFC 5321 §4.1.1.3: "RCPT TO:" keyword, a valid mailbox or <Postmaster>;
+    // no RCPT parameters are implemented (DSN is not advertised) → 555.
+    const parsed = parseRcptTo(args);
+    if (!parsed.ok) {
+      this.send(parsed.reply);
       return;
     }
+    const addr = parsed.address;
 
     try {
       const reject = await this.config.handlers.onRcptTo(addr, tx.from, this.authUser, this.ip);

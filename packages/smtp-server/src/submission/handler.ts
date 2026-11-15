@@ -14,7 +14,9 @@ import {
 import { storeInboundMessage } from '../handlers/message.js';
 import { expandRecipients } from '../handlers/expand.js';
 import { enqueueOutbound } from '../outbound/queue.js';
-import type { SmtpHandlers, AuthUser } from '../core/types.js';
+import { buildReceivedHeader, formatRfc5322Date, prependHeader } from '../handlers/trace.js';
+import { deliverOnce, deliveryKey, redisDeliveryLedger } from '../handlers/delivery.js';
+import type { SmtpHandlers, AuthUser, MessageMeta } from '../core/types.js';
 
 // ── RFC 822 lightweight header extraction ─────────────────────────────────────
 function extractRawHeaders(raw: Buffer): { subject: string; messageId: string } {
@@ -29,28 +31,17 @@ function extractRawHeaders(raw: Buffer): { subject: string; messageId: string } 
 }
 
 /**
- * Prepend a RFC 6409 §6.1 compliant Received: header to a message.
- *
- * Format:
- *   Received: from [<ip>] (helo=<ehlo-domain>)
- *             by <our-hostname> (CoreMail) with ESMTPSA
- *             for <rcpt>; <RFC 2822 date>
- *
- * This traces the submission hop and is required by RFC 6409 §6.1.
+ * RFC 6409 §8.2–8.3: the MSA adds a missing `Date:` and `Message-ID:` (Gmail
+ * and others reject mail without a Message-ID).
  */
-function prependReceivedHeader(
-  raw: Buffer,
-  submittingIp: string,
-  authUserEmail: string,
-  ourHostname: string,
-  firstRcpt: string,
-): Buffer {
-  const date = new Date().toUTCString().replace('GMT', '+0000');
-  const header =
-    `Received: from [${submittingIp}] (authenticated user ${authUserEmail})\r\n` +
-    `\tby ${ourHostname} (CoreMail) with ESMTPSA\r\n` +
-    `\tfor <${firstRcpt}>; ${date}\r\n`;
-  return Buffer.concat([Buffer.from(header, 'utf8'), raw]);
+export function completeSubmissionHeaders(raw: Buffer, hostname: string, now = new Date()): Buffer {
+  const end = raw.indexOf('\r\n\r\n');
+  const head = raw.subarray(0, end >= 0 ? end : raw.length).toString('latin1');
+  const add: string[] = [];
+  if (!/^Date:/im.test(head)) add.push(`Date: ${formatRfc5322Date(now)}`);
+  if (!/^Message-ID:/im.test(head)) add.push(`Message-ID: <${crypto.randomUUID()}@${hostname}>`);
+  if (add.length === 0) return raw;
+  return Buffer.concat([Buffer.from(add.map((h) => `${h}\r\n`).join('')), raw]);
 }
 
 const log = createLogger('smtp:submission');
@@ -106,7 +97,9 @@ async function onMessage(
   to: string[],
   authUser: AuthUser | null,
   ip: string,
+  meta?: MessageMeta,
 ): Promise<void> {
+  const receivedRaw = raw;
   // Anti-spoofing on the header level: MAIL FROM was checked in onMailFrom, but
   // recipients display From:/Sender:. Both must name the user's own address, an
   // alias, or a Shared Mailbox with SEND_AS/FULL_ACCESS (SEND_ON_BEHALF only with
@@ -118,26 +111,31 @@ async function onMessage(
     throw new Error('550 5.7.1 From/Sender header not allowed for authenticated user');
   }
 
-  // RFC 6409 §6.1 — prepend Received: header for submission tracing
-  if (authUser && to.length > 0) {
-    try {
-      const settings = await prisma.serverSettings.findUnique({
-        where: { id: 'singleton' },
-        select: { publicHostname: true },
-      });
-      const hostname = settings?.publicHostname ?? process.env['MAIL_HOSTNAME'] ?? 'mail.localhost';
-      raw = prependReceivedHeader(raw, ip, authUser.email, hostname, to[0]!);
-    } catch {
-      // Non-fatal: continue without Received header if DB unavailable
-    }
-  }
+  const hostname = meta?.hostname ?? await prisma.serverSettings.findUnique({
+    where: { id: 'singleton' },
+    select: { publicHostname: true },
+  }).then((s) => s?.publicHostname ?? null).catch(() => null) ?? process.env['MAIL_HOSTNAME'] ?? 'mail.localhost';
+
+  // RFC 6409 §8.2–8.3: add a missing Date:/Message-ID:.
+  raw = completeSubmissionHeaders(raw, hostname);
+
+  // RFC 5321 §4.4 / RFC 6409 §6.1 — Received: for the submission hop. `for` only
+  // with a single recipient: with several (e.g. all-Bcc mail) it would expose a
+  // Bcc recipient to everybody (§7.2).
+  raw = prependHeader(raw, buildReceivedHeader({
+    ip,
+    meta: meta ?? { helo: '', protocol: 'ESMTPSA', hostname, sessionId: crypto.randomUUID().slice(0, 8).toUpperCase() },
+    recipients: to,
+    authenticatedUser: authUser.email,
+  }));
 
   const localRcpts: string[] = [];
   const externalRcpts: string[] = [];
 
   for (const rcpt of to) {
-    const [, domain] = rcpt.split('@');
-    if (!domain) continue;
+    // Bare <Postmaster> (RFC 5321 §4.1.1.3) is the local postmaster.
+    if (!rcpt.includes('@')) { localRcpts.push(rcpt); continue; }
+    const domain = rcpt.slice(rcpt.lastIndexOf('@') + 1);
 
     const localDomain = await prisma.domain.findFirst({
       where: { name: domain.toLowerCase(), active: true },
@@ -155,25 +153,23 @@ async function onMessage(
     ? await expandRecipients(localRcpts)
     : [];
 
-  // Local delivery — store directly in mailbox
-  for (const rcpt of expandedLocalRcpts) {
-    await storeInboundMessage(raw, {
-      fromAddr: from,
-      rcptTo: rcpt,
-      toJunk: false,
-    });
-  }
-
-  // External delivery — outbound relay queue
-  if (externalRcpts.length > 0) {
-    await enqueueOutbound({
-      messageId: crypto.randomUUID(),
-      from,
-      to: externalRcpts,
-      rawMessage: raw.toString('base64'),
-      ...(authUser ? { senderUserId: authUser.id } : {}),
-    });
-  }
+  // Local delivery (mailbox) + external delivery (outbound queue). 250 only
+  // when both are done; a failure answers 451 and the client's retry skips
+  // what was already delivered (no duplicates, no loss — RFC 5321 §6.1).
+  const submittedRaw = raw;
+  await deliverOnce(deliveryKey(from, receivedRaw), expandedLocalRcpts, externalRcpts, {
+    ledger: redisDeliveryLedger,
+    storeLocal: (rcpt) => storeInboundMessage(submittedRaw, { fromAddr: from, rcptTo: rcpt, toJunk: false }),
+    enqueueExternal: async (rcpts) => {
+      await enqueueOutbound({
+        messageId: crypto.randomUUID(),
+        from,
+        to: rcpts,
+        rawMessage: submittedRaw.toString('base64'),
+        senderUserId: authUser.id,
+      });
+    },
+  });
 
   // MAIL_FLOW — message flow tracing (outbound ACCEPTED)
   const headers = extractRawHeaders(raw);

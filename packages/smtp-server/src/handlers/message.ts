@@ -4,6 +4,7 @@ import { verifyIncomingSmime, decryptIncomingSmime } from '../smime/index.js';
 import { enqueueRuleForward } from './rule-forward.js';
 import { handleTransportOutcome } from './transport-actions.js';
 import { sendAutoReplyIfNeeded } from './auto-reply.js';
+import { withReturnPath } from './trace.js';
 // Journaling feature completely removed in v3.13.6
 
 const log = createLogger('smtp:message-handler');
@@ -175,6 +176,7 @@ export async function storeInboundMessage(
   let rulePinned     = false;
   let ruleDiscard    = false;          // hardDelete → mail is not persisted at all
   const ruleCopyTargets: string[] = [];
+  const ruleForwards: Array<{ address: string; mode: 'forward' | 'redirect' }> = [];
   if (ownerType === 'user' && user) {
     try {
       const outcome = await applyMailRules(parsed, user.id, user.email, folder.id);
@@ -199,16 +201,7 @@ export async function storeInboundMessage(
         ruleDiscard = true;
       }
 
-      // Forwards/redirects fire-and-forget (BullMQ queue)
-      for (const fwd of outcome.forwards) {
-        void enqueueRuleForward({
-          rawBuffer:      effectiveBuffer,
-          toAddress:      fwd.address,
-          forwardingUser: { id: user.id, email: user.email },
-          mode:           fwd.mode,
-          originalFrom:   parsed.fromAddr,
-        }).catch((err: unknown) => log.error({ err }, 'Rule-Forward enqueue failed'));
-      }
+      ruleForwards.push(...outcome.forwards);
 
       if (outcome.appliedRuleIds.length > 0) {
         log.debug(
@@ -221,10 +214,31 @@ export async function storeInboundMessage(
     }
   }
 
+  // Rule forwards/redirects are enqueued BEFORE the message is committed and a
+  // failure propagates (the SMTP transaction is answered 4yz and retried):
+  // after a 250 a forward must not be lost silently (RFC 5321 §6.1).
+  // Redirects keep the original envelope sender (§3.9.1) — a null reverse-path
+  // stays null, so a redirected bounce cannot loop.
+  if (user) {
+    for (const fwd of ruleForwards) {
+      await enqueueRuleForward({
+        rawBuffer:      effectiveBuffer,
+        toAddress:      fwd.address,
+        forwardingUser: { id: user.id, email: user.email },
+        mode:           fwd.mode,
+        originalFrom:   opts.fromAddr,
+      });
+    }
+  }
+
   if (ruleDiscard) {
     log.info({ rcptTo: opts.rcptTo, from: parsed.fromAddr }, 'Mail discarded by rule (hardDelete)');
     return;
   }
+
+  // RFC 5321 §4.4: final delivery inserts Return-Path: <reverse-path> at the
+  // beginning of the stored message (earlier Return-Path fields are removed).
+  effectiveBuffer = withReturnPath(effectiveBuffer, opts.fromAddr);
 
   // Raw-always storage: the original RFC 5322 octets go to object storage for every
   // message (content-addressed, shared by all recipients and rule copies). IMAP,

@@ -11,7 +11,8 @@
  *  - never answer automatically submitted mail (`Auto-Submitted` ≠ `no`, §2),
  *    mailing-list / bulk mail (`List-*`, `Precedence: bulk|list|junk`) and
  *    mail that suppresses OOF (`X-Auto-Response-Suppress: All|OOF`); never
- *    answer mail delivered to Junk
+ *    answer mail delivered to Junk; only answer mail that names one of the
+ *    recipient's addresses in To/Cc/Bcc/Resent-* (§2 — not Bcc'd copies)
  *  - at most one reply per sender per 7 days (§2, Redis), the window restarts
  *    when the out-of-office text or period changes
  *  - reply headers: `Auto-Submitted: auto-replied`, `In-Reply-To`,
@@ -68,6 +69,21 @@ export function bareAddress(v: string): string {
   return (m ? m[1]! : v).trim().toLowerCase();
 }
 
+const RECIPIENT_FIELDS = ['to', 'cc', 'bcc', 'resent-to', 'resent-cc', 'resent-bcc'];
+
+/** RFC 3834 §2: one of `ownAddresses` appears in To/Cc/Bcc/Resent-To/-Cc/-Bcc. */
+export function isExplicitRecipient(headers: HeaderMap, ownAddresses: readonly string[]): boolean {
+  const own = new Set(ownAddresses.map((a) => a.toLowerCase()));
+  for (const name of RECIPIENT_FIELDS) {
+    for (const value of headers.get(name) ?? []) {
+      for (const m of value.matchAll(/[^\s<>,;:"()]+@[^\s<>,;:"()]+/g)) {
+        if (own.has(m[0].toLowerCase())) return true;
+      }
+    }
+  }
+  return false;
+}
+
 export interface AutoReplyInput {
   settings: OofSettings | null;
   envelopeFrom: string;
@@ -106,6 +122,10 @@ export function decideAutoReply(i: AutoReplyInput): AutoReplyDecision {
     if (h(name).length > 0) return { send: false, reason: 'mailing list' };
   }
   if (h('x-auto-response-suppress').some((v) => /\b(all|oof)\b/i.test(v))) return { send: false, reason: 'suppressed' };
+  // §2: no personal response unless one of the recipient's addresses is
+  // explicitly listed in a recipient field (Bcc'd copies, list exploders
+  // without List-* headers).
+  if (!isExplicitRecipient(i.headers, i.ownAddresses)) return { send: false, reason: 'not addressed explicitly' };
 
   if (i.senderIsInternal) {
     return s.oofInternal.trim() ? { send: true, body: s.oofInternal, audience: 'internal' } : { send: false, reason: 'no internal text' };

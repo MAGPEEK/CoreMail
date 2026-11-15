@@ -14,7 +14,7 @@ import net from 'node:net';
 import tls from 'node:tls';
 import { SmtpSession } from './session.js';
 import { selfSignedTestCert } from '../test-cert.js';
-import type { AuthUser, EsmtpExtensions, SmtpSessionConfig } from './types.js';
+import type { AuthUser, EsmtpExtensions, MessageMeta, SmtpSessionConfig } from './types.js';
 
 // ─── Test harness ────────────────────────────────────────────────────────────
 
@@ -115,7 +115,7 @@ interface Recorded {
   mailFrom: string[];
   rcptTo: string[];
   credentials: Array<{ username: string; password: string }>;
-  messages: Array<{ raw: Buffer; from: string; to: string[]; authUser: AuthUser | null }>;
+  messages: Array<{ raw: Buffer; from: string; to: string[]; authUser: AuthUser | null; meta?: MessageMeta }>;
 }
 
 interface Harness {
@@ -160,8 +160,8 @@ async function connect(t: TestContext, options: HarnessOptions = {}): Promise<Ha
         recorded.rcptTo.push(to);
         return options.onRcptTo ? options.onRcptTo(to) : null;
       },
-      onMessage: async (raw, from, to, authUser) => {
-        recorded.messages.push({ raw, from, to, authUser });
+      onMessage: async (raw, from, to, authUser, _ip, meta) => {
+        recorded.messages.push({ raw, from, to, authUser, ...(meta ? { meta } : {}) });
         if (options.onMessage) await options.onMessage();
       },
     },
@@ -432,12 +432,16 @@ describe('command sequence (RFC 5321 §4.1.4)', () => {
     assert.equal(reply.code, 250);
   });
 
-  test('VRFY is declined with 502', async (t) => {
+  test('VRFY is answered with 252 (cannot verify, will accept), never 502', async (t) => {
+    // Changed from "502": VRFY is part of the minimum implementation (RFC 5321 §4.5.1); a server that
+    // does not verify addresses MUST answer 252 rather than a code that looks like a failure (§3.5.3, §7.3).
     const { client } = await connectReady(t);
 
     const reply = await client.cmd('VRFY bob');
+    const bare = await client.cmd('VRFY');
 
-    assert.equal(reply.code, 502);
+    assert.equal(reply.code, 252);
+    assert.equal(bare.code, 501);
   });
 
   test('QUIT answers 221 and closes the connection', async (t) => {
@@ -473,12 +477,16 @@ describe('MAIL FROM / RCPT TO parsing (RFC 5321 §4.1.1.2–3)', () => {
     assert.deepEqual(recorded.mailFrom, ['']);
   });
 
-  test('the reverse-path is passed to the handler in lower case', async (t) => {
+  test('the reverse-path keeps the case of its local-part; only the domain is lower-cased', async (t) => {
+    // Changed from "lower case": RFC 5321 §2.4 — the local-part MUST be treated as case sensitive and its
+    // case MUST be preserved when relaying. Handlers normalize for their own (case-insensitive) lookups.
     const { client, recorded } = await connectReady(t);
 
     await client.cmd('MAIL FROM:<Alice@Example.TEST>');
+    await client.cmd('RCPT TO:<Bob.Smith@Example.TEST>');
 
-    assert.deepEqual(recorded.mailFrom, ['alice@example.test']);
+    assert.deepEqual(recorded.mailFrom, ['Alice@example.test']);
+    assert.deepEqual(recorded.rcptTo, ['Bob.Smith@example.test']);
   });
 
   test('a reverse-path without angle brackets is a syntax error (501)', async (t) => {
@@ -1025,5 +1033,231 @@ describe('input limits and reply codes', () => {
 
     assert.equal(unknown.text, '550 5.1.1 User unknown');
     assert.equal(full.text, '452 4.2.2 Mailbox full');
+  });
+});
+
+// ─── v7.1 review fixes (RFC 5321 / 3207 / 4954 / 4616 conformance) ─────────────
+
+/** Lets loopback I/O run without real timers (works with mocked setTimeout). */
+async function flushIo(ms = 60): Promise<void> {
+  const until = Date.now() + ms;
+  while (Date.now() < until) await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+describe('envelope parameters and syntax (review fixes)', () => {
+  test('RCPT parameters are not implemented (DSN not advertised) → 555', async (t) => {
+    const { client } = await connectReady(t);
+    await client.cmd('MAIL FROM:<alice@example.test>');
+
+    const reply = await client.cmd('RCPT TO:<bob@example.test> NOTIFY=SUCCESS');
+
+    assert.equal(reply.code, 555);
+  });
+
+  test('the MAIL AUTH= parameter (RFC 4954 §5) and SIZE+BODY together are accepted', async (t) => {
+    const { client } = await connectReady(t);
+
+    const reply = await client.cmd('MAIL FROM:<alice@example.test> SIZE=100 BODY=8BITMIME AUTH=<>');
+
+    assert.equal(reply.code, 250);
+  });
+
+  test('a malformed parameter list is a syntax error (501)', async (t) => {
+    const { client } = await connectReady(t);
+
+    const glued = await client.cmd('MAIL FROM:<alice@example.test>SIZE=100');
+    const badSize = await client.cmd('MAIL FROM:<alice@example.test> SIZE=abc');
+
+    assert.equal(glued.code, 501);
+    assert.equal(badSize.code, 501);
+  });
+
+  test('a recipient without local-part or domain is refused with 501 5.1.3 at RCPT', async (t) => {
+    const { client, recorded } = await connectReady(t);
+    await client.cmd('MAIL FROM:<alice@example.test>');
+
+    const noDomain = await client.cmd('RCPT TO:<a@>');
+    const noLocal = await client.cmd('RCPT TO:<@example.test>');
+    const badDomain = await client.cmd('RCPT TO:<a@exa mple.test>');
+
+    assert.deepEqual([noDomain.code, noLocal.code, badDomain.code], [501, 501, 501]);
+    assert.match(noDomain.text, /^501 5\.1\.3 /);
+    assert.deepEqual(recorded.rcptTo, []);
+  });
+
+  test('a source route is accepted and ignored (RFC 5321 §4.1.1.3)', async (t) => {
+    const { client, recorded } = await connectReady(t);
+    await client.cmd('MAIL FROM:<alice@example.test>');
+
+    const reply = await client.cmd('RCPT TO:<@relay.example.test:bob@example.test>');
+
+    assert.equal(reply.code, 250);
+    assert.deepEqual(recorded.rcptTo, ['bob@example.test']);
+  });
+
+  test('<Postmaster> is passed to the handler as the bare "postmaster" recipient', async (t) => {
+    const { client, recorded } = await connectReady(t);
+    await client.cmd('MAIL FROM:<alice@example.test>');
+
+    await client.cmd('RCPT TO:<POSTMASTER>');
+
+    assert.deepEqual(recorded.rcptTo, ['postmaster']);
+  });
+
+  test('HELO without a domain is a syntax error (501)', async (t) => {
+    const { client } = await connect(t);
+    await client.reply();
+
+    const reply = await client.cmd('HELO');
+
+    assert.equal(reply.code, 501);
+  });
+});
+
+describe('DATA transparency and trace data (review fixes)', () => {
+  test('the first period of any line starting with "." is removed (RFC 5321 §4.5.2)', async (t) => {
+    const { client, recorded } = await connectWithRecipient(t);
+    await client.cmd('DATA');
+
+    await client.cmd('.x\r\n. y\r\nz\r\n.');
+
+    assert.equal(recorded.messages[0]?.raw.toString('latin1'), 'x\r\n y\r\nz\r\n');
+  });
+
+  test('the message handler gets HELO name, protocol, host name and session id', async (t) => {
+    const { client, recorded } = await connectWithRecipient(t);
+    await client.cmd('DATA');
+
+    await client.cmd('x\r\n.');
+
+    const meta = recorded.messages[0]?.meta;
+    assert.equal(meta?.helo, 'client.example.test');
+    assert.equal(meta?.protocol, 'ESMTP');
+    assert.equal(meta?.hostname, 'mx.example.test');
+    assert.match(meta?.sessionId ?? '', /^[0-9A-F]{8}$/);
+  });
+
+  test('an internal handler error is answered with a fixed one-line 451 (no internals, no LF)', async (t) => {
+    const { client } = await connectWithRecipient(t, {
+      onMessage: async () => { throw new Error('PrismaClientKnownRequestError:\nInvalid `prisma.message.create()`\nsecret detail'); },
+    });
+    await client.cmd('DATA');
+
+    const reply = await client.cmd('x\r\n.');
+    const next = await client.cmd('NOOP');
+
+    assert.deepEqual(reply.lines, ['451 4.3.0 Temporary local problem, try again later']);
+    assert.equal(next.code, 250);
+  });
+
+  test('a reply error with an embedded line break stays a single reply line', async (t) => {
+    const { client } = await connectWithRecipient(t, {
+      onMessage: async () => { throw new Error('550 5.7.1 Rejected\r\n250 smuggled'); },
+    });
+    await client.cmd('DATA');
+
+    const reply = await client.cmd('x\r\n.');
+    const next = await client.cmd('NOOP');
+
+    assert.deepEqual(reply.lines, ['550 5.7.1 Rejected 250 smuggled']);
+    assert.equal(next.code, 250);
+  });
+});
+
+describe('greeting (review fixes)', () => {
+  test('a banner that does not start with a domain is prefixed with the host name', async (t) => {
+    const { client } = await connect(t, { config: { bannerText: 'Welcome to our mail service' } });
+
+    const greeting = await client.reply();
+
+    assert.equal(greeting.text, '220 mx.example.test Welcome to our mail service');
+  });
+});
+
+describe('AUTH response validation (review fixes, RFC 4954 §4 / RFC 4616 §2)', () => {
+  test('a response that is not valid base64 is answered with 501', async (t) => {
+    const { client, recorded } = await connectReady(t, { auth: true });
+
+    const plain = await client.cmd('AUTH PLAIN not*base64!');
+    await client.cmd('AUTH LOGIN');
+    const login = await client.cmd('%%%');
+
+    assert.equal(plain.code, 501);
+    assert.equal(login.code, 501);
+    assert.deepEqual(recorded.credentials, []);
+  });
+
+  test('a PLAIN message without the authzid field separator is malformed (535)', async (t) => {
+    const { client, recorded } = await connectReady(t, { auth: true });
+
+    const reply = await client.cmd(`AUTH PLAIN ${b64('user@example.test\0secret')}`);
+
+    assert.equal(reply.code, 535);
+    assert.deepEqual(recorded.credentials, []);
+  });
+
+  test('an authzid other than the authenticated user fails, the own identity succeeds', async (t) => {
+    const { client } = await connectReady(t, { auth: true });
+
+    const foreign = await client.cmd(`AUTH PLAIN ${b64('admin@example.test\0user@example.test\0secret')}`);
+    const own = await client.cmd(`AUTH PLAIN ${b64('User@Example.test\0user@example.test\0secret')}`);
+
+    assert.equal(foreign.code, 535);
+    assert.equal(own.code, 235);
+  });
+});
+
+describe('STARTTLS and timers (review fixes)', () => {
+  test('STARTTLS with a parameter is a syntax error (501, RFC 3207 §4)', async (t) => {
+    const { client } = await connectReady(t, { config: { tls: testCert() } });
+
+    const reply = await client.cmd('STARTTLS now');
+
+    assert.equal(reply.code, 501);
+  });
+
+  test('a client that never completes the TLS handshake is disconnected', async (t) => {
+    await flushIo();
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const { client } = await connectReady(t, { config: { tls: testCert() } });
+    await client.cmd('STARTTLS');
+
+    t.mock.timers.tick(60_000);
+    await flushIo();
+
+    assert.equal(client.closed, true);
+  });
+
+  test('the DATA timeout restarts with every received chunk (slow uploads succeed)', async (t) => {
+    await flushIo();
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const { client, recorded } = await connectWithRecipient(t);
+    await client.cmd('DATA');
+
+    for (let i = 0; i < 3; i++) {
+      client.write(`line ${i}\r\n`);
+      await flushIo();
+      t.mock.timers.tick(6 * 60_000); // 18 minutes in total, never 10 without data
+    }
+    const reply = await client.cmd('.');
+
+    assert.equal(reply.code, 250);
+    assert.equal(recorded.messages.length, 1);
+  });
+
+  test('a stalled DATA transfer still times out after ten minutes without data', async (t) => {
+    // Let the sessions of earlier tests close first: their (mocked) timer ids
+    // would otherwise collide with the ids of this test's mocked timers.
+    await flushIo();
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const { client } = await connectWithRecipient(t);
+    await client.cmd('DATA');
+    client.write('partial\r\n');
+    await flushIo();
+
+    t.mock.timers.tick(10 * 60_000);
+    const reply = await client.reply();
+
+    assert.equal(reply.code, 421);
   });
 });

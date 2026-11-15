@@ -38,9 +38,6 @@ let _hostname: string = process.env['SMTP_HOSTNAME'] ?? process.env['MAIL_HOSTNA
 // Loaded from the DB at startup or generated as a self-signed certificate.
 // Null = not loaded yet; undefined = no cert available (should never happen).
 let _tlsConfig: { cert: Buffer; key: Buffer } | null = null;
-// Self-signed certs are rejected by strict MTAs (e.g. Microsoft Exchange).
-// Therefore STARTTLS is NOT advertised on port 25 (inbound) when the cert is self-signed.
-let _tlsCertSelfSigned: boolean = true;
 
 // ── Banner configuration (SmtpSettings) ───────────────────────────────────────
 // Empty = default banner ("hostname ESMTP CoreMail"); set = custom.
@@ -94,8 +91,6 @@ async function refreshSmtpSettings(): Promise<void> {
   }
 }
 
-// Backwards-compat alias — legacy callers further down in server.ts
-const refreshBanner = refreshSmtpSettings;
 
 async function refreshHostname(): Promise<void> {
   try {
@@ -176,12 +171,11 @@ async function refreshTlsConfig(): Promise<void> {
     if (found) {
       const isSelfSigned = isCertSelfSigned(found.certPem);
       _tlsConfig = tlsPemToBuffers(found.certPem, found.keyPem);
-      _tlsCertSelfSigned = isSelfSigned;
       if (isSelfSigned && !certMatchesHostname(found.certPem, _hostname)) {
         log.warn({ hostname: _hostname }, 'SMTP self-signed cert subject != publicHostname — admin should activate a matching cert in BCP');
       }
       log.info({
-        selfSigned: _tlsCertSelfSigned, hostname: _hostname,
+        selfSigned: isSelfSigned, hostname: _hostname,
         source: found.source, certName: found.certName, certId: found.certId,
       }, 'SMTP TLS cert loaded');
       return;
@@ -195,7 +189,6 @@ async function refreshTlsConfig(): Promise<void> {
     log.info({ hostname: SELF_SIGNED_HOSTNAME }, 'No TLS cert in DB — generating self-signed certificate');
     const { certPem, keyPem } = generateSelfSignedCert(SELF_SIGNED_HOSTNAME);
     _tlsConfig = tlsPemToBuffers(certPem, keyPem);
-    _tlsCertSelfSigned = true;
 
     // Store in DB so that all other mail protocols use the same certificate
     await prisma.serverSettings.upsert({
@@ -291,11 +284,10 @@ function createTrackedSmtpServer(port: number, ssl: boolean): TrackedSmtpServer 
       maxSize:    { get: () => _maxSize,    enumerable: true, configurable: true },
       maxRcpt:    { get: () => _maxRcpt,    enumerable: true, configurable: true },
       esmtp:      { get: () => _esmtp,      enumerable: true, configurable: true },
-      // ALWAYS advertise STARTTLS (on all ports incl. 25 inbound). MX-Tools scoring
-      // rewards TLS availability. Opportunistic TLS works for most MTAs.
-      // Prerequisite: the self-signed cert has the CORRECT hostname CN (checked automatically
-      // in refreshTlsConfig and regenerated on mismatch). For full Outlook 365
-      // compatibility: request a Let's Encrypt cert via BCP → SSL/TLS.
+      // ALWAYS advertise STARTTLS (on all ports incl. 25 inbound) — opportunistic TLS
+      // (RFC 7435) works for most MTAs even with a self-signed cert. A cert whose name
+      // does not match publicHostname is only logged (refreshTlsConfig), never
+      // regenerated; for strict peers request a CA cert via BCP → SSL/TLS.
       advertiseStarttls: { get: () => true, enumerable: true, configurable: true },
     },
   );
@@ -386,7 +378,7 @@ async function main(): Promise<void> {
   await waitForObjectStorage('smtp-server');
   await refreshHostname();
   await refreshTlsConfig(); // load certificate or generate self-signed
-  await refreshBanner();    // load banner text from SmtpSettings
+  await refreshSmtpSettings(); // banner, ESMTP flags, maxSize, maxRcpt from SmtpSettings
 
   const existing = await prisma.serviceListener.count({ where: { service: 'SMTP_RECEIVE' } });
   if (existing === 0) {
@@ -412,7 +404,7 @@ async function main(): Promise<void> {
   subscriber.on('message', (ch, message) => {
     if (ch === CHANNEL_SETTINGS_RELOAD) {
       void refreshHostname();
-      void refreshBanner(); // all SMTP settings (banner, ESMTP flags, maxSize, maxRcpt)
+      void refreshSmtpSettings(); // all SMTP settings (banner, ESMTP flags, maxSize, maxRcpt)
       // Invalidate outbound smarthost/relay cache — new provider credentials
       // thus take effect on the next send attempt (instead of after the 60s TTL).
       invalidateOutboundConfigCache();
