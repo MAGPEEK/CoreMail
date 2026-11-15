@@ -14,24 +14,40 @@ function track(child: pino.Logger): void {
   trackedChildren.add(new WeakRef(child));
 }
 
+/** Secret-bearing keys (pino paths are case-sensitive: header spellings are listed separately). */
+const SECRET_KEYS = [
+  'password', 'currentPassword', 'newPassword', 'appPassword', 'pass', 'passwd',
+  'token', 'accessToken', 'refreshToken', 'challengeToken', 'idToken', 'secret', 'clientSecret',
+  'apiKey', 'privateKey', 'totpSecret', 'mfaCode', 'backupCode', 'code_verifier',
+] as const;
+const HEADER_KEYS = [
+  'authorization', 'Authorization', 'cookie', 'Cookie', '["set-cookie"]', '["Set-Cookie"]',
+  '["x-internal-token"]', '["X-Internal-Token"]', '["proxy-authorization"]', '["Proxy-Authorization"]',
+] as const;
+const at = (prefix: string, key: string): string => (key.startsWith('[') ? `${prefix}${key}` : `${prefix}.${key}`);
+
 /**
  * Secrets never reach the log. Paths are pino (fast-redact) paths: a bare name
  * matches a top-level key of the logged object, `*.x` one level below (e.g.
- * `{ body: { password } }`), and the header paths cover `req`/`res`
- * serializers as well as raw header objects logged as `headers`. Matching
- * values are replaced by "[Redacted]".
+ * `{ body: { password } }`) and `*.*.x` two levels below (e.g.
+ * `{ req: { body: { password } } }`, `{ user: { creds: { token } } }`). The
+ * header paths cover `req`/`res` serializers, raw header objects logged as
+ * `headers` and headers nested one level deeper (`{ request: { headers } }`) in
+ * the lowercase (Node) and canonical (fetch/axios) spelling. `err.command.args`
+ * / `*.command.args` hide the arguments of failed ioredis commands — an AUTH
+ * error carries the Redis password there. Matching values become "[Redacted]".
  */
-export const LOG_REDACT_PATHS: readonly string[] = [
-  'authorization', 'cookie', '["set-cookie"]',
-  'password', 'currentPassword', 'newPassword', 'appPassword',
-  'token', 'accessToken', 'refreshToken', 'challengeToken', 'secret', 'clientSecret',
-  '*.authorization', '*.cookie', '*["set-cookie"]',
-  '*.password', '*.currentPassword', '*.newPassword', '*.appPassword',
-  '*.token', '*.accessToken', '*.refreshToken', '*.challengeToken', '*.secret', '*.clientSecret',
-  'req.headers.authorization', 'req.headers.cookie', 'req.headers["x-internal-token"]',
-  'res.headers["set-cookie"]',
-  'headers.authorization', 'headers.cookie', 'headers["x-internal-token"]',
-];
+export const LOG_REDACT_PATHS: readonly string[] = [...new Set([
+  ...HEADER_KEYS,
+  ...SECRET_KEYS,
+  ...HEADER_KEYS.map((k) => at('*', k)),
+  ...SECRET_KEYS.map((k) => at('*', k)),
+  ...SECRET_KEYS.map((k) => at('*.*', k)),
+  ...['req.headers', 'res.headers', 'headers', '*.headers', 'request.headers', 'response.headers', 'config.headers']
+    .flatMap((h) => HEADER_KEYS.map((k) => at(h, k))),
+  // ioredis ReplyError/MaxRetriesPerRequestError: { command: { name: 'auth', args: [password] } }
+  'err.command.args', 'error.command.args', 'command.args', '*.command.args', '*.*.command.args',
+])];
 
 export const LOG_REDACT = { paths: [...LOG_REDACT_PATHS], censor: '[Redacted]' } satisfies pino.LoggerOptions['redact'];
 

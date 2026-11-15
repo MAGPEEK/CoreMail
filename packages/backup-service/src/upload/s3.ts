@@ -1,11 +1,10 @@
 import { S3Client, PutObjectCommand, ListObjectsV2Command, HeadBucketCommand, CreateBucketCommand, DeleteObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import type { Readable } from 'node:stream';
 import { Upload } from '@aws-sdk/lib-storage';
-import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { createLogger } from '@coremail/core';
 import {
-  createEncryptStream, downloadDescriptor, ENCRYPTED_SUFFIX, ENCRYPTION_METADATA, loadKeyring, openDecryptedStream,
+  createEncryptedFileStream, downloadDescriptor, ENCRYPTED_SUFFIX, ENCRYPTION_METADATA, loadKeyring, openDecryptedStream,
   type BackupKeyring,
 } from '../crypto/backup-crypto.js';
 import { backupS3Options } from './config.js';
@@ -85,7 +84,8 @@ export async function uploadToS3(
     params: {
       Bucket: BUCKET,
       Key: storedKey,
-      Body: createReadStream(localPath).pipe(createEncryptStream(keyring.current)),
+      // pipeline-based: a read error aborts the upload (`.pipe()` would hang / truncate)
+      Body: createEncryptedFileStream(localPath, keyring.current),
       ContentType: 'application/octet-stream',
       Metadata: {
         'uploaded-at': new Date().toISOString(),

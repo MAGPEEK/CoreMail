@@ -75,3 +75,64 @@ test('the process logger is built with the redaction', () => {
   const stringifiers = (logger as unknown as Record<symbol, Record<string, unknown>>)[sym!]!;
   assert.ok('password' in stringifiers && 'req' in stringifiers, 'redaction compiled for password and req');
 });
+
+test('two levels deep: req.body secrets, nested credential objects', () => {
+  const { log, lines } = capture();
+  log.info({
+    req: { method: 'POST', body: { email: 'a@b.c', password: 'p1', mfaCode: '123456', token: 't1' } },
+    user: { creds: { password: 'p2', apiKey: 'k1' }, name: 'alice' },
+  }, 'nested');
+  const [l] = lines();
+  const body = (l!['req'] as { body: Record<string, unknown> }).body;
+  assert.equal(body['password'], '[Redacted]');
+  assert.equal(body['mfaCode'], '[Redacted]');
+  assert.equal(body['token'], '[Redacted]');
+  assert.equal(body['email'], 'a@b.c');
+  const user = l!['user'] as { creds: Record<string, unknown>; name: string };
+  assert.equal(user.creds['password'], '[Redacted]');
+  assert.equal(user.creds['apiKey'], '[Redacted]');
+  assert.equal(user.name, 'alice');
+});
+
+test('canonical header spellings (Authorization, Cookie) and nested header objects', () => {
+  const { log, lines } = capture();
+  log.info({
+    headers: { Authorization: 'Bearer x', Cookie: 'sid=1', Accept: '*/*' },
+    request: { headers: { Authorization: 'Basic eDp5', 'Set-Cookie': ['a=b'] } },
+    Authorization: 'Bearer top',
+  });
+  const [l] = lines();
+  const h = l!['headers'] as Record<string, unknown>;
+  assert.equal(h['Authorization'], '[Redacted]');
+  assert.equal(h['Cookie'], '[Redacted]');
+  assert.equal(h['Accept'], '*/*');
+  const rh = (l!['request'] as { headers: Record<string, unknown> }).headers;
+  assert.equal(rh['Authorization'], '[Redacted]');
+  assert.equal(rh['Set-Cookie'], '[Redacted]');
+  assert.equal(l!['Authorization'], '[Redacted]');
+});
+
+test('ioredis-like AUTH error: command.args (the Redis password) is redacted', () => {
+  // ioredis ReplyError: enumerable `command` with the failed command's name and args
+  class ReplyError extends Error {
+    command: { name: string; args: string[] };
+    constructor(msg: string, command: { name: string; args: string[] }) { super(msg); this.name = 'ReplyError'; this.command = command; }
+  }
+  const err = new ReplyError('WRONGPASS invalid username-password pair', { name: 'auth', args: ['default', 's3cr3t-redis-pw'] });
+  // `err` goes through pino's error serializer; under other keys JSON.stringify
+  // still emits the enumerable `command` property.
+  for (const logged of [{ err }, { error: err }, { cause: { err } }, { command: err.command }]) {
+    const chunks: string[] = [];
+    const dest = new Writable({ write(c, _e, cb) { chunks.push(String(c)); cb(); } });
+    pino({ redact: LOG_REDACT }, dest).error(logged, 'redis error');
+    const out = chunks.join('');
+    assert.ok(!out.includes('s3cr3t-redis-pw'), `password leaked: ${out}`);
+    assert.ok(out.includes('"auth"'), `command name kept: ${out}`);
+  }
+  const chunks: string[] = [];
+  pino({ redact: LOG_REDACT }, new Writable({ write(c, _e, cb) { chunks.push(String(c)); cb(); } })).error({ err }, 'x');
+  const l = JSON.parse(chunks[0]!) as { err: { message: string; type: string; command: { args: unknown } } };
+  assert.equal(l.err.message, 'WRONGPASS invalid username-password pair');
+  assert.equal(l.err.type, 'ReplyError');
+  assert.equal(l.err.command.args, '[Redacted]');
+});
