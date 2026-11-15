@@ -849,7 +849,8 @@ must call `publishUserAuthChange(userId, reason)` from `@coremail/storage/auth`
 use `CredentialCache` from `@coremail/core` (HMAC keys, `attachInvalidation()`, TTL fallback);
 services holding such state call `startAuthInvalidationSubscriber()` at start
 (channel `CHANNEL_AUTH_INVALIDATE`).
-Long-lived authenticated connections (IMAP/POP3/SMTP sessions, EAS Ping, JMAP WS/EventSource)
+Long-lived authenticated connections (IMAP/POP3/SMTP sessions, EAS Ping, JMAP WS/EventSource,
+api-gateway SSE `/api/v1/events` via `lib/live-sse.ts` — token connections follow their web session)
 register in a `LiveConnectionRegistry` (`@coremail/core`, policy `connectionAffected()`) with the
 credential used (`verifyMailCredentials` returns `method` + `appPasswordId`) and the check start
 time; the service calls `registry.attachInvalidation()`. App password revocation must publish

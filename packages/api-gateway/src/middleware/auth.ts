@@ -14,6 +14,10 @@ export interface ApiUser {
   sessionId?: string;
   /** true when the session was established with a second factor (v7.0.0). */
   mfaVerified?: boolean;
+  /** `iat` (seconds) of the access token (v7.1.0, live-connection termination). */
+  issuedAt?: number;
+  /** When the token check began (ms) — events since then still end a live connection. */
+  authStartedAt?: number;
 }
 
 declare module 'express' {
@@ -36,6 +40,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
     res.status(401).json({ error: 'Authorization required' });
     return;
   }
+  const authStartedAt = Date.now();
   // verifyAccessToken never throws (returns null for bad/expired/refresh tokens)
   const payload = verifyAccessToken(rawToken);
   if (!payload) {
@@ -54,6 +59,8 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
     email: payload.email,
     sessionId: payload.sessionId,
     mfaVerified: payload.mfaVerified === true,
+    ...(payload.iat !== undefined ? { issuedAt: payload.iat } : {}),
+    authStartedAt,
   };
   next();
 }

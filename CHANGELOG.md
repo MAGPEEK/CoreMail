@@ -138,6 +138,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
   everything; JMAP Bearer connections follow their web session. A login whose credential check
   began before the change but completed after it is terminated as well. Role changes, web
   logouts and app password creation do not touch protocol connections.
+- **The web client's live-update stream (`/api/v1/events`, SSE) ends with its session.** It
+  stayed open after a password change, session revocation, role change or deactivation; it now
+  follows the same rules as JMAP Bearer connections and ends with `event: session-ended` (the
+  browser's reconnect is then refused with 401).
 
 ---
 

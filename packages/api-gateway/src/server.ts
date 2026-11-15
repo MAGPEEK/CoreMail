@@ -51,6 +51,7 @@ import { retentionTagsRouter } from './routes/retention-tags.js';
 import { requireAuth } from './middleware/auth.js';
 import { sseHandler } from './sse.js';
 import { startSseHub } from './lib/sse-hub.js';
+import { sseLiveConnections } from './lib/live-sse.js';
 import { auditMiddleware } from './lib/audit.js';
 import { syncServerUrlsFromHostname } from './lib/server-urls.js';
 import { initSetupToken } from './lib/setup-token.js';
@@ -434,6 +435,8 @@ async function start() {
   void startSseHub(); // one Redis subscriber → SSE fan-out + Web Push (lib/sse-hub.ts)
   // v7.1.0: session revocations done by the auth-service / LDAP sync reach
   // requireAuth's in-process revocation check immediately.
+  // v7.1.0: … and end the user's SSE streams (/api/v1/events) like JMAP Bearer push.
+  sseLiveConnections.attachInvalidation();
   startAuthInvalidationSubscriber();
   // Message store migration: raise Mailbox.highestModSeq / uidNext above legacy
   // Date.now()-sized modSeqs and max(uid)+1 UIDs (idempotent; the first
