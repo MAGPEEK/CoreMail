@@ -118,6 +118,13 @@ export interface SmtpSessionConfig {
    * closes the connection (default 3).
    */
   maxAuthFailures?: number;
+  /**
+   * Tarpit (inbound port 25): after `TARPIT_THRESHOLD` permanent errors in an
+   * unauthenticated session (unknown recipients, protocol errors), every
+   * further reply is delayed by an increasing amount (1 s, 2 s, … up to
+   * `tarpitMaxDelayMs`). 0 / undefined = off.
+   */
+  tarpitMaxDelayMs?: number;
 }
 
 /** Non-credential AUTH outcome: lockout (454) or temporary failure (454). */

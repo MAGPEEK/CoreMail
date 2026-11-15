@@ -8,6 +8,8 @@ import { extractSmtpCode, sendDsnBounce, type DsnOptions } from './dsn.js';
 import { BARE_POSTMASTER } from '../core/types.js';
 import { signMessageForUser, encryptMessageForRecipient } from '../smime/index.js';
 import { storeInboundMessage } from '../handlers/message.js';
+import { isRuleForwardedAlready } from '../handlers/rule-forward.js';
+import type { SenderAuth } from '@coremail/storage';
 import { expandRecipients } from '../handlers/expand.js';
 import { resolveJobDkim } from './dkim.js';
 import { notifyDeadLetter, startQueueMaintenance } from './dead-letter.js';
@@ -77,6 +79,8 @@ export interface OutboundJob {
   bouncedRcpts?:   string[];
   /** Last temporary failure per recipient still pending (final bounce text). */
   pendingFailures?: RecipientFailure[];
+  /** A delay DSN (RFC 3464 Action: delayed) was sent — at most one per message. */
+  delayNotified?: boolean;
 }
 
 // ── Build RFC 5322 buffer from structured message ─────────────────────────────
@@ -168,8 +172,30 @@ export interface OutboundJobLike {
   id?: string | undefined;
   data: OutboundJob;
   attemptsMade: number;
-  opts: { attempts?: number | undefined };
+  opts: { attempts?: number | undefined; delay?: number | undefined };
+  /** Enqueue time (ms) — BullMQ `job.timestamp`; used for the delay DSN. */
+  timestamp?: number | undefined;
   updateData(data: OutboundJob): Promise<void>;
+}
+
+/**
+ * Hours a message may wait in the queue before the sender gets ONE delay
+ * notification (RFC 3464 Action: delayed, status 4.4.7). Env
+ * `OUTBOUND_DELAY_DSN_HOURS` (default 4, 0 = off).
+ */
+export function delayDsnHours(env: Record<string, string | undefined> = process.env): number {
+  const raw = (env['OUTBOUND_DELAY_DSN_HOURS'] ?? '').trim();
+  if (raw === '') return 4;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : 4;
+}
+
+/** Pure: is a delay DSN due for this job (once, after `hours` since the planned send time)? */
+export function delayDsnDue(job: Pick<OutboundJobLike, 'data' | 'timestamp' | 'opts'>, hours: number, now = Date.now()): boolean {
+  if (hours <= 0 || job.data.delayNotified || job.timestamp === undefined) return false;
+  if (!job.data.from) return false; // null sender (bounces) never get a DSN
+  const start = job.timestamp + Math.max(0, job.opts.delay ?? 0);
+  return now - start >= hours * 3_600_000;
 }
 
 export interface OutboundDeps {
@@ -180,6 +206,8 @@ export interface OutboundDeps {
   relay(raw: Buffer, from: string, to: string[], dkim: DkimOptions): Promise<RelayResult>;
   bounce(opts: DsnOptions): Promise<void>;
   hostname(): Promise<string>;
+  /** When the queue gives up on the job (Will-Retry-Until of a delay DSN). */
+  retryUntil?(job: Pick<OutboundJobLike, 'timestamp' | 'opts'>): Promise<Date>;
 }
 
 export interface DeliverySummary {
@@ -268,6 +296,29 @@ export async function deliverOutboundJob(job: OutboundJobLike, buffer: Buffer, d
   }
   await persist(transient);
 
+  // One delay notification once the message waited OUTBOUND_DELAY_DSN_HOURS.
+  // Marked in the job BEFORE sending: at most one DSN even if sending fails.
+  if (transient.length > 0 && delayDsnDue(job, delayDsnHours())) {
+    await job.updateData({ ...job.data, delayNotified: true });
+    try {
+      await deps.bounce({
+        originalFrom:      from,
+        originalTo:        transient.map((f) => f.rcpt),
+        originalSubject:   data.message?.subject ?? '',
+        originalMessageId: data.message?.messageId ?? null,
+        failureReason:     transient[0]!.message,
+        smtpCode:          transient[0]!.code,
+        serverHostname:    await deps.hostname(),
+        recipients:        transient.map((f) => ({ rcpt: f.rcpt, status: '4.4.7', diagnostic: f.message, remote: f.code !== null })),
+        deliverExternal:   data.ruleRedirect !== true,
+        action:            'delayed',
+        ...(deps.retryUntil ? { willRetryUntil: await deps.retryUntil(job) } : {}),
+      });
+    } catch (err) {
+      log.warn({ err, jobId: job.id }, 'Delay DSN failed');
+    }
+  }
+
   if (transient.length > 0) {
     const err = new TemporaryDeliveryError(
       `Temporary failure for ${transient.length} recipient(s): ${transient.map((f) => `<${f.rcpt}> ${f.message}`).join('; ')}`,
@@ -298,6 +349,18 @@ export function finalBounceRecipients(data: OutboundJob, err: unknown): Recipien
     .map((rcpt) => ({ rcpt, code, status: code ? `${Math.floor(code / 100)}.0.0` : '4.4.7', message, permanent: false }));
 }
 
+/**
+ * Pure: sender authentication for a locally delivered queue job. Only jobs of
+ * an authenticated user (REST/JMAP/EAS/SMTP submission set `senderUserId`,
+ * after their sender-identity check) count — not rule forwards/redirects
+ * (they carry someone else's message) and not quarantine releases.
+ */
+export function senderAuthForJob(job: OutboundJob, raw: Buffer): { senderAuth: SenderAuth } | Record<string, never> {
+  if (!job.senderUserId || job.ruleRedirect || job.quarantineReleaseId) return {};
+  if (isRuleForwardedAlready(raw)) return {};
+  return { senderAuth: { authenticatedSender: job.from } };
+}
+
 // ── Worker ────────────────────────────────────────────────────────────────────
 
 async function publicHostname(): Promise<string> {
@@ -316,6 +379,7 @@ const defaultOutboundDeps: OutboundDeps = {
     fromAddr: from,
     rcptTo:   rcpt,
     toJunk:   false,
+    ...senderAuthForJob(job, raw),
     // Stable across the job's retries: rule forwards are not queued twice.
     deliveryKey: `job:${job.messageId}`,
     ...(job.quarantineReleaseId ? { quarantineRelease: true } : {}),
@@ -331,6 +395,10 @@ const defaultOutboundDeps: OutboundDeps = {
   relay: (raw, from, to, dkim) => relayMessage(raw, from, to, dkim),
   bounce: (opts) => sendDsnBounce(opts),
   hostname: publicHostname,
+  retryUntil: async (job) => {
+    const s = await loadQueueSettings();
+    return new Date((job.timestamp ?? Date.now()) + Math.max(0, job.opts.delay ?? 0) + s.outboundRetentionHours * 3_600_000);
+  },
 };
 
 export function startOutboundWorker(): Worker<OutboundJob> {

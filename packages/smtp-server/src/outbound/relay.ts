@@ -1,6 +1,7 @@
 import nodemailer from 'nodemailer';
 import { promises as dns } from 'dns';
-import { createLogger } from '@coremail/core';
+import { isIP } from 'net';
+import { createLogger, isBlockedAddress, normalizeIp } from '@coremail/core';
 import { prisma } from '@coremail/storage/prisma';
 
 const log = createLogger('smtp:relay');
@@ -291,11 +292,14 @@ export interface RelayDeps {
   config(): Promise<OutboundConfig>;
   resolveMx(domain: string): Promise<Array<{ exchange: string; priority: number }>>;
   send(transportOptions: Record<string, unknown>, envelope: { from: string; to: string[] }, raw: Buffer): Promise<SendInfo>;
+  /** A/AAAA of an MX host (SSRF check before connecting); absent = no check. */
+  resolveHost?: (host: string) => Promise<string[]>;
 }
 
 const defaultRelayDeps: RelayDeps = {
   config: getOutboundConfig,
   resolveMx: (domain) => dns.resolveMx(domain),
+  resolveHost: async (host) => (await dns.lookup(host, { all: true, verbatim: true })).map((a) => a.address),
   send: async (options, envelope, raw) => {
     const transporter = nodemailer.createTransport(options as Parameters<typeof nodemailer.createTransport>[0]);
     return await transporter.sendMail({ envelope, raw }) as SendInfo;
@@ -400,6 +404,45 @@ export async function lookupMx(domain: string, resolve: RelayDeps['resolveMx']):
   }
 }
 
+type MxTarget =
+  | { kind: 'ok'; address: string | null }
+  | { kind: 'fail'; failure: Omit<RecipientFailure, 'rcpt'> };
+
+/**
+ * Resolves an MX (or implicit MX) host and refuses loopback / private /
+ * link-local / reserved targets (RFC 3463 5.4.4 — unroutable): a remote domain
+ * must not make us connect to an internal port 25. The connection then goes
+ * to the checked address (no second DNS answer — no rebinding). Without a
+ * resolver (unit tests) or with `OUTBOUND_ALLOW_PRIVATE_MX=true` (lab setups
+ * with internal MX hosts) the host name is used as before. The admin-set
+ * smarthost is not subject to this check.
+ */
+export async function resolveMxTarget(
+  host: string,
+  resolveHost: RelayDeps['resolveHost'],
+  env: Record<string, string | undefined> = process.env,
+): Promise<MxTarget> {
+  if (!resolveHost || (env['OUTBOUND_ALLOW_PRIVATE_MX'] ?? '').toLowerCase() === 'true') return { kind: 'ok', address: null };
+  let addrs: string[];
+  if (isIP(normalizeIp(host)) !== 0) {
+    addrs = [normalizeIp(host)];
+  } else {
+    try {
+      addrs = await resolveHost(host);
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      return { kind: 'fail', failure: { code: null, status: '4.4.3', message: `DNS lookup for MX ${host} failed (${code ?? 'error'})`, permanent: false } };
+    }
+  }
+  if (addrs.length === 0) {
+    return { kind: 'fail', failure: { code: null, status: '4.4.3', message: `MX ${host} has no address`, permanent: false } };
+  }
+  if (addrs.some((a) => isBlockedAddress(a))) {
+    return { kind: 'fail', failure: { code: null, status: '5.4.4', message: `MX ${host} resolves to a non-public address`, permanent: true } };
+  }
+  return { kind: 'ok', address: addrs[0]! };
+}
+
 async function deliverToDomain(
   deps: RelayDeps,
   rawBuffer: Buffer,
@@ -416,7 +459,16 @@ async function deliverToDomain(
 
   let last: RelayResult | null = null;
   for (const host of mx.hosts) {
-    const result = await sendAndCollect(deps, mxTransportOptions(host, heloName, dkimCfg), from, recipients, rawBuffer);
+    // SSRF guard: never connect to an internal address chosen by remote DNS.
+    const target = await resolveMxTarget(host, deps.resolveHost);
+    if (target.kind === 'fail') {
+      log.warn({ domain, mx: host, reason: target.failure.message }, 'MX host refused');
+      last = { delivered: [], failures: recipients.map((rcpt) => ({ rcpt, ...target.failure })) };
+      continue;
+    }
+    const options = mxTransportOptions(target.address ?? host, heloName, dkimCfg);
+    if (target.address) options['tls'] = { ...(options['tls'] as object), servername: host };
+    const result = await sendAndCollect(deps, options, from, recipients, rawBuffer);
     // A permanent reply or a (partial) acceptance is authoritative. When
     // nothing was accepted and every failure is temporary (connection error,
     // 421 greeting, 4yz), the next MX is tried (§5.1).

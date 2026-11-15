@@ -160,7 +160,11 @@ async function onMessage(
   const txKey = deliveryKey(from, receivedRaw);
   await deliverOnce(txKey, expandedLocalRcpts, externalRcpts, {
     ledger: redisDeliveryLedger,
-    storeLocal: (rcpt) => storeInboundMessage(submittedRaw, { fromAddr: from, rcptTo: rcpt, toJunk: false, deliveryKey: txKey }),
+    // MAIL FROM was checked against the SMTP AUTH identity in onMailFrom.
+    storeLocal: (rcpt) => storeInboundMessage(submittedRaw, {
+      fromAddr: from, rcptTo: rcpt, toJunk: false, deliveryKey: txKey,
+      senderAuth: { authenticatedSender: from },
+    }),
     enqueueExternal: async (rcpts) => {
       await enqueueOutbound({
         messageId: crypto.randomUUID(),

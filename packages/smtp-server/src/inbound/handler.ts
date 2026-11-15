@@ -8,14 +8,16 @@
  */
 
 import { createLogger } from '@coremail/core';
-import { prisma, stripHeaders, INTERNAL_MAIL_HEADERS } from '@coremail/storage';
+import { prisma, stripHeaders, INTERNAL_MAIL_HEADERS, isAttendeeAuthenticated, type SenderAuth } from '@coremail/storage';
 import crypto from 'crypto';
 import { storeInboundMessage } from '../handlers/message.js';
 import { quarantineMessage } from '../handlers/quarantine.js';
 import { expandRecipients, isPostmasterAddress } from '../handlers/expand.js';
 import { enqueueOutbound } from '../outbound/queue.js';
 import { BARE_POSTMASTER, type SmtpHandlers, type AuthUser, type MessageMeta } from '../core/types.js';
-import { buildReceivedHeader, countReceived, prependHeader, MAX_RECEIVED_HOPS } from '../handlers/trace.js';
+import {
+  buildReceivedHeader, countReceived, prependHeader, MAX_RECEIVED_HOPS, stripOwnAuthResults, sanitizeAuthHeaders,
+} from '../handlers/trace.js';
 import { deliverOnce, deliveryKey, redisDeliveryLedger } from '../handlers/delivery.js';
 import {
   callConnectionFilter,
@@ -125,9 +127,11 @@ async function onMessage(
   ip: string,
   meta?: MessageMeta,
 ): Promise<void> {
+  const hostname = meta?.hostname ?? process.env['SMTP_HOSTNAME'] ?? 'mail.localhost';
   // Internal CoreMail headers (quarantine-release trace) are never accepted
-  // from outside — strip them before filtering, quarantine or delivery.
-  const stripped = stripHeaders(receivedRaw, INTERNAL_MAIL_HEADERS);
+  // from outside — strip them before filtering, quarantine or delivery. Same
+  // for Authentication-Results fields carrying our authserv-id (RFC 8601 §5).
+  const stripped = stripOwnAuthResults(stripHeaders(receivedRaw, INTERNAL_MAIL_HEADERS), hostname);
 
   // RFC 5321 §6.3: loop detection by hop count.
   if (countReceived(stripped) > MAX_RECEIVED_HOPS) {
@@ -158,10 +162,15 @@ async function onMessage(
     method: 'POST',
     headers: {
       'Content-Type': 'application/octet-stream',
+      // The real SMTP session: SPF/DMARC and rspamd evaluate MAIL FROM, HELO and IP.
       'X-Filter-Context': JSON.stringify({
         senderIp: ip,
         mailFrom: from,
         rcptTo: to[0] ?? '',
+        rcpts: to,
+        hostname,
+        ...(meta?.helo ? { helo: meta.helo } : {}),
+        ...(authUser ? { authUser: authUser.email } : {}),
       }),
     },
     body: raw,
@@ -212,9 +221,16 @@ async function onMessage(
     throw new Error(`451 4.7.1 ${filterResult.reason ?? 'Temporary content filter failure'}`);
   }
 
+  // RFC 8601: our verdict travels with the stored message.
+  const authHeaders = filterResult.authHeaders ? sanitizeAuthHeaders(filterResult.authHeaders) : '';
+  const delivered = authHeaders ? prependHeader(raw, authHeaders) : raw;
+  const senderAuth: SenderAuth = authUser
+    ? { authenticatedSender: from }
+    : { verifiedDomains: filterResult.verifiedDomains ?? [] };
+
   if (filterResult.action === 'quarantine') {
     await quarantineMessage({
-      raw,
+      raw: delivered,
       from,
       recipients: to,
       reason:     filterResult.virusName ? 'VIRUS' : 'SPAM',
@@ -253,11 +269,12 @@ async function onMessage(
   const txKey = deliveryKey(from, receivedRaw);
   await deliverOnce(txKey, localDeliveries, externalDeliveries, {
     ledger: redisDeliveryLedger,
-    storeLocal: (rcpt) => storeInboundMessage(raw, {
+    storeLocal: (rcpt) => storeInboundMessage(delivered, {
       fromAddr: from,
       rcptTo: rcpt,
       deliveryKey: txKey,
       toJunk: filterResult.junkFolder ?? false,
+      senderAuth,
       ...(filterResult.spamScore !== undefined ? { spamScore: filterResult.spamScore } : {}),
     }),
     enqueueExternal: async (rcpts) => {
@@ -265,14 +282,14 @@ async function onMessage(
         messageId:  crypto.randomUUID(),
         from,
         to:         rcpts,
-        rawMessage: raw.toString('base64'),
+        rawMessage: delivered.toString('base64'),
       });
       log.info({ from, external: rcpts, originalTo: to }, 'External targets are forwarded via the outbound queue');
     },
   });
 
   // 4. Handle resource mailbox auto-accept for calendar invitations
-  await processResourceMailboxes(raw, to, from);
+  await processResourceMailboxes(raw, to, from, senderAuth);
 }
 
 // ── Exported handler object ───────────────────────────────────────────────────
@@ -328,15 +345,41 @@ async function verifyRecipient(rcptTo: string): Promise<boolean> {
 
 // ── Helper: processResourceMailboxes ─────────────────────────────────────────
 
+function bareAddress(addr: string): string {
+  const m = /<([^>]*)>/.exec(addr);
+  return (m ? m[1]! : addr).trim().replace(/^mailto:/i, '').toLowerCase();
+}
+
+const parseDtStamp = (s: string): Date => {
+  const clean = s.replace(/Z$/, '');
+  if (clean.length === 8) {
+    return new Date(`${clean.slice(0, 4)}-${clean.slice(4, 6)}-${clean.slice(6, 8)}`);
+  }
+  return new Date(
+    `${clean.slice(0, 4)}-${clean.slice(4, 6)}-${clean.slice(6, 8)}T` +
+      `${clean.slice(9, 11)}:${clean.slice(11, 13)}:${clean.slice(13, 15)}Z`,
+  );
+};
+
 /**
  * Auto-accept/decline calendar invitations for resource mailboxes.
- * Parses iCal data from the message and creates/declines bookings accordingly.
+ *
+ * Bookings belong to ONE resource (its ResourceCalendar): a REQUEST/CANCEL
+ * never touches another resource's booking with the same UID. An existing
+ * booking is updated or cancelled only by its stored organizer, and only when
+ * that sender is authenticated (SPF/DKIM/DMARC-aligned or SMTP AUTH). A new
+ * booking from an unauthenticated sender is stored as PENDING (manual approval)
+ * instead of being auto-accepted.
  */
-async function processResourceMailboxes(
+export async function processResourceMailboxes(
   rawMessage: Buffer,
   rcptTo: string[],
   mailFrom: string,
+  senderAuth: SenderAuth | null = null,
 ): Promise<void> {
+  const sender = bareAddress(mailFrom);
+  const senderAuthenticated = !!sender && isAttendeeAuthenticated(sender, senderAuth);
+
   for (const email of rcptTo) {
     const resource = await prisma.resourceMailbox.findFirst({
       where: { email: email.toLowerCase(), active: true },
@@ -344,6 +387,8 @@ async function processResourceMailboxes(
     });
 
     if (!resource) continue;
+    const calendarId = resource.calendar?.id;
+    if (!calendarId) continue;
 
     // Extract iCal data from message (look for VEVENT in text/calendar attachment)
     const rawText = rawMessage.toString('utf8');
@@ -362,52 +407,58 @@ async function processResourceMailboxes(
     if (!uidMatch || !dtStartMatch || !dtEndMatch) continue;
 
     const uid = uidMatch[1]?.trim() ?? '';
+    if (!uid) continue;
     const summary = summaryMatch?.[1]?.trim() ?? 'Meeting';
-    const method = methodMatch?.[1]?.trim() ?? 'REQUEST';
-
-    // Parse dates (basic ISO conversion)
-    const parseDtStamp = (s: string): Date => {
-      const clean = s.replace(/Z$/, '');
-      if (clean.length === 8) {
-        return new Date(`${clean.slice(0, 4)}-${clean.slice(4, 6)}-${clean.slice(6, 8)}`);
-      }
-      return new Date(
-        `${clean.slice(0, 4)}-${clean.slice(4, 6)}-${clean.slice(6, 8)}T` +
-          `${clean.slice(9, 11)}:${clean.slice(11, 13)}:${clean.slice(13, 15)}Z`,
-      );
-    };
+    const method = methodMatch?.[1]?.trim().toUpperCase() ?? 'REQUEST';
 
     const dtStart = parseDtStamp(dtStartMatch[1] ?? '');
     const dtEnd = parseDtStamp(dtEndMatch[1] ?? '');
 
     if (isNaN(dtStart.getTime()) || isNaN(dtEnd.getTime())) continue;
 
-    // Handle CANCEL method — remove booking
+    // UIDs are unique in the table; a booking of ANOTHER resource with this UID
+    // is never read, changed or deleted from here.
+    const existing = await prisma.resourceBooking.findUnique({ where: { uid } });
+    if (existing && existing.calendarId !== calendarId) {
+      log.warn({ resource: email, uid }, 'Resource booking UID belongs to another resource — ignored');
+      continue;
+    }
+    const isOrganizer = !!existing && senderAuthenticated && bareAddress(existing.organizer) === sender;
+
+    // Handle CANCEL method — remove this resource's booking (organizer only)
     if (method === 'CANCEL') {
-      await prisma.resourceBooking.deleteMany({ where: { uid } });
+      if (!existing) continue;
+      if (!isOrganizer) {
+        log.warn({ resource: email, uid, sender, authenticated: senderAuthenticated }, 'Resource booking CANCEL refused — not the authenticated organizer');
+        continue;
+      }
+      await prisma.resourceBooking.delete({ where: { id: existing.id } });
       log.info({ resource: email, uid }, 'Resource booking cancelled');
       continue;
     }
 
-    if (!resource.autoAccept || resource.requireApproval) {
+    if (existing && !isOrganizer) {
+      log.warn({ resource: email, uid, sender, authenticated: senderAuthenticated }, 'Resource booking update refused — not the authenticated organizer');
+      continue;
+    }
+
+    const save = async (status: 'PENDING' | 'DECLINED' | 'ACCEPTED'): Promise<void> => {
+      if (existing) {
+        await prisma.resourceBooking.update({
+          where: { id: existing.id },
+          data: status === 'DECLINED' ? { status } : { dtStart, dtEnd, summary, status, icalData },
+        });
+      } else {
+        await prisma.resourceBooking.create({
+          data: { calendarId, uid, summary, organizer: sender, dtStart, dtEnd, status, icalData },
+        });
+      }
+    };
+
+    if (!resource.autoAccept || resource.requireApproval || !senderAuthenticated) {
       // Store as PENDING for manual approval
-      const calendarId = resource.calendar?.id;
-      if (!calendarId) continue;
-      await prisma.resourceBooking.upsert({
-        where: { uid },
-        create: {
-          calendarId,
-          uid,
-          summary,
-          organizer: mailFrom,
-          dtStart,
-          dtEnd,
-          status: 'PENDING',
-          icalData,
-        },
-        update: { dtStart, dtEnd, summary, status: 'PENDING', icalData },
-      });
-      log.info({ resource: email, uid }, 'Resource booking pending approval');
+      await save('PENDING');
+      log.info({ resource: email, uid, authenticated: senderAuthenticated }, 'Resource booking pending approval');
       continue;
     }
 
@@ -415,7 +466,7 @@ async function processResourceMailboxes(
     if (resource.autoDeclineConflict) {
       const conflict = await prisma.resourceBooking.findFirst({
         where: {
-          calendar: { resourceId: resource.id },
+          calendarId,
           uid: { not: uid },
           status: { in: ['ACCEPTED', 'TENTATIVE'] },
           dtStart: { lt: dtEnd },
@@ -424,50 +475,15 @@ async function processResourceMailboxes(
       });
 
       if (conflict) {
-        log.info(
-          { resource: email, uid, conflict: conflict.uid },
-          'Resource booking declined — conflict',
-        );
-        const calendarId = resource.calendar?.id;
-        if (calendarId) {
-          await prisma.resourceBooking.upsert({
-            where: { uid },
-            create: {
-              calendarId,
-              uid,
-              summary,
-              organizer: mailFrom,
-              dtStart,
-              dtEnd,
-              status: 'DECLINED',
-              icalData,
-            },
-            update: { status: 'DECLINED' },
-          });
-        }
+        log.info({ resource: email, uid, conflict: conflict.uid }, 'Resource booking declined — conflict');
+        await save('DECLINED');
         continue;
       }
     }
 
     // Auto-accept
-    const calendarId = resource.calendar?.id;
-    if (!calendarId) continue;
-
-    await prisma.resourceBooking.upsert({
-      where: { uid },
-      create: {
-        calendarId,
-        uid,
-        summary,
-        organizer: mailFrom,
-        dtStart,
-        dtEnd,
-        status: 'ACCEPTED',
-        icalData,
-      },
-      update: { dtStart, dtEnd, summary, status: 'ACCEPTED', icalData },
-    });
-
+    await save('ACCEPTED');
     log.info({ resource: email, uid, dtStart, dtEnd }, 'Resource booking accepted');
   }
 }
+

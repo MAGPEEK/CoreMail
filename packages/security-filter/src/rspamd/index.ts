@@ -72,14 +72,50 @@ export interface RspamdResult {
   isSpam: boolean;
 }
 
-export async function scanMessage(rawBuffer: Buffer): Promise<RspamdResult> {
+/** SMTP session data rspamd needs for its own SPF/DMARC/HELO/RBL rules. */
+export interface RspamdMeta {
+  ip?: string;
+  helo?: string;
+  /** Envelope MAIL FROM ('' = null sender). */
+  from?: string;
+  rcpts?: readonly string[];
+  /** SMTP AUTH user (authenticated sessions only). */
+  user?: string;
+  /** Our host name (MTA-Name). */
+  hostname?: string;
+}
+
+/** Header values must be single-line printable ASCII (no header injection). */
+function headerSafe(v: string): string | null {
+  const s = v.trim();
+  return s && s.length <= 512 && /^[\x21-\x7e]+$/.test(s) ? s : null;
+}
+
+/**
+ * Pure: HTTP request headers for /checkv2 (rspamd protocol: IP, Helo, From,
+ * Rcpt — one per recipient — User, MTA-Name). Without them rspamd evaluated
+ * SPF/DMARC/RBLs against nothing.
+ */
+export function buildRspamdHeaders(meta: RspamdMeta = {}): Headers {
+  const h = new Headers({ 'Content-Type': 'text/plain', 'Pass': 'all' });
+  const set = (name: string, v: string | undefined) => {
+    const safe = v === undefined ? null : headerSafe(v);
+    if (safe) h.append(name, safe);
+  };
+  set('IP', meta.ip);
+  set('Helo', meta.helo);
+  if (meta.from !== undefined) h.set('From', headerSafe(meta.from) ?? '<>');
+  for (const r of meta.rcpts ?? []) set('Rcpt', r);
+  set('User', meta.user);
+  set('MTA-Name', meta.hostname);
+  return h;
+}
+
+export async function scanMessage(rawBuffer: Buffer, meta: RspamdMeta = {}): Promise<RspamdResult> {
   try {
     const response = await fetch(`${rspamd().scan}/checkv2`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'text/plain',
-        'Pass': 'all',
-      },
+      headers: buildRspamdHeaders(meta),
       body: rawBuffer,
       signal: AbortSignal.timeout(10_000),
     });

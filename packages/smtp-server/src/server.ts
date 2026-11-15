@@ -10,6 +10,7 @@ import {
 import { connectDatabase, waitForObjectStorage, prisma, loadProtocolCert } from '@coremail/storage';
 import { createSmtpServer } from './core/factory.js';
 import { smtpLiveSessions } from './core/live-sessions.js';
+import { inboundTarpitMaxDelayMs } from './core/session.js';
 import type { SmtpServerHandle } from './core/factory.js';
 import { inboundHandlers } from './inbound/handler.js';
 import { submissionHandlers } from './submission/handler.js';
@@ -278,6 +279,8 @@ function createTrackedSmtpServer(port: number, ssl: boolean): TrackedSmtpServer 
     {
       requireAuth: isSubmission,
       handlers:    isSubmission ? submissionHandlers : inboundHandlers,
+      // Tarpit only for inbound MTA traffic (port 25); SMTP_TARPIT_MAX_DELAY_MS=0 disables it.
+      ...(isSubmission ? {} : { tarpitMaxDelayMs: inboundTarpitMaxDelayMs() }),
       ...(isSubmission ? { verifyCredentials: verifySmtpCredentials } : {}),
     } as Parameters<typeof createSmtpServer>[0],
     {

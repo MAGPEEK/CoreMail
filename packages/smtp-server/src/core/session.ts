@@ -73,6 +73,31 @@ function sameIdentity(authzid: string, ...identities: string[]): boolean {
   return identities.some((id) => id.trim().toLowerCase() === wanted);
 }
 
+/** Permanent errors in a session before the tarpit starts. */
+export const TARPIT_THRESHOLD = 3;
+
+/**
+ * Pure: tarpit delay before the next reply — 0 below the threshold, then
+ * 1 s, 2 s, … per further error, capped at `maxMs`.
+ */
+export function tarpitDelayMs(errors: number, maxMs: number | undefined): number {
+  if (!maxMs || maxMs <= 0 || errors < TARPIT_THRESHOLD) return 0;
+  return Math.min(maxMs, (errors - TARPIT_THRESHOLD + 1) * 1000);
+}
+
+/** Max tarpit delay for port 25 from `SMTP_TARPIT_MAX_DELAY_MS` (default 5000, 0 = off, cap 30 s). */
+export function inboundTarpitMaxDelayMs(env: Record<string, string | undefined> = process.env): number {
+  const raw = (env['SMTP_TARPIT_MAX_DELAY_MS'] ?? '').trim();
+  if (raw === '') return 5000;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? Math.min(n, 30_000) : 5000;
+}
+
+/** Replies counted by the tarpit: 5yz, except the 421/554 closing replies. */
+function isTarpitError(line: string): boolean {
+  return /^5\d\d[ -]/.test(line) && !/^554[ -]/.test(line);
+}
+
 /** True when a handler error carries an SMTP reply ("550 …" or an enhanced code "5.7.1 …"). */
 function isReplyError(message: string): boolean {
   return /^[45]\d\d(?: |-|$)/.test(message) || /^[45]\.\d{1,3}\.\d{1,3}\b/.test(message);
@@ -135,6 +160,9 @@ export class SmtpSession {
 
   /** Failed AUTH attempts in this session (421 + disconnect at the limit). */
   private authFailures = 0;
+
+  /** Permanent (5yz) replies sent in this session — tarpit counter. */
+  private permanentErrors = 0;
 
   /**
    * v7.1.0: the credentials of the authenticated user changed. Queued commands
@@ -208,6 +236,13 @@ export class SmtpSession {
       if (this.state === 'QUIT' || this.terminating) return;
       // Received before a STARTTLS that has since been executed → discard.
       if (epoch !== this.epoch) return;
+      // Tarpit: a client that keeps producing errors (dictionary attack,
+      // broken spam bot) waits before each further reply.
+      const delay = this.authUser ? 0 : tarpitDelayMs(this.permanentErrors, this.config.tarpitMaxDelayMs);
+      if (delay > 0) {
+        await new Promise<void>((r) => setTimeout(r, delay));
+        if ((this.state as SmtpState) === 'QUIT' || this.terminating || this.socket.destroyed) return;
+      }
       await (fn() ?? Promise.resolve());
     }).catch(() => {
       // Errors are handled inside each handler — they send their own error
@@ -218,6 +253,7 @@ export class SmtpSession {
   // ─── Send ────────────────────────────────────────────────────────────────────
 
   private send(line: string): void {
+    if (isTarpitError(line)) this.permanentErrors++;
     if (this.socket.writable) {
       this.socket.write(`${line}\r\n`);
     }

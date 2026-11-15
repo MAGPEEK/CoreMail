@@ -69,3 +69,34 @@ test('scanMessage / learnSpam / learnHam call the RSPAMD_URL endpoints', async (
     'http://spam-filter.internal:21334/learnham',
   ]);
 });
+
+test('scanMessage passes the SMTP session (IP, Helo, From, Rcpt, User) to rspamd', async () => {
+  let sent: Headers | undefined;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (_url: string | URL, init?: RequestInit) => {
+    sent = new Headers(init?.headers);
+    return new Response(JSON.stringify({ score: 1, action: 'no action' }), { status: 200 });
+  }) as typeof fetch;
+  try {
+    await scanMessage(Buffer.from('Subject: x\r\n\r\nb'), {
+      ip: '203.0.113.9', helo: 'mx.sender.example', from: 'a@sender.example',
+      rcpts: ['u1@corp.test', 'u2@corp.test'], hostname: 'mx.corp.test',
+    });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.equal(sent?.get('IP'), '203.0.113.9');
+  assert.equal(sent?.get('Helo'), 'mx.sender.example');
+  assert.equal(sent?.get('From'), 'a@sender.example');
+  assert.equal(sent?.get('Rcpt'), 'u1@corp.test, u2@corp.test');
+  assert.equal(sent?.get('MTA-Name'), 'mx.corp.test');
+  assert.equal(sent?.get('User'), null);
+});
+
+test('rspamd headers: null sender is <>, injection attempts are dropped', async () => {
+  const { buildRspamdHeaders } = await import('./index.js');
+  const h = buildRspamdHeaders({ from: '', helo: 'evil\r\nX-Inject: 1', user: 'alice@corp.test' });
+  assert.equal(h.get('From'), '<>');
+  assert.equal(h.get('Helo'), null);
+  assert.equal(h.get('User'), 'alice@corp.test');
+});

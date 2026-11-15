@@ -9,7 +9,7 @@
     "dev": "node --watch dist/server.js",
     "start": "node dist/server.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --import tsx --test src/connection-request.test.ts src/filter-settings.test.ts src/dnsbl/dnsbl.test.ts src/rspamd/rspamd.test.ts"
+    "test": "node --import tsx --test src/connection-request.test.ts src/filter-settings.test.ts src/dnsbl/dnsbl.test.ts src/rspamd/rspamd.test.ts src/spf-dkim/auth.test.ts"
   },
   "dependencies": {
     "@coremail/core": "workspace:*",

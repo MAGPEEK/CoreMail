@@ -3,7 +3,10 @@ import { parseRawMessage } from '@coremail/storage';
 import { checkDnsbl } from '../dnsbl/index.js';
 import { checkGreylist } from '../greylisting/index.js';
 import { checkCountry, type CountryConfig } from '../geoip/index.js';
-import { authenticateMail, shouldRejectByDmarc } from '../spf-dkim/index.js';
+import { prisma } from '@coremail/storage';
+import {
+  authenticateMail, dmarcDisposition, isDomainAuthenticated, addressDomain, type AuthResult,
+} from '../spf-dkim/index.js';
 import { scanBuffer as clamavScan, type ClamavResult } from '../clamav/index.js';
 import { scanMessage as rspamdScan } from '../rspamd/index.js';
 import { checkBlacklist } from '../blacklist/index.js';
@@ -54,6 +57,13 @@ export interface PipelineResult {
   virusName?: string;
   authSummary?: string;
   junkFolder?: boolean;
+  /**
+   * `Received-SPF` + `Authentication-Results` lines (RFC 8601) the SMTP server
+   * prepends to the delivered message.
+   */
+  authHeaders?: string;
+  /** Domains the message is authenticated for (DMARC/SPF/DKIM pass) — used by iTIP. */
+  verifiedDomains?: string[];
 }
 
 export interface ConnectionContext {
@@ -62,6 +72,14 @@ export interface ConnectionContext {
   rcptTo: string;
   domainId?: string;
   userId?: string;
+  /** EHLO/HELO name of the SMTP session (content stage). */
+  helo?: string;
+  /** Our host name — authserv-id of the Authentication-Results header. */
+  hostname?: string;
+  /** All envelope recipients (content stage; rcptTo is the first). */
+  rcpts?: string[];
+  /** SMTP AUTH user of the session, when authenticated. */
+  authUser?: string;
 }
 
 /** Injectable stage implementations (tests replace them; production uses the real modules). */
@@ -74,6 +92,8 @@ export interface PipelineDeps {
   parse: typeof parseRawMessage;
   clamav: (raw: Buffer) => Promise<ClamavResult>;
   rspamd: typeof rspamdScan;
+  /** Is the domain one of ours (active Domain row)? */
+  isLocalDomain: (domain: string) => Promise<boolean>;
 }
 
 const defaultDeps: PipelineDeps = {
@@ -85,6 +105,8 @@ const defaultDeps: PipelineDeps = {
   parse: parseRawMessage,
   clamav: clamavScan,
   rspamd: rspamdScan,
+  isLocalDomain: async (domain) =>
+    !!(await prisma.domain.findFirst({ where: { name: domain.toLowerCase(), active: true }, select: { id: true } })),
 };
 
 /**
@@ -170,27 +192,89 @@ export async function runIpChecks(
   return { action: 'accept', reason: 'Connection checks passed' };
 }
 
+/**
+ * Pure: SPF/DKIM/DMARC decision for an unauthenticated (port 25) message.
+ *  - Anti-spoofing: a local domain in MAIL FROM or in the header From must be
+ *    authenticated (DMARC pass, or SPF/DKIM pass aligned with that domain) —
+ *    our own domains never arrive unauthenticated from outside.
+ *  - DMARC fail → the policy the From domain publishes: reject → 550 5.7.1,
+ *    quarantine → Junk, none → only tagged (Authentication-Results).
+ * Returns null to continue; `{ junk: true }` to deliver to Junk.
+ */
+export async function decideAuthentication(
+  auth: AuthResult,
+  ctx: ConnectionContext,
+  isLocalDomain: (domain: string) => Promise<boolean>,
+): Promise<PipelineResult | { junk: true } | null> {
+  if (ctx.authUser) return null; // authenticated SMTP session — identity checked by SMTP AUTH
+  const verified = auth.verifiedDomains ?? [];
+  const claimed = new Set<string>();
+  const envDomain = ctx.mailFrom ? addressDomain(ctx.mailFrom) : null;
+  if (envDomain) claimed.add(envDomain);
+  if (auth.headerFromDomain) claimed.add(auth.headerFromDomain);
+  for (const domain of claimed) {
+    if (!(await isLocalDomain(domain))) continue;
+    if (!isDomainAuthenticated(domain, verified)) {
+      return {
+        action: 'reject',
+        reason: `Unauthenticated mail claiming local domain ${domain}`,
+        authSummary: auth.summary,
+      };
+    }
+  }
+  switch (dmarcDisposition(auth)) {
+    case 'reject':
+      return {
+        action: 'reject',
+        reason: `DMARC policy of ${auth.headerFromDomain ?? 'the sender domain'} rejects this message`,
+        authSummary: auth.summary,
+      };
+    case 'quarantine':
+      return { junk: true };
+    default:
+      return null;
+  }
+}
+
 export async function runContentChecks(
   rawMessage: Buffer,
   ctx: ConnectionContext,
   config: PipelineConfig = {},
   deps: PipelineDeps = defaultDeps,
 ): Promise<PipelineResult> {
-  const hostname = config.hostname ?? process.env['SMTP_HOSTNAME'] ?? 'mail.localhost';
+  const hostname = ctx.hostname || config.hostname || process.env['SMTP_HOSTNAME'] || 'mail.localhost';
+
+  // ── Stage 2: SPF / DKIM / DMARC — on the real SMTP session data ─────────
+  const auth = await deps.authenticate(rawMessage, {
+    ip: ctx.senderIp,
+    helo: ctx.helo ?? '',
+    mailFrom: ctx.mailFrom,
+    mta: hostname,
+  });
+  const authDecision = await decideAuthentication(auth, ctx, deps.isLocalDomain);
+  if (authDecision && 'action' in authDecision) return authDecision;
+  const dmarcJunk = authDecision !== null && 'junk' in authDecision;
+
+  const result = await runContentStages(rawMessage, ctx, config, deps, auth, hostname);
+  if (result.action !== 'accept') return result;
+  return {
+    ...result,
+    ...(dmarcJunk ? { junkFolder: true, reason: `${result.reason} (DMARC policy quarantine)` } : {}),
+    ...(auth.authHeaders ? { authHeaders: auth.authHeaders } : {}),
+    verifiedDomains: auth.verifiedDomains ?? [],
+  };
+}
+
+async function runContentStages(
+  rawMessage: Buffer,
+  ctx: ConnectionContext,
+  config: PipelineConfig,
+  deps: PipelineDeps,
+  auth: AuthResult,
+  hostname: string,
+): Promise<PipelineResult> {
   const spamJunk   = config.spamScoreJunk   ?? 6.0;
   const spamReject = config.spamScoreReject ?? 15.0;
-
-  // ── Stage 2: SPF / DKIM / DMARC ─────────────────────────────────────────
-  const auth = await deps.authenticate(rawMessage, ctx.senderIp, hostname);
-
-  // Hard DMARC reject (policy=reject and both SPF+DKIM fail)
-  if (shouldRejectByDmarc(auth.dmarc, 'reject') && auth.spf === 'fail' && auth.dkim === 'fail') {
-    return {
-      action: 'reject',
-      reason: 'DMARC policy violation',
-      authSummary: auth.summary,
-    };
-  }
 
   // ── Stage 3: Address blacklist ───────────────────────────────────────────
   const blacklist = await deps.blacklist(ctx.mailFrom, ctx.domainId, ctx.userId);
@@ -236,9 +320,16 @@ export async function runContentChecks(
     log.debug('ClamAV scan skipped (disabled in settings)');
   }
 
-  // ── Stage 4d: rspamd anti-spam ───────────────────────────────────────────
+  // ── Stage 4d: rspamd anti-spam (with the SMTP session data) ─────────────
   if (config.rspamdEnabled !== false) {
-    const spam = await deps.rspamd(rawMessage);
+    const spam = await deps.rspamd(rawMessage, {
+      ip: ctx.senderIp,
+      ...(ctx.helo ? { helo: ctx.helo } : {}),
+      from: ctx.mailFrom,
+      rcpts: ctx.rcpts && ctx.rcpts.length > 0 ? ctx.rcpts : ctx.rcptTo ? [ctx.rcptTo] : [],
+      ...(ctx.authUser ? { user: ctx.authUser } : {}),
+      hostname,
+    });
 
     if (spam.score >= spamReject) {
       return {
@@ -276,3 +367,4 @@ export async function runContentChecks(
     junkFolder: false,
   };
 }
+

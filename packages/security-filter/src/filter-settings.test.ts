@@ -74,6 +74,7 @@ function fakeDeps(over: Partial<NonNullable<Deps>> = {}): NonNullable<Deps> & { 
     parse: async () => ({ attachments: [{ filename: 'invoice.EXE', mimeType: 'application/octet-stream', size: 10 }] }),
     clamav: async () => { calls.push('clamav'); return { status: 'infected' as const, clean: false, virusName: 'Eicar' }; },
     rspamd: async () => { calls.push('rspamd'); return { score: 7 }; },
+    isLocalDomain: async (d: string) => d === 'local.example',
     ...over,
   };
   return d as never;

@@ -17,6 +17,7 @@ import {
   type ConnectionContext,
 } from './pipeline/index.js';
 import { parseConnectionRequest, runConnectionStage } from './connection-request.js';
+import { parseContentContext, contentErrorResult } from './content-request.js';
 import { buildPipelineConfig } from './settings.js';
 import { invalidateGreylistOptsCache } from './greylisting/index.js';
 
@@ -96,11 +97,9 @@ app.post('/check/content', async (req, res) => {
     return;
   }
 
-  let ctx: ConnectionContext;
-  try {
-    ctx = JSON.parse(ctxHeader) as ConnectionContext;
-  } catch {
-    res.status(400).json({ error: 'Invalid X-Filter-Context JSON' });
+  const ctx: ConnectionContext | null = parseContentContext(ctxHeader);
+  if (!ctx) {
+    res.status(400).json({ error: 'Invalid X-Filter-Context (JSON object with a valid senderIp required)' });
     return;
   }
 
@@ -114,8 +113,9 @@ app.post('/check/content', async (req, res) => {
     const result = await runContentChecks(rawMessage, ctx, pipelineConfig);
     res.json(result);
   } catch (err) {
-    log.error({ err }, 'Content check error');
-    res.json({ action: 'accept', reason: 'Internal error — failing open' });
+    const fallback = contentErrorResult();
+    log.error({ err, action: fallback.action }, 'Content check error');
+    res.json(fallback);
   }
 });
 
