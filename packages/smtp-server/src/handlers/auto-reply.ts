@@ -13,8 +13,12 @@
  *    mail that suppresses OOF (`X-Auto-Response-Suppress: All|OOF`); never
  *    answer mail delivered to Junk; only answer mail that names one of the
  *    recipient's addresses in To/Cc/Bcc/Resent-* (§2 — not Bcc'd copies)
- *  - at most one reply per sender per 7 days (§2, Redis), the window restarts
- *    when the out-of-office text or period changes
+ *  - exactly one reply per sender per OOF period (Exchange semantics, §2 asks
+ *    for at most one per 7 days — stricter is fine): Redis key with the period
+ *    id (UserSettings.oofPeriodId, renewed when OOF is switched on or its
+ *    texts/schedule change, see @coremail/storage oof.ts) plus a hash of the
+ *    texts/schedule; it lives until the scheduled end (+1 day), for an
+ *    open-ended OOF for OOF_REPLY_MEMORY_DAYS (default 366)
  *  - reply headers: `Auto-Submitted: auto-replied`, `In-Reply-To`,
  *    `References`, `Subject: Auto: …` (§3.1.5–3.1.7); envelope MAIL FROM is
  *    the null path (§3.3) so that a bounce cannot loop; DKIM-signed with the
@@ -29,6 +33,7 @@ import { prisma } from '@coremail/storage';
 
 const log = createLogger('smtp:auto-reply');
 
+/** Legacy minimum (RFC 3834 §2): never more than one reply per sender per 7 days. */
 export const AUTO_REPLY_WINDOW_SEC = 7 * 24 * 3600;
 
 export interface OofSettings {
@@ -40,6 +45,22 @@ export interface OofSettings {
   oofUseTimeRange: boolean;
   oofStart: Date | null;
   oofEnd: Date | null;
+  /** v8.1: current OOF period ('' for rows written before 8.1). */
+  oofPeriodId?: string;
+}
+
+/**
+ * Pure: how long the "already replied" marker for a sender lives — until the
+ * end of a scheduled period (+1 day), else OOF_REPLY_MEMORY_DAYS (default 366).
+ * Never shorter than the RFC 3834 7-day minimum.
+ */
+export function replyMemoryTtlSec(s: OofSettings, now: Date, env: Record<string, string | undefined> = process.env): number {
+  if (s.oofUseTimeRange && s.oofEnd) {
+    const sec = Math.ceil((s.oofEnd.getTime() - now.getTime()) / 1000) + 24 * 3600;
+    return Math.max(AUTO_REPLY_WINDOW_SEC, sec);
+  }
+  const days = Number(env['OOF_REPLY_MEMORY_DAYS']);
+  return Math.max(AUTO_REPLY_WINDOW_SEC, (Number.isFinite(days) && days > 0 ? days : 366) * 24 * 3600);
 }
 
 /** Lower-cased header name → values (unfolded). */
@@ -135,10 +156,10 @@ export function decideAutoReply(i: AutoReplyInput): AutoReplyDecision {
   return s.oofExternal.trim() ? { send: true, body: s.oofExternal, audience: 'external' } : { send: false, reason: 'no external text' };
 }
 
-/** Rate-limit key: one reply per (user, sender, oof text/period) per window. */
+/** Rate-limit key: one reply per (user, sender, OOF period id + texts/schedule). */
 export function rateLimitKey(userId: string, sender: string, s: OofSettings): string {
   const version = createHash('sha256')
-    .update(`${s.oofInternal}\0${s.oofExternal}\0${s.oofStart?.toISOString() ?? ''}\0${s.oofEnd?.toISOString() ?? ''}`)
+    .update(`${s.oofPeriodId ?? ''}\0${s.oofInternal}\0${s.oofExternal}\0${s.oofUseTimeRange ? 1 : 0}\0${s.oofStart?.toISOString() ?? ''}\0${s.oofEnd?.toISOString() ?? ''}`)
     .digest('hex').slice(0, 16);
   const who = createHash('sha256').update(sender.toLowerCase()).digest('hex').slice(0, 24);
   return `oof:sent:${userId}:${version}:${who}`;
@@ -224,7 +245,8 @@ export async function sendAutoReplyIfNeeded(ctx: AutoReplyContext, deps: AutoRep
       now: ctx.now ?? new Date(),
     });
     if (!decision.send) return decision.reason;
-    if (!(await deps.acquire(rateLimitKey(ctx.userId, sender, settings), AUTO_REPLY_WINDOW_SEC))) return 'rate limited';
+    const now = ctx.now ?? new Date();
+    if (!(await deps.acquire(rateLimitKey(ctx.userId, sender, settings), replyMemoryTtlSec(settings, now)))) return 'rate limited';
 
     const name = await deps.displayName(ctx.userId);
     const raw = await buildAutoReply({
@@ -249,7 +271,7 @@ const defaultDeps: AutoReplyDeps = {
     where: { userId },
     select: {
       oofEnabled: true, oofInternal: true, oofExternal: true, oofExternalEnabled: true,
-      oofExternalOnlyContacts: true, oofUseTimeRange: true, oofStart: true, oofEnd: true,
+      oofExternalOnlyContacts: true, oofUseTimeRange: true, oofStart: true, oofEnd: true, oofPeriodId: true,
     },
   }),
   ownAddresses: async (userId, email) => [

@@ -8,8 +8,8 @@
  */
 
 import { createLogger } from '@coremail/core';
-import { prisma, stripHeaders, INTERNAL_MAIL_HEADERS, type SenderAuth } from '@coremail/storage';
-import { bounceUnknownLocal } from '../handlers/local-delivery.js';
+import { prisma, stripHeaders, INTERNAL_MAIL_HEADERS, checkReceiveQuotaForAddress, type SenderAuth } from '@coremail/storage';
+import { bounceUnknownLocal, bounceQuotaLocal } from '../handlers/local-delivery.js';
 import crypto from 'crypto';
 import { storeInboundMessage } from '../handlers/message.js';
 import { quarantineMessage } from '../handlers/quarantine.js';
@@ -112,8 +112,13 @@ async function onRcptTo(
       return '5.7.1 Local delivery is disabled by administrator';
     }
     // v8.1: an IDN domain matches the local domain in either spelling.
-    const exists = await verifyRecipient(await canonicalRecipient(to));
+    const canonical = await canonicalRecipient(to);
+    const exists = await verifyRecipient(canonical);
     if (!exists) return '5.1.1 User unknown';
+    // v8.1: ProhibitSendReceiveQuota — refuse at RCPT TO (cached usage, no
+    // mailbox scan): 552 5.2.2, or 452 4.2.2 per QUOTA_FULL_PERMANENT.
+    const full = await checkReceiveQuotaForAddress(canonical);
+    if (full) return full;
   } catch (err) {
     log.error({ err, to }, 'verifyRecipient error');
     return '4.3.0 Temporary failure';
@@ -277,6 +282,7 @@ async function onMessage(
   //    (RFC 5321 §6.1 — neither lost nor duplicated mail).
   const txKey = deliveryKey(from, receivedRaw);
   const unknownRcpts: string[] = [];
+  const fullRcpts: string[] = [];
   await deliverOnce(txKey, localDeliveries, externalDeliveries, {
     ledger: redisDeliveryLedger,
     // Resource mailboxes (room bookings) are handled inside storeInboundMessage.
@@ -290,6 +296,7 @@ async function onMessage(
         ...(filterResult.spamScore !== undefined ? { spamScore: filterResult.spamScore } : {}),
       });
       if (result === 'unknown') unknownRcpts.push(rcpt);
+      if (result === 'quota') fullRcpts.push(rcpt);
     },
     enqueueExternal: async (rcpts) => {
       const jobDsn = dsnForRecipients(dsn, rcpts);
@@ -307,7 +314,7 @@ async function onMessage(
   // 4. RFC 3461 NOTIFY=SUCCESS: "delivered" DSN for the local recipients as
   //    addressed. Not for mail filed as junk (no delivery confirmation to spammers).
   if (dsn && !filterResult.junkFolder) {
-    await notifyLocalSuccess(from, to.filter((r) => !unknownRcpts.includes(r)), dsn, hostname, delivered);
+    await notifyLocalSuccess(from, to.filter((r) => !unknownRcpts.includes(r) && !fullRcpts.includes(r)), dsn, hostname, delivered);
   }
 
   // 5. A recipient verified at RCPT TO but gone at delivery time (deleted in
@@ -315,6 +322,11 @@ async function onMessage(
   if (unknownRcpts.length > 0) {
     await bounceUnknownLocal(raw, from, unknownRcpts, { hostname }).catch((err: unknown) =>
       log.error({ err, from, unknownRcpts }, 'NDR for unknown local recipients failed'));
+  }
+  // 6. v8.1: a mailbox that filled up between RCPT TO and delivery → NDR (5.2.2).
+  if (fullRcpts.length > 0) {
+    await bounceQuotaLocal(raw, from, fullRcpts, { hostname }).catch((err: unknown) =>
+      log.error({ err, from, fullRcpts }, 'NDR for over-quota local recipients failed'));
   }
 }
 

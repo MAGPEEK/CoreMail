@@ -1,4 +1,4 @@
-import { prisma, parseRawMessage, uploadBuffer, storeRawMessage, truncateBodyColumn, attachmentKey, applyMailRules, applyTransportRules, applyOutcomeToBuffer, processITipInbound, createMessage, createRulePatternBudget, type SenderAuth } from '@coremail/storage';
+import { prisma, parseRawMessage, uploadBuffer, storeRawMessage, truncateBodyColumn, attachmentKey, applyMailRules, applyTransportRules, applyOutcomeToBuffer, processITipInbound, createMessage, createRulePatternBudget, checkReceiveQuota, recordDelivery, type SenderAuth, type QuotaOwner } from '@coremail/storage';
 import { getRedisClient, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
 import { verifyIncomingSmime, decryptIncomingSmime } from '../smime/index.js';
 import { enqueueRuleForward } from './rule-forward.js';
@@ -41,8 +41,10 @@ export interface StoreOptions {
  *  - 'resource' the recipient is a resource mailbox — the invitation was processed
  *  - 'unknown'  no active mailbox/resource of that address — the caller sends an
  *               NDR to the sender (never a silent drop)
+ *  - 'quota'    v8.1: the mailbox is at/over its ProhibitSendReceiveQuota — not
+ *               stored; the caller sends an NDR (5.2.2)
  */
-export type StoreResult = 'stored' | 'resource' | 'unknown';
+export type StoreResult = 'stored' | 'resource' | 'unknown' | 'quota';
 
 export async function storeInboundMessage(
   rawBuffer: Buffer,
@@ -73,6 +75,17 @@ export async function storeInboundMessage(
     if (handled.length > 0) return 'resource';
     log.warn({ rcptTo: opts.rcptTo }, 'Mailbox not found — recipient unknown at delivery time');
     return 'unknown';
+  }
+
+  // v8.1: ProhibitSendReceiveQuota. Port 25 already refuses at RCPT TO; this
+  // covers every other path (submission, outbound worker for MWA/JMAP/EAS, rule
+  // redirects). Null-sender mail (bounces, DSNs) is refused too, like Exchange.
+  const quotaOwner: QuotaOwner = ownerType === 'user' && user
+    ? { kind: 'user', id: user.id }
+    : { kind: 'shared', id: sharedMailbox!.id };
+  if (await checkReceiveQuota(quotaOwner)) {
+    log.warn({ rcptTo: opts.rcptTo }, 'Mailbox over its receive quota — not delivered');
+    return 'quota';
   }
 
   // ── Phase 9: S/MIME — decrypt + verify (user mailboxes ONLY, not SharedMailbox)
@@ -396,6 +409,8 @@ export async function storeInboundMessage(
       data: { usedBytes: { increment: effectiveBuffer.length } },
     });
   }
+  // v8.1: cached quota usage + (throttled) warning mail when the warning level is reached
+  void recordDelivery(quotaOwner, effectiveBuffer.length * (1 + copyMessageIds.length));
 
   // Publish real-time notification
   // For SharedMailbox: publish to all users with FULL_ACCESS/READ_ONLY permission,

@@ -13,7 +13,7 @@ import { domainVariants } from '../core/idn.js';
 import { BARE_POSTMASTER } from '../core/types.js';
 import { signMessageForUser, encryptMessageForRecipient } from '../smime/index.js';
 import { storeInboundMessage, type StoreResult } from '../handlers/message.js';
-import { stripForLocalDelivery, unknownRecipientDsn } from '../handlers/local-delivery.js';
+import { stripForLocalDelivery, unknownRecipientDsn, quotaExceededDsn } from '../handlers/local-delivery.js';
 import { isRuleForwardedAlready } from '../handlers/rule-forward.js';
 import type { SenderAuth } from '@coremail/storage';
 import { expandRecipients } from '../handlers/expand.js';
@@ -301,6 +301,7 @@ export async function deliverOutboundJob(job: OutboundJobLike, buffer: Buffer, d
 
   // ── Local delivery (write directly into the mailbox) ──────────────────────
   const unknownLocal: string[] = [];
+  const fullLocal: string[] = [];
   for (const rcpt of finalLocal) {
     if (delivered.has(rcpt) || bounced.has(rcpt)) continue;
     let result: void | StoreResult;
@@ -314,6 +315,12 @@ export async function deliverOutboundJob(job: OutboundJobLike, buffer: Buffer, d
       // no such mailbox (typo in a local domain, deleted user) → NDR below
       bounced.add(rcpt);
       unknownLocal.push(rcpt);
+      continue;
+    }
+    if (result === 'quota') {
+      // v8.1: mailbox over its ProhibitSendReceiveQuota → NDR 5.2.2 below
+      bounced.add(rcpt);
+      fullLocal.push(rcpt);
       continue;
     }
     delivered.add(rcpt);
@@ -331,8 +338,19 @@ export async function deliverOutboundJob(job: OutboundJobLike, buffer: Buffer, d
     }
     newlyBounced.push(...unknownLocal);
   }
+  if (fullLocal.length > 0) {
+    await persist(data.pendingFailures ?? []); // recorded before the NDR: at most one
+    const notify = fullLocal.filter((r) => !(data.finalNdrRcpts ?? []).includes(r));
+    if (notify.length > 0 && from) {
+      await deps.bounce({
+        ...quotaExceededDsn(buffer, from, notify, await deps.hostname(), data.ruleRedirect !== true),
+        ...(data.message ? { originalSubject: data.message.subject, originalMessageId: data.message.messageId } : {}),
+      });
+    }
+    newlyBounced.push(...fullLocal);
+  }
   // NOTIFY=SUCCESS: "delivered" for the local recipients as addressed (aliases included).
-  if (finalLocal.length > 0) await notifySuccess(localRcpts.filter((r) => !unknownLocal.includes(r)), 'delivered');
+  if (finalLocal.length > 0) await notifySuccess(localRcpts.filter((r) => !unknownLocal.includes(r) && !fullLocal.includes(r)), 'delivered');
 
   // ── External delivery via MX / smarthost ──────────────────────────────────
   const pending = external.filter((r) => !delivered.has(r) && !bounced.has(r));

@@ -9,7 +9,7 @@
 
 import { createLogger } from '@coremail/core';
 import {
-  prisma, checkHeaderSenderIdentity, isSenderAddressAllowed, listAllowedSenderAddresses,
+  prisma, checkHeaderSenderIdentity, isSenderAddressAllowed, listAllowedSenderAddresses, checkSendQuota,
 } from '@coremail/storage';
 import { storeInboundMessage } from '../handlers/message.js';
 import { expandRecipients, isLocalDomainAddress } from '../handlers/expand.js';
@@ -18,7 +18,7 @@ import { sendSuccessDsn, rawSubjectAndId } from '../outbound/dsn.js';
 import { dsnForRecipients } from '../core/dsn-params.js';
 import { buildReceivedHeader, formatRfc5322Date, prependHeader } from '../handlers/trace.js';
 import { deliverOnce, deliveryKey, redisDeliveryLedger } from '../handlers/delivery.js';
-import { stripForLocalDelivery, bounceUnknownLocal } from '../handlers/local-delivery.js';
+import { stripForLocalDelivery, bounceUnknownLocal, bounceQuotaLocal } from '../handlers/local-delivery.js';
 import type { SmtpHandlers, AuthUser, MessageMeta } from '../core/types.js';
 
 // ── RFC 822 lightweight header extraction ─────────────────────────────────────
@@ -77,6 +77,14 @@ async function onMailFrom(
       'SMTP submission: sender address not allowed',
     );
     return '5.7.1 Sender address not allowed for authenticated user';
+  }
+
+  // v8.1: ProhibitSendQuota — a mailbox at/over its send limit may not send
+  // (552 5.2.2, RFC 3463 "mailbox full"). Same check as REST/JMAP/EAS.
+  const quota = await checkSendQuota(authUser.id);
+  if (!quota.allowed) {
+    log.info({ authed: authUser.email, usedBytes: quota.status.usedBytes }, 'SMTP submission refused: mailbox over its send quota');
+    return quota.reply;
   }
 
   return null;
@@ -162,6 +170,7 @@ async function onMessage(
   const localRaw = expandedLocalRcpts.length > 0 ? await stripForLocalDelivery(submittedRaw, [hostname]) : submittedRaw;
   const txKey = deliveryKey(from, receivedRaw);
   const unknownRcpts: string[] = [];
+  const fullRcpts: string[] = [];
   await deliverOnce(txKey, expandedLocalRcpts, externalRcpts, {
     ledger: redisDeliveryLedger,
     // MAIL FROM was checked against the SMTP AUTH identity in onMailFrom.
@@ -172,6 +181,7 @@ async function onMessage(
         senderAuth: { authenticatedSender: from },
       });
       if (result === 'unknown') unknownRcpts.push(rcpt);
+      if (result === 'quota') fullRcpts.push(rcpt);
     },
     enqueueExternal: async (rcpts) => {
       // RFC 3461: the DSN request travels with the queue job (passed on to a
@@ -190,10 +200,11 @@ async function onMessage(
 
   // RFC 3461 NOTIFY=SUCCESS: "delivered" DSN for local recipients (stored in the sender's mailbox).
   const dsn = meta?.envelope?.dsn;
-  if (dsn && localRcpts.some((r) => !unknownRcpts.includes(r))) {
+  const failed = (r: string): boolean => unknownRcpts.includes(r) || fullRcpts.includes(r);
+  if (dsn && localRcpts.some((r) => !failed(r))) {
     const original = rawSubjectAndId(submittedRaw);
     await sendSuccessDsn({
-      from, rcpts: localRcpts.filter((r) => !unknownRcpts.includes(r)), action: 'delivered', dsn, hostname, originalRaw: submittedRaw,
+      from, rcpts: localRcpts.filter((r) => !failed(r)), action: 'delivered', dsn, hostname, originalRaw: submittedRaw,
       subject: original.subject, messageId: original.messageId, deliverExternal: true,
     });
   }
@@ -202,6 +213,10 @@ async function onMessage(
   if (unknownRcpts.length > 0) {
     await bounceUnknownLocal(submittedRaw, from, unknownRcpts, { hostname }).catch((err: unknown) =>
       log.error({ err, from, unknownRcpts }, 'NDR for unknown local recipients failed'));
+  }
+  if (fullRcpts.length > 0) {
+    await bounceQuotaLocal(submittedRaw, from, fullRcpts, { hostname }).catch((err: unknown) =>
+      log.error({ err, from, fullRcpts }, 'NDR for over-quota local recipients failed'));
   }
 
   // MAIL_FLOW — message flow tracing (outbound ACCEPTED)
