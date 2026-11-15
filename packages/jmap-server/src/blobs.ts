@@ -13,6 +13,7 @@ import { prisma, downloadBuffer, uploadBuffer, jmapUploadKey, parseRawMessage } 
 import { getRedisClient } from '@coremail/core';
 import type { AccountContext } from './types.js';
 import { loadRawMessage, bodyPartBuffer } from './mail/raw.js';
+import { assertUploadWritable, reserveUploadQuota, type QuotaRedis } from './request-limits.js';
 
 export interface ResolvedBlob {
   buffer: Buffer;
@@ -26,15 +27,27 @@ function metaKey(accountId: string, blobId: string): string {
   return `jmap:blob:${accountId}:${blobId}`;
 }
 
+/**
+ * Stores an upload. v8.1: refused for read-only accounts (UploadReadOnlyError)
+ * and counted against the account's upload quota (UploadQuotaError).
+ */
 export async function storeUpload(account: AccountContext, data: Buffer, type: string): Promise<{ blobId: string; size: number; type: string }> {
+  assertUploadWritable(account);
   const blobId = `u-${randomBytes(16).toString('hex')}`;
   const contentType = type || 'application/octet-stream';
-  await uploadBuffer(jmapUploadKey(account.accountId, blobId), data, contentType);
-  await getRedisClient().set(
-    metaKey(account.accountId, blobId),
-    JSON.stringify({ type: contentType, size: data.length }),
-    'EX', UPLOAD_TTL_SEC,
-  );
+  const redis = getRedisClient();
+  const unreserve = await reserveUploadQuota(redis as unknown as QuotaRedis, account.accountId, blobId, data.length);
+  try {
+    await uploadBuffer(jmapUploadKey(account.accountId, blobId), data, contentType);
+    await redis.set(
+      metaKey(account.accountId, blobId),
+      JSON.stringify({ type: contentType, size: data.length }),
+      'EX', UPLOAD_TTL_SEC,
+    );
+  } catch (err) {
+    await unreserve().catch(() => undefined);
+    throw err;
+  }
   return { blobId, size: data.length, type: contentType };
 }
 
@@ -55,7 +68,7 @@ export async function resolveBlob(account: AccountContext, blobId: string): Prom
 
   if (blobId.startsWith('m-')) {
     const msg = await prisma.message.findFirst({
-      where: { id: blobId.slice(2), folder: { mailboxId: account.mailboxId } },
+      where: { id: blobId.slice(2), deletedAt: null, folder: { mailboxId: account.mailboxId } },
       include: { attachments: true },
     });
     if (!msg) return null;
@@ -64,7 +77,7 @@ export async function resolveBlob(account: AccountContext, blobId: string): Prom
 
   if (blobId.startsWith('a-')) {
     const att = await prisma.attachment.findFirst({
-      where: { id: blobId.slice(2), message: { folder: { mailboxId: account.mailboxId } } },
+      where: { id: blobId.slice(2), message: { deletedAt: null, folder: { mailboxId: account.mailboxId } } },
     });
     if (!att) return null;
     try {
@@ -89,7 +102,7 @@ export async function resolveBlob(account: AccountContext, blobId: string): Prom
   const part = /^p-(.+)-(text|html)$/.exec(blobId);
   if (part) {
     const msg = await prisma.message.findFirst({
-      where: { id: part[1]!, folder: { mailboxId: account.mailboxId } },
+      where: { id: part[1]!, deletedAt: null, folder: { mailboxId: account.mailboxId } },
       select: { bodyText: true, bodyHtml: true },
     });
     if (!msg) return null;
@@ -109,13 +122,13 @@ export async function lookupBlobReferences(
   let messageIds: string[] = [];
   if (blobId.startsWith('m-')) {
     const m = await prisma.message.findFirst({
-      where: { id: blobId.slice(2), folder: { mailboxId: account.mailboxId } }, select: { id: true },
+      where: { id: blobId.slice(2), deletedAt: null, folder: { mailboxId: account.mailboxId } }, select: { id: true },
     });
     if (!m) return null;
     messageIds = [m.id];
   } else if (blobId.startsWith('a-')) {
     const a = await prisma.attachment.findFirst({
-      where: { id: blobId.slice(2), message: { folder: { mailboxId: account.mailboxId } } }, select: { messageId: true },
+      where: { id: blobId.slice(2), message: { deletedAt: null, folder: { mailboxId: account.mailboxId } } }, select: { messageId: true },
     });
     if (!a) return null;
     messageIds = [a.messageId];
@@ -123,7 +136,7 @@ export async function lookupBlobReferences(
     const part = /^p-(.+)-(text|html)$/.exec(blobId);
     if (!part) return null;
     const m = await prisma.message.findFirst({
-      where: { id: part[1]!, folder: { mailboxId: account.mailboxId } }, select: { id: true },
+      where: { id: part[1]!, deletedAt: null, folder: { mailboxId: account.mailboxId } }, select: { id: true },
     });
     if (!m) return null;
     messageIds = [m.id];

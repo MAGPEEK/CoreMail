@@ -7,10 +7,13 @@ import { CAP_BLOB } from '../capabilities.js';
 import { MethodError, requestTooLarge, setError } from '../errors.js';
 import { LIMITS } from '../settings.js';
 import { lookupBlobReferences, resolveBlob, storeUpload } from '../blobs.js';
+import { UploadQuotaError } from '../request-limits.js';
 import type { JsonObject } from '../types.js';
 
 registerMethod('Blob/upload', CAP_BLOB, async (args, ctx) => {
   const account = ctx.account(args['accountId']);
+  // v8.1: no uploads into read-only accounts.
+  if (account.readOnly) throw new MethodError('accountReadOnly');
   const create = (args['create'] ?? {}) as Record<string, JsonObject>;
   if (typeof create !== 'object' || Array.isArray(create)) throw new MethodError('invalidArguments', 'create must be an object');
   if (Object.keys(create).length > LIMITS.maxObjectsInSet) throw requestTooLarge();
@@ -39,7 +42,9 @@ registerMethod('Blob/upload', CAP_BLOB, async (args, ctx) => {
       ctx.createdIds.set(cid, stored.blobId);
       created[cid] = { id: stored.blobId, type: stored.type, size: stored.size };
     } catch (e) {
-      notCreated[cid] = e && typeof e === 'object' && 'type' in e ? (e as JsonObject) : setError('serverFail', e instanceof Error ? e.message : undefined);
+      notCreated[cid] = e instanceof UploadQuotaError
+        ? setError('overQuota', e.message)
+        : e && typeof e === 'object' && 'type' in e ? (e as JsonObject) : setError('serverFail', e instanceof Error ? e.message : undefined);
     }
   }
   return {

@@ -8,7 +8,7 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsx watch src/server.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --import tsx --import ./src/test-env.ts --test src/dispatcher.test.ts src/state.test.ts src/mail/keywords.test.ts src/mail/strip-bcc.test.ts src/methods/common.test.ts src/accounts.test.ts src/auth-basic.test.ts src/auth-invalidation.test.ts src/hardening.test.ts src/push/live.test.ts src/push/ws-origin.test.ts src/review-710.test.ts",
+    "test": "node --import tsx --import ./src/test-env.ts --test src/dispatcher.test.ts src/state.test.ts src/mail/keywords.test.ts src/mail/strip-bcc.test.ts src/methods/common.test.ts src/accounts.test.ts src/auth-basic.test.ts src/auth-invalidation.test.ts src/hardening.test.ts src/push/live.test.ts src/push/ws-origin.test.ts src/review-710.test.ts src/request-limits.test.ts",
     "start": "node dist/server.js"
   },
   "dependencies": {

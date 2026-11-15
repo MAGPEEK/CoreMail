@@ -132,6 +132,29 @@ the REST API and the jmap-server itself feed — this keeps MWA and JMAP clients
 5. **Environment variables** (set in `docker-compose.yml`): `JMAP_PORT=3006`,
    `JMAP_SERVICE_URL=http://localhost:3006`; optionally `VAPID_*`.
 
+## Limits (v8.1)
+
+The limits advertised in the session object are enforced:
+
+| Limit | Value | Enforcement |
+|-------|-------|-------------|
+| `maxConcurrentRequests` | 8 per user | HTTP `/jmap/api` and WebSocket `Request` share the counter; above it → request error `urn:ietf:params:jmap:error:limit` (`limit: "maxConcurrentRequests"`, HTTP 400) |
+| `maxConcurrentUpload` | 4 per user | `POST /jmap/upload/…`, checked before the body is read → `limit` (`maxConcurrentUpload`) |
+| `maxSizeUpload` | 50 MB | 413 `limit` (`maxSizeUpload`) |
+
+Upload quota per account (live `u-…` blobs, 7-day lifetime), tracked in Redis
+(`jmap:upload:usage:<accountId>`):
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `JMAP_UPLOAD_QUOTA_MB` | `500` | Bytes of live uploads per account; `0` disables the quota. Above it: HTTP 403 `urn:ietf:params:jmap:error:overQuota`, `Blob/upload` → SetError `overQuota` |
+| `JMAP_UPLOAD_MAX_BLOBS` | `10000` | Live uploads per account; `0` disables the cap |
+
+Uploads into a read-only account (READ_ONLY delegation / Shared Mailbox) are refused:
+HTTP 403 `urn:ietf:params:jmap:error:forbidden`, `Blob/upload` → method error
+`accountReadOnly`. Blob ids `m-`/`a-`/`p-` of soft-deleted (tombstoned) messages no
+longer resolve.
+
 ## Quick test
 
 See [Examples with curl](#examples-with-curl).
