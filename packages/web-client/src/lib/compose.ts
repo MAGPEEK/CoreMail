@@ -58,3 +58,27 @@ export function replyThreading(orig: OriginalMessageRef): { inReplyTo: string; r
   const refs = parent && parent !== mid ? `${parent} ${mid}` : mid;
   return { inReplyTo: mid, references: refs };
 }
+
+/**
+ * Splits a comma/semicolon separated recipient field into entries, keeping
+ * quoted display names together (`"Doe, John" <j@x>`). Empty entries are dropped.
+ */
+export function splitRecipients(value: string): string[] {
+  const out: string[] = [];
+  let cur = '';
+  let quoted = false;
+  let angle = false;
+  for (const ch of value) {
+    if (ch === '"' && !angle) quoted = !quoted;
+    else if (ch === '<' && !quoted) angle = true;
+    else if (ch === '>' && !quoted) angle = false;
+    if ((ch === ',' || ch === ';') && !quoted && !angle) {
+      if (cur.trim()) out.push(cur.trim());
+      cur = '';
+      continue;
+    }
+    cur += ch;
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out;
+}

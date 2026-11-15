@@ -1,12 +1,12 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   X, Minus, Maximize2, Send, Paperclip, Loader2,
   Bold, Italic, Underline as LucideUnderline, Strikethrough,
   AlignLeft, AlignCenter, AlignRight, AlignJustify,
   List, ListOrdered, Link2, Undo2, Redo2, Eraser,
   ChevronDown, ChevronUp, Quote, Code2, Highlighter, Type, FileIcon,
-  Clock, Calendar as CalendarIcon, Check,
+  Clock, Calendar as CalendarIcon, Check, Trash2,
 } from 'lucide-react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
@@ -20,12 +20,24 @@ import FontFamilyExt from '@tiptap/extension-font-family';
 import { api, fetchBlob } from '../api/client.js';
 import type { Message } from '../api/types.js';
 import { escapeHtml, quoteMailHtml, textToQuotedHtml } from '../lib/mailHtml.js';
-import { replyThreading, safeLinkUrl } from '../lib/compose.js';
+import { replyThreading, safeLinkUrl, splitRecipients } from '../lib/compose.js';
 import { FontSizeExt, InlineImageExt } from './editorExtensions.js';
 import { toLocalInput } from '../lib/datetime.js';
-import { useUiStore, useUiPrefs } from '../store/ui.js';
+import { useUiStore, useUiPrefs, type ComposeAttachment, type ComposeContext } from '../store/ui.js';
 import toast from 'react-hot-toast';
-import { queueDelayedSend, isUnloading } from './DelayedSendToast.js';
+import { queueHeldSend } from './DelayedSendToast.js';
+import {
+  createDraftAutosave, isDraftAttachment, mergeSavedAttachments,
+  type DraftAutosave, type SaveStatus,
+} from '../lib/draft-autosave.js';
+import {
+  saveDraft, loadDraft, deleteDraft, sendDraft, unsendDraft,
+  type DraftPayload, type SavedDraftResponse,
+} from '../lib/draft-api.js';
+import { translate, fmt } from '../i18n/useT.js';
+import { toastError } from '../lib/errors.js';
+
+const attachmentName = (a: ComposeAttachment) => (isDraftAttachment(a) ? a.filename : a.name);
 
 // ── Color palettes ────────────────────────────────────────────────────────────
 const TEXT_COLORS = [
@@ -425,6 +437,10 @@ export function ComposeWindow() {
   const initialCc = composeCtx?.mode === 'replyAll' ? (composeCtx?.ccAddrs ?? []).join(', ') : '';
   // Undo send / failed send: reopen with exactly what the user had written
   const restore = composeCtx?.restore;
+  // Server draft being edited (opened from Drafts, undo send); loaded below
+  // unless a restore snapshot (fresher, in memory) is given.
+  const initialDraftId = composeCtx?.draftId ?? null;
+  const loadDraftFromServer = !!initialDraftId && !restore;
   const { sendDelaySec } = useUiPrefs();
 
   const [minimized, setMinimized] = useState(false);
@@ -434,9 +450,16 @@ export function ComposeWindow() {
   const [showCc, setShowCc]   = useState(restore ? !!restore.cc : !!initialCc);
   const [showBcc, setShowBcc] = useState(!!restore?.bcc);
   const [subject, setSubject] = useState(restore ? restore.subject : initialSubject);
-  const [attachments, setAttachments] = useState<File[]>(restore ? restore.attachments : []);
+  const [attachments, setAttachments] = useState<ComposeAttachment[]>(restore ? restore.attachments : []);
+  const [draftLoading, setDraftLoading] = useState(loadDraftFromServer);
+  const [saveInfo, setSaveInfo] = useState<{ status: SaveStatus; savedAt?: string }>({ status: 'idle' });
+  const [scheduling, setScheduling] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const signatureInserted = useRef(false);
+  /** Threading headers of a reopened draft (kept on every save). */
+  const draftThreading = useRef<{ inReplyTo?: string; references?: string }>({});
+  /** Set once the mail was handed to the server or discarded: no save on close. */
+  const finishedRef = useRef(false);
 
   // Original message of a reply/forward: Message-ID for threading, attachments
   // for forwarding, body when the compose context carries none (list context menu)
@@ -528,6 +551,8 @@ export function ComposeWindow() {
       editor.commands.focus('start');
       return;
     }
+    // A reopened draft brings its own body (loaded below)
+    if (loadDraftFromServer) return;
     if (!sigData || waitForOriginal) return;
     signatureInserted.current = true;
     const isReply   = isReplyMode;
@@ -553,7 +578,134 @@ export function ComposeWindow() {
     if (!sig && !quoted) return;
     editor.commands.setContent(`<p></p>${sig}${quoted ? `<p></p>${quoted}` : ''}`);
     editor.commands.focus('start');
-  }, [editor, sigData, composeCtx, original, waitForOriginal, isReplyMode, isForwardMode, restore]);
+  }, [editor, sigData, composeCtx, original, waitForOriginal, isReplyMode, isForwardMode, restore, loadDraftFromServer]);
+
+  // ── Server draft: autosave (3 s idle + close/minimise), reopen, discard ────
+  /** Reads the current compose state (refs: the saver outlives renders). */
+  const payloadRef = useRef<() => DraftPayload & { snapshot: ComposeAttachment[] }>(() => ({
+    to: [], cc: [], bcc: [], subject: '', bodyHtml: '', bodyText: '', keepAttachmentIds: [], files: [], snapshot: [],
+  }));
+  payloadRef.current = () => {
+    // Threading: the original's Message-ID header (+ References); the internal id
+    // only when the original has no Message-ID or could not be loaded
+    let threading: { inReplyTo?: string; references?: string } = draftThreading.current;
+    if (isReplyMode && composeCtx?.id) {
+      threading = original ? replyThreading(original) : { inReplyTo: composeCtx.id };
+    }
+    return {
+      to: splitRecipients(to),
+      cc: splitRecipients(cc),
+      bcc: splitRecipients(bcc),
+      subject,
+      bodyHtml: editor?.getHTML() ?? '',
+      bodyText: editor?.getText() ?? '',
+      ...(threading.inReplyTo ? { inReplyTo: threading.inReplyTo } : {}),
+      ...(threading.references ? { references: threading.references } : {}),
+      keepAttachmentIds: attachments.filter(isDraftAttachment).map((a) => a.id),
+      files: attachments.filter((a): a is File => !isDraftAttachment(a)),
+      snapshot: [...attachments],
+    };
+  };
+
+  const saverRef = useRef<DraftAutosave | null>(null);
+  if (!saverRef.current) {
+    saverRef.current = createDraftAutosave({
+      initialId: initialDraftId,
+      snapshot: () => payloadRef.current(),
+      save: (id, { snapshot: _snapshot, ...payload }) => saveDraft(id, payload),
+      onStatus: (status, info) => setSaveInfo({ status, ...(info.savedAt ? { savedAt: info.savedAt } : {}) }),
+      onSaved: (saved, state) => {
+        const stored = (saved as SavedDraftResponse).attachments ?? [];
+        setAttachments((cur) => {
+          const merged = mergeSavedAttachments(cur, state.snapshot, stored);
+          // Refs of the replaced version that the server no longer has (draft recreated)
+          const live = merged.filter((a) => !isDraftAttachment(a) || stored.some((s) => s.id === a.id));
+          if (live.length < merged.length) toast.error(`${merged.length - live.length} Anhang/Anhänge des Entwurfs gingen verloren`);
+          return live;
+        });
+        void qc.invalidateQueries({ queryKey: ['messages'] });
+      },
+    });
+  }
+  const saver = saverRef.current;
+  /** Wraps a field setter: a user edit marks the draft for autosave. */
+  const edited = <T,>(setter: (v: T) => void) => (v: T) => { setter(v); saver.touch(); };
+
+  // Typing in the editor (setContent of signature/draft does not emit updates)
+  useEffect(() => {
+    if (!editor) return;
+    const onUpdate = () => saver.touch();
+    editor.on('update', onUpdate);
+    return () => { editor.off('update', onUpdate); };
+  }, [editor, saver]);
+
+  // Reopen a server draft
+  const draftLoaded = useRef(false);
+  useEffect(() => {
+    if (!loadDraftFromServer || !initialDraftId || !editor || draftLoaded.current) return;
+    draftLoaded.current = true;
+    signatureInserted.current = true;
+    loadDraft(initialDraftId).then((d) => {
+      setTo(d.to.join(', '));
+      setCc(d.cc.join(', '));
+      setBcc(d.bcc.join(', '));
+      setShowCc(d.cc.length > 0);
+      setShowBcc(d.bcc.length > 0);
+      setSubject(d.subject);
+      setAttachments(d.attachments);
+      draftThreading.current = {
+        ...(d.inReplyTo ? { inReplyTo: d.inReplyTo } : {}),
+        ...(d.references.length ? { references: d.references.join(' ') } : {}),
+      };
+      editor.commands.setContent(d.bodyHtml || d.bodyText.split('\n').map((l) => `<p>${escapeHtml(l)}</p>`).join(''));
+      editor.commands.focus('start');
+      setSaveInfo({ status: 'saved', savedAt: d.savedAt });
+    }, (err: unknown) => {
+      toastError(err);
+    }).finally(() => setDraftLoading(false));
+  }, [loadDraftFromServer, initialDraftId, editor]);
+
+  // Closing the window (or navigating away) saves pending changes
+  useEffect(() => () => {
+    if (finishedRef.current) return;
+    const s = saverRef.current;
+    if (!s || (s.status !== 'dirty' && s.status !== 'saving' && s.status !== 'error')) return;
+    s.flush().then(
+      (id) => { if (id) toast.success(translate('draft_saved_closed')); },
+      () => toast.error(translate('draft_save_failed')),
+    );
+  }, []);
+
+  const handleMinimize = () => {
+    setMinimized(true);
+    void saver.flush().catch(() => undefined);
+  };
+
+  const handleDiscard = async () => {
+    // eslint-disable-next-line no-alert
+    if (!window.confirm(translate('draft_discard_confirm'))) return;
+    finishedRef.current = true;
+    saver.dispose();                    // no further autosave
+    try {
+      // a save may be running: wait for its result to know the latest version
+      const id = saver.draftId || saver.status === 'saving' ? await saver.flush().catch(() => saver.draftId) : null;
+      if (id) await deleteDraft(id);
+      saver.forget();
+      toast(translate('draft_discarded'), { duration: 3000 });
+      void qc.invalidateQueries({ queryKey: ['messages'] });
+      closeCompose();
+    } catch (err) {
+      finishedRef.current = false;
+      toastError(err);
+    }
+  };
+
+  const saveLabel =
+    saveInfo.status === 'saving' ? translate('draft_saving')
+    : saveInfo.status === 'error' ? translate('draft_save_failed')
+    : saveInfo.savedAt && (saveInfo.status === 'saved' || saveInfo.status === 'dirty')
+      ? fmt(translate('draft_saved_at'), { time: new Date(saveInfo.savedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) })
+      : '';
 
   // Insert / edit link
   const handleLink = useCallback(() => {
@@ -582,42 +734,19 @@ export function ComposeWindow() {
     return toLocalInput(d);
   });
 
-  const buildSendForm = (scheduledAt?: Date): FormData => {
-      const form = new FormData();
-      form.append('to',       to.split(',').map((s) => s.trim()).filter(Boolean).join(','));
-      form.append('cc',       cc.split(',').map((s) => s.trim()).filter(Boolean).join(','));
-      form.append('bcc',      bcc.split(',').map((s) => s.trim()).filter(Boolean).join(','));
-      form.append('subject',  subject);
-      form.append('bodyHtml', editor?.getHTML() ?? '');
-      form.append('bodyText', editor?.getText() ?? '');
-      // Threading: the original's Message-ID header (+ References); the internal id
-      // only when the original has no Message-ID or could not be loaded
-      if (isReplyMode && composeCtx?.id) {
-        const threading = original
-          ? replyThreading(original)
-          : { inReplyTo: composeCtx.id };
-        form.append('inReplyTo', threading.inReplyTo);
-        if ('references' in threading && threading.references) form.append('references', threading.references);
-      }
-      if (scheduledAt) form.append('scheduledAt', scheduledAt.toISOString());
-      for (const file of attachments) form.append('attachments', file);
-      return form;
+  const busy = forwardLoading || draftLoading || scheduling;
+  const invalidateMail = () => {
+    void qc.invalidateQueries({ queryKey: ['messages'] });
+    void qc.invalidateQueries({ queryKey: ['folders'] });
   };
 
-  const sendMutation = useMutation({
-    mutationFn: (scheduledAt?: Date) =>
-      api.postForm<{ ok: boolean; scheduled?: boolean; scheduledAt?: string }>('/mail/send', buildSendForm(scheduledAt)),
-    onSuccess: (_data, scheduledAt) => {
-      if (scheduledAt) {
-        toast.success(`Versand geplant für ${scheduledAt.toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' })}`);
-      } else {
-        toast.success('Nachricht gesendet');
-      }
-      qc.invalidateQueries({ queryKey: ['messages'] });
-      closeCompose();
-    },
-    onError: (err: Error) => toast.error(err.message),
-  });
+  /** Saves the current state as the server draft (forced) and returns its id. */
+  const saveNow = async (): Promise<string> => {
+    saver.touch();
+    const id = await saver.flush();
+    if (!id) throw new Error(translate('draft_save_failed'));
+    return id;
+  };
 
   // Schedule presets (Outlook style): tomorrow morning, tomorrow afternoon, next Monday
   const schedulePresets = (() => {
@@ -634,33 +763,58 @@ export function ComposeWindow() {
     ];
   })();
 
+
   /**
-   * "Send" button / Ctrl+Enter. With a send delay (Settings → View, default
-   * 10 s) the mail is captured now, the window closes and the real request is
-   * made after the delay unless the user clicks Undo (which reopens it).
-   * Scheduled sends ("Send later") are not delayed.
+   * "Send" button / Ctrl+Enter. The mail is saved as a server draft and handed
+   * to the server with the undo hold (Settings → View, default 10 s): the server
+   * sends it after the delay even if this tab is closed or the user signs out.
+   * Undo withdraws it and reopens the draft. Scheduled sends ("Send later") use
+   * the same draft with scheduledAt.
    */
   const handleSend = () => {
-    if (sendMutation.isPending || forwardLoading || !to.trim()) return;
-    if (!sendDelaySec) { sendMutation.mutate(undefined); return; }
-    const form = buildSendForm();
-    const reopen = {
-      ...(composeCtx ?? { mode: 'new' as const }),
-      restore: { to, cc, bcc, subject, bodyHtml: editor?.getHTML() ?? '', attachments: [...attachments] },
-    };
-    queueDelayedSend({
+    if (busy || !to.trim() || finishedRef.current) return;
+    finishedRef.current = true;
+    const restoreSnapshot = { to, cc, bcc, subject, bodyHtml: editor?.getHTML() ?? '', attachments: [...attachments] };
+    const baseCtx: ComposeContext = composeCtx ?? { mode: 'new' };
+    queueHeldSend({
       delaySec: sendDelaySec,
-      send: () => api.postForm<{ ok: boolean }>('/mail/send', form, isUnloading() ? { keepalive: true } : {}),
-      reopen,
-      onSent: () => { void qc.invalidateQueries({ queryKey: ['messages'] }); },
+      start: async () => {
+        const id = await saveNow();
+        await sendDraft(id, { undoDelaySec: sendDelaySec });
+        return id;
+      },
+      undo: (id) => unsendDraft(id),
+      reopenAfterUndo: (id) => ({ mode: 'new', draftId: id }),
+      reopenOnError: () => ({
+        ...baseCtx,
+        restore: restoreSnapshot,
+        ...(saver.draftId ? { draftId: saver.draftId } : {}),
+      }),
+      onSent: invalidateMail,
     });
+    // the draft is in the Drafts folder now; the list shows it until it is sent
+    setTimeout(invalidateMail, 1500);
     closeCompose();
   };
 
-  const handleSchedule = (date: Date) => {
+  const handleSchedule = async (date: Date) => {
     setShowScheduleMenu(false);
     setShowCustomSchedule(false);
-    sendMutation.mutate(date);
+    if (busy || !to.trim() || finishedRef.current) return;
+    finishedRef.current = true;
+    setScheduling(true);
+    try {
+      const id = await saveNow();
+      await sendDraft(id, { scheduledAt: date.toISOString() });
+      toast.success(`Versand geplant für ${date.toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' })}`);
+      invalidateMail();
+      closeCompose();
+    } catch (err) {
+      finishedRef.current = false;
+      toastError(err);
+    } finally {
+      setScheduling(false);
+    }
   };
 
   // ⌘+Enter / Ctrl+Enter sends (as advertised in the Send button tooltip)
@@ -707,7 +861,7 @@ export function ComposeWindow() {
       <div className="flex items-center justify-between px-3 py-2 bg-gray-800 text-white rounded-t-lg shrink-0">
         <span className="text-sm font-medium truncate">{subject || 'Neue Nachricht'}</span>
         <div className="flex items-center gap-1">
-          <button aria-label="Minimieren" onClick={() => setMinimized(true)} className="p-0.5 hover:bg-white/20 rounded" title="Minimieren">
+          <button aria-label="Minimieren" onClick={handleMinimize} className="p-0.5 hover:bg-white/20 rounded" title="Minimieren">
             <Minus size={13} />
           </button>
           <button aria-label="Schließen" onClick={closeCompose} className="p-0.5 hover:bg-white/20 rounded" title="Schließen">
@@ -721,7 +875,7 @@ export function ComposeWindow() {
         {/* To */}
         <div className="flex items-center border-b border-gray-100 px-3 py-1.5 gap-2">
           <span className="text-xs text-gray-400 w-10 shrink-0">An:</span>
-          <RecipientInput value={to} onChange={setTo} placeholder="Empfänger..." />
+          <RecipientInput value={to} onChange={edited(setTo)} placeholder="Empfänger..." />
           <div className="flex gap-3 text-xs text-blue-600 shrink-0">
             {!showCc  && <button type="button" onClick={() => setShowCc(true)}>CC</button>}
             {!showBcc && <button type="button" onClick={() => setShowBcc(true)}>BCC</button>}
@@ -732,7 +886,7 @@ export function ComposeWindow() {
         {showCc && (
           <div className="flex items-center border-b border-gray-100 px-3 py-1.5 gap-2">
             <span className="text-xs text-gray-400 w-10 shrink-0">CC:</span>
-            <RecipientInput value={cc} onChange={setCc} placeholder="CC..." autoFocus />
+            <RecipientInput value={cc} onChange={edited(setCc)} placeholder="CC..." autoFocus />
           </div>
         )}
 
@@ -740,7 +894,7 @@ export function ComposeWindow() {
         {showBcc && (
           <div className="flex items-center border-b border-gray-100 px-3 py-1.5 gap-2">
             <span className="text-xs text-gray-400 w-10 shrink-0">BCC:</span>
-            <RecipientInput value={bcc} onChange={setBcc} placeholder="BCC..." autoFocus />
+            <RecipientInput value={bcc} onChange={edited(setBcc)} placeholder="BCC..." autoFocus />
           </div>
         )}
 
@@ -749,7 +903,7 @@ export function ComposeWindow() {
           <span className="text-xs text-gray-400 w-10 shrink-0">Betreff:</span>
           <input
             value={subject}
-            onChange={(e) => setSubject(e.target.value)}
+            onChange={(e) => edited(setSubject)(e.target.value)}
             className="flex-1 text-sm outline-none font-medium"
             placeholder="Betreff..."
           />
@@ -1037,11 +1191,11 @@ export function ComposeWindow() {
         <div className="border-t border-gray-100 px-3 py-2 flex flex-wrap gap-2 shrink-0 bg-gray-50/40">
           {attachments.map((file, i) => (
             <div
-              key={`${file.name}-${i}`}
+              key={`${attachmentName(file)}-${i}`}
               className="flex items-center gap-1.5 bg-white border border-gray-200 rounded-full px-2.5 py-1 text-xs text-gray-700 shadow-sm"
             >
               <FileIcon size={12} className="text-blue-500 shrink-0" />
-              <span className="max-w-[140px] truncate" title={file.name}>{file.name}</span>
+              <span className="max-w-[140px] truncate" title={attachmentName(file)}>{attachmentName(file)}</span>
               <span className="text-gray-400 shrink-0">
                 {file.size >= 1024 * 1024
                   ? `${(file.size / 1024 / 1024).toFixed(1)} MB`
@@ -1049,7 +1203,7 @@ export function ComposeWindow() {
               </span>
               <button aria-label="Anhang entfernen"
                 type="button"
-                onClick={() => setAttachments((prev) => prev.filter((_, idx) => idx !== i))}
+                onClick={() => { setAttachments((prev) => prev.filter((_, idx) => idx !== i)); saver.touch(); }}
                 className="text-gray-400 hover:text-red-500 shrink-0"
                 title="Anhang entfernen"
               >
@@ -1073,6 +1227,7 @@ export function ComposeWindow() {
               const newFiles = Array.from(e.target.files ?? []);
               if (newFiles.length) {
                 setAttachments((prev) => [...prev, ...newFiles]);
+                saver.touch();
               }
               // Reset so the same file can be selected again
               e.target.value = '';
@@ -1092,20 +1247,35 @@ export function ComposeWindow() {
               </span>
             )}
           </button>
-          {/* "Save draft" button removed: there is no draft API in the backend yet,
-              the button did nothing. */}
+          <button
+            type="button"
+            className="btn-ghost text-xs text-gray-500 hover:text-red-600"
+            title={translate('draft_discard')}
+            aria-label={translate('draft_discard')}
+            onClick={() => { void handleDiscard(); }}
+          >
+            <Trash2 size={14} />
+          </button>
+          {/* Autosave state (server draft) */}
+          <span
+            role="status"
+            aria-live="polite"
+            className={`text-[11px] ml-1 ${saveInfo.status === 'error' ? 'text-red-600' : 'text-gray-400'}`}
+          >
+            {draftLoading ? <Loader2 size={12} className="animate-spin inline" aria-hidden="true" /> : saveLabel}
+          </span>
         </div>
         {/* Send button group: Send + arrow dropdown for "Schedule send" */}
         <div className="relative flex">
           <button
             type="button"
             onClick={handleSend}
-            disabled={sendMutation.isPending || forwardLoading || !to.trim()}
+            disabled={busy || !to.trim()}
             aria-keyshortcuts="Control+Enter Meta+Enter"
             className="btn-primary text-xs justify-center rounded-r-none px-4"
             title="Senden (⌘+Enter)"
           >
-            {sendMutation.isPending ? (
+            {scheduling ? (
               <><Loader2 size={14} className="animate-spin" /> Senden…</>
             ) : (
               <><Send size={14} /> Senden</>
@@ -1114,7 +1284,7 @@ export function ComposeWindow() {
           <button aria-label="Senden planen"
             type="button"
             onClick={() => { setShowScheduleMenu((v) => !v); setShowCustomSchedule(false); }}
-            disabled={sendMutation.isPending || forwardLoading || !to.trim()}
+            disabled={busy || !to.trim()}
             className="btn-primary text-xs rounded-l-none border-l border-blue-700/40 px-2"
             title="Senden planen"
           >
