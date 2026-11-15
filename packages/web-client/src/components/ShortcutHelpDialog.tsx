@@ -6,7 +6,7 @@ import { useT, fmt } from '../i18n/useT.js';
 import type { TranslationKey } from '../i18n/translations.js';
 import {
   SHORTCUT_SETS, ACTION_GROUP, displayKeys,
-  type ShortcutAction, type ShortcutGroup,
+  type Binding, type ShortcutAction, type ShortcutGroup,
 } from '../lib/shortcuts.js';
 
 const GROUP_ORDER: ShortcutGroup[] = ['compose', 'actions', 'navigation', 'goto', 'calendar', 'general'];
@@ -17,8 +17,8 @@ export function actionLabelKey(action: ShortcutAction): TranslationKey {
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 
-function Keys({ keys, then }: { keys: string; then: string }) {
-  const steps = displayKeys(keys, isMac);
+function Keys({ keys, then, noMeta }: { keys: string; then: string; noMeta?: boolean | undefined }) {
+  const steps = displayKeys(keys, isMac, !!noMeta);
   return (
     <span className="inline-flex items-center gap-1 flex-wrap">
       {steps.map((combo, i) => (
@@ -40,9 +40,9 @@ export function ShortcutHelpDialog() {
   const { shortcutSet, shortcutsEnabled } = useUiPrefs();
 
   const groups = useMemo(() => {
-    const byAction = new Map<ShortcutAction, string[]>();
+    const byAction = new Map<ShortcutAction, Binding[]>();
     for (const b of SHORTCUT_SETS[shortcutSet]) {
-      byAction.set(b.action, [...(byAction.get(b.action) ?? []), b.keys]);
+      byAction.set(b.action, [...(byAction.get(b.action) ?? []), b]);
     }
     return GROUP_ORDER.map((g) => ({
       group: g,
@@ -67,6 +67,9 @@ export function ShortcutHelpDialog() {
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
             {shortcutsEnabled ? fmt(t('sc_help_active_set'), { set: setName }) : t('sc_help_disabled')}
           </p>
+          {shortcutsEnabled && (
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{t('sc_help_browser_keys')}</p>
+          )}
         </div>
         <button aria-label={t('close')} className="btn-ghost p-1" onClick={() => setShortcutHelpOpen(false)}>
           <X size={16} />
@@ -83,10 +86,10 @@ export function ShortcutHelpDialog() {
                 <div key={action} className="flex items-center justify-between gap-3 text-sm">
                   <dt className="text-gray-700 dark:text-gray-200">{t(actionLabelKey(action))}</dt>
                   <dd className="flex items-center gap-1.5 shrink-0">
-                    {keys.map((k, i) => (
-                      <Fragment key={k}>
+                    {keys.map((b, i) => (
+                      <Fragment key={b.keys}>
                         {i > 0 && <span className="text-[10px] text-gray-400">{t('sc_or')}</span>}
-                        <Keys keys={k} then={t('sc_then')} />
+                        <Keys keys={b.keys} then={t('sc_then')} noMeta={b.noMeta} />
                       </Fragment>
                     ))}
                   </dd>

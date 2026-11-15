@@ -13,6 +13,7 @@ import { useEffect, useRef } from 'react';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../store/auth.js';
 import { logoutSession } from '../api/client.js';
+import { logoutWithDraftFlush } from '../lib/compose-flush.js';
 
 const WARN_BEFORE_MS = 60_000; // 1 minute advance warning
 
@@ -97,7 +98,9 @@ export function useInactivityLogout() {
       if (warnToastId.current) toast.dismiss(warnToastId.current);
       toast('Sitzung abgelaufen — du wurdest automatisch abgemeldet.', { icon: '🔒', duration: 5000 });
       // Revoke the refresh token server-side, then clear local state
-      void logoutSession().finally(() => {
+      // 8.1: open compose drafts are saved first (max 3 s); the page reload below
+      // drops all cached data
+      void logoutWithDraftFlush({ logout: logoutSession, clearCache: () => undefined }).finally(() => {
         setTimeout(() => { window.location.href = '/login'; }, 800);
       });
     }, limit);

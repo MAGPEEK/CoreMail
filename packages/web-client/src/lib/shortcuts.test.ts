@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   normalizeKey, isEditableTarget, createShortcutMatcher, keysFor, ariaKeyShortcuts,
-  displayKeys, SHORTCUT_SETS, ACTION_GROUP, type KeyLike, type MatchResult,
+  displayKeys, SHORTCUT_SETS, ACTION_GROUP, RESERVED_BROWSER_KEYS, type KeyLike, type MatchResult,
 } from './shortcuts.ts';
 
 const action = (r: MatchResult) => (r && r.kind === 'action' ? r.action : r?.kind ?? null);
@@ -102,12 +102,35 @@ test('sets: Gmail keys in both; Outlook extras only in the CoreMail default', ()
   assert.equal(action(gm.match(ev('Delete', { shiftKey: true }), mail('gmail'))), 'mail.deletePermanent');
 
   assert.equal(action(cm.match(ev('n', { ctrlKey: true }), mail('coremail'))), 'compose.new');
-  assert.equal(action(cm.match(ev('r', { ctrlKey: true }), mail('coremail'))), 'mail.reply');
-  assert.equal(action(cm.match(ev('R', { ctrlKey: true, shiftKey: true }), mail('coremail'))), 'mail.replyAll');
-  assert.equal(action(cm.match(ev('f', { ctrlKey: true }), mail('coremail'))), 'mail.forward');
+  assert.equal(action(cm.match(ev('F', { ctrlKey: true, shiftKey: true }), mail('coremail'))), 'mail.forward');
   assert.equal(gm.match(ev('r', { ctrlKey: true }), mail('gmail')), null, 'Ctrl+R stays browser reload in the Gmail set');
-  // Ctrl+R / Ctrl+F only hijacked inside mail
-  assert.equal(cm.match(ev('r', { ctrlKey: true }), { set: 'coremail', context: 'other' }), null);
+});
+
+test('8.1: browser find/reload/view-source are never taken over (Ctrl and ⌘), ⌘ not bound for Ctrl-only keys', () => {
+  const m = createShortcutMatcher();
+  const ev = (key: string, mods: Partial<KeyLike> = {}): KeyLike => ({ key, target: div, ...mods });
+  for (const set of ['coremail', 'gmail'] as const) {
+    for (const ctx of ['mail', 'calendar', 'other'] as const) {
+      for (const mod of [{ ctrlKey: true }, { metaKey: true }]) {
+        for (const [key, shift] of [['f', false], ['r', false], ['R', true], ['u', false]] as const) {
+          assert.equal(m.match(ev(key, { ...mod, shiftKey: shift }), { set, context: ctx }), null, `${set}/${ctx} ${JSON.stringify(mod)} ${key}`);
+        }
+      }
+    }
+    for (const b of SHORTCUT_SETS[set]) assert.ok(!RESERVED_BROWSER_KEYS.includes(b.keys), `${set} binds ${b.keys}`);
+  }
+  const cm = { set: 'coremail' as const, context: 'mail' as const };
+  // Ctrl+Shift+F forwards, ⌘⇧F (macOS fullscreen) does not; same for ⌘Q / ⌘⇧V
+  assert.equal(action(m.match(ev('F', { ctrlKey: true, shiftKey: true }), cm)), 'mail.forward');
+  assert.equal(m.match(ev('F', { metaKey: true, shiftKey: true }), cm), null);
+  assert.equal(m.match(ev('q', { metaKey: true }), cm), null);
+  assert.equal(m.match(ev('V', { metaKey: true, shiftKey: true }), cm), null);
+  // Gmail-style single letters stay
+  assert.equal(action(m.match(ev('r'), cm)), 'mail.reply');
+  assert.equal(action(m.match(ev('a'), cm)), 'mail.replyAll');
+  assert.equal(action(m.match(ev('f'), cm)), 'mail.forward');
+  assert.deepEqual(displayKeys('ctrl+shift+f', true, true), [['⌃', '⇧', 'F']]);
+  assert.deepEqual(displayKeys('ctrl+z', true), [['⌘', 'Z']]);
 });
 
 test('contexts: calendar keys win in the calendar, mail keys are inactive elsewhere', () => {
@@ -133,8 +156,8 @@ test('Enter on a focused button keeps its native meaning', () => {
 });
 
 test('help/aria helpers', () => {
-  assert.deepEqual(keysFor('coremail', 'mail.reply'), ['r', 'ctrl+r']);
-  assert.equal(ariaKeyShortcuts('coremail', 'mail.replyAll'), 'A Control+Shift+R');
+  assert.deepEqual(keysFor('coremail', 'mail.reply'), ['r']);
+  assert.equal(ariaKeyShortcuts('coremail', 'mail.forward'), 'F Control+Shift+F');
   assert.equal(ariaKeyShortcuts('gmail', 'go.inbox'), undefined, 'sequences are not expressible');
   assert.deepEqual(displayKeys('g i'), [['G'], ['I']]);
   assert.deepEqual(displayKeys('ctrl+shift+r'), [['Ctrl', 'Shift', 'R']]);

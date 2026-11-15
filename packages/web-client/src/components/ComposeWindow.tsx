@@ -31,9 +31,10 @@ import {
   type DraftAutosave, type SaveStatus,
 } from '../lib/draft-autosave.js';
 import {
-  saveDraft, loadDraft, deleteDraft, sendDraft, unsendDraft,
+  saveDraft, loadDraft, deleteDraft, sendDraft, unsendDraft, isDraftLocked,
   type DraftPayload, type SavedDraftResponse,
 } from '../lib/draft-api.js';
+import { registerComposeFlush } from '../lib/compose-flush.js';
 import { translate, fmt } from '../i18n/useT.js';
 import { toastError } from '../lib/errors.js';
 
@@ -613,6 +614,8 @@ export function ComposeWindow() {
       initialId: initialDraftId,
       snapshot: () => payloadRef.current(),
       save: (id, { snapshot: _snapshot, ...payload }) => saveDraft(id, payload),
+      // 8.1: being / already sent elsewhere → stop autosaving (no duplicate draft)
+      isFatal: isDraftLocked,
       onStatus: (status, info) => setSaveInfo({ status, ...(info.savedAt ? { savedAt: info.savedAt } : {}) }),
       onSaved: (saved, state) => {
         const stored = (saved as SavedDraftResponse).attachments ?? [];
@@ -665,6 +668,14 @@ export function ComposeWindow() {
     }).finally(() => setDraftLoading(false));
   }, [loadDraftFromServer, initialDraftId, editor]);
 
+  // 8.1: logout saves pending changes BEFORE the session ends (the unmount
+  // flush below would run without a token)
+  useEffect(() => registerComposeFlush(async () => {
+    const s = saverRef.current;
+    if (finishedRef.current || !s || (s.status !== 'dirty' && s.status !== 'saving' && s.status !== 'error')) return;
+    await s.flush();
+  }), []);
+
   // Closing the window (or navigating away) saves pending changes
   useEffect(() => () => {
     if (finishedRef.current) return;
@@ -703,6 +714,7 @@ export function ComposeWindow() {
   const saveLabel =
     saveInfo.status === 'saving' ? translate('draft_saving')
     : saveInfo.status === 'error' ? translate('draft_save_failed')
+    : saveInfo.status === 'locked' ? translate('draft_locked')
     : saveInfo.savedAt && (saveInfo.status === 'saved' || saveInfo.status === 'dirty')
       ? fmt(translate('draft_saved_at'), { time: new Date(saveInfo.savedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) })
       : '';

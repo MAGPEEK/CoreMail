@@ -2,7 +2,9 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Mail, Calendar, Users, CheckSquare, StickyNote, Search, Bell, Settings, LogOut, ChevronDown, Inbox } from 'lucide-react';
 import { useAuthStore } from '../store/auth.js';
+import { useQueryClient } from '@tanstack/react-query';
 import { logoutSession } from '../api/client.js';
+import { logoutWithDraftFlush } from '../lib/compose-flush.js';
 import { Avatar } from './Avatar.js';
 import { OpenSharedMailboxModal } from './OpenSharedMailboxModal.js';
 import { GLOBAL_SEARCH_INPUT_ID } from '../hooks/useGlobalShortcuts.js';
@@ -14,6 +16,7 @@ interface Props {
 
 export function TopBar({ onSearch, currentApp }: Props) {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { displayName, email } = useAuthStore();
   const [search, setSearch] = useState('');
   const [profileOpen, setProfileOpen] = useState(false);
@@ -111,7 +114,13 @@ export function TopBar({ onSearch, currentApp }: Props) {
               </button>
               <div className="border-t border-gray-100 dark:border-gray-700 my-1" />
               <button
-                onClick={() => { setProfileOpen(false); void logoutSession().finally(() => navigate('/login')); }}
+                onClick={() => {
+                  setProfileOpen(false);
+                  // 8.1: save open compose drafts first (max 3 s), then end the
+                  // session and drop the cached data of this user
+                  void logoutWithDraftFlush({ logout: logoutSession, clearCache: () => queryClient.clear() })
+                    .finally(() => navigate('/login'));
+                }}
                 className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
               >
                 <LogOut size={14} />

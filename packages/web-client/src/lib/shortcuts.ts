@@ -34,6 +34,11 @@ export interface Binding {
   contexts?: ShortcutContext[];
   /** Also fires while typing in an input/editor (only Ctrl+Enter in compose). */
   allowInEditable?: boolean;
+  /**
+   * The physical Ctrl key only — ⌘ (Meta, which otherwise counts as Ctrl) does
+   * not trigger it, so macOS browser/system shortcuts (⌘⇧F, ⌘Q, ⌘⇧V) stay intact.
+   */
+  noMeta?: boolean;
 }
 
 export type ShortcutGroup = 'compose' | 'actions' | 'navigation' | 'goto' | 'calendar' | 'general';
@@ -98,18 +103,25 @@ const GMAIL_BINDINGS: Binding[] = [
   { keys: 'm', action: 'calendar.month', contexts: CAL },
 ];
 
-/** Outlook-like extras of the CoreMail default set. */
+/**
+ * Outlook-like extras of the CoreMail default set. 8.1: browser shortcuts are
+ * never taken over — no Ctrl/⌘+F (find), Ctrl/⌘+R and Ctrl+Shift+R (reload),
+ * Ctrl/⌘+U (view source). Reply / reply all / forward / unread use the
+ * single letters r / a / f / Shift+U; forward additionally Ctrl+Shift+F (OWA
+ * uses Ctrl+F, but browser find matters more). Ctrl-only (noMeta) where the ⌘
+ * variant is a macOS browser/system shortcut.
+ */
 const COREMAIL_EXTRAS: Binding[] = [
   { keys: 'ctrl+n', action: 'compose.new' },
-  { keys: 'ctrl+r', action: 'mail.reply', contexts: MAIL },
-  { keys: 'ctrl+shift+r', action: 'mail.replyAll', contexts: MAIL },
-  { keys: 'ctrl+f', action: 'mail.forward', contexts: MAIL },
-  { keys: 'ctrl+q', action: 'mail.markRead', contexts: MAIL },
-  { keys: 'ctrl+u', action: 'mail.markUnread', contexts: MAIL },
+  { keys: 'ctrl+shift+f', action: 'mail.forward', contexts: MAIL, noMeta: true },
+  { keys: 'ctrl+q', action: 'mail.markRead', contexts: MAIL, noMeta: true },
   { keys: 'insert', action: 'mail.flag', contexts: MAIL },
-  { keys: 'ctrl+shift+v', action: 'mail.move', contexts: MAIL },
+  { keys: 'ctrl+shift+v', action: 'mail.move', contexts: MAIL, noMeta: true },
   { keys: 'ctrl+z', action: 'undo' },
 ];
+
+/** Combos the browser owns; no set may bind them (checked by the tests). */
+export const RESERVED_BROWSER_KEYS: readonly string[] = ['ctrl+f', 'ctrl+r', 'ctrl+shift+r', 'ctrl+u', 'ctrl+l', 'ctrl+t', 'ctrl+w', 'ctrl+p'];
 
 export const SHORTCUT_SETS: Record<ShortcutSetId, Binding[]> = {
   gmail: GMAIL_BINDINGS,
@@ -229,7 +241,7 @@ export function createShortcutMatcher(opts: { timeoutMs?: number; now?: () => nu
       const combo = normalizeKey(e);
       if (!combo) return null;
       const editable = isEditableTarget(e.target);
-      const bindings = activeBindings(o.set, o.context);
+      const bindings = activeBindings(o.set, o.context).filter((b) => !(e.metaKey && b.noMeta));
       // Enter/Space on a focused button or link keeps its native meaning
       if ((combo === 'enter' || combo === 'space') && isInteractiveTarget(e.target)) return null;
 
@@ -283,9 +295,10 @@ export function ariaKeyShortcuts(set: ShortcutSetId, action: ShortcutAction): st
 }
 
 /** Display form: [["Ctrl", "Shift", "R"]] per alternative, sequences as ["G", "then", "I"]. */
-export function displayKeys(keys: string, isMac = false): string[][] {
+export function displayKeys(keys: string, isMac = false, noMeta = false): string[][] {
   return keys.split(' ').map((part) => part.split('+').map((p) => {
-    if (p === 'ctrl') return isMac ? '⌘' : 'Ctrl';
+    // Ctrl-only bindings show the Control key (⌃) on a Mac, not ⌘
+    if (p === 'ctrl') return isMac ? (noMeta ? '⌃' : '⌘') : 'Ctrl';
     if (p === 'shift') return isMac ? '⇧' : 'Shift';
     if (p === 'alt') return isMac ? '⌥' : 'Alt';
     if (p === 'enter') return 'Enter';
