@@ -27,8 +27,11 @@
  *  - Only ORGANIZATION_MANAGEMENT may assign/change roles, and modify, reset the
  *    password of, or delete another admin account (role ≠ USER).
  *
- * The caller's areas are exposed via GET /api/v1/user/me → `adminAreas`
- * (`{ "<area>": "write" | "read" }`) so the BCP can hide pages.
+ * The caller's areas are exposed via GET /api/v1/admin/me/permissions
+ * (`{ role, areas: { "<area>": "write" | "read" }, mfaVerified }`) and, for
+ * older clients, GET /api/v1/user/me → `adminAreas`, so the BCP can hide pages
+ * and render read-only forms. ROLE_PERMISSIONS (below) is the per-role view of
+ * this matrix and the one the guards consult.
  */
 
 export const USER_ROLES = [
@@ -56,6 +59,32 @@ export const AREA_MATRIX: Record<AdminArea, { write: readonly UserRoleName[]; re
   hygiene:      { write: ['HYGIENE_MANAGEMENT'],     read: ['VIEW_ONLY_ORG'] },
   compliance:   { write: ['COMPLIANCE_MANAGEMENT'],  read: [] },
 };
+
+/** One permission entry: `access` on `area` (write implies read). */
+export interface AreaPermission { readonly area: AdminArea; readonly access: AreaAccess }
+
+/**
+ * Role → permissions (8.x). THE map every area guard consults: `areaAccess()`
+ * — and therefore `canAccess()`, `requireArea()`, `allowedAreas()`,
+ * `GET /api/v1/user/me` (`adminAreas`) and `GET /api/v1/admin/me/permissions` —
+ * reads it. Built once from AREA_MATRIX (which stays the readable per-area
+ * view); ORGANIZATION_MANAGEMENT gets write on every area, USER gets nothing.
+ * `requireRole()` without roles (EMS fallback, /storage) is ORGANIZATION_MANAGEMENT
+ * only and therefore needs no area.
+ */
+export const ROLE_PERMISSIONS: Readonly<Record<UserRoleName, readonly AreaPermission[]>> = Object.freeze(
+  Object.fromEntries(USER_ROLES.map((role) => {
+    const perms: AreaPermission[] = [];
+    if (role !== 'USER') {
+      for (const area of ADMIN_AREAS) {
+        const m = AREA_MATRIX[area];
+        if (role === 'ORGANIZATION_MANAGEMENT' || m.write.includes(role)) perms.push(Object.freeze({ area, access: 'write' as const }));
+        else if (m.read.includes(role)) perms.push(Object.freeze({ area, access: 'read' as const }));
+      }
+    }
+    return [role, Object.freeze(perms)];
+  })) as Record<UserRoleName, readonly AreaPermission[]>,
+);
 
 export function isUserRole(v: unknown): v is UserRoleName {
   return typeof v === 'string' && (USER_ROLES as readonly string[]).includes(v);
@@ -88,12 +117,8 @@ export function isReadMethod(method: string): boolean {
 
 /** Access level of `role` on `area`, or null. */
 export function areaAccess(role: string | undefined, area: AdminArea): AreaAccess | null {
-  if (!role || !isUserRole(role) || role === 'USER') return null;
-  if (role === 'ORGANIZATION_MANAGEMENT') return 'write';
-  const m = AREA_MATRIX[area];
-  if (m.write.includes(role)) return 'write';
-  if (m.read.includes(role)) return 'read';
-  return null;
+  if (!role || !isUserRole(role)) return null;
+  return ROLE_PERMISSIONS[role].find((p) => p.area === area)?.access ?? null;
 }
 
 export function canAccess(role: string | undefined, area: AdminArea, method: string): boolean {

@@ -4,6 +4,10 @@ import { prisma } from '@coremail/storage';
 import { isAccessTokenRevoked, isAccessTokenRevokedShared } from '@coremail/storage/auth';
 import { canAccess, isAdminRole, isReadMethod, stricterRole, type AdminArea, type UserRoleName } from '../lib/rbac.js';
 
+// The single role → area permission map the guards below use (via canAccess →
+// areaAccess). Re-exported so routes and tests import it from the guard module.
+export { ROLE_PERMISSIONS, ADMIN_AREAS, allowedAreas, type AreaPermission, type AreaAccess, type AdminArea } from '../lib/rbac.js';
+
 const log = createLogger('api:auth');
 
 export interface ApiUser {

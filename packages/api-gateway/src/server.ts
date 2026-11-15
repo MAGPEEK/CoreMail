@@ -37,6 +37,7 @@ import { categoriesRouter } from './routes/categories.js';
 // Journaling feature completely removed in v3.13.6
 import { getAcmeChallenge } from './routes/admin/certificates.js';
 import { mountAdminRoutes } from './routes/admin/index.js';
+import { adminMeRouter } from './routes/admin/me.js';
 import { startTlsProxy, setTlsUpgradeHandler } from './tls-proxy.js';
 import { startCertRenewalScheduler } from './lib/cert-renewal.js';
 // auto-letsencrypt removed — admin requests LE manually via BCP → SSL/TLS
@@ -366,6 +367,7 @@ app.use('/api/v1/admin', adminMutationRateLimit);
 
 // v6: router table + per-router RBAC guards live in routes/admin/index.ts
 mountAdminRoutes(app);
+app.use('/api/v1/admin/me', adminMeRouter); // 8.x: GET /me/permissions for the BCP
 
 // ── Static frontend files (OWA under root + BCP under /bcp) ──────────────────
 const WWW_DIR = process.env['WWW_DIR'] ?? '/app/www';
