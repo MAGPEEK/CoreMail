@@ -13,8 +13,11 @@ const EnvSchema = z.object({
   REDIS_URL: z.string().default('redis://redis:6379'),
   MINIO_ENDPOINT: z.string().default('minio'),
   MINIO_PORT: envNumber(9000),
-  MINIO_ACCESS_KEY: z.string().default('minioadmin'),
-  MINIO_SECRET_KEY: z.string().default('minioadmin'),
+  // 8.0.1: no well-known default credentials. The object store reads and
+  // validates these itself (`@coremail/storage` parseObjectStorageConfig fails
+  // closed when the minio/s3 driver is selected without them).
+  MINIO_ACCESS_KEY: z.string().optional(),
+  MINIO_SECRET_KEY: z.string().optional(),
   MINIO_BUCKET_ATTACHMENTS: z.string().default('coremail-attachments'),
   JWT_SECRET: z.string().min(32),
   JWT_ACCESS_TTL: envNumber(900),        // 15 minutes

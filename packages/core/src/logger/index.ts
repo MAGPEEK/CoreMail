@@ -14,8 +14,30 @@ function track(child: pino.Logger): void {
   trackedChildren.add(new WeakRef(child));
 }
 
+/**
+ * Secrets never reach the log. Paths are pino (fast-redact) paths: a bare name
+ * matches a top-level key of the logged object, `*.x` one level below (e.g.
+ * `{ body: { password } }`), and the header paths cover `req`/`res`
+ * serializers as well as raw header objects logged as `headers`. Matching
+ * values are replaced by "[Redacted]".
+ */
+export const LOG_REDACT_PATHS: readonly string[] = [
+  'authorization', 'cookie', '["set-cookie"]',
+  'password', 'currentPassword', 'newPassword', 'appPassword',
+  'token', 'accessToken', 'refreshToken', 'challengeToken', 'secret', 'clientSecret',
+  '*.authorization', '*.cookie', '*["set-cookie"]',
+  '*.password', '*.currentPassword', '*.newPassword', '*.appPassword',
+  '*.token', '*.accessToken', '*.refreshToken', '*.challengeToken', '*.secret', '*.clientSecret',
+  'req.headers.authorization', 'req.headers.cookie', 'req.headers["x-internal-token"]',
+  'res.headers["set-cookie"]',
+  'headers.authorization', 'headers.cookie', 'headers["x-internal-token"]',
+];
+
+export const LOG_REDACT = { paths: [...LOG_REDACT_PATHS], censor: '[Redacted]' } satisfies pino.LoggerOptions['redact'];
+
 const baseOptions: pino.LoggerOptions = {
   level: config.LOG_LEVEL,
+  redact: LOG_REDACT,
   onChild: (child) => track(child as pino.Logger),
 };
 

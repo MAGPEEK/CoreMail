@@ -34,3 +34,13 @@ test('set numeric variables are coerced; unset ones use the default; garbage is 
   assert.equal(r.data.PORT, 3000);
   assert.equal(parseEnvConfig({ ...base, MINIO_PORT: 'abc' }).success, false);
 });
+
+test('no well-known MinIO default credentials (minioadmin) in the core config', () => {
+  const r = parseEnvConfig(base);
+  assert.ok(r.success);
+  assert.equal(r.data.MINIO_ACCESS_KEY, undefined);
+  assert.equal(r.data.MINIO_SECRET_KEY, undefined);
+  const set = parseEnvConfig({ ...base, MINIO_ACCESS_KEY: 'u', MINIO_SECRET_KEY: 'p' });
+  assert.ok(set.success);
+  assert.equal(set.data.MINIO_SECRET_KEY, 'p');
+});
