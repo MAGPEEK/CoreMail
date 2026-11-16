@@ -178,7 +178,8 @@ test('clamd reply parsing: FOUND before OK, errors are errors', () => {
   // signature name containing "OK" must not be read as clean
   assert.equal(parseClamdResponse('stream: Win.Trojan.OKrat-1 FOUND').status, 'infected');
   assert.equal(parseClamdResponse('stream: Win.Trojan.OKrat-1 FOUND').virusName, 'Win.Trojan.OKrat-1');
-  assert.equal(parseClamdResponse('INSTREAM size limit exceeded. ERROR').status, 'error');
+  // 9.2: clamd's StreamMaxLength answer is "too large" (clamavOversizeAction), not a scanner failure
+  assert.equal(parseClamdResponse('INSTREAM size limit exceeded. ERROR').status, 'oversize');
   assert.equal(parseClamdResponse('').status, 'error');
   assert.equal(parseClamdResponse('stream: OK but weird').status, 'error');
 });

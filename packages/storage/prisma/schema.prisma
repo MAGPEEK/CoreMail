@@ -1390,6 +1390,16 @@ model SecuritySettings {
   clamavBlockEncryptedArch   Boolean  @default(false)
   clamavMaxFileSizeMb        Int      @default(25)
   clamavMaxScanSizeMb        Int      @default(100)
+  // The five scan options above are clamd engine limits (clamd.conf in the
+  // clamav container). CoreMail cannot apply them; they are kept for
+  // compatibility only — see docs/antivirus.md for the clamd.conf settings.
+  // ClamAV — CoreMail-side policy (9.2, honoured by security-filter)
+  clamavTimeoutSec           Int      @default(20)       // 5..25 s, below the SMTP→filter timeout (30 s)
+  clamavScanLimitMb          Int      @default(50)       // 1..50 MB; larger messages are not sent to clamd
+  clamavOversizeAction       String   @default("accept") // accept (delivered, tagged) | reject
+  clamavHeuristicsAsVirus    Boolean  @default(true)     // Heuristics.* findings count as a virus
+  clamavPuaAsVirus           Boolean  @default(true)     // PUA.* findings count as a virus
+  clamavEncryptedAsVirus     Boolean  @default(true)     // Heuristics.Encrypted.* findings count as a virus
   updatedAt                  DateTime @updatedAt
 
   @@map("security_settings")

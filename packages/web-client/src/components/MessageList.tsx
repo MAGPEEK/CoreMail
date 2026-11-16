@@ -111,13 +111,13 @@ function MessageRow({
       }}
       onContextMenu={onContextMenu}
       aria-current={selected ? 'true' : undefined}
-      className={`w-full text-left px-3 ${py} border-b border-gray-100 dark:border-gray-700 transition-all duration-150 relative group cursor-pointer ${
+      className={`w-full text-left px-3 ${py} border-b border-line transition-all duration-150 relative group cursor-pointer ${
         selected
           ? 'bg-accent/10 shadow-sm'
           : checked
             ? 'bg-accent/5'
-            : 'hover:bg-gray-50 dark:hover:bg-gray-800 hover:shadow-sm'
-      } ${isUnread ? 'border-l-2 border-l-accent' : 'border-l-2 border-l-transparent'} ${isDragging ? 'opacity-30' : ''}`}
+            : 'hover:bg-surface-2 hover:shadow-sm'
+      } ${isUnread ? 'border-l-2 border-l-accent-fg' : 'border-l-2 border-l-transparent'} ${isDragging ? 'opacity-30' : ''}`}
       role="button"
       tabIndex={0}
     >
@@ -127,8 +127,8 @@ function MessageRow({
           onClick={onToggleCheck}
           className={`w-4 h-4 rounded-sm border flex items-center justify-center shrink-0 transition-all duration-150 ${
             checked
-              ? 'bg-accent border-accent text-white animate-bounce-in'
-              : 'border-gray-300 dark:border-gray-600 opacity-0 group-hover:opacity-100 hover:border-accent hover:scale-110'
+              ? 'bg-accent border-accent-fg text-white animate-bounce-in'
+              : 'border-line-strong opacity-0 group-hover:opacity-100 hover:border-accent-fg hover:scale-110'
           }`}
           aria-label="Auswählen"
         >
@@ -142,8 +142,8 @@ function MessageRow({
           aria-label="Kennzeichnen"
         >
           {isFlagged
-            ? <Flag size={14} className="fill-red-500 text-red-500" />
-            : <Flag size={14} className="text-gray-300 dark:text-gray-600 hover:text-red-400 transition-colors" />}
+            ? <Flag size={14} className="fill-danger-fg text-danger-fg" />
+            : <Flag size={14} className="text-fg-subtle hover:text-danger-fg transition-colors" />}
         </button>
 
         {/* Avatar with hash-based color */}
@@ -162,33 +162,33 @@ function MessageRow({
 
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between gap-2">
-            <span className={`text-sm truncate flex items-center gap-1 ${isUnread ? 'font-semibold text-gray-900 dark:text-gray-100' : 'text-gray-700 dark:text-gray-300'}`}>
+            <span className={`text-sm truncate flex items-center gap-1 ${isUnread ? 'font-semibold text-fg' : 'text-fg-muted'}`}>
               {isUnread && (
                 <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent animate-pulse-soft shrink-0" />
               )}
-              {isPinned && <Pin size={11} className="text-accent shrink-0" />}
+              {isPinned && <Pin size={11} className="text-accent-fg shrink-0" />}
               <span className="truncate">{msg.fromAddr}</span>
             </span>
             <div className="flex items-center gap-1 shrink-0">
-              {isReplied && <span title="Beantwortet"><Reply size={12} className="text-blue-500" /></span>}
+              {isReplied && <span title="Beantwortet"><Reply size={12} className="text-info-fg" /></span>}
               {isSpam && (
                 <span title={`Als Spam erkannt (rspamd-Score: ${spamScore?.toFixed(2)})`}>
-                  <ShieldAlert size={12} className={isHighRiskSpam ? 'text-red-600' : 'text-amber-500'} />
+                  <ShieldAlert size={12} className={isHighRiskSpam ? 'text-danger-fg' : 'text-warning-fg'} />
                 </span>
               )}
               {isScheduledPending && (
                 <span title={`Wird gesendet am ${msg.scheduledAt ? new Date(msg.scheduledAt).toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' }) : ''}`}>
-                  <CalendarClock size={12} className="text-blue-500" />
+                  <CalendarClock size={12} className="text-info-fg" />
                 </span>
               )}
-              {hasAttachments && <Paperclip size={12} className="text-gray-400" />}
-              {isSnoozed && <Clock size={12} className="text-amber-500" />}
-              <span className="text-xs text-gray-400 transition-opacity duration-150 group-hover:opacity-0">{formatDate(msg.date)}</span>
+              {hasAttachments && <Paperclip size={12} className="text-fg-subtle" />}
+              {isSnoozed && <Clock size={12} className="text-warning-fg" />}
+              <span className="text-xs text-fg-subtle transition-opacity duration-150 group-hover:opacity-0">{formatDate(msg.date)}</span>
             </div>
           </div>
           <p className={`text-sm truncate mt-0.5 transition-colors duration-150 ${
-            isUnread ? 'font-medium text-gray-800 dark:text-gray-200' : 'text-gray-600 dark:text-gray-400'
-          } group-hover:text-accent group-hover:underline group-hover:underline-offset-2`}>
+            isUnread ? 'font-medium text-fg' : 'text-fg-muted'
+          } group-hover:text-accent-fg group-hover:underline group-hover:underline-offset-2`}>
             {msg.subject || '(kein Betreff)'}
           </p>
           {msg.categories && msg.categories.length > 0 && (
@@ -196,8 +196,8 @@ function MessageRow({
               {msg.categories.map((c) => (
                 <span
                   key={c.id}
-                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium"
-                  style={{ backgroundColor: `${c.color}22`, color: c.color, border: `1px solid ${c.color}55` }}
+                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium text-fg"
+                  style={{ backgroundColor: `${c.color}22`, border: `1px solid ${c.color}55` }}
                 >
                   <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: c.color }} />
                   {c.name}
@@ -208,11 +208,11 @@ function MessageRow({
         </div>
 
         {/* Hover quick actions (Gmail style) — fade-in with slight slide */}
-        <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded shadow-md opacity-0 translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150 pointer-events-none group-hover:pointer-events-auto">
+        <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5 bg-surface border border-line rounded shadow-md opacity-0 translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150 pointer-events-none group-hover:pointer-events-auto">
           <button aria-label="Archivieren"
             aria-keyshortcuts={ariaKeys('mail.archive')}
             onClick={(e) => { e.stopPropagation(); onQuickAction('archive'); }}
-            className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 transition-colors active:scale-90"
+            className="p-1.5 hover:bg-surface-2 text-fg-muted transition-colors active:scale-90"
             title="Archivieren"
           >
             <Archive size={13} />
@@ -220,14 +220,14 @@ function MessageRow({
           <button aria-label="Löschen"
             aria-keyshortcuts={ariaKeys('mail.delete')}
             onClick={(e) => { e.stopPropagation(); onQuickAction('delete'); }}
-            className="p-1.5 hover:bg-red-50 dark:hover:bg-red-900/30 text-gray-600 dark:text-gray-300 hover:text-red-600 transition-colors active:scale-90"
+            className="p-1.5 hover:bg-danger-bg text-fg-muted hover:text-danger-fg transition-colors active:scale-90"
             title="Löschen"
           >
             <Trash2 size={13} />
           </button>
           <button aria-label={isUnread ? 'Als gelesen markieren' : 'Als ungelesen markieren'}
             onClick={(e) => { e.stopPropagation(); onQuickAction('read'); }}
-            className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 transition-colors active:scale-90"
+            className="p-1.5 hover:bg-surface-2 text-fg-muted transition-colors active:scale-90"
             title={isUnread ? 'Als gelesen markieren' : 'Als ungelesen markieren'}
           >
             {isUnread ? <MailOpen size={13} /> : <Mail size={13} />}
@@ -253,7 +253,7 @@ function FilterTab({ value, label, active, onSelect }: {
       className={`px-3 py-1 text-xs rounded-full transition-colors ${
         active
           ? 'bg-accent text-white'
-          : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
+          : 'text-fg-muted hover:bg-surface-2'
       }`}
     >
       {label}
@@ -694,11 +694,11 @@ export function MessageList({ folderId }: Props) {
   };
 
   return (
-    <div className="w-full h-full border-r border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 flex flex-col overflow-hidden">
+    <div className="w-full h-full border-r border-line bg-surface flex flex-col overflow-hidden">
       {/* Search row */}
-      <div className="px-3 py-2 border-b border-gray-100 dark:border-gray-700 flex items-center gap-2 relative">
+      <div className="px-3 py-2 border-b border-line flex items-center gap-2 relative">
         <div className="relative flex-1">
-          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-fg-subtle" />
           <input
             ref={searchInputRef}
             type="search"
@@ -709,61 +709,61 @@ export function MessageList({ folderId }: Props) {
             onKeyDown={(e) => { if (e.key === 'Escape' && searchText) { e.preventDefault(); setSearchText(''); } }}
             aria-label={t('search_placeholder')}
             aria-keyshortcuts="/"
-            className="w-full pl-7 pr-3 py-1 text-xs rounded border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 outline-none focus:border-accent dark:text-gray-100 [&::-webkit-search-cancel-button]:hidden"
+            className="w-full pl-7 pr-3 py-1 text-xs rounded border border-line-strong bg-surface outline-none focus:border-accent-fg [&::-webkit-search-cancel-button]:hidden"
             placeholder={t('search_placeholder')}
           />
           {searchText && (
-            <button aria-label="Suche leeren" onClick={() => setSearchText('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+            <button aria-label="Suche leeren" onClick={() => setSearchText('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-fg-subtle hover:text-fg-muted">
               <X size={12} />
             </button>
           )}
           {/* Typeahead suggestions (plain words only — operators go to the server) */}
           {showSuggestions && suggestions.length > 0 && !hasOperatorSyntax(searchText) && (
-            <div className="absolute top-full left-0 right-0 mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg z-50 max-h-40 overflow-y-auto">
+            <div className="absolute top-full left-0 right-0 mt-1 bg-surface border border-line rounded-lg shadow-lg z-50 max-h-40 overflow-y-auto">
               {suggestions.map((m) => (
                 <button key={m.id}
                   onMouseDown={() => { setSelectedMessage(m.id); setSearchText(''); setShowSuggestions(false); }}
-                  className="w-full text-left px-3 py-2 text-xs hover:bg-gray-50 dark:hover:bg-gray-700 border-b border-gray-50 dark:border-gray-700 last:border-0">
-                  <p className="font-medium text-gray-800 dark:text-gray-200 truncate">{m.subject || '(kein Betreff)'}</p>
-                  <p className="text-gray-400 truncate">{m.fromAddr}</p>
+                  className="w-full text-left px-3 py-2 text-xs hover:bg-surface-2 border-b border-line last:border-0">
+                  <p className="font-medium text-fg truncate">{m.subject || '(kein Betreff)'}</p>
+                  <p className="text-fg-subtle truncate">{m.fromAddr}</p>
                 </button>
               ))}
             </div>
           )}
         </div>
         {/* Scope toggle */}
-        <div className="flex text-[10px] rounded border border-gray-200 dark:border-gray-600 overflow-hidden shrink-0">
+        <div className="flex text-[10px] rounded border border-line-strong overflow-hidden shrink-0">
           <button
             onClick={() => setSearchScope('folder')}
-            className={`px-1.5 py-1 ${searchScope === 'folder' ? 'bg-accent text-white' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}
+            className={`px-1.5 py-1 ${searchScope === 'folder' ? 'bg-accent text-white' : 'text-fg-muted hover:bg-surface-2'}`}
             title="Diesen Ordner durchsuchen"
           >Ordner</button>
           <button
             onClick={() => setSearchScope('all')}
-            className={`px-1.5 py-1 ${searchScope === 'all' ? 'bg-accent text-white' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}`}
+            className={`px-1.5 py-1 ${searchScope === 'all' ? 'bg-accent text-white' : 'text-fg-muted hover:bg-surface-2'}`}
             title="Gesamtes Postfach durchsuchen"
           >Alle</button>
         </div>
         <SearchOperatorsHelp onInsert={insertOperator} />
       </div>
       {chips.length > 0 && (
-        <div className="pt-2 border-b border-gray-100 dark:border-gray-700">
+        <div className="pt-2 border-b border-line">
           <SearchChips chips={chips} onRemove={(c) => removeChip(c.raw)} />
         </div>
       )}
-      <div className="px-3 py-2 border-b border-gray-100 dark:border-gray-700 flex items-center gap-2">
+      <div className="px-3 py-2 border-b border-line flex items-center gap-2">
         <input
           type="checkbox"
           checked={allChecked}
           onChange={() => (allChecked ? clearSelection() : selectAll(orderedIds))}
-          className="rounded border-gray-300 dark:border-gray-600 text-accent focus:ring-accent"
+          className="rounded border-line-strong text-accent-fg focus:ring-accent-fg"
           title="Alle auswählen"
         />
         <FilterTab value="all" label="Alle" active={filter === 'all'} onSelect={setFilter} />
         <FilterTab value="unread" label="Ungelesen" active={filter === 'unread'} onSelect={setFilter} />
         <FilterTab value="flagged" label="Markiert" active={filter === 'flagged'} onSelect={setFilter} />
         <FilterTab value="attachments" label="Anhang" active={filter === 'attachments'} onSelect={setFilter} />
-        <span className="ml-auto text-xs text-gray-500" title={`${displayMessages.length} geladen von ${totalCount}`}>
+        <span className="ml-auto text-xs text-fg-subtle" title={`${displayMessages.length} geladen von ${totalCount}`}>
           <AnimatedCounter value={filter === 'all' ? totalCount : displayMessages.length} />
         </span>
       </div>
@@ -773,7 +773,7 @@ export function MessageList({ folderId }: Props) {
           <MessageListSkeleton rows={8} label={t('loading_more')} />
         ) : displayMessages.length === 0 && !hasNextPage ? (
           activeQuery.isError
-            ? <p role="alert" className="p-4 text-xs text-red-600">Nachrichten konnten nicht geladen werden.</p>
+            ? <p role="alert" className="p-4 text-xs text-danger-fg">Nachrichten konnten nicht geladen werden.</p>
             : searching ? <EmptySearch /> : filter === 'all' ? <EmptyInbox /> : <EmptyFilter />
         ) : (
           displayMessages.map((msg) => (
@@ -798,7 +798,7 @@ export function MessageList({ folderId }: Props) {
             <div ref={sentinelRef} className="p-3 flex justify-center">
               <button
                 onClick={() => void fetchNextPage()}
-                className="text-xs text-accent hover:underline"
+                className="text-xs text-accent-fg hover:underline"
               >
                 Weitere Nachrichten laden
               </button>
@@ -832,12 +832,12 @@ export function MessageList({ folderId }: Props) {
       {rawModal && (
         <Modal
           onClose={() => setRawModal(null)}
-          label="RFC 822 Quelltext"
-          className="bg-white dark:bg-gray-900 rounded-lg shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col"
+          label="Quelltext"
+          className="bg-surface rounded-lg shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col"
         >
-            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700 shrink-0">
-              <span className="text-sm font-semibold text-gray-700 dark:text-gray-200 flex items-center gap-2">
-                <Code size={14} /> RFC 822 Quelltext
+            <div className="flex items-center justify-between px-4 py-3 border-b border-line shrink-0">
+              <span className="text-sm font-semibold text-fg-muted flex items-center gap-2">
+                <Code size={14} /> Quelltext
               </span>
               <div className="flex items-center gap-2">
                 <button
@@ -851,7 +851,7 @@ export function MessageList({ folderId }: Props) {
                 </button>
               </div>
             </div>
-            <pre className="flex-1 overflow-auto p-4 text-xs font-mono text-gray-800 dark:text-gray-200 leading-relaxed whitespace-pre-wrap break-all">
+            <pre className="flex-1 overflow-auto p-4 text-xs font-mono text-fg leading-relaxed whitespace-pre-wrap break-all">
               {rawModal.text}
             </pre>
         </Modal>

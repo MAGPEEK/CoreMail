@@ -94,7 +94,7 @@ export function LoginPage() {
 
       {/* ── Maintenance mode banner (above the login card) ── */}
       {maintenanceMode && (
-        <div className="fixed top-0 inset-x-0 z-50 bg-amber-500 text-white px-4 py-3 flex items-start gap-3 shadow-lg">
+        <div className="fixed top-0 inset-x-0 z-50 bg-warning text-white px-4 py-3 flex items-start gap-3 shadow-lg">
           <AlertTriangle size={18} className="mt-0.5 shrink-0" />
           <div>
             <span className="font-semibold">Wartungsmodus aktiv — </span>
@@ -106,7 +106,7 @@ export function LoginPage() {
         </div>
       )}
 
-      <div className={`bg-white dark:bg-gray-900 rounded-lg shadow-2xl p-8 w-full max-w-sm border border-transparent dark:border-gray-700${maintenanceMode ? ' mt-14' : ''}`}>
+      <div className={`bg-surface rounded-lg shadow-2xl p-8 w-full max-w-sm border border-transparent${maintenanceMode ? ' mt-14' : ''}`}>
         {/* Logo */}
         <div className="flex items-center justify-center gap-2 mb-6">
           <div className="w-10 h-10 bg-accent rounded-lg flex items-center justify-center">
@@ -116,8 +116,8 @@ export function LoginPage() {
             }
           </div>
           <div>
-            <h1 className="text-xl font-bold text-gray-900 dark:text-white">CoreMail</h1>
-            <p className="text-xs text-gray-500 dark:text-gray-400">
+            <h1 className="text-xl font-bold text-fg">CoreMail</h1>
+            <p className="text-xs text-fg-subtle">
               {step === 'mfa' ? 'Zwei-Faktor-Authentifizierung' : 'Mail Web Access'}
             </p>
           </div>
@@ -127,9 +127,9 @@ export function LoginPage() {
         {step === 'credentials' && (
           <form onSubmit={handleSubmitCredentials} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">E-Mail-Adresse</label>
+              <label className="block text-sm font-medium text-fg-muted mb-1">E-Mail-Adresse</label>
               <div className="relative">
-                <Mail size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <Mail size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-subtle" />
                 <input
                   type="email"
                   value={email}
@@ -143,9 +143,9 @@ export function LoginPage() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Passwort</label>
+              <label className="block text-sm font-medium text-fg-muted mb-1">Passwort</label>
               <div className="relative">
-                <Lock size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <Lock size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-subtle" />
                 <input
                   type="password"
                   value={password}
@@ -159,7 +159,7 @@ export function LoginPage() {
             </div>
 
             {error && (
-              <div className="bg-red-50 border border-red-200 rounded px-3 py-2 text-sm text-red-700">
+              <div className="bg-danger-bg border border-danger-line rounded px-3 py-2 text-sm text-danger-fg">
                 {error}
               </div>
             )}
@@ -170,7 +170,7 @@ export function LoginPage() {
 
             {selfServicePasswordReset && (
               <div className="text-center pt-1">
-                <Link to="/forgot-password" className="text-xs text-accent hover:underline">
+                <Link to="/forgot-password" className="text-xs text-accent-fg hover:underline">
                   Passwort vergessen?
                 </Link>
               </div>

@@ -44,8 +44,8 @@ beforeEach(() => {
   jobs = [];
   failEnqueue = false;
   rows = new Map([['q1', {
-    id: 'q1', fromAddr: 'sender@ext.test', toAddr: 'bob@corp.test', subject: 'Invoice', reason: 'VIRUS',
-    details: { virusName: 'EICAR', envelope: { from: 'sender@ext.test', recipients: ['bob@corp.test', 'partner@ext.test'] } },
+    id: 'q1', fromAddr: 'sender@ext.test', toAddr: 'bob@corp.test', subject: 'Invoice', reason: 'SPAM',
+    details: { score: 12, envelope: { from: 'sender@ext.test', recipients: ['bob@corp.test', 'partner@ext.test'] } },
     rawPath: 'quarantine/q1.eml', released: false,
   }]]);
 });
@@ -101,4 +101,20 @@ test('queue failure rolls the claim back (release can be retried)', async () => 
   failEnqueue = false;
   await releaseQuarantine('q1', 'a', deps());
   assert.equal(jobs.length, 1);
+});
+
+test('virus findings cannot be released (the BCP hides the button; the API refuses too)', async () => {
+  rows.get('q1')!.reason = 'VIRUS';
+  await assert.rejects(releaseQuarantine('q1', 'admin-1', deps()), (e: unknown) => e instanceof ReleaseError && e.status === 409);
+  assert.equal(jobs.length, 0);
+  assert.equal(rows.get('q1')!.released, false);
+});
+
+test('release keeps the stored X-CoreMail-Virus-Scan verdict (ours) but replaces the release trace header', async () => {
+  const d = deps();
+  d.download = async () => Buffer.from('X-CoreMail-Virus-Scan: infected; signature="Eicar"; host=mx.corp.test\r\nX-CoreMail-Quarantine-Released: stale\r\nSubject: Invoice\r\n\r\nbody\r\n');
+  rows.get('q1')!.reason = 'POLICY';
+  await releaseQuarantine('q1', 'admin-1', d);
+  const raw = Buffer.from(jobs[0]!.rawMessage, 'base64').toString();
+  assert.equal(raw, 'X-CoreMail-Quarantine-Released: q1\r\nX-CoreMail-Virus-Scan: infected; signature="Eicar"; host=mx.corp.test\r\nSubject: Invoice\r\n\r\nbody\r\n');
 });

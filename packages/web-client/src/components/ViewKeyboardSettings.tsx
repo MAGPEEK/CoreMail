@@ -31,17 +31,17 @@ export function ViewKeyboardSettings() {
     <>
       {/* ── Keyboard shortcuts ─────────────────────────────────────────────── */}
       <div>
-        <h3 id="view-shortcuts-heading" className="text-sm font-semibold text-gray-800 mb-1 flex items-center gap-2">
-          <Keyboard size={15} className="text-gray-500" aria-hidden="true" />
+        <h3 id="view-shortcuts-heading" className="text-sm font-semibold text-fg mb-1 flex items-center gap-2">
+          <Keyboard size={15} className="text-fg-subtle" aria-hidden="true" />
           {t('view_shortcuts')}
         </h3>
-        <p className="text-xs text-gray-500 mb-3">{t('view_shortcuts_hint')}</p>
+        <p className="text-xs text-fg-subtle mb-3">{t('view_shortcuts_hint')}</p>
         <div role="radiogroup" aria-labelledby="view-shortcuts-heading" className="space-y-2">
           {choices.map(({ value, label }) => (
             <label
               key={value}
               className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
-                current === value ? 'border-accent bg-accent/5' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                current === value ? 'border-accent bg-accent/5' : 'border-line hover:border-line-strong hover:bg-surface-2'
               }`}
             >
               <input
@@ -50,10 +50,10 @@ export function ViewKeyboardSettings() {
                 value={value}
                 checked={current === value}
                 onChange={() => choose(value)}
-                className="text-accent focus:ring-accent"
+                className="text-accent-fg focus:ring-accent-fg"
               />
-              <span className="flex-1 text-sm font-medium text-gray-900">{label}</span>
-              {current === value && <Check size={14} className="text-accent shrink-0" aria-hidden="true" />}
+              <span className="flex-1 text-sm font-medium text-fg">{label}</span>
+              {current === value && <Check size={14} className="text-accent-fg shrink-0" aria-hidden="true" />}
             </label>
           ))}
         </div>
@@ -61,7 +61,7 @@ export function ViewKeyboardSettings() {
           type="button"
           onClick={() => setShortcutHelpOpen(true)}
           aria-keyshortcuts={shortcutsEnabled ? '?' : undefined}
-          className="mt-2 text-xs text-accent hover:underline"
+          className="mt-2 text-xs text-accent-fg hover:underline"
         >
           {t('shortcut_show_list')}
         </button>
@@ -69,16 +69,16 @@ export function ViewKeyboardSettings() {
 
       {/* ── Undo send ──────────────────────────────────────────────────────── */}
       <div>
-        <h3 className="text-sm font-semibold text-gray-800 mb-1 flex items-center gap-2">
-          <Send size={15} className="text-gray-500" aria-hidden="true" />
+        <h3 className="text-sm font-semibold text-fg mb-1 flex items-center gap-2">
+          <Send size={15} className="text-fg-subtle" aria-hidden="true" />
           <label htmlFor="send-delay-select">{t('view_send_delay')}</label>
         </h3>
-        <p className="text-xs text-gray-500 mb-3">{t('view_send_delay_hint')}</p>
+        <p className="text-xs text-fg-subtle mb-3">{t('view_send_delay_hint')}</p>
         <select
           id="send-delay-select"
           value={sendDelaySec}
           onChange={(e) => setSendDelaySec(Number(e.target.value))}
-          className="text-sm border border-gray-300 rounded px-2 py-1.5 bg-white focus:border-accent outline-none"
+          className="text-sm border border-line-strong rounded px-2 py-1.5 bg-surface focus:border-accent-fg outline-none focus-visible:ring-2 focus-visible:ring-accent-fg"
         >
           {SEND_DELAY_OPTIONS.map((s) => (
             <option key={s} value={s}>{s === 0 ? t('send_delay_off') : fmt(t('send_delay_sec'), { n: s })}</option>

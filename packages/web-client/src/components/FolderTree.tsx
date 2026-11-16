@@ -109,7 +109,7 @@ function FolderItem({
     <div
       ref={setDropRef}
       className={`relative rounded-sm transition-all duration-150 ${
-        isOver ? 'ring-2 ring-accent ring-inset bg-accent/15 scale-[1.02] animate-drop-pulse' : ''
+        isOver ? 'ring-2 ring-accent-fg ring-inset bg-accent/15 scale-[1.02] animate-drop-pulse' : ''
       }`}
     >
       {/* Animated accent bar on the left for the active folder */}
@@ -126,7 +126,7 @@ function FolderItem({
         className={`group w-full flex items-center gap-1.5 pr-3 py-1.5 text-sm rounded-sm transition-all duration-150 ${
           dragDisabled ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'
         } ${
-          selected ? 'bg-accent/10 text-accent font-medium' : 'text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 hover:translate-x-0.5'
+          selected ? 'bg-accent/10 text-accent-fg font-medium' : 'text-fg-muted hover:bg-surface-2 hover:translate-x-0.5'
         } ${isDragging ? 'opacity-40' : ''}`}
         role="button"
         tabIndex={0}
@@ -135,7 +135,7 @@ function FolderItem({
           <button aria-label={expanded ? 'Ordner zuklappen' : 'Ordner aufklappen'}
             onClick={(e) => { e.stopPropagation(); onToggleExpand(); }}
             onPointerDown={(e) => e.stopPropagation()}
-            className="w-4 h-4 flex items-center justify-center text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 shrink-0"
+            className="w-4 h-4 flex items-center justify-center text-fg-subtle hover:text-fg-muted shrink-0"
           >
             {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
           </button>
@@ -154,13 +154,13 @@ function FolderItem({
         {folder.retentionTag && (
           <span
             title={`${folder.retentionTag.name} (${folder.retentionTag.retentionDays}d)`}
-            className="shrink-0 inline-flex items-center text-[10px] text-gray-400 dark:text-gray-500"
+            className="shrink-0 inline-flex items-center text-[10px] text-fg-subtle"
           >
             <Clock size={11} />
           </span>
         )}
         {folder.unreadCount > 0 && (
-          <AnimatedCounter value={folder.unreadCount} className="text-xs font-bold text-accent" />
+          <AnimatedCounter value={folder.unreadCount} className="text-xs font-bold text-accent-fg" />
         )}
       </div>
     </div>
@@ -172,8 +172,8 @@ function SectionHeader({ label, collapsed, onToggle, action }: {
   label: string; collapsed: boolean; onToggle: () => void; action?: ReactNode;
 }) {
   return (
-    <div className="flex items-center gap-1 mt-3 mb-1 px-2 text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide">
-      <button onClick={onToggle} aria-expanded={!collapsed} className="flex items-center gap-1 hover:text-gray-600 dark:hover:text-gray-300 flex-1">
+    <div className="flex items-center gap-1 mt-3 mb-1 px-2 text-xs font-semibold text-fg-subtle uppercase tracking-wide">
+      <button onClick={onToggle} aria-expanded={!collapsed} className="flex items-center gap-1 hover:text-fg-muted flex-1">
         {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
         {label}
       </button>
@@ -349,7 +349,7 @@ export function FolderTree({ onNewMail }: Props) {
       { type: 'divider' },
       {
         label: folder.isFavorite ? t('remove_favorite') : t('add_favorite'),
-        icon: <Star size={14} className={folder.isFavorite ? 'fill-yellow-400 text-yellow-500' : ''} />,
+        icon: <Star size={14} className={folder.isFavorite ? 'fill-warning-fg text-warning-fg' : ''} />,
         onClick: () => patchFolder.mutate({ id: folder.id, body: { isFavorite: !folder.isFavorite } }),
       },
       {
@@ -374,24 +374,24 @@ export function FolderTree({ onNewMail }: Props) {
           label: t('folder_color'),
           icon: <PaintBucket size={14} />,
           children: [
-            { label: '—',     icon: <Tag size={14} className="text-gray-300" />,   onClick: () => patchFolder.mutate({ id: folder.id, body: { color: null } }) },
-            { label: 'Blau',  icon: <Tag size={14} className="text-blue-500" />,   onClick: () => patchFolder.mutate({ id: folder.id, body: { color: '#3B82F6' } }) },
-            { label: 'Grün',  icon: <Tag size={14} className="text-green-500" />,  onClick: () => patchFolder.mutate({ id: folder.id, body: { color: '#10B981' } }) },
-            { label: 'Rot',   icon: <Tag size={14} className="text-red-500" />,    onClick: () => patchFolder.mutate({ id: folder.id, body: { color: '#EF4444' } }) },
-            { label: 'Orange',icon: <Tag size={14} className="text-orange-500" />, onClick: () => patchFolder.mutate({ id: folder.id, body: { color: '#F97316' } }) },
-            { label: 'Lila',  icon: <Tag size={14} className="text-purple-500" />, onClick: () => patchFolder.mutate({ id: folder.id, body: { color: '#8B5CF6' } }) },
+            { label: '—',     icon: <Tag size={14} className="text-fg-subtle" />,   onClick: () => patchFolder.mutate({ id: folder.id, body: { color: null } }) },
+            { label: 'Blau',  icon: <Tag size={14} style={{ color: '#3B82F6' }} />,   onClick: () => patchFolder.mutate({ id: folder.id, body: { color: '#3B82F6' } }) },
+            { label: 'Grün',  icon: <Tag size={14} style={{ color: '#10B981' }} />,  onClick: () => patchFolder.mutate({ id: folder.id, body: { color: '#10B981' } }) },
+            { label: 'Rot',   icon: <Tag size={14} style={{ color: '#EF4444' }} />,    onClick: () => patchFolder.mutate({ id: folder.id, body: { color: '#EF4444' } }) },
+            { label: 'Orange',icon: <Tag size={14} style={{ color: '#F97316' }} />, onClick: () => patchFolder.mutate({ id: folder.id, body: { color: '#F97316' } }) },
+            { label: 'Lila',  icon: <Tag size={14} style={{ color: '#8B5CF6' }} />, onClick: () => patchFolder.mutate({ id: folder.id, body: { color: '#8B5CF6' } }) },
           ],
         },
       );
     }
 
     // Assign retention policy — also available for system folders
-    // (Exchange behavior: personal tags can be attached to any folder)
+    // (personal tags can be attached to any folder)
     const tagChildren: ContextMenuItem[] = (retentionTags ?? []).map((tg) => {
       const isCurrent = folder.retentionTagId === tg.id;
       return {
         label: `${tg.name} · ${tg.retentionDays} ${t('retention_days')}`,
-        icon: isCurrent ? <Check size={14} className="text-accent" /> : <Clock size={14} />,
+        icon: isCurrent ? <Check size={14} className="text-accent-fg" /> : <Clock size={14} />,
         onClick: () => assignRetentionTag.mutate({ folderId: folder.id, tagId: tg.id }),
       };
     });
@@ -435,7 +435,7 @@ export function FolderTree({ onNewMail }: Props) {
     if (isTrashOrJunk) {
       items.push(
         { type: 'divider' },
-        // v8.1: Exchange "Recover deleted items" — from the Trash folder
+        // v8.1: "Recover deleted items" — from the Trash folder
         ...(folder.name === 'Trash' ? [{
           label: t('recover_title'),
           icon: <RotateCcw size={14} />,
@@ -499,7 +499,7 @@ export function FolderTree({ onNewMail }: Props) {
   void lang;
 
   return (
-    <aside className="w-full h-full bg-gray-50 dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 flex flex-col overflow-hidden">
+    <aside className="w-full h-full bg-surface-2 border-r border-line flex flex-col overflow-hidden">
       <div className="p-3 flex items-center gap-2">
         <button
           onClick={onNewMail}
@@ -517,7 +517,7 @@ export function FolderTree({ onNewMail }: Props) {
           }}
           title={t('refresh_folders')}
           aria-label={t('refresh_folders')}
-          className="shrink-0 p-2 rounded border border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 active:scale-95 transition-all"
+          className="shrink-0 p-2 rounded border border-line text-fg-subtle hover:bg-surface-2 active:scale-95 transition-all"
         >
           <RefreshCw size={15} />
         </button>
@@ -561,7 +561,7 @@ export function FolderTree({ onNewMail }: Props) {
           action={
             <button aria-label="Neuer Ordner"
               onClick={() => setDialog({ kind: 'createRoot' })}
-              className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+              className="text-fg-subtle hover:text-fg-muted"
               title="Neuer Ordner"
             >
               <Plus size={12} />

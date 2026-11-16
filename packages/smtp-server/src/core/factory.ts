@@ -10,6 +10,9 @@ import type { SmtpSessionConfig } from './types.js';
 import {
   checkAndTrackConnection,
   releaseConnection,
+  acquireGlobalSlot,
+  releaseGlobalSlot,
+  connectionCaps,
   isAuthBanned,
   publishConnectionLimitEvent,
 } from './ip-limiter.js';
@@ -32,8 +35,29 @@ export function createSmtpServer(config: SmtpSessionConfig, implicitTls = false)
     });
 
     // ── IP-Level-Checks (synchron + async) ─────────────────────────────────
+    // Submission listeners (requireAuth: 587/465) and private/loopback clients are
+    // exempt from the global cap; the BCP per-IP cap is for port 25 only (connectionCaps).
+    const caps = connectionCaps({
+      submission: config.requireAuth,
+      ip,
+      maxConnections: config.maxConnections,
+      maxConnectionsPerIp: config.maxConnectionsPerIp,
+    });
+
+    // 0. Global connection limit for inbound MX traffic (SmtpSettings.maxConnections)
+    if (caps.global !== null) {
+      if (!acquireGlobalSlot(caps.global)) {
+        if (socket.writable) {
+          socket.write('421 4.3.2 Too many connections, try again later\r\n');
+        }
+        socket.end();
+        return;
+      }
+      socket.once('close', () => releaseGlobalSlot());
+    }
+
     // 1. Per-IP connection limit + new-connection rate (in-memory, synchronous)
-    if (!checkAndTrackConnection(ip)) {
+    if (!checkAndTrackConnection(ip, Date.now(), caps.perIp)) {
       if (socket.writable) {
         socket.write('421 4.7.1 Too many connections from your IP\r\n');
       }

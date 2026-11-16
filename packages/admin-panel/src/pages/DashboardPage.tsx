@@ -10,7 +10,7 @@ import {
 import {
   AreaChart, Area, BarChart, Bar,
   XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, Cell,
+  ResponsiveContainer,
 } from 'recharts';
 import { api, fetchEventTicket } from '../api/client.js';
 import { openReconnectingEventSource, eventStreamUrl } from '../lib/reconnectingEventSource.js';
@@ -40,6 +40,8 @@ interface DashboardData {
   activeSessions: number;
   recentLogins:   { id: string; timestamp: string; actorEmail: string; ipAddress: string | null; userAgent: string }[];
   securityHits24h: number;
+  /** Widgets whose data belongs to another area (absent on older backends → all shown). */
+  sections?: { errors: boolean; storageUsers: boolean; audit: boolean; logins: boolean; attacks: boolean };
   generatedAt: string;
 }
 
@@ -86,10 +88,44 @@ function fmtUptime(sec: number): { primary: string; secondary: string } {
   return { primary: `${mins} min`, secondary: `${sec % 60} s` };
 }
 
+// Status fills use the *-fg tokens: they keep >= 3:1 against the track in both themes.
 function barColor(pct: number): string {
-  if (pct >= 90) return 'bg-red-500';
-  if (pct >= 75) return 'bg-yellow-400';
-  return 'bg-green-500';
+  if (pct >= 90) return 'bg-danger-fg';
+  if (pct >= 75) return 'bg-warning-fg';
+  return 'bg-success-fg';
+}
+
+// ── Chart colours from the theme tokens ───────────────────────────────────────
+// Recharts writes colours into SVG attributes, where var() is not reliable, so the
+// tokens are resolved from :root and re-read whenever the theme class or the
+// runtime accent colour (inline style on <html>) changes.
+interface ChartTheme { grid: string; axis: string; series: string; surface: string; border: string; fg: string; hover: string }
+
+function readChartTheme(): ChartTheme {
+  const cs = getComputedStyle(document.documentElement);
+  const tok = (name: string, fallback: string) => {
+    const v = cs.getPropertyValue(`--${name}`).trim();
+    return `rgb(${v || fallback})`;
+  };
+  return {
+    grid:    tok('line', '226 229 233'),
+    axis:    tok('fg-subtle', '93 100 112'),
+    series:  tok('color-accent-fg', '0 95 184'),
+    surface: tok('surface', '255 255 255'),
+    border:  tok('line-strong', '122 129 141'),
+    fg:      tok('fg', '17 24 39'),
+    hover:   tok('surface-2', '246 247 249'),
+  };
+}
+
+function useChartTheme(): ChartTheme {
+  const [theme, setTheme] = useState<ChartTheme>(readChartTheme);
+  useEffect(() => {
+    const obs = new MutationObserver(() => setTheme(readChartTheme()));
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style', 'data-theme'] });
+    return () => obs.disconnect();
+  }, []);
+  return theme;
 }
 
 // ── KPI card ──────────────────────────────────────────────────────────────────
@@ -110,15 +146,15 @@ function KpiCard({
           <Icon size={18} className="text-white" />
         </div>
         {trend && (
-          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${trend.value >= 0 ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-600'}`}>
+          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${trend.value >= 0 ? 'bg-success-bg text-success-fg' : 'bg-danger-bg text-danger-fg'}`}>
             {trend.value >= 0 ? '↑' : '↓'} {Math.abs(trend.value)} {trend.label}
           </span>
         )}
       </div>
       <div>
-        <p className="text-2xl font-bold text-gray-900 tabular-nums">{typeof value === 'number' ? fmtNum(value) : value}</p>
-        <p className="text-xs font-medium text-gray-500 mt-0.5">{label}</p>
-        {sub && <p className="text-xs text-gray-400 mt-0.5">{sub}</p>}
+        <p className="text-2xl font-bold text-fg tabular-nums">{typeof value === 'number' ? fmtNum(value) : value}</p>
+        <p className="text-xs font-medium text-fg-subtle mt-0.5">{label}</p>
+        {sub && <p className="text-xs text-fg-subtle mt-0.5">{sub}</p>}
       </div>
     </div>
   );
@@ -128,8 +164,8 @@ function KpiCard({
 function SectionTitle({ icon: Icon, title }: { icon: React.ElementType; title: string }) {
   return (
     <div className="flex items-center gap-2 mb-3">
-      <Icon size={15} className="text-gray-400" />
-      <h2 className="text-sm font-semibold text-gray-700">{title}</h2>
+      <Icon size={15} className="text-fg-subtle" />
+      <h2 className="text-sm font-semibold text-fg-muted">{title}</h2>
     </div>
   );
 }
@@ -137,15 +173,15 @@ function SectionTitle({ icon: Icon, title }: { icon: React.ElementType; title: s
 // ── Queue-Badge ───────────────────────────────────────────────────────────────
 function QueueBadge({ label, value, variant }: { label: string; value: number; variant: 'default' | 'warn' | 'error' | 'success' }) {
   const colors: Record<string, string> = {
-    default: 'bg-blue-50 border-blue-100 text-blue-700',
-    warn:    'bg-yellow-50 border-yellow-100 text-yellow-700',
-    error:   'bg-red-50 border-red-100 text-red-700',
-    success: 'bg-green-50 border-green-100 text-green-700',
+    default: 'bg-info-bg border-info-line text-info-fg',
+    warn:    'bg-warning-bg border-warning-line text-warning-fg',
+    error:   'bg-danger-bg border-danger-line text-danger-fg',
+    success: 'bg-success-bg border-success-line text-success-fg',
   };
   return (
     <div className={`flex flex-col items-center justify-center border rounded-xl p-4 ${colors[variant]}`}>
       <p className="text-2xl font-bold tabular-nums">{fmtNum(value)}</p>
-      <p className="text-xs mt-1 font-medium opacity-80">{label}</p>
+      <p className="text-xs mt-1 font-medium">{label}</p>
     </div>
   );
 }
@@ -154,9 +190,9 @@ function QueueBadge({ label, value, variant }: { label: string; value: number; v
 function ChartTooltip({ active, payload, label }: { active?: boolean; payload?: { value: number }[]; label?: string }) {
   if (!active || !payload?.length) return null;
   return (
-    <div className="bg-white border border-gray-200 rounded-lg shadow-md px-3 py-2 text-xs">
-      <p className="text-gray-500">{label}</p>
-      <p className="font-semibold text-gray-900">{fmtNum(payload[0]?.value ?? 0)} Mails</p>
+    <div className="bg-surface border border-line rounded-lg shadow-md px-3 py-2 text-xs">
+      <p className="text-fg-subtle">{label}</p>
+      <p className="font-semibold text-fg">{fmtNum(payload[0]?.value ?? 0)} Mails</p>
     </div>
   );
 }
@@ -164,7 +200,7 @@ function ChartTooltip({ active, payload, label }: { active?: boolean; payload?: 
 // ── Mini bar (for RAM/CPU display) ────────────────────────────────────────────
 function MiniBar({ pct, color }: { pct: number; color: string }) {
   return (
-    <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+    <div className="h-1.5 bg-surface-2 rounded-full overflow-hidden">
       <div className={`h-full rounded-full transition-all ${color}`} style={{ width: `${Math.min(pct, 100)}%` }} />
     </div>
   );
@@ -207,17 +243,17 @@ function WidgetSettingsPopover({ onClose }: { onClose: () => void }) {
   return (
     <div
       ref={ref}
-      className="absolute right-0 top-full mt-2 w-96 bg-white rounded-lg border border-gray-200 shadow-xl z-20"
+      className="absolute right-0 top-full mt-2 w-96 bg-surface rounded-lg border border-line shadow-xl z-20"
     >
-      <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+      <div className="px-4 py-3 border-b border-line flex items-center justify-between">
         <div>
-          <h3 className="text-sm font-semibold text-gray-900">{t('dash_widget_settings')}</h3>
-          <p className="text-[11px] text-gray-400 mt-0.5">{t('dash_widget_drag_hint')}</p>
+          <h3 className="text-sm font-semibold text-fg">{t('dash_widget_settings')}</h3>
+          <p className="text-[11px] text-fg-subtle mt-0.5">{t('dash_widget_drag_hint')}</p>
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
-          <button onClick={() => setAll(true)}  className="text-[11px] px-2 py-0.5 rounded border border-gray-200 text-gray-600 hover:bg-gray-50">{t('dash_widget_all')}</button>
-          <button onClick={() => setAll(false)} className="text-[11px] px-2 py-0.5 rounded border border-gray-200 text-gray-600 hover:bg-gray-50">{t('dash_widget_none')}</button>
-          <button onClick={reset}               className="text-[11px] px-2 py-0.5 rounded border border-gray-200 text-gray-600 hover:bg-gray-50">{t('dash_widget_reset')}</button>
+          <button onClick={() => setAll(true)}  className="text-[11px] px-2 py-0.5 rounded border border-line-strong text-fg-muted hover:bg-surface-2">{t('dash_widget_all')}</button>
+          <button onClick={() => setAll(false)} className="text-[11px] px-2 py-0.5 rounded border border-line-strong text-fg-muted hover:bg-surface-2">{t('dash_widget_none')}</button>
+          <button onClick={reset}               className="text-[11px] px-2 py-0.5 rounded border border-line-strong text-fg-muted hover:bg-surface-2">{t('dash_widget_reset')}</button>
         </div>
       </div>
       <div className="max-h-[60vh] overflow-y-auto py-1">
@@ -252,21 +288,21 @@ function WidgetSettingsPopover({ onClose }: { onClose: () => void }) {
               setDraggingIndex(null);
             }}
             onDragEnd={() => { dragIndex.current = null; setHoverIndex(null); setDraggingIndex(null); }}
-            className={`flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 cursor-move transition-opacity ${
-              hoverIndex === i ? 'border-t-2 border-accent' : 'border-t-2 border-transparent'
+            className={`flex items-center gap-2 px-3 py-1.5 hover:bg-surface-2 cursor-move transition-opacity ${
+              hoverIndex === i ? 'border-t-2 border-accent-fg' : 'border-t-2 border-transparent'
             } ${draggingIndex === i ? 'opacity-40' : ''}`}
           >
-            <GripVertical size={13} className="text-gray-300 shrink-0" />
+            <GripVertical size={13} className="text-fg-subtle shrink-0" />
             <input
               type="checkbox"
               checked={visible[w.id] ?? true}
               onChange={() => toggle(w.id)}
               onClick={(e) => e.stopPropagation()}
               draggable={false}
-              className="h-4 w-4 rounded border-gray-300 text-accent focus:ring-accent shrink-0"
+              className="h-4 w-4 rounded border-line-strong text-accent-fg focus:ring-accent-fg shrink-0"
             />
-            <span className="text-sm text-gray-700 flex-1 truncate">{w.label}</span>
-            <span className="text-[10px] text-gray-400 uppercase tracking-wide shrink-0">{GROUP_LABELS[w.group]}</span>
+            <span className="text-sm text-fg-muted flex-1 truncate">{w.label}</span>
+            <span className="text-[10px] text-fg-subtle uppercase tracking-wide shrink-0">{GROUP_LABELS[w.group]}</span>
           </div>
         ))}
         {/* End-of-list drop zone — allows "drag to the end" */}
@@ -289,7 +325,7 @@ function WidgetSettingsPopover({ onClose }: { onClose: () => void }) {
             setHoverIndex(null);
             setDraggingIndex(null);
           }}
-          className={`h-3 ${hoverIndex === orderedItems.length ? 'border-t-2 border-accent' : 'border-t-2 border-transparent'}`}
+          className={`h-3 ${hoverIndex === orderedItems.length ? 'border-t-2 border-accent-fg' : 'border-t-2 border-transparent'}`}
         />
       </div>
     </div>
@@ -367,7 +403,7 @@ function DraggableCard({
       className={`cursor-move select-none transition-all relative rounded-xl ${
         cardDrag === id ? 'opacity-40 scale-[0.98]' : ''
       } ${
-        cardHover === id && sameGroup ? 'ring-2 ring-accent ring-offset-2' : ''
+        cardHover === id && sameGroup ? 'ring-2 ring-accent-fg ring-offset-2' : ''
       }`}
       title=""
     >
@@ -414,17 +450,17 @@ function AttackEventsWidget() {
     return (
       <div className="card">
         <SectionTitle icon={Siren} title={t('dash_attack_title')} />
-        <p className="text-xs text-gray-400 text-center py-4">{t('dash_attack_loading')}</p>
+        <p className="text-xs text-fg-subtle text-center py-4">{t('dash_attack_loading')}</p>
       </div>
     );
   }
 
   return (
-    <div className={`card border-2 transition-colors ${data.isUnderAttack ? 'border-red-400 bg-red-50/30' : 'border-transparent'}`}>
+    <div className={`card border-2 transition-colors ${data.isUnderAttack ? 'border-danger-line bg-danger-bg' : 'border-transparent'}`}>
       <div className="flex items-center justify-between mb-3">
         <SectionTitle icon={Siren} title={t('dash_attack_title')} />
         {data.isUnderAttack && (
-          <span className="flex items-center gap-1.5 text-xs font-bold text-red-600 bg-red-100 px-2.5 py-1 rounded-full animate-pulse">
+          <span className="flex items-center gap-1.5 text-xs font-bold text-danger-fg bg-danger-bg px-2.5 py-1 rounded-full animate-pulse">
             <AlertTriangle size={12} />
             {t('dash_attack_under')}
           </span>
@@ -433,25 +469,25 @@ function AttackEventsWidget() {
 
       {/* Counters */}
       <div className="grid grid-cols-2 gap-3 mb-4">
-        <div className={`rounded-lg p-3 text-center ${data.total1h > 0 ? 'bg-red-50 border border-red-100' : 'bg-gray-50'}`}>
-          <p className={`text-2xl font-bold tabular-nums ${data.total1h > 0 ? 'text-red-700' : 'text-gray-700'}`}>{data.total1h}</p>
-          <p className="text-[11px] text-gray-500 mt-0.5">{t('dash_attack_last_hour')}</p>
+        <div className={`rounded-lg p-3 text-center ${data.total1h > 0 ? 'bg-danger-bg border border-danger-line' : 'bg-surface-2'}`}>
+          <p className={`text-2xl font-bold tabular-nums ${data.total1h > 0 ? 'text-danger-fg' : 'text-fg-muted'}`}>{data.total1h}</p>
+          <p className="text-[11px] text-fg-subtle mt-0.5">{t('dash_attack_last_hour')}</p>
         </div>
-        <div className="rounded-lg p-3 text-center bg-gray-50">
-          <p className="text-2xl font-bold tabular-nums text-gray-700">{data.total24h}</p>
-          <p className="text-[11px] text-gray-500 mt-0.5">{t('dash_attack_last_24h')}</p>
+        <div className="rounded-lg p-3 text-center bg-surface-2">
+          <p className="text-2xl font-bold tabular-nums text-fg-muted">{data.total24h}</p>
+          <p className="text-[11px] text-fg-subtle mt-0.5">{t('dash_attack_last_24h')}</p>
         </div>
       </div>
 
       {/* Top attack types */}
       {data.byType.length > 0 && (
         <div className="mb-4">
-          <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">{t('dash_attack_types')}</p>
+          <p className="text-[11px] font-semibold text-fg-subtle uppercase tracking-wide mb-2">{t('dash_attack_types')}</p>
           <div className="space-y-1.5">
             {data.byType.map((b) => (
               <div key={b.type} className="flex items-center justify-between">
-                <span className="text-xs text-gray-600 font-mono">{typeLabel[b.type] ?? b.type}</span>
-                <span className="text-xs font-semibold text-gray-800 tabular-nums">{b.count}×</span>
+                <span className="text-xs text-fg-muted font-mono">{typeLabel[b.type] ?? b.type}</span>
+                <span className="text-xs font-semibold text-fg tabular-nums">{b.count}×</span>
               </div>
             ))}
           </div>
@@ -461,12 +497,12 @@ function AttackEventsWidget() {
       {/* Top-IPs */}
       {data.topIps.length > 0 && (
         <div className="mb-4">
-          <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">{t('dash_attack_top_ips')}</p>
+          <p className="text-[11px] font-semibold text-fg-subtle uppercase tracking-wide mb-2">{t('dash_attack_top_ips')}</p>
           <div className="space-y-1.5">
             {data.topIps.slice(0, 5).map((t) => (
               <div key={t.ip} className="flex items-center justify-between">
-                <span className="text-xs font-mono text-gray-700">{t.ip}</span>
-                <span className="text-xs font-semibold text-red-600 tabular-nums">{t.count}×</span>
+                <span className="text-xs font-mono text-fg-muted">{t.ip}</span>
+                <span className="text-xs font-semibold text-danger-fg tabular-nums">{t.count}×</span>
               </div>
             ))}
           </div>
@@ -475,22 +511,22 @@ function AttackEventsWidget() {
 
       {/* Recent events */}
       {data.latestEvents.length === 0 ? (
-        <div className="flex items-center gap-2 justify-center text-green-600 py-2">
+        <div className="flex items-center gap-2 justify-center text-success-fg py-2">
           <CheckCircle size={14} />
           <span className="text-xs">{t('dash_attack_none')}</span>
         </div>
       ) : (
         <div>
-          <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">{t('dash_attack_events')}</p>
+          <p className="text-[11px] font-semibold text-fg-subtle uppercase tracking-wide mb-2">{t('dash_attack_events')}</p>
           <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
             {data.latestEvents.slice(0, 10).map((e) => (
-              <div key={e.id} className="flex items-start gap-2 p-1.5 rounded bg-gray-50 hover:bg-gray-100 transition-colors">
-                <span className="shrink-0 mt-0.5 text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-100 text-red-700 whitespace-nowrap">
+              <div key={e.id} className="flex items-start gap-2 p-1.5 rounded bg-surface-2 hover:bg-surface-2 transition-colors">
+                <span className="shrink-0 mt-0.5 text-[10px] font-bold px-1.5 py-0.5 rounded bg-danger-bg text-danger-fg whitespace-nowrap">
                   {typeLabel[e.type] ?? e.type}
                 </span>
                 <div className="min-w-0 flex-1">
-                  <p className="text-xs font-mono text-gray-700 truncate">{e.ip}</p>
-                  <p className="text-[10px] text-gray-400">{e.service} · {timeAgo(e.timestamp)}</p>
+                  <p className="text-xs font-mono text-fg-muted truncate">{e.ip}</p>
+                  <p className="text-[10px] text-fg-subtle">{e.service} · {timeAgo(e.timestamp)}</p>
                 </div>
               </div>
             ))}
@@ -504,7 +540,8 @@ function AttackEventsWidget() {
 // ── Main component ────────────────────────────────────────────────────────────
 export function DashboardPage() {
   const t = useT();
-  const { data, isLoading, refetch, dataUpdatedAt } = useQuery({
+  const chart = useChartTheme();
+  const { data, isLoading, isError, error, refetch, dataUpdatedAt } = useQuery({
     queryKey: ['admin-dashboard'],
     queryFn:  () => api.get<DashboardData>('/admin/dashboard'),
     refetchInterval: 30_000,
@@ -513,7 +550,15 @@ export function DashboardPage() {
   const visible    = useDashboardStore((s) => s.visible);
   const order      = useDashboardStore((s) => s.order);
   const moveWidget = useDashboardStore((s) => s.moveWidget);
-  const isVisible  = (id: WidgetId) => visible[id] ?? true;
+  // Widgets whose data the role may not read are left out entirely (server sends `sections`)
+  const allowed: Partial<Record<WidgetId, boolean | undefined>> = {
+    'recent-errors':   data?.sections?.errors,
+    'storage-ranking': data?.sections?.storageUsers,
+    'recent-audit':    data?.sections?.audit,
+    'recent-logins':   data?.sections?.logins,
+    'attack-events':   data?.sections?.attacks,
+  };
+  const isVisible  = (id: WidgetId) => (visible[id] ?? true) && allowed[id] !== false;
 
   // ── Drag state for direct reordering on the dashboard cards ────────────────
   const [cardDrag, setCardDrag]   = useState<WidgetId | null>(null);
@@ -524,7 +569,7 @@ export function DashboardPage() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="flex items-center gap-2 text-gray-400">
+        <div className="flex items-center gap-2 text-fg-subtle">
           <RefreshCw size={16} className="animate-spin" />
           <span className="text-sm">{t('dash_loading')}</span>
         </div>
@@ -532,7 +577,19 @@ export function DashboardPage() {
     );
   }
 
-  if (!data) return null;
+  if (!data) {
+    return (
+      <div className="p-6">
+        <div role="alert" className="flex items-center gap-3 bg-danger-bg border border-danger-line text-danger-fg rounded-lg px-4 py-3 text-sm">
+          <XCircle size={16} className="shrink-0" />
+          <span className="flex-1">{isError && error instanceof Error && error.message ? error.message : t('dash_loading')}</span>
+          <button onClick={() => void refetch()} className="btn-secondary text-xs">
+            <RefreshCw size={13} /> {t('dash_refresh')}
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   const { users, domains, messages, storage, queues, recentErrors, recentAuditEvents, server, activeSessions, recentLogins, securityHits24h } = data;
   const totalQueueItems = queues.waiting + queues.active + queues.delayed;
@@ -558,8 +615,8 @@ export function DashboardPage() {
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold text-gray-900">{t('dash_title')}</h1>
-          <p className="text-xs text-gray-400 mt-0.5">{t('dash_last_update')} {lastUpdate} · {t('dash_auto_refresh')}</p>
+          <h1 className="text-xl font-semibold text-fg">{t('dash_title')}</h1>
+          <p className="text-xs text-fg-subtle mt-0.5">{t('dash_last_update')} {lastUpdate} · {t('dash_auto_refresh')}</p>
         </div>
         <div className="flex items-center gap-2 relative">
           <button
@@ -587,7 +644,7 @@ export function DashboardPage() {
         const kpiSlots: Partial<Record<WidgetId, ReactElement>> = {
           'kpi-users': (
             <KpiCard
-              icon={Users}  color="bg-blue-500"
+              icon={Users}  color="bg-accent"
               label={t('dash_kpi_users')}
               value={users.total}
               sub={`${users.active} ${t('dash_kpi_users_sub')} · ${users.inactive} ${t('dash_kpi_users_sub2')}`}
@@ -596,15 +653,15 @@ export function DashboardPage() {
           ),
           'kpi-domains': (
             <KpiCard
-              icon={Globe} color="bg-indigo-500"
+              icon={Globe} color="bg-info"
               label={t('dash_kpi_domains')}
               value={domains.total}
-              sub={`${data.sharedMailboxes} ${t('dash_kpi_domains_sub')} · ${data.groups} ${t('dash_kpi_domains_sub2')}`}
+              sub={`${data.sharedMailboxes} ${t('dash_kpi_domains_sub')}`}
             />
           ),
           'kpi-messages': (
             <KpiCard
-              icon={Mail}  color="bg-sky-500"
+              icon={Mail}  color="bg-info"
               label={t('dash_kpi_messages')}
               value={messages.total}
               sub={`${fmtNum(messages.newDay)} ${t('dash_kpi_messages_today')} · ${fmtNum(messages.newWeek)} ${t('dash_kpi_messages_week')}`}
@@ -613,7 +670,7 @@ export function DashboardPage() {
           ),
           'kpi-storage': (
             <KpiCard
-              icon={HardDrive} color="bg-violet-500"
+              icon={HardDrive} color="bg-info"
               label={t('dash_kpi_storage')}
               value={fmtBytes(storage.totalUsedBytes)}
               sub={`${t('dash_kpi_storage_top')} ${storage.topUsers[0]?.displayName ?? '—'} (${fmtBytes(storage.topUsers[0]?.usedBytes ?? 0)})`}
@@ -641,23 +698,23 @@ export function DashboardPage() {
               <SectionTitle icon={Server} title="Server" />
               <div className="space-y-3">
                 <div className="flex items-end gap-2">
-                  <p className="text-3xl font-bold text-gray-900 tabular-nums leading-none">{uptime.primary}</p>
-                  <p className="text-sm text-gray-400 mb-0.5">{uptime.secondary}</p>
+                  <p className="text-3xl font-bold text-fg tabular-nums leading-none">{uptime.primary}</p>
+                  <p className="text-sm text-fg-subtle mb-0.5">{uptime.secondary}</p>
                 </div>
-                <p className="text-xs text-gray-500">{t('dash_server_uptime')} {new Date(server.startedAt).toLocaleString('de-DE')}</p>
-                <div className="pt-3 border-t border-gray-100 grid grid-cols-2 gap-y-1.5 gap-x-3 text-xs">
-                  <span className="text-gray-400">{t('dash_server_version')}</span>
-                  <span className="text-gray-700 font-mono">v{server.version}</span>
-                  <span className="text-gray-400">{t('dash_server_hostname')}</span>
-                  <span className="text-gray-700 font-mono truncate" title={server.hostname}>{server.hostname}</span>
-                  <span className="text-gray-400">{t('dash_server_platform')}</span>
-                  <span className="text-gray-700 font-mono">{server.platform}/{server.arch}</span>
-                  <span className="text-gray-400">{t('dash_server_nodejs')}</span>
-                  <span className="text-gray-700 font-mono">{server.nodeVersion}</span>
-                  <span className="text-gray-400">{t('dash_server_pid')}</span>
-                  <span className="text-gray-700 font-mono">{server.pid}</span>
-                  <span className="text-gray-400">{t('dash_server_sessions')}</span>
-                  <span className="text-gray-700 tabular-nums">{fmtNum(activeSessions)}</span>
+                <p className="text-xs text-fg-subtle">{t('dash_server_uptime')} {new Date(server.startedAt).toLocaleString('de-DE')}</p>
+                <div className="pt-3 border-t border-line grid grid-cols-2 gap-y-1.5 gap-x-3 text-xs">
+                  <span className="text-fg-subtle">{t('dash_server_version')}</span>
+                  <span className="text-fg-muted font-mono">v{server.version}</span>
+                  <span className="text-fg-subtle">{t('dash_server_hostname')}</span>
+                  <span className="text-fg-muted font-mono truncate" title={server.hostname}>{server.hostname}</span>
+                  <span className="text-fg-subtle">{t('dash_server_platform')}</span>
+                  <span className="text-fg-muted font-mono">{server.platform}/{server.arch}</span>
+                  <span className="text-fg-subtle">{t('dash_server_nodejs')}</span>
+                  <span className="text-fg-muted font-mono">{server.nodeVersion}</span>
+                  <span className="text-fg-subtle">{t('dash_server_pid')}</span>
+                  <span className="text-fg-muted font-mono">{server.pid}</span>
+                  <span className="text-fg-subtle">{t('dash_server_sessions')}</span>
+                  <span className="text-fg-muted tabular-nums">{fmtNum(activeSessions)}</span>
                 </div>
               </div>
             </div>
@@ -668,27 +725,27 @@ export function DashboardPage() {
               <div className="space-y-4">
                 <div>
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs font-medium text-gray-600 flex items-center gap-1.5"><Cpu size={12} className="text-gray-400" /> {t('dash_server_cpu')}</span>
-                    <span className="text-xs font-semibold text-gray-700 tabular-nums">{server.cpu.load1.toFixed(2)} / {server.cpu.cores} Cores</span>
+                    <span className="text-xs font-medium text-fg-muted flex items-center gap-1.5"><Cpu size={12} className="text-fg-subtle" /> {t('dash_server_cpu')}</span>
+                    <span className="text-xs font-semibold text-fg-muted tabular-nums">{server.cpu.load1.toFixed(2)} / {server.cpu.cores} Cores</span>
                   </div>
                   <MiniBar pct={cpuPct} color={barColor(cpuPct)} />
-                  <p className="text-[11px] text-gray-400 mt-1">5 min: {server.cpu.load5.toFixed(2)} · 15 min: {server.cpu.load15.toFixed(2)}</p>
+                  <p className="text-[11px] text-fg-subtle mt-1">5 min: {server.cpu.load5.toFixed(2)} · 15 min: {server.cpu.load15.toFixed(2)}</p>
                 </div>
                 <div>
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs font-medium text-gray-600 flex items-center gap-1.5"><MemoryStick size={12} className="text-gray-400" /> {t('dash_server_ram')}</span>
-                    <span className="text-xs font-semibold text-gray-700 tabular-nums">{fmtBytes(sysMemUsed)} / {fmtBytes(server.memory.systemTotal)}</span>
+                    <span className="text-xs font-medium text-fg-muted flex items-center gap-1.5"><MemoryStick size={12} className="text-fg-subtle" /> {t('dash_server_ram')}</span>
+                    <span className="text-xs font-semibold text-fg-muted tabular-nums">{fmtBytes(sysMemUsed)} / {fmtBytes(server.memory.systemTotal)}</span>
                   </div>
                   <MiniBar pct={sysMemPct} color={barColor(sysMemPct)} />
-                  <p className="text-[11px] text-gray-400 mt-1">{t('dash_server_free')} {fmtBytes(server.memory.systemFree)}</p>
+                  <p className="text-[11px] text-fg-subtle mt-1">{t('dash_server_free')} {fmtBytes(server.memory.systemFree)}</p>
                 </div>
                 <div>
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs font-medium text-gray-600 flex items-center gap-1.5"><Activity size={12} className="text-gray-400" /> {t('dash_server_heap')}</span>
-                    <span className="text-xs font-semibold text-gray-700 tabular-nums">{fmtBytes(server.memory.heapUsed)} / {fmtBytes(heapBudget)}</span>
+                    <span className="text-xs font-medium text-fg-muted flex items-center gap-1.5"><Activity size={12} className="text-fg-subtle" /> {t('dash_server_heap')}</span>
+                    <span className="text-xs font-semibold text-fg-muted tabular-nums">{fmtBytes(server.memory.heapUsed)} / {fmtBytes(heapBudget)}</span>
                   </div>
                   <MiniBar pct={heapPct} color={barColor(heapPct)} />
-                  <p className="text-[11px] text-gray-400 mt-1">{t('dash_server_allocated')} {fmtBytes(server.memory.heapTotal)} · {t('dash_server_rss')} {fmtBytes(server.memory.rss)}</p>
+                  <p className="text-[11px] text-fg-subtle mt-1">{t('dash_server_allocated')} {fmtBytes(server.memory.heapTotal)} · {t('dash_server_rss')} {fmtBytes(server.memory.rss)}</p>
                 </div>
               </div>
             </div>
@@ -698,17 +755,17 @@ export function DashboardPage() {
               <SectionTitle icon={ShieldAlert} title="Sicherheit (24h)" />
               <div className="space-y-3">
                 <div className="flex items-end gap-2">
-                  <p className="text-3xl font-bold text-gray-900 tabular-nums leading-none">{fmtNum(securityHits24h)}</p>
-                  <p className="text-sm text-gray-400 mb-0.5">{t('dash_security_hits')}</p>
+                  <p className="text-3xl font-bold text-fg tabular-nums leading-none">{fmtNum(securityHits24h)}</p>
+                  <p className="text-sm text-fg-subtle mb-0.5">{t('dash_security_hits')}</p>
                 </div>
-                <p className="text-xs text-gray-500">{t('dash_security_blocked')}</p>
-                <div className="pt-3 border-t border-gray-100 grid grid-cols-2 gap-y-1.5 gap-x-3 text-xs">
-                  <span className="text-gray-400">{t('dash_security_errors')}</span>
-                  <span className="text-gray-700 tabular-nums">{recentErrors.length}</span>
-                  <span className="text-gray-400">{t('dash_security_audit')}</span>
-                  <span className="text-gray-700 tabular-nums">{recentAuditEvents.length}</span>
-                  <span className="text-gray-400">{t('dash_security_logins')}</span>
-                  <span className="text-gray-700 tabular-nums">{recentLogins.length}</span>
+                <p className="text-xs text-fg-subtle">{t('dash_security_blocked')}</p>
+                <div className="pt-3 border-t border-line grid grid-cols-2 gap-y-1.5 gap-x-3 text-xs">
+                  <span className="text-fg-subtle">{t('dash_security_errors')}</span>
+                  <span className="text-fg-muted tabular-nums">{allowed['recent-errors'] === false ? '—' : recentErrors.length}</span>
+                  <span className="text-fg-subtle">{t('dash_security_audit')}</span>
+                  <span className="text-fg-muted tabular-nums">{allowed['recent-audit'] === false ? '—' : recentAuditEvents.length}</span>
+                  <span className="text-fg-subtle">{t('dash_security_logins')}</span>
+                  <span className="text-fg-muted tabular-nums">{allowed['recent-logins'] === false ? '—' : recentLogins.length}</span>
                 </div>
               </div>
             </div>
@@ -745,10 +802,10 @@ export function DashboardPage() {
               </div>
               <div className={`mt-3 flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium ${
                 hasQueueProblem
-                  ? 'bg-red-50 text-red-700'
+                  ? 'bg-danger-bg text-danger-fg'
                   : totalQueueItems > 200
-                  ? 'bg-yellow-50 text-yellow-700'
-                  : 'bg-green-50 text-green-700'
+                  ? 'bg-warning-bg text-warning-fg'
+                  : 'bg-success-bg text-success-fg'
               }`}>
                 {hasQueueProblem
                   ? <><XCircle size={13} /> {queues.failed} {t('dash_queue_jobs_error')}</>
@@ -766,17 +823,17 @@ export function DashboardPage() {
                 <AreaChart data={messages.mailsChart} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
                   <defs>
                     <linearGradient id="mailGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%"  stopColor="#3b82f6" stopOpacity={0.3} />
-                      <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}   />
+                      <stop offset="5%"  stopColor={chart.series} stopOpacity={0.3} />
+                      <stop offset="95%" stopColor={chart.series} stopOpacity={0}   />
                     </linearGradient>
                   </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                  <XAxis dataKey="day" tick={{ fontSize: 11, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} axisLine={false} tickLine={false} allowDecimals={false} />
-                  <Tooltip content={<ChartTooltip />} />
+                  <CartesianGrid strokeDasharray="3 3" stroke={chart.grid} />
+                  <XAxis dataKey="day" tick={{ fontSize: 11, fill: chart.axis }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fontSize: 11, fill: chart.axis }} axisLine={false} tickLine={false} allowDecimals={false} />
+                  <Tooltip content={<ChartTooltip />} cursor={{ stroke: chart.border }} />
                   <Area
                     type="monotone" dataKey="count"
-                    stroke="#3b82f6" strokeWidth={2}
+                    stroke={chart.series} strokeWidth={2}
                     fill="url(#mailGrad)"
                   />
                 </AreaChart>
@@ -805,24 +862,24 @@ export function DashboardPage() {
               <SectionTitle icon={HardDrive} title={t('dash_storage_ranking')} />
               <div className="space-y-3">
                 {storage.topUsers.length === 0 && (
-                  <p className="text-xs text-gray-400 text-center py-4">{t('dash_storage_no_data')}</p>
+                  <p className="text-xs text-fg-subtle text-center py-4">{t('dash_storage_no_data')}</p>
                 )}
                 {storage.topUsers.map((u, i) => (
                   <div key={u.id}>
                     <div className="flex items-center justify-between mb-1">
                       <div className="flex items-center gap-2 min-w-0">
-                        <span className="text-xs text-gray-400 w-4 shrink-0">#{i + 1}</span>
+                        <span className="text-xs text-fg-subtle w-4 shrink-0">#{i + 1}</span>
                         <div className="min-w-0">
-                          <p className="text-xs font-medium text-gray-800 truncate">{u.displayName}</p>
-                          <p className="text-[11px] text-gray-400 truncate">{u.email}</p>
+                          <p className="text-xs font-medium text-fg truncate">{u.displayName}</p>
+                          <p className="text-[11px] text-fg-subtle truncate">{u.email}</p>
                         </div>
                       </div>
                       <div className="text-right shrink-0 ml-2">
-                        <p className="text-xs font-semibold text-gray-700">{fmtBytes(u.usedBytes)}</p>
-                        <p className="text-[11px] text-gray-400">{u.usedPercent}%</p>
+                        <p className="text-xs font-semibold text-fg-muted">{fmtBytes(u.usedBytes)}</p>
+                        <p className="text-[11px] text-fg-subtle">{u.usedPercent}%</p>
                       </div>
                     </div>
-                    <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                    <div className="h-1.5 bg-surface-2 rounded-full overflow-hidden">
                       <div
                         className={`h-full rounded-full transition-all ${barColor(u.usedPercent)}`}
                         style={{ width: `${Math.min(u.usedPercent, 100)}%` }}
@@ -837,33 +894,39 @@ export function DashboardPage() {
             <div className="card">
               <SectionTitle icon={Globe} title={t('dash_domains_chart')} />
               {domains.list.length === 0 ? (
-                <p className="text-xs text-gray-400 text-center py-4">{t('dash_domains_no_domains')}</p>
+                <p className="text-xs text-fg-subtle text-center py-4">{t('dash_domains_no_domains')}</p>
               ) : (
                 <>
                   <ResponsiveContainer width="100%" height={120}>
                     <BarChart data={domains.list} margin={{ top: 4, right: 8, left: -20, bottom: 4 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                      <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#9ca3af' }} axisLine={false} tickLine={false} />
-                      <YAxis tick={{ fontSize: 10, fill: '#9ca3af' }} axisLine={false} tickLine={false} allowDecimals={false} />
+                      <CartesianGrid strokeDasharray="3 3" stroke={chart.grid} />
+                      <XAxis dataKey="name" tick={{ fontSize: 10, fill: chart.axis }} axisLine={false} tickLine={false} />
+                      <YAxis tick={{ fontSize: 10, fill: chart.axis }} axisLine={false} tickLine={false} allowDecimals={false} />
                       <Tooltip
                         formatter={(v: number) => [`${v} ${t('dash_domains_users')}`, '']}
-                        contentStyle={{ fontSize: 12, borderRadius: 8 }}
+                        contentStyle={{ fontSize: 12, borderRadius: 8, background: chart.surface, borderColor: chart.border, color: chart.fg }}
+                        itemStyle={{ color: chart.fg }}
+                        labelStyle={{ color: chart.fg }}
+                        cursor={{ fill: chart.hover }}
                       />
-                      <Bar dataKey="userCount" radius={[4, 4, 0, 0]} maxBarSize={40}>
-                        {domains.list.map((d, i) => (
-                          <Cell key={d.id} fill={['#3b82f6', '#6366f1', '#8b5cf6', '#a855f7', '#ec4899'][i % 5]} />
-                        ))}
-                      </Bar>
+                      {/* One series (users per domain): the domain name on the axis and in the
+                          list below carries the meaning, so every bar uses the accent token. */}
+                      <Bar dataKey="userCount" radius={[4, 4, 0, 0]} maxBarSize={40} fill={chart.series} />
                     </BarChart>
                   </ResponsiveContainer>
-                  <div className="mt-3 divide-y divide-gray-50">
+                  <div className="mt-3 divide-y divide-line">
                     {domains.list.map((d) => (
                       <div key={d.id} className="flex items-center justify-between py-1.5">
                         <div className="flex items-center gap-2">
-                          <span className={`w-2 h-2 rounded-full shrink-0 ${d.active ? 'bg-green-400' : 'bg-gray-300'}`} />
-                          <span className="text-xs font-mono text-gray-700">{d.name}</span>
+                          <span
+                            className={`w-2 h-2 rounded-full shrink-0 ${d.active ? 'bg-success-fg' : 'border border-line-strong'}`}
+                            title={d.active ? t('status_active') : t('status_inactive')}
+                            aria-hidden="true"
+                          />
+                          <span className="sr-only">{d.active ? t('status_active') : t('status_inactive')}</span>
+                          <span className="text-xs font-mono text-fg-muted">{d.name}</span>
                         </div>
-                        <span className="text-xs text-gray-500">{d.userCount} {t('dash_domains_users')}</span>
+                        <span className="text-xs text-fg-subtle">{d.userCount} {t('dash_domains_users')}</span>
                       </div>
                     ))}
                   </div>
@@ -895,22 +958,22 @@ export function DashboardPage() {
             <div className="card">
               <SectionTitle icon={AlertTriangle} title={t('dash_errors_title')} />
               {recentErrors.length === 0 ? (
-                <div className="flex items-center gap-2 py-6 justify-center text-green-600">
+                <div className="flex items-center gap-2 py-6 justify-center text-success-fg">
                   <CheckCircle size={16} />
                   <span className="text-sm">{t('dash_errors_empty')}</span>
                 </div>
               ) : (
                 <div className="space-y-2">
                   {recentErrors.map((e) => (
-                    <div key={e.id} className="flex items-start gap-2.5 p-2 rounded-lg bg-gray-50 hover:bg-gray-100 transition-colors">
+                    <div key={e.id} className="flex items-start gap-2.5 p-2 rounded-lg bg-surface-2 hover:bg-surface-2 transition-colors">
                       <span className={`shrink-0 mt-0.5 text-[10px] font-bold px-1.5 py-0.5 rounded uppercase ${
-                        e.level === 'ERROR' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'
+                        e.level === 'ERROR' ? 'bg-danger-bg text-danger-fg' : 'bg-warning-bg text-warning-fg'
                       }`}>
                         {e.level}
                       </span>
                       <div className="min-w-0 flex-1">
-                        <p className="text-xs text-gray-700 truncate">{e.message}</p>
-                        <p className="text-[11px] text-gray-400 mt-0.5">
+                        <p className="text-xs text-fg-muted truncate">{e.message}</p>
+                        <p className="text-[11px] text-fg-subtle mt-0.5">
                           <span className="font-mono">{e.service}</span> · {timeAgo(e.timestamp)}
                         </p>
                       </div>
@@ -924,28 +987,28 @@ export function DashboardPage() {
             <div className="card">
               <SectionTitle icon={ShieldCheck} title={t('dash_audit_title')} />
               {recentAuditEvents.length === 0 ? (
-                <p className="text-xs text-gray-400 text-center py-6">{t('dash_audit_empty')}</p>
+                <p className="text-xs text-fg-subtle text-center py-6">{t('dash_audit_empty')}</p>
               ) : (
-                <div className="divide-y divide-gray-50">
+                <div className="divide-y divide-line">
                   {recentAuditEvents.map((e) => (
                     <div key={e.id} className="flex items-start gap-2.5 py-2.5">
                       <div className={`shrink-0 mt-0.5 w-5 h-5 rounded-full flex items-center justify-center ${
-                        e.success ? 'bg-green-100' : 'bg-red-100'
+                        e.success ? 'bg-success-bg' : 'bg-danger-bg'
                       }`}>
                         {e.success
-                          ? <CheckCircle size={11} className="text-green-600" />
-                          : <XCircle    size={11} className="text-red-600"   />}
+                          ? <CheckCircle size={11} className="text-success-fg" />
+                          : <XCircle    size={11} className="text-danger-fg"   />}
                       </div>
                       <div className="min-w-0 flex-1">
-                        <p className="text-xs text-gray-700">
+                        <p className="text-xs text-fg-muted">
                           <span className="font-medium">{e.actorEmail}</span>
-                          <span className="text-gray-400"> · </span>
-                          <span className="font-mono text-gray-600">{e.action}</span>
+                          <span className="text-fg-subtle"> · </span>
+                          <span className="font-mono text-fg-muted">{e.action}</span>
                           {e.targetName && (
-                            <span className="text-gray-400"> → {e.targetName}</span>
+                            <span className="text-fg-subtle"> → {e.targetName}</span>
                           )}
                         </p>
-                        <p className="text-[11px] text-gray-400 mt-0.5">{e.targetType} · {timeAgo(e.timestamp)}</p>
+                        <p className="text-[11px] text-fg-subtle mt-0.5">{e.targetType} · {timeAgo(e.timestamp)}</p>
                       </div>
                     </div>
                   ))}
@@ -974,18 +1037,18 @@ export function DashboardPage() {
           <div className="card">
             <SectionTitle icon={LogIn} title={t('dash_logins_title')} />
             {recentLogins.length === 0 ? (
-              <p className="text-xs text-gray-400 text-center py-6">{t('dash_logins_empty')}</p>
+              <p className="text-xs text-fg-subtle text-center py-6">{t('dash_logins_empty')}</p>
             ) : (
-              <div className="divide-y divide-gray-50">
+              <div className="divide-y divide-line">
                 {recentLogins.map((l) => (
                   <div key={l.id} className="flex items-center justify-between py-2.5">
                     <div className="min-w-0 flex-1">
-                      <p className="text-xs text-gray-700 font-medium truncate">{l.actorEmail}</p>
-                      <p className="text-[11px] text-gray-400 mt-0.5 truncate">
+                      <p className="text-xs text-fg-muted font-medium truncate">{l.actorEmail}</p>
+                      <p className="text-[11px] text-fg-subtle mt-0.5 truncate">
                         {l.ipAddress ?? '—'} · {l.userAgent.slice(0, 60) || t('dash_logins_unknown')}{l.userAgent.length > 60 ? '…' : ''}
                       </p>
                     </div>
-                    <span className="text-[11px] text-gray-400 shrink-0 ml-2">{timeAgo(l.timestamp)}</span>
+                    <span className="text-[11px] text-fg-subtle shrink-0 ml-2">{timeAgo(l.timestamp)}</span>
                   </div>
                 ))}
               </div>
@@ -1000,39 +1063,39 @@ export function DashboardPage() {
           setCardDrag={setCardDrag} setCardHover={setCardHover} order={order} moveWidget={moveWidget}>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <div className="card flex items-center gap-3 py-3">
-              <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center shrink-0">
-                <Inbox size={14} className="text-blue-600" />
+              <div className="w-8 h-8 rounded-lg bg-info-bg flex items-center justify-center shrink-0">
+                <Inbox size={14} className="text-info-fg" />
               </div>
               <div>
-                <p className="text-xs text-gray-500">{t('dash_strip_queue')}</p>
-                <p className="text-base font-bold text-gray-900">{fmtNum(totalQueueItems)}</p>
+                <p className="text-xs text-fg-subtle">{t('dash_strip_queue')}</p>
+                <p className="text-base font-bold text-fg">{fmtNum(totalQueueItems)}</p>
               </div>
             </div>
             <div className="card flex items-center gap-3 py-3">
-              <div className="w-8 h-8 rounded-lg bg-green-50 flex items-center justify-center shrink-0">
-                <Activity size={14} className="text-green-600" />
+              <div className="w-8 h-8 rounded-lg bg-success-bg flex items-center justify-center shrink-0">
+                <Activity size={14} className="text-success-fg" />
               </div>
               <div>
-                <p className="text-xs text-gray-500">{t('dash_strip_delivered')}</p>
-                <p className="text-base font-bold text-gray-900">{fmtNum(queues.completed)}</p>
+                <p className="text-xs text-fg-subtle">{t('dash_strip_delivered')}</p>
+                <p className="text-base font-bold text-fg">{fmtNum(queues.completed)}</p>
               </div>
             </div>
             <div className="card flex items-center gap-3 py-3">
-              <div className="w-8 h-8 rounded-lg bg-purple-50 flex items-center justify-center shrink-0">
-                <UserPlus size={14} className="text-purple-600" />
+              <div className="w-8 h-8 rounded-lg bg-info-bg flex items-center justify-center shrink-0">
+                <UserPlus size={14} className="text-info-fg" />
               </div>
               <div>
-                <p className="text-xs text-gray-500">{t('dash_strip_new_users')}</p>
-                <p className="text-base font-bold text-gray-900">{fmtNum(users.newWeek)}</p>
+                <p className="text-xs text-fg-subtle">{t('dash_strip_new_users')}</p>
+                <p className="text-base font-bold text-fg">{fmtNum(users.newWeek)}</p>
               </div>
             </div>
             <div className="card flex items-center gap-3 py-3">
-              <div className="w-8 h-8 rounded-lg bg-orange-50 flex items-center justify-center shrink-0">
-                <Clock size={14} className="text-orange-600" />
+              <div className="w-8 h-8 rounded-lg bg-warning-bg flex items-center justify-center shrink-0">
+                <Clock size={14} className="text-warning-fg" />
               </div>
               <div>
-                <p className="text-xs text-gray-500">{t('dash_strip_mails_today')}</p>
-                <p className="text-base font-bold text-gray-900">{fmtNum(messages.newDay)}</p>
+                <p className="text-xs text-fg-subtle">{t('dash_strip_mails_today')}</p>
+                <p className="text-base font-bold text-fg">{fmtNum(messages.newDay)}</p>
               </div>
             </div>
           </div>

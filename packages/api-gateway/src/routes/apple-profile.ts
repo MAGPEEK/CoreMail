@@ -135,7 +135,7 @@ export function buildAppleProfile(p: AppleProfileInput, type: AppleProfileType =
       host = u.host;
       ssl = u.protocol === 'https:';
     } catch { /* keep the public hostname */ }
-    content = [payload('eas', 'com.apple.eas.account', `${org} (Exchange ActiveSync)`, {
+    content = [payload('eas', 'com.apple.eas.account', `${org} (ActiveSync)`, {
       EmailAddress: p.email,
       UserName: p.email,
       Host: host,
@@ -189,7 +189,7 @@ export function buildAppleProfile(p: AppleProfileInput, type: AppleProfileType =
     PayloadUUID: stableUuid(p.userId, profileKind),
     PayloadDisplayName: type === 'eas' ? `${org} — ${p.email} (ActiveSync)` : `${org} — ${p.email}`,
     PayloadDescription: (type === 'eas'
-      ? `Sets up ${p.email} with Exchange ActiveSync (mail, calendar, contacts). `
+      ? `Sets up ${p.email} with ActiveSync (mail, calendar, contacts). `
       : `Sets up ${p.email} for Mail (IMAP/SMTP), Calendar (CalDAV) and Contacts (CardDAV). `) + passwordHint,
     PayloadOrganization: org,
     PayloadRemovalDisallowed: false,

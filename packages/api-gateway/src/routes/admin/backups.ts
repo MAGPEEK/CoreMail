@@ -147,6 +147,11 @@ adminBackupsRouter.get('/users/:userId/folders', async (req: Request, res: Respo
   res.json(folders);
 });
 
+// 9.1.x — encryption key state (source + key id, never the key) for the BCP
+adminBackupsRouter.get('/encryption', async (req: Request, res: Response) => {
+  await forward(req, res, 'GET', '/backup/admin/encryption');
+});
+
 // v3.18.26 — backup schedules CRUD
 adminBackupsRouter.get('/schedules', async (req: Request, res: Response) => {
   await forward(req, res, 'GET', '/backup/admin/schedules');

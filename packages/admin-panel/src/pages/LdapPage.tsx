@@ -8,6 +8,7 @@ import {
 import { api } from '../api/client.js';
 import toast from 'react-hot-toast';
 import { Toggle as ToggleSwitch } from '../components/Toggle.js';
+import { Can, WriteGuard } from '../components/Can.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -94,26 +95,27 @@ function Toggle({ value, onChange }: { value: boolean; onChange: (v: boolean) =>
 // ─── Connection List ──────────────────────────────────────────────────────────
 
 function ConnectionsList({
-  configs, onSelect, onDelete, onSync,
+  configs, onSelect, onDelete, onSync, syncing,
 }: {
   configs: LdapSummary[];
   onSelect: (domainId: string) => void;
   onDelete: (domainId: string) => void;
   onSync: (domainId: string) => void;
+  syncing: boolean;
 }) {
   return (
     <div className="space-y-3">
       {configs.length === 0 ? (
-        <div className="bg-white rounded-lg border border-gray-200 py-16 text-center">
-          <Network size={28} className="mx-auto text-gray-300 mb-3" />
-          <p className="text-sm font-medium text-gray-500">Keine LDAP-Verbindungen konfiguriert</p>
-          <p className="text-xs text-gray-400 mt-1">Klicke auf „Neue Verbindung" um zu beginnen</p>
+        <div className="bg-surface rounded-lg border border-line py-16 text-center">
+          <Network size={28} className="mx-auto text-fg-subtle mb-3" />
+          <p className="text-sm font-medium text-fg-subtle">Keine LDAP-Verbindungen konfiguriert</p>
+          <p className="text-xs text-fg-subtle mt-1">Klicke auf „Neue Verbindung" um zu beginnen</p>
         </div>
       ) : (
-        <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+        <div className="bg-surface rounded-lg border border-line overflow-hidden">
           <table className="w-full text-sm">
             <thead>
-              <tr className="bg-gray-50 border-b border-gray-200 text-xs font-semibold text-gray-500 uppercase tracking-wide">
+              <tr className="bg-surface-2 border-b border-line text-xs font-semibold text-fg-subtle uppercase tracking-wide">
                 <th className="text-left px-4 py-2.5">Domain</th>
                 <th className="text-left px-4 py-2.5">Host</th>
                 <th className="text-left px-4 py-2.5">Base DN</th>
@@ -124,31 +126,36 @@ function ConnectionsList({
             </thead>
             <tbody>
               {configs.map(c => (
-                <tr key={c.domainId} className="border-b border-gray-100 hover:bg-gray-50">
+                <tr key={c.domainId} className="border-b border-line hover:bg-surface-2">
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2">
-                      <div className="w-2 h-2 rounded-full bg-green-400" />
-                      <span className="font-medium text-gray-800">{c.domainName}</span>
+                      <div className={`w-2 h-2 rounded-full ${c.enabled === false ? 'bg-surface-3' : 'bg-success'}`} title={c.enabled === false ? 'LDAP-Anmeldung deaktiviert' : 'aktiv'} />
+                      <span className="font-medium text-fg">{c.domainName}</span>
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-xs font-mono text-gray-700">
+                  <td className="px-4 py-3 text-xs font-mono text-fg-muted">
                     {c.ssl ? 'ldaps://' : 'ldap://'}{c.host}:{c.port}
                   </td>
-                  <td className="px-4 py-3 text-xs font-mono text-gray-600 truncate max-w-[180px]">{c.baseDN}</td>
+                  <td className="px-4 py-3 text-xs font-mono text-fg-muted truncate max-w-[180px]">{c.baseDN}</td>
                   <td className="px-4 py-3 text-center">
                     {c.syncEnabled
-                      ? <span className="text-xs px-1.5 py-0.5 bg-green-100 text-green-700 rounded-full">aktiv</span>
-                      : <span className="text-xs px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded-full">inaktiv</span>}
+                      ? <span className="text-xs px-1.5 py-0.5 bg-success-bg text-success-fg rounded-full">aktiv</span>
+                      : <span className="text-xs px-1.5 py-0.5 bg-surface-2 text-fg-subtle rounded-full">inaktiv</span>}
                   </td>
-                  <td className="px-4 py-3 text-xs text-gray-500">{fmtDt(c.lastSyncAt)}</td>
+                  <td className="px-4 py-3 text-xs text-fg-subtle">{fmtDt(c.lastSyncAt)}</td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-1.5">
+                      <Can area="identity" access="write" mode="hide">
                       <button aria-label="Jetzt synchronisieren" onClick={() => onSync(c.domainId)} title="Jetzt synchronisieren"
-                        className="p-1 text-gray-400 hover:text-blue-600 transition-colors"><RotateCcw size={13} /></button>
+                        disabled={syncing || c.enabled === false}
+                        className="p-1 text-fg-subtle hover:text-accent-fg transition-colors disabled:opacity-40"><RotateCcw size={13} className={syncing ? 'animate-spin' : ''} /></button>
+                      </Can>
                       <button aria-label="Konfigurieren" onClick={() => onSelect(c.domainId)} title="Konfigurieren"
-                        className="p-1 text-gray-400 hover:text-accent transition-colors"><Settings size={13} /></button>
-                      <button aria-label="Löschen" onClick={() => { if (confirm(`LDAP-Konfiguration für „${c.domainName}" löschen?`)) onDelete(c.domainId); }}
-                        className="p-1 text-gray-400 hover:text-red-500 transition-colors"><Trash2 size={13} /></button>
+                        className="p-1 text-fg-subtle hover:text-accent-fg transition-colors"><Settings size={13} /></button>
+                      <Can area="identity" access="write" mode="hide">
+                      <button aria-label="Löschen" onClick={() => { if (confirm(`LDAP-Konfiguration für „${c.domainName}" löschen? LDAP-Benutzer dieser Domain können sich danach nicht mehr mit dem Verzeichnis-Passwort anmelden.`)) onDelete(c.domainId); }}
+                        className="p-1 text-fg-subtle hover:text-danger-fg transition-colors"><Trash2 size={13} /></button>
+                      </Can>
                     </div>
                   </td>
                 </tr>
@@ -234,16 +241,20 @@ function ConfigForm({ domainId, domains, onSaved }: {
 
   const set = (k: keyof typeof form, v: unknown) => setForm(f => ({ ...f, [k]: v }));
 
+  const portOk = Number.isInteger(form.port) && form.port >= 1 && form.port <= 65535;
+  const canSave = !!form.domainId && !!form.host.trim() && portOk && !!form.baseDN.trim() && !!form.bindDN.trim()
+    && !!form.userDN.trim() && form.userFilter.includes('{{') && (!!existing || !!form.bindPassword);
+
   return (
-    <div className="space-y-5 max-w-2xl">
+    <WriteGuard area="identity" className="space-y-5 max-w-2xl">
       <div className="card p-5 space-y-4">
-        <p className="text-sm font-semibold text-gray-700">Verbindung</p>
+        <p className="text-sm font-semibold text-fg-muted">Verbindung</p>
 
         {!domainId && (
           <div>
-            <label className="text-xs font-medium text-gray-600 block mb-1">Domain *</label>
+            <label className="text-xs font-medium text-fg-muted block mb-1">Domain *</label>
             <select value={form.domainId} onChange={e => set('domainId', e.target.value)}
-              className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent">
+              className="w-full border border-line-strong rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-accent-fg">
               <option value="">Domain wählen…</option>
               {domains.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
             </select>
@@ -252,130 +263,130 @@ function ConfigForm({ domainId, domains, onSaved }: {
 
         <div className="grid grid-cols-3 gap-3">
           <div className="col-span-2">
-            <label className="text-xs font-medium text-gray-600 block mb-1">LDAP-Host / IP *</label>
+            <label className="text-xs font-medium text-fg-muted block mb-1">LDAP-Host / IP *</label>
             <input value={form.host} onChange={e => set('host', e.target.value)}
               placeholder="dc.meinefirma.de"
-              className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent" />
+              className="w-full border border-line-strong rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-accent-fg" />
           </div>
           <div>
-            <label className="text-xs font-medium text-gray-600 block mb-1">Port *</label>
-            <input type="number" value={form.port} onChange={e => set('port', parseInt(e.target.value))}
-              className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent" />
+            <label className="text-xs font-medium text-fg-muted block mb-1">Port *</label>
+            <input type="number" value={form.port} onChange={e => set('port', e.target.value === '' ? 0 : Number(e.target.value))}
+              className="w-full border border-line-strong rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-accent-fg" />
           </div>
         </div>
 
-        <div className="flex items-center justify-between py-2 border-t border-gray-100">
+        <div className="flex items-center justify-between py-2 border-t border-line">
           <div>
-            <p className="text-sm font-medium text-gray-800">LDAPS (SSL/TLS)</p>
-            <p className="text-xs text-gray-500">Empfohlen für Produktivumgebungen (Port 636)</p>
+            <p className="text-sm font-medium text-fg">LDAPS (SSL/TLS)</p>
+            <p className="text-xs text-fg-subtle">Empfohlen für Produktivumgebungen (Port 636)</p>
           </div>
           <Toggle value={form.ssl} onChange={v => { set('ssl', v); set('port', v ? 636 : 389); }} />
         </div>
 
         {!form.ssl && (
-          <div className="flex items-center justify-between py-2 border-t border-gray-100">
+          <div className="flex items-center justify-between py-2 border-t border-line">
             <div>
-              <p className="text-sm font-medium text-gray-800">StartTLS</p>
-              <p className="text-xs text-gray-500">Verschlüsselung auf Port 389. Ohne LDAPS/StartTLS wird die Verbindung abgelehnt (Ausnahme: localhost oder LDAP_ALLOW_INSECURE=true).</p>
+              <p className="text-sm font-medium text-fg">StartTLS</p>
+              <p className="text-xs text-fg-subtle">Verschlüsselung auf Port 389. Ohne LDAPS/StartTLS wird die Verbindung abgelehnt (Ausnahme: localhost oder LDAP_ALLOW_INSECURE=true).</p>
             </div>
             <Toggle value={form.startTls} onChange={v => set('startTls', v)} />
           </div>
         )}
 
-        <div className="flex items-center justify-between py-2 border-t border-gray-100">
+        <div className="flex items-center justify-between py-2 border-t border-line">
           <div>
-            <p className="text-sm font-medium text-gray-800">Zertifikat prüfen</p>
-            <p className="text-xs text-gray-500">Serverzertifikat gegen vertrauenswürdige CAs prüfen (empfohlen)</p>
+            <p className="text-sm font-medium text-fg">Zertifikat prüfen</p>
+            <p className="text-xs text-fg-subtle">Serverzertifikat gegen vertrauenswürdige CAs prüfen (empfohlen)</p>
           </div>
           <Toggle value={form.tlsVerify} onChange={v => set('tlsVerify', v)} />
         </div>
 
         <div>
-          <label className="text-xs font-medium text-gray-600 block mb-1">Eigene CA (PEM, optional)</label>
+          <label className="text-xs font-medium text-fg-muted block mb-1">Eigene CA (PEM, optional)</label>
           <textarea value={form.tlsCaCert} onChange={e => set('tlsCaCert', e.target.value)} rows={3}
             placeholder="-----BEGIN CERTIFICATE-----"
-            className="w-full border border-gray-300 rounded px-3 py-1.5 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-accent" />
+            className="w-full border border-line-strong rounded px-3 py-1.5 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-accent-fg" />
         </div>
 
         <div>
-          <label className="text-xs font-medium text-gray-600 block mb-1">Base DN *</label>
+          <label className="text-xs font-medium text-fg-muted block mb-1">Base DN *</label>
           <input value={form.baseDN} onChange={e => set('baseDN', e.target.value)}
             placeholder="DC=meinefirma,DC=de"
-            className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-accent" />
+            className="w-full border border-line-strong rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent-fg" />
         </div>
 
         <div>
-          <label className="text-xs font-medium text-gray-600 block mb-1">Bind DN (Service-Account) *</label>
+          <label className="text-xs font-medium text-fg-muted block mb-1">Bind DN (Service-Account) *</label>
           <input value={form.bindDN} onChange={e => set('bindDN', e.target.value)}
             placeholder="CN=coremail-svc,OU=ServiceAccounts,DC=meinefirma,DC=de"
-            className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-accent" />
+            className="w-full border border-line-strong rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent-fg" />
         </div>
 
         <div>
-          <label className="text-xs font-medium text-gray-600 block mb-1">
-            Bind-Passwort {existing ? <span className="text-gray-400">(leer = unverändert)</span> : '*'}
+          <label className="text-xs font-medium text-fg-muted block mb-1">
+            Bind-Passwort {existing ? <span className="text-fg-subtle">(leer = unverändert)</span> : '*'}
           </label>
           <input type="password" value={form.bindPassword} onChange={e => set('bindPassword', e.target.value)}
             placeholder={existing?.hasBindPassword ? '••••••••' : ''} autoComplete="new-password"
-            className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent" />
+            className="w-full border border-line-strong rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-accent-fg" />
         </div>
       </div>
 
       <div className="card p-5 space-y-4">
-        <p className="text-sm font-semibold text-gray-700">Benutzer-Suche</p>
+        <p className="text-sm font-semibold text-fg-muted">Benutzer-Suche</p>
 
         <div>
-          <label className="text-xs font-medium text-gray-600 block mb-1">User DN</label>
+          <label className="text-xs font-medium text-fg-muted block mb-1">User DN *</label>
           <input value={form.userDN} onChange={e => set('userDN', e.target.value)}
             placeholder="OU=Users,DC=meinefirma,DC=de"
-            className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-accent" />
+            className="w-full border border-line-strong rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent-fg" />
         </div>
 
         <div>
-          <label className="text-xs font-medium text-gray-600 block mb-1">Benutzer-Filter</label>
+          <label className="text-xs font-medium text-fg-muted block mb-1">Benutzer-Filter</label>
           <input value={form.userFilter} onChange={e => set('userFilter', e.target.value)}
-            className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-accent" />
-          <p className="text-xs text-gray-400 mt-1">
-            <code className="bg-gray-100 px-1 rounded">{'{{username}}'}</code> = Teil vor dem @ der Login-Adresse,
-            <code className="bg-gray-100 px-1 rounded mx-1">{'{{email}}'}</code> = vollständige Adresse (Sonderzeichen werden nach RFC 4515 maskiert).
-            Active Directory: <code className="bg-gray-100 px-1 rounded">(sAMAccountName={'{{username}}'})</code>.
-            Das Attribut <code className="bg-gray-100 px-1 rounded">mail</code> des Eintrags muss der Login-Adresse entsprechen.
+            className="w-full border border-line-strong rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent-fg" />
+          <p className="text-xs text-fg-subtle mt-1">
+            <code className="bg-surface-2 px-1 rounded">{'{{username}}'}</code> = Teil vor dem @ der Login-Adresse,
+            <code className="bg-surface-2 px-1 rounded mx-1">{'{{email}}'}</code> = vollständige Adresse (Sonderzeichen werden maskiert).
+            Active Directory: <code className="bg-surface-2 px-1 rounded">(sAMAccountName={'{{username}}'})</code>.
+            Das Attribut <code className="bg-surface-2 px-1 rounded">mail</code> des Eintrags muss der Login-Adresse entsprechen.
           </p>
         </div>
 
         <div>
-          <label className="text-xs font-medium text-gray-600 block mb-1">Sync-Filter (optional)</label>
+          <label className="text-xs font-medium text-fg-muted block mb-1">Sync-Filter (optional)</label>
           <input value={form.groupFilter ?? ''} onChange={e => set('groupFilter', e.target.value)}
             placeholder="(memberOf=CN=Mail-Users,OU=Groups,DC=meinefirma,DC=de)"
-            className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-accent" />
-          <p className="text-xs text-gray-400 mt-1">Schränkt die Synchronisation zusätzlich ein (UND-verknüpft mit Personen mit mail-Attribut).</p>
+            className="w-full border border-line-strong rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent-fg" />
+          <p className="text-xs text-fg-subtle mt-1">Schränkt die Synchronisation zusätzlich ein (UND-verknüpft mit Personen mit mail-Attribut).</p>
         </div>
 
-        <div className="flex items-center justify-between py-2 border-t border-gray-100">
+        <div className="flex items-center justify-between py-2 border-t border-line">
           <div>
-            <p className="text-sm font-medium text-gray-800">LDAP-Anmeldung aktiv</p>
-            <p className="text-xs text-gray-500">Benutzer dieser Domain melden sich mit ihrem Verzeichnis-Passwort an</p>
+            <p className="text-sm font-medium text-fg">LDAP-Anmeldung aktiv</p>
+            <p className="text-xs text-fg-subtle">Benutzer dieser Domain melden sich mit ihrem Verzeichnis-Passwort an</p>
           </div>
           <Toggle value={form.enabled} onChange={v => set('enabled', v)} />
         </div>
 
-        <div className="flex items-center justify-between py-2 border-t border-gray-100">
+        <div className="flex items-center justify-between py-2 border-t border-line">
           <div>
-            <p className="text-sm font-medium text-gray-800">Lokale Konten übernehmen</p>
-            <p className="text-xs text-gray-500">Ein lokales CoreMail-Konto mit derselben Adresse wird beim LDAP-Login/Sync zum LDAP-Konto (lokales Passwort entfällt). Standard: aus.</p>
+            <p className="text-sm font-medium text-fg">Lokale Konten übernehmen</p>
+            <p className="text-xs text-fg-subtle">Ein lokales CoreMail-Konto mit derselben Adresse wird beim LDAP-Login/Sync zum LDAP-Konto (lokales Passwort entfällt). Standard: aus.</p>
           </div>
           <Toggle value={form.allowLocalTakeover} onChange={v => set('allowLocalTakeover', v)} />
         </div>
 
-        <div className="flex items-center justify-between py-2 border-t border-gray-100 gap-4">
+        <div className="flex items-center justify-between py-2 border-t border-line gap-4">
           <div>
-            <p className="text-sm font-medium text-gray-800">Geplante Synchronisation</p>
-            <p className="text-xs text-gray-500">Benutzer anlegen, aktualisieren und deaktivieren (nie löschen)</p>
+            <p className="text-sm font-medium text-fg">Geplante Synchronisation</p>
+            <p className="text-xs text-fg-subtle">Benutzer anlegen, aktualisieren und deaktivieren (nie löschen)</p>
           </div>
           <div className="flex items-center gap-2">
             <select value={form.syncIntervalMinutes} onChange={e => set('syncIntervalMinutes', parseInt(e.target.value))}
               disabled={!form.syncEnabled}
-              className="border border-gray-300 rounded px-2 py-1 text-xs disabled:opacity-50">
+              className="border border-line-strong rounded px-2 py-1 text-xs disabled:opacity-50">
               <option value={60}>stündlich</option>
               <option value={360}>alle 6 h</option>
               <option value={720}>alle 12 h</option>
@@ -391,14 +402,14 @@ function ConfigForm({ domainId, domains, onSaved }: {
       {testResult && (
         <div className={`flex items-start gap-2 p-3 rounded-lg border text-sm ${
           testResult.success
-            ? 'bg-green-50 border-green-200 text-green-800'
-            : 'bg-red-50 border-red-200 text-red-800'
+            ? 'bg-success-bg border-success-line text-success-fg'
+            : 'bg-danger-bg border-danger-line text-danger-fg'
         }`}>
           {testResult.success ? <CheckCircle2 size={15} className="shrink-0 mt-0.5" /> : <XCircle size={15} className="shrink-0 mt-0.5" />}
           <div className="space-y-0.5 min-w-0">
             <p>{testResult.message}</p>
             {testResult.steps?.map(s => (
-              <p key={s.step} className="text-xs font-mono opacity-80 break-all">{s.ok ? '✓' : '✗'} {s.step}: {s.detail}</p>
+              <p key={s.step} className="text-xs font-mono break-all">{s.ok ? '✓' : '✗'} {s.step}: {s.detail}</p>
             ))}
             {testResult.lookup && (
               <p className="text-xs">
@@ -413,26 +424,27 @@ function ConfigForm({ domainId, domains, onSaved }: {
 
       <div className="flex gap-3">
         <input value={testEmail} onChange={e => setTestEmail(e.target.value)} placeholder="Test-Adresse (optional)"
-          className="border border-gray-300 rounded px-3 py-1.5 text-sm w-56 focus:outline-none focus:ring-1 focus:ring-accent" />
+          className="border border-line-strong rounded px-3 py-1.5 text-sm w-56 focus:outline-none focus:ring-2 focus:ring-accent-fg" />
         <button
           onClick={handleTest}
           disabled={testing || !form.host || !existing}
-          title={existing ? '' : 'Zuerst speichern'}
-          className="flex items-center gap-2 px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50"
+          title={existing ? 'Testet die gespeicherte Konfiguration — Änderungen vorher speichern' : 'Zuerst speichern'}
+          className="flex items-center gap-2 px-4 py-2 text-sm border border-line-strong rounded-lg hover:bg-surface-2 disabled:opacity-50"
         >
           <TestTube2 size={14} />
           {testing ? 'Teste…' : 'Verbindung testen'}
         </button>
         <button
           onClick={() => save.mutate(form)}
-          disabled={save.isPending || !form.host || !form.baseDN}
+          disabled={save.isPending || !canSave}
           className="flex items-center gap-2 px-5 py-2 bg-accent text-white rounded-lg text-sm font-medium hover:bg-accent/90 disabled:opacity-60"
         >
           <Save size={14} />
           {save.isPending ? 'Speichern…' : 'Konfiguration speichern'}
         </button>
       </div>
-    </div>
+      <p className="text-xs text-fg-subtle">Der Verbindungstest verwendet die gespeicherte Konfiguration.</p>
+    </WriteGuard>
   );
 }
 
@@ -452,7 +464,7 @@ function SyncSection({ configs }: { configs: LdapSummary[] }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex gap-2 bg-blue-50 border border-blue-100 rounded-lg p-3 text-xs text-blue-700">
+      <div className="flex gap-2 bg-info-bg border border-info-line rounded-lg p-3 text-xs text-info-fg">
         <AlertCircle size={13} className="shrink-0 mt-0.5" />
         <p>Die Synchronisation legt Benutzer aus dem Verzeichnis an (inkl. Postfach), aktualisiert Anzeigenamen und
           deaktiviert Konten, die im Verzeichnis fehlen oder dort deaktiviert sind — gelöscht wird nichts.
@@ -460,10 +472,10 @@ function SyncSection({ configs }: { configs: LdapSummary[] }) {
           Geplante Läufe nach dem eingestellten Intervall (Standard: täglich).</p>
       </div>
 
-      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+      <div className="bg-surface rounded-lg border border-line overflow-hidden">
         <table className="w-full text-sm">
           <thead>
-            <tr className="bg-gray-50 border-b border-gray-200 text-xs font-semibold text-gray-500 uppercase tracking-wide">
+            <tr className="bg-surface-2 border-b border-line text-xs font-semibold text-fg-subtle uppercase tracking-wide">
               <th className="text-left px-4 py-2.5">Domain</th>
               <th className="text-left px-4 py-2.5">Verbindung</th>
               <th className="text-center px-4 py-2.5">Status</th>
@@ -473,28 +485,30 @@ function SyncSection({ configs }: { configs: LdapSummary[] }) {
           </thead>
           <tbody>
             {configs.length === 0 ? (
-              <tr><td colSpan={5} className="text-center py-10 text-gray-400 text-xs">Keine Verbindungen konfiguriert</td></tr>
+              <tr><td colSpan={5} className="text-center py-10 text-fg-subtle text-xs">Keine Verbindungen konfiguriert</td></tr>
             ) : configs.map(c => (
-              <tr key={c.domainId} className="border-b border-gray-100 hover:bg-gray-50">
-                <td className="px-4 py-3 font-medium text-gray-800">{c.domainName}</td>
-                <td className="px-4 py-3 text-xs font-mono text-gray-600">{c.ssl ? 'ldaps://' : 'ldap://'}{c.host}:{c.port}</td>
+              <tr key={c.domainId} className="border-b border-line hover:bg-surface-2">
+                <td className="px-4 py-3 font-medium text-fg">{c.domainName}</td>
+                <td className="px-4 py-3 text-xs font-mono text-fg-muted">{c.ssl ? 'ldaps://' : 'ldap://'}{c.host}:{c.port}</td>
                 <td className="px-4 py-3 text-center">
                   {c.syncEnabled
-                    ? <span className="text-xs px-1.5 py-0.5 bg-green-100 text-green-700 rounded-full">aktiv</span>
-                    : <span className="text-xs px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded-full">deaktiviert</span>}
+                    ? <span className="text-xs px-1.5 py-0.5 bg-success-bg text-success-fg rounded-full">aktiv</span>
+                    : <span className="text-xs px-1.5 py-0.5 bg-surface-2 text-fg-subtle rounded-full">deaktiviert</span>}
                 </td>
-                <td className="px-4 py-3 text-xs text-gray-500">
+                <td className="px-4 py-3 text-xs text-fg-subtle">
                   {fmtDt(c.lastSyncAt)}
-                  <div className="text-[11px] text-gray-400">{syncSummary(c.lastSyncResult)}</div>
+                  <div className="text-[11px] text-fg-subtle">{syncSummary(c.lastSyncResult)}</div>
                 </td>
                 <td className="px-4 py-3">
+                  <Can area="identity" access="write">
                   <button
                     onClick={() => syncMut.mutate(c.domainId)}
                     disabled={c.enabled === false || syncMut.isPending}
-                    className="flex items-center gap-1 text-xs px-2.5 py-1 border border-gray-200 rounded hover:bg-gray-50 disabled:opacity-40"
+                    className="flex items-center gap-1 text-xs px-2.5 py-1 border border-line rounded hover:bg-surface-2 disabled:opacity-40"
                   >
-                    <RotateCcw size={11} /> Jetzt synchronisieren
+                    <RotateCcw size={11} className={syncMut.isPending && syncMut.variables === c.domainId ? 'animate-spin' : ''} /> Jetzt synchronisieren
                   </button>
+                  </Can>
                 </td>
               </tr>
             ))}
@@ -543,38 +557,38 @@ function AttributeMapSection({ configs }: { configs: LdapSummary[] }) {
   ];
 
   return (
-    <div className="space-y-4 max-w-2xl">
+    <WriteGuard area="identity" className="space-y-4 max-w-2xl">
       {configs.length > 1 && (
         <div>
-          <label className="text-xs font-medium text-gray-600 block mb-1">Domain</label>
+          <label className="text-xs font-medium text-fg-muted block mb-1">Domain</label>
           <select value={selectedDomainId} onChange={e => setSelectedDomainId(e.target.value)}
-            className="border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent">
+            className="border border-line-strong rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-accent-fg">
             {configs.map(c => <option key={c.domainId} value={c.domainId}>{c.domainName}</option>)}
           </select>
         </div>
       )}
 
       <div className="card p-5">
-        <p className="text-sm font-semibold text-gray-700 mb-1">LDAP-Attributzuordnung</p>
-        <p className="text-xs text-gray-500 mb-4">
+        <p className="text-sm font-semibold text-fg-muted mb-1">LDAP-Attributzuordnung</p>
+        <p className="text-xs text-fg-subtle mb-4">
           Ordne LDAP-Attribute den CoreMail-Feldern zu. Linke Spalte: CoreMail-Feld. Rechte Spalte: LDAP-Attributname im Verzeichnis.
         </p>
-        <div className="divide-y divide-gray-100">
+        <div className="divide-y divide-line">
           {COREMAIL_ATTRS.map(attr => (
             <div key={attr.key} className="flex items-center gap-4 py-3">
               <div className="w-40">
-                <p className="text-sm font-medium text-gray-800">{attr.label}</p>
-                <p className="text-xs text-gray-400 font-mono">{attr.key}</p>
+                <p className="text-sm font-medium text-fg">{attr.label}</p>
+                <p className="text-xs text-fg-subtle font-mono">{attr.key}</p>
               </div>
-              <ChevronRight size={14} className="text-gray-400 shrink-0" />
+              <ChevronRight size={14} className="text-fg-subtle shrink-0" />
               <div className="flex-1">
                 <input
                   value={attrMap[attr.key] ?? ''}
                   onChange={e => setAttrMap(m => ({ ...m, [attr.key]: e.target.value }))}
                   placeholder={attr.hint}
-                  className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-accent"
+                  className="w-full border border-line-strong rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent-fg"
                 />
-                <p className="text-xs text-gray-400 mt-0.5">{attr.hint}</p>
+                <p className="text-xs text-fg-subtle mt-0.5">{attr.hint}</p>
               </div>
             </div>
           ))}
@@ -582,7 +596,7 @@ function AttributeMapSection({ configs }: { configs: LdapSummary[] }) {
 
         <button
           onClick={() => save.mutate()}
-          disabled={save.isPending || !selectedDomainId}
+          disabled={save.isPending || !selectedDomainId || !cfg}
           className="mt-4 flex items-center gap-2 px-5 py-2 bg-accent text-white rounded-lg text-sm font-medium hover:bg-accent/90 disabled:opacity-60"
         >
           <Save size={14} />
@@ -590,19 +604,19 @@ function AttributeMapSection({ configs }: { configs: LdapSummary[] }) {
         </button>
       </div>
 
-      <div className="flex gap-2 bg-amber-50 border border-amber-100 rounded-lg p-3 text-xs text-amber-700">
+      <div className="flex gap-2 bg-warning-bg border border-warning-line rounded-lg p-3 text-xs text-warning-fg">
         <AlertCircle size={13} className="shrink-0 mt-0.5" />
         <p>
-          <strong>Active Directory:</strong> Typische Attribute: <code className="bg-amber-100 px-1 rounded">sAMAccountName</code> (Login),
-          <code className="bg-amber-100 px-1 rounded mx-1">displayName</code>,
-          <code className="bg-amber-100 px-1 rounded">mail</code>,
-          <code className="bg-amber-100 px-1 rounded mx-1">givenName</code>,
-          <code className="bg-amber-100 px-1 rounded">sn</code>
+          <strong>Active Directory:</strong> Typische Attribute: <code className="bg-warning-bg px-1 rounded">sAMAccountName</code> (Login),
+          <code className="bg-warning-bg px-1 rounded mx-1">displayName</code>,
+          <code className="bg-warning-bg px-1 rounded">mail</code>,
+          <code className="bg-warning-bg px-1 rounded mx-1">givenName</code>,
+          <code className="bg-warning-bg px-1 rounded">sn</code>
           (Nachname).
-          OpenLDAP verwendet häufig <code className="bg-amber-100 px-1 rounded mx-1">uid</code> statt <code className="bg-amber-100 px-1 rounded">sAMAccountName</code>.
+          OpenLDAP verwendet häufig <code className="bg-warning-bg px-1 rounded mx-1">uid</code> statt <code className="bg-warning-bg px-1 rounded">sAMAccountName</code>.
         </p>
       </div>
-    </div>
+    </WriteGuard>
   );
 }
 
@@ -641,12 +655,12 @@ export function LdapPage() {
 
   return (
     <div className="h-full flex">
-      <nav className="w-44 shrink-0 bg-[#1e2433] flex flex-col py-4 gap-0.5">
-        <p className="text-[10px] text-gray-500 uppercase tracking-widest px-4 pb-2">LDAP / Active Directory</p>
+      <nav className="w-44 shrink-0 bg-surface-2 border-r border-line flex flex-col py-4 gap-0.5">
+        <p className="text-[10px] text-fg-subtle uppercase tracking-widest px-4 pb-2">LDAP / Active Directory</p>
         {SECTIONS.map(s => (
           <button key={s.key} onClick={() => { setSection(s.key); setShowNewForm(false); setEditingDomainId(null); }}
             className={`flex items-center gap-2 px-4 py-2 text-sm text-left transition-colors ${
-              section === s.key ? 'bg-white/10 text-white' : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
+              section === s.key ? 'bg-surface-3 text-fg' : 'text-fg-muted hover:bg-surface-3 hover:text-fg'
             }`}>
             {s.icon}<span>{s.label}</span>
           </button>
@@ -657,21 +671,23 @@ export function LdapPage() {
         <div className="p-6 max-w-5xl">
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center gap-3">
-              <Server size={20} className="text-accent" />
+              <Server size={20} className="text-accent-fg" />
               <div>
-                <h1 className="text-xl font-semibold text-gray-900">LDAP / Active Directory</h1>
-                <p className="text-xs text-gray-500">{SECTIONS.find(s => s.key === section)?.label}</p>
+                <h1 className="text-xl font-semibold text-fg">LDAP / Active Directory</h1>
+                <p className="text-xs text-fg-subtle">{SECTIONS.find(s => s.key === section)?.label}</p>
               </div>
             </div>
             <div className="flex gap-2">
-              <button aria-label="Aktualisieren" onClick={() => refetch()} className="flex items-center gap-1.5 px-3 py-2 text-sm text-gray-600 border border-gray-300 rounded hover:bg-gray-50">
+              <button aria-label="Aktualisieren" onClick={() => refetch()} className="flex items-center gap-1.5 px-3 py-2 text-sm text-fg-muted border border-line-strong rounded hover:bg-surface-2">
                 <RefreshCw size={13} />
               </button>
-              {section === 'list' && !showNewForm && (
+              {section === 'list' && !showNewForm && !editingDomainId && (
+                <Can area="identity" access="write" mode="hide">
                 <button onClick={() => setShowNewForm(true)}
                   className="flex items-center gap-2 px-4 py-2 bg-accent text-white rounded-lg text-sm font-medium hover:bg-accent/90">
                   <Plus size={14} /> Neue Verbindung
                 </button>
+                </Can>
               )}
             </div>
           </div>
@@ -682,15 +698,17 @@ export function LdapPage() {
               onSelect={id => setEditingDomainId(id)}
               onDelete={id => deleteMut.mutate(id)}
               onSync={id => syncMut.mutate(id)}
+              syncing={syncMut.isPending}
             />
           )}
           {(showNewForm || editingDomainId) && (
             <div>
               <button onClick={() => { setShowNewForm(false); setEditingDomainId(null); }}
-                className="text-xs text-gray-500 hover:text-gray-800 mb-4 flex items-center gap-1">
+                className="text-xs text-fg-subtle hover:text-fg mb-4 flex items-center gap-1">
                 ← Zurück zur Liste
               </button>
               <ConfigForm
+                key={editingDomainId ?? 'new'}
                 domainId={editingDomainId}
                 domains={domains.filter(d => !configs.some(c => c.domainId === d.id) || d.id === editingDomainId)}
                 onSaved={() => { setShowNewForm(false); setEditingDomainId(null); setSection('list'); }}
@@ -701,6 +719,7 @@ export function LdapPage() {
           {section === 'attributemap' && <AttributeMapSection configs={configs} />}
           {section === 'detail' && (
             <ConfigForm
+              key={configs[0]?.domainId ?? 'new'}
               domainId={configs[0]?.domainId ?? null}
               domains={domains}
               onSaved={() => void qc.invalidateQueries({ queryKey: ['admin-ldap'] })}

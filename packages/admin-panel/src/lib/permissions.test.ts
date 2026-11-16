@@ -181,3 +181,16 @@ test('9.1 HELP_DESK end to end (client side): sign out everywhere / reset / enab
   // edit / delete stay hidden behind recipients write
   assert.equal(canOutcome(HELP_DESK, 'recipients', 'write', 'disable'), 'disable');
 });
+
+test('assignableRoles / canAssignRoles mirror canAssignRole of the API', async () => {
+  const { assignableRoles, canAssignRoles } = await import('./permissions.ts');
+  const ALL = ['USER', 'HELP_DESK', 'ORGANIZATION_MANAGEMENT'] as const;
+  assert.deepEqual(assignableRoles(ALL, 'ORGANIZATION_MANAGEMENT', 'USER'), [...ALL]);
+  assert.deepEqual(assignableRoles(ALL, null), [...ALL]);
+  // other admins: new accounts only USER, existing accounts keep their role
+  assert.deepEqual(assignableRoles(ALL, 'RECIPIENT_MANAGEMENT'), ['USER']);
+  assert.deepEqual(assignableRoles(ALL, 'RECIPIENT_MANAGEMENT', 'HELP_DESK'), ['HELP_DESK']);
+  assert.equal(canAssignRoles('ORGANIZATION_MANAGEMENT'), true);
+  assert.equal(canAssignRoles('RECIPIENT_MANAGEMENT'), false);
+  assert.equal(canAssignRoles(null), false);
+});

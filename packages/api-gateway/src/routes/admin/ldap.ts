@@ -18,6 +18,7 @@ import { createLogger } from '@coremail/core';
 import { runLdapSyncLocked, testLdapConnection, LdapSyncBusyError } from '@coremail/auth-ldap';
 import { requireArea } from '../../middleware/auth.js';
 import { publicLdapConfig } from '../../lib/secrets.js';
+import { invalidInputMessage } from '../../lib/zod-message.js';
 
 const log = createLogger('admin:ldap');
 export const adminLdapRouter: RouterType = Router();
@@ -89,7 +90,7 @@ adminLdapRouter.put('/:domainId', async (req: Request, res: Response) => {
   if (!domain) { res.status(404).json({ error: 'Domain nicht gefunden' }); return; }
 
   const p = LdapConfigSchema.safeParse(req.body);
-  if (!p.success) { res.status(400).json({ error: 'Ungültige Eingabe', issues: p.error.issues }); return; }
+  if (!p.success) { res.status(400).json({ error: invalidInputMessage(p.error), issues: p.error.issues }); return; }
   if (!p.data.userFilter.includes('{{')) {
     res.status(400).json({ error: 'Der Benutzerfilter muss {{username}} oder {{email}} enthalten' });
     return;

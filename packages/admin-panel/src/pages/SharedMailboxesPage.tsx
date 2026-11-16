@@ -2,12 +2,15 @@ import { useId, useState, useEffect } from 'react';
 import { Modal } from '../components/Modal.js';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
-import { Inbox, Plus, Trash2, Pencil, UserPlus, X, Loader2, Shield, RefreshCw } from 'lucide-react';
+import { Inbox, Plus, Trash2, Pencil, UserPlus, X, Loader2, Shield, RefreshCw, HardDrive } from 'lucide-react';
 import { api } from '../api/client.js';
 import { MailboxAliasesSection } from '../components/MailboxAliasesSection.js';
 import { useT } from '../i18n/useT.js';
+import type { TranslationKey } from '../i18n/translations.js';
 import { Can, WriteGuard } from '../components/Can.js';
 import { DataTable, type Column } from '../components/DataTable.js';
+import { usePermissions } from '../hooks/usePermissions.js';
+import { gbInputToBytes, bytesToGbInput, gbInputValid, quotaOptions, quotaLabel } from '../lib/quotaInput.js';
 
 type PermType = 'FULL_ACCESS' | 'SEND_AS' | 'SEND_ON_BEHALF' | 'READ_ONLY';
 
@@ -18,26 +21,33 @@ interface Perm {
 interface SharedMailbox {
   id: string; email: string; displayName: string; domainId: string;
   quotaBytes: number; usedBytes: number; active: boolean; createdAt: string;
+  quotaWarningBytes?: number | null; quotaProhibitSendBytes?: number | null;
   permissions: Perm[];
 }
-interface Domain { id: string; name: string }
+interface Domain { id: string; name: string; active?: boolean }
 interface User   { id: string; email: string; displayName: string }
 
-const PERM_LABELS: Record<PermType, string> = {
-  FULL_ACCESS: 'Vollzugriff', SEND_AS: 'Senden als',
-  SEND_ON_BEHALF: 'Im Auftrag senden', READ_ONLY: 'Nur lesen',
+// i18n keys (shared with the mailbox delegation section)
+const PERM_KEYS: Record<PermType, { label: TranslationKey; desc: TranslationKey }> = {
+  FULL_ACCESS:    { label: 'delegate_perm_full',         desc: 'shared_perm_desc_full' },
+  SEND_AS:        { label: 'delegate_perm_sendas',       desc: 'shared_perm_desc_sendas' },
+  SEND_ON_BEHALF: { label: 'delegate_perm_sendonbehalf', desc: 'shared_perm_desc_onbehalf' },
+  READ_ONLY:      { label: 'delegate_perm_readonly',     desc: 'shared_perm_desc_readonly' },
 };
+const PERM_ORDER: PermType[] = ['FULL_ACCESS', 'SEND_AS', 'SEND_ON_BEHALF', 'READ_ONLY'];
 
 export function SharedMailboxesPage() {
   const t = useT();
   const qc = useQueryClient();
+  const { can } = usePermissions();
+  const canWrite = can('recipients', 'write');
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [page, setPage] = useState(1);
   const [limit] = useState(50);
-  const [editItem, setEditItem] = useState<SharedMailbox | null>(null);
+  const [editId, setEditId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
-  const [permItem, setPermItem] = useState<SharedMailbox | null>(null);
+  const [permId, setPermId] = useState<string | null>(null);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(search), 300);
@@ -48,12 +58,13 @@ export function SharedMailboxesPage() {
   const { data, isLoading, isFetching, refetch } = useQuery<{ items: SharedMailbox[]; total: number }>({
     queryKey: ['admin-shared-mailboxes', debouncedSearch, page, limit],
     queryFn: () => api.get(`/admin/shared-mailboxes?search=${encodeURIComponent(debouncedSearch)}&page=${page}&limit=${limit}`),
+    placeholderData: (prev) => prev,
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.delete(`/admin/shared-mailboxes/${id}`),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['admin-shared-mailboxes'] }); toast.success(t('shared_deleted')); },
-    onError: () => toast.error(t('shared_delete_failed')),
+    onError: (e: Error) => toast.error(e.message || t('shared_delete_failed')),
   });
   const bulkDelete = useMutation({
     mutationFn: async (ids: string[]) => {
@@ -68,6 +79,10 @@ export function SharedMailboxesPage() {
 
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
+  // Modals read the LIVE row: after a save the list refetches and the modal shows
+  // the new state (it used to keep the snapshot taken when it was opened).
+  const editItem = items.find((i) => i.id === editId) ?? null;
+  const permItem = items.find((i) => i.id === permId) ?? null;
   const confirmDelete = (item: SharedMailbox) => {
     if (window.confirm(`"${item.email}" ${t('shared_delete_confirm')}`)) deleteMutation.mutate(item.id);
   };
@@ -77,8 +92,8 @@ export function SharedMailboxesPage() {
       key: 'email', header: t('shared_col_email'),
       cell: (item) => (
         <>
-          <p className="font-medium text-gray-900 text-sm">{item.email}</p>
-          <p className="text-xs text-gray-400">{item.displayName}</p>
+          <p className="font-medium text-fg text-sm">{item.email}</p>
+          <p className="text-xs text-fg-subtle">{item.displayName}</p>
         </>
       ),
     },
@@ -87,20 +102,20 @@ export function SharedMailboxesPage() {
       cell: (item) => (
         <div className="flex flex-wrap gap-1">
           {item.permissions.length === 0
-            ? <span className="text-xs text-gray-400">–</span>
+            ? <span className="text-xs text-fg-subtle">–</span>
             : item.permissions.slice(0, 3).map(p => (
-                <span key={p.id} className="px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded text-xs">
-                  {p.user.email.split('@')[0]} · {PERM_LABELS[p.permission]}
+                <span key={p.id} className="px-1.5 py-0.5 bg-info-bg text-info-fg rounded text-xs">
+                  {p.user.email.split('@')[0]} · {t(PERM_KEYS[p.permission].label)}
                 </span>
               ))}
-          {item.permissions.length > 3 && <span className="text-xs text-gray-400">+{item.permissions.length - 3}</span>}
+          {item.permissions.length > 3 && <span className="text-xs text-fg-subtle">+{item.permissions.length - 3}</span>}
         </div>
       ),
     },
     {
       key: 'status', header: t('mbox_col_status'),
       cell: (item) => (
-        <span className={`px-2 py-0.5 rounded text-xs font-medium ${item.active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+        <span className={`px-2 py-0.5 rounded text-xs font-medium ${item.active ? 'bg-success-bg text-success-fg' : 'bg-surface-2 text-fg-subtle'}`}>
           {item.active ? t('status_active') : t('status_inactive')}
         </span>
       ),
@@ -109,17 +124,17 @@ export function SharedMailboxesPage() {
       key: 'actions', header: t('mbox_col_actions'), srOnlyHeader: true, headerClassName: 'text-right', className: 'text-right',
       cell: (item) => (
         <div className="flex items-center justify-end gap-1">
-          <button onClick={() => setPermItem(item)} title={t('shared_col_permissions')} aria-label={`${t('shared_col_permissions')}: ${item.email}`}
-            className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors">
+          <button onClick={() => setPermId(item.id)} title={t('shared_col_permissions')} aria-label={`${t('shared_col_permissions')}: ${item.email}`}
+            className="p-1.5 text-fg-subtle hover:text-info-fg hover:bg-info-bg rounded transition-colors">
             <Shield size={14} />
           </button>
           <Can area="recipients" access="write">
-            <button onClick={() => setEditItem(item)} title={t('tb_edit')} aria-label={`${t('tb_edit')}: ${item.email}`}
-              className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded transition-colors">
+            <button onClick={() => setEditId(item.id)} title={t('tb_edit')} aria-label={`${t('tb_edit')}: ${item.email}`}
+              className="p-1.5 text-fg-subtle hover:text-fg-muted hover:bg-surface-2 rounded transition-colors">
               <Pencil size={14} />
             </button>
             <button onClick={() => confirmDelete(item)} title={t('tb_delete')} aria-label={`${t('tb_delete')}: ${item.email}`}
-              className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors">
+              className="p-1.5 text-fg-subtle hover:text-danger-fg hover:bg-danger-bg rounded transition-colors">
               <Trash2 size={14} />
             </button>
           </Can>
@@ -131,10 +146,10 @@ export function SharedMailboxesPage() {
   return (
     <div className="p-6 space-y-4">
       <div className="flex items-center gap-3">
-        <Inbox size={22} className="text-blue-600" aria-hidden="true" />
+        <Inbox size={22} className="text-info-fg" aria-hidden="true" />
         <div>
-          <h1 className="text-xl font-bold text-gray-900">{t('shared_title')}</h1>
-          <p className="text-sm text-gray-500">{total} {t('shared_count')}</p>
+          <h1 className="text-xl font-bold text-fg">{t('shared_title')}</h1>
+          <p className="text-sm text-fg-subtle">{total} {t('shared_count')}</p>
         </div>
       </div>
 
@@ -146,8 +161,9 @@ export function SharedMailboxesPage() {
         loading={isLoading}
         server={{ page, pageSize: limit, total, onPageChange: setPage }}
         search={{ placeholder: t('shared_search'), value: search, onChange: (q) => { setSearch(q); setPage(1); } }}
-        selectable
-        onActivate={(i) => setPermItem(i)}
+        selectable={canWrite}
+        onActivate={(i) => setPermId(i.id)}
+        rowClassName={(i) => (!i.active ? 'bg-surface-2' : '')}
         emptyText={debouncedSearch ? undefined : t('shared_empty')}
         toolbar={({ selectedRows, clearSelection }) => (
           <>
@@ -158,12 +174,12 @@ export function SharedMailboxesPage() {
             </Can>
             <Can area="recipients" access="write">
               <button className="btn-secondary flex items-center gap-1.5 text-xs disabled:opacity-40" disabled={selectedRows.length !== 1}
-                onClick={() => selectedRows[0] && setEditItem(selectedRows[0])}>
+                onClick={() => selectedRows[0] && setEditId(selectedRows[0].id)}>
                 <Pencil size={13} aria-hidden="true" /> {t('tb_edit')}
               </button>
             </Can>
             <Can area="recipients" access="write">
-              <button className="btn-secondary flex items-center gap-1.5 text-xs text-red-600 disabled:opacity-40"
+              <button className="btn-secondary flex items-center gap-1.5 text-xs text-danger-fg disabled:opacity-40"
                 disabled={selectedRows.length === 0 || bulkDelete.isPending}
                 onClick={() => {
                   if (!window.confirm(`${t('tb_delete_selected_confirm')} (${selectedRows.length})\n${selectedRows.map((r) => r.email).join('\n')}`)) return;
@@ -180,24 +196,31 @@ export function SharedMailboxesPage() {
       />
 
       {createOpen && <SharedMailboxModal onClose={() => setCreateOpen(false)} />}
-      {editItem   && <SharedMailboxModal item={editItem} onClose={() => setEditItem(null)} />}
-      {permItem   && <PermissionsModal item={permItem} onClose={() => setPermItem(null)} />}
+      {editItem   && <SharedMailboxModal key={editItem.id} item={editItem} onClose={() => setEditId(null)} />}
+      {permItem   && <PermissionsModal key={permItem.id} item={permItem} onClose={() => setPermId(null)} />}
     </div>
   );
 }
 
 // ── Create/Edit Modal ─────────────────────────────────────────────────────────
 function SharedMailboxModal({ item, onClose }: { item?: SharedMailbox; onClose: () => void }) {
+  const t = useT();
   const qc = useQueryClient();
   const [name, setName]         = useState(item?.displayName ?? '');
   const [localPart, setLocalPart] = useState(item?.email?.split('@')[0] ?? '');
   const [domainId, setDomainId] = useState(item?.domainId ?? '');
   const [active, setActive]     = useState(item?.active ?? true);
+  const [quotaBytes, setQuotaBytes] = useState<number>(item?.quotaBytes ?? 5 * 1024 ** 3);
+  const [warningGb, setWarningGb]   = useState(bytesToGbInput(item?.quotaWarningBytes));
+  const [sendGb, setSendGb]         = useState(bytesToGbInput(item?.quotaProhibitSendBytes));
+  const levelsValid = gbInputValid(warningGb) && gbInputValid(sendGb);
 
-  const { data: domains = [] } = useQuery<Domain[]>({
+  const { data: allDomains = [] } = useQuery<Domain[]>({
     queryKey: ['admin-domains-list'],
-    queryFn: () => api.get<{ domains: Domain[] }>('/admin/domains?limit=500').then(r => r.domains),
+    queryFn: () => api.get<{ domains: Domain[] }>('/admin/domains?limit=200').then(r => r.domains),
   });
+  // New mailboxes only on active domains (same rule as user mailboxes)
+  const domains = item ? allDomains : allDomains.filter((d) => d.active !== false);
 
   // Set default domain once the list is available
   useEffect(() => {
@@ -207,21 +230,25 @@ function SharedMailboxModal({ item, onClose }: { item?: SharedMailbox; onClose: 
   }, [domains, item, domainId]);
 
   const selectedDomain = domains.find(d => d.id === domainId);
-  // RFC 5321 simplified: a-z, 0-9, dot, dash, underscore, plus
+  // simplified local-part rule: a-z, 0-9, dot, dash, underscore, plus
   const localPartTrimmed = localPart.trim().toLowerCase();
   const localPartValid   = /^[a-z0-9._+-]+$/.test(localPartTrimmed) && !localPartTrimmed.startsWith('.') && !localPartTrimmed.endsWith('.');
   const fullEmail        = localPartTrimmed && selectedDomain ? `${localPartTrimmed}@${selectedDomain.name}` : '';
 
   const mutation = useMutation({
     mutationFn: () => item
-      ? api.put(`/admin/shared-mailboxes/${item.id}`, { displayName: name, active })
-      : api.post('/admin/shared-mailboxes', { email: fullEmail, displayName: name, domainId }),
+      ? api.put(`/admin/shared-mailboxes/${item.id}`, {
+          displayName: name.trim(), active, quotaBytes,
+          quotaWarningBytes: gbInputToBytes(warningGb),
+          quotaProhibitSendBytes: gbInputToBytes(sendGb),
+        })
+      : api.post('/admin/shared-mailboxes', { email: fullEmail, displayName: name.trim(), domainId, quotaBytes }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['admin-shared-mailboxes'] });
-      toast.success(item ? 'Gespeichert' : 'Erstellt');
+      toast.success(item ? t('shared_saved') : t('shared_created'));
       onClose();
     },
-    onError: (e: Error) => toast.error(e.message || 'Fehler'),
+    onError: (e: Error) => toast.error(e.message || t('shared_save_error')),
   });
 
   const titleId = useId();
@@ -231,78 +258,104 @@ function SharedMailboxModal({ item, onClose }: { item?: SharedMailbox; onClose: 
       labelledBy={titleId}
 
       closeOnBackdrop={false}
-      overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-      className="bg-white rounded-xl shadow-2xl w-full max-w-md"
+      overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-scrim/40 p-4"
+      className="bg-surface rounded-xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto"
     >
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
-          <h2 id={titleId} className="font-semibold text-gray-900">{item ? 'Postfach bearbeiten' : 'Neues freigegebenes Postfach'}</h2>
-          <button type="button" onClick={onClose} aria-label="Schließen" className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-line">
+          <h2 id={titleId} className="font-semibold text-fg">{item ? t('shared_edit_title') : t('shared_create_title')}</h2>
+          <button type="button" onClick={onClose} aria-label={t('action_close')} className="text-fg-subtle hover:text-fg-muted"><X size={18} /></button>
         </div>
         <div className="p-5 space-y-4">
           <div>
-            <label className="field-label">Anzeigename</label>
-            <input value={name} onChange={e => setName(e.target.value)} className="input" placeholder="Support-Team" />
+            <label className="field-label" htmlFor="sm-name">{t('shared_displayname')}</label>
+            <input id="sm-name" value={name} onChange={e => setName(e.target.value)} className="input" placeholder={t('shared_displayname_ph')} />
           </div>
           {!item && (
             <div>
-              <label className="field-label">E-Mail-Adresse</label>
+              <label className="field-label" htmlFor="sm-local">{t('shared_email')}</label>
               <div className="flex items-stretch gap-0">
                 <input
+                  id="sm-local"
                   value={localPart}
                   onChange={e => setLocalPart(e.target.value)}
                   className="input rounded-r-none border-r-0 flex-1 min-w-0"
                   placeholder="support"
                   autoComplete="off"
                 />
-                <span className="inline-flex items-center px-2 bg-gray-50 border border-gray-300 text-gray-500 text-sm select-none">@</span>
+                <span className="inline-flex items-center px-2 bg-surface-2 border border-line-strong text-fg-subtle text-sm select-none">@</span>
                 <select
                   value={domainId}
                   onChange={e => setDomainId(e.target.value)}
+                  aria-label={t('mbox_col_domain')}
                   className="input rounded-l-none border-l-0 w-44 flex-shrink-0"
                 >
                   {domains.length === 0 ? (
-                    <option value="">— keine Domain —</option>
+                    <option value="">{t('shared_no_domain')}</option>
                   ) : (
                     domains.map(d => <option key={d.id} value={d.id}>{d.name}</option>)
                   )}
                 </select>
               </div>
               {fullEmail && (
-                <p className="mt-1 text-xs text-gray-500 font-mono">{fullEmail}</p>
+                <p className="mt-1 text-xs text-fg-subtle font-mono">{fullEmail}</p>
               )}
               {localPart && !localPartValid && (
-                <p className="mt-1 text-xs text-red-600">Local-Part darf nur a-z, 0-9, . _ + - enthalten und nicht mit Punkt beginnen/enden.</p>
+                <p className="mt-1 text-xs text-danger-fg">{t('shared_localpart_invalid')}</p>
               )}
+            </div>
+          )}
+          <div>
+            <label className="field-label flex items-center gap-1" htmlFor="sm-quota"><HardDrive size={12} aria-hidden="true" /> {t('shared_quota')}</label>
+            <select id="sm-quota" className="input w-full" value={quotaBytes} onChange={(e) => setQuotaBytes(parseInt(e.target.value, 10))}>
+              {quotaOptions(item?.quotaBytes).map((v) => (
+                <option key={v} value={v}>{quotaLabel(v) ?? t('mbox_quota_unlimited')}</option>
+              ))}
+            </select>
+          </div>
+          {item && (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="field-label" htmlFor="sm-quota-warning">{t('mbox_quota_warning')}</label>
+                <input id="sm-quota-warning" className="input w-full" inputMode="decimal" value={warningGb}
+                  placeholder={t('mbox_quota_default_hint')} onChange={(e) => setWarningGb(e.target.value)} />
+              </div>
+              <div>
+                <label className="field-label" htmlFor="sm-quota-send">{t('mbox_quota_prohibit_send')}</label>
+                <input id="sm-quota-send" className="input w-full" inputMode="decimal" value={sendGb}
+                  placeholder={t('mbox_quota_default_hint')} onChange={(e) => setSendGb(e.target.value)} />
+              </div>
+              {!levelsValid && <p className="col-span-2 text-xs text-danger-fg" role="alert">{t('mbox_quota_invalid')}</p>}
             </div>
           )}
           {item && (
             <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
               <input type="checkbox" checked={active} onChange={e => setActive(e.target.checked)} className="rounded" />
-              Aktiv
+              {t('shared_active')}
             </label>
           )}
           <div className="flex justify-end gap-2 pt-2">
-            <button onClick={onClose} className="btn-secondary">Abbrechen</button>
+            <button onClick={onClose} className="btn-secondary">{t('action_cancel')}</button>
             <button onClick={() => mutation.mutate()}
               disabled={
                 mutation.isPending ||
                 !name.trim() ||
+                !levelsValid ||
                 (!item && (!localPartValid || !domainId))
               }
               className="btn-primary flex items-center gap-1.5">
               {mutation.isPending && <Loader2 size={14} className="animate-spin" />}
-              {item ? 'Speichern' : 'Erstellen'}
+              {item ? t('action_save') : t('mbox_create_btn')}
             </button>
           </div>
 
           {/* Aliases — edit mode only (mailbox must already exist) */}
           {item && (
-            <div className="border-t border-gray-200 pt-4 mt-2">
+            <div className="border-t border-line pt-4 mt-2">
               <MailboxAliasesSection
                 mailboxType="shared"
                 mailboxId={item.id}
                 defaultDomainId={item.domainId}
-                allDomains={domains.map((d) => ({ id: d.id, name: d.name }))}
+                allDomains={allDomains.map((d) => ({ id: d.id, name: d.name }))}
               />
             </div>
           )}
@@ -311,8 +364,9 @@ function SharedMailboxModal({ item, onClose }: { item?: SharedMailbox; onClose: 
   );
 }
 
-// ── Permissions modal — Exchange-style with multiple permissions per user ────
+// ── Permissions modal — multiple permissions per user ────
 function PermissionsModal({ item, onClose }: { item: SharedMailbox; onClose: () => void }) {
+  const t = useT();
   const qc = useQueryClient();
   const [userId, setUserId]     = useState('');
   const [perms, setPerms]       = useState<PermType[]>(['FULL_ACCESS']);
@@ -353,22 +407,22 @@ function PermissionsModal({ item, onClose }: { item: SharedMailbox; onClose: () 
       api.post(`/admin/shared-mailboxes/${item.id}/permissions`, { userId: uid, permissions }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['admin-shared-mailboxes'] });
-      toast.success('Berechtigungen gespeichert');
+      toast.success(t('shared_perm_saved'));
       setUserId(''); setUserSearch(''); setPerms(['FULL_ACCESS']); setEditingUser(null);
     },
-    onError: (e: Error) => toast.error(e.message || 'Fehler'),
+    onError: (e: Error) => toast.error(e.message || t('shared_save_error')),
   });
 
   const removeAllMutation = useMutation({
     mutationFn: (uid: string) => api.delete(`/admin/shared-mailboxes/${item.id}/permissions/${uid}`),
-    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['admin-shared-mailboxes'] }); toast.success('Alle Berechtigungen entfernt'); },
-    onError: () => toast.error('Fehler'),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['admin-shared-mailboxes'] }); toast.success(t('shared_perm_removed')); },
+    onError: (e: Error) => toast.error(e.message || t('shared_save_error')),
   });
 
   const togglePerm = (p: PermType) =>
     setPerms((cur) => cur.includes(p) ? cur.filter((x) => x !== p) : [...cur, p]);
 
-  // Validation: SEND_AS and SEND_ON_BEHALF are mutually exclusive (Exchange behavior)
+  // Validation: SEND_AS and SEND_ON_BEHALF are mutually exclusive
   const sendConflict = perms.includes('SEND_AS') && perms.includes('SEND_ON_BEHALF');
 
   const titleId = useId();
@@ -378,49 +432,52 @@ function PermissionsModal({ item, onClose }: { item: SharedMailbox; onClose: () 
       labelledBy={titleId}
 
       closeOnBackdrop={false}
-      overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-      className="bg-white rounded-xl shadow-2xl w-full max-w-xl"
+      overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-scrim/40 p-4"
+      className="bg-surface rounded-xl shadow-2xl w-full max-w-xl max-h-[90vh] overflow-y-auto"
     >
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-line">
           <div>
-            <h2 id={titleId} className="font-semibold text-gray-900">Berechtigungen</h2>
-            <p className="text-xs text-gray-500">{item.email}</p>
+            <h2 id={titleId} className="font-semibold text-fg">{t('shared_perm_title')}</h2>
+            <p className="text-xs text-fg-subtle">{item.email}</p>
           </div>
-          <button type="button" onClick={onClose} aria-label="Schließen" className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+          <button type="button" onClick={onClose} aria-label={t('action_close')} className="text-fg-subtle hover:text-fg-muted"><X size={18} /></button>
         </div>
         <WriteGuard area="recipients" className="p-5 space-y-4">
           {/* Existing permissions — grouped per user */}
           <div className="space-y-2">
             {Object.keys(grouped).length === 0 && !editingUser && (
-              <p className="text-sm text-gray-400 text-center py-2">Noch keine Berechtigungen</p>
+              <p className="text-sm text-fg-subtle text-center py-2">{t('shared_perm_none')}</p>
             )}
             {Object.entries(grouped).map(([uid, g]) => (
-              <div key={uid} className="p-3 bg-gray-50 rounded-lg">
+              <div key={uid} className="p-3 bg-surface-2 rounded-lg">
                 <div className="flex items-start justify-between">
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-gray-900">{g.user.displayName}</p>
-                    <p className="text-xs text-gray-500 truncate">{g.user.email}</p>
+                    <p className="text-sm font-medium text-fg">{g.user.displayName}</p>
+                    <p className="text-xs text-fg-subtle truncate">{g.user.email}</p>
                     <div className="flex flex-wrap gap-1 mt-1.5">
                       {g.perms.map((p) => (
-                        <span key={p.id} className="text-[10px] bg-accent/10 text-accent border border-accent/20 px-1.5 py-0.5 rounded">
-                          {PERM_LABELS[p.permission]}
+                        <span key={p.id} className="text-[10px] bg-accent/10 text-accent-fg border border-accent/20 px-1.5 py-0.5 rounded">
+                          {t(PERM_KEYS[p.permission].label)}
                         </span>
                       ))}
                     </div>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
                     <button
+                      type="button"
                       onClick={() => {
                         setEditingUser(uid);
                         setPerms(g.perms.map((p) => p.permission));
                         setUserId(uid);
                       }}
-                      className="text-xs text-accent hover:underline"
+                      className="text-xs text-accent-fg hover:underline"
                     >
-                      Bearbeiten
+                      {t('action_edit')}
                     </button>
-                    <button aria-label="Alle Berechtigungen entfernen" onClick={() => removeAllMutation.mutate(uid)}
-                      className="p-1 text-gray-400 hover:text-red-600 transition-colors">
+                    <button type="button" aria-label={`${t('shared_perm_remove_all')}: ${g.user.email}`} title={t('shared_perm_remove_all')}
+                      disabled={removeAllMutation.isPending}
+                      onClick={() => { if (confirm(`${t('shared_perm_remove_confirm')}\n${g.user.email}`)) removeAllMutation.mutate(uid); }}
+                      className="p-1 text-fg-subtle hover:text-danger-fg transition-colors">
                       <X size={14} />
                     </button>
                   </div>
@@ -430,9 +487,9 @@ function PermissionsModal({ item, onClose }: { item: SharedMailbox; onClose: () 
           </div>
 
           {/* New / edit permission */}
-          <div className="border-t border-gray-200 pt-4 space-y-2">
-            <p className="text-xs font-semibold text-gray-500 uppercase">
-              {editingUser ? 'Berechtigungen bearbeiten' : 'Berechtigung hinzufügen'}
+          <div className="border-t border-line pt-4 space-y-2">
+            <p className="text-xs font-semibold text-fg-subtle uppercase">
+              {editingUser ? t('shared_perm_edit') : t('shared_perm_add')}
             </p>
 
             {!editingUser && (
@@ -441,79 +498,73 @@ function PermissionsModal({ item, onClose }: { item: SharedMailbox; onClose: () 
                   value={userSearch}
                   onChange={e => { setUserSearch(e.target.value); setUserId(''); }}
                   className="input"
-                  placeholder="Benutzer suchen — E-Mail oder Name…"
+                  aria-label={t('shared_perm_search_ph')}
+                  placeholder={t('shared_perm_search_ph')}
                   autoFocus
                 />
                 {searchLc.length === 0 ? (
-                  <p className="text-xs text-gray-400 px-2 py-1.5">Tippe einen Namen oder eine E-Mail, um Benutzer zu finden.</p>
+                  <p className="text-xs text-fg-subtle px-2 py-1.5">{t('shared_perm_search_hint')}</p>
                 ) : usersLoading ? (
-                  <p className="text-xs text-gray-400 px-2 py-1.5">Lade Benutzerliste…</p>
+                  <p className="text-xs text-fg-subtle px-2 py-1.5">{t('shared_perm_users_loading')}</p>
                 ) : visibleUsers.length === 0 ? (
-                  <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                  <p className="text-xs text-warning-fg bg-warning-bg border border-warning-line rounded px-2 py-1.5">
                     {filteredUsers.length === 0
-                      ? `Kein Benutzer gefunden für „${userSearch}".`
-                      : `Alle gefundenen Benutzer (${filteredUsers.length}) haben bereits Berechtigungen — zum Ändern „Bearbeiten" oben klicken.`}
+                      ? `${t('shared_perm_no_user')} „${userSearch}“.`
+                      : t('shared_perm_all_granted')}
                   </p>
                 ) : (
-                  <div className="border border-gray-200 rounded max-h-44 overflow-y-auto">
+                  <div className="border border-line rounded max-h-44 overflow-y-auto">
                     {visibleUsers.map(u => (
                       <button
                         key={u.id}
                         type="button"
+                        aria-pressed={userId === u.id}
                         onClick={() => setUserId(u.id)}
-                        className={`w-full text-left px-3 py-1.5 text-sm hover:bg-accent/10 border-b border-gray-100 last:border-b-0 ${
-                          userId === u.id ? 'bg-accent/15 ring-1 ring-accent' : ''
+                        className={`w-full text-left px-3 py-1.5 text-sm hover:bg-accent/10 border-b border-line last:border-b-0 ${
+                          userId === u.id ? 'bg-accent/15 ring-1 ring-accent-fg' : ''
                         }`}
                       >
-                        <span className="font-medium text-gray-900">{u.displayName || u.email}</span>
-                        <span className="text-xs text-gray-500 ml-2">{u.email}</span>
+                        <span className="font-medium text-fg">{u.displayName || u.email}</span>
+                        <span className="text-xs text-fg-subtle ml-2">{u.email}</span>
                       </button>
                     ))}
                   </div>
                 )}
                 {!userId && visibleUsers.length > 0 && (
-                  <p className="text-xs text-gray-500 px-2">Wähle einen Benutzer aus der Liste oben.</p>
+                  <p className="text-xs text-fg-subtle px-2">{t('shared_perm_pick_user')}</p>
                 )}
               </>
             )}
 
             {/* Multi-permission checkboxes */}
             <div className="space-y-1.5">
-              {(Object.entries(PERM_LABELS) as [PermType, string][]).map(([k, v]) => {
-                const description = {
-                  FULL_ACCESS:    'Vollzugriff auf Mailbox (Lesen, Schreiben, Verschieben, Löschen)',
-                  SEND_AS:        'Sendet E-Mails direkt unter der Adresse des Postfachs',
-                  SEND_ON_BEHALF: 'Sendet im Namen — Empfänger sieht „im Auftrag von Postfach"',
-                  READ_ONLY:      'Nur Lesezugriff — keine Änderungen erlaubt',
-                }[k];
-                return (
-                  <label key={k} className="flex items-start gap-2 p-2 hover:bg-gray-50 rounded cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={perms.includes(k)}
-                      onChange={() => togglePerm(k)}
-                      className="mt-0.5"
-                    />
-                    <div className="flex-1">
-                      <p className="text-sm font-medium text-gray-900">{v}</p>
-                      <p className="text-xs text-gray-500">{description}</p>
-                    </div>
-                  </label>
-                );
-              })}
+              {PERM_ORDER.map((k) => (
+                <label key={k} className="flex items-start gap-2 p-2 hover:bg-surface-2 rounded cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={perms.includes(k)}
+                    onChange={() => togglePerm(k)}
+                    className="mt-0.5"
+                  />
+                  <div className="flex-1">
+                    <p className="text-sm font-medium text-fg">{t(PERM_KEYS[k].label)}</p>
+                    <p className="text-xs text-fg-subtle">{t(PERM_KEYS[k].desc)}</p>
+                  </div>
+                </label>
+              ))}
             </div>
 
             {sendConflict && (
-              <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded px-2 py-1">
-                ⚠ „Senden als" und „Senden im Auftrag" sollten nicht gleichzeitig gesetzt sein — Exchange-Konvention.
+              <p className="text-xs text-warning-fg bg-warning-bg border border-warning-line rounded px-2 py-1">
+                ⚠ {t('shared_perm_send_conflict')}
               </p>
             )}
 
             <div className="flex justify-end gap-2 pt-2">
               {editingUser && (
-                <button onClick={() => { setEditingUser(null); setUserId(''); setPerms(['FULL_ACCESS']); }}
+                <button type="button" onClick={() => { setEditingUser(null); setUserId(''); setPerms(['FULL_ACCESS']); }}
                   className="btn-secondary text-sm">
-                  Abbrechen
+                  {t('action_cancel')}
                 </button>
               )}
               <button
@@ -521,13 +572,13 @@ function PermissionsModal({ item, onClose }: { item: SharedMailbox; onClose: () 
                 onClick={() => userId && perms.length > 0 && setMutation.mutate({ uid: userId, permissions: perms })}
                 disabled={!userId || perms.length === 0 || setMutation.isPending}
                 title={
-                  !userId ? 'Bitte erst einen Benutzer aus der Liste auswählen'
-                  : perms.length === 0 ? 'Bitte mindestens eine Berechtigung anhaken'
+                  !userId ? t('shared_perm_pick_user')
+                  : perms.length === 0 ? t('shared_perm_pick_perm')
                   : ''
                 }
                 className="btn-primary flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed">
                 {setMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <UserPlus size={14} />}
-                {editingUser ? 'Speichern' : 'Hinzufügen'}
+                {editingUser ? t('action_save') : t('action_add')}
               </button>
             </div>
           </div>

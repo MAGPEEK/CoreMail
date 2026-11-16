@@ -21,10 +21,10 @@ const PERM_LABELS: Record<string, string> = {
 };
 
 const PERM_COLORS: Record<string, string> = {
-  FULL_ACCESS:    'bg-emerald-100 text-emerald-700',
-  SEND_AS:        'bg-blue-100 text-blue-700',
-  SEND_ON_BEHALF: 'bg-indigo-100 text-indigo-700',
-  READ_ONLY:      'bg-gray-100 text-gray-700',
+  FULL_ACCESS:    'bg-success-bg text-success-fg',
+  SEND_AS:        'bg-info-bg text-info-fg',
+  SEND_ON_BEHALF: 'bg-info-bg text-info-fg',
+  READ_ONLY:      'bg-surface-2 text-fg-muted',
 };
 
 export function OpenSharedMailboxModal({ onClose }: { onClose: () => void }) {
@@ -59,49 +59,49 @@ export function OpenSharedMailboxModal({ onClose }: { onClose: () => void }) {
     <Modal
       onClose={onClose}
       label="Weiteres Postfach öffnen"
-      overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-      className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col"
+      overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-scrim/40 p-4"
+      className="bg-surface rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col"
     >
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-700 shrink-0">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-line shrink-0">
           <div>
-            <h2 className="font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
-              <Inbox size={17} className="text-accent" /> Weiteres Postfach öffnen
+            <h2 className="font-semibold text-fg flex items-center gap-2">
+              <Inbox size={17} className="text-accent-fg" /> Weiteres Postfach öffnen
             </h2>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+            <p className="text-xs text-fg-subtle mt-0.5">
               Freigegebene Postfächer, auf die du Zugriff hast
             </p>
           </div>
-          <button aria-label="Schließen" onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
+          <button aria-label="Schließen" onClick={onClose} className="text-fg-subtle hover:text-fg-muted">
             <X size={18} />
           </button>
         </div>
 
-        <div className="px-5 py-3 border-b border-gray-100 dark:border-gray-700 shrink-0">
+        <div className="px-5 py-3 border-b border-line shrink-0">
           <div className="relative">
-            <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+            <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-fg-subtle" />
             <input
               autoFocus
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Postfach suchen…"
-              className="w-full pl-8 pr-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-accent"
+              className="w-full pl-8 pr-3 py-1.5 text-sm border border-line-strong rounded bg-surface text-fg focus:outline-none focus:ring-1 focus:ring-accent-fg"
             />
           </div>
         </div>
 
         <div className="flex-1 overflow-y-auto px-2 py-2">
           {isLoading ? (
-            <p className="text-center text-sm text-gray-400 py-12">Lade…</p>
+            <p className="text-center text-sm text-fg-subtle py-12">Lade…</p>
           ) : error ? (
-            <p className="text-center text-sm text-red-500 py-12">{(error as Error).message || 'Fehler beim Laden'}</p>
+            <p className="text-center text-sm text-danger-fg py-12">{(error as Error).message || 'Fehler beim Laden'}</p>
           ) : filtered.length === 0 ? (
             <div className="text-center py-12 px-4">
-              <Inbox size={28} className="mx-auto text-gray-300 mb-2" />
-              <p className="text-sm text-gray-500 dark:text-gray-400">
+              <Inbox size={28} className="mx-auto text-fg-subtle mb-2" />
+              <p className="text-sm text-fg-subtle">
                 {search ? `Kein Postfach gefunden für „${search}".` : 'Keine freigegebenen Postfächer verfügbar.'}
               </p>
               {!search && (
-                <p className="text-xs text-gray-400 mt-1">
+                <p className="text-xs text-fg-subtle mt-1">
                   Ein Administrator muss dir Zugriff auf ein Postfach gewähren.
                 </p>
               )}
@@ -128,18 +128,18 @@ export function OpenSharedMailboxModal({ onClose }: { onClose: () => void }) {
                     }`}
                   >
                     <div className="w-9 h-9 rounded-full bg-accent/10 flex items-center justify-center shrink-0">
-                      <Inbox size={16} className="text-accent" />
+                      <Inbox size={16} className="text-accent-fg" />
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
+                      <p className="text-sm font-medium text-fg truncate">
                         {m.displayName || m.email}
                       </p>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{m.email}</p>
+                      <p className="text-xs text-fg-subtle truncate">{m.email}</p>
                       <div className="flex flex-wrap gap-1 mt-1">
                         {m.permissions.map((p) => (
                           <span
                             key={p}
-                            className={`text-[10px] px-1.5 py-0.5 rounded ${PERM_COLORS[p] ?? 'bg-gray-100 text-gray-700'}`}
+                            className={`text-[10px] px-1.5 py-0.5 rounded ${PERM_COLORS[p] ?? 'bg-surface-2 text-fg-muted'}`}
                           >
                             {PERM_LABELS[p] ?? p}
                           </span>
@@ -147,9 +147,9 @@ export function OpenSharedMailboxModal({ onClose }: { onClose: () => void }) {
                       </div>
                     </div>
                     {readable ? (
-                      <ExternalLink size={14} className="text-gray-400 shrink-0" />
+                      <ExternalLink size={14} className="text-fg-subtle shrink-0" />
                     ) : (
-                      <Lock size={14} className="text-gray-300 shrink-0" />
+                      <Lock size={14} className="text-fg-subtle shrink-0" />
                     )}
                   </button>
                 );
@@ -158,10 +158,10 @@ export function OpenSharedMailboxModal({ onClose }: { onClose: () => void }) {
           )}
         </div>
 
-        <div className="px-5 py-3 border-t border-gray-100 dark:border-gray-700 flex justify-end shrink-0">
+        <div className="px-5 py-3 border-t border-line flex justify-end shrink-0">
           <button
             onClick={onClose}
-            className="px-3 py-1.5 text-sm text-gray-600 dark:text-gray-300 border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700"
+            className="px-3 py-1.5 text-sm text-fg-muted border border-line-strong rounded hover:bg-surface-2"
           >
             Schließen
           </button>

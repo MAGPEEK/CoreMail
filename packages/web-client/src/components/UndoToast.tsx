@@ -31,7 +31,7 @@ export function showUndoToast({ message, onUndo, duration = UNDO_TTL_MS }: UndoO
     <div
       role="status"
       aria-live="polite"
-      className={`flex items-center gap-3 px-4 py-2.5 bg-gray-900 text-white rounded-md shadow-lg text-sm ${
+      className={`flex items-center gap-3 px-4 py-2.5 bg-surface text-fg border border-line rounded-md shadow-lg text-sm ${
         t.visible ? 'animate-in fade-in slide-in-from-top-2' : 'animate-out fade-out'
       }`}
       style={{ minWidth: 280 }}
@@ -44,13 +44,13 @@ export function showUndoToast({ message, onUndo, duration = UNDO_TTL_MS }: UndoO
           if (undoStack.remove(entry.id)) runUndo(onUndo);
         }}
         aria-keyshortcuts="Z"
-        className="font-semibold text-blue-300 hover:text-blue-200 transition-colors"
+        className="font-semibold text-accent-fg hover:underline transition-colors"
       >
         {translate('undo')}
       </button>
       <button
         onClick={() => { toast.dismiss(t.id); toastIdByEntry.delete(entry.id); undoStack.remove(entry.id); }}
-        className="text-gray-400 hover:text-white"
+        className="text-fg-subtle hover:text-fg"
         aria-label={translate('close')}
       >
         ×

@@ -53,3 +53,16 @@ export function isBackupAdmin(role: string | undefined, method: string, path?: s
   if (role === 'VIEW_ONLY_ORG') return read && !mailboxData;
   return false;
 }
+
+/**
+ * 9.2: an archive key from `?key=` (archive download/delete) must be a plain
+ * relative object key — no empty/"."/".." segments, no leading "/", no
+ * backslashes or control characters. Such keys used to reach the object store
+ * and come back as a 500 ("Resource name contains bad components").
+ */
+export function isSafeArchiveKey(key: string): boolean {
+  if (!key || key.length > 1024) return false;
+  // eslint-disable-next-line no-control-regex
+  if (/[\x00-\x1f\x7f\\]/.test(key) || key.startsWith('/')) return false;
+  return key.split('/').every((seg) => seg !== '' && seg !== '.' && seg !== '..');
+}

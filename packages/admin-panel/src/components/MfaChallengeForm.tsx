@@ -111,12 +111,12 @@ export function MfaChallengeForm({ challengeToken, method, methods, email, onSuc
   return (
     <form onSubmit={submitCode} className="space-y-5">
       <div className="text-center">
-        <p className="text-sm text-gray-600">
+        <p className="text-sm text-fg-muted">
           {mode === 'totp' && 'Geben Sie den 6-stelligen Code aus Ihrer Authenticator-App ein.'}
           {mode === 'backup' && 'Geben Sie einen Ihrer Backup-Codes ein (Format XXXX-XXXX).'}
           {mode === 'webauthn' && 'Melden Sie sich mit Ihrem Sicherheitsschlüssel oder Passkey an.'}
         </p>
-        <p className="text-xs text-gray-400 mt-1">{email}</p>
+        <p className="text-xs text-fg-subtle mt-1">{email}</p>
       </div>
 
       {mode === 'totp' && (
@@ -133,8 +133,8 @@ export function MfaChallengeForm({ challengeToken, method, methods, email, onSuc
               value={d}
               onChange={(e) => handleDigitChange(i, e.target.value)}
               onKeyDown={(e) => handleDigitKeyDown(i, e)}
-              className="w-10 h-12 text-center text-xl font-bold border-2 rounded-lg focus:outline-none focus:border-accent transition-colors"
-              style={{ borderColor: d ? 'var(--color-accent)' : undefined }}
+              className="w-10 h-12 text-center text-xl font-bold border-2 border-line-strong bg-surface text-fg rounded-lg focus:outline-none focus:border-accent-fg focus:ring-2 focus:ring-accent-fg transition-colors"
+              style={{ borderColor: d ? 'rgb(var(--color-accent-fg))' : undefined }}
             />
           ))}
         </div>
@@ -162,7 +162,7 @@ export function MfaChallengeForm({ challengeToken, method, methods, email, onSuc
       )}
 
       {error && (
-        <div role="alert" className="bg-red-50 border border-red-200 rounded px-3 py-2 text-sm text-red-700 text-center">{error}</div>
+        <div role="alert" className="bg-danger-bg border border-danger-line rounded px-3 py-2 text-sm text-danger-fg text-center">{error}</div>
       )}
 
       {mode !== 'webauthn' && (
@@ -175,24 +175,24 @@ export function MfaChallengeForm({ challengeToken, method, methods, email, onSuc
 
       <div className="flex flex-col items-center gap-1 text-xs">
         {mode !== 'backup' && (
-          <button type="button" onClick={() => switchMode('backup')} className="text-accent hover:underline">
+          <button type="button" onClick={() => switchMode('backup')} className="text-accent-fg hover:underline">
             Backup-Code verwenden
           </button>
         )}
         {mode !== 'totp' && hasTotp && (
-          <button type="button" onClick={() => switchMode('totp')} className="text-accent hover:underline">
+          <button type="button" onClick={() => switchMode('totp')} className="text-accent-fg hover:underline">
             Code aus der Authenticator-App verwenden
           </button>
         )}
         {mode !== 'webauthn' && canWebAuthn && (
-          <button type="button" onClick={() => switchMode('webauthn')} className="text-accent hover:underline">
+          <button type="button" onClick={() => switchMode('webauthn')} className="text-accent-fg hover:underline">
             Sicherheitsschlüssel verwenden
           </button>
         )}
       </div>
 
       <button type="button" onClick={() => onBack()}
-        className="w-full flex items-center justify-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 py-1">
+        className="w-full flex items-center justify-center gap-1.5 text-sm text-fg-subtle hover:text-fg-muted py-1">
         <ArrowLeft size={13} /> Zurück zur Anmeldung
       </button>
     </form>

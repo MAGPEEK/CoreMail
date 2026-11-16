@@ -1,7 +1,7 @@
 name: coremail
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  CoreMail 9.1.0 — Docker Compose, variant STANDARD (production, single host)
+#  CoreMail 9.2.0 — Docker Compose, variant STANDARD (production, single host)
 #
 #  Variants (docs/docker-compose.md has the comparison table):
 #    docker-compose.minimal.yml   MINIMAL   coremail + postgres + redis (1–50 users)
@@ -57,7 +57,7 @@ services:
   #  REST API, webmail "MWA", admin panel "BCP", admin CLI `coremail`)
   # ───────────────────────────────────────────────────────────────────────────
   coremail:
-    image: magpeek/coremail-app:${COREMAIL_VERSION:-9.1.0}
+    image: magpeek/coremail-app:${COREMAIL_VERSION:-9.2.0}
     # Use your own build instead of the Docker Hub image:
     # build:
     #   context: ../..

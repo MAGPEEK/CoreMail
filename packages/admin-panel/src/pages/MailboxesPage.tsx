@@ -13,7 +13,8 @@ import { usePermissions } from '../hooks/usePermissions.js';
 import { Can, WriteGuard } from '../components/Can.js';
 import { DataTable, type Column } from '../components/DataTable.js';
 import { DetailPanel } from '../components/DetailPanel.js';
-import { gbInputToBytes, bytesToGbInput } from '../lib/quotaInput.js';
+import { gbInputToBytes, bytesToGbInput, gbInputValid, quotaOptions, quotaLabel } from '../lib/quotaInput.js';
+import { assignableRoles } from '../lib/permissions.js';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 interface FolderInfo { id: string; name: string; displayName: string; totalCount: number; unreadCount: number }
@@ -23,7 +24,7 @@ interface User {
   domainId: string; createdAt: string;
   /** 8.x: last successful login (web, SSO, mail protocols) — null = never / not yet recorded */
   lastLoginAt?: string | null;
-  /** v8.1: explicit Exchange quota levels (null = server default) */
+  /** v8.1: explicit quota levels (null = server default) */
   quotaWarningBytes?: number | null;
   quotaProhibitSendBytes?: number | null;
 }
@@ -48,47 +49,50 @@ function formatBytes(b: number): string {
   return `${b} B`;
 }
 
-const ROLES: Record<string, { label: string; color: string }> = {
-  USER:                    { label: 'Benutzer',       color: 'badge-gray' },
-  HELP_DESK:               { label: 'Helpdesk',       color: 'badge-blue' },
-  RECIPIENT_MANAGEMENT:    { label: 'Empfänger-Mgmt', color: 'badge-blue' },
-  COMPLIANCE_MANAGEMENT:   { label: 'Compliance',     color: 'badge-blue' },
-  HYGIENE_MANAGEMENT:      { label: 'Schutz',         color: 'badge-blue' },
-  SERVER_MANAGEMENT:       { label: 'Server',         color: 'badge-blue' },
-  VIEW_ONLY_ORG:           { label: 'Nur-Lesen',      color: 'badge-gray' },
-  ORGANIZATION_MANAGEMENT: { label: 'Administrator',  color: 'badge-orange' },
+// Labels: i18n role_label_<ROLE> (shared with the RBAC page).
+const ROLE_COLORS: Record<string, string> = {
+  USER:                    'badge-gray',
+  HELP_DESK:               'badge-blue',
+  RECIPIENT_MANAGEMENT:    'badge-blue',
+  COMPLIANCE_MANAGEMENT:   'badge-blue',
+  HYGIENE_MANAGEMENT:      'badge-blue',
+  SERVER_MANAGEMENT:       'badge-blue',
+  VIEW_ONLY_ORG:           'badge-gray',
+  ORGANIZATION_MANAGEMENT: 'badge-orange',
 };
+const ROLE_KEYS = Object.keys(ROLE_COLORS);
+type Translate = ReturnType<typeof useT>;
+const roleLabel = (t: Translate, role: string): string =>
+  ROLE_KEYS.includes(role) ? t(`role_label_${role}` as 'role_label_USER') : role;
 
-const QUOTA_OPTIONS = [
-  { label: '1 GB',       value: 1_073_741_824 },
-  { label: '2 GB',       value: 2_147_483_648 },
-  { label: '5 GB',       value: 5_368_709_120 },
-  { label: '10 GB',      value: 10_737_418_240 },
-  { label: '25 GB',      value: 26_843_545_600 },
-  { label: '50 GB',      value: 53_687_091_200 },
-  { label: 'Unbegrenzt', value: 107_374_182_400 },
-];
+/** Quota select options; 0 = unlimited (server convention), current non-preset values are kept. */
+function QuotaOptions({ current }: { current?: number }) {
+  const t = useT();
+  return <>{quotaOptions(current).map((v) => (
+    <option key={v} value={v}>{quotaLabel(v) ?? t('mbox_quota_unlimited')}</option>
+  ))}</>;
+}
 
 // ── Quota bar ────────────────────────────────────────────────────────────────
 function QuotaBar({ used, total, showLabel = false }: { used: number; total: number; showLabel?: boolean }) {
   const t = useT();
   const pct = Math.min(100, total > 0 ? (used / total) * 100 : 0);
-  const color = pct > 90 ? 'bg-red-500' : pct > 70 ? 'bg-yellow-500' : 'bg-accent';
+  const color = pct > 90 ? 'bg-danger' : pct > 70 ? 'bg-warning' : 'bg-accent';
   return (
     <div className="space-y-1 w-full">
       {showLabel && (
-        <div className="flex justify-between text-xs text-gray-500">
+        <div className="flex justify-between text-xs text-fg-subtle">
           <span className="font-medium">{formatBytes(used)}</span>
-          <span className="text-gray-400">{t('mbox_storage_of')} {formatBytes(total)}</span>
+          <span className="text-fg-subtle">{t('mbox_storage_of')} {total > 0 ? formatBytes(total) : t('mbox_quota_unlimited')}</span>
         </div>
       )}
-      <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+      <div className="h-2 bg-surface-3 rounded-full overflow-hidden">
         <div className={`h-full rounded-full transition-all ${color}`} style={{ width: `${pct}%` }} />
       </div>
       {!showLabel && (
-        <div className="flex justify-between text-xs text-gray-400">
+        <div className="flex justify-between text-xs text-fg-subtle">
           <span>{formatBytes(used)}</span>
-          <span>{formatBytes(total)}</span>
+          <span>{total > 0 ? formatBytes(total) : t('mbox_quota_unlimited')}</span>
         </div>
       )}
     </div>
@@ -105,7 +109,7 @@ const EMPTY_FORM = {
 export function MailboxesPage() {
   const t = useT();
   const qc = useQueryClient();
-  const { can, canManage } = usePermissions();
+  const { can, canManage, role: actorRole } = usePermissions();
   const canWrite = can('recipients', 'write');
   const [domainFilter, setDomainFilter] = useState('');
   const [activeId, setActiveId]         = useState<string | null>(null);
@@ -149,6 +153,8 @@ export function MailboxesPage() {
   const invalidate = () => {
     void qc.invalidateQueries({ queryKey: ['admin-mailboxes'] });
     void qc.invalidateQueries({ queryKey: ['admin-mailbox-detail'] });
+    void qc.invalidateQueries({ queryKey: ['admin-rbac-users'] });
+    void qc.invalidateQueries({ queryKey: ['admin-users-list-all'] });
   };
 
   // Create
@@ -285,11 +291,11 @@ export function MailboxesPage() {
       cell: (u) => (
         <div className="flex items-center gap-2.5">
           <div className="w-8 h-8 rounded-full bg-accent/10 flex items-center justify-center shrink-0" aria-hidden="true">
-            <span className="text-sm font-semibold text-accent">{(u.displayName ?? u.email ?? '?').charAt(0).toUpperCase()}</span>
+            <span className="text-sm font-semibold text-accent-fg">{(u.displayName ?? u.email ?? '?').charAt(0).toUpperCase()}</span>
           </div>
           <div className="min-w-0">
-            <p className="font-medium text-gray-800 truncate">{u.displayName ?? u.email}</p>
-            <p className="text-xs text-gray-400 flex items-center gap-1 truncate"><Mail size={10} aria-hidden="true" />{u.email}</p>
+            <p className="font-medium text-fg truncate">{u.displayName ?? u.email}</p>
+            <p className="text-xs text-fg-subtle flex items-center gap-1 truncate"><Mail size={10} aria-hidden="true" />{u.email}</p>
           </div>
         </div>
       ),
@@ -297,13 +303,13 @@ export function MailboxesPage() {
     {
       key: 'domain', header: t('mbox_col_domain'),
       sortValue: (u) => domainName(u.domainId),
-      cell: (u) => <span className="text-xs font-mono bg-gray-100 text-gray-600 px-2 py-0.5 rounded">{domainName(u.domainId)}</span>,
+      cell: (u) => <span className="text-xs font-mono bg-surface-2 text-fg-muted px-2 py-0.5 rounded">{domainName(u.domainId)}</span>,
     },
     {
       key: 'role', header: t('mbox_col_role'),
-      sortValue: (u) => (ROLES[u.role]?.label ?? u.role),
+      sortValue: (u) => roleLabel(t, u.role),
       cell: (u) => {
-        const role = ROLES[u.role] ?? { label: u.role, color: 'badge-gray' };
+        const role = { label: roleLabel(t, u.role), color: ROLE_COLORS[u.role] ?? 'badge-gray' };
         return (
           <span className={`badge text-xs ${role.color} flex items-center gap-1 w-fit`}>
             {u.role === 'ORGANIZATION_MANAGEMENT' && <Shield size={10} aria-hidden="true" />}
@@ -320,12 +326,12 @@ export function MailboxesPage() {
         return (
           <div className="space-y-1">
             <div className="flex justify-between text-xs">
-              <span className={`font-medium ${pct > 90 ? 'text-red-600' : pct > 70 ? 'text-yellow-600' : 'text-gray-700'}`}>{formatBytes(u.usedBytes)}</span>
-              <span className="text-gray-400">{formatBytes(u.quotaBytes)}</span>
+              <span className={`font-medium ${pct > 90 ? 'text-danger-fg' : pct > 70 ? 'text-warning-fg' : 'text-fg-muted'}`}>{formatBytes(u.usedBytes)}</span>
+              <span className="text-fg-subtle">{u.quotaBytes > 0 ? formatBytes(u.quotaBytes) : t('mbox_quota_unlimited')}</span>
             </div>
-            <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100}
+            <div className="h-1.5 bg-surface-3 rounded-full overflow-hidden" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100}
               aria-label={t('mbox_col_storage')}>
-              <div className={`h-full rounded-full transition-all ${pct > 90 ? 'bg-red-500' : pct > 70 ? 'bg-yellow-500' : 'bg-accent'}`} style={{ width: `${pct}%` }} />
+              <div className={`h-full rounded-full transition-all ${pct > 90 ? 'bg-danger' : pct > 70 ? 'bg-warning' : 'bg-accent'}`} style={{ width: `${pct}%` }} />
             </div>
           </div>
         );
@@ -336,7 +342,7 @@ export function MailboxesPage() {
       sortValue: (u) => u.active,
       cell: (u) => (
         <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border ${
-          u.active ? 'bg-green-50 border-green-200 text-green-700' : 'bg-red-50 border-red-200 text-red-700'}`}>
+          u.active ? 'bg-success-bg border-success-line text-success-fg' : 'bg-danger-bg border-danger-line text-danger-fg'}`}>
           {u.active ? <><UserCheck size={11} aria-hidden="true" /> {t('status_active')}</> : <><UserX size={11} aria-hidden="true" /> {t('status_disabled')}</>}
         </span>
       ),
@@ -347,10 +353,10 @@ export function MailboxesPage() {
         <Can area="recipients" access="write">
           <div className="flex items-center gap-1">
             <button onClick={() => setEditUser(u)} className="btn-ghost p-1.5 rounded" title={t('mbox_btn_edit_title')} aria-label={`${t('mbox_btn_edit_title')}: ${u.email}`}>
-              <Pencil size={13} className="text-gray-500" />
+              <Pencil size={13} className="text-fg-subtle" />
             </button>
             <button onClick={() => confirmDelete(u)} className="btn-ghost p-1.5 rounded" title={t('mbox_btn_delete_title')} aria-label={`${t('mbox_btn_delete_title')}: ${u.email}`}>
-              <Trash2 size={13} className="text-red-500" />
+              <Trash2 size={13} className="text-danger-fg" />
             </button>
           </div>
         </Can>
@@ -363,8 +369,8 @@ export function MailboxesPage() {
     <div className="p-6 space-y-4">
       {/* Header */}
       <div>
-        <h1 className="text-xl font-semibold text-gray-900">{t('mbox_page_title')}</h1>
-        <p className="text-xs text-gray-400 mt-0.5">{mailboxes.length} {t('mbox_total')}</p>
+        <h1 className="text-xl font-semibold text-fg">{t('mbox_page_title')}</h1>
+        <p className="text-xs text-fg-subtle mt-0.5">{mailboxes.length} {t('mbox_total')}</p>
       </div>
 
       <div className="flex flex-col lg:flex-row gap-4 items-start">
@@ -380,7 +386,7 @@ export function MailboxesPage() {
             selectable={canWrite}
             onActivate={(u) => setActiveId(u.id)}
             activeKey={activeId}
-            rowClassName={(u) => (!u.active ? 'opacity-60' : '')}
+            rowClassName={(u) => (!u.active ? 'bg-surface-2' : '')}
             emptyText={domainFilter ? t('mbox_no_results') : undefined}
             filters={domains.length > 0 && (
               <div className="relative">
@@ -391,7 +397,7 @@ export function MailboxesPage() {
                     <option key={d.id} value={d.id}>{d.name} ({mailboxes.filter((u) => u.domainId === d.id).length})</option>
                   ))}
                 </select>
-                <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" aria-hidden="true" />
+                <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-fg-subtle pointer-events-none" aria-hidden="true" />
               </div>
             )}
             toolbar={({ selectedRows, clearSelection }) => (
@@ -420,7 +426,7 @@ export function MailboxesPage() {
                   </button>
                 </Can>
                 <Can area="recipients" access="write">
-                  <button className="btn-secondary flex items-center gap-1.5 text-xs text-red-600 disabled:opacity-40"
+                  <button className="btn-secondary flex items-center gap-1.5 text-xs text-danger-fg disabled:opacity-40"
                     disabled={selectedRows.length === 0 || bulkMutation.isPending}
                     onClick={() => {
                       if (!confirm(`${t('tb_delete_selected_confirm')} (${selectedRows.length})\n${selectedRows.map((u) => u.email).join('\n')}`)) return;
@@ -491,7 +497,7 @@ export function MailboxesPage() {
                   </>
                 )}
                 <Can area="recipients" access="write">
-                  <button className="btn-secondary text-xs flex items-center gap-1 text-red-600" onClick={() => confirmDelete(active)}>
+                  <button className="btn-secondary text-xs flex items-center gap-1 text-danger-fg" onClick={() => confirmDelete(active)}>
                     <Trash2 size={12} aria-hidden="true" /> {t('tb_delete')}
                   </button>
                 </Can>
@@ -500,24 +506,24 @@ export function MailboxesPage() {
           >
             {/* Quota / usage */}
             <section aria-label={t('mbox_detail_total_storage')} className="space-y-2">
-              <h3 className="text-xs font-medium text-gray-500 flex items-center gap-1.5">
-                <HardDrive size={12} className="text-accent" aria-hidden="true" /> {t('mbox_detail_total_storage')}
+              <h3 className="text-xs font-medium text-fg-subtle flex items-center gap-1.5">
+                <HardDrive size={12} className="text-accent-fg" aria-hidden="true" /> {t('mbox_detail_total_storage')}
               </h3>
               <QuotaBar used={detail?.id === active.id ? detail.usedBytes : active.usedBytes}
                 total={active.quotaBytes} showLabel />
-              {/* v8.1: Exchange quota levels */}
+              {/* v8.1: quota levels */}
               {detail?.id === active.id && detail.quotaLimits && (
                 <dl className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 text-xs">
-                  <dt className="text-gray-400">{t('mbox_quota_warning').replace(' (GB)', '')}</dt>
-                  <dd className="text-gray-700">{detail.quotaLimits.warningBytes > 0 ? formatBytes(detail.quotaLimits.warningBytes) : '—'}</dd>
-                  <dt className="text-gray-400">{t('mbox_quota_prohibit_send').replace(' (GB)', '')}</dt>
-                  <dd className="text-gray-700">{detail.quotaLimits.prohibitSendBytes > 0 ? formatBytes(detail.quotaLimits.prohibitSendBytes) : '—'}</dd>
-                  <dt className="text-gray-400">{t('mbox_quota_receive_limit')}</dt>
-                  <dd className="text-gray-700">{detail.quotaLimits.prohibitSendReceiveBytes > 0 ? formatBytes(detail.quotaLimits.prohibitSendReceiveBytes) : '—'}</dd>
+                  <dt className="text-fg-subtle">{t('mbox_quota_warning').replace(' (GB)', '')}</dt>
+                  <dd className="text-fg-muted">{detail.quotaLimits.warningBytes > 0 ? formatBytes(detail.quotaLimits.warningBytes) : '—'}</dd>
+                  <dt className="text-fg-subtle">{t('mbox_quota_prohibit_send').replace(' (GB)', '')}</dt>
+                  <dd className="text-fg-muted">{detail.quotaLimits.prohibitSendBytes > 0 ? formatBytes(detail.quotaLimits.prohibitSendBytes) : '—'}</dd>
+                  <dt className="text-fg-subtle">{t('mbox_quota_receive_limit')}</dt>
+                  <dd className="text-fg-muted">{detail.quotaLimits.prohibitSendReceiveBytes > 0 ? formatBytes(detail.quotaLimits.prohibitSendReceiveBytes) : '—'}</dd>
                   {detail.quotaLevel && (
                     <dd className={`col-span-2 font-medium ${
-                      detail.quotaLevel === 'ok' ? 'text-gray-500'
-                        : detail.quotaLevel === 'warning' ? 'text-amber-600' : 'text-red-600'}`}>
+                      detail.quotaLevel === 'ok' ? 'text-fg-subtle'
+                        : detail.quotaLevel === 'warning' ? 'text-warning-fg' : 'text-danger-fg'}`}>
                       {t(`mbox_quota_level_${detail.quotaLevel}` as 'mbox_quota_level_ok')}
                     </dd>
                   )}
@@ -527,46 +533,46 @@ export function MailboxesPage() {
 
             {/* Facts */}
             <dl className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1.5 text-xs">
-              <dt className="text-gray-400">{t('mbox_col_role')}</dt>
-              <dd className="text-gray-700">{ROLES[active.role]?.label ?? active.role}</dd>
-              <dt className="text-gray-400">{t('mbox_col_status')}</dt>
-              <dd className="text-gray-700">{active.active ? t('status_active') : t('status_disabled')}</dd>
-              <dt className="text-gray-400">{t('mbox_col_domain')}</dt>
-              <dd className="text-gray-700 font-mono">{domainName(active.domainId)}</dd>
-              <dt className="text-gray-400">{t('mbox_last_login')}</dt>
-              <dd className="text-gray-700">
+              <dt className="text-fg-subtle">{t('mbox_col_role')}</dt>
+              <dd className="text-fg-muted">{roleLabel(t, active.role)}</dd>
+              <dt className="text-fg-subtle">{t('mbox_col_status')}</dt>
+              <dd className="text-fg-muted">{active.active ? t('status_active') : t('status_disabled')}</dd>
+              <dt className="text-fg-subtle">{t('mbox_col_domain')}</dt>
+              <dd className="text-fg-muted font-mono">{domainName(active.domainId)}</dd>
+              <dt className="text-fg-subtle">{t('mbox_last_login')}</dt>
+              <dd className="text-fg-muted">
                 {lastLoginAt
                   ? <time dateTime={lastLoginAt}>{new Date(lastLoginAt).toLocaleString()}</time>
-                  : <span className="text-gray-400">{t('mbox_last_login_none')}</span>}
+                  : <span className="text-fg-subtle">{t('mbox_last_login_none')}</span>}
               </dd>
-              <dt className="text-gray-400">{t('mbox_detail_created')}</dt>
-              <dd className="text-gray-700">{new Date(active.createdAt).toLocaleDateString()}</dd>
+              <dt className="text-fg-subtle">{t('mbox_detail_created')}</dt>
+              <dd className="text-fg-muted">{new Date(active.createdAt).toLocaleDateString()}</dd>
             </dl>
 
             {/* Folders */}
             {detailLoading && detail?.id !== active.id ? (
-              <p className="flex items-center gap-2 text-gray-500 text-xs" role="status">
+              <p className="flex items-center gap-2 text-fg-subtle text-xs" role="status">
                 <Loader2 size={12} className="animate-spin" aria-hidden="true" /> {t('mbox_detail_loading')}
               </p>
             ) : detail?.id === active.id && detail.mailbox?.folders && detail.mailbox.folders.length > 0 ? (
-              <div className="border border-gray-200 rounded-lg overflow-hidden">
+              <div className="border border-line rounded-lg overflow-hidden">
                 <table className="w-full text-xs">
-                  <caption className="text-left text-xs font-medium text-gray-500 px-3 py-2 bg-gray-50 border-b border-gray-100">
+                  <caption className="text-left text-xs font-medium text-fg-subtle px-3 py-2 bg-surface-2 border-b border-line">
                     <span className="inline-flex items-center gap-1.5"><Folder size={12} aria-hidden="true" /> {t('mbox_detail_folders')}</span>
                   </caption>
                   <thead>
-                    <tr className="border-b border-gray-100">
-                      <th scope="col" className="text-left px-3 py-1.5 text-gray-400 font-medium">{t('mbox_detail_col_folder')}</th>
-                      <th scope="col" className="text-right px-3 py-1.5 text-gray-400 font-medium">{t('mbox_detail_col_messages')}</th>
-                      <th scope="col" className="text-right px-3 py-1.5 text-gray-400 font-medium">{t('mbox_detail_col_unread')}</th>
+                    <tr className="border-b border-line">
+                      <th scope="col" className="text-left px-3 py-1.5 text-fg-subtle font-medium">{t('mbox_detail_col_folder')}</th>
+                      <th scope="col" className="text-right px-3 py-1.5 text-fg-subtle font-medium">{t('mbox_detail_col_messages')}</th>
+                      <th scope="col" className="text-right px-3 py-1.5 text-fg-subtle font-medium">{t('mbox_detail_col_unread')}</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-50">
+                  <tbody className="divide-y divide-line">
                     {detail.mailbox.folders.map((f) => (
                       <tr key={f.id}>
-                        <th scope="row" className="px-3 py-1.5 text-left font-normal text-gray-700">{f.displayName || f.name}</th>
-                        <td className="px-3 py-1.5 text-right text-gray-600">{f.totalCount}</td>
-                        <td className="px-3 py-1.5 text-right">{f.unreadCount > 0 ? <span className="font-semibold text-accent">{f.unreadCount}</span> : <span className="text-gray-300">—</span>}</td>
+                        <th scope="row" className="px-3 py-1.5 text-left font-normal text-fg-muted">{f.displayName || f.name}</th>
+                        <td className="px-3 py-1.5 text-right text-fg-muted">{f.totalCount}</td>
+                        <td className="px-3 py-1.5 text-right">{f.unreadCount > 0 ? <span className="font-semibold text-accent-fg">{f.unreadCount}</span> : <span className="text-fg-subtle">—</span>}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -576,7 +582,7 @@ export function MailboxesPage() {
 
             {/* Aliases (existing component; write actions are gated by the area) */}
             <WriteGuard area="recipients">
-              <MailboxAliasesSection
+              <MailboxAliasesSection key={active.id}
                 mailboxType="user"
                 mailboxId={active.id}
                 defaultDomainId={active.domainId}
@@ -601,7 +607,7 @@ export function MailboxesPage() {
               />
             </WriteGuard>
 
-            <p className="text-xs text-gray-400">{t('mbox_detail_id')}: <code className="bg-gray-100 px-1 rounded">{active.id}</code></p>
+            <p className="text-xs text-fg-subtle">{t('mbox_detail_id')}: <code className="bg-surface-2 px-1 rounded">{active.id}</code></p>
           </DetailPanel>
         )}
       </div>
@@ -611,13 +617,13 @@ export function MailboxesPage() {
         <Modal title={t('mbox_create_title')} onClose={() => setShowCreate(false)}>
           <div className="space-y-4">
             <div>
-              <label className="field-label" htmlFor="mbox-create-domain">{t('mbox_create_domain')} <span className="text-red-500">*</span></label>
+              <label className="field-label" htmlFor="mbox-create-domain">{t('mbox_create_domain')} <span className="text-danger-fg">*</span></label>
               <select id="mbox-create-domain" className="input w-full" value={form.domainId} onChange={(e) => selectDomain(e.target.value)}>
                 <option value="">{t('mbox_create_domain_select')}</option>
                 {domains.filter(d => d.active).map((d) => <option key={d.id} value={d.id}>@{d.name}</option>)}
               </select>
               {domains.filter(d => d.active).length === 0 && (
-                <p className="text-xs text-amber-600 mt-1">
+                <p className="text-xs text-warning-fg mt-1">
                   {domains.length === 0
                     ? t('mbox_create_domain_none')
                     : t('mbox_create_domain_inactive')}
@@ -625,41 +631,41 @@ export function MailboxesPage() {
               )}
             </div>
             <div>
-              <label className="field-label" htmlFor="mbox-create-local">{t('mbox_create_email')} <span className="text-red-500">*</span></label>
+              <label className="field-label" htmlFor="mbox-create-local">{t('mbox_create_email')} <span className="text-danger-fg">*</span></label>
               <div className="flex">
-                <input id="mbox-create-local" className="input rounded-r-none flex-1" placeholder="benutzername"
+                <input id="mbox-create-local" className="input rounded-r-none flex-1" placeholder={t('mbox_create_local_ph')}
                   value={localPart} onChange={(e) => setLocal(e.target.value)} />
-                <span className="px-3 py-2 bg-gray-100 border border-l-0 border-gray-300 text-gray-500 text-sm rounded-r">
+                <span className="px-3 py-2 bg-surface-2 border border-l-0 border-line-strong text-fg-subtle text-sm rounded-r">
                   @{form.domainId ? domainName(form.domainId) : 'domain.com'}
                 </span>
               </div>
-              {form.email && <p className="text-xs text-gray-400 mt-1">→ {form.email}</p>}
+              {form.email && <p className="text-xs text-fg-subtle mt-1">→ {form.email}</p>}
             </div>
             <div>
-              <label className="field-label" htmlFor="mbox-create-name">{t('mbox_create_displayname')} <span className="text-red-500">*</span></label>
-              <input id="mbox-create-name" className="input w-full" placeholder="Max Mustermann"
+              <label className="field-label" htmlFor="mbox-create-name">{t('mbox_create_displayname')} <span className="text-danger-fg">*</span></label>
+              <input id="mbox-create-name" className="input w-full" placeholder={t('mbox_create_name_ph')}
                 value={form.displayName} onChange={(e) => setForm({ ...form, displayName: e.target.value })} />
             </div>
             <div>
-              <label className="field-label" htmlFor="mbox-create-pw">{t('mbox_create_password')} <span className="text-red-500">*</span></label>
+              <label className="field-label" htmlFor="mbox-create-pw">{t('mbox_create_password')} <span className="text-danger-fg">*</span></label>
               <input id="mbox-create-pw" type="password" className="input w-full" placeholder={t('mbox_create_pw_hint')}
                 value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
               {form.password && form.password.length < 8 && (
-                <p className="text-xs text-red-500 mt-1">{t('mbox_create_pw_short')}</p>
+                <p className="text-xs text-danger-fg mt-1">{t('mbox_create_pw_short')}</p>
               )}
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="field-label" htmlFor="mbox-create-role">{t('mbox_create_role')}</label>
                 <select id="mbox-create-role" className="input w-full" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
-                  {Object.entries(ROLES).map(([v, { label }]) => <option key={v} value={v}>{label}</option>)}
+                  {assignableRoles(ROLE_KEYS, actorRole).map((v) => <option key={v} value={v}>{roleLabel(t, v)}</option>)}
                 </select>
               </div>
               <div>
                 <label className="field-label flex items-center gap-1" htmlFor="mbox-create-quota"><HardDrive size={12} aria-hidden="true" /> {t('mbox_create_quota')}</label>
                 <select id="mbox-create-quota" className="input w-full" value={form.quotaBytes}
                   onChange={(e) => setForm({ ...form, quotaBytes: parseInt(e.target.value) })}>
-                  {QUOTA_OPTIONS.map((q) => <option key={q.value} value={q.value}>{q.label}</option>)}
+                  <QuotaOptions />
                 </select>
               </div>
             </div>
@@ -693,18 +699,18 @@ export function MailboxesPage() {
       {showResetPw && (
         <Modal title={`${t('mbox_reset_pw_title')} — ${showResetPw.email}`} onClose={() => setShowResetPw(null)}>
           <div className="space-y-3">
-            <p className="text-sm text-gray-600">{t('mbox_reset_pw_for')} <strong>{showResetPw.displayName}</strong>:</p>
+            <p className="text-sm text-fg-muted">{t('mbox_reset_pw_for')} <strong>{showResetPw.displayName}</strong>:</p>
             <input type="password" className="input w-full" placeholder={t('mbox_reset_pw_placeholder')}
               aria-label={t('mbox_reset_pw_placeholder')}
               value={newPassword} onChange={(e) => setNewPassword(e.target.value)} autoFocus />
             {newPassword && newPassword.length < 8 && (
-              <p className="text-xs text-red-500">{t('mbox_create_pw_short')}</p>
+              <p className="text-xs text-danger-fg">{t('mbox_create_pw_short')}</p>
             )}
-            <label className="flex items-start gap-2 text-xs text-gray-600">
+            <label className="flex items-start gap-2 text-xs text-fg-muted">
               <input type="checkbox" className="mt-0.5" checked={revokeAppPw} onChange={(e) => setRevokeAppPw(e.target.checked)} />
               {t('mbox_reset_pw_revoke_app')}
             </label>
-            <p className="text-xs text-gray-400">{t('mbox_quick_signout_hint')}</p>
+            <p className="text-xs text-fg-subtle">{t('mbox_quick_signout_hint')}</p>
           </div>
           <div className="flex justify-end gap-2 mt-5">
             <button onClick={() => setShowResetPw(null)} className="btn-secondary">{t('action_cancel')}</button>
@@ -725,17 +731,18 @@ export function MailboxesPage() {
 
 // ── Modal ────────────────────────────────────────────────────────────────────
 function Modal({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
+  const t = useT();
   const titleId = useId();
   return (
     <AccessibleModal
       onClose={onClose}
       labelledBy={titleId}
-      overlayClassName="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
-      className="bg-white rounded-xl shadow-2xl w-full max-w-lg"
+      overlayClassName="fixed inset-0 bg-scrim/40 flex items-center justify-center z-50 p-4"
+      className="bg-surface rounded-xl shadow-2xl w-full max-w-lg"
     >
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-          <h2 id={titleId} className="text-base font-semibold text-gray-900">{title}</h2>
-          <button type="button" onClick={onClose} aria-label="Schließen" className="btn-ghost p-1 rounded"><X size={16} className="text-gray-500" aria-hidden="true" /></button>
+        <div className="flex items-center justify-between px-6 py-4 border-b border-line">
+          <h2 id={titleId} className="text-base font-semibold text-fg">{title}</h2>
+          <button type="button" onClick={onClose} aria-label={t('action_close')} className="btn-ghost p-1 rounded"><X size={16} className="text-fg-subtle" aria-hidden="true" /></button>
         </div>
         <div className="px-6 py-5">{children}</div>
     </AccessibleModal>
@@ -752,17 +759,19 @@ function EditForm({ user, domains, onSave, isPending }:
   const [quotaBytes, setQuotaBytes]   = useState(user.quotaBytes);
   const [warningGb, setWarningGb]     = useState(bytesToGbInput(user.quotaWarningBytes));
   const [sendGb, setSendGb]           = useState(bytesToGbInput(user.quotaProhibitSendBytes));
+  const { role: actorRole } = usePermissions();
+  const levelsValid = gbInputValid(warningGb) && gbInputValid(sendGb);
   const domainLabel = `@${domains.find((d) => d.id === user.domainId)?.name ?? user.domainId}`;
 
   return (
     <div className="space-y-4">
       <div>
         <label className="field-label">{t('mbox_edit_email')}</label>
-        <input className="input w-full bg-gray-50 cursor-not-allowed" value={user.email} disabled />
+        <input className="input w-full bg-surface-2 cursor-not-allowed" value={user.email} disabled />
       </div>
       <div>
         <label className="field-label">{t('mbox_edit_domain')}</label>
-        <input className="input w-full bg-gray-50 cursor-not-allowed" value={domainLabel} disabled />
+        <input className="input w-full bg-surface-2 cursor-not-allowed" value={domainLabel} disabled />
       </div>
       <div>
         <label className="field-label">{t('mbox_edit_displayname')}</label>
@@ -772,17 +781,17 @@ function EditForm({ user, domains, onSave, isPending }:
         <div>
           <label className="field-label">{t('mbox_create_role')}</label>
           <select className="input w-full" value={role} onChange={(e) => setRole(e.target.value)}>
-            {Object.entries(ROLES).map(([v, { label }]) => <option key={v} value={v}>{label}</option>)}
+            {assignableRoles(ROLE_KEYS, actorRole, user.role).map((v) => <option key={v} value={v}>{roleLabel(t, v)}</option>)}
           </select>
         </div>
         <div>
           <label className="field-label flex items-center gap-1"><HardDrive size={12} /> {t('mbox_create_quota')}</label>
           <select className="input w-full" value={quotaBytes} onChange={(e) => setQuotaBytes(parseInt(e.target.value))}>
-            {QUOTA_OPTIONS.map((q) => <option key={q.value} value={q.value}>{q.label}</option>)}
+            <QuotaOptions current={user.quotaBytes} />
           </select>
         </div>
       </div>
-      {/* v8.1: Exchange quota levels (IssueWarningQuota / ProhibitSendQuota) */}
+      {/* v8.1: quota levels (warning / prohibit send / prohibit send+receive) */}
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label className="field-label" htmlFor="mbox-quota-warning">{t('mbox_quota_warning')}</label>
@@ -794,15 +803,19 @@ function EditForm({ user, domains, onSave, isPending }:
           <input id="mbox-quota-send" className="input w-full" inputMode="decimal" value={sendGb}
             placeholder={t('mbox_quota_default_hint')} onChange={(e) => setSendGb(e.target.value)} />
         </div>
+        {/* a typo used to be saved silently as "server default" */}
+        {!levelsValid && <p className="col-span-2 text-xs text-danger-fg" role="alert">{t('mbox_quota_invalid')}</p>}
       </div>
       <div className="flex justify-end pt-1">
         <button
           onClick={() => onSave({
-            displayName, role, quotaBytes,
+            displayName: displayName.trim(), quotaBytes,
+            // role only when changed — a role change ends the account's sessions
+            ...(role !== user.role ? { role } : {}),
             quotaWarningBytes: gbInputToBytes(warningGb),
             quotaProhibitSendBytes: gbInputToBytes(sendGb),
           })}
-          disabled={!displayName || isPending}
+          disabled={!displayName.trim() || !levelsValid || isPending}
           className="btn-primary disabled:opacity-50 flex items-center gap-2"
         >
           {isPending && <Loader2 size={14} className="animate-spin" />}
@@ -810,7 +823,7 @@ function EditForm({ user, domains, onSave, isPending }:
         </button>
       </div>
 
-      <div className="border-t border-gray-200 pt-4 mt-2">
+      <div className="border-t border-line pt-4 mt-2">
         <MailboxAliasesSection
           mailboxType="user"
           mailboxId={user.id}
@@ -848,38 +861,38 @@ function DelegateSection({
   const available = allUsers.filter((u) => u.id !== userId && !alreadyGranted.has(u.id));
 
   return (
-    <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-      <p className="text-xs font-medium text-gray-500 px-4 py-2 bg-gray-50 border-b border-gray-100 flex items-center gap-1.5">
+    <div className="bg-surface border border-line rounded-lg overflow-hidden">
+      <p className="text-xs font-medium text-fg-subtle px-4 py-2 bg-surface-2 border-b border-line flex items-center gap-1.5">
         <Users size={12} /> {t('delegate_section')}
       </p>
 
       {/* Existing delegates */}
       {delegates.length === 0 ? (
-        <p className="px-4 py-3 text-xs text-gray-400">{t('delegate_no_delegates')}</p>
+        <p className="px-4 py-3 text-xs text-fg-subtle">{t('delegate_no_delegates')}</p>
       ) : (
         <table className="w-full text-xs">
           <thead>
-            <tr className="border-b border-gray-100">
-              <th className="text-left px-4 py-1.5 text-gray-400 font-medium">{t('delegate_user')}</th>
-              <th className="text-left px-4 py-1.5 text-gray-400 font-medium">{t('delegate_permission')}</th>
+            <tr className="border-b border-line">
+              <th className="text-left px-4 py-1.5 text-fg-subtle font-medium">{t('delegate_user')}</th>
+              <th className="text-left px-4 py-1.5 text-fg-subtle font-medium">{t('delegate_permission')}</th>
               <th className="px-4 py-1.5" />
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-50">
+          <tbody className="divide-y divide-line">
             {delegates.map((d) => (
-              <tr key={d.id} className="hover:bg-gray-50">
+              <tr key={d.id} className="hover:bg-surface-2">
                 <td className="px-4 py-1.5">
-                  <span className="font-medium text-gray-700">{d.grantee.displayName}</span>
-                  <span className="text-gray-400 ml-1">({d.grantee.email})</span>
+                  <span className="font-medium text-fg-muted">{d.grantee.displayName}</span>
+                  <span className="text-fg-subtle ml-1">({d.grantee.email})</span>
                 </td>
-                <td className="px-4 py-1.5 text-gray-600">
+                <td className="px-4 py-1.5 text-fg-muted">
                   {t((PERM_LABELS[d.permission] ?? d.permission) as Parameters<typeof t>[0])}
                 </td>
                 <td className="px-4 py-1.5 text-right">
                   <button
                     onClick={() => onRevoke(d.granteeId)}
                     disabled={isPending}
-                    className="text-red-500 hover:text-red-700 disabled:opacity-40 text-xs"
+                    className="text-danger-fg hover:text-danger-fg disabled:opacity-40 text-xs"
                   >
                     {t('delegate_revoke')}
                   </button>
@@ -891,7 +904,7 @@ function DelegateSection({
       )}
 
       {/* Grant access form */}
-      <div className="px-4 py-3 border-t border-gray-100 bg-gray-50/50 flex items-center gap-2 flex-wrap">
+      <div className="px-4 py-3 border-t border-line bg-surface-2/50 flex items-center gap-2 flex-wrap">
         <select
           className="input text-xs flex-1 min-w-40"
           value={delegateForm.granteeId}

@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   HardDriveDownload, Play, RefreshCw, Upload, AlertCircle, CheckCircle2,
   Loader2, Clock, Database, X, User as UserIcon, CalendarClock, Plus, Trash2,
-  Pencil, PauseCircle, Archive, ListChecks,
+  Pencil, PauseCircle, Archive, ListChecks, KeyRound,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { api, downloadFileNamed } from '../api/client.js';
@@ -75,18 +75,19 @@ interface BackupSchedule {
 }
 
 interface UserItem { id: string; email: string; displayName: string | null }
+interface EncryptionState { encrypted: boolean; keySource: 'env' | 'derived' | null; keyId?: string; decryptKeys?: number; error?: string }
 interface S3BackupObject { key: string; size: number; lastModified: string }
 
 const STATUS_LABEL: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
-  PENDING:    { label: 'Wartet',      color: 'text-gray-500',  icon: <Clock      size={13} /> },
-  SCHEDULED:  { label: 'Geplant',     color: 'text-indigo-500',icon: <CalendarClock size={13} /> },
-  PROCESSING: { label: 'Läuft',       color: 'text-blue-600',  icon: <Loader2    size={13} className="animate-spin" /> },
-  RUNNING:    { label: 'Läuft',       color: 'text-blue-600',  icon: <Loader2    size={13} className="animate-spin" /> },
-  RETRYING:   { label: 'Retry',       color: 'text-amber-600', icon: <RefreshCw  size={13} className="animate-spin" /> },
-  COMPLETED:  { label: 'Fertig',      color: 'text-green-600', icon: <CheckCircle2 size={13} /> },
-  FAILED:     { label: 'Fehler',      color: 'text-red-600',   icon: <AlertCircle size={13} /> },
-  ABORTED:    { label: 'Abgebrochen', color: 'text-gray-400',  icon: <X          size={13} /> },
-  EXPIRED:    { label: 'Abgelaufen',  color: 'text-gray-400',  icon: <Clock      size={13} /> },
+  PENDING:    { label: 'Wartet',      color: 'text-fg-subtle',  icon: <Clock      size={13} /> },
+  SCHEDULED:  { label: 'Geplant',     color: 'text-info-fg',icon: <CalendarClock size={13} /> },
+  PROCESSING: { label: 'Läuft',       color: 'text-info-fg',  icon: <Loader2    size={13} className="animate-spin" /> },
+  RUNNING:    { label: 'Läuft',       color: 'text-info-fg',  icon: <Loader2    size={13} className="animate-spin" /> },
+  RETRYING:   { label: 'Retry',       color: 'text-warning-fg', icon: <RefreshCw  size={13} className="animate-spin" /> },
+  COMPLETED:  { label: 'Fertig',      color: 'text-success-fg', icon: <CheckCircle2 size={13} /> },
+  FAILED:     { label: 'Fehler',      color: 'text-danger-fg',   icon: <AlertCircle size={13} /> },
+  ABORTED:    { label: 'Abgebrochen', color: 'text-fg-subtle',  icon: <X          size={13} /> },
+  EXPIRED:    { label: 'Abgelaufen',  color: 'text-fg-subtle',  icon: <Clock      size={13} /> },
 };
 
 function fmtBytes(n: number | string | null): string {
@@ -143,6 +144,15 @@ export function BackupsPage() {
     queryFn:  () => api.get<BackupSchedule[]>('/admin/backups/schedules'),
     staleTime: 30_000,
     enabled: caps.operations, // 9.1: COMPLIANCE_MANAGEMENT has no schedules (403)
+  });
+
+  // 9.1.x: key state of the backup encryption (servers read; never the key itself)
+  const { data: encryption } = useQuery<EncryptionState>({
+    queryKey: ['admin-backups-encryption'],
+    queryFn:  () => api.get<EncryptionState>('/admin/backups/encryption'),
+    staleTime: 5 * 60_000,
+    enabled: caps.operations,
+    meta: { silentError: true },
   });
 
   const { data: users = [] } = useQuery<UserItem[]>({
@@ -247,34 +257,34 @@ export function BackupsPage() {
 
   const jobColumns: Column<BackupJob>[] = [
     {
-      key: 'created', header: t('bk_col_created'), sortValue: (j) => new Date(j.createdAt), className: 'whitespace-nowrap text-xs text-gray-700 dark:text-gray-200',
+      key: 'created', header: t('bk_col_created'), sortValue: (j) => new Date(j.createdAt), className: 'whitespace-nowrap text-xs text-fg-muted',
       cell: (j) => fmtDate(j.createdAt),
     },
     {
       key: 'scope', header: t('bk_col_scope'), sortValue: (j) => `${j.scope} ${j.userId ? userEmailById(j.userId) : ''}`, className: 'text-xs',
       cell: (j) => (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-gray-100 dark:bg-gray-800 rounded text-gray-700 dark:text-gray-200">
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-surface-2 rounded text-fg-muted">
           {j.scope}{j.userId ? ` · ${userEmailById(j.userId)}` : ''}
         </span>
       ),
     },
-    { key: 'format', header: t('bk_col_format'), sortValue: (j) => j.format, className: 'uppercase text-xs text-gray-600 dark:text-gray-300', cell: (j) => j.format },
-    { key: 'trigger', header: t('bk_col_trigger'), sortValue: (j) => j.triggeredBy, className: 'text-xs text-gray-500 dark:text-gray-400', cell: (j) => j.triggeredBy },
+    { key: 'format', header: t('bk_col_format'), sortValue: (j) => j.format, className: 'uppercase text-xs text-fg-muted', cell: (j) => j.format },
+    { key: 'trigger', header: t('bk_col_trigger'), sortValue: (j) => j.triggeredBy, className: 'text-xs text-fg-subtle', cell: (j) => j.triggeredBy },
     {
       key: 'status', header: t('bk_col_status'), sortValue: (j) => j.status,
       cell: (j) => {
-        const st = STATUS_LABEL[j.status] ?? { label: j.status, color: 'text-gray-500', icon: null };
+        const st = STATUS_LABEL[j.status] ?? { label: j.status, color: 'text-fg-subtle', icon: null };
         return (
           <div className={`${st.color} text-xs`}>
             <span className="inline-flex items-center gap-1.5">{st.icon} {st.label}</span>
             {(j.status === 'RUNNING' || j.status === 'PROCESSING') && j.progress > 0 && (
-              <div className="mt-1 w-20 h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden" role="progressbar"
+              <div className="mt-1 w-20 h-1.5 bg-surface-3 rounded-full overflow-hidden" role="progressbar"
                 aria-valuenow={j.progress} aria-valuemin={0} aria-valuemax={100}>
                 <div className="h-full bg-accent transition-all" style={{ width: `${j.progress}%` }} />
               </div>
             )}
             {j.errorMsg && (
-              <div className="text-[10px] text-red-500 mt-1" title={j.errorMsg}>
+              <div className="text-[10px] text-danger-fg mt-1" title={j.errorMsg}>
                 {j.errorClass ? `[${j.errorClass}] ` : ''}{j.errorMsg.slice(0, 40)}{j.errorMsg.length > 40 ? '…' : ''}
               </div>
             )}
@@ -282,14 +292,14 @@ export function BackupsPage() {
         );
       },
     },
-    { key: 'duration', header: t('bk_col_duration'), sortValue: (j) => j.durationMs, className: 'text-xs text-gray-600 dark:text-gray-300', cell: (j) => fmtDuration(j.durationMs) },
+    { key: 'duration', header: t('bk_col_duration'), sortValue: (j) => j.durationMs, className: 'text-xs text-fg-muted', cell: (j) => fmtDuration(j.durationMs) },
     {
       key: 'size', header: t('bk_col_size'), sortValue: (j) => (j.sizeBytes === null ? null : Number(j.sizeBytes)),
-      headerClassName: 'text-right', className: 'text-right text-xs text-gray-600 dark:text-gray-300', cell: (j) => fmtBytes(j.sizeBytes),
+      headerClassName: 'text-right', className: 'text-right text-xs text-fg-muted', cell: (j) => fmtBytes(j.sizeBytes),
     },
     {
       key: 'mails', header: 'Mails', sortValue: (j) => j.messageCount,
-      headerClassName: 'text-right', className: 'text-right text-xs text-gray-600 dark:text-gray-300', cell: (j) => j.messageCount ?? '—',
+      headerClassName: 'text-right', className: 'text-right text-xs text-fg-muted', cell: (j) => j.messageCount ?? '—',
     },
     {
       key: 'actions', header: t('mbox_col_actions'), srOnlyHeader: true,
@@ -300,7 +310,7 @@ export function BackupsPage() {
             <Can action="backupMailboxData">
               <button
                 onClick={() => void downloadJob(j.id, j.downloadUrl ?? undefined)}
-                className="p-1.5 text-gray-400 hover:text-accent hover:bg-accent/10 rounded"
+                className="p-1.5 text-fg-subtle hover:text-accent-fg hover:bg-accent/10 rounded"
                 title="Backup herunterladen" aria-label="Backup herunterladen"
               >
                 <HardDriveDownload size={13} />
@@ -315,7 +325,7 @@ export function BackupsPage() {
                 }
               }}
               disabled={deleteJob.isPending}
-              className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded disabled:opacity-50"
+              className="p-1.5 text-fg-subtle hover:text-danger-fg hover:bg-danger-bg rounded disabled:opacity-50"
               title="Job löschen" aria-label="Job löschen"
             >
               <Trash2 size={13} />
@@ -330,26 +340,45 @@ export function BackupsPage() {
     <div className="p-6 max-w-7xl mx-auto space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
-            <HardDriveDownload size={22} className="text-accent" />
+          <h1 className="text-2xl font-semibold text-fg flex items-center gap-2">
+            <HardDriveDownload size={22} className="text-accent-fg" />
             Backup &amp; Restore
           </h1>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+          <p className="text-sm text-fg-subtle mt-1">
             Backups verwalten, Zeitpläne konfigurieren, Daten wiederherstellen.
           </p>
         </div>
         <button
           onClick={() => { void refetchJobs(); toast.success('Aktualisiert'); }}
           disabled={jobsLoading}
-          className="flex items-center gap-1.5 px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-50"
+          className="flex items-center gap-1.5 px-3 py-2 text-sm border border-line-strong rounded hover:bg-surface-2 disabled:opacity-50"
         >
           <RefreshCw size={14} className={jobsLoading ? 'animate-spin' : ''} />
           Aktualisieren
         </button>
       </div>
 
+      {encryption && (
+        encryption.encrypted ? (
+          <div role="status" className={`flex items-start gap-2 px-3 py-2 rounded border text-xs ${encryption.keySource === 'env' ? 'border-success-line bg-success-bg text-success-fg' : 'border-warning-line bg-warning-bg text-warning-fg'}`}>
+            <KeyRound size={14} className="shrink-0 mt-0.5" aria-hidden="true" />
+            <span>
+              Backups werden verschlüsselt (AES-256-GCM, Schlüssel-ID <code className="font-mono">{encryption.keyId?.slice(0, 8)}</code>).{' '}
+              {encryption.keySource === 'env'
+                ? 'Schlüssel aus BACKUP_ENCRYPTION_KEY — bewahren Sie ihn getrennt vom Server auf, ohne ihn sind Backups nicht wiederherstellbar.'
+                : 'BACKUP_ENCRYPTION_KEY ist nicht gesetzt: der Schlüssel wird aus JWT_SECRET + PEPPER abgeleitet. Setzen Sie einen eigenen Schlüssel (openssl rand -hex 32) und bewahren Sie ihn getrennt auf.'}
+            </span>
+          </div>
+        ) : (
+          <div role="alert" className="flex items-start gap-2 px-3 py-2 rounded border border-danger-line bg-danger-bg text-danger-fg text-xs">
+            <AlertCircle size={14} className="shrink-0 mt-0.5" aria-hidden="true" />
+            <span>Backup-Verschlüsselung nicht konfiguriert — Backups schlagen fehl: {encryption.error}</span>
+          </div>
+        )
+      )}
+
       {/* TABS */}
-      <div className="border-b border-gray-200 dark:border-gray-700">
+      <div className="border-b border-line">
         <nav className="-mb-px flex gap-1 overflow-x-auto">
           <TabBtn active={tab === 'jobs'} onClick={() => setTab('jobs')} icon={<ListChecks size={14} />} label="Jobs" badge={jobsData.length} />
           {(caps.manage || caps.mailboxData) && <TabBtn active={tab === 'actions'} onClick={() => setTab('actions')} icon={<Play size={14} />} label="Schnellaktionen" />}
@@ -375,7 +404,7 @@ export function BackupsPage() {
               <ListChecks size={32} className="opacity-50" aria-hidden="true" />
               Noch keine Backup-Jobs vorhanden
               <Can area="servers" access="write" mode="hide">
-                <button onClick={() => setTab('actions')} className="text-accent hover:underline text-sm">→ Erstes Backup starten</button>
+                <button onClick={() => setTab('actions')} className="text-accent-fg hover:underline text-sm">→ Erstes Backup starten</button>
               </Can>
             </span>
           }
@@ -388,7 +417,7 @@ export function BackupsPage() {
               </Can>
               <Can area="servers" access="write">
                 <button
-                  className="btn-secondary flex items-center gap-1.5 text-xs text-red-600 disabled:opacity-40"
+                  className="btn-secondary flex items-center gap-1.5 text-xs text-danger-fg disabled:opacity-40"
                   disabled={selectedRows.length === 0 || deleteJob.isPending}
                   onClick={() => {
                     if (!window.confirm(`${t('tb_delete_selected_confirm')} (${selectedRows.length}) — S3-Objekte werden auch entfernt`)) return;
@@ -421,22 +450,24 @@ export function BackupsPage() {
       {tab === 'schedules' && caps.operations && (
         <div className="space-y-3">
           <div className="flex justify-end">
+            <Can area="servers" access="write">
             <button
               onClick={() => setScheduleEditor({ name: '', cron: '0 2 * * *', scope: 'full', format: 'zip', retentionDays: 30, enabled: true })}
               className="text-xs px-3 py-1.5 bg-accent text-white rounded hover:bg-accent/90 flex items-center gap-1.5"
             >
               <Plus size={12} /> Neuer Zeitplan
             </button>
+            </Can>
           </div>
-          <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded overflow-hidden">
+          <div className="bg-surface border border-line rounded overflow-hidden">
             {schedules.length === 0 ? (
-              <div className="p-12 text-center text-gray-400">
+              <div className="p-12 text-center text-fg-subtle">
                 <CalendarClock size={32} className="mx-auto mb-2 opacity-50" />
                 <p className="text-sm">Noch keine Zeitpläne — erstelle einen für tägliches oder wöchentliches automatisches Backup</p>
               </div>
             ) : (
               <table className="w-full text-sm">
-                <thead className="bg-gray-50 dark:bg-gray-800 text-xs uppercase text-gray-500 dark:text-gray-400">
+                <thead className="bg-surface-2 text-xs uppercase text-fg-subtle">
                   <tr>
                     <th className="px-4 py-2 text-left font-medium">Name</th>
                     <th className="px-4 py-2 text-left font-medium">Cron</th>
@@ -447,34 +478,37 @@ export function BackupsPage() {
                     <th className="px-4 py-2" />
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+                <tbody className="divide-y divide-line">
                   {schedules.map((s) => (
-                    <tr key={s.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/50">
-                      <td className="px-4 py-2 font-medium text-gray-900 dark:text-gray-100">{s.name}</td>
-                      <td className="px-4 py-2 font-mono text-xs text-gray-600 dark:text-gray-300">{s.cron}</td>
-                      <td className="px-4 py-2 text-gray-600 dark:text-gray-300 text-xs">
-                        {s.scope}{s.targetUserId ? ` (${userEmailById(s.targetUserId)})` : ''} · {s.format}
+                    <tr key={s.id} className="hover:bg-surface-2">
+                      <td className="px-4 py-2 font-medium text-fg">{s.name}</td>
+                      <td className="px-4 py-2 font-mono text-xs text-fg-muted">{s.cron}</td>
+                      <td className="px-4 py-2 text-fg-muted text-xs">
+                        {s.scope === 'full' ? 'Alle Mailboxen' : `Mailbox ${userEmailById(s.targetUserId)}`} · {s.format} · {s.retentionDays} Tage
                       </td>
                       <td className="px-4 py-2">
-                        {s.enabled ? <CheckCircle2 size={14} className="text-green-600" /> : <PauseCircle size={14} className="text-gray-400" />}
+                        {s.enabled ? <CheckCircle2 size={14} className="text-success-fg" /> : <PauseCircle size={14} className="text-fg-subtle" />}
                       </td>
-                      <td className="px-4 py-2 text-xs text-gray-500 dark:text-gray-400">{fmtDate(s.lastRunAt)}</td>
+                      <td className="px-4 py-2 text-xs text-fg-subtle">{fmtDate(s.lastRunAt)}</td>
                       <td className="px-4 py-2 text-xs">{s.lastStatus ?? '—'}</td>
                       <td className="px-4 py-2">
+                        <Can area="servers" access="write" mode="hide">
                         <div className="flex items-center justify-end gap-1">
                           <button aria-label="Jetzt ausführen" onClick={() => runScheduleNow.mutate(s.id)} disabled={runScheduleNow.isPending}
-                            className="p-1.5 text-gray-400 hover:text-accent hover:bg-accent/10 rounded disabled:opacity-50" title="Jetzt ausführen">
+                            className="p-1.5 text-fg-subtle hover:text-accent-fg hover:bg-accent/10 rounded disabled:opacity-50" title="Jetzt ausführen">
                             <Play size={13} />
                           </button>
                           <button aria-label="Bearbeiten" onClick={() => setScheduleEditor(s)}
-                            className="p-1.5 text-gray-400 hover:text-accent hover:bg-accent/10 rounded" title="Bearbeiten">
+                            className="p-1.5 text-fg-subtle hover:text-accent-fg hover:bg-accent/10 rounded" title="Bearbeiten">
                             <Pencil size={13} />
                           </button>
-                          <button aria-label="Löschen" onClick={() => { if (window.confirm(`Zeitplan „${s.name}" löschen?`)) deleteSchedule.mutate(s.id); }}
-                            className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded" title="Löschen">
+                          <button aria-label="Löschen" onClick={() => { if (window.confirm(`Zeitplan „${s.name}" löschen? Bereits erstellte Backups bleiben erhalten.`)) deleteSchedule.mutate(s.id); }}
+                            disabled={deleteSchedule.isPending}
+                            className="p-1.5 text-fg-subtle hover:text-danger-fg hover:bg-danger-bg rounded disabled:opacity-50" title="Löschen">
                             <Trash2 size={13} />
                           </button>
                         </div>
+                        </Can>
                       </td>
                     </tr>
                   ))}
@@ -487,19 +521,19 @@ export function BackupsPage() {
 
       {/* TAB: Backup archive (formerly "S3 snapshots") */}
       {tab === 'archive' && (
-        <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded overflow-hidden">
-          <div className="px-4 py-2 bg-gray-50 dark:bg-gray-800/50 border-b border-gray-200 dark:border-gray-700 text-xs text-gray-600 dark:text-gray-400">
-            {s3Data.length} Objekt{s3Data.length === 1 ? '' : 'e'} im Backup-Bucket — werden je nach Retention-Policy automatisch gelöscht.
+        <div className="bg-surface border border-line rounded overflow-hidden">
+          <div className="px-4 py-2 bg-surface-2 border-b border-line text-xs text-fg-muted">
+            {s3Data.length} Objekt{s3Data.length === 1 ? '' : 'e'} im Backup-Speicher. Backups eines Zeitplans werden nach dessen Aufbewahrungsdauer gelöscht, manuelle Backups nie automatisch.
           </div>
           {s3Data.length === 0 ? (
-            <div className="p-12 text-center text-gray-400">
+            <div className="p-12 text-center text-fg-subtle">
               <Archive size={32} className="mx-auto mb-2 opacity-50" />
               <p className="text-sm">Keine Snapshots im Archiv</p>
             </div>
           ) : (
             <div className="max-h-[60vh] overflow-y-auto">
               <table className="w-full text-sm">
-                <thead className="bg-gray-50 dark:bg-gray-800 text-xs uppercase text-gray-500 dark:text-gray-400 sticky top-0">
+                <thead className="bg-surface-2 text-xs uppercase text-fg-subtle sticky top-0">
                   <tr>
                     <th className="px-4 py-2 text-left font-medium">Speicherort</th>
                     <th className="px-4 py-2 text-right font-medium">Größe</th>
@@ -507,18 +541,18 @@ export function BackupsPage() {
                     <th className="px-4 py-2 text-right font-medium">Aktionen</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+                <tbody className="divide-y divide-line">
                   {s3Data.map((b) => (
-                    <tr key={b.key} className="hover:bg-gray-50 dark:hover:bg-gray-800/50">
-                      <td className="px-4 py-2 font-mono text-xs text-gray-700 dark:text-gray-200 truncate max-w-md" title={b.key}>{b.key}</td>
-                      <td className="px-4 py-2 text-right text-gray-600 dark:text-gray-300">{fmtBytes(b.size)}</td>
-                      <td className="px-4 py-2 text-gray-600 dark:text-gray-300">{fmtDate(b.lastModified)}</td>
+                    <tr key={b.key} className="hover:bg-surface-2">
+                      <td className="px-4 py-2 font-mono text-xs text-fg-muted truncate max-w-md" title={b.key}>{b.key}</td>
+                      <td className="px-4 py-2 text-right text-fg-muted">{fmtBytes(b.size)}</td>
+                      <td className="px-4 py-2 text-fg-muted">{fmtDate(b.lastModified)}</td>
                       <td className="px-4 py-2">
                         <div className="flex items-center justify-end gap-1">
                           <Can action="backupMailboxData">
                             <button aria-label="Backup herunterladen"
                               onClick={() => void downloadArchive(b.key)}
-                              className="p-1.5 text-gray-400 hover:text-accent hover:bg-accent/10 rounded"
+                              className="p-1.5 text-fg-subtle hover:text-accent-fg hover:bg-accent/10 rounded"
                               title="Backup herunterladen"
                             >
                               <HardDriveDownload size={13} />
@@ -533,7 +567,7 @@ export function BackupsPage() {
                               }
                             }}
                             disabled={deleteArchive.isPending}
-                            className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded disabled:opacity-50"
+                            className="p-1.5 text-fg-subtle hover:text-danger-fg hover:bg-danger-bg rounded disabled:opacity-50"
                             title="Backup löschen"
                           >
                             <Trash2 size={13} />
@@ -577,14 +611,14 @@ function TabBtn(props: { active: boolean; onClick: () => void; icon: React.React
       onClick={props.onClick}
       className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
         props.active
-          ? 'border-accent text-accent'
-          : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 hover:border-gray-300'
+          ? 'border-accent-fg text-accent-fg'
+          : 'border-transparent text-fg-subtle hover:text-fg hover:border-line-strong'
       }`}
     >
       {props.icon}
       {props.label}
       {props.badge !== undefined && props.badge > 0 && (
-        <span className={`ml-1 px-1.5 py-0.5 text-[10px] rounded-full ${props.active ? 'bg-accent/20 text-accent' : 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300'}`}>
+        <span className={`ml-1 px-1.5 py-0.5 text-[10px] rounded-full ${props.active ? 'bg-accent/20 text-accent-fg' : 'bg-surface-3 text-fg-muted'}`}>
           {props.badge}
         </span>
       )}
@@ -609,12 +643,12 @@ function ActionsTab(props: {
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
       {/* Full backup */}
       {props.showFullBackup && (
-      <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded p-5">
+      <div className="bg-surface border border-line rounded p-5">
         <div className="flex items-start gap-3 mb-3">
-          <Database size={20} className="text-accent mt-0.5" />
+          <Database size={20} className="text-accent-fg mt-0.5" />
           <div>
-            <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Vollbackup aller Mailboxen</h3>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+            <h3 className="text-sm font-semibold text-fg">Vollbackup aller Mailboxen</h3>
+            <p className="text-xs text-fg-subtle mt-1">
               Erstellt einen Snapshot aller aktiven User-Postfächer als ZIP-Archive im Backup-Bucket.
             </p>
           </div>
@@ -631,23 +665,23 @@ function ActionsTab(props: {
       )}
 
       {/* Mailbox backup */}
-      <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded p-5">
+      <div className="bg-surface border border-line rounded p-5">
         <div className="flex items-start gap-3 mb-3">
-          <UserIcon size={20} className="text-accent mt-0.5" />
+          <UserIcon size={20} className="text-accent-fg mt-0.5" />
           <div>
-            <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Einzelne Mailbox sichern</h3>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-              Schneller Snapshot einer einzelnen Mailbox in ZIP (Outlook) oder MBOX (Thunderbird/Apple Mail).
+            <h3 className="text-sm font-semibold text-fg">Einzelne Mailbox sichern</h3>
+            <p className="text-xs text-fg-subtle mt-1">
+              Schneller Snapshot einer einzelnen Mailbox als ZIP (.eml-Dateien) oder MBOX (Thunderbird/Apple Mail).
             </p>
           </div>
         </div>
         <div className="space-y-2">
           <div>
-            <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">User</label>
+            <label className="block text-xs font-medium text-fg-muted mb-1">User</label>
             <select
               value={mailboxUserId}
               onChange={(e) => setMailboxUserId(e.target.value)}
-              className="w-full border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
+              className="w-full border border-line-strong rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent-fg"
             >
               <option value="">— bitte wählen —</option>
               {props.users.map((u) => (
@@ -658,13 +692,13 @@ function ActionsTab(props: {
             </select>
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Format</label>
+            <label className="block text-xs font-medium text-fg-muted mb-1">Format</label>
             <select
               value={mailboxFormat}
               onChange={(e) => setMailboxFormat(e.target.value as 'zip' | 'mbox')}
-              className="w-full border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
+              className="w-full border border-line-strong rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent-fg"
             >
-              <option value="zip">ZIP (Outlook-kompatibel, .eml-Dateien)</option>
+              <option value="zip">ZIP (.eml-Dateien)</option>
               <option value="mbox">MBOX (Thunderbird/Apple Mail)</option>
             </select>
           </div>
@@ -728,44 +762,44 @@ function RestoreTab(props: { users: UserItem[] }) {
   };
 
   return (
-    <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded p-5">
+    <div className="bg-surface border border-line rounded p-5">
       <div className="flex items-start gap-3 mb-4">
-        <Upload size={20} className="text-accent mt-0.5" />
+        <Upload size={20} className="text-accent-fg mt-0.5" />
         <div>
-          <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">MBOX-Import (Wiederherstellung)</h3>
-          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+          <h3 className="text-sm font-semibold text-fg">MBOX-Import (Wiederherstellung)</h3>
+          <p className="text-xs text-fg-subtle mt-1">
             Importiert eine MBOX-Datei (z. B. aus altem Mailserver, Thunderbird-Export) in das Postfach eines Users. Max. 500 MB pro Import.
           </p>
         </div>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
         <div>
-          <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Ziel-User</label>
+          <label className="block text-xs font-medium text-fg-muted mb-1">Ziel-User</label>
           <select
             value={importUserId}
             onChange={(e) => { setImportUserId(e.target.value); setImportFolderId(''); }}
-            className="w-full border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
+            className="w-full border border-line-strong rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent-fg"
           >
             <option value="">— bitte wählen —</option>
             {props.users.map((u) => <option key={u.id} value={u.id}>{u.email}</option>)}
           </select>
         </div>
         <div>
-          <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Zielordner</label>
+          <label className="block text-xs font-medium text-fg-muted mb-1">Zielordner</label>
           <select
             value={importFolderId || folders.find((f) => f.name === 'INBOX')?.id || ''}
             onChange={(e) => setImportFolderId(e.target.value)}
             disabled={!importUserId}
-            className="w-full border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-50"
+            className="w-full border border-line-strong rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent-fg disabled:opacity-50"
           >
             <option value="">— bitte wählen —</option>
             {folders.map((f) => <option key={f.id} value={f.id}>{f.displayName || f.name}</option>)}
           </select>
         </div>
         <div className="md:col-span-2">
-          <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">MBOX-Datei (auch verschlüsseltes CoreMail-Backup .mbox.enc)</label>
+          <label className="block text-xs font-medium text-fg-muted mb-1">MBOX-Datei (auch verschlüsseltes CoreMail-Backup .mbox.enc)</label>
           <input ref={fileRef} type="file" accept=".mbox,.txt,.enc"
-            className="w-full text-sm text-gray-700 dark:text-gray-300 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-sm file:font-medium file:bg-accent/10 file:text-accent hover:file:bg-accent/20" />
+            className="w-full text-sm text-fg-muted file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-sm file:font-medium file:bg-accent/10 file:text-accent-fg hover:file:bg-accent/20" />
         </div>
       </div>
       <div className="flex justify-end">
@@ -844,35 +878,35 @@ function ScheduleEditorModal(props: {
       labelledBy={titleId}
 
       closeOnBackdrop={false}
-      overlayClassName="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
-      className="bg-white dark:bg-gray-900 rounded-lg shadow-xl w-full max-w-lg max-h-[92vh] flex flex-col"
+      overlayClassName="fixed inset-0 bg-scrim/40 flex items-center justify-center z-50 p-4"
+      className="bg-surface rounded-lg shadow-xl w-full max-w-lg max-h-[92vh] flex flex-col"
     >
-        <div className="px-5 py-3 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
-          <h2 id={titleId} className="text-base font-semibold text-gray-900 dark:text-gray-100">
+        <div className="px-5 py-3 border-b border-line flex items-center justify-between">
+          <h2 id={titleId} className="text-base font-semibold text-fg">
             {props.initial.id ? 'Zeitplan bearbeiten' : 'Neuer Zeitplan'}
           </h2>
-          <button type="button" onClick={props.onClose} aria-label="Schließen" className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
+          <button type="button" onClick={props.onClose} aria-label="Schließen" className="text-fg-subtle hover:text-fg-muted text-xl leading-none">×</button>
         </div>
 
         <div className="px-5 py-4 space-y-3 overflow-y-auto">
           <div>
-            <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Name</label>
+            <label className="block text-xs font-medium text-fg-muted mb-1">Name</label>
             <input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="z. B. Tägliches Vollbackup"
-              className="w-full border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
+              className="w-full border border-line-strong rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent-fg"
             />
           </div>
 
           {/* Frequency */}
           <div>
-            <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Wie oft?</label>
+            <label className="block text-xs font-medium text-fg-muted mb-1">Wie oft?</label>
             <select
               value={freq}
               onChange={(e) => setFreq(e.target.value as ScheduleFreq)}
-              className="w-full border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded px-3 py-1.5 text-sm"
+              className="w-full border border-line-strong rounded px-3 py-1.5 text-sm"
             >
               <option value="hourly">Stündlich</option>
               <option value="daily">Täglich</option>
@@ -887,35 +921,35 @@ function ScheduleEditorModal(props: {
             <div className="grid grid-cols-2 gap-3">
               {freq === 'weekly' && (
                 <div>
-                  <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Wochentag</label>
+                  <label className="block text-xs font-medium text-fg-muted mb-1">Wochentag</label>
                   <select value={weekday} onChange={(e) => setWeekday(parseInt(e.target.value, 10))}
-                    className="w-full border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded px-3 py-1.5 text-sm">
+                    className="w-full border border-line-strong rounded px-3 py-1.5 text-sm">
                     {WEEKDAYS.map((d, i) => <option key={i} value={i}>{d}</option>)}
                   </select>
                 </div>
               )}
               {freq === 'monthly' && (
                 <div>
-                  <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Tag des Monats</label>
+                  <label className="block text-xs font-medium text-fg-muted mb-1">Tag des Monats</label>
                   <select value={day} onChange={(e) => setDay(parseInt(e.target.value, 10))}
-                    className="w-full border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded px-3 py-1.5 text-sm">
+                    className="w-full border border-line-strong rounded px-3 py-1.5 text-sm">
                     {Array.from({ length: 28 }, (_, i) => i + 1).map((d) => <option key={d} value={d}>{d}.</option>)}
                   </select>
                 </div>
               )}
               {(freq === 'daily' || freq === 'weekly' || freq === 'monthly') && (
                 <div>
-                  <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Stunde (UTC)</label>
+                  <label className="block text-xs font-medium text-fg-muted mb-1">Stunde (UTC)</label>
                   <select value={hour} onChange={(e) => setHour(parseInt(e.target.value, 10))}
-                    className="w-full border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded px-3 py-1.5 text-sm">
+                    className="w-full border border-line-strong rounded px-3 py-1.5 text-sm">
                     {Array.from({ length: 24 }, (_, i) => i).map((h) => <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>)}
                   </select>
                 </div>
               )}
               <div>
-                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Minute</label>
+                <label className="block text-xs font-medium text-fg-muted mb-1">Minute</label>
                 <select value={minute} onChange={(e) => setMinute(parseInt(e.target.value, 10))}
-                  className="w-full border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded px-3 py-1.5 text-sm">
+                  className="w-full border border-line-strong rounded px-3 py-1.5 text-sm">
                   {/* v3.18.34: minute precision (0..59) instead of a 5-minute grid */}
                   {Array.from({ length: 60 }, (_, m) => (
                     <option key={m} value={m}>{String(m).padStart(2, '0')}</option>
@@ -927,35 +961,36 @@ function ScheduleEditorModal(props: {
 
           {freq === 'custom' && (
             <div>
-              <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Cron-Expression (5-Felder, UTC)</label>
+              <label className="block text-xs font-medium text-fg-muted mb-1">Cron-Expression (5-Felder, UTC)</label>
               <input
                 type="text"
                 value={customCron}
                 onChange={(e) => setCustomCron(e.target.value)}
                 placeholder="0 2 * * *"
-                className="w-full border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-accent"
+                className="w-full border border-line-strong rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-accent-fg"
               />
             </div>
           )}
 
-          <div className="text-[10px] text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/50 px-3 py-2 rounded border border-gray-200 dark:border-gray-700">
+          <div className="text-[10px] text-fg-subtle bg-surface-2 px-3 py-2 rounded border border-line">
             Aktiver Cron: <code className="font-mono">{effectiveCron}</code>
           </div>
 
           {/* Scope + Format */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Was sichern?</label>
+              <label className="block text-xs font-medium text-fg-muted mb-1">Was sichern?</label>
               <select value={scope} onChange={(e) => setScope(e.target.value)}
-                className="w-full border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded px-3 py-1.5 text-sm">
+                className="w-full border border-line-strong rounded px-3 py-1.5 text-sm">
                 <option value="full">Alle Mailboxen</option>
                 <option value="user">Einzelne Mailbox</option>
               </select>
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Format</label>
-              <select value={format} onChange={(e) => setFormat(e.target.value)}
-                className="w-full border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded px-3 py-1.5 text-sm">
+              <label className="block text-xs font-medium text-fg-muted mb-1">Format</label>
+              <select value={scope === 'full' ? 'zip' : format} onChange={(e) => setFormat(e.target.value)} disabled={scope === 'full'}
+                title={scope === 'full' ? 'Vollbackups sind immer ZIP-Archive' : undefined}
+                className="w-full border border-line-strong rounded px-3 py-1.5 text-sm disabled:opacity-60">
                 <option value="zip">ZIP</option>
                 <option value="mbox">MBOX</option>
               </select>
@@ -964,9 +999,9 @@ function ScheduleEditorModal(props: {
 
           {scope === 'user' && (
             <div>
-              <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Ziel-User</label>
+              <label className="block text-xs font-medium text-fg-muted mb-1">Ziel-User</label>
               <select value={targetUserId ?? ''} onChange={(e) => setTargetUserId(e.target.value || null)}
-                className="w-full border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded px-3 py-1.5 text-sm">
+                className="w-full border border-line-strong rounded px-3 py-1.5 text-sm">
                 <option value="">— bitte wählen —</option>
                 {props.users.map((u) => <option key={u.id} value={u.id}>{u.email}</option>)}
               </select>
@@ -976,32 +1011,32 @@ function ScheduleEditorModal(props: {
           {/* Retention + Active */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Aufbewahrung (Tage)</label>
+              <label className="block text-xs font-medium text-fg-muted mb-1" title="Ältere Backups dieses Zeitplans werden nach jedem Lauf gelöscht">Aufbewahrung (Tage)</label>
               <select value={retentionDays} onChange={(e) => setRetentionDays(parseInt(e.target.value, 10))}
-                className="w-full border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded px-3 py-1.5 text-sm">
+                className="w-full border border-line-strong rounded px-3 py-1.5 text-sm">
                 {[7, 14, 30, 60, 90, 180, 365, 730, 1825, 3650].map((d) => <option key={d} value={d}>{d} Tage</option>)}
               </select>
             </div>
             <div className="flex items-end">
-              <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-                <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} className="rounded border-gray-300" />
+              <label className="flex items-center gap-2 text-sm text-fg-muted">
+                <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} className="rounded border-line-strong" />
                 Aktiviert
               </label>
             </div>
           </div>
         </div>
 
-        <div className="px-5 py-3 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 flex justify-end gap-2">
+        <div className="px-5 py-3 border-t border-line bg-surface-2 flex justify-end gap-2">
           <button onClick={props.onClose}
-            className="px-4 py-1.5 text-sm border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-200 rounded hover:bg-gray-100 dark:hover:bg-gray-700">
+            className="px-4 py-1.5 text-sm border border-line-strong text-fg-muted rounded hover:bg-surface-2">
             Abbrechen
           </button>
           <button onClick={() => props.onSave({
-              name, cron: effectiveCron, scope, format,
+              name: name.trim(), cron: effectiveCron.trim(), scope, format: scope === 'full' ? 'zip' : format,
               ...(scope === 'user' && targetUserId ? { targetUserId } : { targetUserId: null }),
               retentionDays, enabled,
             })}
-            disabled={!name || (scope === 'user' && !targetUserId) || props.saving}
+            disabled={!name.trim() || !effectiveCron.trim() || (scope === 'user' && !targetUserId) || props.saving}
             className="px-4 py-1.5 text-sm bg-accent text-white rounded hover:bg-accent/90 disabled:opacity-50">
             {props.saving ? 'Speichern…' : 'Speichern'}
           </button>

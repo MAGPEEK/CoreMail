@@ -5,9 +5,12 @@ import { prisma } from '@coremail/storage';
 import { requireArea } from '../../middleware/auth.js';
 import { rspamdControllerHeaders } from '../../lib/rspamd-controller.js';
 import { getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
+import { adminClamavRouter } from './security-clamav.js';
 
 export const adminSecurityRouter: RouterType = Router();
 adminSecurityRouter.use(requireArea('hygiene'));
+// ClamAV policy, status and EICAR self-test (9.2)
+adminSecurityRouter.use('/clamav', adminClamavRouter);
 
 const RSPAMD_URL  = process.env['RSPAMD_URL']  ?? 'http://rspamd:11334';
 const CLAMAV_HOST = process.env['CLAMAV_HOST'] ?? 'clamav';
@@ -105,6 +108,22 @@ adminSecurityRouter.put('/settings', async (req: Request, res: Response) => {
   });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request', details: parsed.error.issues }); return; }
+
+  // 9.2: the spam (→ Junk) threshold must stay below the reject threshold — the
+  // BCP checks it, the API did not (a reject score below the spam score rejects
+  // everything that would have gone to Junk). Checked against the stored values
+  // when only one of the two is sent.
+  if (parsed.data.rspamdSpamScore !== undefined || parsed.data.rspamdRejectScore !== undefined) {
+    const cur = await prisma.securitySettings.findUnique({
+      where: { id: 'singleton' }, select: { rspamdSpamScore: true, rspamdRejectScore: true },
+    });
+    const spam   = parsed.data.rspamdSpamScore   ?? cur?.rspamdSpamScore   ?? 6;
+    const reject = parsed.data.rspamdRejectScore ?? cur?.rspamdRejectScore ?? 15;
+    if (spam >= reject) {
+      res.status(400).json({ error: 'The spam score must be lower than the reject score', code: 'RSPAMD_THRESHOLDS' });
+      return;
+    }
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const settings = await prisma.securitySettings.upsert({
@@ -230,20 +249,16 @@ adminSecurityRouter.get('/rspamd/history', async (_req: Request, res: Response) 
   }
 });
 
-// ── POST /admin/security/rspamd/learn/:type ───────────────────────────────────
-adminSecurityRouter.post('/rspamd/learn/:type', async (req: Request, res: Response) => {
-  const { type } = req.params as { type: string };
-  if (type !== 'spam' && type !== 'ham') { res.status(400).json({ error: 'type must be spam or ham' }); return; }
-  try {
-    const endpoint = type === 'spam' ? '/learnspam' : '/learnham';
-    const data = await rspamdFetch<Record<string, unknown>>(endpoint, {
-      method: 'POST',
-      body:   JSON.stringify(req.body),
-    });
-    res.json(data);
-  } catch (e) {
-    res.status(502).json({ error: String((e as Error).message) });
-  }
+// POST /admin/security/rspamd/learn/:type is deprecated (9.2): it forwarded a JSON
+// body instead of a message, so rspamd never learned anything. Bayes training
+// happens through the users' Junk/Not-junk actions (security-filter /learn/*).
+// The route stays (410 with an explanation) so API clients get a clear answer;
+// removing it is a MAJOR change.
+adminSecurityRouter.post('/rspamd/learn/:type', (_req: Request, res: Response) => {
+  res.status(410).json({
+    error: 'Deprecated: this endpoint never trained rspamd. Use the webmail Junk / Not junk actions, which send the message to rspamd.',
+    code: 'DEPRECATED',
+  });
 });
 
 // ═════════════════════════════════════════════════════════════════════════════

@@ -44,18 +44,18 @@ export function DetailPanel({ title, subtitle, onClose, actions, children }: Det
         if (e.key === 'Escape' && !(e.target as HTMLElement).closest('[role="dialog"]')) { e.stopPropagation(); onCloseRef.current(); }
       }}
     >
-      <div className="flex items-start justify-between gap-2 px-4 py-3 border-b border-gray-100 dark:border-gray-800">
+      <div className="flex items-start justify-between gap-2 px-4 py-3 border-b border-line">
         <div className="min-w-0">
-          <h2 id={headingId} ref={headingRef} tabIndex={-1} className="text-base font-semibold text-gray-900 dark:text-gray-100 truncate outline-none">
+          <h2 id={headingId} ref={headingRef} tabIndex={-1} className="text-base font-semibold text-fg truncate outline-none">
             {title}
           </h2>
-          {subtitle && <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{subtitle}</p>}
+          {subtitle && <p className="text-xs text-fg-subtle truncate">{subtitle}</p>}
         </div>
         <button type="button" onClick={onClose} className="btn-ghost p-1 rounded shrink-0" aria-label={t('dt_close_details')}>
-          <X size={16} className="text-gray-500" />
+          <X size={16} className="text-fg-subtle" />
         </button>
       </div>
-      {actions && <div className="flex flex-wrap gap-1.5 px-4 py-2 border-b border-gray-100 dark:border-gray-800 bg-gray-50/60 dark:bg-gray-800/40">{actions}</div>}
+      {actions && <div className="flex flex-wrap gap-1.5 px-4 py-2 border-b border-line bg-surface-2/60">{actions}</div>}
       <div className="px-4 py-4 space-y-4 text-sm">{children}</div>
     </aside>
   );

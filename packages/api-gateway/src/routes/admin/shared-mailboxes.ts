@@ -18,6 +18,7 @@ import { requireArea } from '../../middleware/auth.js';
 import { ensureSharedMailboxProvisioned } from '../../lib/provision-mailbox.js';
 import { quotaLevelPatchError } from '../../lib/quota-levels.js';
 import { publishPermissionChange, sharedMailboxGrantees } from '../../lib/permission-events.js';
+import { addressCollision } from '../../lib/address-collision.js';
 
 const log = createLogger('admin:shared-mailboxes');
 export const adminSharedMailboxesRouter: RouterType = Router();
@@ -38,17 +39,20 @@ const SELECT = {
 // ── GET / ─────────────────────────────────────────────────────────────────────
 adminSharedMailboxesRouter.get('/', async (req: Request, res: Response) => {
   const { search = '', page = '1', limit = '50' } = req.query as Record<string, string>;
-  const skip = (parseInt(page) - 1) * parseInt(limit);
+  // NaN / negative values used to reach Prisma (500)
+  const pageN = Math.max(1, parseInt(page, 10) || 1);
+  const limitN = Math.min(500, Math.max(1, parseInt(limit, 10) || 50));
+  const skip = (pageN - 1) * limitN;
 
   const where = search
     ? { OR: [{ email: { contains: search, mode: 'insensitive' as const } }, { displayName: { contains: search, mode: 'insensitive' as const } }] }
     : {};
 
   const [items, total] = await Promise.all([
-    prisma.sharedMailbox.findMany({ where, select: SELECT, orderBy: { email: 'asc' }, skip, take: parseInt(limit) }),
+    prisma.sharedMailbox.findMany({ where, select: SELECT, orderBy: { email: 'asc' }, skip, take: limitN }),
     prisma.sharedMailbox.count({ where }),
   ]);
-  res.json({ items, total, page: parseInt(page), limit: parseInt(limit) });
+  res.json({ items, total, page: pageN, limit: limitN });
 });
 
 // ── GET /:id ──────────────────────────────────────────────────────────────────
@@ -63,20 +67,30 @@ adminSharedMailboxesRouter.get('/:id', async (req: Request, res: Response) => {
 adminSharedMailboxesRouter.post('/', async (req: Request, res: Response) => {
   const schema = z.object({
     email:       z.string().email(),
-    displayName: z.string().min(1).max(200),
+    displayName: z.string().trim().min(1).max(200),
     domainId:    z.string().min(1),
-    quotaBytes:  z.number().int().positive().optional(),
+    quotaBytes:  z.number().int().min(0).optional(), // 0 = unlimited
   });
   const p = schema.safeParse(req.body);
   if (!p.success) { res.status(400).json({ error: 'Invalid input', details: p.error.issues }); return; }
+  const email = p.data.email.trim().toLowerCase();
+
+  const domain = await prisma.domain.findUnique({ where: { id: p.data.domainId }, select: { name: true } });
+  if (!domain) { res.status(404).json({ error: 'Domain not found' }); return; }
+  if (email.split('@')[1] !== domain.name.toLowerCase()) {
+    res.status(400).json({ error: `The address must end in @${domain.name}` }); return;
+  }
+  // users, shared mailboxes and aliases share one address namespace
+  const collision = await addressCollision(email);
+  if (collision) { res.status(409).json({ error: collision }); return; }
 
   try {
     const item = await prisma.sharedMailbox.create({
       data: {
-        email: p.data.email,
+        email,
         displayName: p.data.displayName,
         domainId: p.data.domainId,
-        ...(p.data.quotaBytes ? { quotaBytes: BigInt(p.data.quotaBytes) } : {}),
+        ...(p.data.quotaBytes !== undefined ? { quotaBytes: BigInt(p.data.quotaBytes) } : {}),
       },
       select: SELECT,
     });
@@ -89,7 +103,7 @@ adminSharedMailboxesRouter.post('/', async (req: Request, res: Response) => {
     res.status(201).json(item);
   } catch (err) {
     const msg = String(err);
-    if (msg.includes('Unique constraint')) { res.status(409).json({ error: 'E-Mail-Adresse bereits vergeben' }); return; }
+    if (msg.includes('Unique constraint')) { res.status(409).json({ error: 'The address is already in use' }); return; }
     throw err;
   }
 });
@@ -104,7 +118,7 @@ adminSharedMailboxesRouter.post('/:id/provision', async (req: Request, res: Resp
     res.json(result);
   } catch (err) {
     log.error({ err, id }, 'Shared mailbox provisioning failed');
-    res.status(500).json({ error: 'Provisioning fehlgeschlagen' });
+    res.status(500).json({ error: 'Provisioning failed' });
   }
 });
 
@@ -114,7 +128,7 @@ adminSharedMailboxesRouter.put('/:id', async (req: Request, res: Response) => {
   const schema = z.object({
     displayName: z.string().min(1).max(200).optional(),
     active:      z.boolean().optional(),
-    quotaBytes:  z.number().int().positive().optional(),
+    quotaBytes:  z.number().int().min(0).optional(), // 0 = unlimited
     // v8.1: Exchange quota levels (null = server default percent of quotaBytes)
     quotaWarningBytes:      z.number().int().min(0).nullable().optional(),
     quotaProhibitSendBytes: z.number().int().min(0).nullable().optional(),
@@ -183,7 +197,14 @@ adminSharedMailboxesRouter.post('/:id/permissions', async (req: Request, res: Re
   const p = schema.safeParse(req.body);
   if (!p.success) { res.status(400).json({ error: 'Invalid input' }); return; }
   const perms = p.data.permissions ?? (p.data.permission ? [p.data.permission] : []);
-  if (perms.length === 0) { res.status(400).json({ error: 'Keine Berechtigung angegeben' }); return; }
+  if (perms.length === 0) { res.status(400).json({ error: 'No permission given' }); return; }
+
+  const [sm, grantee] = await Promise.all([
+    prisma.sharedMailbox.findUnique({ where: { id: sharedMailboxId }, select: { id: true } }),
+    prisma.user.findUnique({ where: { id: p.data.userId }, select: { id: true } }),
+  ]);
+  if (!sm) { res.status(404).json({ error: 'Shared mailbox not found' }); return; }
+  if (!grantee) { res.status(404).json({ error: 'User not found' }); return; }
 
   const actorId = req.apiUser?.userId ?? 'system';
   try {
@@ -203,7 +224,7 @@ adminSharedMailboxesRouter.post('/:id/permissions', async (req: Request, res: Re
     res.status(201).json(updated);
   } catch (err) {
     log.error({ err }, 'Failed to set permissions');
-    res.status(400).json({ error: 'Berechtigung konnte nicht gesetzt werden' });
+    res.status(400).json({ error: 'The permission could not be set' });
   }
 });
 

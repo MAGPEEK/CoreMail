@@ -4,6 +4,7 @@
  * GET/POST/PUT/DELETE /api/v1/admin/organisation/sharing-policies
  * GET/POST/PUT/DELETE /api/v1/admin/organisation/address-lists
  * GET                 /api/v1/admin/organisation/gal            — global address list (live query)
+ * GET                 /api/v1/admin/organisation/role-assignments — users + roles (RBAC page)
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
@@ -15,6 +16,20 @@ import { requireArea } from '../../middleware/auth.js';
 const log = createLogger('admin:organisation');
 export const adminOrganisationRouter: RouterType = Router();
 adminOrganisationRouter.use(requireArea('organisation'));
+
+// ─── Role assignments (RBAC page) ─────────────────────────────────────────────
+// GET /api/v1/admin/organisation/role-assignments — who holds which role. The BCP
+// RBAC page is in the organisation area; it used to load GET /mailboxes (area
+// recipients), so SERVER_MANAGEMENT could open the page but never load it. Only the
+// fields the page needs (no quota/usage/login data). Role changes still go through
+// PUT /mailboxes/:id (ORGANIZATION_MANAGEMENT only, audited as user.role).
+adminOrganisationRouter.get('/role-assignments', async (_req: Request, res: Response) => {
+  const users = await prisma.user.findMany({
+    select: { id: true, email: true, displayName: true, role: true, active: true, domainId: true },
+    orderBy: { email: 'asc' },
+  });
+  res.json(users);
+});
 
 // ─── Sharing Policies ─────────────────────────────────────────────────────────
 

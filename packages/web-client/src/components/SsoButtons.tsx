@@ -40,20 +40,20 @@ export function SsoButtons({ target }: { target: 'mwa' | 'bcp' }) {
   return (
     <div className="mt-4 space-y-2">
       {ssoError && (
-        <div className="bg-red-50 border border-red-200 rounded px-3 py-2 text-sm text-red-700">
+        <div className="bg-danger-bg border border-danger-line rounded px-3 py-2 text-sm text-danger-fg">
           {SSO_ERROR_TEXT[ssoError] ?? 'Die SSO-Anmeldung ist fehlgeschlagen.'}
         </div>
       )}
       {providers.length > 0 && (
         <>
-          <div className="flex items-center gap-2 text-xs text-gray-400">
-            <span className="flex-1 border-t border-gray-200 dark:border-gray-700" />oder<span className="flex-1 border-t border-gray-200 dark:border-gray-700" />
+          <div className="flex items-center gap-2 text-xs text-fg-subtle">
+            <span className="flex-1 border-t border-line" />oder<span className="flex-1 border-t border-line" />
           </div>
           {providers.map((p) => (
             <a
               key={p.id}
               href={`/auth/sso/${encodeURIComponent(p.id)}/start?target=${target}`}
-              className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-200"
+              className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm border border-line-strong rounded hover:bg-surface-2 text-fg-muted"
             >
               <KeyRound size={14} /> Anmelden mit {p.name}
             </a>

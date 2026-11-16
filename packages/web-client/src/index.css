@@ -1,14 +1,13 @@
+@import './theme/tokens.css';
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* Colours: only semantic tokens (src/theme/tokens.css, WCAG 2.2 AA in light + dark).
+   src/theme/theme-guard.test.ts rejects raw palette classes and dark: variants. */
 @layer base {
   * {
     box-sizing: border-box;
-  }
-
-  :root {
-    --color-accent: 0 120 212; /* Microsoft Blau — RGB-Kanäle ohne Komma */
   }
 
   html, body, #root {
@@ -17,27 +16,35 @@
     padding: 0;
     font-family: "Segoe UI", system-ui, sans-serif;
     font-size: 14px;
-    color: #1a1a1a;
-    background: #f3f3f3;
+    color: rgb(var(--fg));
+    background: rgb(var(--canvas));
   }
 
-  /* Dark-Mode Basis */
-  html.dark, html.dark body, html.dark #root {
-    color-scheme: dark;
-    color: #e5e5e5;
-    background: #1e1e1e;
+  /* SC 2.4.7 / 2.4.11: a visible focus indicator on every focusable element */
+  :focus-visible {
+    outline: 2px solid rgb(var(--color-accent-fg));
+    outline-offset: 2px;
   }
 
-  ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
-  }
+  ::placeholder { color: rgb(var(--fg-subtle)); opacity: 1; }
+
+  /* Native checkboxes/radios/ranges follow the accent; color-scheme (tokens.css) themes the rest */
+  input[type='checkbox'], input[type='radio'], input[type='range'], progress { accent-color: rgb(var(--color-accent)); }
+
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
   ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: #c0c0c0; border-radius: 3px; }
-  ::-webkit-scrollbar-thumb:hover { background: #a0a0a0; }
+  ::-webkit-scrollbar-thumb { background: rgb(var(--line-strong) / 0.6); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgb(var(--line-strong)); }
 
-  html.dark ::-webkit-scrollbar-thumb { background: #555; }
-  html.dark ::-webkit-scrollbar-thumb:hover { background: #777; }
+  /* SC 2.3.3 / 2.2.2: respect reduced motion (stops the infinite pulse/halo/shimmer) */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
 }
 
 @layer components {
@@ -45,26 +52,25 @@
     @apply inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium cursor-pointer
            transition-all duration-150 ease-out
            active:scale-95
-           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-fg focus-visible:ring-offset-1 focus-visible:ring-offset-surface
            disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100;
   }
   .btn-primary {
     @apply btn bg-accent text-white hover:bg-accent-hover hover:shadow-md active:bg-accent-active;
   }
   .btn-secondary {
-    @apply btn bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 hover:border-gray-400 hover:shadow-sm
-           dark:bg-gray-700 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-600 dark:hover:border-gray-500;
+    @apply btn bg-surface border border-line-strong text-fg hover:bg-surface-2 hover:shadow-sm;
   }
   .btn-ghost {
-    @apply btn text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700;
+    @apply btn text-fg-muted hover:bg-surface-2 hover:text-fg;
+  }
+  .btn-danger {
+    @apply btn bg-danger text-white hover:bg-danger/90;
   }
   .input {
-    @apply w-full border border-gray-300 rounded px-3 py-1.5 text-sm outline-none
-           focus:border-accent focus:ring-2 focus:ring-accent/30 transition-all duration-150
-           hover:border-gray-400
-           disabled:opacity-50 disabled:cursor-not-allowed
-           dark:bg-gray-800 dark:border-gray-600 dark:text-gray-100 dark:placeholder-gray-500
-           dark:hover:border-gray-500;
+    @apply w-full border border-line-strong rounded px-3 py-1.5 text-sm outline-none bg-surface text-fg
+           focus:border-accent-fg focus:ring-2 focus:ring-accent-fg/30 transition-all duration-150
+           disabled:opacity-50 disabled:cursor-not-allowed;
   }
 
   /* Unread-Dot Pulse-Animation (sanft, alle 3 Sekunden) */
@@ -195,8 +201,67 @@
 /* Placeholder for external images blocked by the mail privacy filter (lib/mailHtml.ts) */
 [data-coremail-blocked] {
   opacity: 0.5;
-  outline: 1px dashed #ccc;
+  outline: 1px dashed rgb(var(--line-strong));
   min-width: 16px;
   min-height: 16px;
 }
 
+/* ─── FullCalendar + Tiptap on the semantic tokens (both themes) ───────────────
+   FullCalendar reads its colours from --fc-* variables; they follow the tokens so
+   the calendar switches with the theme. Event colours are user data (set per
+   event); their text colour is chosen in CalendarPage for >= 4.5:1. */
+.fc {
+  color: rgb(var(--fg));
+  --fc-page-bg-color: rgb(var(--surface));
+  --fc-neutral-bg-color: rgb(var(--surface-2));
+  --fc-neutral-text-color: rgb(var(--fg-subtle));
+  --fc-border-color: rgb(var(--line));
+  --fc-today-bg-color: rgb(var(--color-accent) / 0.08);
+  --fc-highlight-color: rgb(var(--color-accent) / 0.15);
+  --fc-non-business-color: rgb(var(--surface-3) / 0.5);
+  --fc-now-indicator-color: rgb(var(--danger));
+  --fc-list-event-hover-bg-color: rgb(var(--surface-2));
+  --fc-more-link-bg-color: rgb(var(--surface-3));
+  --fc-more-link-text-color: rgb(var(--fg));
+  --fc-event-selected-overlay-color: rgb(var(--scrim) / 0.25);
+  --fc-button-text-color: rgb(var(--fg));
+  --fc-button-bg-color: rgb(var(--surface));
+  --fc-button-border-color: rgb(var(--line-strong));
+  --fc-button-hover-bg-color: rgb(var(--surface-2));
+  --fc-button-hover-border-color: rgb(var(--line-strong));
+  --fc-button-active-bg-color: rgb(var(--surface-3));
+  --fc-button-active-border-color: rgb(var(--line-strong));
+}
+.fc .fc-button:focus-visible,
+.fc .fc-button-primary:focus,
+.fc .fc-button-primary:not(:disabled):active:focus,
+.fc .fc-button-primary:not(:disabled).fc-button-active:focus {
+  box-shadow: 0 0 0 2px rgb(var(--color-accent-fg));
+}
+.fc .fc-button-primary:disabled {
+  color: rgb(var(--fg-disabled));
+  background-color: rgb(var(--surface-2));
+  border-color: rgb(var(--line));
+}
+.fc .fc-col-header-cell-cushion,
+.fc .fc-daygrid-day-number,
+.fc .fc-timegrid-slot-label-cushion,
+.fc .fc-daygrid-week-number,
+.fc .fc-timegrid-axis-cushion { color: rgb(var(--fg-muted)); }
+.fc .fc-day-other .fc-daygrid-day-number { color: rgb(var(--fg-subtle)); opacity: 1; }
+.fc .fc-day-today .fc-daygrid-day-number { color: rgb(var(--color-accent-fg)); font-weight: 600; }
+.fc .fc-daygrid-dot-event,
+.fc .fc-daygrid-dot-event .fc-event-title,
+.fc .fc-daygrid-dot-event .fc-event-time { color: rgb(var(--fg)); }
+.fc .fc-daygrid-dot-event:hover { background: rgb(var(--surface-2)); }
+.fc .fc-popover { background: rgb(var(--surface)); border-color: rgb(var(--line)); color: rgb(var(--fg)); }
+.fc .fc-popover-header { background: rgb(var(--surface-2)); color: rgb(var(--fg)); }
+.fc .fc-popover-close { color: rgb(var(--fg-subtle)); opacity: 1; }
+.fc .fc-list, .fc .fc-list-table td { background: rgb(var(--surface)); }
+.fc .fc-list-day-cushion { background: rgb(var(--surface-2)); }
+.fc .fc-list-empty { background: rgb(var(--surface-2)); color: rgb(var(--fg-subtle)); }
+
+/* Tiptap / ProseMirror editor (compose, signature) */
+.ProseMirror { color: rgb(var(--fg)); caret-color: rgb(var(--fg)); }
+.ProseMirror p.is-editor-empty:first-child::before { color: rgb(var(--fg-subtle)); }
+.ProseMirror ::selection { background: rgb(var(--color-accent) / 0.25); }

@@ -49,7 +49,7 @@ export function SearchOperatorsHelp({ onInsert }: { onInsert: (token: string) =>
         aria-haspopup="dialog"
         aria-label={t('search_help')}
         title={t('search_help')}
-        className="p-1 rounded text-gray-400 hover:text-accent hover:bg-gray-100 dark:hover:bg-gray-700"
+        className="p-1 rounded text-fg-subtle hover:text-accent-fg hover:bg-surface-2"
       >
         <HelpCircle size={14} />
       </button>
@@ -57,20 +57,20 @@ export function SearchOperatorsHelp({ onInsert }: { onInsert: (token: string) =>
         <div
           role="dialog"
           aria-label={t('search_help')}
-          className="absolute right-0 top-full mt-1 w-80 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-xl z-50 p-3 animate-fly-in origin-top-right"
+          className="absolute right-0 top-full mt-1 w-80 bg-surface border border-line rounded-lg shadow-xl z-50 p-3 animate-fly-in origin-top-right"
         >
-          <p className="text-xs font-semibold text-gray-800 dark:text-gray-100">{t('search_help')}</p>
-          <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5 mb-2">{t('search_help_intro')}</p>
+          <p className="text-xs font-semibold text-fg">{t('search_help')}</p>
+          <p className="text-[11px] text-fg-subtle mt-0.5 mb-2">{t('search_help_intro')}</p>
           <ul className="space-y-0.5 max-h-72 overflow-y-auto">
             {OPERATORS.map((op) => (
               <li key={op.example}>
                 <button
                   type="button"
                   onClick={() => { onInsert(op.insert); setOpen(false); }}
-                  className="w-full flex items-center justify-between gap-2 px-1.5 py-1 rounded text-left hover:bg-gray-50 dark:hover:bg-gray-700"
+                  className="w-full flex items-center justify-between gap-2 px-1.5 py-1 rounded text-left hover:bg-surface-2"
                 >
-                  <code className="text-[11px] font-mono text-accent">{op.example}</code>
-                  <span className="text-[11px] text-gray-600 dark:text-gray-300 text-right">{t(op.label)}</span>
+                  <code className="text-[11px] font-mono text-accent-fg">{op.example}</code>
+                  <span className="text-[11px] text-fg-muted text-right">{t(op.label)}</span>
                 </button>
               </li>
             ))}
@@ -93,10 +93,10 @@ export function SearchChips({ chips, onRemove }: { chips: SearchChip[]; onRemove
           title={c.valid ? c.raw : `${c.raw} — ${t('search_chip_invalid')}`}
           className={`inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-full text-[11px] border ${
             !c.valid
-              ? 'border-red-300 text-red-600 bg-red-50 dark:bg-red-900/20 line-through'
+              ? 'border-danger-line text-danger-fg bg-danger-bg line-through'
               : c.negate
-                ? 'border-gray-300 text-gray-600 dark:text-gray-300 bg-gray-50 dark:bg-gray-800'
-                : 'border-accent/40 text-accent bg-accent/5'
+                ? 'border-line-strong text-fg-muted bg-surface-2'
+                : 'border-accent/40 text-accent-fg bg-accent/5'
           }`}
         >
           <span>
@@ -107,7 +107,7 @@ export function SearchChips({ chips, onRemove }: { chips: SearchChip[]; onRemove
             type="button"
             onClick={() => onRemove(c)}
             aria-label={`${t('search_chip_remove')}: ${c.raw}`}
-            className="p-0.5 rounded-full hover:bg-black/10"
+            className="p-0.5 rounded-full hover:bg-scrim/10"
           >
             <X size={10} />
           </button>

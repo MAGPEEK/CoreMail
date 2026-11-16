@@ -255,6 +255,60 @@ describe('greeting (RFC 5321 §4.2)', () => {
 
     assert.equal(greeting.text, '220 mail.example.test ready');
   });
+
+  test('greetingDelayMs holds the 220 and refuses a client that talks first', async (t) => {
+    const patient = await connect(t, { config: { greetingDelayMs: 150 } });
+    assert.deepEqual(await patient.client.drain(60), [], 'no greeting before the delay');
+    assert.equal((await patient.client.reply()).code, 220);
+    assert.equal((await patient.client.cmd('EHLO client.example.test')).code, 250);
+
+    const early = await connect(t, { config: { greetingDelayMs: 300 } });
+    early.client.write('EHLO bot.example.test\r\n');
+    const reply = await early.client.reply();
+    assert.equal(reply.code, 554);
+    assert.ok(await early.client.waitForClose(), 'pre-greeting talker is disconnected');
+  });
+
+  test('the greeting-delay timer is cleared when the client disconnects first', async () => {
+    // Fake socket: records writes; 'close' is emitted before the delayed 220.
+    const { EventEmitter } = await import('node:events');
+    const writes: string[] = [];
+    const fake = Object.assign(new EventEmitter(), {
+      remoteAddress: '203.0.113.5',
+      writable: true,
+      setEncoding: () => undefined,
+      write: (chunk: string) => { writes.push(chunk); return true; },
+      end: () => undefined,
+      destroy: () => undefined,
+    });
+    const session = new SmtpSession(fake as unknown as net.Socket, {
+      hostname: 'mx.example.test',
+      maxSize: 1024,
+      maxRcpt: 3,
+      requireAuth: false,
+      handlers: {
+        onConnect: async () => true,
+        onMailFrom: async () => null,
+        onRcptTo: async () => null,
+        onMessage: async () => undefined,
+      },
+      greetingDelayMs: 80,
+    });
+    session.start();
+    assert.notEqual((session as unknown as { greetingTimer: unknown }).greetingTimer, null, 'delayed greeting armed');
+    fake.emit('close');
+    assert.equal((session as unknown as { greetingTimer: unknown }).greetingTimer, null, 'timer cleared on close');
+    await delay(150);
+    assert.deepEqual(writes, [], 'no 220 is written to a closed connection');
+  });
+
+  test('commandTimeoutMs (connectionTimeoutSec) closes an idle session with 421', async (t) => {
+    const { client } = await connect(t, { config: { commandTimeoutMs: 120 } });
+    assert.equal((await client.reply()).code, 220);
+    const timeout = await client.reply();
+    assert.equal(timeout.code, 421);
+    assert.ok(await client.waitForClose());
+  });
 });
 
 // ─── EHLO / HELO ─────────────────────────────────────────────────────────────

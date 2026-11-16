@@ -24,6 +24,7 @@ import { ErrorBoundary } from './components/ErrorBoundary.js';
 import { ShortcutHelpDialog } from './components/ShortcutHelpDialog.js';
 import { useGlobalShortcuts } from './hooks/useGlobalShortcuts.js';
 import { useSendGuard } from './components/DelayedSendToast.js';
+import { accentFgChannels } from './theme/contrast.js';
 
 // ── Theme-Applier ─────────────────────────────────────────────────────────────
 function ThemeApplier() {
@@ -38,6 +39,8 @@ function ThemeApplier() {
     const apply = () => {
       const isDark = resolveIsDark(theme);
       document.documentElement.classList.toggle('dark', isDark);
+      // Accent text, icons and focus rings: derived per theme so they keep 4.5:1 (theme/contrast.ts)
+      document.documentElement.style.setProperty('--color-accent-fg', accentFgChannels(accentRgb, isDark));
     };
     apply();
 
@@ -46,7 +49,7 @@ function ThemeApplier() {
     const handler = () => { if (theme === 'system') apply(); };
     mq.addEventListener('change', handler);
     return () => mq.removeEventListener('change', handler);
-  }, [theme]);
+  }, [theme, accentRgb]);
 
   return null;
 }
@@ -128,7 +131,7 @@ function SetupGuard({ children }: { children: React.ReactNode }) {
 
   if (setupRequired === null) {
     return (
-      <div className="min-h-screen bg-[#0078D4] flex items-center justify-center">
+      <div className="min-h-screen bg-accent flex items-center justify-center">
         <div className="text-white text-sm animate-pulse">CoreMail wird geladen…</div>
       </div>
     );

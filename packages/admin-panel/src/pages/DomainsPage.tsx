@@ -9,7 +9,7 @@ import { copyToClipboard } from '../utils/clipboard.js';
 import { useT } from '../i18n/useT.js';
 import { Can } from '../components/Can.js';
 import { DataTable, type Column } from '../components/DataTable.js';
-import { clientSetupRows, clientSetupSummary } from '../lib/dnsClientSetup.js';
+import { clientSetupRows, clientSetupSummary, srvParts, srvZoneLine, type SrvParts } from '../lib/dnsClientSetup.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface Domain {
@@ -25,7 +25,10 @@ interface DomainsResponse { domains: Domain[]; total: number; page: number; limi
 interface DkimRecord { selector: string; dnsName: string; dnsValue: string }
 
 // ── DNS check types ───────────────────────────────────────────────────────────
-interface DnsRec { type: string; name: string; expected: string; ok: boolean; found: string | null; warning?: string; recommended?: boolean }
+interface DnsRec {
+  type: string; name: string; expected: string; ok: boolean; found: string | null; warning?: string; recommended?: boolean;
+  optional?: boolean; srv?: SrvParts;
+}
 interface DnsCheckResult {
   domain: string; hostname: string; serverIp: string;
   records: { a: DnsRec; mx: DnsRec; spf: DnsRec; dkim: DnsRec; dmarc: DnsRec; autodiscover: DnsRec; ptr: DnsRec };
@@ -43,15 +46,51 @@ function getHostPart(name: string, domain: string): string {
 
 // ── CopyBtn (module level — no inline definition) ────────────────────────────
 function CopyBtn({ value }: { value: string }) {
+  const t = useT();
   const [copied, setCopied] = useState(false);
   return (
-    <button aria-label="Kopieren"
+    <button type="button" aria-label={t('domain_dns_copy')}
       onClick={() => { void copyToClipboard(value).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }); }}
-      className="shrink-0 p-1 text-gray-400 hover:text-blue-600 transition-colors"
-      title="Kopieren"
+      className="shrink-0 p-1 text-fg-subtle hover:text-info-fg transition-colors"
+      title={t('domain_dns_copy')}
     >
-      {copied ? <Check size={12} className="text-green-500" /> : <Copy size={12} />}
+      {copied ? <Check size={12} className="text-success-fg" /> : <Copy size={12} />}
     </button>
+  );
+}
+
+// ── SrvFields — SRV split into provider fields + zone-file line (module level) ─
+function SrvFields({ record, domain }: { record: DnsRec; domain: string }) {
+  const t = useT();
+  const parts = srvParts(record);
+  if (!parts) return null;
+  const fields: [string, string][] = [
+    [t('domain_dns_srv_priority'), String(parts.priority)],
+    [t('domain_dns_srv_weight'),   String(parts.weight)],
+    [t('domain_dns_srv_port'),     String(parts.port)],
+    [t('domain_dns_srv_target'),   parts.target],
+  ];
+  const zone = srvZoneLine(record.name, domain, parts);
+  return (
+    <div className="space-y-1">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+        {fields.map(([label, v]) => (
+          <div key={label} className="min-w-0">
+            <div className="text-[10px] text-fg-subtle">{label}</div>
+            <div className="flex items-center gap-1">
+              <code className="flex-1 bg-surface-2 border border-line rounded px-2 py-0.5 text-xs font-mono truncate min-w-0" title={v}>{v}</code>
+              <CopyBtn value={v} />
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="flex items-start gap-1.5">
+        <span className="text-[10px] text-fg-subtle w-16 shrink-0 pt-0.5">{t('domain_dns_srv_zone')}</span>
+        <code className="flex-1 bg-surface-2 border border-line rounded px-2 py-0.5 text-xs font-mono break-all min-w-0 leading-relaxed">{zone}</code>
+        <CopyBtn value={zone} />
+      </div>
+      <p className="text-[10px] text-fg-subtle leading-relaxed">{t('domain_dns_srv_hint')}</p>
+    </div>
   );
 }
 
@@ -61,48 +100,61 @@ interface DnsRowProps {
   hostOverride?: string; valueOverride?: string; extra?: React.ReactNode;
 }
 function DnsRow({ label, record, domain, hostOverride, valueOverride, extra }: DnsRowProps) {
+  const t = useT();
   const host  = hostOverride ?? getHostPart(record.name, domain);
   const value = valueOverride ?? record.expected;
+  const isSrv = record.type === 'SRV' && srvParts(record) !== null;
   return (
-    <div className="py-2.5 border-b border-gray-100 last:border-0">
+    <div className="py-2.5 border-b border-line last:border-0">
       <div className="flex items-start gap-2">
         {record.ok
-          ? <CheckCircle size={14} className="mt-0.5 shrink-0 text-green-500" />
-          // v8.1: recommended records are yellow when missing, never red
-          : <AlertCircle size={14} className={`mt-0.5 shrink-0 ${record.warning || record.recommended ? 'text-amber-500' : 'text-red-500'}`} />}
+          ? <CheckCircle size={14} className="mt-0.5 shrink-0 text-success-fg" />
+          // v8.1: recommended records are yellow when missing, never red; optional ones grey
+          : <AlertCircle size={14} className={`mt-0.5 shrink-0 ${
+              record.warning ? 'text-warning-fg'
+              : record.optional ? 'text-fg-subtle'
+              : record.recommended ? 'text-warning-fg' : 'text-danger-fg'}`} />}
         <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0 mt-0.5 leading-none ${
-          record.type === 'TXT'  ? 'bg-purple-100 text-purple-700' :
-          record.type === 'MX'   ? 'bg-blue-100   text-blue-700'   :
-          record.type === 'A'    ? 'bg-green-100  text-green-700'  :
-          record.type === 'CNAME'? 'bg-amber-100  text-amber-700'  :
-          record.type === 'SRV'  ? 'bg-teal-100   text-teal-700'   :
-                                   'bg-gray-100   text-gray-500'
+          record.type === 'TXT'  ? 'bg-info-bg text-info-fg' :
+          record.type === 'MX'   ? 'bg-info-bg   text-info-fg'   :
+          record.type === 'A'    ? 'bg-success-bg  text-success-fg'  :
+          record.type === 'CNAME'? 'bg-warning-bg  text-warning-fg'  :
+          record.type === 'SRV'  ? 'bg-success-bg   text-success-fg'   :
+                                   'bg-surface-2   text-fg-subtle'
         }`}>{record.type}</span>
         <div className="flex-1 min-w-0">
-          <div className="text-xs font-semibold text-gray-700 mb-1.5">{label}</div>
+          <div className="text-xs font-semibold text-fg-muted mb-1.5 flex flex-wrap items-center gap-1.5">
+            {label}
+            {record.optional && (
+              <span className="text-[10px] font-normal px-1.5 py-0.5 rounded bg-surface-2 text-fg-subtle leading-none">{t('domain_dns_optional_badge')}</span>
+            )}
+          </div>
           {/* Host */}
           <div className="flex items-center gap-1.5 mb-1">
-            <span className="text-[10px] text-gray-400 w-9 shrink-0">Host</span>
-            <code className="flex-1 bg-gray-50 border border-gray-200 rounded px-2 py-0.5 text-xs font-mono truncate min-w-0" title={record.name}>{host}</code>
+            <span className="text-[10px] text-fg-subtle w-16 shrink-0">{t('domain_dns_host_label')}</span>
+            <code className="flex-1 bg-surface-2 border border-line rounded px-2 py-0.5 text-xs font-mono truncate min-w-0" title={record.name}>{host}</code>
             <CopyBtn value={host} />
           </div>
-          {/* Value */}
-          {value && (
+          {/* Value — SRV split into provider fields + zone-file line */}
+          {isSrv ? <SrvFields record={record} domain={domain} /> : value && (
             <div className="flex items-start gap-1.5">
-              <span className="text-[10px] text-gray-400 w-9 shrink-0 pt-0.5">Wert</span>
-              <code className="flex-1 bg-gray-50 border border-gray-200 rounded px-2 py-0.5 text-xs font-mono break-all min-w-0 leading-relaxed">{value}</code>
+              <span className="text-[10px] text-fg-subtle w-16 shrink-0 pt-0.5">{t('domain_dns_value_label')}</span>
+              <code className="flex-1 bg-surface-2 border border-line rounded px-2 py-0.5 text-xs font-mono break-all min-w-0 leading-relaxed">{value}</code>
               <CopyBtn value={value} />
             </div>
+          )}
+          {record.optional && !record.ok && (
+            <p className="mt-1 text-[10px] text-fg-subtle leading-relaxed">ℹ {t('domain_dns_optional_hint')}</p>
           )}
           {extra}
           {/* Currently in DNS — if different */}
           {record.found && record.found !== record.expected && (
-            <div className="mt-1.5 text-[10px] text-gray-400 bg-gray-50 rounded px-2 py-0.5 font-mono break-all">
-              Im DNS: {record.found.slice(0, 80)}{record.found.length > 80 ? '…' : ''}
+            <div className="mt-1.5 text-[10px] text-fg-subtle bg-surface-2 rounded px-2 py-0.5 font-mono break-all">
+              {t('domain_dns_found_label')}: {record.found.slice(0, 80)}{record.found.length > 80 ? '…' : ''}
             </div>
           )}
           {record.warning && (
-            <div className="mt-1.5 text-[10px] text-amber-700 bg-amber-50 rounded px-2 py-1 leading-relaxed">⚠ {record.warning}</div>
+            <div className="mt-1.5 text-[10px] text-warning-fg bg-warning-bg rounded px-2 py-1 leading-relaxed">⚠ {record.warning}</div>
           )}
         </div>
       </div>
@@ -112,6 +164,7 @@ function DnsRow({ label, record, domain, hostOverride, valueOverride, extra }: D
 
 // ── DkimDnsRow — with 255-character chunk view ────────────────────────────────
 function DkimDnsRow({ record, domain, label }: { record: DnsRec; domain: string; label: string }) {
+  const t = useT();
   const [showChunked, setShowChunked] = useState(false);
   const full   = record.expected;
   const chunk1 = full.slice(0, 255);
@@ -121,18 +174,18 @@ function DkimDnsRow({ record, domain, label }: { record: DnsRec; domain: string;
       full.length > 255 ? (
         <div className="mt-1.5">
           <button onClick={() => setShowChunked(s => !s)}
-            className="text-[10px] text-blue-500 hover:underline flex items-center gap-1">
-            {showChunked ? '▲' : '▼'} Für DNS-Provider mit 255-Zeichen-Limit
+            className="text-[10px] text-info-fg hover:underline flex items-center gap-1">
+            {showChunked ? '▲' : '▼'} {t('domain_dns_dkim_chunked')}
           </button>
           {showChunked && (
             <div className="mt-1 space-y-1">
               <div className="flex items-start gap-1.5">
-                <code className="flex-1 bg-blue-50 border border-blue-200 rounded px-2 py-0.5 text-xs font-mono break-all leading-relaxed">"{chunk1}"</code>
+                <code className="flex-1 bg-info-bg border border-info-line rounded px-2 py-0.5 text-xs font-mono break-all leading-relaxed">"{chunk1}"</code>
                 <CopyBtn value={chunk1} />
               </div>
               {chunk2 && (
                 <div className="flex items-start gap-1.5">
-                  <code className="flex-1 bg-blue-50 border border-blue-200 rounded px-2 py-0.5 text-xs font-mono break-all leading-relaxed">"{chunk2}"</code>
+                  <code className="flex-1 bg-info-bg border border-info-line rounded px-2 py-0.5 text-xs font-mono break-all leading-relaxed">"{chunk2}"</code>
                   <CopyBtn value={chunk2} />
                 </div>
               )}
@@ -152,15 +205,15 @@ function ClientSetupDnsSection({ dnsCheck }: { dnsCheck: DnsCheckResult }) {
   if (rows.length === 0) return null;
   const summary = clientSetupSummary(rows);
   return (
-    <div className="border-t border-gray-200">
-      <div className="bg-amber-50/60 px-3 py-2 border-b border-gray-100">
+    <div className="border-t border-line">
+      <div className="bg-warning-bg px-3 py-2 border-b border-line">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <span className="text-xs font-semibold text-gray-700">{t('domain_dns_recommended_title')}</span>
-          <span className={`text-[10px] font-mono ${summary.ok === summary.total ? 'text-green-600' : 'text-amber-600'}`}>
+          <span className="text-xs font-semibold text-fg-muted">{t('domain_dns_recommended_title')}</span>
+          <span className={`text-[10px] font-mono ${summary.ok === summary.total ? 'text-success-fg' : 'text-warning-fg'}`}>
             {summary.ok}/{summary.total} {t('domain_dns_recommended_count')}
           </span>
         </div>
-        <p className="mt-1 text-[10px] text-gray-500 leading-relaxed">{t('domain_dns_recommended_hint')}</p>
+        <p className="mt-1 text-[10px] text-fg-subtle leading-relaxed">{t('domain_dns_recommended_hint')}</p>
       </div>
       <div className="px-3">
         {rows.map((row) => (
@@ -168,10 +221,10 @@ function ClientSetupDnsSection({ dnsCheck }: { dnsCheck: DnsCheckResult }) {
         ))}
       </div>
       {dnsCheck.certificateHostnames && dnsCheck.certificateHostnames.length > 0 && (
-        <div className="px-3 py-2 border-t border-gray-100 text-[10px] text-gray-500 leading-relaxed">
+        <div className="px-3 py-2 border-t border-line text-[10px] text-fg-subtle leading-relaxed">
           ℹ {t('domain_dns_cert_hint')}{' '}
           {dnsCheck.certificateHostnames.map((h, i) => (
-            <span key={h}>{i > 0 && ', '}<code className="font-mono text-gray-700">{h}</code></span>
+            <span key={h}>{i > 0 && ', '}<code className="font-mono text-fg-muted">{h}</code></span>
           ))}
         </div>
       )}
@@ -203,21 +256,21 @@ function AddDomainModal({ onClose }: { onClose: () => void }) {
       labelledBy={titleId}
 
       closeOnBackdrop={false}
-      overlayClassName="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
-      className="bg-white rounded-lg shadow-2xl w-full max-w-sm p-6"
+      overlayClassName="fixed inset-0 bg-scrim/40 flex items-center justify-center z-50"
+      className="bg-surface rounded-lg shadow-2xl w-full max-w-sm p-6"
     >
         <div className="flex items-center justify-between mb-5">
-          <h2 id={titleId} className="text-base font-semibold text-gray-900">{t('domain_add_title')}</h2>
-          <button type="button" onClick={onClose} aria-label="Schließen" className="p-1 text-gray-400 hover:text-gray-600 rounded">
+          <h2 id={titleId} className="text-base font-semibold text-fg">{t('domain_add_title')}</h2>
+          <button type="button" onClick={onClose} aria-label={t('action_close')} className="p-1 text-fg-subtle hover:text-fg-muted rounded">
             <X size={16} />
           </button>
         </div>
 
         <div className="space-y-3">
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">{t('domain_add_name_label')} <span className="text-red-500">*</span></label>
+            <label className="block text-xs font-medium text-fg-muted mb-1">{t('domain_add_name_label')} <span className="text-danger-fg">*</span></label>
             <input
-              className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full border border-line-strong rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-fg"
               value={name}
               onChange={e => setName(e.target.value)}
               placeholder="example.com"
@@ -226,28 +279,28 @@ function AddDomainModal({ onClose }: { onClose: () => void }) {
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">{t('domain_add_dkim_label')}</label>
+            <label className="block text-xs font-medium text-fg-muted mb-1">{t('domain_add_dkim_label')}</label>
             <input
-              className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full border border-line-strong rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-fg"
               value={selector}
               onChange={e => setSelector(e.target.value)}
               placeholder="coremail"
             />
-            <p className="text-xs text-gray-400 mt-1">{t('domain_add_dkim_hint')}</p>
+            <p className="text-xs text-fg-subtle mt-1">{t('domain_add_dkim_hint')}</p>
           </div>
         </div>
 
         <div className="flex justify-end gap-2 mt-5">
           <button
             onClick={onClose}
-            className="px-4 py-2 text-sm text-gray-600 bg-gray-100 rounded hover:bg-gray-200 transition-colors"
+            className="px-4 py-2 text-sm text-fg-muted bg-surface-2 rounded hover:bg-surface-3 transition-colors"
           >
             {t('action_cancel')}
           </button>
           <button
             onClick={() => createMutation.mutate()}
             disabled={!name.trim() || createMutation.isPending}
-            className="px-4 py-2 text-sm text-white bg-blue-600 rounded hover:bg-blue-700 transition-colors disabled:opacity-50"
+            className="px-4 py-2 text-sm text-white bg-accent rounded hover:bg-accent-hover transition-colors disabled:opacity-50"
           >
             {createMutation.isPending ? t('domain_add_btn_adding') : t('domain_add_btn_add')}
           </button>
@@ -268,13 +321,17 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
   const [dnsLoading, setDnsLoading] = useState(false);
 
   const updateMutation = useMutation({
-    mutationFn: () => api.put<Domain>(`/admin/domains/${domain.id}`, { name: name.trim(), dkimSelector: selector }),
+    // Only changed fields: an unchanged name must not trip the server's rename guard.
+    mutationFn: () => api.put<Domain>(`/admin/domains/${domain.id}`, {
+      ...(name.trim() !== domain.name ? { name: name.trim() } : {}),
+      ...(selector.trim() !== domain.dkimSelector ? { dkimSelector: selector.trim() } : {}),
+    }),
     onSuccess: () => {
       toast.success(t('domain_updated_toast'));
       void qc.invalidateQueries({ queryKey: ['admin-domains'] });
       onClose();
     },
-    onError: (err: Error) => toast.error(err.message || 'Fehler'),
+    onError: (err: Error) => toast.error(err.message || t('domain_save_error')),
   });
 
   const deleteMutation = useMutation({
@@ -292,8 +349,8 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
     try {
       const r = await api.get<DkimRecord>(`/admin/domains/${domain.id}/dkim-record`);
       setDkimRecord(r);
-    } catch {
-      toast.error(t('domain_dkim_load_error'));
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : t('domain_dkim_load_error'));
     } finally {
       setDkimLoading(false);
     }
@@ -307,8 +364,8 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
       setDkimRecord(r);
       setDnsCheck(null); // Invalidate DNS panel — new key
       toast.success(t('domain_dkim_regen_success'));
-    } catch {
-      toast.error(t('domain_dkim_regen_error'));
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : t('domain_dkim_regen_error'));
     } finally {
       setDkimLoading(false);
     }
@@ -319,8 +376,8 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
     try {
       const r = await api.get<DnsCheckResult>(`/admin/domains/${domain.id}/dns-check`);
       setDnsCheck(r);
-    } catch {
-      toast.error(t('domain_dns_check_error'));
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : t('domain_dns_check_error'));
     } finally {
       setDnsLoading(false);
     }
@@ -333,27 +390,27 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
       labelledBy={titleId}
 
       closeOnBackdrop={false}
-      overlayClassName="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
-      className={`bg-white rounded-lg shadow-2xl w-full ${dnsCheck ? 'max-w-2xl' : 'max-w-lg'} p-6 max-h-[90vh] overflow-y-auto transition-all`}
+      overlayClassName="fixed inset-0 bg-scrim/40 flex items-center justify-center z-50 p-4"
+      className={`bg-surface rounded-lg shadow-2xl w-full ${dnsCheck ? 'max-w-2xl' : 'max-w-lg'} p-6 max-h-[90vh] overflow-y-auto transition-all`}
     >
         <div className="flex items-center justify-between mb-5">
-          <h2 id={titleId} className="text-base font-semibold text-gray-900">{t('domain_edit_title')}</h2>
-          <button type="button" onClick={onClose} aria-label="Schließen" className="p-1 text-gray-400 hover:text-gray-600 rounded"><X size={16} /></button>
+          <h2 id={titleId} className="text-base font-semibold text-fg">{t('domain_edit_title')}</h2>
+          <button type="button" onClick={onClose} aria-label={t('action_close')} className="p-1 text-fg-subtle hover:text-fg-muted rounded"><X size={16} /></button>
         </div>
 
         <div className="space-y-3">
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">{t('domain_edit_name_label')}</label>
+            <label className="block text-xs font-medium text-fg-muted mb-1">{t('domain_edit_name_label')}</label>
             <input
-              className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full border border-line-strong rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-fg"
               value={name}
               onChange={e => setName(e.target.value)}
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">{t('domain_edit_dkim_label')}</label>
+            <label className="block text-xs font-medium text-fg-muted mb-1">{t('domain_edit_dkim_label')}</label>
             <input
-              className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full border border-line-strong rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-fg"
               value={selector}
               onChange={e => setSelector(e.target.value)}
             />
@@ -361,10 +418,10 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
 
           {/* Info */}
           <div className="flex items-center gap-4 pt-1">
-            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${domain.primary ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-500'}`}>
+            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${domain.primary ? 'bg-info-bg text-info-fg' : 'bg-surface-2 text-fg-subtle'}`}>
               {domain.primary ? t('domain_edit_primary') : t('domain_edit_secondary')}
             </span>
-            <span className="text-xs text-gray-400">{domain._count.users} {t('domain_edit_mailbox_count')}</span>
+            <span className="text-xs text-fg-subtle">{domain._count.users} {t('domain_edit_mailbox_count')}</span>
           </div>
 
           {/* ── DKIM Quick-Show ────────────────────────────────────────────── */}
@@ -372,7 +429,7 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
             <button
               onClick={() => void loadDkim()}
               disabled={dkimLoading}
-              className="flex items-center gap-1.5 text-xs text-blue-600 hover:underline disabled:opacity-50"
+              className="flex items-center gap-1.5 text-xs text-info-fg hover:underline disabled:opacity-50"
             >
               <CheckCircle size={13} />
               {dkimLoading ? t('domain_dkim_loading') : t('domain_dkim_show')}
@@ -381,8 +438,8 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
               <button
                 onClick={() => void regenerateDkim()}
                 disabled={dkimLoading}
-                className="flex items-center gap-1.5 text-xs text-amber-600 hover:underline disabled:opacity-50"
-                title="Neues RSA-2048-Schlüsselpaar generieren — bestehender DNS-Eintrag wird ungültig"
+                className="flex items-center gap-1.5 text-xs text-warning-fg hover:underline disabled:opacity-50"
+                title={t('domain_dkim_regen_title')}
               >
                 <RefreshCw size={12} />
                 {t('domain_dkim_regenerate')}
@@ -391,30 +448,30 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
           </div>
 
           {dkimRecord && (
-            <div className="bg-gray-50 rounded-lg p-3 space-y-2 border border-gray-200">
+            <div className="bg-surface-2 rounded-lg p-3 space-y-2 border border-line">
               <div>
-                <label className="text-xs text-gray-500 font-medium">{t('domain_dkim_dns_name')}</label>
+                <label className="text-xs text-fg-subtle font-medium">{t('domain_dkim_dns_name')}</label>
                 <div className="flex items-center gap-2 mt-1">
-                  <code className="flex-1 bg-white border border-gray-200 rounded px-2 py-1 text-xs font-mono break-all">{dkimRecord.dnsName}</code>
-                  <button aria-label="Kopieren" onClick={() => { copyToClipboard(dkimRecord.dnsName).then(() => toast.success(t('domain_dkim_copied'))).catch(() => toast.error(t('domain_dkim_copy_error'))); }} className="p-1 text-gray-400 hover:text-gray-600"><Copy size={12} /></button>
+                  <code className="flex-1 bg-surface border border-line rounded px-2 py-1 text-xs font-mono break-all">{dkimRecord.dnsName}</code>
+                  <button aria-label={t('domain_dns_copy')} onClick={() => { copyToClipboard(dkimRecord.dnsName).then(() => toast.success(t('domain_dkim_copied'))).catch(() => toast.error(t('domain_dkim_copy_error'))); }} className="p-1 text-fg-subtle hover:text-fg-muted"><Copy size={12} /></button>
                 </div>
               </div>
               <div>
-                <label className="text-xs text-gray-500 font-medium">{t('domain_dkim_txt_value')}</label>
+                <label className="text-xs text-fg-subtle font-medium">{t('domain_dkim_txt_value')}</label>
                 <div className="flex items-start gap-2 mt-1">
-                  <code className="flex-1 bg-white border border-gray-200 rounded px-2 py-1 text-xs font-mono break-all">{dkimRecord.dnsValue}</code>
-                  <button aria-label="Kopieren" onClick={() => { copyToClipboard(dkimRecord.dnsValue).then(() => toast.success(t('domain_dkim_copied'))).catch(() => toast.error(t('domain_dkim_copy_error'))); }} className="p-1 text-gray-400 hover:text-gray-600 mt-0.5"><Copy size={12} /></button>
+                  <code className="flex-1 bg-surface border border-line rounded px-2 py-1 text-xs font-mono break-all">{dkimRecord.dnsValue}</code>
+                  <button aria-label={t('domain_dns_copy')} onClick={() => { copyToClipboard(dkimRecord.dnsValue).then(() => toast.success(t('domain_dkim_copied'))).catch(() => toast.error(t('domain_dkim_copy_error'))); }} className="p-1 text-fg-subtle hover:text-fg-muted mt-0.5"><Copy size={12} /></button>
                 </div>
               </div>
             </div>
           )}
 
           {/* ── DNS setup ──────────────────────────────────────────────────── */}
-          <div className="pt-1 border-t border-gray-100">
+          <div className="pt-1 border-t border-line">
             <button
               onClick={() => void runDnsCheck()}
               disabled={dnsLoading}
-              className="flex items-center gap-1.5 text-xs text-indigo-600 hover:underline disabled:opacity-50"
+              className="flex items-center gap-1.5 text-xs text-info-fg hover:underline disabled:opacity-50"
             >
               <Globe size={13} />
               {dnsLoading ? t('domain_dns_checking') : t('domain_dns_check_btn')}
@@ -422,15 +479,15 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
             </button>
 
             {dnsCheck && (
-              <div className="mt-2 rounded-lg border border-gray-200 overflow-hidden">
+              <div className="mt-2 rounded-lg border border-line overflow-hidden">
                 {/* Header */}
-                <div className="bg-gray-50 px-3 py-2 border-b border-gray-100 flex flex-wrap items-center justify-between gap-2">
-                  <span className="text-xs font-semibold text-gray-700">
-                    {t('domain_dns_panel_title')} <span className="text-indigo-600">{dnsCheck.domain}</span>
+                <div className="bg-surface-2 px-3 py-2 border-b border-line flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs font-semibold text-fg-muted">
+                    {t('domain_dns_panel_title')} <span className="text-info-fg">{dnsCheck.domain}</span>
                   </span>
-                  <span className="text-[10px] text-gray-500 font-mono">
+                  <span className="text-[10px] text-fg-subtle font-mono">
                     {dnsCheck.hostname}
-                    {dnsCheck.serverIp ? <> · <span className="text-green-600">{dnsCheck.serverIp}</span></> : <span className="text-amber-600"> · {t('domain_dns_ip_unknown')}</span>}
+                    {dnsCheck.serverIp ? <> · <span className="text-success-fg">{dnsCheck.serverIp}</span></> : <span className="text-warning-fg"> · {t('domain_dns_ip_unknown')}</span>}
                   </span>
                 </div>
 
@@ -457,9 +514,9 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
                     label={t('domain_dns_record_ptr')}
                     record={dnsCheck.records.ptr}
                     domain={dnsCheck.domain}
-                    hostOverride={dnsCheck.serverIp || '(Server-IP)'}
+                    hostOverride={dnsCheck.serverIp || t('domain_dns_server_ip')}
                     valueOverride={dnsCheck.hostname}
-                    extra={<p className="mt-1 text-[10px] text-gray-400">ℹ {t('domain_dns_ptr_note')}</p>}
+                    extra={<p className="mt-1 text-[10px] text-fg-subtle">ℹ {t('domain_dns_ptr_note')}</p>}
                   />
                 </div>
                 <ClientSetupDnsSection dnsCheck={dnsCheck} />
@@ -475,19 +532,19 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
               if (confirm(`${t('domain_delete_confirm')} "${domain.name}"`)) deleteMutation.mutate();
             }}
             disabled={domain.primary || deleteMutation.isPending}
-            className="px-3 py-2 text-sm text-red-600 hover:bg-red-50 rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            className="px-3 py-2 text-sm text-danger-fg hover:bg-danger-bg rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             title={domain.primary ? t('domain_delete_primary_title') : undefined}
           >
             {t('action_delete')}
           </button>
           <div className="flex gap-2">
-            <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 bg-gray-100 rounded hover:bg-gray-200 transition-colors">
+            <button onClick={onClose} className="px-4 py-2 text-sm text-fg-muted bg-surface-2 rounded hover:bg-surface-3 transition-colors">
               {t('action_cancel')}
             </button>
             <button
               onClick={() => updateMutation.mutate()}
               disabled={!name.trim() || updateMutation.isPending}
-              className="px-4 py-2 text-sm text-white bg-blue-600 rounded hover:bg-blue-700 transition-colors disabled:opacity-50"
+              className="px-4 py-2 text-sm text-white bg-accent rounded hover:bg-accent-hover transition-colors disabled:opacity-50"
             >
               {updateMutation.isPending ? t('action_saving') : t('action_save')}
             </button>
@@ -530,7 +587,7 @@ export function DomainsPage() {
   const toggleMutation = useMutation({
     mutationFn: (id: string) => api.patch(`/admin/domains/${id}/toggle`, {}),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['admin-domains'] }),
-    onError: () => toast.error('Fehler beim Umschalten'),
+    onError: (err: Error) => toast.error(err.message || t('domain_toggle_error')),
   });
 
   const makePrimaryMutation = useMutation({
@@ -539,24 +596,24 @@ export function DomainsPage() {
       toast.success(t('domain_primary_set_toast'));
       void qc.invalidateQueries({ queryKey: ['admin-domains'] });
     },
-    onError: () => toast.error('Fehler beim Setzen der primären Domain'),  // no key exists for this
+    onError: (err: Error) => toast.error(err.message || t('domain_primary_error')),
   });
 
   const columns: Column<Domain>[] = [
     {
       key: 'name', header: t('domain_col_domain'),
-      cell: (d) => <span className="text-gray-800 text-sm font-medium">{d.name}</span>,
+      cell: (d) => <span className="text-fg text-sm font-medium">{d.name}</span>,
     },
     {
       key: 'primary', header: t('domain_primary_label'), srOnlyHeader: true, className: 'w-44',
       cell: (d) => d.primary ? (
-        <span className="text-sm text-gray-500">{t('domain_primary_label')}</span>
+        <span className="text-sm text-fg-subtle">{t('domain_primary_label')}</span>
       ) : (
         <Can area="domains" access="write">
           <button
             onClick={() => makePrimaryMutation.mutate(d.id)}
             disabled={makePrimaryMutation.isPending}
-            className="px-4 py-1.5 text-xs font-bold text-blue-600 border border-blue-300 rounded hover:bg-blue-50 transition-colors uppercase tracking-wide disabled:opacity-50"
+            className="px-4 py-1.5 text-xs font-bold text-info-fg border border-info-line rounded hover:bg-info-bg transition-colors uppercase tracking-wide disabled:opacity-50"
           >
             {t('domain_make_primary')}
           </button>
@@ -565,12 +622,12 @@ export function DomainsPage() {
     },
     {
       key: 'users', header: t('mbox_page_title'),
-      cell: (d) => <span className="text-gray-500 text-xs">{d._count?.users ?? 0}</span>,
+      cell: (d) => <span className="text-fg-subtle text-xs">{d._count?.users ?? 0}</span>,
     },
     {
       key: 'status', header: t('domain_col_status'), headerClassName: 'text-center', className: 'text-center',
       cell: (d) => (
-        <Can area="domains" access="write" fallback={<span className="text-xs text-gray-500">{d.active ? t('status_active') : t('status_inactive')}</span>}>
+        <Can area="domains" access="write" fallback={<span className="text-xs text-fg-subtle">{d.active ? t('status_active') : t('status_inactive')}</span>}>
           <Toggle active={d.active} onToggle={() => toggleMutation.mutate(d.id)} />
         </Can>
       ),
@@ -581,7 +638,7 @@ export function DomainsPage() {
         <Can area="domains" access="write">
           <button
             onClick={() => setEditing(d)}
-            className="p-1.5 text-blue-500 hover:text-blue-700 border border-blue-200 rounded hover:bg-blue-50 transition-colors"
+            className="p-1.5 text-info-fg hover:text-info-fg border border-info-line rounded hover:bg-info-bg transition-colors"
             title={t('domain_edit_title_btn')}
             aria-label={`${t('domain_edit_title_btn')}: ${d.name}`}
           >
@@ -595,8 +652,8 @@ export function DomainsPage() {
   return (
     <div className="p-6 space-y-4">
       <div>
-        <h1 className="text-xl font-semibold text-gray-900">{t('domain_page_title')}</h1>
-        <p className="text-xs text-gray-400 mt-0.5">{total} Domain{total !== 1 ? 's' : ''} {t('domain_total')}</p>
+        <h1 className="text-xl font-semibold text-fg">{t('domain_page_title')}</h1>
+        <p className="text-xs text-fg-subtle mt-0.5">{total} Domain{total !== 1 ? 's' : ''} {t('domain_total')}</p>
       </div>
 
       <DataTable<Domain>
@@ -609,7 +666,7 @@ export function DomainsPage() {
         search={{ placeholder: t('domain_search_placeholder'), value: search, onChange: (q) => { setSearch(q); setPage(1); } }}
         emptyText={search ? t('domain_no_results') : t('domain_empty')}
         filters={
-          <label className="flex items-center gap-1.5 text-xs text-gray-500">
+          <label className="flex items-center gap-1.5 text-xs text-fg-subtle">
             <select
               value={limit}
               onChange={e => { setLimit(Number(e.target.value)); setPage(1); }}

@@ -1,7 +1,7 @@
 /**
  * Keyboard shortcut definitions + matcher (framework-free, unit-tested).
  *
- * Two switchable sets modelled on Exchange OWA 2019:
+ * Two switchable shortcut sets:
  *  - "gmail"    — the Gmail set OWA offers (c/r/a/f, e, #, !, s, v, z, j/k, g-sequences …)
  *  - "coremail" — the default: the Gmail set plus Outlook-style Ctrl combinations
  *                 (Ctrl+N/R/Shift+R/F, Ctrl+Q/U, Insert, Ctrl+Z) and Delete.

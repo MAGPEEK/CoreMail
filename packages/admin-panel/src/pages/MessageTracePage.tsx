@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Search, Download, Loader2, ArrowRight, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -21,13 +21,13 @@ const STATUS_LABELS: Record<string, { de: string; en: string; color: string }> =
 };
 
 const COLOR_CLASS: Record<string, string> = {
-  blue:   'bg-blue-100 text-blue-700',
-  green:  'bg-green-100 text-green-700',
-  purple: 'bg-purple-100 text-purple-700',
-  red:    'bg-red-100 text-red-700',
-  amber:  'bg-amber-100 text-amber-700',
-  orange: 'bg-orange-100 text-orange-700',
-  gray:   'bg-gray-100 text-gray-600',
+  blue:   'bg-info-bg text-info-fg',
+  green:  'bg-success-bg text-success-fg',
+  purple: 'bg-info-bg text-info-fg',
+  red:    'bg-danger-bg text-danger-fg',
+  amber:  'bg-warning-bg text-warning-fg',
+  orange: 'bg-warning-bg text-warning-fg',
+  gray:   'bg-surface-2 text-fg-muted',
 };
 
 function StatusBadge({ status, lang }: { status: string; lang: string }) {
@@ -51,27 +51,31 @@ export function MessageTracePage() {
   const [toDate, setToDate]       = useState('');
   const [page, setPage]           = useState(1);
   const [limit]                   = useState(100);
-  const [triggered, setTriggered] = useState(false);
+  // The table follows the APPLIED filters (Search / Enter), not every keystroke.
+  // datetime-local values are local time → sent as ISO instants.
+  const currentFilters = () => {
+    const iso = (v: string) => { const d = v ? new Date(v) : null; return d && !Number.isNaN(d.getTime()) ? d.toISOString() : ''; };
+    return { sender: sender.trim(), recipient: recipient.trim(), subject: subject.trim(), status, from: iso(fromDate), to: iso(toDate) };
+  };
+  const [applied, setApplied] = useState(currentFilters);
 
-  // On first load automatically show the latest entries (without filter)
-  useEffect(() => {
-    setTriggered(true);
-  }, []);
-
-  const { data, isLoading, isFetching, refetch } = useQuery<{ items: TraceItem[]; total: number }>({
-    queryKey: ['message-trace', sender, recipient, subject, status, fromDate, toDate, page],
-    // IMPORTANT: API client adds /api/v1 automatically → path without /api/v1
-    queryFn: () => api.get(
-      `/admin/message-trace?sender=${encodeURIComponent(sender)}&recipient=${encodeURIComponent(recipient)}&subject=${encodeURIComponent(subject)}&status=${status}&from=${fromDate}&to=${toDate}&page=${page}&limit=${limit}`
-    ),
-    enabled: triggered,
+  const { data, isLoading, isFetching, refetch } = useQuery<{ items: TraceItem[]; total: number; truncated?: boolean }>({
+    queryKey: ['message-trace', applied, page],
+    // API client adds /api/v1 automatically → path without /api/v1
+    queryFn: () => api.get(`/admin/message-trace?${new URLSearchParams({ ...applied, page: String(page), limit: String(limit) }).toString()}`),
+    placeholderData: (prev) => prev,
   });
 
-  function handleSearch() { setPage(1); setTriggered(true); void refetch(); }
+  function handleSearch() {
+    const next = currentFilters();
+    setPage(1);
+    if (JSON.stringify(next) === JSON.stringify(applied)) void refetch(); else setApplied(next);
+  }
   function handleReset() {
     setSender(''); setRecipient(''); setSubject('');
     setStatus(''); setFromDate(''); setToDate('');
-    setPage(1); setTriggered(true);
+    setPage(1);
+    setApplied({ sender: '', recipient: '', subject: '', status: '', from: '', to: '' });
   }
 
   const items = data?.items ?? [];
@@ -82,7 +86,7 @@ export function MessageTracePage() {
   // Authenticated download (Authorization header) with the same filters as the
   // table — window.open() could not send the token and dropped subject/status.
   function exportCsv() {
-    const qs = new URLSearchParams({ sender, recipient, subject, status, from: fromDate, to: toDate });
+    const qs = new URLSearchParams(applied);
     setExporting(true);
     downloadFile(`/admin/message-trace/export?${qs.toString()}`, 'message-trace.csv')
       .catch((err: unknown) => { toast.error(err instanceof Error ? err.message : String(err)); })
@@ -134,16 +138,16 @@ export function MessageTracePage() {
     <div className="p-6">
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
-          <Search size={22} className="text-blue-600" />
+          <Search size={22} className="text-info-fg" />
           <div>
-            <h1 className="text-xl font-bold text-gray-900">{pageTitle}</h1>
-            <p className="text-sm text-gray-500">{pageSubtitle}</p>
+            <h1 className="text-xl font-bold text-fg">{pageTitle}</h1>
+            <p className="text-sm text-fg-subtle">{pageSubtitle}</p>
           </div>
         </div>
         <button
           onClick={() => void refetch()}
           disabled={isLoading || isFetching}
-          className="flex items-center gap-1.5 px-3 py-2 text-sm text-gray-600 border border-gray-300 rounded hover:bg-gray-50 disabled:opacity-50"
+          className="flex items-center gap-1.5 px-3 py-2 text-sm text-fg-muted border border-line-strong rounded hover:bg-surface-2 disabled:opacity-50"
         >
           <RefreshCw size={13} className={(isLoading || isFetching) ? 'animate-spin' : ''} />
           {labelRefresh}
@@ -151,7 +155,7 @@ export function MessageTracePage() {
       </div>
 
       {/* Search form */}
-      <div className="bg-white rounded-xl border border-gray-200 p-4 mb-4">
+      <div className="bg-surface rounded-xl border border-line p-4 mb-4">
         <div className="grid grid-cols-3 gap-3 mb-3">
           <div>
             <label className="field-label">{labelSender}</label>
@@ -173,7 +177,7 @@ export function MessageTracePage() {
           </div>
           <div>
             <label className="field-label">{labelStatus}</label>
-            <select value={status} onChange={e => setStatus(e.target.value)} className="input">
+            <select value={status} onChange={e => setStatus(e.target.value)} className="input" aria-label={labelStatus}>
               {statusOptions.map(o => (
                 <option key={o.value} value={o.value}>{o.label}</option>
               ))}
@@ -197,7 +201,7 @@ export function MessageTracePage() {
               {exporting ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />} {labelExport}
             </button>
             <button onClick={handleReset}
-              className="btn-secondary flex items-center gap-1.5 text-xs text-gray-500">
+              className="btn-secondary flex items-center gap-1.5 text-xs text-fg-subtle">
               {labelReset}
             </button>
           </div>
@@ -212,49 +216,49 @@ export function MessageTracePage() {
       </div>
 
       {/* Results table */}
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className="bg-surface rounded-xl border border-line overflow-hidden">
         {isLoading ? (
-          <div className="flex items-center justify-center py-12 text-gray-400">
+          <div className="flex items-center justify-center py-12 text-fg-subtle">
             <Loader2 size={20} className="animate-spin mr-2" /> {labelRunning}
           </div>
         ) : items.length === 0 ? (
-          <div className="text-center py-12 text-gray-400 text-sm">
-            <Search size={28} className="mx-auto mb-2 opacity-30" />
+          <div className="text-center py-12 text-fg-subtle text-sm">
+            <Search size={28} className="mx-auto mb-2 text-fg-subtle" aria-hidden="true" />
             {labelNoResults}
           </div>
         ) : (
           <>
             <table className="w-full">
-              <thead className="bg-gray-50 border-b border-gray-200">
+              <thead className="bg-surface-2 border-b border-line">
                 <tr>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">{labelTimestamp}</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">{labelFromTo}</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">{labelSubject}</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">{labelStatus}</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">{labelDetails}</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-fg-subtle uppercase tracking-wide">{labelTimestamp}</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-fg-subtle uppercase tracking-wide">{labelFromTo}</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-fg-subtle uppercase tracking-wide">{labelSubject}</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-fg-subtle uppercase tracking-wide">{labelStatus}</th>
+                  <th className="text-left px-4 py-3 text-xs font-semibold text-fg-subtle uppercase tracking-wide">{labelDetails}</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100">
+              <tbody className="divide-y divide-line">
                 {items.map(item => {
                   const m = item.metadata ?? {};
                   return (
-                    <tr key={item.id} className="hover:bg-gray-50 transition-colors">
-                      <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
+                    <tr key={item.id} className="hover:bg-surface-2 transition-colors">
+                      <td className="px-4 py-3 text-xs text-fg-subtle whitespace-nowrap">
                         {new Date(item.timestamp).toLocaleString(lang === 'en' ? 'en-GB' : 'de-DE')}
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1 text-sm">
-                          <span className="text-gray-700">{m['sender'] || '–'}</span>
-                          <ArrowRight size={12} className="text-gray-400 shrink-0" />
-                          <span className="text-gray-700">{m['recipient'] || '–'}</span>
+                          <span className="text-fg-muted">{m['sender'] || '–'}</span>
+                          <ArrowRight size={12} className="text-fg-subtle shrink-0" />
+                          <span className="text-fg-muted">{m['recipient'] || '–'}</span>
                         </div>
                       </td>
                       <td className="px-4 py-3">
-                        <p className="text-sm text-gray-700 truncate max-w-[200px]">
+                        <p className="text-sm text-fg-muted truncate max-w-[200px]">
                           {m['subject'] || `(${labelNoSubject.replace('(', '').replace(')', '')})`}
                         </p>
                         {m['messageId'] && (
-                          <p className="text-xs text-gray-400 font-mono">
+                          <p className="text-xs text-fg-subtle font-mono">
                             {m['messageId'].slice(0, 30)}
                           </p>
                         )}
@@ -262,8 +266,8 @@ export function MessageTracePage() {
                       <td className="px-4 py-3">
                         <StatusBadge status={m['status'] ?? ''} lang={lang} />
                       </td>
-                      <td className="px-4 py-3 text-xs text-gray-500">
-                        {m['reason'] && <span className="text-red-600">{m['reason']}</span>}
+                      <td className="px-4 py-3 text-xs text-fg-subtle">
+                        {m['reason'] && <span className="text-danger-fg">{m['reason']}</span>}
                         {m['spamScore'] && <span> {labelSpam} {m['spamScore']}</span>}
                         {m['size'] && <span> {Math.round(parseInt(m['size']) / 1024)} KB</span>}
                       </td>
@@ -272,15 +276,15 @@ export function MessageTracePage() {
                 })}
               </tbody>
             </table>
-            {pages > 1 && (
-              <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200 text-sm text-gray-500">
-                <span>{total} {labelEntries}</span>
+            {(pages > 1 || data?.truncated) && (
+              <div className="flex items-center justify-between px-4 py-3 border-t border-line text-sm text-fg-subtle">
+                <span>{total} {labelEntries}{data?.truncated ? (lang === 'en' ? ' (newest 5,000 searched: narrow the date range)' : ' (die neuesten 5.000 durchsucht: Zeitraum eingrenzen)') : ''}</span>
                 <div className="flex gap-1">
                   <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
-                    className="px-2 py-1 border rounded hover:bg-gray-50 disabled:opacity-40">‹</button>
+                    className="px-2 py-1 border border-line-strong rounded text-fg-muted hover:bg-surface-2 disabled:text-fg-subtle disabled:cursor-not-allowed">‹</button>
                   <span className="px-3 py-1">{labelPage} {page} {labelOf} {pages}</span>
                   <button onClick={() => setPage(p => Math.min(pages, p + 1))} disabled={page === pages}
-                    className="px-2 py-1 border rounded hover:bg-gray-50 disabled:opacity-40">›</button>
+                    className="px-2 py-1 border border-line-strong rounded text-fg-muted hover:bg-surface-2 disabled:text-fg-subtle disabled:cursor-not-allowed">›</button>
                 </div>
               </div>
             )}

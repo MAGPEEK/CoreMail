@@ -25,6 +25,7 @@ import {
 import { ShareCalendarDialog } from '../components/ShareCalendarDialog.js';
 import { EventEditDialog } from '../components/EventEditDialog.js';
 import toast from 'react-hot-toast';
+import { readableTextOn } from '../lib/readableText.js';
 
 const LOCALE_MAP = { de: deLocale, en: enLocale, es: esLocale, it: itLocale };
 
@@ -150,7 +151,7 @@ export function CalendarPage() {
       allDay: true,
       backgroundColor: t.status === 'COMPLETED' ? '#9ca3af' : '#f59e0b',
       borderColor: 'transparent',
-      textColor: '#ffffff',
+      textColor: readableTextOn(t.status === 'COMPLETED' ? '#9ca3af' : '#f59e0b'),
       classNames: t.status === 'COMPLETED' ? ['opacity-60'] : [],
     }));
 
@@ -181,6 +182,8 @@ export function CalendarPage() {
           end: allDay ? ev.dtEnd.slice(0, 10) : ev.dtEnd,
           allDay,
           backgroundColor: cal?.color ?? '#0078D4',
+          // Calendar colours are user data: black or white text, whichever reaches 4.5:1
+          textColor: readableTextOn(cal?.color ?? '#0078D4'),
           borderColor: 'transparent',
           // READ shares: per-event editable=false (prevents drag/resize)
           editable: !isReadOnly,

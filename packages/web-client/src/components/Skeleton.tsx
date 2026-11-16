@@ -6,7 +6,7 @@ import { useT } from '../i18n/useT.js';
 export function SkeletonBar({ width = '100%', height = 12, className = '' }: { width?: string | number; height?: number; className?: string }) {
   return (
     <span
-      className={`block rounded bg-gradient-to-r from-gray-200 via-gray-100 to-gray-200 dark:from-gray-700 dark:via-gray-600 dark:to-gray-700 bg-[length:200%_100%] animate-shimmer ${className}`}
+      className={`block rounded bg-gradient-to-r from-surface-3 via-surface-2 to-surface-3 bg-[length:200%_100%] animate-shimmer ${className}`}
       style={{ width: typeof width === 'number' ? `${width}px` : width, height }}
     />
   );
@@ -17,11 +17,11 @@ export function MessageListSkeleton({ rows = 8, label }: { rows?: number; label?
   return (
     <div className="flex-1 overflow-hidden" {...(label ? { role: 'status', 'aria-busy': true, 'aria-label': label } : { 'aria-hidden': true })}>
       {Array.from({ length: rows }).map((_, i) => (
-        <div key={i} className="px-3 py-2.5 border-b border-gray-100 dark:border-gray-700">
+        <div key={i} className="px-3 py-2.5 border-b border-line">
           <div className="flex items-start gap-2.5">
             <span className="w-4 h-4 shrink-0" />
             <span className="w-4 h-4 shrink-0" />
-            <span className="w-7 h-7 rounded-full bg-gray-200 dark:bg-gray-700 shrink-0 animate-shimmer bg-gradient-to-r from-gray-200 via-gray-100 to-gray-200 dark:from-gray-700 dark:via-gray-600 dark:to-gray-700 bg-[length:200%_100%]" />
+            <span className="w-7 h-7 rounded-full bg-surface-3 shrink-0 animate-shimmer bg-gradient-to-r from-surface-3 via-surface-2 to-surface-3 bg-[length:200%_100%]" />
             <div className="flex-1 min-w-0 space-y-2">
               <div className="flex items-center justify-between">
                 <SkeletonBar width={120 + (i % 4) * 30} height={10} />
@@ -39,7 +39,7 @@ export function MessageListSkeleton({ rows = 8, label }: { rows?: number; label?
 /** Skeleton for MessageReader */
 export function MessageReaderSkeleton() {
   return (
-    <div className="flex-1 flex flex-col bg-white dark:bg-gray-900 p-6 space-y-6">
+    <div className="flex-1 flex flex-col bg-surface p-6 space-y-6">
       <div className="flex items-center gap-1">
         {Array.from({ length: 5 }).map((_, i) => (
           <SkeletonBar key={i} width={i === 4 ? 60 : 90} height={28} className="rounded" />
@@ -72,11 +72,11 @@ export function EmptyState({
 }: { icon: ReactNode; title: string; subtitle?: string }) {
   return (
     <div className="flex-1 flex flex-col items-center justify-center text-center px-6 py-12 select-none">
-      <div className="w-20 h-20 rounded-full bg-gray-100 dark:bg-gray-800 flex items-center justify-center text-gray-400 dark:text-gray-500 mb-4">
+      <div className="w-20 h-20 rounded-full bg-surface-2 flex items-center justify-center text-fg-subtle mb-4">
         {icon}
       </div>
-      <h3 className="text-base font-medium text-gray-700 dark:text-gray-200 mb-1">{title}</h3>
-      {subtitle && <p className="text-sm text-gray-400 dark:text-gray-500 max-w-xs">{subtitle}</p>}
+      <h3 className="text-base font-medium text-fg-muted mb-1">{title}</h3>
+      {subtitle && <p className="text-sm text-fg-subtle max-w-xs">{subtitle}</p>}
     </div>
   );
 }
@@ -85,17 +85,17 @@ export function EmptyState({
 function CaughtUpIllustration() {
   return (
     <svg width="132" height="104" viewBox="0 0 132 104" fill="none" aria-hidden="true" className="mb-4">
-      <ellipse cx="66" cy="94" rx="46" ry="6" className="fill-gray-200 dark:fill-gray-700" />
+      <ellipse cx="66" cy="94" rx="46" ry="6" className="fill-surface-3" />
       <path d="M22 50 L36 22 H96 L110 50 V82 a6 6 0 0 1 -6 6 H28 a6 6 0 0 1 -6 -6 Z"
-        className="fill-white stroke-gray-300 dark:fill-gray-800 dark:stroke-gray-600" strokeWidth="2" strokeLinejoin="round" />
+        className="fill-surface stroke-line" strokeWidth="2" strokeLinejoin="round" />
       <path d="M22 50 H46 a4 4 0 0 1 4 4 a16 8 0 0 0 32 0 a4 4 0 0 1 4 -4 H110"
-        className="stroke-gray-300 dark:stroke-gray-600" strokeWidth="2" strokeLinejoin="round" />
+        className="stroke-line" strokeWidth="2" strokeLinejoin="round" />
       <circle cx="66" cy="32" r="18" style={{ fill: 'rgb(var(--color-accent, 0 120 212) / 0.12)' }} />
       <path d="M57 32 l6 6 l12 -12" style={{ stroke: 'rgb(var(--color-accent, 0 120 212))' }}
         strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
-      <circle cx="104" cy="16" r="3" className="fill-amber-300" />
-      <circle cx="24" cy="24" r="2" className="fill-sky-300" />
-      <path d="M114 34 l3 0 M115.5 32.5 l0 3" className="stroke-pink-300" strokeWidth="1.5" strokeLinecap="round" />
+      <circle cx="104" cy="16" r="3" className="fill-warning-fg" />
+      <circle cx="24" cy="24" r="2" className="fill-info-fg" />
+      <path d="M114 34 l3 0 M115.5 32.5 l0 3" className="stroke-danger-fg" strokeWidth="1.5" strokeLinecap="round" />
     </svg>
   );
 }
@@ -106,8 +106,8 @@ export function EmptyInbox() {
   return (
     <div role="status" className="flex-1 flex flex-col items-center justify-center text-center px-6 py-12 select-none">
       <CaughtUpIllustration />
-      <h3 className="text-base font-medium text-gray-700 dark:text-gray-200 mb-1">{t('empty_caught_up')}</h3>
-      <p className="text-sm text-gray-400 dark:text-gray-500 max-w-xs">{t('empty_caught_up_sub')}</p>
+      <h3 className="text-base font-medium text-fg-muted mb-1">{t('empty_caught_up')}</h3>
+      <p className="text-sm text-fg-subtle max-w-xs">{t('empty_caught_up_sub')}</p>
     </div>
   );
 }

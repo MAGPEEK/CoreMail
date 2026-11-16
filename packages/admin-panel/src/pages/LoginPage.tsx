@@ -52,8 +52,8 @@ export function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-900">
-      <div className="bg-white rounded-lg shadow-2xl p-8 w-full max-w-sm">
+    <div className="min-h-screen flex items-center justify-center bg-canvas">
+      <div className="bg-surface rounded-lg shadow-2xl p-8 w-full max-w-sm">
         {/* Logo */}
         <div className="flex items-center justify-center gap-2 mb-6">
           <div className="w-10 h-10 bg-accent rounded-lg flex items-center justify-center">
@@ -63,8 +63,8 @@ export function LoginPage() {
             }
           </div>
           <div>
-            <h1 className="text-xl font-bold text-gray-900">CoreMail BCP</h1>
-            <p className="text-xs text-gray-500">
+            <h1 className="text-xl font-bold text-fg">CoreMail BCP</h1>
+            <p className="text-xs text-fg-subtle">
               {step === 'mfa' ? 'Zwei-Faktor-Authentifizierung' : 'Backend Control Panel'}
             </p>
           </div>
@@ -74,23 +74,23 @@ export function LoginPage() {
         {step === 'credentials' && (
           <form onSubmit={handleSubmitCredentials} className="space-y-4">
             <div>
-              <label htmlFor="bcp-email" className="block text-sm font-medium text-gray-700 mb-1">Administrator-E-Mail</label>
+              <label htmlFor="bcp-email" className="block text-sm font-medium text-fg-muted mb-1">Administrator-E-Mail</label>
               <div className="relative">
-                <Mail size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <Mail size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-subtle" />
                 <input id="bcp-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)}
                   className="input pl-9" placeholder="admin@domain.com" required autoComplete="email" />
               </div>
             </div>
             <div>
-              <label htmlFor="bcp-password" className="block text-sm font-medium text-gray-700 mb-1">Passwort</label>
+              <label htmlFor="bcp-password" className="block text-sm font-medium text-fg-muted mb-1">Passwort</label>
               <div className="relative">
-                <Lock size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <Lock size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-subtle" />
                 <input id="bcp-password" type="password" value={password} onChange={(e) => setPassword(e.target.value)}
                   className="input pl-9" placeholder="••••••••" required autoComplete="current-password" />
               </div>
             </div>
             {error && (
-              <div role="alert" className="bg-red-50 border border-red-200 rounded px-3 py-2 text-sm text-red-700">{error}</div>
+              <div role="alert" className="bg-danger-bg border border-danger-line rounded px-3 py-2 text-sm text-danger-fg">{error}</div>
             )}
             <button type="submit" disabled={loading}
               className="btn-primary w-full justify-center py-2 disabled:opacity-60">

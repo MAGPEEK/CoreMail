@@ -53,14 +53,26 @@ adminDomainsRouter.get('/:id', async (req: Request, res: Response) => {
   res.json(domain);
 });
 
+// Host-name labels (letters, digits, hyphen; no leading/trailing hyphen), at least one dot.
+const DOMAIN_RE = /^(?=.{3,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+// DKIM selector: one DNS label (what provider UIs and the record helpers expect).
+const SELECTOR_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+const domainNameSchema = z.string().trim().toLowerCase().regex(DOMAIN_RE, 'Invalid domain name');
+const selectorSchema = z.string().trim().toLowerCase()
+  .regex(SELECTOR_RE, 'Invalid DKIM selector (one DNS label: letters, digits, hyphen)');
+/** 400 with the first zod issue as a readable `error` (the BCP shows it in a toast). */
+function invalid(res: Response, issues: { message: string }[]): void {
+  res.status(400).json({ error: issues[0]?.message ?? 'Invalid request', details: issues });
+}
+
 // ── POST / ────────────────────────────────────────────────────────────────────
 adminDomainsRouter.post('/', async (req: Request, res: Response) => {
   const schema = z.object({
-    name:         z.string().min(3).max(253),
-    dkimSelector: z.string().default('coremail'),
+    name:         domainNameSchema,
+    dkimSelector: selectorSchema.default('coremail'),
   });
   const parsed = schema.safeParse(req.body);
-  if (!parsed.success) { res.status(400).json({ error: 'Invalid request', details: parsed.error.issues }); return; }
+  if (!parsed.success) { invalid(res, parsed.error.issues); return; }
 
   const existing = await prisma.domain.findUnique({ where: { name: parsed.data.name } });
   if (existing) { res.status(409).json({ error: 'Domain already exists' }); return; }
@@ -100,12 +112,12 @@ adminDomainsRouter.post('/', async (req: Request, res: Response) => {
 adminDomainsRouter.put('/:id', async (req: Request, res: Response) => {
   const id = req.params['id'] ?? '';
   const schema = z.object({
-    name:         z.string().min(3).max(253).optional(),
+    name:         domainNameSchema.optional(),
     active:       z.boolean().optional(),
-    dkimSelector: z.string().optional(),
+    dkimSelector: selectorSchema.optional(),
   });
   const parsed = schema.safeParse(req.body);
-  if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
+  if (!parsed.success) { invalid(res, parsed.error.issues); return; }
 
   const domain = await prisma.domain.findUnique({ where: { id } });
   if (!domain) { res.status(404).json({ error: 'Domain not found' }); return; }
@@ -114,6 +126,20 @@ adminDomainsRouter.put('/:id', async (req: Request, res: Response) => {
   if (parsed.data.name !== undefined && parsed.data.name !== domain.name) {
     const clash = await prisma.domain.findUnique({ where: { name: parsed.data.name }, select: { id: true } });
     if (clash) { res.status(409).json({ error: 'Domain already exists' }); return; }
+    // Addresses are stored in full (user@old-domain): a rename would leave every
+    // mailbox, alias and shared mailbox on a domain that no longer exists.
+    const [users, shared, resources] = await Promise.all([
+      prisma.user.count({ where: { domainId: id } }),
+      prisma.sharedMailbox.count({ where: { domainId: id } }),
+      prisma.resourceMailbox.count({ where: { domainId: id } }),
+    ]);
+    if (users + shared + resources > 0) {
+      res.status(409).json({
+        error: 'The domain has mailboxes and cannot be renamed. Add the new domain and move the mailboxes instead.',
+        code: 'DOMAIN_IN_USE',
+      });
+      return;
+    }
   }
 
   const updated = await prisma.domain.update({
@@ -126,6 +152,12 @@ adminDomainsRouter.put('/:id', async (req: Request, res: Response) => {
     select: SELECT,
   });
   log.info({ id }, 'Domain updated');
+  // A renamed primary domain re-derives the public host name / client URLs.
+  if (domain.primary && parsed.data.name !== undefined && parsed.data.name !== domain.name) {
+    await syncFromPrimaryDomain(parsed.data.name).catch((err: unknown) =>
+      log.warn({ err, domain: parsed.data.name }, 'Auto-derive of server URLs failed'),
+    );
+  }
   res.json(updated);
 });
 
@@ -148,6 +180,12 @@ adminDomainsRouter.post('/:id/make-primary', async (req: Request, res: Response)
   const id = req.params['id'] ?? '';
   const domain = await prisma.domain.findUnique({ where: { id } });
   if (!domain) { res.status(404).json({ error: 'Domain not found' }); return; }
+  // An inactive domain receives no mail — it must not become the primary domain
+  // (publicHostname / server URLs are derived from the primary domain).
+  if (!domain.active) {
+    res.status(409).json({ error: 'An inactive domain cannot be the primary domain — activate it first', code: 'DOMAIN_INACTIVE' });
+    return;
+  }
 
   // Mark all other domains as non-primary, this one as primary
   await prisma.$transaction([
@@ -279,6 +317,14 @@ export interface ClientSetupRecord {
   found: string | null;
   warning?: string;
   recommended: true;
+  /** Plain-text protocols (IMAP 143, POP3 110): optional, not counted as recommended. */
+  optional?: true;
+  /**
+   * SRV only: the record split into its fields, for DNS providers with separate
+   * priority / weight / port / target inputs (e.g. netcup). `target` has no trailing
+   * dot; `expected` keeps the zone-file form "priority weight port target.".
+   */
+  srv?: { priority: number; weight: number; port: number; target: string };
 }
 
 const norm = (h: string): string => h.trim().toLowerCase().replace(/\.$/, '');
@@ -289,9 +335,13 @@ export async function checkClientSetupRecords(
 ): Promise<Record<string, ClientSetupRecord>> {
   const target = norm(hostname);
 
-  async function srv(service: string, port: number, priority = 0, weight = 1): Promise<ClientSetupRecord> {
+  async function srv(service: string, port: number, priority = 0, weight = 1, optional = false): Promise<ClientSetupRecord> {
     const expected = `${priority} ${weight} ${port} ${target}.`;
-    const base = { type: 'SRV' as const, name: `${service}._tcp`, expected, recommended: true as const };
+    const base = {
+      type: 'SRV' as const, name: `${service}._tcp`, expected, recommended: true as const,
+      ...(optional ? { optional: true as const } : {}),
+      srv: { priority, weight, port, target },
+    };
     let recs: { priority: number; weight: number; port: number; name: string }[];
     try {
       recs = await dns.resolveSrv(`${service}._tcp.${domainName}`);
@@ -300,7 +350,9 @@ export async function checkClientSetupRecords(
     }
     if (!recs.length) return { ...base, ok: false, found: null };
     const found = recs.map((r) => `${r.priority} ${r.weight} ${r.port} ${norm(r.name) || '.'}.`).join(', ');
-    // "." target = service explicitly not offered (RFC 2782)
+    // "." target = service explicitly not offered (RFC 2782 / RFC 6186). For the
+    // optional plain-text protocols that is a deliberate, valid answer.
+    if (optional && recs.every((r) => norm(r.name) === '')) return { ...base, ok: true, found };
     const ok = recs.some((r) => r.port === port && norm(r.name) === target);
     return ok
       ? { ...base, ok, found }
@@ -345,13 +397,14 @@ export async function checkClientSetupRecords(
     }
   }
 
-  const [submissions, submission, imaps, imap, pop3s, autodiscoverSrv, autoconfig, caldavs, caldavsPath, carddavs, carddavsPath] =
+  const [submissions, submission, imaps, imap, pop3s, pop3, autodiscoverSrv, autoconfig, caldavs, caldavsPath, carddavs, carddavsPath] =
     await Promise.all([
       srv('_submissions', 465),
       srv('_submission', 587),
       srv('_imaps', 993),
-      srv('_imap', 143),
+      srv('_imap', 143, 0, 1, true),
       srv('_pop3s', 995),
+      srv('_pop3', 110, 0, 1, true),
       srv('_autodiscover', httpsPort, 0, 0),
       autoconfigHost(),
       srv('_caldavs', httpsPort),
@@ -359,7 +412,7 @@ export async function checkClientSetupRecords(
       srv('_carddavs', httpsPort),
       davPath('_carddavs'),
     ]);
-  return { submissions, submission, imaps, imap, pop3s, autodiscoverSrv, autoconfig, caldavs, caldavsPath, carddavs, carddavsPath };
+  return { submissions, submission, imaps, imap, pop3s, pop3, autodiscoverSrv, autoconfig, caldavs, caldavsPath, carddavs, carddavsPath };
 }
 
 // ── GET /:id/dns-check ────────────────────────────────────────────────────────
@@ -427,7 +480,7 @@ adminDomainsRouter.get('/:id/dns-check', async (req: Request, res: Response) => 
   const spfIsMulti = spfRaw.ok && (spfRaw.found ?? '').startsWith('__MULTI__');
   const spf: DnsEntry = spfIsMulti
     ? { ok: false, found: (spfRaw.found ?? '').replace('__MULTI__', ''),
-        warning: 'RFC 7208 §3.2 Verletzung: Mehrere SPF-TXT-Records (→ permerror bei allen Empfängern). Nur einen einzigen SPF-Record behalten!' }
+        warning: 'Multiple SPF TXT records (receivers treat this as a permanent error). Keep exactly one SPF record.' }
     : spfRaw;
 
   // ── DKIM ────────────────────────────────────────────────────────────────────
@@ -467,7 +520,7 @@ adminDomainsRouter.get('/:id/dns-check', async (req: Request, res: Response) => 
     if (!matched) throw new Error(`PTR ${cleaned.join(', ')} ≠ ${hostname}`);
     return `${serverIp} → ${cleaned.join(', ')}`;
   });
-  if (!ptr.ok) ptr.warning = 'PTR-Record fehlt oder stimmt nicht überein. Im Hosting-Control-Panel des Servers (Contabo, Hetzner, …) setzen.';
+  if (!ptr.ok) ptr.warning = 'PTR record is missing or does not match. Set it in the control panel of your server provider (Contabo, Hetzner, …).';
 
   // ── Expected values ──────────────────────────────────────────────────────────
   // SPF: real server IP if already known, otherwise hostname-based
@@ -481,8 +534,8 @@ adminDomainsRouter.get('/:id/dns-check', async (req: Request, res: Response) => 
     dkim.found.replace(/\s/g, '') === dkimExpected.replace(/\s/g, '');
 
   // v5.2.5: relative DNS names as the provider expects them
-  // (`_dmarc` instead of `_dmarc.stefanwuestner.de`, `@` for root, `mail` instead
-  // of `mail.stefanwuestner.de`). Prevents a double suffix when the user
+  // (`_dmarc` instead of `_dmarc.example.com`, `@` for root, `mail` instead
+  // of `mail.example.com`). Prevents a double suffix when the user
   // accidentally copies the FQDN from the UI into the provider field.
   const relativeName = (fqdn: string): string => {
     if (fqdn === domainName) return '@';
@@ -490,7 +543,7 @@ adminDomainsRouter.get('/:id/dns-check', async (req: Request, res: Response) => 
     return fqdn.endsWith(suffix) ? fqdn.slice(0, -suffix.length) : fqdn;
   };
 
-  // Hostname relative as well (e.g. "mail.stefanwuestner.de" → "mail")
+  // Hostname relative as well (e.g. "mail.example.com" → "mail")
   const aName = relativeName(hostname);
   const dkimNameRel = relativeName(dkimName);
 

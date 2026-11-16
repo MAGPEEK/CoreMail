@@ -17,7 +17,7 @@ function IconBtn({ icon, onClick, title }: { icon: React.ReactNode; onClick: () 
       onClick={onClick}
       title={title}
       aria-label={title}
-      className="p-1.5 rounded-sm text-gray-600 dark:text-gray-300 hover:bg-accent/10 hover:text-accent transition-all duration-150 active:scale-90"
+      className="p-1.5 rounded-sm text-fg-muted hover:bg-accent/10 hover:text-accent-fg transition-all duration-150 active:scale-90"
     >
       {icon}
     </button>
@@ -85,16 +85,16 @@ export function BulkToolbar({ currentFolderId }: { currentFolderId: string }) {
 
   return (
     <div
-      className="absolute top-0 left-52 w-80 z-20 bg-white dark:bg-gray-800 border-b-2 border-accent flex items-center gap-1 px-2 py-1.5 shadow-sm animate-slide-down"
+      className="absolute top-0 left-52 w-80 z-20 bg-surface border-b-2 border-accent-fg flex items-center gap-1 px-2 py-1.5 shadow-sm animate-slide-down"
     >
       <button aria-label="Auswahl aufheben"
         onClick={clearSelection}
-        className="p-1 rounded text-gray-500 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-all duration-150 active:scale-90"
+        className="p-1 rounded text-fg-subtle hover:bg-surface-2 transition-all duration-150 active:scale-90"
         title="Auswahl aufheben"
       >
         <X size={16} />
       </button>
-      <span className="text-xs font-semibold text-accent">
+      <span className="text-xs font-semibold text-accent-fg">
         <AnimatedCounter value={count} /> ausgewählt
       </span>
 

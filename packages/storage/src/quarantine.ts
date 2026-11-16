@@ -15,8 +15,11 @@
 /** Informational trace header added to released messages. Never trusted. */
 export const QUARANTINE_RELEASE_HEADER = 'X-CoreMail-Quarantine-Released';
 
+/** Virus-scan verdict for mail delivered/quarantined without a clean ClamAV scan (smtp-server, 9.2). */
+export const VIRUS_SCAN_HEADER = 'X-CoreMail-Virus-Scan';
+
 /** Internal headers that must never be accepted from external senders. */
-export const INTERNAL_MAIL_HEADERS: readonly string[] = [QUARANTINE_RELEASE_HEADER];
+export const INTERNAL_MAIL_HEADERS: readonly string[] = [QUARANTINE_RELEASE_HEADER, VIRUS_SCAN_HEADER];
 
 export type QuarantineReason = 'VIRUS' | 'SPAM' | 'POLICY';
 

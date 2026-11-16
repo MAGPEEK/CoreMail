@@ -141,6 +141,9 @@ measured) and logs two errors. **Exception:** if "ClamAV: block on failure"
 switched off. With both scanners off, a message is accepted in well under a second and
 nothing is logged.
 
+ClamAV policy, the EICAR test and recommended `clamd.conf` limits (mounted config,
+`FRESHCLAM_CHECKS`): [antivirus.md](antivirus.md).
+
 `SECURITY_FILTER_FAIL_OPEN` is unrelated: it only decides what happens when the content
 pipeline crashes internally (default: defer). Leave it unset.
 

@@ -190,15 +190,15 @@ export function ShareCalendarDialog({
     <Modal
       onClose={onClose}
       label="Kalender teilen"
-      overlayClassName="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
-      className="bg-white dark:bg-gray-900 rounded-lg shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto"
+      overlayClassName="fixed inset-0 bg-scrim/40 flex items-center justify-center z-50 p-4"
+      className="bg-surface rounded-lg shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto"
     >
         {/* Header */}
-        <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
+        <div className="px-6 py-4 border-b border-line flex items-center justify-between">
           <div className="flex items-center gap-3 min-w-0 flex-1">
-            <Share2 size={18} className="text-accent shrink-0" />
+            <Share2 size={18} className="text-accent-fg shrink-0" />
             <div className="min-w-0 flex-1">
-              <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100">
+              <h2 className="text-base font-semibold text-fg">
                 {t('cal_share_title')}
               </h2>
               {ownedCalendars && ownedCalendars.length > 1 ? (
@@ -207,7 +207,7 @@ export function ShareCalendarDialog({
                   <select
                     value={selectedCalId}
                     onChange={(e) => setSelectedCalId(e.target.value)}
-                    className="text-xs bg-transparent border-0 pl-0 pr-5 py-0 text-gray-500 dark:text-gray-400 focus:outline-none focus:ring-0 appearance-none cursor-pointer hover:text-gray-700 dark:hover:text-gray-200"
+                    className="text-xs bg-transparent border-0 pl-0 pr-5 py-0 text-fg-subtle focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-fg rounded-sm appearance-none cursor-pointer hover:text-fg-muted"
                   >
                     {ownedCalendars.map((c) => (
                       <option key={c.id} value={c.id}>
@@ -215,10 +215,10 @@ export function ShareCalendarDialog({
                       </option>
                     ))}
                   </select>
-                  <ChevronDown size={11} className="absolute right-0 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                  <ChevronDown size={11} className="absolute right-0 top-1/2 -translate-y-1/2 text-fg-subtle pointer-events-none" />
                 </div>
               ) : (
-                <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                <p className="text-xs text-fg-subtle truncate">
                   <span className="inline-block w-2 h-2 rounded-full mr-1.5 align-middle" style={{ backgroundColor: calendar.color }} />
                   {calendar.name}
                 </p>
@@ -226,7 +226,7 @@ export function ShareCalendarDialog({
             </div>
           </div>
           <button onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-xl leading-none ml-2"
+            className="text-fg-subtle hover:text-fg-muted text-xl leading-none ml-2"
             aria-label="×">
             ×
           </button>
@@ -236,12 +236,12 @@ export function ShareCalendarDialog({
         <div className="px-6 py-4 space-y-4">
           {/* Permission selection + input */}
           <div>
-            <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+            <label className="block text-xs font-medium text-fg-muted mb-1">
               {t('cal_share_add_user')}
             </label>
             <div className="flex items-center gap-2">
               <div className="relative flex-1">
-                <UserPlus size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                <UserPlus size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-fg-subtle" />
                 <input
                   ref={inputRef}
                   type="text"
@@ -250,20 +250,20 @@ export function ShareCalendarDialog({
                   onKeyDown={onKeyDown}
                   onFocus={() => { if (suggestions.length > 0) setShowSug(true); }}
                   placeholder={t('cal_share_add_user')}
-                  className="w-full border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded pl-8 pr-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
+                  className="w-full border border-line-strong rounded pl-8 pr-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent-fg"
                 />
                 {showSug && suggestions.length > 0 && (
-                  <div className="absolute left-0 right-0 top-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md shadow-lg z-10 max-h-60 overflow-y-auto">
+                  <div className="absolute left-0 right-0 top-full mt-1 bg-surface border border-line rounded-md shadow-lg z-10 max-h-60 overflow-y-auto">
                     {suggestions.map((c, idx) => (
                       <button
                         key={c.id}
                         type="button"
                         onMouseDown={(e) => { e.preventDefault(); pickSuggestion(c); }}
                         onMouseEnter={() => setActiveIdx(idx)}
-                        className={`w-full text-left px-3 py-2 text-sm border-b border-gray-100 dark:border-gray-700 last:border-b-0 ${idx === activeIdx ? 'bg-accent/10' : 'hover:bg-gray-50 dark:hover:bg-gray-700'}`}
+                        className={`w-full text-left px-3 py-2 text-sm border-b border-line last:border-b-0 ${idx === activeIdx ? 'bg-accent/10' : 'hover:bg-surface-2'}`}
                       >
-                        <div className="font-medium text-gray-900 dark:text-gray-100 truncate">{c.displayName}</div>
-                        <div className="text-xs text-gray-500 dark:text-gray-400 truncate">{c.email}</div>
+                        <div className="font-medium text-fg truncate">{c.displayName}</div>
+                        <div className="text-xs text-fg-subtle truncate">{c.email}</div>
                       </button>
                     ))}
                   </div>
@@ -272,47 +272,47 @@ export function ShareCalendarDialog({
               <select
                 value={permission}
                 onChange={(e) => setPermission(e.target.value as Perm)}
-                className="border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
+                className="border border-line-strong rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent-fg"
               >
                 <option value="READ">{t('cal_share_perm_read')}</option>
                 <option value="WRITE">{t('cal_share_perm_write')}</option>
               </select>
             </div>
             {debouncedQ.length >= 1 && suggestions.length === 0 && (
-              <p className="text-xs text-gray-400 mt-1.5">{t('cal_share_no_users_found')}</p>
+              <p className="text-xs text-fg-subtle mt-1.5">{t('cal_share_no_users_found')}</p>
             )}
           </div>
 
           {/* Existing shares */}
           <div>
-            <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-2">
+            <label className="block text-xs font-medium text-fg-muted mb-2">
               {t('cal_share_current')}
             </label>
             {sharesLoading ? (
-              <p className="text-sm text-gray-400 py-2">…</p>
+              <p className="text-sm text-fg-subtle py-2">…</p>
             ) : shares.length === 0 ? (
-              <div className="border border-dashed border-gray-200 dark:border-gray-700 rounded p-4 text-center">
-                <Share2 size={20} className="mx-auto text-gray-300 mb-1.5" />
-                <p className="text-sm text-gray-400">{t('cal_share_empty')}</p>
+              <div className="border border-dashed border-line rounded p-4 text-center">
+                <Share2 size={20} className="mx-auto text-fg-subtle mb-1.5" />
+                <p className="text-sm text-fg-subtle">{t('cal_share_empty')}</p>
               </div>
             ) : (
-              <ul className="border border-gray-200 dark:border-gray-700 rounded divide-y divide-gray-100 dark:divide-gray-700">
+              <ul className="border border-line rounded divide-y divide-line">
                 {shares.map((s) => (
                   <li key={s.id} className="flex items-center gap-3 px-3 py-2.5">
-                    <div className="w-8 h-8 rounded-full bg-accent/10 text-accent flex items-center justify-center text-xs font-semibold shrink-0">
+                    <div className="w-8 h-8 rounded-full bg-accent/10 text-accent-fg flex items-center justify-center text-xs font-semibold shrink-0">
                       {(s.granteeDisplayName || s.granteeEmail).slice(0, 2).toUpperCase()}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
+                      <p className="text-sm font-medium text-fg truncate">
                         {s.granteeDisplayName}
                       </p>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{s.granteeEmail}</p>
+                      <p className="text-xs text-fg-subtle truncate">{s.granteeEmail}</p>
                     </div>
                     <select
                       value={s.permission}
                       onChange={(e) => updateShare.mutate({ shareId: s.id, permission: e.target.value as Perm })}
                       disabled={updateShare.isPending}
-                      className="text-xs border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-50"
+                      className="text-xs border border-line-strong rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-accent-fg disabled:opacity-50"
                     >
                       <option value="READ">{t('cal_share_perm_read')}</option>
                       <option value="WRITE">{t('cal_share_perm_write')}</option>
@@ -324,7 +324,7 @@ export function ShareCalendarDialog({
                         }
                       }}
                       disabled={removeShare.isPending}
-                      className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded disabled:opacity-50"
+                      className="p-1.5 text-fg-subtle hover:text-danger-fg hover:bg-danger-bg rounded disabled:opacity-50"
                       aria-label={t('cal_share_remove')}
                     >
                       <Trash2 size={14} />
@@ -336,13 +336,13 @@ export function ShareCalendarDialog({
           </div>
 
           {/* Permissions note */}
-          <div className="bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/30 rounded p-3 text-xs text-blue-700 dark:text-blue-300">
+          <div className="bg-info-bg border border-info-line rounded p-3 text-xs text-info-fg">
             <div className="flex items-start gap-2">
               <Eye size={14} className="mt-0.5 shrink-0" />
               <div>
                 {t('cal_share_help_read')}<br />
                 {t('cal_share_help_write')}<br />
-                <span className="block mt-1 text-blue-600/70 dark:text-blue-400/70">
+                <span className="block mt-1 text-info-fg">
                   {t('cal_share_help_caldav')}
                 </span>
               </div>
@@ -351,27 +351,27 @@ export function ShareCalendarDialog({
 
           {/* v3.18.18: CalDAV URL for external access */}
           {caldavInfo && (
-            <div className="border border-gray-200 dark:border-gray-700 rounded p-3 space-y-2">
-              <div className="flex items-center gap-2 text-xs font-medium text-gray-700 dark:text-gray-300">
-                <LinkIcon size={14} className="text-accent" />
+            <div className="border border-line rounded p-3 space-y-2">
+              <div className="flex items-center gap-2 text-xs font-medium text-fg-muted">
+                <LinkIcon size={14} className="text-accent-fg" />
                 Externer Zugriff (CalDAV)
               </div>
-              <div className="text-xs text-gray-500 dark:text-gray-400">
+              <div className="text-xs text-fg-subtle">
                 Für Apple Kalender, Thunderbird Lightning, DAVx⁵ usw.
               </div>
 
               {/* Account-URL (Auto-Discovery) */}
               <div>
-                <label className="block text-[10px] font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mt-2 mb-1">
+                <label className="block text-[10px] font-medium text-fg-subtle uppercase tracking-wide mt-2 mb-1">
                   Account-URL (Auto-Discovery, empfohlen)
                 </label>
                 <div className="flex items-center gap-1.5">
-                  <code className="flex-1 px-2 py-1.5 text-[11px] bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded font-mono text-gray-700 dark:text-gray-200 truncate">
+                  <code className="flex-1 px-2 py-1.5 text-[11px] bg-surface-2 border border-line rounded font-mono text-fg-muted truncate">
                     {caldavInfo.accountUrl}
                   </code>
                   <button
                     onClick={() => copyToClipboard(caldavInfo.accountUrl, 'Account-URL')}
-                    className="p-1.5 text-gray-400 hover:text-accent hover:bg-accent/10 rounded shrink-0"
+                    className="p-1.5 text-fg-subtle hover:text-accent-fg hover:bg-accent/10 rounded shrink-0"
                     aria-label="Kopieren"
                     title="Account-URL kopieren"
                   >
@@ -383,16 +383,16 @@ export function ShareCalendarDialog({
               {/* Per-calendar URL (show only the currently selected one) */}
               {currentCalDavUrl && (
                 <div>
-                  <label className="block text-[10px] font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mt-2 mb-1">
+                  <label className="block text-[10px] font-medium text-fg-subtle uppercase tracking-wide mt-2 mb-1">
                     Direkte URL für „{calendar.name}"
                   </label>
                   <div className="flex items-center gap-1.5">
-                    <code className="flex-1 px-2 py-1.5 text-[11px] bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded font-mono text-gray-700 dark:text-gray-200 truncate">
+                    <code className="flex-1 px-2 py-1.5 text-[11px] bg-surface-2 border border-line rounded font-mono text-fg-muted truncate">
                       {currentCalDavUrl}
                     </code>
                     <button
                       onClick={() => copyToClipboard(currentCalDavUrl, 'Kalender-URL')}
-                      className="p-1.5 text-gray-400 hover:text-accent hover:bg-accent/10 rounded shrink-0"
+                      className="p-1.5 text-fg-subtle hover:text-accent-fg hover:bg-accent/10 rounded shrink-0"
                       aria-label="Kopieren"
                       title="Kalender-URL kopieren"
                     >
@@ -402,10 +402,10 @@ export function ShareCalendarDialog({
                 </div>
               )}
 
-              <div className="mt-2 pt-2 border-t border-gray-100 dark:border-gray-700/50">
-                <div className="flex flex-col gap-0.5 text-[11px] text-gray-600 dark:text-gray-400">
+              <div className="mt-2 pt-2 border-t border-line">
+                <div className="flex flex-col gap-0.5 text-[11px] text-fg-muted">
                   <div><strong>Benutzer:</strong> <span className="font-mono">{caldavInfo.username}</span></div>
-                  <div className="text-amber-600 dark:text-amber-400">
+                  <div className="text-warning-fg">
                     <strong>Passwort:</strong> App-Passwort erforderlich
                     (Einstellungen → Sicherheit → App-Passwörter)
                   </div>
@@ -416,9 +416,9 @@ export function ShareCalendarDialog({
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-3 border-t border-gray-200 dark:border-gray-700 flex justify-end">
+        <div className="px-6 py-3 border-t border-line flex justify-end">
           <button onClick={onClose}
-            className="px-4 py-1.5 text-sm text-gray-600 dark:text-gray-300 border border-gray-300 dark:border-gray-700 rounded hover:bg-gray-50 dark:hover:bg-gray-800">
+            className="px-4 py-1.5 text-sm text-fg-muted border border-line-strong rounded hover:bg-surface-2">
             {t('cal_share_done')}
           </button>
         </div>

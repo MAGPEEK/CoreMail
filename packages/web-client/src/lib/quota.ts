@@ -20,11 +20,11 @@ export function quotaColor(level: QuotaLevel): { bar: string; text: string } {
   switch (level) {
     case 'prohibitSendReceive':
     case 'prohibitSend':
-      return { bar: 'bg-red-500', text: 'text-red-600 dark:text-red-400' };
+      return { bar: 'bg-danger', text: 'text-danger-fg' };
     case 'warning':
-      return { bar: 'bg-amber-500', text: 'text-amber-600 dark:text-amber-400' };
+      return { bar: 'bg-warning', text: 'text-warning-fg' };
     default:
-      return { bar: 'bg-accent', text: 'text-gray-500 dark:text-gray-400' };
+      return { bar: 'bg-accent', text: 'text-fg-subtle' };
   }
 }
 

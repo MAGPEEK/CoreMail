@@ -30,10 +30,10 @@ export function MoveToFolderDialog({
     <Modal
       onClose={onClose}
       labelledBy="move-dialog-title"
-      className="bg-white dark:bg-gray-900 rounded-lg shadow-2xl w-full max-w-sm flex flex-col max-h-[70vh]"
+      className="bg-surface rounded-lg shadow-2xl w-full max-w-sm flex flex-col max-h-[70vh]"
     >
       <div className="px-4 pt-4 pb-2">
-        <h2 id="move-dialog-title" className="text-sm font-semibold text-gray-800 dark:text-gray-100 mb-2">{t('move_dialog_title')}</h2>
+        <h2 id="move-dialog-title" className="text-sm font-semibold text-fg mb-2">{t('move_dialog_title')}</h2>
         <input
           autoFocus
           value={q}
@@ -48,11 +48,11 @@ export function MoveToFolderDialog({
           aria-controls="move-dialog-list"
           aria-activedescendant={list[idx] ? `move-opt-${list[idx]!.id}` : undefined}
           placeholder={t('move_dialog_filter')}
-          className="w-full px-3 py-1.5 text-sm rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 dark:text-gray-100 outline-none focus:border-accent"
+          className="w-full px-3 py-1.5 text-sm rounded border border-line-strong bg-surface outline-none focus:border-accent-fg"
         />
       </div>
       <ul id="move-dialog-list" role="listbox" aria-labelledby="move-dialog-title" className="flex-1 overflow-y-auto pb-2">
-        {list.length === 0 && <li className="px-4 py-3 text-xs text-gray-500">{t('move_dialog_none')}</li>}
+        {list.length === 0 && <li className="px-4 py-3 text-xs text-fg-subtle">{t('move_dialog_none')}</li>}
         {list.map((f, i) => (
           <li
             key={f.id}
@@ -62,7 +62,7 @@ export function MoveToFolderDialog({
             onMouseEnter={() => setActive(i)}
             onMouseDown={(e) => { e.preventDefault(); pick(f); }}
             className={`px-4 py-1.5 text-sm flex items-center gap-2 cursor-pointer ${
-              i === idx ? 'bg-accent/10 text-accent' : 'text-gray-700 dark:text-gray-200'
+              i === idx ? 'bg-accent/10 text-accent-fg' : 'text-fg-muted'
             }`}
           >
             <FolderIcon size={14} style={f.color ? { color: f.color } : undefined} aria-hidden="true" />

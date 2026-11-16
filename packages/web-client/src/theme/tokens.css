@@ -1,0 +1,81 @@
+/*
+ * CoreMail semantic color tokens — WCAG 2.2 AA (light + dark).
+ *
+ * KEEP IDENTICAL in packages/web-client/src/theme/tokens.css and
+ * packages/admin-panel/src/theme/tokens.css (theme.test.ts enforces it).
+ *
+ * Values are RGB channels so Tailwind's alpha modifier works (bg-surface/80).
+ * theme.test.ts verifies the contrast guarantees below for both themes:
+ *   - fg, fg-muted, fg-subtle, accent-fg and every *-fg      >= 4.5:1 on canvas, surface, surface-2, surface-3 (SC 1.4.3)
+ *   - every *-fg, fg and fg-muted                             >= 4.5:1 on its *-bg tint
+ *   - white text                                              >= 4.5:1 on every solid (danger/success/warning/info, accent presets)
+ *   - line-strong (input borders, controls, focus-adjacent)   >= 3:1   on every surface (SC 1.4.11)
+ * fg-disabled is exempt (SC 1.4.3 "inactive user interface component").
+ * line is decorative only — never the sole boundary of a control.
+ */
+:root {
+  color-scheme: light;
+  --canvas: 243 244 246;
+  --surface: 255 255 255;
+  --surface-2: 246 247 249;
+  --surface-3: 232 234 238;
+  --fg: 17 24 39;
+  --fg-muted: 75 85 99;
+  --fg-subtle: 93 100 112;
+  --fg-disabled: 156 163 175;
+  --line: 226 229 233;
+  --line-strong: 122 129 141;
+  --scrim: 0 0 0;
+  --danger: 196 35 28;
+  --danger-fg: 185 28 28;
+  --danger-bg: 253 240 240;
+  --danger-line: 242 184 181;
+  --success: 21 112 56;
+  --success-fg: 21 112 58;
+  --success-bg: 238 250 242;
+  --success-line: 160 220 180;
+  --warning: 161 79 0;
+  --warning-fg: 153 80 0;
+  --warning-bg: 253 246 227;
+  --warning-line: 236 200 120;
+  --info: 29 79 196;
+  --info-fg: 29 79 196;
+  --info-bg: 238 244 254;
+  --info-line: 170 196 245;
+  /* accent: set at runtime from the user's accent colour (--color-accent);
+     --color-accent-fg is derived so that accent text/icons/focus rings keep 4.5:1. */
+  --color-accent: 0 120 212;
+  --color-accent-fg: 0 95 184;
+}
+
+:root.dark {
+  color-scheme: dark;
+  --canvas: 17 19 24;
+  --surface: 27 30 37;
+  --surface-2: 34 38 46;
+  --surface-3: 44 49 59;
+  --fg: 238 240 243;
+  --fg-muted: 182 188 198;
+  --fg-subtle: 155 162 173;
+  --fg-disabled: 107 114 128;
+  --line: 50 56 67;
+  --line-strong: 122 130 145;
+  --scrim: 0 0 0;
+  --danger: 196 35 28;
+  --danger-fg: 255 156 150;
+  --danger-bg: 54 25 27;
+  --danger-line: 110 42 46;
+  --success: 21 112 56;
+  --success-fg: 126 226 162;
+  --success-bg: 20 43 29;
+  --success-line: 34 84 58;
+  --warning: 161 79 0;
+  --warning-fg: 245 194 85;
+  --warning-bg: 47 37 15;
+  --warning-line: 92 69 17;
+  --info: 29 79 196;
+  --info-fg: 147 188 255;
+  --info-bg: 22 36 61;
+  --info-line: 36 66 110;
+  --color-accent-fg: 112 181 255;
+}

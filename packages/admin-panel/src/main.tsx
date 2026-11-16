@@ -18,7 +18,6 @@ import { LogsPage } from './pages/LogsPage.js';
 import { BackupsPage } from './pages/BackupsPage.js';
 import { ProtectionPage } from './pages/ProtectionPage.js';
 import { ServersPage } from './pages/ServersPage.js';
-import { ReportsPage } from './pages/ReportsPage.js';
 import { SettingsPage } from './pages/SettingsPage.js';
 import { CertificatesPage } from './pages/CertificatesPage.js';
 import { SharedMailboxesPage } from './pages/SharedMailboxesPage.js';
@@ -107,10 +106,10 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
     if (this.state.error) {
       return (
         <div className="p-8 space-y-4 max-w-2xl mx-auto mt-16">
-          <div className="bg-red-50 border border-red-200 rounded-lg p-6 space-y-3">
-            <h2 className="text-lg font-semibold text-red-800">Seite konnte nicht geladen werden</h2>
-            <p className="text-sm text-red-700">{this.state.error.message}</p>
-            <pre className="text-xs text-red-600 bg-red-100 rounded p-3 overflow-auto max-h-48">
+          <div className="bg-danger-bg border border-danger-line rounded-lg p-6 space-y-3">
+            <h2 className="text-lg font-semibold text-danger-fg">Seite konnte nicht geladen werden</h2>
+            <p className="text-sm text-danger-fg">{this.state.error.message}</p>
+            <pre className="text-xs text-danger-fg bg-danger-bg rounded p-3 overflow-auto max-h-48">
               {this.state.error.stack}
             </pre>
             <button
@@ -159,8 +158,8 @@ function SetupGuard({ children }: { children: React.ReactNode }) {
 
   if (setupRequired === null || setupRequired === true) {
     return (
-      <div className="min-h-screen bg-blue-700 flex items-center justify-center">
-        <div className="text-white text-sm animate-pulse">CoreMail wird geladen…</div>
+      <div className="min-h-screen bg-canvas flex items-center justify-center">
+        <div className="text-fg-muted text-sm animate-pulse">CoreMail wird geladen…</div>
       </div>
     );
   }
@@ -170,7 +169,7 @@ function SetupGuard({ children }: { children: React.ReactNode }) {
 function PermissionsLoading() {
   const t = useT();
   return (
-    <div className="p-8 flex items-center justify-center gap-2 text-sm text-gray-400" role="status">
+    <div className="p-8 flex items-center justify-center gap-2 text-sm text-fg-subtle" role="status">
       <Loader2 size={16} className="animate-spin" aria-hidden="true" /> {t('perm_loading')}
     </div>
   );
@@ -191,11 +190,11 @@ function AdminLayout({ children }: { children: React.ReactNode }) {
       <div className="flex-1 flex overflow-hidden">
         <Sidebar />
         <main
-          className="flex-1 overflow-y-auto bg-gray-50 dark:bg-gray-950"
+          className="flex-1 overflow-y-auto bg-canvas"
           {...(ready && pageAccess === 'read' ? { 'data-area-readonly': '' } : {})}
         >
           {ready && pageAccess === 'read' && (
-            <div role="status" className="m-4 mb-0 flex items-center gap-2 px-3 py-2 rounded border border-amber-200 bg-amber-50 text-amber-800 text-xs dark:bg-amber-900/20 dark:border-amber-800 dark:text-amber-200">
+            <div role="status" className="m-4 mb-0 flex items-center gap-2 px-3 py-2 rounded border border-warning-line bg-warning-bg text-warning-fg text-xs">
               <Lock size={13} aria-hidden="true" /> {t('perm_readonly_banner')}
             </div>
           )}
@@ -252,7 +251,8 @@ createRoot(document.getElementById('root')!).render(
                   <Route path="/audit-log"     element={<AuditLogPage />} />
                   {/* /oauth-clients route removed in v5.6.0 (OAuth2 dropped entirely) */}
                   {/* /public-folders route removed in v3.18.31 */}
-                  <Route path="/reports" element={<ReportsPage />} />
+                  {/* /reports removed in the 9.1 BCP review (static placeholder data; the dashboard shows the real mail flow) */}
+                  <Route path="/reports" element={<Navigate to="/dashboard" replace />} />
                   <Route path="/settings" element={<SettingsPage />} />
                   <Route path="/compliance-info" element={<ComplianceInfoPage />} />
                   <Route path="/smtp-config" element={<SmtpConfigPage />} />

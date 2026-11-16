@@ -10,9 +10,11 @@
  * POST   /api/v1/admin/services/listeners/:service/restore-defaults — restore default ports
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
+import { isIP } from 'node:net';
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { requireArea } from '../../middleware/auth.js';
+import { invalidInputMessage } from '../../lib/zod-message.js';
 import { createLogger, getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD } from '@coremail/core';
 
 const log = createLogger('admin:services');
@@ -24,6 +26,15 @@ const SERVICE_TYPES = ['SMTP_RECEIVE', 'SMTP_SEND', 'IMAP', 'POP3'] as const;
 type SvcType = typeof SERVICE_TYPES[number];
 
 // Slug → DB enum (URL uses hyphens, DB underscores)
+/** Another listener of the same service already uses this port (409). */
+export async function portTaken(service: SvcType, port: number, exceptId?: string): Promise<boolean> {
+  const other = await prisma.serviceListener.findFirst({
+    where: { service, port, ...(exceptId ? { NOT: { id: exceptId } } : {}) },
+    select: { id: true },
+  });
+  return other !== null;
+}
+
 function slugToEnum(slug: string): SvcType | null {
   const upper = slug.toUpperCase().replace(/-/g, '_');
   return (SERVICE_TYPES as readonly string[]).includes(upper) ? upper as SvcType : null;
@@ -32,7 +43,8 @@ function slugToEnum(slug: string): SvcType | null {
 const ServiceTypeSchema = z.enum(SERVICE_TYPES);
 
 const ListenerSchema = z.object({
-  address: z.string().min(1).max(64).default('0.0.0.0'),
+  // IPv4/IPv6 literal the listener binds to (0.0.0.0 = all interfaces)
+  address: z.string().trim().max(64).refine((a) => isIP(a) !== 0, 'IP address required').default('0.0.0.0'),
   port:    z.number().int().min(1).max(65535),
   ssl:     z.boolean().default(false),
   active:  z.boolean().default(true),
@@ -42,7 +54,9 @@ const ListenerSchema = z.object({
 const DEFAULTS: { service: SvcType; address: string; port: number; ssl: boolean }[] = [
   { service: 'SMTP_RECEIVE', address: '0.0.0.0', port: 25,  ssl: false },
   { service: 'SMTP_RECEIVE', address: '0.0.0.0', port: 465, ssl: true  },
-  { service: 'SMTP_RECEIVE', address: '0.0.0.0', port: 587, ssl: true  },
+  // 587 = submission with STARTTLS (ssl:false); ssl:true would start implicit TLS
+  // on 587 and break every client. Same seed as smtp-server/src/server.ts.
+  { service: 'SMTP_RECEIVE', address: '0.0.0.0', port: 587, ssl: false },
   { service: 'SMTP_SEND',    address: '0.0.0.0', port: 587, ssl: true  },
   { service: 'IMAP',         address: '0.0.0.0', port: 143, ssl: false },
   { service: 'IMAP',         address: '0.0.0.0', port: 993, ssl: true  },
@@ -113,7 +127,11 @@ adminServicesRouter.post('/listeners/:service', async (req: Request, res: Respon
 
   const parsed = ListenerSchema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: 'Invalid input', details: parsed.error.issues });
+    res.status(400).json({ error: invalidInputMessage(parsed.error), details: parsed.error.issues });
+    return;
+  }
+  if (await portTaken(svc, parsed.data.port)) {
+    res.status(409).json({ error: `Port ${parsed.data.port} ist für diesen Dienst bereits konfiguriert` });
     return;
   }
   const listener = await prisma.serviceListener.create({
@@ -129,7 +147,13 @@ adminServicesRouter.put('/listeners/:id', async (req: Request, res: Response) =>
   const id = req.params['id'] ?? '';
   const parsed = ListenerSchema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: 'Invalid input', details: parsed.error.issues });
+    res.status(400).json({ error: invalidInputMessage(parsed.error), details: parsed.error.issues });
+    return;
+  }
+  const existing = await prisma.serviceListener.findUnique({ where: { id }, select: { service: true } });
+  if (!existing) { res.status(404).json({ error: 'Listener not found' }); return; }
+  if (await portTaken(existing.service as SvcType, parsed.data.port, id)) {
+    res.status(409).json({ error: `Port ${parsed.data.port} ist für diesen Dienst bereits konfiguriert` });
     return;
   }
   try {

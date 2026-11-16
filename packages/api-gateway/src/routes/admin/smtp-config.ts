@@ -4,6 +4,7 @@ import nodemailer from 'nodemailer';
 import { prisma } from '@coremail/storage';
 import { getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 import { requireArea } from '../../middleware/auth.js';
+import { smarthostTestOptions } from '../../lib/smarthost-test.js';
 
 export const adminSmtpConfigRouter: RouterType = Router();
 adminSmtpConfigRouter.use(requireArea('servers'));
@@ -34,15 +35,16 @@ adminSmtpConfigRouter.put('/settings', async (req: Request, res: Response) => {
     extSize:              z.boolean().optional(),
     ext8bitmime:          z.boolean().optional(),
     extEnhancedStatus:    z.boolean().optional(),
-    // The following fields remain accepted for backwards compat but are
-    // ignored (hardcoded) in the SMTP server (not implemented):
-    // extAuthCramMd5, extSmtputf8, extDsn, extChunking
+    // Not accepted (ignored by the SMTP server): extAuthCramMd5 (not implemented),
+    // extSmtputf8 / extDsn / extChunking (SMTP_EXT_* environment variables).
     // Local delivery
     localDeliveryEnabled: z.boolean().optional(),
     // Banner
     bannerOverride:       z.boolean().optional(),
     bannerText:           z.string().max(255).optional(),
-    // Relaying
+    // Relaying — accepted for backwards compatibility only: the SMTP server
+    // implements no open/IP-based relaying (port 25 accepts local recipients,
+    // relaying needs SMTP AUTH on 465/587). Not shown in the BCP.
     relayingEnabled:      z.boolean().optional(),
     relayDomains:         z.array(z.string().min(1)).optional(),
     relayRequireAuth:     z.boolean().optional(),
@@ -68,7 +70,8 @@ adminSmtpConfigRouter.put('/settings', async (req: Request, res: Response) => {
     smarthostImplicitTls: z.boolean().optional(),
     smarthostUsername:        z.string().max(255).optional(),
     smarthostPassword:        z.string().max(255).optional(),
-    // Spam/virus filter before relaying
+    // Accepted for backwards compatibility only: outbound mail is not scanned
+    // (no outbound filter stage exists). Not shown in the BCP.
     outboundFilterEnabled:    z.boolean().optional(),
   });
 
@@ -84,6 +87,18 @@ adminSmtpConfigRouter.put('/settings', async (req: Request, res: Response) => {
   // v6 write-only semantics: masked or empty = keep the stored password
   if (data['smarthostPassword'] === '••••••••' || data['smarthostPassword'] === '') {
     delete data['smarthostPassword'];
+  }
+  if (typeof data['smarthostHost'] === 'string') data['smarthostHost'] = (data['smarthostHost'] as string).trim();
+
+  // Smarthost mode without a host would make every outbound delivery fail.
+  if (parsed.data.outboundMode === 'smarthost' || parsed.data.smarthostHost !== undefined) {
+    const current = await getOrCreate();
+    const mode = parsed.data.outboundMode ?? current.outboundMode;
+    const host = (data['smarthostHost'] as string | undefined) ?? current.smarthostHost;
+    if (mode === 'smarthost' && !host) {
+      res.status(400).json({ error: 'Smarthost-Modus benötigt einen Smarthost-Server' });
+      return;
+    }
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -121,18 +136,14 @@ adminSmtpConfigRouter.post('/test-smarthost', async (req: Request, res: Response
   const { host, port, tls, implicitTls, username, password } = parsed.data;
 
   try {
-    const transporter = nodemailer.createTransport({
-      host,
-      port,
-      secure:           implicitTls,
-      requireTLS:       tls && !implicitTls,
-      opportunisticTLS: tls && !implicitTls,
-      ...(username ? { auth: { user: username, pass: password ?? '' } } : {}),
-      tls: { rejectUnauthorized: false },
-      connectionTimeout: 10_000,
-      greetingTimeout:   10_000,
-      socketTimeout:     10_000,
-    });
+    // Same TLS/auth rules as the real delivery; empty password = the stored one.
+    const stored = await prisma.smtpSettings.findUnique({
+      where:  { id: 'singleton' },
+      select: { smarthostUsername: true, smarthostPassword: true },
+    }).catch(() => null);
+    const transporter = nodemailer.createTransport(
+      smarthostTestOptions({ host, port, tls, implicitTls, username, password }, stored) as Parameters<typeof nodemailer.createTransport>[0],
+    );
 
     await transporter.verify();
     res.json({ ok: true, message: `Verbindung zu ${host}:${port} erfolgreich` });

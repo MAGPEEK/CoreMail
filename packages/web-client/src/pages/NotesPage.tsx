@@ -21,21 +21,23 @@ interface NoteDetail extends NoteListItem {
 }
 
 // ─── Color config ─────────────────────────────────────────────────────────────
+// The note colour is user data. Cards are an opaque surface with a 15 % tint of the
+// hue on top (gradient layer), so fg / fg-subtle keep >= 4.5:1 in both themes.
 
 const COLOR_BG: Record<NoteColor, string> = {
-  YELLOW: 'bg-yellow-100 border-yellow-200',
-  BLUE:   'bg-blue-100 border-blue-200',
-  GREEN:  'bg-green-100 border-green-200',
-  PINK:   'bg-pink-100 border-pink-200',
-  PURPLE: 'bg-purple-100 border-purple-200',
+  YELLOW: 'bg-surface bg-gradient-to-b from-yellow-400/15 to-yellow-400/15 border-line',
+  BLUE:   'bg-surface bg-gradient-to-b from-blue-500/15 to-blue-500/15 border-line',
+  GREEN:  'bg-surface bg-gradient-to-b from-green-500/15 to-green-500/15 border-line',
+  PINK:   'bg-surface bg-gradient-to-b from-pink-500/15 to-pink-500/15 border-line',
+  PURPLE: 'bg-surface bg-gradient-to-b from-purple-500/15 to-purple-500/15 border-line',
 };
 
 const COLOR_HEADER: Record<NoteColor, string> = {
-  YELLOW: 'bg-yellow-200',
-  BLUE:   'bg-blue-200',
-  GREEN:  'bg-green-200',
-  PINK:   'bg-pink-200',
-  PURPLE: 'bg-purple-200',
+  YELLOW: 'bg-yellow-400/10',
+  BLUE:   'bg-blue-500/10',
+  GREEN:  'bg-green-500/10',
+  PINK:   'bg-pink-500/10',
+  PURPLE: 'bg-purple-500/10',
 };
 
 const COLOR_DOT: Record<NoteColor, string> = {
@@ -102,9 +104,9 @@ function NoteEditor({ noteId, onClose }: { noteId: string | null; onClose: () =>
     <Modal
       onClose={onClose}
       label={isNew ? 'Neue Notiz' : 'Notiz bearbeiten'}
-      overlayClassName="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+      overlayClassName="fixed inset-0 bg-scrim/40 z-50 flex items-center justify-center p-4"
       className={loading
-        ? 'bg-white rounded-lg p-8 text-gray-400 text-sm'
+        ? 'bg-surface rounded-lg p-8 text-fg-subtle text-sm'
         : `rounded-lg shadow-xl w-full max-w-lg border ${COLOR_BG[form.color]}`}
     >
       {loading ? (
@@ -119,16 +121,16 @@ function NoteEditor({ noteId, onClose }: { noteId: string | null; onClose: () =>
               <button key={c} type="button" onClick={() => setForm(f => ({ ...f, color: c }))}
                 role="radio" aria-checked={form.color === c} aria-label={COLOR_LABEL[c]} title={COLOR_LABEL[c]}
                 className={`w-4 h-4 rounded-full border-2 transition-all ${COLOR_DOT[c]} ${
-                  form.color === c ? 'border-gray-600 scale-125' : 'border-transparent hover:border-gray-400'
+                  form.color === c ? 'border-fg scale-125' : 'border-transparent hover:border-line-strong'
                 }`} />
             ))}
           </div>
           <div className="flex items-center gap-1">
             <button type="button" onClick={() => save.mutate()} disabled={save.isPending || !form.subject}
-              className="text-xs px-3 py-1 bg-white/60 hover:bg-white/80 rounded text-gray-700 font-medium disabled:opacity-50 transition-colors">
+              className="text-xs px-3 py-1 bg-surface/70 hover:bg-surface rounded text-fg-muted font-medium disabled:opacity-50 transition-colors">
               {save.isPending ? 'Speichern…' : 'Speichern'}
             </button>
-            <button type="button" onClick={onClose} aria-label="Schließen" className="ml-1 text-gray-500 hover:text-gray-700">
+            <button type="button" onClick={onClose} aria-label="Schließen" className="ml-1 text-fg-subtle hover:text-fg-muted">
               <X size={16} aria-hidden="true" />
             </button>
           </div>
@@ -138,11 +140,11 @@ function NoteEditor({ noteId, onClose }: { noteId: string | null; onClose: () =>
         <div className="p-4 space-y-3">
           <input value={form.subject} onChange={e => setForm(f => ({ ...f, subject: e.target.value }))}
             aria-label="Betreff" autoFocus
-            className="w-full bg-transparent border-b border-gray-300 pb-1 text-base font-semibold text-gray-800 placeholder-gray-400 focus:outline-none focus:border-gray-500"
+            className="w-full bg-transparent border-b border-line-strong pb-1 text-base font-semibold text-fg placeholder-fg-subtle focus:outline-none focus:border-accent-fg"
             placeholder="Betreff" />
           <textarea value={form.body} onChange={e => setForm(f => ({ ...f, body: e.target.value }))}
             aria-label="Notiz"
-            rows={10} className="w-full bg-transparent text-sm text-gray-700 placeholder-gray-400 focus:outline-none resize-none"
+            rows={10} className="w-full bg-transparent text-sm text-fg-muted placeholder-fg-subtle focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-fg rounded-sm resize-none"
             placeholder="Notiz eingeben…" />
         </div>
       </>
@@ -170,15 +172,15 @@ export function NotesPage() {
   });
 
   return (
-    <div className="flex flex-1 flex-col overflow-hidden bg-gray-50">
+    <div className="flex flex-1 flex-col overflow-hidden bg-surface-2">
       {/* Toolbar */}
-      <div className="bg-white border-b border-gray-200 px-6 py-3 flex items-center gap-3">
-        <h1 className="text-base font-semibold text-gray-900 mr-2">Notizen</h1>
+      <div className="bg-surface border-b border-line px-6 py-3 flex items-center gap-3">
+        <h1 className="text-base font-semibold text-fg mr-2">Notizen</h1>
 
-        <div className="flex items-center gap-1.5 bg-gray-100 rounded px-2.5 py-1.5 flex-1 max-w-xs">
-          <Search size={13} className="text-gray-400 shrink-0" />
+        <div className="flex items-center gap-1.5 bg-surface-2 rounded px-2.5 py-1.5 flex-1 max-w-xs">
+          <Search size={13} className="text-fg-subtle shrink-0" />
           <input value={search} onChange={e => setSearch(e.target.value)}
-            className="bg-transparent text-sm focus:outline-none text-gray-700 placeholder-gray-400 w-full"
+            className="bg-transparent text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-fg rounded-sm text-fg-muted placeholder-fg-subtle w-full"
             placeholder="Notizen durchsuchen…" />
         </div>
 
@@ -191,13 +193,13 @@ export function NotesPage() {
       {/* Grid */}
       <div className="flex-1 overflow-y-auto p-6">
         {isLoading ? (
-          <div className="text-center text-gray-400 py-16 text-sm">Laden…</div>
+          <div className="text-center text-fg-subtle py-16 text-sm">Laden…</div>
         ) : notes.length === 0 ? (
-          <div className="text-center text-gray-400 py-16">
+          <div className="text-center text-fg-subtle py-16">
             <p className="text-sm">{search ? 'Keine Notizen gefunden' : 'Noch keine Notizen vorhanden'}</p>
             {!search && (
               <button onClick={() => setEditId(null)}
-                className="mt-3 text-sm text-accent hover:underline">
+                className="mt-3 text-sm text-accent-fg hover:underline">
                 Erste Notiz erstellen
               </button>
             )}
@@ -213,15 +215,15 @@ export function NotesPage() {
                   <div className={`w-2.5 h-2.5 rounded-full ${COLOR_DOT[note.color]}`} />
                   <button aria-label="Notiz löschen"
                     onClick={e => { e.stopPropagation(); del.mutate(note.id); }}
-                    className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 transition-all">
+                    className="opacity-0 group-hover:opacity-100 text-fg-subtle hover:text-danger-fg transition-all">
                     <Trash2 size={12} />
                   </button>
                 </div>
 
                 {/* Note body */}
                 <div className="px-3 py-2.5 min-h-[100px]">
-                  <p className="text-sm font-medium text-gray-800 line-clamp-2 leading-snug">{note.subject || '(Kein Betreff)'}</p>
-                  <p className="text-xs text-gray-500 mt-2">{fmtDate(note.updatedAt)}</p>
+                  <p className="text-sm font-medium text-fg line-clamp-2 leading-snug">{note.subject || '(Kein Betreff)'}</p>
+                  <p className="text-xs text-fg-subtle mt-2">{fmtDate(note.updatedAt)}</p>
                 </div>
               </div>
             ))}

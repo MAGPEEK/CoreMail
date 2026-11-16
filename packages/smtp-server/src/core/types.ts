@@ -148,6 +148,30 @@ export interface SmtpSessionConfig {
    * `tarpitMaxDelayMs`). 0 / undefined = off.
    */
   tarpitMaxDelayMs?: number;
+  /**
+   * Idle timeout while waiting for the greeting reply / the next command
+   * (SmtpSettings.connectionTimeoutSec × 1000). Default 5 min (RFC 5321
+   * §4.5.3.2). The DATA block timeout is not affected.
+   */
+  commandTimeoutMs?: number;
+  /**
+   * Delay before the 220 greeting (SmtpSettings.greetingDelaySec × 1000,
+   * inbound port 25 only). A client that talks before the greeting is
+   * answered with 554 and disconnected (pre-greeting traffic). 0 = off.
+   */
+  greetingDelayMs?: number;
+  /**
+   * Maximum concurrent connections per client IP (SmtpSettings.maxConnectionsPerIp).
+   * Read by the server factory for inbound listeners (port 25) only; submission
+   * keeps SMTP_MAX_CONNS_PER_IP (default 10). See ip-limiter connectionCaps().
+   */
+  maxConnectionsPerIp?: number;
+  /**
+   * Maximum concurrent inbound (port 25) connections from public IPs
+   * (SmtpSettings.maxConnections). Submission listeners and private/loopback
+   * clients are exempt. Read by the server factory; 0/undefined = no limit.
+   */
+  maxConnections?: number;
 }
 
 /** Non-credential AUTH outcome: lockout (454) or temporary failure (454). */

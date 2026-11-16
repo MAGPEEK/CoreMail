@@ -65,29 +65,29 @@ function isCertUsable(status: CertStatus, expiresAt: string | null): boolean {
 function StatusBadge({ status, expiresAt }: { status: CertStatus; expiresAt: string | null }) {
   const days = daysUntil(expiresAt);
   const base = 'inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold';
-  if (status === 'ACTIVE')   return <span className={`${base} bg-green-100 text-green-700`}>Aktiv{days !== null ? ` · ${days}d` : ''}</span>;
-  if (status === 'EXPIRING') return <span className={`${base} bg-amber-100 text-amber-700`}>Läuft ab · {days}d</span>;
-  if (status === 'EXPIRED')  return <span className={`${base} bg-red-100 text-red-700`}>Abgelaufen</span>;
-  if (status === 'PENDING')  return <span className={`${base} bg-blue-100 text-blue-700`}><Loader2 size={10} className="animate-spin" /> Ausstehend</span>;
-  if (status === 'RENEWING') return <span className={`${base} bg-blue-100 text-blue-700`}><Loader2 size={10} className="animate-spin" /> Erneuerung</span>;
-  if (status === 'ERROR')    return <span className={`${base} bg-red-100 text-red-700`}><AlertCircle size={10} /> Fehler</span>;
-  return <span className={`${base} bg-gray-100 text-gray-600`}>{status}</span>;
+  if (status === 'ACTIVE')   return <span className={`${base} bg-success-bg text-success-fg`}>Aktiv{days !== null ? ` · ${days}d` : ''}</span>;
+  if (status === 'EXPIRING') return <span className={`${base} bg-warning-bg text-warning-fg`}>Läuft ab · {days}d</span>;
+  if (status === 'EXPIRED')  return <span className={`${base} bg-danger-bg text-danger-fg`}>Abgelaufen</span>;
+  if (status === 'PENDING')  return <span className={`${base} bg-info-bg text-info-fg`}><Loader2 size={10} className="animate-spin" /> Ausstehend</span>;
+  if (status === 'RENEWING') return <span className={`${base} bg-info-bg text-info-fg`}><Loader2 size={10} className="animate-spin" /> Erneuerung</span>;
+  if (status === 'ERROR')    return <span className={`${base} bg-danger-bg text-danger-fg`}><AlertCircle size={10} /> Fehler</span>;
+  return <span className={`${base} bg-surface-2 text-fg-muted`}>{status}</span>;
 }
 
 function TypeBadge({ type }: { type: CertType }) {
   const base = 'px-2 py-0.5 rounded text-xs font-medium';
-  if (type === 'LETSENCRYPT') return <span className={`${base} bg-purple-100 text-purple-700`}>Let's Encrypt</span>;
-  if (type === 'CUSTOM')      return <span className={`${base} bg-indigo-100 text-indigo-700`}>Eigenes</span>;
-  return <span className={`${base} bg-gray-100 text-gray-600`}>Self-Signed</span>;
+  if (type === 'LETSENCRYPT') return <span className={`${base} bg-info-bg text-info-fg`}>Let's Encrypt</span>;
+  if (type === 'CUSTOM')      return <span className={`${base} bg-info-bg text-info-fg`}>Eigenes</span>;
+  return <span className={`${base} bg-surface-2 text-fg-muted`}>Self-Signed</span>;
 }
 
 // Mail protocols only — HTTPS is activated via the lock icon, not via services
 const ALL_SERVICES = ['SMTP', 'IMAP', 'POP3'];
 
 const SERVICE_COLORS: Record<string, string> = {
-  SMTP: 'bg-green-100 text-green-700',
-  IMAP: 'bg-green-100 text-green-700',
-  POP3: 'bg-green-100 text-green-700',
+  SMTP: 'bg-success-bg text-success-fg',
+  IMAP: 'bg-success-bg text-success-fg',
+  POP3: 'bg-success-bg text-success-fg',
 };
 
 /**
@@ -137,24 +137,24 @@ function ServiceSelector({
                 : undefined}
               className={`px-2 py-1 rounded text-xs font-medium border transition-colors ${
                 isSelected
-                  ? 'bg-blue-600 border-blue-600 text-white'
+                  ? 'bg-accent border-info-line text-white'
                   : takenByName
-                  ? 'bg-amber-50 border-amber-300 text-amber-700 hover:border-blue-400'
-                  : 'bg-white border-gray-300 text-gray-600 hover:border-blue-400'
+                  ? 'bg-warning-bg border-warning-line text-warning-fg hover:border-info-line'
+                  : 'bg-surface border-line-strong text-fg-muted hover:border-info-line'
               }`}>
               {svc}
-              {takenByName && !isSelected && <span className="ml-1 opacity-70">⚠</span>}
+              {takenByName && !isSelected && <span className="ml-1 text-warning-fg" aria-hidden="true">⚠</span>}
             </button>
           );
         })}
       </div>
       {/* Notice when services are taken over from other certs */}
       {beingTransferred.length > 0 && (
-        <p className="mt-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+        <p className="mt-2 text-xs text-warning-fg bg-warning-bg border border-warning-line rounded px-2 py-1">
           ⚠️ {beingTransferred.map(s => `${s} (von „${takenBy[s]}")`).join(', ')} {beingTransferred.length === 1 ? 'wird' : 'werden'} diesem Zertifikat übertragen und beim anderen entfernt.
         </p>
       )}
-      <p className="mt-2 text-xs text-gray-400">
+      <p className="mt-2 text-xs text-fg-subtle">
         Jeder Service kann nur einem Zertifikat gleichzeitig zugeordnet sein.
       </p>
     </div>
@@ -204,7 +204,7 @@ export function CertificatesPage() {
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.delete(`/admin/certificates/${id}`),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['admin-certificates'] }); toast.success('Zertifikat gelöscht'); },
-    onError: () => toast.error('Löschen fehlgeschlagen'),
+    onError: (err: Error) => toast.error(err.message || 'Löschen fehlgeschlagen'),
   });
 
   const activateHttpsMutation = useMutation({
@@ -237,7 +237,7 @@ export function CertificatesPage() {
       void qc.invalidateQueries({ queryKey: ['admin-certificates'] });
       toast.success('HTTPS-Proxy deaktiviert — Mail-Protokolle nutzen Cert weiterhin');
     },
-    onError: () => toast.error('Deaktivierung fehlgeschlagen'),
+    onError: (err: Error) => toast.error(err.message || 'Deaktivierung fehlgeschlagen'),
   });
 
   function confirmDelete(cert: Certificate) {
@@ -257,12 +257,12 @@ export function CertificatesPage() {
       key: 'name', header: t('cert_col_name'), sortValue: (c) => c.name,
       cell: (cert) => (
         <div className="flex items-start gap-2">
-          <span className="mt-0.5 text-gray-400 shrink-0" aria-hidden="true">
+          <span className="mt-0.5 text-fg-subtle shrink-0" aria-hidden="true">
             {expandedId === cert.id ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
           </span>
           <div>
-            <p className="font-medium text-gray-900 text-sm">{cert.name}</p>
-            <p className="text-xs text-gray-400 mt-0.5">{cert.domains.slice(0, 2).join(', ')}{cert.domains.length > 2 ? ` +${cert.domains.length - 2}` : ''}</p>
+            <p className="font-medium text-fg text-sm">{cert.name}</p>
+            <p className="text-xs text-fg-subtle mt-0.5">{cert.domains.slice(0, 2).join(', ')}{cert.domains.length > 2 ? ` +${cert.domains.length - 2}` : ''}</p>
           </div>
         </div>
       ),
@@ -271,7 +271,7 @@ export function CertificatesPage() {
     { key: 'status', header: t('cert_col_status'), sortValue: (c) => c.status, cell: (cert) => <StatusBadge status={cert.status} expiresAt={cert.expiresAt} /> },
     {
       key: 'expires', header: t('cert_col_expires'), sortValue: (c) => (c.expiresAt ? new Date(c.expiresAt) : null),
-      className: 'text-xs text-gray-500 whitespace-nowrap',
+      className: 'text-xs text-fg-subtle whitespace-nowrap',
       cell: (cert) => (cert.expiresAt ? new Date(cert.expiresAt).toLocaleDateString() : '–'),
     },
     {
@@ -279,9 +279,9 @@ export function CertificatesPage() {
       cell: (cert) => (
         <div className="flex flex-wrap gap-1">
           {cert.services.length === 0
-            ? <span className="text-xs text-gray-400">–</span>
+            ? <span className="text-xs text-fg-subtle">–</span>
             : cert.services.map(s => (
-                <span key={s} className={`px-1.5 py-0.5 rounded text-xs font-medium ${SERVICE_COLORS[s] ?? 'bg-gray-100 text-gray-600'}`}>{s}</span>
+                <span key={s} className={`px-1.5 py-0.5 rounded text-xs font-medium ${SERVICE_COLORS[s] ?? 'bg-surface-2 text-fg-muted'}`}>{s}</span>
               ))}
         </div>
       ),
@@ -297,7 +297,8 @@ export function CertificatesPage() {
                             onClick={() => deactivateHttpsMutation.mutate(cert.id)}
                             disabled={deactivateHttpsMutation.isPending}
                             title="HTTPS-Proxy deaktivieren"
-                            className="p-1.5 text-green-600 hover:text-gray-500 hover:bg-gray-50 rounded transition-colors disabled:opacity-40">
+                            aria-label="HTTPS-Proxy deaktivieren"
+                            className="p-1.5 text-success-fg hover:text-fg-subtle hover:bg-surface-2 rounded transition-colors disabled:opacity-40">
                             <Lock size={14} />
                           </button>
                         ) : isCertUsable(cert.status, cert.expiresAt) ? (
@@ -305,13 +306,13 @@ export function CertificatesPage() {
                             onClick={() => activateHttpsMutation.mutate(cert.id)}
                             disabled={activateHttpsMutation.isPending}
                             title="HTTPS-Proxy (Port 443) aktivieren"
-                            className="p-1.5 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded transition-colors disabled:opacity-40">
+                            className="p-1.5 text-fg-subtle hover:text-success-fg hover:bg-success-bg rounded transition-colors disabled:opacity-40">
                             <LockOpen size={14} />
                           </button>
                         ) : null}
                         {/* ── Protocol TLS (SMTP/IMAP/POP3) — independent of HTTPS ── */}
                         {cert.isActiveProtocol ? (
-                          <span title="SMTP/IMAP/POP3 nutzen dieses Cert" className="p-1.5 text-blue-500 cursor-default">
+                          <span title="SMTP/IMAP/POP3 nutzen dieses Cert" role="img" aria-label="SMTP/IMAP/POP3 nutzen dieses Cert" className="p-1.5 text-info-fg cursor-default">
                             <Server size={14} />
                           </span>
                         ) : isCertUsable(cert.status, cert.expiresAt) ? (
@@ -319,7 +320,7 @@ export function CertificatesPage() {
                             onClick={() => activateProtocolMutation.mutate(cert.id)}
                             disabled={activateProtocolMutation.isPending}
                             title="Protokoll-TLS aktivieren (SMTP/IMAP/POP3)"
-                            className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors disabled:opacity-40">
+                            className="p-1.5 text-fg-subtle hover:text-info-fg hover:bg-info-bg rounded transition-colors disabled:opacity-40">
                             <Server size={14} />
                           </button>
                         ) : null}
@@ -342,23 +343,23 @@ export function CertificatesPage() {
                               cert.status === 'ERROR'     ? 'Letzte Erneuerung fehlgeschlagen — erneut versuchen' :
                               'Jetzt erneuern'
                             }
-                            className={`p-1.5 rounded transition-colors disabled:opacity-40 hover:text-blue-600 hover:bg-blue-50 ${
-                              cert.status === 'EXPIRED' || cert.status === 'ERROR' ? 'text-red-500'
-                              : cert.status === 'EXPIRING' ? 'text-amber-500'
-                              : 'text-gray-400'}`}>
+                            className={`p-1.5 rounded transition-colors disabled:opacity-40 hover:text-info-fg hover:bg-info-bg ${
+                              cert.status === 'EXPIRED' || cert.status === 'ERROR' ? 'text-danger-fg'
+                              : cert.status === 'EXPIRING' ? 'text-warning-fg'
+                              : 'text-fg-subtle'}`}>
                             <RefreshCw size={14} className={(cert.status === 'RENEWING' || cert.status === 'PENDING') ? 'animate-spin' : ''} />
                           </button>
                         )}
                         <button
                           onClick={() => setEditingCert(cert)}
                           title="Bearbeiten (Name, Services, Auto-Renew)" aria-label={`${t('tb_edit')}: ${cert.name}`}
-                          className="p-1.5 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-colors">
+                          className="p-1.5 text-fg-subtle hover:text-info-fg hover:bg-info-bg rounded transition-colors">
                           <Pencil size={14} />
                         </button>
                         <button
                           onClick={() => confirmDelete(cert)}
                           title="Löschen" aria-label={`${t('tb_delete')}: ${cert.name}`}
-                          className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors">
+                          className="p-1.5 text-fg-subtle hover:text-danger-fg hover:bg-danger-bg rounded transition-colors">
                           <Trash2 size={14} />
                         </button>
           </div>
@@ -372,18 +373,18 @@ export function CertificatesPage() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
-          <ShieldCheck size={22} className="text-blue-600" />
+          <ShieldCheck size={22} className="text-info-fg" />
           <div>
-            <h1 className="text-xl font-bold text-gray-900">SSL/TLS Zertifikate</h1>
-            <p className="text-sm text-gray-500">{certs.length} Zertifikat{certs.length !== 1 ? 'e' : ''}</p>
+            <h1 className="text-xl font-bold text-fg">SSL/TLS Zertifikate</h1>
+            <p className="text-sm text-fg-subtle">{certs.length} Zertifikat{certs.length !== 1 ? 'e' : ''}</p>
           </div>
         </div>
       </div>
 
       {/* HTTPS status banner — only when active */}
       {tlsInfo?.activeCert && (
-        <div className="mb-4 flex items-center gap-3 px-4 py-3 bg-green-50 border border-green-200 rounded-xl text-sm text-green-800">
-          <Lock size={16} className="text-green-600 shrink-0" />
+        <div className="mb-4 flex items-center gap-3 px-4 py-3 bg-success-bg border border-success-line rounded-xl text-sm text-success-fg">
+          <Lock size={16} className="text-success-fg shrink-0" />
           <span>
             <strong>HTTPS aktiv</strong> — Port {tlsInfo.port} verwendet{' '}
             <span className="font-mono font-medium">{tlsInfo.activeCert.name}</span>
@@ -397,13 +398,13 @@ export function CertificatesPage() {
 
       {/* Status banners */}
       {certs.some(c => c.status === 'PENDING' || c.status === 'RENEWING') && (
-        <div className="mb-3 px-4 py-3 bg-blue-50 border border-blue-100 rounded-xl flex items-center gap-2 text-sm text-blue-700" role="status">
+        <div className="mb-3 px-4 py-3 bg-info-bg border border-info-line rounded-xl flex items-center gap-2 text-sm text-info-fg" role="status">
           <Loader2 size={14} className="animate-spin shrink-0" aria-hidden="true" />
-          <span>ACME-Prozess läuft… Let's Encrypt verifiziert die Domain über <strong>Port 80</strong> (<code className="font-mono text-xs bg-blue-100 px-1 rounded">/.well-known/acme-challenge/</code>). Das dauert 1–3 Minuten.</span>
+          <span>ACME-Prozess läuft… Let's Encrypt verifiziert die Domain über <strong>Port 80</strong> (<code className="font-mono text-xs bg-info-bg px-1 rounded">/.well-known/acme-challenge/</code>). Das dauert 1–3 Minuten.</span>
         </div>
       )}
       {certs.some(c => c.status === 'ERROR') && (
-        <div className="mb-3 px-4 py-3 bg-red-50 border border-red-200 rounded-xl flex items-start gap-2 text-sm text-red-700" role="alert">
+        <div className="mb-3 px-4 py-3 bg-danger-bg border border-danger-line rounded-xl flex items-start gap-2 text-sm text-danger-fg" role="alert">
           <AlertCircle size={14} className="shrink-0 mt-0.5" aria-hidden="true" />
           <span>
             <strong>Zertifikat fehlgeschlagen.</strong> Häufigste Ursache: <strong>Port 80</strong> muss öffentlich erreichbar sein (ACME HTTP-01 Challenge).
@@ -433,59 +434,59 @@ export function CertificatesPage() {
         renderExpanded={(cert) => expandedId === cert.id ? (
                         <div className="grid grid-cols-2 gap-4 text-sm">
                           <div>
-                            <p className="text-xs text-gray-500 mb-1">Alle Domains</p>
+                            <p className="text-xs text-fg-subtle mb-1">Alle Domains</p>
                             <div className="flex flex-wrap gap-1">
                               {cert.domains.map(d => (
-                                <span key={d} className="px-2 py-0.5 bg-white border border-gray-200 rounded text-xs font-mono">{d}</span>
+                                <span key={d} className="px-2 py-0.5 bg-surface border border-line rounded text-xs font-mono">{d}</span>
                               ))}
                             </div>
                           </div>
                           <div className="grid grid-cols-2 gap-3">
                             <div>
-                              <p className="text-xs text-gray-500">Ausgestellt</p>
-                              <p className="text-gray-700">{cert.issuedAt ? new Date(cert.issuedAt).toLocaleDateString('de-DE') : '–'}</p>
+                              <p className="text-xs text-fg-subtle">Ausgestellt</p>
+                              <p className="text-fg-muted">{cert.issuedAt ? new Date(cert.issuedAt).toLocaleDateString('de-DE') : '–'}</p>
                             </div>
                             <div>
-                              <p className="text-xs text-gray-500">Läuft ab</p>
-                              <p className="text-gray-700">{cert.expiresAt ? new Date(cert.expiresAt).toLocaleDateString('de-DE') : '–'}</p>
+                              <p className="text-xs text-fg-subtle">Läuft ab</p>
+                              <p className="text-fg-muted">{cert.expiresAt ? new Date(cert.expiresAt).toLocaleDateString('de-DE') : '–'}</p>
                             </div>
                             <div>
-                              <p className="text-xs text-gray-500">Auto-Renew</p>
-                              <p className="text-gray-700">{cert.autoRenew ? 'Ja' : 'Nein'}</p>
+                              <p className="text-xs text-fg-subtle">Auto-Renew</p>
+                              <p className="text-fg-muted">{cert.autoRenew ? 'Ja' : 'Nein'}</p>
                             </div>
                             {/* HTTPS-Proxy Status */}
                             <div>
-                              <p className="text-xs text-gray-500">HTTPS-Proxy (Port 443)</p>
-                              <p className="flex items-center gap-1 text-gray-700">
+                              <p className="text-xs text-fg-subtle">HTTPS-Proxy (Port 443)</p>
+                              <p className="flex items-center gap-1 text-fg-muted">
                                 {cert.isActiveHttps
-                                  ? <><Lock size={12} className="text-green-600" /> <span className="text-green-700 font-medium">Aktiv</span></>
-                                  : <><LockOpen size={12} className="text-gray-400" /> <span className="text-gray-400">Inaktiv</span></>
+                                  ? <><Lock size={12} className="text-success-fg" /> <span className="text-success-fg font-medium">Aktiv</span></>
+                                  : <><LockOpen size={12} className="text-fg-subtle" /> <span className="text-fg-subtle">Inaktiv</span></>
                                 }
                               </p>
                             </div>
                             {/* Protocol TLS status — independent of HTTPS proxy */}
                             <div>
-                              <p className="text-xs text-gray-500">Protokoll-TLS (SMTP/IMAP/POP3)</p>
-                              <p className="flex items-center gap-1 text-gray-700">
+                              <p className="text-xs text-fg-subtle">Protokoll-TLS (SMTP/IMAP/POP3)</p>
+                              <p className="flex items-center gap-1 text-fg-muted">
                                 {cert.isActiveProtocol
-                                  ? <><Server size={12} className="text-green-600" /> <span className="text-green-700 font-medium">Aktiv (465 / 993 / 995)</span></>
-                                  : <><Server size={12} className="text-gray-400" /> <span className="text-gray-400">Inaktiv</span></>
+                                  ? <><Server size={12} className="text-success-fg" /> <span className="text-success-fg font-medium">Aktiv (465 / 993 / 995)</span></>
+                                  : <><Server size={12} className="text-fg-subtle" /> <span className="text-fg-subtle">Inaktiv</span></>
                                 }
                               </p>
                             </div>
                             {cert.acmeEmail && (
                               <div>
-                                <p className="text-xs text-gray-500">ACME E-Mail</p>
-                                <p className="text-gray-700">{cert.acmeEmail}</p>
+                                <p className="text-xs text-fg-subtle">ACME E-Mail</p>
+                                <p className="text-fg-muted">{cert.acmeEmail}</p>
                               </div>
                             )}
                           </div>
                           {cert.lastError && (
-                            <div className="col-span-2 p-3 bg-red-50 border border-red-200 rounded">
-                              <p className="text-xs font-semibold text-red-700 mb-1 flex items-center gap-1">
+                            <div className="col-span-2 p-3 bg-danger-bg border border-danger-line rounded">
+                              <p className="text-xs font-semibold text-danger-fg mb-1 flex items-center gap-1">
                                 <AlertCircle size={12} /> Fehlermeldung
                               </p>
-                              <pre className="text-xs text-red-700 whitespace-pre-wrap break-words font-mono leading-relaxed">{cert.lastError}</pre>
+                              <pre className="text-xs text-danger-fg whitespace-pre-wrap break-words font-mono leading-relaxed">{cert.lastError}</pre>
                             </div>
                           )}
                         </div>
@@ -514,7 +515,7 @@ export function CertificatesPage() {
               </button>
             </Can>
             <Can area="servers" access="write">
-              <button className="btn-secondary flex items-center gap-1.5 text-xs text-red-600 disabled:opacity-40" disabled={selectedRows.length !== 1}
+              <button className="btn-secondary flex items-center gap-1.5 text-xs text-danger-fg disabled:opacity-40" disabled={selectedRows.length !== 1}
                 onClick={() => { if (selectedRows[0]) { confirmDelete(selectedRows[0]); clearSelection(); } }}>
                 <Trash2 size={13} aria-hidden="true" /> {t('tb_delete')}
               </button>
@@ -566,7 +567,7 @@ function LetsEncryptModal({ onClose, allCerts }: { onClose: () => void; allCerts
       toast.success('Let\'s Encrypt Anfrage gestartet');
       onClose();
     },
-    onError: () => toast.error('Anfrage fehlgeschlagen'),
+    onError: (err: Error) => toast.error(err.message || 'Anfrage fehlgeschlagen'),
   });
 
   return (
@@ -594,13 +595,13 @@ function LetsEncryptModal({ onClose, allCerts }: { onClose: () => void; allCerts
               className="rounded" />
             Auto-Renew (empfohlen)
           </label>
-          <label className="flex items-center gap-2 text-sm cursor-pointer select-none text-amber-700">
+          <label className="flex items-center gap-2 text-sm cursor-pointer select-none text-warning-fg">
             <input type="checkbox" checked={staging} onChange={e => setStaging(e.target.checked)}
               className="rounded" />
             Staging-Umgebung (Test)
           </label>
         </div>
-        <p className="text-xs text-gray-500 bg-blue-50 border border-blue-200 rounded p-2">
+        <p className="text-xs text-fg-subtle bg-info-bg border border-info-line rounded p-2">
           <strong>Voraussetzung:</strong> Port 80 muss öffentlich erreichbar sein, damit Let's Encrypt den ACME HTTP-01 Challenge verifizieren kann.
         </p>
         <div className="flex justify-end gap-2 pt-2">
@@ -641,7 +642,7 @@ function UploadModal({ onClose, allCerts }: { onClose: () => void; allCerts: Cer
       toast.success('Zertifikat hochgeladen');
       onClose();
     },
-    onError: () => toast.error('Upload fehlgeschlagen — ungültiges PEM?'),
+    onError: (err: Error) => toast.error(err.message || 'Upload fehlgeschlagen — ungültiges PEM?'),
   });
 
   return (
@@ -707,13 +708,13 @@ function SelfSignedModal({ onClose, allCerts }: { onClose: () => void; allCerts:
       toast.success('Selbstsigniertes Zertifikat generiert');
       onClose();
     },
-    onError: () => toast.error('Generierung fehlgeschlagen'),
+    onError: (err: Error) => toast.error(err.message || 'Generierung fehlgeschlagen'),
   });
 
   return (
     <Modal title="Selbstsigniertes Zertifikat generieren" onClose={onClose}>
       <div className="space-y-4">
-        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+        <p className="text-xs text-warning-fg bg-warning-bg border border-warning-line rounded p-2">
           Selbstsignierte Zertifikate werden von Browsern nicht vertraut. Nur für interne Tests geeignet.
         </p>
         <Field label="Name">
@@ -782,29 +783,29 @@ function EditCertModal({ cert, allCerts, onClose }: {
           <StatusBadge status={cert.status} expiresAt={cert.expiresAt} />
         </div>
         <div>
-          <p className="text-xs text-gray-500 mb-1">Domains (nicht editierbar)</p>
+          <p className="text-xs text-fg-subtle mb-1">Domains (nicht editierbar)</p>
           <div className="flex flex-wrap gap-1">
             {cert.domains.map(d => (
-              <span key={d} className="px-2 py-0.5 bg-gray-100 border border-gray-200 rounded text-xs font-mono">{d}</span>
+              <span key={d} className="px-2 py-0.5 bg-surface-2 border border-line rounded text-xs font-mono">{d}</span>
             ))}
           </div>
         </div>
         {/* Read-only: activation status */}
-        <div className="grid grid-cols-2 gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200 text-sm">
+        <div className="grid grid-cols-2 gap-3 p-3 bg-surface-2 rounded-lg border border-line text-sm">
           <div>
-            <p className="text-xs text-gray-500 mb-0.5">HTTPS-Proxy (Port 443)</p>
+            <p className="text-xs text-fg-subtle mb-0.5">HTTPS-Proxy (Port 443)</p>
             <p className="flex items-center gap-1">
               {cert.isActiveHttps
-                ? <><Lock size={12} className="text-green-600" /><span className="text-green-700 font-medium">Aktiv</span></>
-                : <><LockOpen size={12} className="text-gray-400" /><span className="text-gray-400">Inaktiv</span></>}
+                ? <><Lock size={12} className="text-success-fg" /><span className="text-success-fg font-medium">Aktiv</span></>
+                : <><LockOpen size={12} className="text-fg-subtle" /><span className="text-fg-subtle">Inaktiv</span></>}
             </p>
           </div>
           <div>
-            <p className="text-xs text-gray-500 mb-0.5">Protokoll-TLS (SMTP/IMAP/POP3)</p>
+            <p className="text-xs text-fg-subtle mb-0.5">Protokoll-TLS (SMTP/IMAP/POP3)</p>
             <p className="flex items-center gap-1">
               {cert.isActiveProtocol
-                ? <><Server size={12} className="text-blue-600" /><span className="text-blue-700 font-medium">Aktiv</span></>
-                : <><Server size={12} className="text-gray-400" /><span className="text-gray-400">Inaktiv</span></>}
+                ? <><Server size={12} className="text-info-fg" /><span className="text-info-fg font-medium">Aktiv</span></>
+                : <><Server size={12} className="text-fg-subtle" /><span className="text-fg-subtle">Inaktiv</span></>}
             </p>
           </div>
         </div>
@@ -854,17 +855,18 @@ function EditCertModal({ cert, allCerts, onClose }: {
 // ── UI-Helpers ────────────────────────────────────────────────────────────────
 
 function Modal({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
+  const t = useT();
   const titleId = useId();
   return (
     <AccessibleModal
       onClose={onClose}
       labelledBy={titleId}
-      overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-      className="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto"
+      overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-scrim/40 p-4"
+      className="bg-surface rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto"
     >
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
-          <h2 id={titleId} className="font-semibold text-gray-900">{title}</h2>
-          <button type="button" onClick={onClose} aria-label="Schließen" className="text-gray-400 hover:text-gray-600 transition-colors">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-line">
+          <h2 id={titleId} className="font-semibold text-fg">{title}</h2>
+          <button type="button" onClick={onClose} aria-label={t('action_close')} className="text-fg-subtle hover:text-fg-muted transition-colors">
             <X size={18} aria-hidden="true" />
           </button>
         </div>
@@ -876,7 +878,7 @@ function Modal({ title, children, onClose }: { title: string; children: React.Re
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
+      <label className="block text-sm font-medium text-fg-muted mb-1">{label}</label>
       {children}
     </div>
   );

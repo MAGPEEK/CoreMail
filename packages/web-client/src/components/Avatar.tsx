@@ -1,21 +1,21 @@
 // Avatar with hash-based color + initials — like Gmail/Outlook.com
 
-// 14 Material-inspired color pairs (background, text) — high contrast
+// 14 Material-inspired color pairs (background, text) — 700 shades: white initials reach >= 4.99:1 (WCAG 1.4.3)
 const COLORS = [
-  { bg: 'bg-blue-500',    text: 'text-white' },
-  { bg: 'bg-emerald-500', text: 'text-white' },
-  { bg: 'bg-amber-500',   text: 'text-white' },
-  { bg: 'bg-rose-500',    text: 'text-white' },
-  { bg: 'bg-violet-500',  text: 'text-white' },
-  { bg: 'bg-cyan-500',    text: 'text-white' },
-  { bg: 'bg-pink-500',    text: 'text-white' },
-  { bg: 'bg-orange-500',  text: 'text-white' },
-  { bg: 'bg-teal-500',    text: 'text-white' },
-  { bg: 'bg-indigo-500',  text: 'text-white' },
-  { bg: 'bg-fuchsia-500', text: 'text-white' },
-  { bg: 'bg-lime-600',    text: 'text-white' },
-  { bg: 'bg-sky-500',     text: 'text-white' },
-  { bg: 'bg-red-500',     text: 'text-white' },
+  { bg: 'bg-blue-700',    text: 'text-white' },
+  { bg: 'bg-emerald-700', text: 'text-white' },
+  { bg: 'bg-amber-700',   text: 'text-white' },
+  { bg: 'bg-rose-700',    text: 'text-white' },
+  { bg: 'bg-violet-700',  text: 'text-white' },
+  { bg: 'bg-cyan-700',    text: 'text-white' },
+  { bg: 'bg-pink-700',    text: 'text-white' },
+  { bg: 'bg-orange-700',  text: 'text-white' },
+  { bg: 'bg-teal-700',    text: 'text-white' },
+  { bg: 'bg-indigo-700',  text: 'text-white' },
+  { bg: 'bg-fuchsia-700', text: 'text-white' },
+  { bg: 'bg-lime-700',    text: 'text-white' },
+  { bg: 'bg-sky-700',     text: 'text-white' },
+  { bg: 'bg-red-700',     text: 'text-white' },
 ] as const;
 
 function hashString(s: string): number {

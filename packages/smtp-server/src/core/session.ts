@@ -29,7 +29,7 @@ import { hasDsnRequest } from './dsn-params.js';
 const log = createLogger('smtp:session');
 
 // RFC 5321 §4.5.3.2 timeouts (milliseconds)
-const T_GREETING = 5 * 60_000;
+/** Default idle timeout for the greeting reply / next command (config.commandTimeoutMs overrides). */
 const T_COMMAND  = 5 * 60_000;
 /** Data block timeout: restarted for every received chunk (§4.5.3.2.6). */
 const T_DATA     = 10 * 60_000;
@@ -193,6 +193,11 @@ export class SmtpSession {
   // Set once the connection is being torn down (oversized line).
   private closing: boolean = false;
 
+  /** A delayed 220 greeting has not been sent yet (config.greetingDelayMs). */
+  private greetingPending: boolean = false;
+  /** Timer of the delayed greeting — cleared when the socket closes. */
+  private greetingTimer: NodeJS.Timeout | null = null;
+
   /**
    * BDAT chunk currently being read. Chunk octets are taken from the input
    * synchronously (they follow the command line immediately, also when
@@ -280,13 +285,35 @@ export class SmtpSession {
     });
     this.socket.on('close', () => {
       this.clearTimer();
+      if (this.greetingTimer) { clearTimeout(this.greetingTimer); this.greetingTimer = null; }
+      this.greetingPending = false;
       this.unregisterLive?.();
       this.unregisterLive = null;
       log.debug({ id: this.id }, 'Socket closed');
     });
 
-    this.resetTimer(T_GREETING);
+    this.resetTimer(this.commandTimeout());
+    const delayMs = this.config.greetingDelayMs ?? 0;
+    if (delayMs > 0) {
+      // Greeting delay (inbound): hold the 220; a client that talks first is
+      // not RFC 5321 compliant (pre-greeting traffic) and is refused in onData.
+      this.greetingPending = true;
+      this.greetingTimer = setTimeout(() => {
+        this.greetingTimer = null;
+        if (!this.greetingPending || this.closing) return;
+        this.greetingPending = false;
+        this.send(`220 ${greetingText(this.config.hostname, this.config.bannerText)}`);
+      }, delayMs);
+      this.greetingTimer.unref?.();
+      return;
+    }
     this.send(`220 ${greetingText(this.config.hostname, this.config.bannerText)}`);
+  }
+
+  /** Idle timeout for the greeting reply / next command (SmtpSettings.connectionTimeoutSec). */
+  private commandTimeout(): number {
+    const ms = this.config.commandTimeoutMs;
+    return ms !== undefined && Number.isFinite(ms) && ms > 0 ? ms : T_COMMAND;
   }
 
   // ─── Timer ──────────────────────────────────────────────────────────────────
@@ -390,6 +417,16 @@ export class SmtpSession {
 
   private onData(chunk: string): void {
     if (this.closing) return;
+    if (this.greetingPending) {
+      // Pre-greeting traffic (client talked before the delayed 220).
+      this.greetingPending = false;
+      this.closing = true;
+      this.clearTimer();
+      this.send('554 5.5.0 SMTP protocol violation: client sent data before the greeting');
+      this.socket.end();
+      log.info({ id: this.id, ip: this.ip }, 'SMTP: pre-greeting traffic — connection closed');
+      return;
+    }
     // RFC 5321 §4.5.3.2.6: the data block timeout runs per received chunk, not
     // for the whole message — a slow but progressing upload must not time out.
     if (this.inData || this.bdat) this.resetTimer(T_DATA);
@@ -472,7 +509,7 @@ export class SmtpSession {
         if (!chunk.discard) this.bdatBuffered -= chunk.size;
       }
     }, { kind: 'bdat' });
-    this.resetTimer(T_COMMAND);
+    this.resetTimer(this.commandTimeout());
     return true;
   }
 
@@ -509,7 +546,7 @@ export class SmtpSession {
   /** Queued part of BDAT: sequence checks, size limit, then 250 or delivery on LAST. */
   private async handleBdatChunk(chunk: BdatChunk, data: Buffer | null): Promise<void> {
     const tx = this.transaction;
-    this.resetTimer(T_COMMAND);
+    this.resetTimer(this.commandTimeout());
     // RFC 3030 §2: BDAT needs an open transaction with a recipient; after
     // BDAT LAST (or a failed chunk) it is a bad sequence until RSET/MAIL.
     if (!tx || (this.state !== 'RCPT' && this.state !== 'BDAT') || chunk.discard === 'sequence') {
@@ -573,7 +610,7 @@ export class SmtpSession {
         this.enqueueCommand(() => {
           this.transaction = null;
           this.state = 'READY';
-          this.resetTimer(T_COMMAND);
+          this.resetTimer(this.commandTimeout());
           this.send('552 5.3.4 Message exceeds size limit');
         });
         return;
@@ -620,7 +657,7 @@ export class SmtpSession {
     const tx = this.transaction;
     if (!tx) {
       this.send('451 4.3.0 Internal error');
-      this.resetTimer(T_COMMAND);
+      this.resetTimer(this.commandTimeout());
       return;
     }
 
@@ -634,7 +671,7 @@ export class SmtpSession {
     // Reset transaction state before calling handler (handler may take time)
     this.transaction = null;
     this.state = 'READY';
-    this.resetTimer(T_COMMAND);
+    this.resetTimer(this.commandTimeout());
 
     try {
       await this.config.handlers.onMessage(raw, from, to, authUser, ip, meta);
@@ -679,14 +716,14 @@ export class SmtpSession {
     // RFC 5321 §4.5.3.1 — max line length
     if (line.length > MAX_LINE) {
       this.send('500 5.5.6 Line too long');
-      this.resetTimer(T_COMMAND);
+      this.resetTimer(this.commandTimeout());
       return;
     }
 
     // AUTH_WAIT: multi-step AUTH exchange — enqueue like all other commands
     // so that concurrent pipelined commands don't race against auth state.
     if (this.state === 'AUTH_WAIT') {
-      this.resetTimer(T_COMMAND);
+      this.resetTimer(this.commandTimeout());
       this.enqueueCommand(() => this.handleAuthStep(line));
       return;
     }
@@ -696,7 +733,7 @@ export class SmtpSession {
     const cmd  = (spaceIdx === -1 ? line : line.slice(0, spaceIdx)).toUpperCase().trim();
     const args = spaceIdx === -1 ? '' : line.slice(spaceIdx + 1).trim();
 
-    this.resetTimer(T_COMMAND);
+    this.resetTimer(this.commandTimeout());
 
     // A new transaction (or its reset) restarts the BDAT read-time size count.
     if (cmd === 'MAIL' || cmd === 'RSET' || cmd === 'EHLO' || cmd === 'HELO') {
@@ -1119,7 +1156,7 @@ export class SmtpSession {
         log.debug({ id: this.id, err }, 'TLS socket error');
       });
 
-      this.resetTimer(T_GREETING);
+      this.resetTimer(this.commandTimeout());
       log.debug({ id: this.id }, 'STARTTLS upgrade complete');
     });
 

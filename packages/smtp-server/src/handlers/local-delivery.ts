@@ -5,13 +5,14 @@
  *  - stripOwnAuthResults for all of our authserv-ids: a local user must not be
  *    able to deliver a forged `Authentication-Results: <our host>; dmarc=pass`
  *    to colleagues (RFC 8601 §5). Port 25 strips on receipt; the local paths
- *    strip here before storing.
+ *    strip here before storing. Same for the internal X-CoreMail-Virus-Scan.
  *  - an NDR for recipients that turn out to be unknown at delivery time
  *    (deleted/deactivated after the message was accepted) — never a silent drop.
  */
 import { createLogger } from '@coremail/core';
-import { prisma } from '@coremail/storage';
+import { prisma, stripHeaders } from '@coremail/storage';
 import { stripOwnAuthResults } from './trace.js';
+import { VIRUS_SCAN_HEADER } from '../inbound/virus-scan-header.js';
 import { sendDsnBounce, type DsnOptions } from '../outbound/dsn.js';
 
 const log = createLogger('smtp:local-delivery');
@@ -49,9 +50,17 @@ export function stripOwnAuthResultsAll(raw: Buffer, ids: readonly string[]): Buf
   return out;
 }
 
-/** Removes Authentication-Results fields carrying one of our authserv-ids. */
+/**
+ * Removes Authentication-Results fields carrying one of our authserv-ids and
+ * the internal X-CoreMail-Virus-Scan verdict (only the port-25 path adds it,
+ * after its own scan) — a local user must not inject either into a
+ * colleague's mailbox (mail rules match on the verdict).
+ */
 export async function stripForLocalDelivery(raw: Buffer, extraIds: readonly string[] = []): Promise<Buffer> {
-  return stripOwnAuthResultsAll(raw, [...new Set([...(await ownAuthservIds()), ...extraIds.map((i) => i.toLowerCase())])]);
+  return stripOwnAuthResultsAll(
+    stripHeaders(raw, [VIRUS_SCAN_HEADER]),
+    [...new Set([...(await ownAuthservIds()), ...extraIds.map((i) => i.toLowerCase())])],
+  );
 }
 
 /** Pure: subject + Message-ID of a raw message (for the NDR). */

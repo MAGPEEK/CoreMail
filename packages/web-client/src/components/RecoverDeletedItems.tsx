@@ -1,5 +1,5 @@
 /**
- * "Recover deleted items" (v8.1, Exchange Recoverable Items): lists items
+ * "Recover deleted items" (v8.1): lists items
  * deleted from the mailbox within DELETED_ITEM_RETENTION_DAYS and restores or
  * permanently deletes the selected ones (/api/v1/mail/recoverable).
  * Used inline in Settings and as a dialog from the Trash folder menu.
@@ -75,49 +75,49 @@ export function RecoverDeletedItemsPanel({ target }: { target?: RecoverTarget } 
   const ids = [...selected];
   const busy = restore.isPending || purge.isPending;
 
-  if (isLoading) return <div className="flex justify-center py-12 text-gray-400"><Loader2 size={18} className="animate-spin" /></div>;
+  if (isLoading) return <div className="flex justify-center py-12 text-fg-subtle"><Loader2 size={18} className="animate-spin" /></div>;
 
   return (
     <div className="space-y-4">
-      <p className="text-sm text-gray-500 dark:text-gray-400">{fmt(t('recover_hint'), { days: data?.retentionDays ?? 30 })}</p>
+      <p className="text-sm text-fg-subtle">{fmt(t('recover_hint'), { days: data?.retentionDays ?? 30 })}</p>
       <div className="flex items-center gap-2">
         <button className="btn-primary" disabled={ids.length === 0 || busy} onClick={() => restore.mutate(ids)}>
           <RotateCcw size={14} /> {t('recover_restore')}
         </button>
         <button
-          className="px-3 py-1.5 text-sm rounded border border-red-300 text-red-600 hover:bg-red-50 dark:hover:bg-red-950 disabled:opacity-40"
+          className="px-3 py-1.5 text-sm rounded border border-line-strong text-danger-fg hover:bg-danger-bg disabled:opacity-40"
           disabled={ids.length === 0 || busy}
           onClick={() => { if (window.confirm(t('recover_purge_confirm'))) purge.mutate(ids); }}
         >
           <Trash2 size={14} className="inline mr-1" />{t('recover_purge')}
         </button>
-        {busy && <Loader2 size={14} className="animate-spin text-gray-400" />}
+        {busy && <Loader2 size={14} className="animate-spin text-fg-subtle" />}
       </div>
       {items.length === 0 ? (
-        <p className="text-sm text-gray-400 py-4">{t('recover_empty')}</p>
+        <p className="text-sm text-fg-subtle py-4">{t('recover_empty')}</p>
       ) : (
-        <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-auto max-h-[60vh]">
+        <div className="border border-line rounded-lg overflow-auto max-h-[60vh]">
           <table className="w-full text-sm">
-            <thead className="bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 sticky top-0">
+            <thead className="bg-surface-2 border-b border-line sticky top-0">
               <tr>
                 <th className="px-3 py-2 w-8">
                   <input type="checkbox" aria-label={t('recover_select_all')} checked={allSelected}
                     onChange={() => setSelected(allSelected ? new Set() : new Set(items.map((i) => i.id)))} />
                 </th>
-                <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500">Subject</th>
-                <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500">From</th>
-                <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500">{t('recover_deleted_on')}</th>
-                <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500">{t('recover_expires')}</th>
+                <th className="text-left px-3 py-2 text-xs font-semibold text-fg-subtle">Subject</th>
+                <th className="text-left px-3 py-2 text-xs font-semibold text-fg-subtle">From</th>
+                <th className="text-left px-3 py-2 text-xs font-semibold text-fg-subtle">{t('recover_deleted_on')}</th>
+                <th className="text-left px-3 py-2 text-xs font-semibold text-fg-subtle">{t('recover_expires')}</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+            <tbody className="divide-y divide-line">
               {items.map((i) => (
-                <tr key={i.id} className="hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer" onClick={() => toggle(i.id)}>
+                <tr key={i.id} className="hover:bg-surface-2 cursor-pointer" onClick={() => toggle(i.id)}>
                   <td className="px-3 py-2"><input type="checkbox" checked={selected.has(i.id)} onChange={() => toggle(i.id)} onClick={(e) => e.stopPropagation()} aria-label={i.subject || '(no subject)'} /></td>
                   <td className="px-3 py-2 truncate max-w-[16rem]" title={i.subject}>{i.subject || '(no subject)'}</td>
                   <td className="px-3 py-2 truncate max-w-[12rem]" title={i.fromAddr}>{i.fromName || i.fromAddr}</td>
-                  <td className="px-3 py-2 whitespace-nowrap text-gray-600 dark:text-gray-400">{fmtDate(i.deletedAt)}</td>
-                  <td className="px-3 py-2 whitespace-nowrap text-gray-600 dark:text-gray-400">{fmtDate(i.expiresAt)}</td>
+                  <td className="px-3 py-2 whitespace-nowrap text-fg-muted">{fmtDate(i.deletedAt)}</td>
+                  <td className="px-3 py-2 whitespace-nowrap text-fg-muted">{fmtDate(i.expiresAt)}</td>
                 </tr>
               ))}
             </tbody>
@@ -132,12 +132,12 @@ export function RecoverDeletedItemsPanel({ target }: { target?: RecoverTarget } 
 export function RecoverDeletedItemsDialog({ onClose, target, subtitle }: { onClose: () => void; target?: RecoverTarget; subtitle?: string }) {
   const t = useT();
   return (
-    <Modal onClose={onClose} label={t('recover_title')} className="bg-white dark:bg-gray-900 rounded-lg shadow-2xl w-full max-w-3xl p-5">
+    <Modal onClose={onClose} label={t('recover_title')} className="bg-surface rounded-lg shadow-2xl w-full max-w-3xl p-5">
       <div className="flex items-center justify-between mb-3">
-        <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">{t('recover_title')}</h2>
-        <button onClick={onClose} aria-label="Close" className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-800"><X size={16} /></button>
+        <h2 className="text-lg font-semibold text-fg">{t('recover_title')}</h2>
+        <button onClick={onClose} aria-label="Close" className="p-1 rounded hover:bg-surface-2"><X size={16} /></button>
       </div>
-      {subtitle && <p className="-mt-2 mb-3 text-xs text-gray-500 dark:text-gray-400 truncate">{subtitle}</p>}
+      {subtitle && <p className="-mt-2 mb-3 text-xs text-fg-subtle truncate">{subtitle}</p>}
       <RecoverDeletedItemsPanel {...(target ? { target } : {})} />
     </Modal>
   );

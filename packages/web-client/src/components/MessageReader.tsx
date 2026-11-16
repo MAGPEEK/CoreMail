@@ -95,11 +95,11 @@ export function MessageReader({ messageId }: Props) {
   if (!msg) {
     if (!isError) return null;
     return (
-      <div role="alert" className="flex-1 flex items-center justify-center bg-white dark:bg-gray-900 p-6">
+      <div role="alert" className="flex-1 flex items-center justify-center bg-surface p-6">
         <div className="text-center max-w-sm">
-          <AlertCircle size={32} className="mx-auto text-red-500 mb-2" aria-hidden="true" />
-          <p className="text-sm font-medium text-gray-900 dark:text-gray-100">Die Nachricht konnte nicht geladen werden.</p>
-          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 break-words">
+          <AlertCircle size={32} className="mx-auto text-danger-fg mb-2" aria-hidden="true" />
+          <p className="text-sm font-medium text-fg">Die Nachricht konnte nicht geladen werden.</p>
+          <p className="text-xs text-fg-subtle mt-1 break-words">
             {error instanceof Error ? error.message : 'Unbekannter Fehler'}
           </p>
           <button
@@ -186,9 +186,9 @@ export function MessageReader({ messageId }: Props) {
   ];
 
   return (
-    <div className="flex-1 flex flex-col bg-white dark:bg-gray-900 overflow-hidden">
+    <div className="flex-1 flex flex-col bg-surface overflow-hidden">
       {/* Toolbar */}
-      <div className="flex items-center gap-1 px-4 py-2 border-b border-gray-100 dark:border-gray-700 shrink-0">
+      <div className="flex items-center gap-1 px-4 py-2 border-b border-line shrink-0">
         <button
           onClick={() => doReply('reply')}
           aria-keyshortcuts={ariaKeys('mail.reply')}
@@ -211,7 +211,7 @@ export function MessageReader({ messageId }: Props) {
         <button onClick={handleArchive} aria-keyshortcuts={ariaKeys('mail.archive')} className="btn-ghost text-xs">
           <Archive size={14} /> Archivieren
         </button>
-        <button onClick={handleDelete} aria-keyshortcuts={ariaKeys('mail.delete')} className="btn-ghost text-xs text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20">
+        <button onClick={handleDelete} aria-keyshortcuts={ariaKeys('mail.delete')} className="btn-ghost text-xs text-danger-fg hover:bg-danger-bg">
           <Trash2 size={14} /> Löschen
         </button>
         <button
@@ -234,10 +234,10 @@ export function MessageReader({ messageId }: Props) {
         return (
           <div className={`px-4 py-2.5 border-b shrink-0 flex items-center gap-2.5 text-sm ${
             isHighRisk
-              ? 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800 text-red-900 dark:text-red-200'
-              : 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800 text-amber-900 dark:text-amber-200'
+              ? 'bg-danger-bg border-danger-line text-danger-fg'
+              : 'bg-warning-bg border-warning-line text-warning-fg'
           }`}>
-            <ShieldAlert size={16} className={isHighRisk ? 'text-red-600 dark:text-red-300 shrink-0' : 'text-amber-600 dark:text-amber-300 shrink-0'} />
+            <ShieldAlert size={16} className={isHighRisk ? 'text-danger-fg shrink-0' : 'text-warning-fg shrink-0'} />
             <div className="flex-1 min-w-0">
               <p className="font-semibold leading-tight">
                 {isHighRisk
@@ -246,7 +246,7 @@ export function MessageReader({ messageId }: Props) {
                     ? 'Diese Nachricht liegt im Junk-Ordner.'
                     : 'Diese Nachricht zeigt Spam-Signale.'}
               </p>
-              <p className="text-xs opacity-80 leading-tight">
+              <p className="text-xs leading-tight">
                 {score !== null
                   ? <>rspamd-Score: <strong className="font-mono">{score.toFixed(2)}</strong> · Links nicht ohne Prüfung anklicken</>
                   : <>Klicken Sie unten auf „Kein Spam", falls diese Nachricht fälschlicherweise als Junk erkannt wurde.</>}
@@ -255,7 +255,7 @@ export function MessageReader({ messageId }: Props) {
             {isJunkFolder ? (
               <button
                 onClick={() => { bulkMutation.mutate({ ids: [msg.id], action: 'notSpam' }); setSelectedMessage(null); }}
-                className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-white dark:bg-gray-800 border border-amber-300 dark:border-amber-700 rounded hover:bg-amber-100 dark:hover:bg-amber-900/40 transition-colors"
+                className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-surface text-fg border border-line-strong rounded hover:bg-surface-2 transition-colors"
                 title="Diese Nachricht ist kein Spam (Bayes-Lernen)"
               >
                 <ShieldCheck size={13} /> Kein Spam
@@ -263,7 +263,7 @@ export function MessageReader({ messageId }: Props) {
             ) : (
               <button
                 onClick={() => withUndo('spam')}
-                className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-white dark:bg-gray-800 border border-red-300 dark:border-red-700 rounded hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors"
+                className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-surface text-fg border border-line-strong rounded hover:bg-surface-2 transition-colors"
                 title="In Junk verschieben (Bayes-Lernen)"
               >
                 <AlertOctagon size={13} /> Als Junk
@@ -275,7 +275,7 @@ export function MessageReader({ messageId }: Props) {
 
       {/* Draft (own Drafts folder): continue editing in compose (server draft) */}
       {currentFolder?.name === 'Drafts' && !msg.scheduledStatus && (
-        <div className="px-4 py-2.5 border-b shrink-0 flex items-center gap-2.5 text-sm bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800 text-amber-900 dark:text-amber-200">
+        <div className="px-4 py-2.5 border-b shrink-0 flex items-center gap-2.5 text-sm bg-warning-bg border-warning-line text-warning-fg">
           <span className="flex-1">{translate('draft_banner')}</span>
           <button
             type="button"
@@ -290,20 +290,20 @@ export function MessageReader({ messageId }: Props) {
       {/* Scheduled send banner (Outlook style) — visible for PENDING/SENT/CANCELLED */}
       {msg.scheduledAt && msg.scheduledStatus && (
         <div className={`px-4 py-2.5 border-b shrink-0 flex items-center gap-2.5 text-sm ${
-          msg.scheduledStatus === 'PENDING'   ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800 text-blue-900 dark:text-blue-200' :
-          msg.scheduledStatus === 'SENT'      ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800 text-green-900 dark:text-green-200' :
-                                                 'bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300'
+          msg.scheduledStatus === 'PENDING'   ? 'bg-info-bg border-info-line text-info-fg' :
+          msg.scheduledStatus === 'SENT'      ? 'bg-success-bg border-success-line text-success-fg' :
+                                                 'bg-surface-2 border-line text-fg-muted'
         }`}>
-          {msg.scheduledStatus === 'PENDING' && <CalendarClock size={16} className="text-blue-600 dark:text-blue-300 shrink-0" />}
-          {msg.scheduledStatus === 'SENT'    && <CheckCircle  size={16} className="text-green-600 dark:text-green-300 shrink-0" />}
-          {msg.scheduledStatus === 'CANCELLED' && <X size={16} className="text-gray-500 shrink-0" />}
+          {msg.scheduledStatus === 'PENDING' && <CalendarClock size={16} className="text-info-fg shrink-0" />}
+          {msg.scheduledStatus === 'SENT'    && <CheckCircle  size={16} className="text-success-fg shrink-0" />}
+          {msg.scheduledStatus === 'CANCELLED' && <X size={16} className="text-fg-subtle shrink-0" />}
           <div className="flex-1 min-w-0">
             <p className="font-semibold leading-tight">
               {msg.scheduledStatus === 'PENDING'   ? 'Diese Nachricht wird geplant gesendet' :
                msg.scheduledStatus === 'SENT'      ? 'Geplanter Versand abgeschlossen' :
                                                      'Geplanter Versand abgebrochen'}
             </p>
-            <p className="text-xs opacity-80 leading-tight">
+            <p className="text-xs leading-tight">
               {msg.scheduledStatus === 'PENDING' ? 'Versand am ' : 'War geplant für '}
               <strong>{new Date(msg.scheduledAt).toLocaleString('de-DE', { dateStyle: 'full', timeStyle: 'short' })}</strong>
             </p>
@@ -312,7 +312,7 @@ export function MessageReader({ messageId }: Props) {
             <button
               onClick={() => cancelScheduledMutation.mutate()}
               disabled={cancelScheduledMutation.isPending}
-              className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-white dark:bg-gray-800 border border-blue-300 dark:border-blue-700 rounded hover:bg-blue-100 dark:hover:bg-blue-900/40 transition-colors disabled:opacity-50"
+              className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-surface text-fg border border-line-strong rounded hover:bg-surface-2 transition-colors disabled:opacity-50"
               title="Planung abbrechen — Mail wird nicht gesendet"
             >
               <X size={13} /> Planung abbrechen
@@ -322,11 +322,11 @@ export function MessageReader({ messageId }: Props) {
       )}
 
       {/* Header */}
-      <div className="px-6 py-4 border-b border-gray-100 dark:border-gray-700 shrink-0 animate-page-in">
+      <div className="px-6 py-4 border-b border-line shrink-0 animate-page-in">
         <div className="flex items-start gap-2 mb-3">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100 flex-1">{msg.subject || '(kein Betreff)'}</h2>
-          {isFlagged && <Flag size={16} className="fill-red-500 text-red-500 shrink-0 mt-1" />}
-          {isPinned && <Pin size={16} className="text-accent shrink-0 mt-1" />}
+          <h2 className="text-lg font-semibold text-fg flex-1">{msg.subject || '(kein Betreff)'}</h2>
+          {isFlagged && <Flag size={16} className="fill-danger-fg text-danger-fg shrink-0 mt-1" />}
+          {isPinned && <Pin size={16} className="text-accent-fg shrink-0 mt-1" />}
         </div>
         <div className="flex items-start gap-3">
           <div
@@ -343,15 +343,15 @@ export function MessageReader({ messageId }: Props) {
             <Avatar seed={msg.fromAddr} size="lg" className="transition-transform duration-150 hover:scale-105 cursor-default" />
           </div>
           <div className="flex-1 min-w-0 space-y-0.5 text-sm">
-            <p className="font-medium text-gray-900 dark:text-gray-100">{msg.fromName || msg.fromAddr.split('@')[0]}</p>
-            <p className="text-xs text-gray-500 dark:text-gray-400">&lt;{msg.fromAddr}&gt;</p>
-            <p className="text-xs text-gray-500 dark:text-gray-400">
-              An: <span className="text-gray-700 dark:text-gray-300">{msg.toAddrs.join(', ')}</span>
+            <p className="font-medium text-fg">{msg.fromName || msg.fromAddr.split('@')[0]}</p>
+            <p className="text-xs text-fg-subtle">&lt;{msg.fromAddr}&gt;</p>
+            <p className="text-xs text-fg-subtle">
+              An: <span className="text-fg-muted">{msg.toAddrs.join(', ')}</span>
               {msg.ccAddrs?.length > 0 && (
-                <> · CC: <span className="text-gray-700 dark:text-gray-300">{msg.ccAddrs.join(', ')}</span></>
+                <> · CC: <span className="text-fg-muted">{msg.ccAddrs.join(', ')}</span></>
               )}
             </p>
-            <p className="text-xs text-gray-400 dark:text-gray-500">{format(new Date(msg.date), 'EEEE, dd.MM.yyyy HH:mm')}</p>
+            <p className="text-xs text-fg-subtle">{format(new Date(msg.date), 'EEEE, dd.MM.yyyy HH:mm')}</p>
           </div>
         </div>
         {showAvatarCard && (
@@ -366,17 +366,17 @@ export function MessageReader({ messageId }: Props) {
 
       {/* Attachments */}
       {msg.attachments?.length > 0 && (
-        <div className="px-6 py-2 border-b border-gray-100 dark:border-gray-700 flex flex-wrap gap-2 shrink-0">
+        <div className="px-6 py-2 border-b border-line flex flex-wrap gap-2 shrink-0">
           {msg.attachments.map((att) => (
             // Fetch-to-blob with the Authorization header (a plain <a href> would
             // reach GET /api/v1/mail/attachments/:id without a token → 401).
             <button key={att.id} type="button" title={att.filename}
               onClick={() => { downloadFile(`/mail/attachments/${att.id}`, att.filename || 'attachment').catch(toastError); }}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-surface-2 border border-line rounded text-xs text-fg-muted hover:bg-surface-3 transition-colors">
               <Paperclip size={12} />
               {att.filename}
-              <span className="text-gray-400">({Math.round(att.size / 1024)} KB)</span>
-              <Download size={11} className="text-gray-400" />
+              <span className="text-fg-subtle">({Math.round(att.size / 1024)} KB)</span>
+              <Download size={11} className="text-fg-subtle" />
             </button>
           ))}
         </div>
@@ -388,7 +388,7 @@ export function MessageReader({ messageId }: Props) {
         if (!msg.bodyHtml) {
           return (
             <div className="flex-1 overflow-y-auto px-6 py-4">
-              <pre className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap font-sans">{msg.bodyText}</pre>
+              <pre className="text-sm text-fg-muted whitespace-pre-wrap font-sans">{msg.bodyText}</pre>
             </div>
           );
         }
@@ -398,7 +398,7 @@ export function MessageReader({ messageId }: Props) {
             html={msg.bodyHtml}
             attachments={msg.attachments}
             scrollClassName="flex-1 overflow-y-auto px-6 py-4"
-            bodyClassName="prose prose-sm dark:prose-invert max-w-none"
+            bodyClassName="prose prose-sm max-w-none"
           />
         );
       })()}
@@ -409,12 +409,12 @@ export function MessageReader({ messageId }: Props) {
       {showRawSource && rawSource !== null && (
         <Modal
           onClose={() => setShowRawSource(false)}
-          label="RFC 822 Quelltext"
-          className="bg-white dark:bg-gray-900 rounded-lg shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col"
+          label="Quelltext"
+          className="bg-surface rounded-lg shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col"
         >
-            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700 shrink-0">
-              <span className="text-sm font-semibold text-gray-700 dark:text-gray-200 flex items-center gap-2">
-                <Code size={14} /> RFC 822 Quelltext
+            <div className="flex items-center justify-between px-4 py-3 border-b border-line shrink-0">
+              <span className="text-sm font-semibold text-fg-muted flex items-center gap-2">
+                <Code size={14} /> Quelltext
               </span>
               <div className="flex items-center gap-2">
                 <button
@@ -428,7 +428,7 @@ export function MessageReader({ messageId }: Props) {
                 </button>
               </div>
             </div>
-            <pre className="flex-1 overflow-auto p-4 text-xs font-mono text-gray-800 dark:text-gray-200 leading-relaxed whitespace-pre-wrap break-all">
+            <pre className="flex-1 overflow-auto p-4 text-xs font-mono text-fg leading-relaxed whitespace-pre-wrap break-all">
               {rawSource}
             </pre>
         </Modal>

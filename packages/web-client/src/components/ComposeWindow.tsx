@@ -77,7 +77,7 @@ function ColorPicker({
   return (
     <div
       ref={ref}
-      className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-xl p-2.5 z-[300]"
+      className="absolute top-full left-0 mt-1 bg-surface border border-line rounded-lg shadow-xl p-2.5 z-[300]"
       style={{ minWidth: 168 }}
     >
       <div className="grid grid-cols-6 gap-1">
@@ -87,7 +87,7 @@ function ColorPicker({
             onMouseDown={(e) => { e.preventDefault(); onSelect(c); onClose(); }}
             style={{
               backgroundColor: c,
-              border: c === currentColor ? '2px solid #1a73e8' : '1px solid #e0e0e0',
+              border: c === currentColor ? '2px solid rgb(var(--color-accent-fg))' : '1px solid rgb(var(--line-strong))',
             }}
             className="w-5 h-5 rounded cursor-pointer hover:scale-110 transition-transform"
             title={c}
@@ -96,7 +96,7 @@ function ColorPicker({
       </div>
       <button
         onMouseDown={(e) => { e.preventDefault(); onSelect(''); onClose(); }}
-        className="mt-2 pt-2 border-t border-gray-100 w-full text-xs text-gray-500 hover:text-gray-800 text-center block"
+        className="mt-2 pt-2 border-t border-line w-full text-xs text-fg-subtle hover:text-fg text-center block"
       >
         Farbe entfernen
       </button>
@@ -110,7 +110,7 @@ const BLOCK_TYPES = [
   { label: 'Überschrift 1', cmd: 'h1',         size: 'text-2xl font-bold' },
   { label: 'Überschrift 2', cmd: 'h2',         size: 'text-xl font-semibold' },
   { label: 'Überschrift 3', cmd: 'h3',         size: 'text-base font-semibold' },
-  { label: 'Codeblock',     cmd: 'codeBlock',  size: 'font-mono text-xs text-red-600' },
+  { label: 'Codeblock',     cmd: 'codeBlock',  size: 'font-mono text-xs text-danger-fg' },
 ] as const;
 
 type BlockCmd = typeof BLOCK_TYPES[number]['cmd'];
@@ -152,19 +152,19 @@ function BlockTypeDropdown({ editor }: { editor: ReturnType<typeof useEditor> })
     <div ref={ref} className="relative">
       <button
         onMouseDown={(e) => { e.preventDefault(); setOpen((o) => !o); }}
-        className="flex items-center gap-1 px-2 h-6 text-xs rounded hover:bg-gray-100 border border-transparent hover:border-gray-200 min-w-[96px]"
+        className="flex items-center gap-1 px-2 h-6 text-xs rounded hover:bg-surface-2 border border-transparent hover:border-line min-w-[96px]"
       >
-        <span className="flex-1 text-left text-gray-700">{active}</span>
-        <ChevronDown size={11} className="shrink-0 text-gray-400" />
+        <span className="flex-1 text-left text-fg-muted">{active}</span>
+        <ChevronDown size={11} className="shrink-0 text-fg-subtle" />
       </button>
       {open && (
-        <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-xl py-1 z-[300] min-w-[156px]">
+        <div className="absolute top-full left-0 mt-1 bg-surface border border-line rounded-lg shadow-xl py-1 z-[300] min-w-[156px]">
           {BLOCK_TYPES.map(({ label, cmd, size }) => (
             <button
               key={cmd}
               onMouseDown={(e) => { e.preventDefault(); apply(cmd); }}
-              className={`block w-full text-left px-3 py-1.5 hover:bg-gray-50 ${size} ${
-                active === label ? 'text-blue-600' : 'text-gray-700'
+              className={`block w-full text-left px-3 py-1.5 hover:bg-surface-2 ${size} ${
+                active === label ? 'text-accent-fg' : 'text-fg-muted'
               }`}
             >
               {label}
@@ -207,15 +207,15 @@ function FontFamilyDropdown({ editor }: { editor: ReturnType<typeof useEditor> }
     <div ref={ref} className="relative">
       <button
         onMouseDown={(e) => { e.preventDefault(); setOpen((o) => !o); }}
-        className="flex items-center gap-1 px-2 h-6 text-xs rounded hover:bg-gray-100 border border-transparent hover:border-gray-200 min-w-[88px]"
+        className="flex items-center gap-1 px-2 h-6 text-xs rounded hover:bg-surface-2 border border-transparent hover:border-line min-w-[88px]"
       >
-        <span className="flex-1 text-left text-gray-700 truncate" style={currentFont ? { fontFamily: currentFont } : undefined}>
+        <span className="flex-1 text-left text-fg-muted truncate" style={currentFont ? { fontFamily: currentFont } : undefined}>
           {activeLabel}
         </span>
-        <ChevronDown size={11} className="shrink-0 text-gray-400" />
+        <ChevronDown size={11} className="shrink-0 text-fg-subtle" />
       </button>
       {open && (
-        <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-xl py-1 z-[300] min-w-[160px]">
+        <div className="absolute top-full left-0 mt-1 bg-surface border border-line rounded-lg shadow-xl py-1 z-[300] min-w-[160px]">
           {FONT_FAMILIES.map(({ label, value }) => (
             <button
               key={label}
@@ -228,8 +228,8 @@ function FontFamilyDropdown({ editor }: { editor: ReturnType<typeof useEditor> }
                   editor?.chain().focus().setFontFamily(value).run();
                 }
               }}
-              className={`block w-full text-left px-3 py-1.5 hover:bg-gray-50 text-sm ${
-                currentFont === value ? 'text-blue-600' : 'text-gray-700'
+              className={`block w-full text-left px-3 py-1.5 hover:bg-surface-2 text-sm ${
+                currentFont === value ? 'text-accent-fg' : 'text-fg-muted'
               }`}
               style={value ? { fontFamily: value } : undefined}
             >
@@ -244,7 +244,7 @@ function FontFamilyDropdown({ editor }: { editor: ReturnType<typeof useEditor> }
 
 // ── Divider ───────────────────────────────────────────────────────────────────
 function Sep() {
-  return <div className="w-px h-5 bg-gray-200 mx-0.5 shrink-0" />;
+  return <div className="w-px h-5 bg-line mx-0.5 shrink-0" />;
 }
 
 // ── Toolbar-Button ────────────────────────────────────────────────────────────
@@ -268,8 +268,8 @@ function ToolBtn({
       disabled={disabled}
       className={`w-6 h-6 flex items-center justify-center rounded transition-colors ${
         active
-          ? 'bg-blue-100 text-blue-700'
-          : 'hover:bg-gray-100 text-gray-700'
+          ? 'bg-accent/10 text-accent-fg'
+          : 'hover:bg-surface-3 text-fg-muted'
       } disabled:opacity-30 disabled:cursor-default`}
     >
       {children}
@@ -382,32 +382,32 @@ function RecipientInput({
           const frag = getFragment(value);
           if (frag.length >= 1 && suggestions.length > 0) setShowSug(true);
         }}
-        className="w-full text-sm outline-none bg-transparent"
+        className="w-full text-sm outline-none bg-transparent rounded-sm focus-visible:ring-2 focus-visible:ring-accent-fg"
         placeholder={placeholder}
         autoFocus={autoFocus}
       />
       {showSug && suggestions.length > 0 && (
-        <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-xl z-[400] max-h-52 overflow-y-auto">
+        <div className="absolute top-full left-0 right-0 mt-1 bg-surface border border-line rounded-lg shadow-xl z-[400] max-h-52 overflow-y-auto">
           {suggestions.map((c, i) => (
             <button
               key={c.id}
               onMouseDown={(e) => { e.preventDefault(); pickSuggestion(c); }}
               className={`w-full text-left px-3 py-2 flex items-center gap-2.5 transition-colors ${
-                i === activeIdx ? 'bg-blue-50' : 'hover:bg-gray-50'
+                i === activeIdx ? 'bg-accent/10' : 'hover:bg-surface-2'
               }`}
             >
-              <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold shrink-0 uppercase bg-accent/15 text-accent">
+              <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold shrink-0 uppercase bg-accent/15 text-accent-fg">
                 {(c.displayName || c.email)[0]}
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1.5">
                   {c.displayName && (
-                    <span className="text-sm font-medium text-gray-900 truncate">{c.displayName}</span>
+                    <span className="text-sm font-medium text-fg truncate">{c.displayName}</span>
                   )}
                 </div>
-                <div className={`truncate ${c.displayName ? 'text-xs text-gray-500' : 'text-sm text-gray-900'}`}>{c.email}</div>
+                <div className={`truncate ${c.displayName ? 'text-xs text-fg-subtle' : 'text-sm text-fg'}`}>{c.email}</div>
                 {c.company && (
-                  <div className="text-xs text-gray-400 truncate">{c.company}</div>
+                  <div className="text-xs text-fg-subtle truncate">{c.company}</div>
                 )}
               </div>
             </button>
@@ -840,14 +840,14 @@ export function ComposeWindow() {
   // ── Minimized state ────────────────────────────────────────────────────────
   if (minimized) {
     return (
-      <div className="fixed bottom-0 right-4 w-72 bg-gray-800 text-white rounded-t-lg shadow-xl z-50">
+      <div className="fixed bottom-0 right-4 w-72 bg-surface-3 text-fg border border-line-strong rounded-t-lg shadow-xl z-50">
         <div className="flex items-center justify-between px-3 py-2">
           <span className="text-sm font-medium truncate">{subject || 'Neue Nachricht'}</span>
           <div className="flex items-center gap-1">
-            <button aria-label="Vergrößern" onClick={() => setMinimized(false)} className="p-0.5 hover:bg-white/20 rounded" title="Vergrößern">
+            <button aria-label="Vergrößern" onClick={() => setMinimized(false)} className="p-0.5 hover:bg-surface rounded" title="Vergrößern">
               <Maximize2 size={13} />
             </button>
-            <button aria-label="Schließen" onClick={closeCompose} className="p-0.5 hover:bg-white/20 rounded" title="Schließen">
+            <button aria-label="Schließen" onClick={closeCompose} className="p-0.5 hover:bg-surface rounded" title="Schließen">
               <X size={13} />
             </button>
           </div>
@@ -866,29 +866,29 @@ export function ComposeWindow() {
       aria-label={subject || 'Neue Nachricht'}
       onKeyDown={handleComposeKeyDown}
       data-shortcut-scope="compose"
-      className="fixed bottom-0 right-4 w-[880px] max-w-[calc(100vw-2rem)] bg-white shadow-2xl border border-gray-300 rounded-t-lg z-50 flex flex-col animate-fly-in"
+      className="fixed bottom-0 right-4 w-[880px] max-w-[calc(100vw-2rem)] bg-surface shadow-2xl border border-line-strong rounded-t-lg z-50 flex flex-col animate-fly-in"
       style={{ maxHeight: '92vh', height: '78vh' }}
     >
       {/* ── Title bar ───────────────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between px-3 py-2 bg-gray-800 text-white rounded-t-lg shrink-0">
+      <div className="flex items-center justify-between px-3 py-2 bg-surface-3 text-fg rounded-t-lg shrink-0">
         <span className="text-sm font-medium truncate">{subject || 'Neue Nachricht'}</span>
         <div className="flex items-center gap-1">
-          <button aria-label="Minimieren" onClick={handleMinimize} className="p-0.5 hover:bg-white/20 rounded" title="Minimieren">
+          <button aria-label="Minimieren" onClick={handleMinimize} className="p-0.5 hover:bg-surface rounded" title="Minimieren">
             <Minus size={13} />
           </button>
-          <button aria-label="Schließen" onClick={closeCompose} className="p-0.5 hover:bg-white/20 rounded" title="Schließen">
+          <button aria-label="Schließen" onClick={closeCompose} className="p-0.5 hover:bg-surface rounded" title="Schließen">
             <X size={13} />
           </button>
         </div>
       </div>
 
       {/* ── Header fields (To / CC / BCC / Subject) ─────────────────────────── */}
-      <div className="border-b border-gray-100 shrink-0">
+      <div className="border-b border-line shrink-0">
         {/* To */}
-        <div className="flex items-center border-b border-gray-100 px-3 py-1.5 gap-2">
-          <span className="text-xs text-gray-400 w-10 shrink-0">An:</span>
+        <div className="flex items-center border-b border-line px-3 py-1.5 gap-2">
+          <span className="text-xs text-fg-subtle w-10 shrink-0">An:</span>
           <RecipientInput value={to} onChange={edited(setTo)} placeholder="Empfänger..." />
-          <div className="flex gap-3 text-xs text-blue-600 shrink-0">
+          <div className="flex gap-3 text-xs text-accent-fg shrink-0">
             {!showCc  && <button type="button" onClick={() => setShowCc(true)}>CC</button>}
             {!showBcc && <button type="button" onClick={() => setShowBcc(true)}>BCC</button>}
           </div>
@@ -896,34 +896,34 @@ export function ComposeWindow() {
 
         {/* CC */}
         {showCc && (
-          <div className="flex items-center border-b border-gray-100 px-3 py-1.5 gap-2">
-            <span className="text-xs text-gray-400 w-10 shrink-0">CC:</span>
+          <div className="flex items-center border-b border-line px-3 py-1.5 gap-2">
+            <span className="text-xs text-fg-subtle w-10 shrink-0">CC:</span>
             <RecipientInput value={cc} onChange={edited(setCc)} placeholder="CC..." autoFocus />
           </div>
         )}
 
         {/* BCC */}
         {showBcc && (
-          <div className="flex items-center border-b border-gray-100 px-3 py-1.5 gap-2">
-            <span className="text-xs text-gray-400 w-10 shrink-0">BCC:</span>
+          <div className="flex items-center border-b border-line px-3 py-1.5 gap-2">
+            <span className="text-xs text-fg-subtle w-10 shrink-0">BCC:</span>
             <RecipientInput value={bcc} onChange={edited(setBcc)} placeholder="BCC..." autoFocus />
           </div>
         )}
 
         {/* Subject */}
         <div className="flex items-center px-3 py-1.5 gap-2">
-          <span className="text-xs text-gray-400 w-10 shrink-0">Betreff:</span>
+          <span className="text-xs text-fg-subtle w-10 shrink-0">Betreff:</span>
           <input
             value={subject}
             onChange={(e) => edited(setSubject)(e.target.value)}
-            className="flex-1 text-sm outline-none font-medium"
+            className="flex-1 text-sm outline-none font-medium bg-transparent rounded-sm focus-visible:ring-2 focus-visible:ring-accent-fg"
             placeholder="Betreff..."
           />
         </div>
       </div>
 
       {/* ── Formatting toolbar ───────────────────────────────────────────────── */}
-      <div className="flex items-center flex-wrap gap-0.5 px-2 py-1.5 border-b border-gray-100 shrink-0 bg-gray-50/60">
+      <div className="flex items-center flex-wrap gap-0.5 px-2 py-1.5 border-b border-line shrink-0 bg-surface-2/60">
 
         {/* Undo / Redo */}
         <ToolBtn
@@ -994,9 +994,10 @@ export function ComposeWindow() {
               setShowHighlight(false);
             }}
             title="Schriftfarbe"
-            className="w-7 h-6 flex flex-col items-center justify-center rounded hover:bg-gray-100 px-0.5"
+            aria-label="Schriftfarbe"
+            className="w-7 h-6 flex flex-col items-center justify-center rounded hover:bg-surface-3 px-0.5"
           >
-            <Type size={11} className="text-gray-700 shrink-0" />
+            <Type size={11} className="text-fg-muted shrink-0" />
             <div
               className="w-5 h-1 rounded-sm"
               style={{ backgroundColor: currentTextColor ?? '#000000' }}
@@ -1024,9 +1025,10 @@ export function ComposeWindow() {
               setShowTextColor(false);
             }}
             title="Markierungsfarbe"
-            className="w-7 h-6 flex flex-col items-center justify-center rounded hover:bg-gray-100 px-0.5"
+            aria-label="Markierungsfarbe"
+            className="w-7 h-6 flex flex-col items-center justify-center rounded hover:bg-surface-3 px-0.5"
           >
-            <Highlighter size={11} className="text-gray-700 shrink-0" />
+            <Highlighter size={11} className="text-fg-muted shrink-0" />
             <div
               className="w-5 h-1 rounded-sm"
               style={{ backgroundColor: currentHighlight ?? '#ffff00' }}
@@ -1179,19 +1181,19 @@ export function ComposeWindow() {
             '[&_.ProseMirror_h2]:text-xl  [&_.ProseMirror_h2]:font-semibold [&_.ProseMirror_h2]:mb-2 [&_.ProseMirror_h2]:mt-2',
             '[&_.ProseMirror_h3]:text-base [&_.ProseMirror_h3]:font-semibold [&_.ProseMirror_h3]:mb-1 [&_.ProseMirror_h3]:mt-2',
             // Blockquote
-            '[&_.ProseMirror_blockquote]:border-l-4 [&_.ProseMirror_blockquote]:border-gray-300 [&_.ProseMirror_blockquote]:pl-4 [&_.ProseMirror_blockquote]:text-gray-500 [&_.ProseMirror_blockquote]:italic [&_.ProseMirror_blockquote]:my-2',
+            '[&_.ProseMirror_blockquote]:border-l-4 [&_.ProseMirror_blockquote]:border-line-strong [&_.ProseMirror_blockquote]:pl-4 [&_.ProseMirror_blockquote]:text-fg-subtle [&_.ProseMirror_blockquote]:italic [&_.ProseMirror_blockquote]:my-2',
             // Lists
             '[&_.ProseMirror_ul]:list-disc   [&_.ProseMirror_ul]:pl-6 [&_.ProseMirror_ul]:my-1',
             '[&_.ProseMirror_ol]:list-decimal [&_.ProseMirror_ol]:pl-6 [&_.ProseMirror_ol]:my-1',
             '[&_.ProseMirror_li]:my-0.5',
             // Inline-Code
-            '[&_.ProseMirror_:not(pre)>code]:bg-gray-100 [&_.ProseMirror_:not(pre)>code]:text-red-600 [&_.ProseMirror_:not(pre)>code]:font-mono [&_.ProseMirror_:not(pre)>code]:text-xs [&_.ProseMirror_:not(pre)>code]:px-1.5 [&_.ProseMirror_:not(pre)>code]:py-0.5 [&_.ProseMirror_:not(pre)>code]:rounded',
+            '[&_.ProseMirror_:not(pre)>code]:bg-surface-2 [&_.ProseMirror_:not(pre)>code]:text-danger-fg [&_.ProseMirror_:not(pre)>code]:font-mono [&_.ProseMirror_:not(pre)>code]:text-xs [&_.ProseMirror_:not(pre)>code]:px-1.5 [&_.ProseMirror_:not(pre)>code]:py-0.5 [&_.ProseMirror_:not(pre)>code]:rounded',
             // Codeblock
-            '[&_.ProseMirror_pre]:bg-gray-100 [&_.ProseMirror_pre]:p-3 [&_.ProseMirror_pre]:rounded-lg [&_.ProseMirror_pre]:font-mono [&_.ProseMirror_pre]:text-xs [&_.ProseMirror_pre]:overflow-x-auto [&_.ProseMirror_pre]:my-2',
+            '[&_.ProseMirror_pre]:bg-surface-2 [&_.ProseMirror_pre]:p-3 [&_.ProseMirror_pre]:rounded-lg [&_.ProseMirror_pre]:font-mono [&_.ProseMirror_pre]:text-xs [&_.ProseMirror_pre]:overflow-x-auto [&_.ProseMirror_pre]:my-2',
             // Links
-            '[&_.ProseMirror_a]:text-blue-600 [&_.ProseMirror_a]:underline [&_.ProseMirror_a]:cursor-pointer',
+            '[&_.ProseMirror_a]:text-accent-fg [&_.ProseMirror_a]:underline [&_.ProseMirror_a]:cursor-pointer',
             // HR
-            '[&_.ProseMirror_hr]:border-gray-200 [&_.ProseMirror_hr]:my-4',
+            '[&_.ProseMirror_hr]:border-line [&_.ProseMirror_hr]:my-4',
             // Paragraph spacing
             '[&_.ProseMirror_p]:mb-1',
           ].join(' ')}
@@ -1200,15 +1202,15 @@ export function ComposeWindow() {
 
       {/* ── Attachment list ───────────────────────────────────────────────────── */}
       {attachments.length > 0 && (
-        <div className="border-t border-gray-100 px-3 py-2 flex flex-wrap gap-2 shrink-0 bg-gray-50/40">
+        <div className="border-t border-line px-3 py-2 flex flex-wrap gap-2 shrink-0 bg-surface-2/40">
           {attachments.map((file, i) => (
             <div
               key={`${attachmentName(file)}-${i}`}
-              className="flex items-center gap-1.5 bg-white border border-gray-200 rounded-full px-2.5 py-1 text-xs text-gray-700 shadow-sm"
+              className="flex items-center gap-1.5 bg-surface border border-line rounded-full px-2.5 py-1 text-xs text-fg-muted shadow-sm"
             >
-              <FileIcon size={12} className="text-blue-500 shrink-0" />
+              <FileIcon size={12} className="text-accent-fg shrink-0" />
               <span className="max-w-[140px] truncate" title={attachmentName(file)}>{attachmentName(file)}</span>
-              <span className="text-gray-400 shrink-0">
+              <span className="text-fg-subtle shrink-0">
                 {file.size >= 1024 * 1024
                   ? `${(file.size / 1024 / 1024).toFixed(1)} MB`
                   : `${Math.round(file.size / 1024)} KB`}
@@ -1216,7 +1218,7 @@ export function ComposeWindow() {
               <button aria-label="Anhang entfernen"
                 type="button"
                 onClick={() => { setAttachments((prev) => prev.filter((_, idx) => idx !== i)); saver.touch(); }}
-                className="text-gray-400 hover:text-red-500 shrink-0"
+                className="text-fg-subtle hover:text-danger-fg shrink-0"
                 title="Anhang entfernen"
               >
                 <X size={11} />
@@ -1227,7 +1229,7 @@ export function ComposeWindow() {
       )}
 
       {/* ── Action bar ────────────────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between px-3 py-2 border-t border-gray-100 bg-gray-50/60 shrink-0">
+      <div className="flex items-center justify-between px-3 py-2 border-t border-line bg-surface-2/60 shrink-0">
         <div className="flex items-center gap-1">
           {/* Hidden file input */}
           <input
@@ -1261,7 +1263,7 @@ export function ComposeWindow() {
           </button>
           <button
             type="button"
-            className="btn-ghost text-xs text-gray-500 hover:text-red-600"
+            className="btn-ghost text-xs text-fg-subtle hover:text-danger-fg"
             title={translate('draft_discard')}
             aria-label={translate('draft_discard')}
             onClick={() => { void handleDiscard(); }}
@@ -1272,7 +1274,7 @@ export function ComposeWindow() {
           <span
             role="status"
             aria-live="polite"
-            className={`text-[11px] ml-1 ${saveInfo.status === 'error' ? 'text-red-600' : 'text-gray-400'}`}
+            className={`text-[11px] ml-1 ${saveInfo.status === 'error' ? 'text-danger-fg' : 'text-fg-subtle'}`}
           >
             {draftLoading ? <Loader2 size={12} className="animate-spin inline" aria-hidden="true" /> : saveLabel}
           </span>
@@ -1297,7 +1299,7 @@ export function ComposeWindow() {
             type="button"
             onClick={() => { setShowScheduleMenu((v) => !v); setShowCustomSchedule(false); }}
             disabled={busy || !to.trim()}
-            className="btn-primary text-xs rounded-l-none border-l border-blue-700/40 px-2"
+            className="btn-primary text-xs rounded-l-none border-l border-white/30 px-2"
             title="Senden planen"
           >
             <ChevronUp size={12} />
@@ -1305,10 +1307,10 @@ export function ComposeWindow() {
 
           {showScheduleMenu && (
             <div
-              className="absolute bottom-full mb-1 right-0 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl py-2 z-50 w-[320px]"
+              className="absolute bottom-full mb-1 right-0 bg-surface border border-line rounded-lg shadow-xl py-2 z-50 w-[320px]"
               onMouseLeave={() => setShowCustomSchedule(false)}
             >
-              <div className="px-3 pb-2 text-xs font-semibold text-gray-700 dark:text-gray-200 border-b border-gray-100 dark:border-gray-700 mb-1 flex items-center gap-1.5">
+              <div className="px-3 pb-2 text-xs font-semibold text-fg-muted border-b border-line mb-1 flex items-center gap-1.5">
                 <Clock size={12} /> Senden planen
               </div>
               {schedulePresets.map((p) => (
@@ -1316,18 +1318,18 @@ export function ComposeWindow() {
                   key={p.label}
                   type="button"
                   onClick={() => handleSchedule(p.date)}
-                  className="w-full text-left px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center justify-between transition-colors"
+                  className="w-full text-left px-3 py-2 hover:bg-surface-2 flex items-center justify-between transition-colors"
                 >
-                  <span className="text-sm text-gray-800 dark:text-gray-100 font-medium">{p.label}</span>
-                  <span className="text-xs text-gray-500 dark:text-gray-400">{p.sub}</span>
+                  <span className="text-sm text-fg font-medium">{p.label}</span>
+                  <span className="text-xs text-fg-subtle">{p.sub}</span>
                 </button>
               ))}
-              <div className="border-t border-gray-100 dark:border-gray-700 mt-1 pt-1">
+              <div className="border-t border-line mt-1 pt-1">
                 {!showCustomSchedule ? (
                   <button
                     type="button"
                     onClick={() => setShowCustomSchedule(true)}
-                    className="w-full px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700 text-sm text-left text-blue-600 dark:text-blue-400 flex items-center gap-2"
+                    className="w-full px-3 py-2 hover:bg-surface-2 text-sm text-left text-accent-fg flex items-center gap-2"
                   >
                     <CalendarIcon size={13} /> Datum & Uhrzeit wählen…
                   </button>
@@ -1337,7 +1339,7 @@ export function ComposeWindow() {
                       type="datetime-local"
                       value={customScheduleValue}
                       onChange={(e) => setCustomScheduleValue(e.target.value)}
-                      className="w-full text-sm border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded px-2 py-1.5"
+                      className="w-full text-sm border border-line-strong rounded px-2 py-1.5"
                     />
                     <button
                       type="button"

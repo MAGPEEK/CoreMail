@@ -10,7 +10,9 @@
 import { createLogger } from '@coremail/core';
 import {
   prisma, checkHeaderSenderIdentity, isSenderAddressAllowed, listAllowedSenderAddresses, checkSendQuota,
+  stripHeaders,
 } from '@coremail/storage';
+import { VIRUS_SCAN_HEADER } from '../inbound/virus-scan-header.js';
 import { storeInboundMessage } from '../handlers/message.js';
 import { expandRecipientsWithOrigins, isLocalDomainAddress } from '../handlers/expand.js';
 import { enqueueOutbound } from '../outbound/queue.js';
@@ -46,6 +48,15 @@ export function completeSubmissionHeaders(raw: Buffer, hostname: string, now = n
   if (!/^Message-ID:/im.test(head)) add.push(`Message-ID: <${crypto.randomUUID()}@${hostname}>`);
   if (add.length === 0) return raw;
   return Buffer.concat([Buffer.from(add.map((h) => `${h}\r\n`).join('')), raw]);
+}
+
+/**
+ * Pure: removes X-CoreMail-Virus-Scan from a submitted message (local and
+ * external recipients). Port 25 strips it on receipt as well; only the inbound
+ * path adds it after its own ClamAV scan.
+ */
+export function stripSubmittedInternalHeaders(raw: Buffer): Buffer {
+  return stripHeaders(raw, [VIRUS_SCAN_HEADER]);
 }
 
 const log = createLogger('smtp:submission');
@@ -127,6 +138,10 @@ async function onMessage(
     where: { id: 'singleton' },
     select: { publicHostname: true },
   }).then((s) => s?.publicHostname ?? null).catch(() => null) ?? process.env['MAIL_HOSTNAME'] ?? 'mail.localhost';
+
+  // The internal virus-scan verdict is only ever set by the port-25 path after
+  // its own scan — never accepted from an authenticated client.
+  raw = stripSubmittedInternalHeaders(raw);
 
   // RFC 6409 §8.2–8.3: add a missing Date:/Message-ID:.
   raw = completeSubmissionHeaders(raw, hostname);

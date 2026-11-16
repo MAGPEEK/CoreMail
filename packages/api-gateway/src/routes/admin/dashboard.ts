@@ -3,6 +3,7 @@ import { Queue } from 'bullmq';
 import { prisma } from '@coremail/storage';
 import { createBullMqConnection, createLogger } from '@coremail/core';
 import { requireArea } from '../../middleware/auth.js';
+import { areaAccess } from '../../lib/rbac.js';
 import os from 'node:os';
 import v8 from 'node:v8';
 import { readFile } from 'node:fs/promises';
@@ -22,6 +23,36 @@ async function getAppVersion(): Promise<string> {
     _appVersion = 'unknown';
   }
   return _appVersion;
+}
+
+/**
+ * Which dashboard sections a role may see. The dashboard area is readable by
+ * every admin role, but some widgets carry data of other areas: recent
+ * errors/warnings (servers), the storage ranking with mailbox addresses
+ * (recipients), audit events and sign-ins with IP addresses (compliance —
+ * personal data, like the audit log itself) and the attack summary (hygiene,
+ * which the page fetches from /security/attacks/summary).
+ */
+export interface DashboardSections {
+  errors: boolean;
+  storageUsers: boolean;
+  audit: boolean;
+  logins: boolean;
+  /** MAIL_FLOW warnings name sender and recipient (message trace = compliance). */
+  mailFlowErrors: boolean;
+  attacks: boolean;
+}
+
+export function dashboardSections(role: string | undefined): DashboardSections {
+  const compliance = areaAccess(role, 'compliance') !== null;
+  return {
+    errors: areaAccess(role, 'servers') !== null,
+    storageUsers: areaAccess(role, 'recipients') !== null,
+    audit: compliance,
+    logins: compliance,
+    mailFlowErrors: compliance,
+    attacks: areaAccess(role, 'hygiene') !== null,
+  };
 }
 
 export const adminDashboardRouter: RouterType = Router();
@@ -51,8 +82,9 @@ function getOutboundQueue(): Queue {
 
 // ── GET /api/v1/admin/dashboard ───────────────────────────────────────────────
 // Aggregates all dashboard metrics in a single call.
-adminDashboardRouter.get('/', async (_req: Request, res: Response) => {
+adminDashboardRouter.get('/', async (req: Request, res: Response) => {
   try {
+    const sections = dashboardSections(req.apiUser?.role);
     const now = new Date();
     const sevenDaysAgo  = new Date(now.getTime() - 7  * 24 * 60 * 60 * 1000);
     const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
@@ -86,8 +118,8 @@ adminDashboardRouter.get('/', async (_req: Request, res: Response) => {
       prisma.user.count({ where: { createdAt: { gte: sevenDaysAgo } } }),
       prisma.user.aggregate({ _sum: { usedBytes: true } }),
 
-      // Top-10 users by storage usage
-      prisma.user.findMany({
+      // Top-10 users by storage usage (addresses: recipients area only)
+      !sections.storageUsers ? Promise.resolve([]) : prisma.user.findMany({
         where: { active: true },
         orderBy: { usedBytes: 'desc' },
         take: 10,
@@ -117,16 +149,19 @@ adminDashboardRouter.get('/', async (_req: Request, res: Response) => {
       Promise.resolve(0),
       prisma.sharedMailbox.count().catch(() => 0),
 
-      // Last 10 error and warn logs
-      prisma.systemLog.findMany({
-        where: { level: { in: ['ERROR', 'WARN'] }, timestamp: { gte: thirtyDaysAgo } },
+      // Last 10 error and warn logs (servers area; mail-flow entries only with compliance)
+      !sections.errors ? Promise.resolve([]) : prisma.systemLog.findMany({
+        where: {
+          level: { in: ['ERROR', 'WARN'] }, timestamp: { gte: thirtyDaysAgo },
+          ...(sections.mailFlowErrors ? {} : { category: { not: 'MAIL_FLOW' } }),
+        },
         orderBy: { timestamp: 'desc' },
         take: 10,
         select: { id: true, timestamp: true, level: true, service: true, message: true },
       }).catch(() => [] as never[]),
 
-      // Last 8 audit events
-      prisma.auditLog.findMany({
+      // Last 8 audit events (compliance area)
+      !sections.audit ? Promise.resolve([]) : prisma.auditLog.findMany({
         orderBy: { timestamp: 'desc' },
         take: 8,
         select: {
@@ -152,12 +187,12 @@ adminDashboardRouter.get('/', async (_req: Request, res: Response) => {
       // Active sessions (not expired)
       prisma.session.count({ where: { expiresAt: { gt: now } } }).catch(() => 0),
 
-      // Last successful logins (from AuditLog with action LIKE login)
-      prisma.auditLog.findMany({
-        where: { action: { contains: 'login', mode: 'insensitive' }, success: true },
-        orderBy: { timestamp: 'desc' },
+      // Last web/API sign-ins = the newest sessions (the audit log records no
+      // logins). Compliance area — IP addresses are personal data.
+      !sections.logins ? Promise.resolve([]) : prisma.session.findMany({
+        orderBy: { createdAt: 'desc' },
         take: 5,
-        select: { id: true, timestamp: true, actorEmail: true, ipAddress: true, userAgent: true },
+        select: { id: true, createdAt: true, ipAddress: true, userAgent: true, user: { select: { email: true } } },
       }).catch(() => [] as never[]),
 
       // DNSBL hits in the last 24h
@@ -267,8 +302,15 @@ adminDashboardRouter.get('/', async (_req: Request, res: Response) => {
       recentAuditEvents,
       server,
       activeSessions,
-      recentLogins,
+      recentLogins: recentLogins.map((l) => ({
+        id:         l.id,
+        timestamp:  l.createdAt.toISOString(),
+        actorEmail: l.user.email,
+        ipAddress:  l.ipAddress || null,
+        userAgent:  l.userAgent,
+      })),
       securityHits24h,
+      sections,
       generatedAt: now.toISOString(),
     });
   } catch (err) {

@@ -96,6 +96,23 @@ export function canManageAccount(actorRole: string | null, targetRole: string | 
 }
 
 /**
+ * Mirror of canAssignRole in lib/rbac.ts: the roles `actorRole` may pick for an
+ * account whose role is `currentRole` (undefined = new account). Only
+ * ORGANIZATION_MANAGEMENT assigns roles; everyone else keeps the current role
+ * (new accounts: USER). Unknown actor role → all (the server decides).
+ */
+export function assignableRoles<R extends string>(all: readonly R[], actorRole: string | null, currentRole?: string): R[] {
+  if (actorRole === null || actorRole === 'ORGANIZATION_MANAGEMENT') return [...all];
+  const keep = currentRole ?? 'USER';
+  return all.filter((r) => r === keep);
+}
+
+/** May the admin change roles at all (RBAC page)? */
+export function canAssignRoles(actorRole: string | null): boolean {
+  return actorRole === 'ORGANIZATION_MANAGEMENT';
+}
+
+/**
  * Client-side write block of the API client: a mutating /admin request from a
  * page whose area is read-only is refused — unless the admin holds a narrow
  * action on that area (e.g. HELP_DESK password reset on Mailboxes); the server

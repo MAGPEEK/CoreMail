@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  Terminal, Package, MessageSquare, Clock, ArrowRightLeft,
+  Terminal, Package, MessageSquare, Clock,
   Network, Plus, Trash2, CheckCircle, Info, SendHorizonal,
   Loader2, XCircle, Globe, Copy, Check, RefreshCw, AlertCircle,
 } from 'lucide-react';
@@ -9,6 +9,9 @@ import { api } from '../api/client.js';
 import toast from 'react-hot-toast';
 import { Toggle } from '../components/Toggle.js';
 import { copyToClipboard } from '../utils/clipboard.js';
+import { errorMessage } from '../lib/errors.js';
+import { smtpGreetingPreview } from '../lib/smtpBanner.js';
+import { WriteGuard } from '../components/Can.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -28,10 +31,8 @@ interface SmtpSettings {
   localDeliveryEnabled: boolean;
   bannerOverride:       boolean;
   bannerText:           string;
-  relayingEnabled:      boolean;
-  relayDomains:         string[];
-  relayRequireAuth:     boolean;
-  relayTrustedIps:      string[];
+  // relaying* and outboundFilterEnabled are still stored but not shown: the
+  // SMTP server implements neither IP/domain relaying nor outbound scanning.
   greylistingEnabled:   boolean;
   greylistWaitSec:      number;
   greylistTtlHours:     number;
@@ -51,12 +52,11 @@ interface SmtpSettings {
   smarthostImplicitTls:  boolean;
   smarthostUsername:     string;
   smarthostPassword:     string;
-  outboundFilterEnabled: boolean;
 }
 
 // ── Sub-Navigation ────────────────────────────────────────────────────────────
 
-type Section = 'esmtp' | 'delivery' | 'banner' | 'greylisting' | 'relaying' | 'connection' | 'outgoing' | 'dns';
+type Section = 'esmtp' | 'delivery' | 'banner' | 'greylisting' | 'connection' | 'outgoing' | 'dns';
 
 const SUB_NAV: { id: Section; label: string; icon: React.ElementType }[] = [
   { id: 'esmtp',       label: 'ESMTP-Befehle',    icon: Terminal },
@@ -64,7 +64,6 @@ const SUB_NAV: { id: Section; label: string; icon: React.ElementType }[] = [
   { id: 'outgoing',    label: 'Ausgehende Mail',   icon: SendHorizonal },
   { id: 'banner',      label: 'SMTP-Banner',       icon: MessageSquare },
   { id: 'greylisting', label: 'Greylisting',       icon: Clock },
-  { id: 'relaying',    label: 'Relaying',          icon: ArrowRightLeft },
   { id: 'connection',  label: 'Verbindung',        icon: Network },
   { id: 'dns',         label: 'DNS-Einträge',      icon: Globe },
 ];
@@ -84,12 +83,12 @@ function ToggleRow({ label, desc, value, onChange, warn }: {
   onChange: (v: boolean) => void; warn?: string;
 }) {
   return (
-    <div className="flex items-start justify-between py-3 border-b border-gray-100 last:border-0">
+    <div className="flex items-start justify-between py-3 border-b border-line last:border-0">
       <div className="flex-1 pr-6">
-        <p className="text-sm font-medium text-gray-800">{label}</p>
-        {desc && <p className="text-xs text-gray-400 mt-0.5">{desc}</p>}
+        <p className="text-sm font-medium text-fg">{label}</p>
+        {desc && <p className="text-xs text-fg-subtle mt-0.5">{desc}</p>}
         {warn && value === false && (
-          <p className="text-xs text-amber-600 mt-0.5 flex items-center gap-1">
+          <p className="text-xs text-warning-fg mt-0.5 flex items-center gap-1">
             <Info size={10} /> {warn}
           </p>
         )}
@@ -104,18 +103,18 @@ function NumInput({ label, desc, value, onChange, min, max, unit }: {
   onChange: (v: number) => void; min: number; max: number; unit?: string;
 }) {
   return (
-    <div className="flex items-center justify-between py-3 border-b border-gray-100 last:border-0">
+    <div className="flex items-center justify-between py-3 border-b border-line last:border-0">
       <div>
-        <p className="text-sm font-medium text-gray-800">{label}</p>
-        {desc && <p className="text-xs text-gray-400 mt-0.5">{desc}</p>}
+        <p className="text-sm font-medium text-fg">{label}</p>
+        {desc && <p className="text-xs text-fg-subtle mt-0.5">{desc}</p>}
       </div>
       <div className="flex items-center gap-2 shrink-0">
         <input
           type="number" min={min} max={max} value={value}
           onChange={e => onChange(parseInt(e.target.value, 10) || min)}
-          className="w-24 border border-gray-300 rounded px-2 py-1 text-sm text-right focus:outline-none focus:ring-1 focus:ring-accent"
+          className="w-24 border border-line-strong rounded px-2 py-1 text-sm text-right focus:outline-none focus:ring-2 focus:ring-accent-fg"
         />
-        {unit && <span className="text-xs text-gray-400 w-10">{unit}</span>}
+        {unit && <span className="text-xs text-fg-subtle w-10">{unit}</span>}
       </div>
     </div>
   );
@@ -164,9 +163,9 @@ const ENV_EXT_DEFS: { label: string; rfc: string; env: string }[] = [
 ];
 
 const RISK_BADGE: Record<Risk, string> = {
-  safe:     'bg-green-100 text-green-700',
-  caution:  'bg-amber-100 text-amber-700',
-  advanced: 'bg-purple-100 text-purple-700',
+  safe:     'bg-success-bg text-success-fg',
+  caution:  'bg-warning-bg text-warning-fg',
+  advanced: 'bg-info-bg text-info-fg',
 };
 const RISK_LABEL: Record<Risk, string> = {
   safe: 'Standard', caution: 'Vorsicht', advanced: 'Erweitert',
@@ -186,20 +185,21 @@ function EsmtpSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d: Par
     setVals(prev => ({ ...prev, [key]: v }));
   }
 
-  const changed = Object.keys(vals);
+  // Pending changes = toggles that differ from the saved value (0 after the refetch)
+  const changed = (Object.keys(vals) as (keyof SmtpSettings)[]).filter((k) => vals[k] !== s[k]);
 
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-base font-semibold text-gray-900">ESMTP-Erweiterungen</h2>
-          <p className="text-xs text-gray-400 mt-0.5">
+          <h2 className="text-base font-semibold text-fg">ESMTP-Erweiterungen</h2>
+          <p className="text-xs text-fg-subtle mt-0.5">
             Steuert welche EHLO-Capabilities der SMTP-Server ankündigt und akzeptiert
           </p>
         </div>
         <div className="flex items-center gap-3">
           {changed.length > 0 && (
-            <span className="text-xs text-amber-600">{changed.length} Änderung{changed.length > 1 ? 'en' : ''}</span>
+            <span className="text-xs text-warning-fg">{changed.length} Änderung{changed.length > 1 ? 'en' : ''}</span>
           )}
           <SaveBtn onClick={() => onSave(vals)} pending={pending} />
         </div>
@@ -215,31 +215,29 @@ function EsmtpSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d: Par
 
       <div className="card overflow-hidden">
         <table className="w-full">
-          <thead className="bg-gray-50 border-b border-gray-200">
+          <thead className="bg-surface-2 border-b border-line">
             <tr>
-              <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500">Erweiterung</th>
-              <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500">RFC</th>
-              <th className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 hidden lg:table-cell">Beschreibung</th>
-              <th className="text-center px-4 py-2.5 text-xs font-semibold text-gray-500">Typ</th>
-              <th className="text-center px-4 py-2.5 text-xs font-semibold text-gray-500">Aktiv</th>
+              <th className="text-left px-4 py-2.5 text-xs font-semibold text-fg-subtle">Erweiterung</th>
+              <th className="text-left px-4 py-2.5 text-xs font-semibold text-fg-subtle hidden lg:table-cell">Beschreibung</th>
+              <th className="text-center px-4 py-2.5 text-xs font-semibold text-fg-subtle">Typ</th>
+              <th className="text-center px-4 py-2.5 text-xs font-semibold text-fg-subtle">Aktiv</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-100">
+          <tbody className="divide-y divide-line">
             {EXT_DEFS.map(ext => {
               const active = get(ext.key);
-              const modified = ext.key in vals;
+              const modified = ext.key in vals && vals[ext.key] !== s[ext.key];
               return (
-                <tr key={ext.key} className={`hover:bg-gray-50 transition-colors ${modified ? 'bg-accent/5' : ''}`}>
+                <tr key={ext.key} className={`hover:bg-surface-2 transition-colors ${modified ? 'bg-accent/5' : ''}`}>
                   <td className="px-4 py-2.5">
-                    <span className="font-mono text-xs font-semibold text-gray-800">{ext.label}</span>
+                    <span className="font-mono text-xs font-semibold text-fg">{ext.label}</span>
                     {ext.warnOff && !active && (
-                      <p className="text-[10px] text-amber-600 mt-0.5 flex items-center gap-0.5">
+                      <p className="text-[10px] text-warning-fg mt-0.5 flex items-center gap-0.5">
                         <Info size={9} /> {ext.warnOff}
                       </p>
                     )}
                   </td>
-                  <td className="px-4 py-2.5 text-xs text-gray-400 font-mono">{ext.rfc}</td>
-                  <td className="px-4 py-2.5 text-xs text-gray-500 hidden lg:table-cell max-w-xs">{ext.desc}</td>
+                  <td className="px-4 py-2.5 text-xs text-fg-subtle hidden lg:table-cell max-w-xs">{ext.desc}</td>
                   <td className="px-4 py-2.5 text-center">
                     <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${RISK_BADGE[ext.risk]}`}>
                       {RISK_LABEL[ext.risk]}
@@ -255,22 +253,22 @@ function EsmtpSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d: Par
         </table>
       </div>
 
-      <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 text-xs text-blue-700 flex items-start gap-2">
+      <div className="bg-info-bg border border-info-line rounded-lg px-4 py-3 text-xs text-info-fg flex items-start gap-2">
         <Info size={13} className="shrink-0 mt-0.5" />
         <span>
-          Änderungen werden in der Datenbank gespeichert und beim nächsten SMTP-Server-Neustart aktiv.
-          Die deaktivierten Erweiterungen erscheinen nicht mehr im EHLO-Response.
+          Änderungen gelten sofort für neue SMTP-Verbindungen (kein Neustart nötig).
+          Deaktivierte Erweiterungen erscheinen nicht mehr in der EHLO-Antwort.
         </span>
       </div>
 
-      <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 text-xs text-gray-600 flex items-start gap-2">
+      <div className="bg-surface-2 border border-line rounded-lg px-4 py-3 text-xs text-fg-muted flex items-start gap-2">
         <Info size={13} className="shrink-0 mt-0.5" />
         <span>
           Implementiert und standardmäßig aktiv, geschaltet über Umgebungsvariablen (nicht in der BCP):{' '}
           {ENV_EXT_DEFS.map((e, i) => (
             <span key={e.env}>
               {i > 0 && ', '}
-              <span className="font-mono font-semibold text-gray-800">{e.label}</span> ({e.rfc}, <code className="font-mono">{e.env}=false</code> schaltet ab)
+              <span className="font-mono font-semibold text-fg">{e.label}</span> (<code className="font-mono">{e.env}=false</code> schaltet ab)
             </span>
           ))}.
         </span>
@@ -290,8 +288,8 @@ function DeliverySection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d: 
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-base font-semibold text-gray-900">Lokale Zustellung</h2>
-          <p className="text-xs text-gray-400 mt-0.5">Steuert ob der Server eingehende Nachrichten für lokale Postfächer annimmt</p>
+          <h2 className="text-base font-semibold text-fg">Lokale Zustellung</h2>
+          <p className="text-xs text-fg-subtle mt-0.5">Steuert ob der Server eingehende Nachrichten für lokale Postfächer annimmt</p>
         </div>
         <SaveBtn onClick={() => onSave({ localDeliveryEnabled: enabled })} pending={pending} />
       </div>
@@ -307,27 +305,26 @@ function DeliverySection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d: 
       </div>
 
       <div className="grid grid-cols-2 gap-4">
-        <div className={`card p-4 border-2 transition-colors ${enabled ? 'border-green-200 bg-green-50/30' : 'border-gray-200'}`}>
+        <div className={`card p-4 border-2 transition-colors ${enabled ? 'border-success-line bg-success-bg/30' : 'border-line'}`}>
           <div className="flex items-center gap-2 mb-2">
-            <CheckCircle size={15} className={enabled ? 'text-green-500' : 'text-gray-300'} />
-            <span className="text-sm font-semibold text-gray-800">Aktiviert</span>
+            <CheckCircle size={15} className={enabled ? 'text-success-fg' : 'text-fg-subtle'} />
+            <span className="text-sm font-semibold text-fg">Aktiviert</span>
           </div>
-          <ul className="space-y-1 text-xs text-gray-500">
+          <ul className="space-y-1 text-xs text-fg-subtle">
             <li>• Empfänger werden gegen lokale Postfächer geprüft</li>
             <li>• Ressourcenpostfächer (Räume) akzeptiert</li>
             <li>• Shared Mailboxes erreichbar</li>
           </ul>
         </div>
-        <div className={`card p-4 border-2 transition-colors ${!enabled ? 'border-amber-200 bg-amber-50/30' : 'border-gray-200'}`}>
+        <div className={`card p-4 border-2 transition-colors ${!enabled ? 'border-warning-line bg-warning-bg/30' : 'border-line'}`}>
           <div className="flex items-center gap-2 mb-2">
-            <Info size={15} className={!enabled ? 'text-amber-500' : 'text-gray-300'} />
-            <span className="text-sm font-semibold text-gray-800">Deaktiviert</span>
+            <Info size={15} className={!enabled ? 'text-warning-fg' : 'text-fg-subtle'} />
+            <span className="text-sm font-semibold text-fg">Deaktiviert</span>
           </div>
-          <ul className="space-y-1 text-xs text-gray-500">
-            <li>• Alle RCPT TO-Befehle werden abgelehnt</li>
-            <li>• Server agiert als reiner Relay-Knoten</li>
+          <ul className="space-y-1 text-xs text-fg-subtle">
+            <li>• Port 25 lehnt alle Empfänger ab (RCPT TO)</li>
+            <li>• Versand authentifizierter Benutzer (465/587) bleibt möglich</li>
             <li>• Nützlich für reine Outbound-Server</li>
-            <li>• Kein lokaler Postfachspeicher nötig</li>
           </ul>
         </div>
       </div>
@@ -343,14 +340,17 @@ function BannerSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d: Pa
   const [override, setOverride] = useState(s.bannerOverride);
   const [text, setText]         = useState(s.bannerText);
 
-  const defaultBanner = `${window.location.hostname} CoreMail ESMTP`;
+  // Host name of this BCP as a stand-in for the server host name (ServerSettings.publicHostname)
+  const host = window.location.hostname;
+  const defaultBanner = smtpGreetingPreview(host, false, '');
+  const preview = smtpGreetingPreview(host, override, text);
 
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-base font-semibold text-gray-900">SMTP-Banner</h2>
-          <p className="text-xs text-gray-400 mt-0.5">Der Begrüßungstext den der SMTP-Server bei jeder Verbindung sendet (220-Response)</p>
+          <h2 className="text-base font-semibold text-fg">SMTP-Banner</h2>
+          <p className="text-xs text-fg-subtle mt-0.5">Der Begrüßungstext den der SMTP-Server bei jeder Verbindung sendet (220-Response)</p>
         </div>
         <SaveBtn onClick={() => onSave({ bannerOverride: override, bannerText: text })} pending={pending} />
       </div>
@@ -366,7 +366,7 @@ function BannerSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d: Pa
 
       <div className="card p-5 space-y-4">
         <div>
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+          <p className="text-xs font-semibold text-fg-subtle uppercase tracking-wide mb-2">
             {override ? 'Benutzerdefinierter Banner' : 'Standard-Banner (aktiv)'}
           </p>
           {override ? (
@@ -375,39 +375,39 @@ function BannerSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d: Pa
               onChange={e => setText(e.target.value.slice(0, 255))}
               rows={2}
               placeholder="z.B. mail.example.com ESMTP"
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-accent resize-none"
+              className="w-full border border-line-strong rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent-fg resize-none"
             />
           ) : (
-            <div className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 font-mono text-sm text-gray-600">
+            <div className="bg-surface-2 border border-line rounded-lg px-3 py-2 font-mono text-sm text-fg-muted">
               {defaultBanner}
             </div>
           )}
-          <p className="text-xs text-gray-400 mt-1">
-            {override ? `${text.length}/255 Zeichen` : 'Hostname + "CoreMail ESMTP"'}
+          <p className="text-xs text-fg-subtle mt-1">
+            {override ? `${text.length}/255 Zeichen — beginnt der Text nicht mit einem Hostnamen, wird der Server-Hostname vorangestellt` : 'Hostname + "ESMTP CoreMail"'}
           </p>
         </div>
 
         <div>
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Vorschau — SMTP-Verbindung</p>
-          <div className="bg-gray-900 rounded-lg p-4 font-mono text-xs space-y-1">
-            <p className="text-gray-400">{'# telnet mail.example.com 25'}</p>
-            <p className="text-green-400">
+          <p className="text-xs font-semibold text-fg-subtle uppercase tracking-wide mb-2">Vorschau — SMTP-Verbindung</p>
+          <div className="bg-surface-2 border border-line rounded-lg p-4 font-mono text-xs space-y-1">
+            <p className="text-fg-subtle">{'# telnet mail.example.com 25'}</p>
+            <p className="text-success-fg">
               {'220 '}
-              <span className="text-white">{override && text ? text : defaultBanner}</span>
+              <span className="text-fg">{preview}</span>
             </p>
-            <p className="text-gray-400">{'EHLO client.example.com'}</p>
-            <p className="text-green-400">{'250-mail.example.com'}</p>
-            <p className="text-green-400">{'250-STARTTLS'}</p>
-            <p className="text-green-400">{'250-AUTH PLAIN LOGIN'}</p>
-            <p className="text-green-400">{'250 SIZE 26214400'}</p>
+            <p className="text-fg-subtle">{'EHLO client.example.com'}</p>
+            <p className="text-success-fg">{'250-mail.example.com'}</p>
+            <p className="text-success-fg">{'250-STARTTLS'}</p>
+            <p className="text-success-fg">{'250-AUTH PLAIN LOGIN'}</p>
+            <p className="text-success-fg">{'250 SIZE 26214400'}</p>
           </div>
         </div>
 
-        <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-700 flex items-start gap-2">
+        <div className="bg-info-bg border border-info-line rounded-lg px-3 py-2 text-xs text-info-fg flex items-start gap-2">
           <Info size={12} className="shrink-0 mt-0.5" />
           <span>
             Der Banner sollte keine detaillierten Software-Versionsinformationen enthalten (Security through obscurity).
-            RFC 5321 verlangt, dass der Hostname im Banner erscheint.
+            Der SMTP-Standard verlangt, dass der Hostname im Banner erscheint.
           </span>
         </div>
       </div>
@@ -439,8 +439,8 @@ function GreylistingSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-base font-semibold text-gray-900">Greylisting</h2>
-          <p className="text-xs text-gray-400 mt-0.5">Temporäres Abweisen unbekannter Absender beim ersten Verbindungsversuch</p>
+          <h2 className="text-base font-semibold text-fg">Greylisting</h2>
+          <p className="text-xs text-fg-subtle mt-0.5">Temporäres Abweisen unbekannter Absender beim ersten Verbindungsversuch</p>
         </div>
         <SaveBtn onClick={() => onSave({ greylistingEnabled: enabled, greylistWaitSec: wait, greylistTtlHours: ttl, greylistWhitelist: whitelist })} pending={pending} />
       </div>
@@ -465,30 +465,30 @@ function GreylistingSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (
           { label: 'Protokoll', value: 'SMTP 451', sub: 'Temp. Fehler' },
         ].map(c => (
           <div key={c.label} className="card p-3 text-center">
-            <p className="text-lg font-bold text-gray-900">{c.value}</p>
-            <p className="text-xs text-gray-400">{c.label}</p>
-            <p className="text-[10px] text-gray-300 mt-0.5">{c.sub}</p>
+            <p className="text-lg font-bold text-fg">{c.value}</p>
+            <p className="text-xs text-fg-subtle">{c.label}</p>
+            <p className="text-[10px] text-fg-subtle mt-0.5">{c.sub}</p>
           </div>
         ))}
       </div>
 
       {/* Flow illustration */}
       <div className="card p-4 space-y-3">
-        <p className="text-sm font-semibold text-gray-700">Ablauf</p>
+        <p className="text-sm font-semibold text-fg-muted">Ablauf</p>
         <div className="flex items-start gap-3">
           {[
-            { step: '1', label: 'Erstversuch', color: 'bg-red-100 text-red-700', desc: `SMTP-Server antwortet: "451 4.7.1 Greylisted — try again in ${waitMin} min"` },
-            { step: '2', label: `Nach ${waitMin} Min`, color: 'bg-amber-100 text-amber-700', desc: 'Legitimer Mailserver wiederholt den Versuch automatisch' },
-            { step: '3', label: 'Akzeptiert', color: 'bg-green-100 text-green-700', desc: `Triplet wird ${ttl}h whitegelistet — alle weiteren Versuche sofort akzeptiert` },
+            { step: '1', label: 'Erstversuch', color: 'bg-danger-bg text-danger-fg', desc: `SMTP-Server antwortet: "451 4.7.1 Greylisted — try again in ${waitMin} min"` },
+            { step: '2', label: `Nach ${waitMin} Min`, color: 'bg-warning-bg text-warning-fg', desc: 'Legitimer Mailserver wiederholt den Versuch automatisch' },
+            { step: '3', label: 'Akzeptiert', color: 'bg-success-bg text-success-fg', desc: `Triplet wird ${ttl}h whitegelistet — alle weiteren Versuche sofort akzeptiert` },
           ].map((item, i) => (
             <div key={i} className="flex-1 flex flex-col items-center text-center">
               <div className={`w-8 h-8 rounded-full ${item.color} flex items-center justify-center font-bold text-sm mb-1`}>
                 {item.step}
               </div>
-              <p className="text-xs font-semibold text-gray-700 mb-1">{item.label}</p>
-              <p className="text-[10px] text-gray-400 leading-relaxed">{item.desc}</p>
+              <p className="text-xs font-semibold text-fg-muted mb-1">{item.label}</p>
+              <p className="text-[10px] text-fg-subtle leading-relaxed">{item.desc}</p>
               {i < 2 && (
-                <div className="absolute right-0 top-3 text-gray-300">→</div>
+                <div className="absolute right-0 top-3 text-fg-subtle">→</div>
               )}
             </div>
           ))}
@@ -497,19 +497,19 @@ function GreylistingSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (
 
       {/* Whitelist */}
       <div className="card p-4 space-y-3">
-        <p className="text-sm font-semibold text-gray-700">
+        <p className="text-sm font-semibold text-fg-muted">
           Greylisting-Whitelist
-          <span className="text-xs font-normal text-gray-400 ml-2">IPs / CIDR / Hostnamen die nie gegreylistet werden</span>
+          <span className="text-xs font-normal text-fg-subtle ml-2">IPs / CIDR / Hostnamen die nie gegreylistet werden</span>
         </p>
         {whitelist.length === 0 && (
-          <p className="text-xs text-gray-400 italic">Keine Einträge — alle unbekannten Absender werden gegreylistet</p>
+          <p className="text-xs text-fg-subtle italic">Keine Einträge — alle unbekannten Absender werden gegreylistet</p>
         )}
         <div className="space-y-1.5">
           {whitelist.map(e => (
-            <div key={e} className="flex items-center justify-between bg-gray-50 rounded px-3 py-1.5">
-              <span className="text-sm font-mono text-gray-700">{e}</span>
+            <div key={e} className="flex items-center justify-between bg-surface-2 rounded px-3 py-1.5">
+              <span className="text-sm font-mono text-fg-muted">{e}</span>
               <button aria-label={`${e} entfernen`} onClick={() => setWhitelist(prev => prev.filter(x => x !== e))}
-                className="text-gray-400 hover:text-red-500 transition-colors">
+                className="text-fg-subtle hover:text-danger-fg transition-colors">
                 <Trash2 size={13} />
               </button>
             </div>
@@ -519,167 +519,22 @@ function GreylistingSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (
           <input value={newEntry} onChange={e => setNewEntry(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && addEntry()}
             placeholder="z.B. 192.168.1.0/24 oder mx.google.com"
-            className="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-accent"
+            className="flex-1 border border-line-strong rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent-fg"
           />
           <button onClick={addEntry} className="btn-secondary text-sm gap-1">
             <Plus size={13} /> Hinzufügen
           </button>
         </div>
-        <div className="flex flex-wrap gap-1.5 pt-1 border-t border-gray-100">
-          <p className="w-full text-xs text-gray-400 mb-0.5">Schnell hinzufügen:</p>
+        <div className="flex flex-wrap gap-1.5 pt-1 border-t border-line">
+          <p className="w-full text-xs text-fg-subtle mb-0.5">Schnell hinzufügen:</p>
           {['127.0.0.1','::1','10.0.0.0/8','172.16.0.0/12','192.168.0.0/16'].filter(e => !whitelist.includes(e)).map(e => (
             <button key={e} onClick={() => setWhitelist(prev => [...prev, e])}
-              className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-2 py-0.5 rounded font-mono transition-colors">
+              className="text-xs bg-surface-2 hover:bg-surface-3 text-fg-muted px-2 py-0.5 rounded font-mono transition-colors">
               + {e}
             </button>
           ))}
         </div>
       </div>
-    </div>
-  );
-}
-
-// ═════════════════════════════════════════════════════════════════════════════
-// RelayingSection
-// ═════════════════════════════════════════════════════════════════════════════
-
-function RelayingSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d: Partial<SmtpSettings>) => void; pending: boolean }) {
-  const [enabled,      setEnabled]     = useState(s.relayingEnabled);
-  const [requireAuth,  setRequireAuth] = useState(s.relayRequireAuth);
-  const [domains,      setDomains]     = useState<string[]>(s.relayDomains);
-  const [trustedIps,   setTrustedIps]  = useState<string[]>(s.relayTrustedIps);
-  const [newDomain,    setNewDomain]   = useState('');
-  const [newIp,        setNewIp]       = useState('');
-
-  function add(list: string[], setList: (v: string[]) => void, val: string) {
-    const e = val.trim().toLowerCase();
-    if (!e || list.includes(e)) return;
-    setList([...list, e]);
-  }
-
-  function save() {
-    onSave({ relayingEnabled: enabled, relayRequireAuth: requireAuth, relayDomains: domains, relayTrustedIps: trustedIps });
-  }
-
-  return (
-    <div className="space-y-5">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-base font-semibold text-gray-900">Relaying — Weiterleitung</h2>
-          <p className="text-xs text-gray-400 mt-0.5">Konfiguriert für welche fremden Domains E-Mails weitergeleitet werden</p>
-        </div>
-        <SaveBtn onClick={save} pending={pending} />
-      </div>
-
-      {!enabled && (
-        <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-3 text-sm text-green-700 flex items-center gap-2">
-          <CheckCircle size={15} />
-          <span><strong>Open Relay deaktiviert</strong> — E-Mails werden nur für lokale Domains angenommen. Empfohlene Einstellung.</span>
-        </div>
-      )}
-      {enabled && (
-        <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-700 flex items-start gap-2">
-          <Info size={15} className="shrink-0 mt-0.5" />
-          <span>
-            <strong>Relay aktiv</strong> — Stellen Sie sicher, dass Relay nur für autorisierte Absender/Domains erlaubt ist
-            um Open-Relay-Missbrauch zu verhindern.
-          </span>
-        </div>
-      )}
-
-      <div className="card p-5 space-y-0">
-        <ToggleRow
-          label="Relaying aktiviert"
-          desc="E-Mails für Domains außerhalb des lokalen Systems weiterleiten"
-          value={enabled}
-          onChange={setEnabled}
-        />
-        {enabled && (
-          <ToggleRow
-            label="Authentifizierung erforderlich"
-            desc="Relay nur für authentifizierte SMTP-Sessions erlauben (AUTH-Befehl)"
-            value={requireAuth}
-            onChange={setRequireAuth}
-          />
-        )}
-      </div>
-
-      {enabled && (
-        <>
-          {/* Relay Domains */}
-          <div className="card p-4 space-y-3">
-            <div>
-              <p className="text-sm font-semibold text-gray-700">Relay-Domains</p>
-              <p className="text-xs text-gray-400 mt-0.5">Für diese Domains werden eingehende Nachrichten weitergeleitet (leer = kein Domain-Relay)</p>
-            </div>
-            {domains.length === 0 && (
-              <p className="text-xs text-gray-400 italic">Keine Relay-Domains konfiguriert</p>
-            )}
-            <div className="flex flex-wrap gap-1.5">
-              {domains.map(d => (
-                <span key={d} className="flex items-center gap-1 bg-blue-50 border border-blue-200 text-blue-700 text-xs px-2 py-0.5 rounded-full font-mono">
-                  {d}
-                  <button onClick={() => setDomains(prev => prev.filter(x => x !== d))}
-                    className="hover:text-red-600 ml-0.5">×</button>
-                </span>
-              ))}
-            </div>
-            <div className="flex gap-2">
-              <input value={newDomain} onChange={e => setNewDomain(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') { add(domains, setDomains, newDomain); setNewDomain(''); } }}
-                placeholder="z.B. example.com"
-                className="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-accent"
-              />
-              <button onClick={() => { add(domains, setDomains, newDomain); setNewDomain(''); }}
-                className="btn-secondary text-sm gap-1">
-                <Plus size={13} /> Hinzufügen
-              </button>
-            </div>
-          </div>
-
-          {/* Trusted IPs */}
-          <div className="card p-4 space-y-3">
-            <div>
-              <p className="text-sm font-semibold text-gray-700">Vertrauenswürdige IPs (Relay ohne Auth)</p>
-              <p className="text-xs text-gray-400 mt-0.5">Diese IP-Adressen/CIDR-Ranges dürfen ohne Authentifizierung weiterleiten</p>
-            </div>
-            {trustedIps.length === 0 && (
-              <p className="text-xs text-gray-400 italic">Keine vertrauenswürdigen IPs — Relay nur via AUTH</p>
-            )}
-            <div className="space-y-1.5">
-              {trustedIps.map(ip => (
-                <div key={ip} className="flex items-center justify-between bg-gray-50 rounded px-3 py-1.5">
-                  <span className="text-sm font-mono text-gray-700">{ip}</span>
-                  <button aria-label={`${ip} entfernen`} onClick={() => setTrustedIps(prev => prev.filter(x => x !== ip))}
-                    className="text-gray-400 hover:text-red-500 transition-colors">
-                    <Trash2 size={13} />
-                  </button>
-                </div>
-              ))}
-            </div>
-            <div className="flex gap-2">
-              <input value={newIp} onChange={e => setNewIp(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') { add(trustedIps, setTrustedIps, newIp); setNewIp(''); } }}
-                placeholder="z.B. 10.0.0.0/8"
-                className="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-accent"
-              />
-              <button onClick={() => { add(trustedIps, setTrustedIps, newIp); setNewIp(''); }}
-                className="btn-secondary text-sm gap-1">
-                <Plus size={13} /> Hinzufügen
-              </button>
-            </div>
-            <div className="flex flex-wrap gap-1.5 pt-1 border-t border-gray-100">
-              <p className="w-full text-xs text-gray-400 mb-0.5">Lokale Netze:</p>
-              {['127.0.0.0/8','10.0.0.0/8','172.16.0.0/12','192.168.0.0/16'].filter(e => !trustedIps.includes(e)).map(e => (
-                <button key={e} onClick={() => setTrustedIps(prev => [...prev, e])}
-                  className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-2 py-0.5 rounded font-mono transition-colors">
-                  + {e}
-                </button>
-              ))}
-            </div>
-          </div>
-        </>
-      )}
     </div>
   );
 }
@@ -696,7 +551,6 @@ function OutgoingSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d: 
   const [implicitTls, setImplicitTls] = useState(s.smarthostImplicitTls ?? false);
   const [username, setUsername]       = useState(s.smarthostUsername ?? '');
   const [password, setPassword]       = useState('');  // never prefilled (security)
-  const [filterEnabled, setFilterEnabled] = useState(s.outboundFilterEnabled ?? true);
 
   const [testStatus, setTestStatus]   = useState<'idle' | 'testing' | 'ok' | 'err'>('idle');
   const [testMsg, setTestMsg]         = useState('');
@@ -736,6 +590,7 @@ function OutgoingSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d: 
   }
 
   function handleSave() {
+    if (mode === 'smarthost' && !host.trim()) { toast.error('Bitte einen Smarthost-Server angeben'); return; }
     const payload: Partial<SmtpSettings> = {
       outboundMode:          mode,
       smarthostHost:         host,
@@ -743,7 +598,6 @@ function OutgoingSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d: 
       smarthostTls:          tls,
       smarthostImplicitTls:  implicitTls,
       smarthostUsername:     username,
-      outboundFilterEnabled: filterEnabled,
     };
     if (password) payload.smarthostPassword = password;
     onSave(payload);
@@ -753,8 +607,8 @@ function OutgoingSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d: 
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-base font-semibold text-gray-900">Ausgehende Zustellung</h2>
-          <p className="text-xs text-gray-400 mt-0.5">
+          <h2 className="text-base font-semibold text-fg">Ausgehende Zustellung</h2>
+          <p className="text-xs text-fg-subtle mt-0.5">
             Wie CoreMail ausgehende E-Mails an externe Empfänger zustellt
           </p>
         </div>
@@ -782,29 +636,29 @@ function OutgoingSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d: 
             onClick={() => setMode(opt.value)}
             className={`text-left p-4 rounded-lg border-2 transition-all ${
               mode === opt.value
-                ? 'border-accent bg-accent/5'
-                : 'border-gray-200 hover:border-gray-300 bg-white'
+                ? 'border-accent-fg bg-accent/5'
+                : 'border-line hover:border-line-strong bg-surface'
             }`}
           >
             <div className="flex items-center gap-2 mb-1.5">
               <span className="text-xl">{opt.icon}</span>
-              <span className="font-semibold text-sm text-gray-800">{opt.label}</span>
+              <span className="font-semibold text-sm text-fg">{opt.label}</span>
               {mode === opt.value && (
-                <CheckCircle size={14} className="ml-auto text-accent" />
+                <CheckCircle size={14} className="ml-auto text-accent-fg" />
               )}
             </div>
-            <p className="text-xs text-gray-500 leading-relaxed">{opt.desc}</p>
+            <p className="text-xs text-fg-subtle leading-relaxed">{opt.desc}</p>
           </button>
         ))}
       </div>
 
       {/* MX Info */}
       {mode === 'mx' && (
-        <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-3 text-xs text-green-800 flex items-start gap-2">
-          <CheckCircle size={13} className="shrink-0 mt-0.5 text-green-600" />
+        <div className="bg-success-bg border border-success-line rounded-lg px-4 py-3 text-xs text-success-fg flex items-start gap-2">
+          <CheckCircle size={13} className="shrink-0 mt-0.5 text-success-fg" />
           <div>
             <span className="font-semibold">Direkte MX-Zustellung aktiv</span>
-            <p className="mt-0.5 text-green-700">
+            <p className="mt-0.5 text-success-fg">
               CoreMail stellt Mails direkt an den Ziel-Mailserver zu. Stelle sicher, dass Port 25
               ausgehend von deinem Server nicht geblockt ist und ein gültiger PTR-/DMARC-Record gesetzt ist.
             </p>
@@ -812,46 +666,35 @@ function OutgoingSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d: 
         </div>
       )}
 
-      {/* Spam/virus filter */}
-      <div className="card p-5 space-y-0">
-        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide pb-3 border-b border-gray-100">Sicherheitsfilter</p>
-        <ToggleRow
-          label="Spam-/Virenfilter vor Weiterleitung anwenden"
-          desc="Ausgehende Mails werden vor dem Versand durch rspamd (Anti-Spam) und ClamAV (Antivirus) geprüft. Empfohlen um sicherzustellen, dass kein infizierter oder als Spam eingestufter Inhalt versendet wird."
-          value={filterEnabled}
-          onChange={setFilterEnabled}
-        />
-      </div>
-
       {/* Smarthost Settings */}
       {mode === 'smarthost' && (
         <div className="space-y-4">
           {/* Host + Port */}
           <div className="card p-5 space-y-4">
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide border-b border-gray-100 pb-2">Verbindung</p>
+            <p className="text-xs font-semibold text-fg-subtle uppercase tracking-wide border-b border-line pb-2">Verbindung</p>
 
             <div className="grid grid-cols-3 gap-3">
               <div className="col-span-2">
-                <label className="block text-xs font-medium text-gray-600 mb-1">Smarthost / Relay-Server</label>
+                <label className="block text-xs font-medium text-fg-muted mb-1">Smarthost / Relay-Server</label>
                 <input
                   value={host} onChange={e => setHost(e.target.value)}
                   placeholder="z.B. smtp.sendgrid.net"
-                  className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-accent"
+                  className="w-full border border-line-strong rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent-fg"
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Port</label>
+                <label className="block text-xs font-medium text-fg-muted mb-1">Port</label>
                 <input
                   type="number" min={1} max={65535} value={port}
                   onChange={e => setPort(parseInt(e.target.value, 10) || 587)}
-                  className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm text-right font-mono focus:outline-none focus:ring-1 focus:ring-accent"
+                  className="w-full border border-line-strong rounded px-3 py-1.5 text-sm text-right font-mono focus:outline-none focus:ring-2 focus:ring-accent-fg"
                 />
               </div>
             </div>
 
             {/* Port quick select */}
             <div className="flex flex-wrap gap-1.5">
-              <span className="text-xs text-gray-400 self-center">Schnell:</span>
+              <span className="text-xs text-fg-subtle self-center">Schnell:</span>
               {PORT_PRESETS.map(p => (
                 <button
                   key={p.port}
@@ -863,8 +706,8 @@ function OutgoingSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d: 
                   }}
                   className={`text-xs px-2 py-0.5 rounded font-mono border transition-colors ${
                     port === p.port
-                      ? 'bg-accent text-white border-accent'
-                      : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'
+                      ? 'bg-accent text-white border-accent-fg'
+                      : 'bg-surface-2 text-fg-muted border-line hover:bg-surface-2'
                   }`}
                 >
                   {p.label}
@@ -875,7 +718,7 @@ function OutgoingSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d: 
 
           {/* TLS */}
           <div className="card p-5 space-y-0">
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide pb-3 border-b border-gray-100">TLS-Verschlüsselung</p>
+            <p className="text-xs font-semibold text-fg-subtle uppercase tracking-wide pb-3 border-b border-line">TLS-Verschlüsselung</p>
             <ToggleRow
               label="STARTTLS (opportunistisch)"
               desc="Verbindung beginnt als Plaintext und wird per STARTTLS auf TLS aufgewertet — Standard für Port 587"
@@ -892,29 +735,29 @@ function OutgoingSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d: 
 
           {/* Auth */}
           <div className="card p-5 space-y-4">
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide border-b border-gray-100 pb-2">Authentifizierung (optional)</p>
+            <p className="text-xs font-semibold text-fg-subtle uppercase tracking-wide border-b border-line pb-2">Authentifizierung (optional)</p>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Benutzername</label>
+                <label className="block text-xs font-medium text-fg-muted mb-1">Benutzername</label>
                 <input
                   value={username} onChange={e => setUsername(e.target.value)}
                   placeholder="z.B. apikey oder user@domain.de"
                   autoComplete="off"
-                  className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
+                  className="w-full border border-line-strong rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-accent-fg"
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">
+                <label className="block text-xs font-medium text-fg-muted mb-1">
                   Passwort
                   {s.smarthostPassword === '••••••••' && (
-                    <span className="ml-1.5 text-gray-400 font-normal">(gespeichert — leer lassen um beizubehalten)</span>
+                    <span className="ml-1.5 text-fg-subtle font-normal">(gespeichert — leer lassen um beizubehalten)</span>
                   )}
                 </label>
                 <input
                   type="password" value={password} onChange={e => setPassword(e.target.value)}
                   placeholder={s.smarthostPassword === '••••••••' ? '••••••••' : 'Kein Passwort gesetzt'}
                   autoComplete="new-password"
-                  className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
+                  className="w-full border border-line-strong rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-accent-fg"
                 />
               </div>
             </div>
@@ -934,24 +777,24 @@ function OutgoingSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d: 
                 }
               </button>
               {testStatus === 'ok' && (
-                <span className="flex items-center gap-1.5 text-sm text-green-700">
+                <span className="flex items-center gap-1.5 text-sm text-success-fg">
                   <CheckCircle size={14} /> {testMsg}
                 </span>
               )}
               {testStatus === 'err' && (
-                <span className="flex items-center gap-1.5 text-sm text-red-600">
+                <span className="flex items-center gap-1.5 text-sm text-danger-fg">
                   <XCircle size={14} /> {testMsg}
                 </span>
               )}
             </div>
-            <p className="text-xs text-gray-400 mt-2">
+            <p className="text-xs text-fg-subtle mt-2">
               Testet die SMTP-Verbindung ohne E-Mails zu senden. Verwendete Einstellungen: aktueller Formularinhalt (noch nicht gespeichert).
             </p>
           </div>
 
           {/* Provider Presets */}
           <div className="card p-4">
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Bekannte Anbieter</p>
+            <p className="text-xs font-semibold text-fg-subtle uppercase tracking-wide mb-3">Bekannte Anbieter</p>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
               {[
                 { name: 'SendGrid',    host: 'smtp.sendgrid.net',         port: 587, tls: true,  implTls: false },
@@ -967,10 +810,10 @@ function OutgoingSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d: 
                 <button
                   key={p.name}
                   onClick={() => { setHost(p.host); setPort(p.port); setTls(p.tls); setImplicitTls(p.implTls); }}
-                  className="text-left px-3 py-2 rounded border border-gray-200 hover:border-accent hover:bg-accent/5 transition-colors"
+                  className="text-left px-3 py-2 rounded border border-line hover:border-accent-fg hover:bg-accent/5 transition-colors"
                 >
-                  <p className="text-xs font-semibold text-gray-700">{p.name}</p>
-                  <p className="text-[10px] text-gray-400 font-mono">{p.host}:{p.port}</p>
+                  <p className="text-xs font-semibold text-fg-muted">{p.name}</p>
+                  <p className="text-[10px] text-fg-subtle font-mono">{p.host}:{p.port}</p>
                 </button>
               ))}
             </div>
@@ -1004,8 +847,8 @@ function ConnectionSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-base font-semibold text-gray-900">Verbindungseinstellungen</h2>
-          <p className="text-xs text-gray-400 mt-0.5">Limits und Timeouts für SMTP-Verbindungen und Nachrichten</p>
+          <h2 className="text-base font-semibold text-fg">Verbindungseinstellungen</h2>
+          <p className="text-xs text-fg-subtle mt-0.5">Limits und Timeouts für SMTP-Verbindungen und Nachrichten</p>
         </div>
         <SaveBtn onClick={() => onSave(vals)} pending={pending} />
       </div>
@@ -1017,20 +860,20 @@ function ConnectionSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d
           { label: 'Max. Empfänger', value: vals.maxRecipients },
         ].map(c => (
           <div key={c.label} className="card p-3 text-center">
-            <p className="text-xl font-bold text-gray-900">{c.value.toLocaleString()}</p>
-            <p className="text-xs text-gray-400">{c.label}</p>
+            <p className="text-xl font-bold text-fg">{c.value.toLocaleString()}</p>
+            <p className="text-xs text-fg-subtle">{c.label}</p>
           </div>
         ))}
       </div>
 
       {/* Connection limits */}
       <div className="card p-5 space-y-0">
-        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide pb-3 border-b border-gray-100">Verbindungslimits</p>
+        <p className="text-xs font-semibold text-fg-subtle uppercase tracking-wide pb-3 border-b border-line">Verbindungslimits</p>
         <NumInput label="Maximale gleichzeitige Verbindungen"
           desc="Gesamtanzahl aktiver SMTP-Verbindungen (alle IPs)"
           value={vals.maxConnections} onChange={v => set('maxConnections', v)} min={1} max={10000} unit="Verb." />
         <NumInput label="Maximale Verbindungen pro IP"
-          desc="Verhindert DDoS/Spam von einzelnen IP-Adressen"
+          desc="Verhindert DDoS/Spam von einzelnen IP-Adressen (private und lokale Netze sind ausgenommen)"
           value={vals.maxConnectionsPerIp} onChange={v => set('maxConnectionsPerIp', v)} min={1} max={1000} unit="Verb." />
         <NumInput label="Maximale Empfänger pro Nachricht"
           desc="Anzahl RCPT TO-Befehle pro Mail-Transaktion"
@@ -1042,7 +885,7 @@ function ConnectionSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d
 
       {/* Message size */}
       <div className="card p-5 space-y-0">
-        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide pb-3 border-b border-gray-100">Nachrichtengröße</p>
+        <p className="text-xs font-semibold text-fg-subtle uppercase tracking-wide pb-3 border-b border-line">Nachrichtengröße</p>
         <NumInput label="Maximale Nachrichtengröße"
           desc="Nachrichten größer als dieser Wert werden mit 552 abgelehnt"
           value={vals.maxMessageSizeMb} onChange={v => set('maxMessageSizeMb', v)} min={1} max={500} unit="MB" />
@@ -1050,19 +893,19 @@ function ConnectionSection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d
 
       {/* Timeouts */}
       <div className="card p-5 space-y-0">
-        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide pb-3 border-b border-gray-100">Timeouts & Verzögerungen</p>
+        <p className="text-xs font-semibold text-fg-subtle uppercase tracking-wide pb-3 border-b border-line">Timeouts & Verzögerungen</p>
         <NumInput label="Verbindungs-Timeout"
-          desc="Inaktive Verbindungen werden nach dieser Zeit getrennt (RFC 5321: min. 300s)"
+          desc="Inaktive Verbindungen werden nach dieser Zeit getrennt (mindestens 300 s)"
           value={vals.connectionTimeoutSec} onChange={v => set('connectionTimeoutSec', v)} min={30} max={3600} unit="Sek" />
         <NumInput label="Greeting Delay"
-          desc="Künstliche Verzögerung der 220-Antwort — hilft gegen Spam-Bots die sofort Daten senden"
+          desc="Verzögert die 220-Antwort auf Port 25 — Clients, die vorher senden, werden abgewiesen (hilft gegen Spam-Bots)"
           value={vals.greetingDelaySec} onChange={v => set('greetingDelaySec', v)} min={0} max={30} unit="Sek" />
       </div>
 
-      <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 text-xs text-blue-700 flex items-start gap-2">
+      <div className="bg-info-bg border border-info-line rounded-lg px-4 py-3 text-xs text-info-fg flex items-start gap-2">
         <Info size={13} className="shrink-0 mt-0.5" />
         <span>
-          RFC 5321 schreibt Mindest-Timeouts vor: EHLO/HELO 5 Min, MAIL 5 Min, DATA-Initiierung 2 Min, DATA-Block 3 Min.
+          Der SMTP-Standard schreibt Mindest-Timeouts vor: EHLO/HELO 5 Min, MAIL 5 Min, DATA-Initiierung 2 Min, DATA-Block 3 Min.
           Der Verbindungs-Timeout sollte mindestens 300 Sek. betragen.
         </span>
       </div>
@@ -1114,10 +957,10 @@ function CopyBtn({ text, size = 13 }: { text: string; size?: number }) {
     <button aria-label="Kopieren"
       onClick={handleCopy}
       title="Kopieren"
-      className="shrink-0 p-1 rounded text-gray-400 hover:text-accent hover:bg-accent/10 transition-colors"
+      className="shrink-0 p-1 rounded text-fg-subtle hover:text-accent-fg hover:bg-accent/10 transition-colors"
     >
       {copied
-        ? <Check size={size} className="text-green-500" />
+        ? <Check size={size} className="text-success-fg" />
         : <Copy size={size} />}
     </button>
   );
@@ -1125,8 +968,8 @@ function CopyBtn({ text, size = 13 }: { text: string; size?: number }) {
 
 // ── StatusDot — green = ok, yellow = warning (exists but differs), red = missing
 function StatusDot({ ok, checking, warning }: { ok: boolean; checking: boolean; warning?: boolean }) {
-  if (checking) return <Loader2 size={14} className="animate-spin text-gray-400 shrink-0" />;
-  const color = ok ? 'bg-green-500' : warning ? 'bg-yellow-400' : 'bg-red-500';
+  if (checking) return <Loader2 size={14} className="animate-spin text-fg-subtle shrink-0" />;
+  const color = ok ? 'bg-success' : warning ? 'bg-warning' : 'bg-danger';
   return <span className={`inline-block w-3 h-3 rounded-full shrink-0 mt-0.5 ${color}`} />;
 }
 
@@ -1140,7 +983,7 @@ interface DnsRowProps {
 }
 function DnsRow({ label, description, record, checking, isLast }: DnsRowProps) {
   return (
-    <div className={`grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 py-4 ${isLast ? '' : 'border-b border-gray-100'}`}>
+    <div className={`grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 py-4 ${isLast ? '' : 'border-b border-line'}`}>
       {/* Status dot */}
       <div className="flex items-start pt-0.5">
         <StatusDot ok={record.ok} checking={checking} warning={!!record.warning} />
@@ -1149,70 +992,70 @@ function DnsRow({ label, description, record, checking, isLast }: DnsRowProps) {
       <div className="space-y-2 min-w-0">
         {/* Label row */}
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-sm font-semibold text-gray-900">{label}</span>
-          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 font-mono border border-gray-200">
+          <span className="text-sm font-semibold text-fg">{label}</span>
+          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-surface-2 text-fg-subtle font-mono border border-line">
             {record.type}
           </span>
           {!checking && (
             <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
-              record.ok        ? 'bg-green-100  text-green-700'
-              : record.warning ? 'bg-yellow-100 text-yellow-700'
-              :                  'bg-red-100    text-red-700'
+              record.ok        ? 'bg-success-bg  text-success-fg'
+              : record.warning ? 'bg-warning-bg text-warning-fg'
+              :                  'bg-danger-bg    text-danger-fg'
             }`}>
               {record.ok ? '● Gesetzt' : record.warning ? '⚠ Warnung' : '○ Nicht gefunden'}
             </span>
           )}
         </div>
 
-        <p className="text-xs text-gray-400 leading-relaxed">{description}</p>
+        <p className="text-xs text-fg-subtle leading-relaxed">{description}</p>
 
         {/* Special warning (e.g. multiple SPF records) */}
         {!checking && record.warning && (
-          <div className="flex items-start gap-1.5 bg-red-50 border border-red-200 rounded px-2 py-1.5">
-            <AlertCircle size={11} className="text-red-500 shrink-0 mt-0.5" />
-            <span className="text-[11px] text-red-800 font-medium">{record.warning}</span>
+          <div className="flex items-start gap-1.5 bg-danger-bg border border-danger-line rounded px-2 py-1.5">
+            <AlertCircle size={11} className="text-danger-fg shrink-0 mt-0.5" />
+            <span className="text-[11px] text-danger-fg font-medium">{record.warning}</span>
           </div>
         )}
 
         {/* DNS name + copy */}
-        <div className="flex items-center gap-1 bg-gray-50 rounded border border-gray-200 px-2 py-1.5">
-          <span className="text-[10px] text-gray-400 font-medium mr-1 shrink-0">Name</span>
-          <code className="flex-1 text-xs text-gray-600 font-mono break-all">{record.name}</code>
+        <div className="flex items-center gap-1 bg-surface-2 rounded border border-line px-2 py-1.5">
+          <span className="text-[10px] text-fg-subtle font-medium mr-1 shrink-0">Name</span>
+          <code className="flex-1 text-xs text-fg-muted font-mono break-all">{record.name}</code>
           <CopyBtn text={record.name} />
         </div>
 
         {/* Expected value + copy */}
-        <div className="flex items-start gap-1 bg-gray-50 rounded border border-gray-200 px-2 py-1.5">
-          <span className="text-[10px] text-gray-400 font-medium mr-1 mt-0.5 shrink-0">Wert</span>
-          <code className="flex-1 text-xs text-gray-800 font-mono break-all leading-relaxed">{record.expected}</code>
+        <div className="flex items-start gap-1 bg-surface-2 rounded border border-line px-2 py-1.5">
+          <span className="text-[10px] text-fg-subtle font-medium mr-1 mt-0.5 shrink-0">Wert</span>
+          <code className="flex-1 text-xs text-fg font-mono break-all leading-relaxed">{record.expected}</code>
           <CopyBtn text={record.expected} />
         </div>
 
         {/* Currently found in DNS */}
         {!checking && record.ok && record.found && (
-          <div className="flex items-start gap-1.5 bg-green-50 border border-green-200 rounded px-2 py-1.5">
-            <CheckCircle size={11} className="text-green-500 shrink-0 mt-0.5" />
-            <code className="text-[11px] text-green-800 font-mono break-all leading-relaxed">{record.found}</code>
+          <div className="flex items-start gap-1.5 bg-success-bg border border-success-line rounded px-2 py-1.5">
+            <CheckCircle size={11} className="text-success-fg shrink-0 mt-0.5" />
+            <code className="text-[11px] text-success-fg font-mono break-all leading-relaxed">{record.found}</code>
           </div>
         )}
         {!checking && !record.ok && record.found && !record.warning && (
-          <div className="flex items-start gap-1.5 bg-yellow-50 border border-yellow-200 rounded px-2 py-1.5">
-            <AlertCircle size={11} className="text-yellow-600 shrink-0 mt-0.5" />
-            <span className="text-[11px] text-yellow-800">
+          <div className="flex items-start gap-1.5 bg-warning-bg border border-warning-line rounded px-2 py-1.5">
+            <AlertCircle size={11} className="text-warning-fg shrink-0 mt-0.5" />
+            <span className="text-[11px] text-warning-fg">
               Gefunden, aber abweichend: <code className="font-mono">{record.found}</code>
             </span>
           </div>
         )}
         {!checking && !record.ok && record.found && record.warning && (
-          <div className="flex items-start gap-1.5 bg-red-50 border border-red-200 rounded px-2 py-1.5">
-            <AlertCircle size={11} className="text-red-500 shrink-0 mt-0.5" />
-            <code className="text-[11px] text-red-800 font-mono break-all leading-relaxed">{record.found}</code>
+          <div className="flex items-start gap-1.5 bg-danger-bg border border-danger-line rounded px-2 py-1.5">
+            <AlertCircle size={11} className="text-danger-fg shrink-0 mt-0.5" />
+            <code className="text-[11px] text-danger-fg font-mono break-all leading-relaxed">{record.found}</code>
           </div>
         )}
         {!checking && !record.ok && !record.found && (
-          <div className="flex items-center gap-1.5 bg-yellow-50 border border-yellow-200 rounded px-2 py-1.5">
-            <AlertCircle size={11} className="text-yellow-500 shrink-0" />
-            <span className="text-[11px] text-yellow-700">Kein Eintrag gefunden — beim DNS-Anbieter eintragen</span>
+          <div className="flex items-center gap-1.5 bg-warning-bg border border-warning-line rounded px-2 py-1.5">
+            <AlertCircle size={11} className="text-warning-fg shrink-0" />
+            <span className="text-[11px] text-warning-fg">Kein Eintrag gefunden — beim DNS-Anbieter eintragen</span>
           </div>
         )}
       </div>
@@ -1226,46 +1069,46 @@ function PtrRow({ record, hostname, checking }: { record?: DnsRecord; hostname: 
     <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 py-4">
       <div className="flex items-start pt-0.5">
         {checking
-          ? <Loader2 size={14} className="animate-spin text-gray-400 shrink-0" />
+          ? <Loader2 size={14} className="animate-spin text-fg-subtle shrink-0" />
           : record
-            ? <span className={`inline-block w-3 h-3 rounded-full shrink-0 mt-0.5 ${record.ok ? 'bg-green-500' : 'bg-yellow-400'}`} />
-            : <span className="inline-block w-3 h-3 rounded-full shrink-0 mt-0.5 bg-blue-400" />
+            ? <span className={`inline-block w-3 h-3 rounded-full shrink-0 mt-0.5 ${record.ok ? 'bg-success' : 'bg-warning'}`} />
+            : <span className="inline-block w-3 h-3 rounded-full shrink-0 mt-0.5 bg-info" />
         }
       </div>
       <div className="space-y-2 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-sm font-semibold text-gray-900">Reverse DNS (PTR / FCrDNS)</span>
-          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 font-mono border border-gray-200">PTR</span>
+          <span className="text-sm font-semibold text-fg">Reverse DNS (PTR / FCrDNS)</span>
+          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-surface-2 text-fg-subtle font-mono border border-line">PTR</span>
           {!checking && record && (
             <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
-              record.ok ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
+              record.ok ? 'bg-success-bg text-success-fg' : 'bg-warning-bg text-warning-fg'
             }`}>
               {record.ok ? '● FCrDNS OK' : '○ PTR fehlt / falsch'}
             </span>
           )}
           {!checking && !record && (
-            <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
+            <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-info-bg text-info-fg">
               Beim Hosting-Anbieter setzen
             </span>
           )}
         </div>
 
-        <p className="text-xs text-gray-400 leading-relaxed">
+        <p className="text-xs text-fg-subtle leading-relaxed">
           Forward-confirmed reverse DNS (FCrDNS): Der PTR-Record der Server-IP muss auf{' '}
           <code className="font-mono">{hostname}</code> zeigen — und <code className="font-mono">{hostname}</code>{' '}
           muss per A-Record auf dieselbe IP zurückzeigen. Wird im Server-Panel des Hosters gesetzt.
         </p>
 
         {!checking && record?.ok && record.found && (
-          <div className="flex items-start gap-1.5 bg-green-50 border border-green-200 rounded px-2 py-1.5">
-            <CheckCircle size={11} className="text-green-500 shrink-0 mt-0.5" />
-            <code className="text-[11px] text-green-800 font-mono break-all">{record.found}</code>
+          <div className="flex items-start gap-1.5 bg-success-bg border border-success-line rounded px-2 py-1.5">
+            <CheckCircle size={11} className="text-success-fg shrink-0 mt-0.5" />
+            <code className="text-[11px] text-success-fg font-mono break-all">{record.found}</code>
           </div>
         )}
         {!checking && record && !record.ok && (
-          <div className="flex items-start gap-1.5 bg-yellow-50 border border-yellow-200 rounded px-2 py-1.5">
-            <AlertCircle size={11} className="text-yellow-500 shrink-0 mt-0.5" />
-            <span className="text-[11px] text-yellow-800">
+          <div className="flex items-start gap-1.5 bg-warning-bg border border-warning-line rounded px-2 py-1.5">
+            <AlertCircle size={11} className="text-warning-fg shrink-0 mt-0.5" />
+            <span className="text-[11px] text-warning-fg">
               {record.found
                 ? <>PTR vorhanden, stimmt aber nicht überein: <code className="font-mono">{record.found}</code></>
                 : 'Kein PTR-Record gefunden — im Server-Panel des Hosting-Anbieters (Contabo, Hetzner …) setzen.'
@@ -1274,9 +1117,9 @@ function PtrRow({ record, hostname, checking }: { record?: DnsRecord; hostname: 
           </div>
         )}
 
-        <div className="flex items-start gap-1 bg-gray-50 rounded border border-gray-200 px-2 py-1.5">
-          <span className="text-[10px] text-gray-400 font-medium mr-1 mt-0.5 shrink-0">Soll-Wert</span>
-          <code className="flex-1 text-xs text-gray-800 font-mono break-all">{hostname}</code>
+        <div className="flex items-start gap-1 bg-surface-2 rounded border border-line px-2 py-1.5">
+          <span className="text-[10px] text-fg-subtle font-medium mr-1 mt-0.5 shrink-0">Soll-Wert</span>
+          <code className="flex-1 text-xs text-fg font-mono break-all">{hostname}</code>
           <CopyBtn text={hostname} />
         </div>
       </div>
@@ -1334,7 +1177,7 @@ function DnsSection() {
     {
       key:         'spf',
       label:       'SPF — Sender Policy Framework',
-      description: 'Legt fest welche IPs im Namen der Domain senden dürfen — nur EINEN SPF-Record setzen (RFC 7208)',
+      description: 'Legt fest welche IPs im Namen der Domain senden dürfen — nur EINEN SPF-Record setzen',
       fallback:    emptyRecord('TXT',   selectedDomain?.name ?? '', 'v=spf1 ip4:<ServerIP> -all'),
     },
     {
@@ -1363,15 +1206,15 @@ function DnsSection() {
       {/* ── Header ─────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h2 className="text-base font-semibold text-gray-900">DNS-Einträge</h2>
-          <p className="text-xs text-gray-400 mt-0.5">
+          <h2 className="text-base font-semibold text-fg">DNS-Einträge</h2>
+          <p className="text-xs text-fg-subtle mt-0.5">
             Prüft alle für den Mailserver erforderlichen DNS-Einträge
           </p>
         </div>
         <button
           onClick={() => setCheckKey(k => k + 1)}
           disabled={!effectiveDomainId || checking}
-          className="flex items-center gap-1.5 text-sm text-accent border border-accent/30 hover:bg-accent/5 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-40"
+          className="flex items-center gap-1.5 text-sm text-accent-fg border border-accent/30 hover:bg-accent/5 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-40"
         >
           <RefreshCw size={13} className={checking ? 'animate-spin' : ''} />
           Prüfen
@@ -1387,8 +1230,8 @@ function DnsSection() {
               onClick={() => { setSelectedDomainId(d.id); setCheckKey(k => k + 1); }}
               className={`px-3 py-1.5 rounded-full text-sm font-medium border transition-all ${
                 d.id === effectiveDomainId
-                  ? 'bg-accent text-white border-accent'
-                  : 'bg-white text-gray-600 border-gray-200 hover:border-accent/40'
+                  ? 'bg-accent text-white border-accent-fg'
+                  : 'bg-surface text-fg-muted border-line hover:border-accent/40'
               }`}
             >
               {d.name}
@@ -1399,7 +1242,7 @@ function DnsSection() {
       )}
 
       {domains.length === 0 && (
-        <div className="card p-8 text-center text-sm text-gray-400">
+        <div className="card p-8 text-center text-sm text-fg-subtle">
           Keine Domains — bitte zuerst eine Domain unter <strong>Domains</strong> anlegen.
         </div>
       )}
@@ -1407,11 +1250,11 @@ function DnsSection() {
       {/* ── Status banner ──────────────────────────────────────────────── */}
       {dnsCheck && !checking && (
         <div className={`rounded-lg px-4 py-3 flex items-start gap-3 border ${
-          allOk && !hasWarn ? 'bg-green-50 border-green-200' : 'bg-yellow-50 border-yellow-200'
+          allOk && !hasWarn ? 'bg-success-bg border-success-line' : 'bg-warning-bg border-warning-line'
         }`}>
-          <span className={`w-3 h-3 rounded-full shrink-0 mt-0.5 ${allOk && !hasWarn ? 'bg-green-500' : 'bg-yellow-400'}`} />
+          <span className={`w-3 h-3 rounded-full shrink-0 mt-0.5 ${allOk && !hasWarn ? 'bg-success' : 'bg-warning'}`} />
           <div className="flex-1 min-w-0">
-            <p className={`text-sm font-semibold ${allOk && !hasWarn ? 'text-green-800' : 'text-yellow-800'}`}>
+            <p className={`text-sm font-semibold ${allOk && !hasWarn ? 'text-success-fg' : 'text-warning-fg'}`}>
               {allOk && !hasWarn
                 ? `Alle ${total} Einträge für ${dnsCheck.domain} sind korrekt gesetzt ✓`
                 : (() => {
@@ -1421,7 +1264,7 @@ function DnsSection() {
                     return `${okCount} von ${total} Einträgen gesetzt${parts.length ? ' — ' + parts.join(', ') : ''}`;
                   })()}
             </p>
-            <p className={`text-xs mt-0.5 ${allOk && !hasWarn ? 'text-green-700' : 'text-yellow-700'}`}>
+            <p className={`text-xs mt-0.5 ${allOk && !hasWarn ? 'text-success-fg' : 'text-warning-fg'}`}>
               Mailserver: <strong className="font-mono">{dnsCheck.hostname}</strong>
             </p>
           </div>
@@ -1430,13 +1273,13 @@ function DnsSection() {
 
       {/* ── DNS table ───────────────────────────────────────────────────── */}
       {domains.length > 0 && (
-        <div className="card divide-y divide-gray-100 overflow-hidden">
-          <div className="px-4 py-2 bg-gray-50 flex items-center gap-2">
-            <Globe size={12} className="text-gray-400" />
-            <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
+        <div className="card divide-y divide-line overflow-hidden">
+          <div className="px-4 py-2 bg-surface-2 flex items-center gap-2">
+            <Globe size={12} className="text-fg-subtle" />
+            <span className="text-[11px] font-semibold text-fg-subtle uppercase tracking-wider">
               {selectedDomain?.name ?? '…'}
             </span>
-            {checking && <Loader2 size={11} className="animate-spin text-gray-400 ml-auto" />}
+            {checking && <Loader2 size={11} className="animate-spin text-fg-subtle ml-auto" />}
           </div>
 
           <div className="px-4">
@@ -1464,17 +1307,17 @@ function DnsSection() {
       )}
 
       {/* ── Legend ─────────────────────────────────────────────────────── */}
-      <div className="flex items-center gap-5 text-xs text-gray-500 px-1 flex-wrap">
+      <div className="flex items-center gap-5 text-xs text-fg-subtle px-1 flex-wrap">
         <span className="flex items-center gap-1.5">
-          <span className="w-3 h-3 rounded-full bg-green-500 inline-block" /> Gesetzt
+          <span className="w-3 h-3 rounded-full bg-success inline-block" /> Gesetzt
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="w-3 h-3 rounded-full bg-yellow-400 inline-block" /> Warnung (Eintrag existiert, aber Wert weicht ab)
+          <span className="w-3 h-3 rounded-full bg-warning inline-block" /> Warnung (Eintrag existiert, aber Wert weicht ab)
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="w-3 h-3 rounded-full bg-red-500 inline-block" /> Nicht gefunden
+          <span className="w-3 h-3 rounded-full bg-danger inline-block" /> Nicht gefunden
         </span>
-        <span className="text-gray-400">· Prüfung über lokalen Resolver (kein Caching)</span>
+        <span className="text-fg-subtle">· Prüfung über lokalen Resolver (kein Caching)</span>
       </div>
     </div>
   );
@@ -1500,23 +1343,23 @@ export function SmtpConfigPage() {
       toast.success('SMTP-Einstellungen gespeichert');
       qc.invalidateQueries({ queryKey: ['admin', 'smtp-config', 'settings'] });
     },
-    onError: () => toast.error('Fehler beim Speichern'),
+    onError: (e) => toast.error(errorMessage(e, 'Fehler beim Speichern')),
   });
 
   return (
     <div className="flex h-full">
       {/* ── Left sub-nav ────────────────────────────────────────────────── */}
-      <aside className="w-44 shrink-0 bg-[#1e2433] flex flex-col h-full">
-        <div className="px-3 py-3 border-b border-white/10">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">SMTP-Konfiguration</p>
+      <aside className="w-44 shrink-0 bg-surface-2 border-r border-line flex flex-col h-full">
+        <div className="px-3 py-3 border-b border-line">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-fg-subtle">SMTP-Konfiguration</p>
         </div>
         <nav className="flex-1 py-2 space-y-0.5">
           {SUB_NAV.map(({ id, label, icon: Icon }) => (
             <button key={id} onClick={() => setSection(id)}
               className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left transition-colors ${
                 section === id
-                  ? 'bg-white/10 text-white border-l-2 border-accent'
-                  : 'text-gray-400 hover:bg-white/5 hover:text-gray-200'
+                  ? 'bg-surface-3 text-fg border-l-2 border-accent-fg'
+                  : 'text-fg-muted hover:bg-surface-3 hover:text-fg'
               }`}>
               <Icon size={13} className="shrink-0" />
               {label}
@@ -1532,17 +1375,16 @@ export function SmtpConfigPage() {
 
         {section !== 'dns' && (
           !settings ? (
-            <div className="text-sm text-gray-400">Lade SMTP-Einstellungen…</div>
+            <div className="text-sm text-fg-subtle">Lade SMTP-Einstellungen…</div>
           ) : (
-            <>
+            <WriteGuard area="servers">
               {section === 'esmtp'       && <EsmtpSection       s={settings} onSave={d => saveMut.mutate(d)} pending={saveMut.isPending} />}
               {section === 'delivery'    && <DeliverySection    s={settings} onSave={d => saveMut.mutate(d)} pending={saveMut.isPending} />}
               {section === 'outgoing'    && <OutgoingSection    s={settings} onSave={d => saveMut.mutate(d)} pending={saveMut.isPending} />}
               {section === 'banner'      && <BannerSection      s={settings} onSave={d => saveMut.mutate(d)} pending={saveMut.isPending} />}
               {section === 'greylisting' && <GreylistingSection s={settings} onSave={d => saveMut.mutate(d)} pending={saveMut.isPending} />}
-              {section === 'relaying'    && <RelayingSection    s={settings} onSave={d => saveMut.mutate(d)} pending={saveMut.isPending} />}
               {section === 'connection'  && <ConnectionSection  s={settings} onSave={d => saveMut.mutate(d)} pending={saveMut.isPending} />}
-            </>
+            </WriteGuard>
           )
         )}
       </div>

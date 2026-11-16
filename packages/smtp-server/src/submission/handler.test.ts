@@ -68,3 +68,21 @@ test('the envelope sender accepts aliases (shared sender policy)', async () => {
   assert.equal(await submissionHandlers.onMailFrom('robert@corp.test', '192.0.2.1', user), null);
   assert.match(String(await submissionHandlers.onMailFrom('ceo@corp.test', '192.0.2.1', user)), /^5\.7\.1/);
 });
+
+test('9.2 review: a client-supplied X-CoreMail-Virus-Scan is stripped on submission', async () => {
+  const { stripSubmittedInternalHeaders } = await import('./handler.js');
+  const forged = Buffer.from([
+    'From: bob@corp.test',
+    'X-CoreMail-Virus-Scan: infected; signature="Win.Test.EICAR_HDB-1";',
+    '  host=mail.corp.test',
+    'x-coremail-virus-scan: unscanned; reason=too-large; host=mail.corp.test',
+    'Subject: s', '', 'X-CoreMail-Virus-Scan: in the body stays', '',
+  ].join('\r\n'));
+  const out = stripSubmittedInternalHeaders(forged).toString();
+  const head = out.slice(0, out.indexOf('\r\n\r\n'));
+  assert.doesNotMatch(head, /virus-scan|host=mail/i, 'both copies incl. the folded line are removed');
+  assert.match(head, /^From: bob@corp\.test\r\nSubject: s$/);
+  assert.match(out, /\r\n\r\nX-CoreMail-Virus-Scan: in the body stays/);
+  const clean = Buffer.from('From: bob@corp.test\r\nSubject: s\r\n\r\nb\r\n');
+  assert.equal(stripSubmittedInternalHeaders(clean), clean, 'untouched when absent');
+});

@@ -19,10 +19,10 @@ function PasswordStrengthBar({ password, minLen }: { password: string; minLen: n
   if (!password) return null;
   return (
     <div className="mt-1 space-y-1">
-      <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden">
+      <div className="h-1.5 bg-surface-3 rounded-full overflow-hidden">
         <div className={`h-full rounded-full transition-all ${colors[score]} ${widths[score]}`} />
       </div>
-      {score > 0 && <p className="text-xs text-gray-500">{labels[score]}</p>}
+      {score > 0 && <p className="text-xs text-fg-subtle">{labels[score]}</p>}
     </div>
   );
 }
@@ -100,15 +100,15 @@ export function ResetPasswordPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-accent to-blue-800">
-      <div className="bg-white rounded-lg shadow-2xl p-8 w-full max-w-sm">
+      <div className="bg-surface rounded-lg shadow-2xl p-8 w-full max-w-sm">
         {/* Logo */}
         <div className="flex items-center justify-center gap-2 mb-6">
           <div className="w-10 h-10 bg-accent rounded-lg flex items-center justify-center">
             <KeyRound size={22} className="text-white" />
           </div>
           <div>
-            <h1 className="text-xl font-bold text-gray-900">{orgName}</h1>
-            <p className="text-xs text-gray-500">Neues Passwort setzen</p>
+            <h1 className="text-xl font-bold text-fg">{orgName}</h1>
+            <p className="text-xs text-fg-subtle">Neues Passwort setzen</p>
           </div>
         </div>
 
@@ -116,22 +116,22 @@ export function ResetPasswordPage() {
         {tokenValid === null && (
           <div className="text-center py-8">
             <div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin mx-auto" />
-            <p className="text-sm text-gray-500 mt-3">Link wird überprüft…</p>
+            <p className="text-sm text-fg-subtle mt-3">Link wird überprüft…</p>
           </div>
         )}
 
         {/* Token invalid */}
         {tokenValid === false && (
           <div className="text-center space-y-4">
-            <XCircle size={48} className="mx-auto text-red-500" />
-            <h2 className="font-semibold text-gray-900">Link ungültig oder abgelaufen</h2>
-            <p className="text-sm text-gray-600">
+            <XCircle size={48} className="mx-auto text-danger-fg" />
+            <h2 className="font-semibold text-fg">Link ungültig oder abgelaufen</h2>
+            <p className="text-sm text-fg-muted">
               Dieser Reset-Link ist nicht mehr gültig (Ablaufzeit: 15 Minuten) oder wurde bereits verwendet.
             </p>
             <Link to="/forgot-password" className="btn-primary w-full justify-center py-2 text-sm">
               Neuen Link anfordern
             </Link>
-            <Link to="/login" className="flex items-center justify-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 py-1">
+            <Link to="/login" className="flex items-center justify-center gap-1.5 text-sm text-fg-subtle hover:text-fg-muted py-1">
               <ArrowLeft size={13} /> Zurück zur Anmeldung
             </Link>
           </div>
@@ -140,9 +140,9 @@ export function ResetPasswordPage() {
         {/* Success */}
         {success && (
           <div className="text-center space-y-4">
-            <CheckCircle size={48} className="mx-auto text-green-500" />
-            <h2 className="font-semibold text-gray-900">Passwort geändert</h2>
-            <p className="text-sm text-gray-600">
+            <CheckCircle size={48} className="mx-auto text-success-fg" />
+            <h2 className="font-semibold text-fg">Passwort geändert</h2>
+            <p className="text-sm text-fg-muted">
               Ihr Passwort wurde erfolgreich zurückgesetzt. Sie werden zur Anmeldung weitergeleitet…
             </p>
           </div>
@@ -151,14 +151,14 @@ export function ResetPasswordPage() {
         {/* Form */}
         {tokenValid === true && !success && (
           <form onSubmit={handleSubmit} className="space-y-4">
-            <p className="text-sm text-gray-600">
+            <p className="text-sm text-fg-muted">
               Geben Sie Ihr neues Passwort ein. Die Mindestlänge legt Ihr Administrator fest.
             </p>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Neues Passwort</label>
+              <label className="block text-sm font-medium text-fg-muted mb-1">Neues Passwort</label>
               <div className="relative">
-                <Lock size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <Lock size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-subtle" />
                 <input
                   type={showPw ? 'text' : 'password'}
                   value={password}
@@ -172,7 +172,7 @@ export function ResetPasswordPage() {
                 <button aria-label={showPw ? 'Passwort verbergen' : 'Passwort anzeigen'}
                   type="button"
                   onClick={() => setShowPw((v) => !v)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-fg-subtle hover:text-fg-muted"
                 >
                   {showPw ? <EyeOff size={15} /> : <Eye size={15} />}
                 </button>
@@ -181,9 +181,9 @@ export function ResetPasswordPage() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Passwort bestätigen</label>
+              <label className="block text-sm font-medium text-fg-muted mb-1">Passwort bestätigen</label>
               <div className="relative">
-                <Lock size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <Lock size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-subtle" />
                 <input
                   type={showPw ? 'text' : 'password'}
                   value={confirm}
@@ -195,12 +195,12 @@ export function ResetPasswordPage() {
                 />
               </div>
               {confirm && password !== confirm && (
-                <p className="text-xs text-red-500 mt-1">Passwörter stimmen nicht überein</p>
+                <p className="text-xs text-danger-fg mt-1">Passwörter stimmen nicht überein</p>
               )}
             </div>
 
             {error && (
-              <div className="bg-red-50 border border-red-200 rounded px-3 py-2 text-sm text-red-700">
+              <div className="bg-danger-bg border border-danger-line rounded px-3 py-2 text-sm text-danger-fg">
                 {error}
               </div>
             )}

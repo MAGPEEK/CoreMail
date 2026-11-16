@@ -39,7 +39,7 @@ export function MiniCalendar({ selectedDate, onSelectDate }: Props) {
       <div className="flex items-center justify-between px-1 mb-2">
         <button
           onClick={() => setCursor(new Date())}
-          className="text-sm font-semibold text-gray-900 dark:text-gray-100 hover:text-accent transition-colors"
+          className="text-sm font-semibold text-fg hover:text-accent-fg transition-colors"
           title="Heute"
         >
           {format(cursor, 'MMMM yyyy', { locale: deLocale })}
@@ -47,14 +47,14 @@ export function MiniCalendar({ selectedDate, onSelectDate }: Props) {
         <div className="flex items-center gap-0.5">
           <button
             onClick={() => setCursor(addMonths(cursor, -1))}
-            className="p-1 rounded text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-all duration-150 active:scale-90"
+            className="p-1 rounded text-fg-muted hover:bg-surface-2 transition-all duration-150 active:scale-90"
             aria-label="Vorheriger Monat"
           >
             <ChevronUp size={14} />
           </button>
           <button
             onClick={() => setCursor(addMonths(cursor, 1))}
-            className="p-1 rounded text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-all duration-150 active:scale-90"
+            className="p-1 rounded text-fg-muted hover:bg-surface-2 transition-all duration-150 active:scale-90"
             aria-label="Nächster Monat"
           >
             <ChevronDown size={14} />
@@ -64,7 +64,7 @@ export function MiniCalendar({ selectedDate, onSelectDate }: Props) {
 
       {/* Day header */}
       <div
-        className="grid gap-0 text-[10px] font-medium text-gray-400 dark:text-gray-500 px-0.5"
+        className="grid gap-0 text-[10px] font-medium text-fg-subtle px-0.5"
         style={{ gridTemplateColumns: calendarShowWeekNumbers ? '0.7fr repeat(7, 1fr)' : 'repeat(7, 1fr)' }}
       >
         {calendarShowWeekNumbers && <div className="text-center" />}
@@ -82,7 +82,7 @@ export function MiniCalendar({ selectedDate, onSelectDate }: Props) {
           <div key={wi} className="contents">
             {/* Week number column */}
             {calendarShowWeekNumbers && (
-              <div className="flex items-center justify-center text-[10px] text-gray-400 dark:text-gray-500 py-1">
+              <div className="flex items-center justify-center text-[10px] text-fg-subtle py-1">
                 {getISOWeek(week[0]!)}
               </div>
             )}
@@ -99,10 +99,10 @@ export function MiniCalendar({ selectedDate, onSelectDate }: Props) {
                     isSelected
                       ? 'bg-accent text-white font-semibold shadow-sm'
                       : isToday
-                        ? 'ring-1 ring-accent text-accent font-semibold'
+                        ? 'ring-1 ring-accent-fg text-accent-fg font-semibold'
                         : inMonth
-                          ? 'text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800'
-                          : 'text-gray-300 dark:text-gray-600 hover:bg-gray-50 dark:hover:bg-gray-800/50'
+                          ? 'text-fg-muted hover:bg-surface-2'
+                          : 'text-fg-subtle hover:bg-surface-2'
                   }`}
                 >
                   {format(d, 'd')}

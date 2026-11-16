@@ -3,12 +3,14 @@ import { useQuery } from '@tanstack/react-query';
 import {
   ClipboardList, Download, FileText, RefreshCw,
   CheckCircle2, XCircle, Info, X, AlertTriangle,
-  Activity, Users, BarChart3, Code2,
+  Activity, Users, BarChart3, Code2, ShieldCheck, Copy, Loader2,
 } from 'lucide-react';
-import { api, downloadFile } from '../api/client.js';
+import { api, apiFetch, saveBlob } from '../api/client.js';
 import toast from 'react-hot-toast';
 import { useT } from '../i18n/useT.js';
 import { DataTable, type Column } from '../components/DataTable.js';
+import { apiErrorFromBody } from '../lib/errors.js';
+import { dayEndIso, dayStartIso, signatureFromHeader } from '../lib/auditFilters.js';
 
 // v3.18.34: AnomaliesResponse interface + banner removed — the red banners were
 // confusing in practice (showed e.g. one's own settings changes as
@@ -59,13 +61,71 @@ function fmtDt(iso: string) {
   });
 }
 
-/** Convert a YYYY-MM-DD value to ISO at start-of-day UTC. */
-function dateFromIso(d: string): string {
-  return new Date(d + 'T00:00:00.000Z').toISOString();
-}
-/** Convert a YYYY-MM-DD value to ISO at end-of-day UTC. */
-function dateToIso(d: string): string {
-  return new Date(d + 'T23:59:59.999Z').toISOString();
+/**
+ * Check an export file against its signature (POST /admin/audit-log/verify-export,
+ * raw bytes). The signature is the X-CoreMail-Signature value of the export.
+ */
+function VerifyExportPanel({ lastSignature }: { lastSignature: string | null }) {
+  const t = useT();
+  const [file, setFile] = useState<File | null>(null);
+  const [signature, setSignature] = useState('');
+  const [result, setResult] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function verify() {
+    if (!file || !signature.trim() || busy) return;
+    setBusy(true); setResult(null);
+    try {
+      const res = await apiFetch('/admin/audit-log/verify-export', {
+        method: 'POST', body: file, headers: { 'X-CoreMail-Signature': signature.trim() },
+      }, 'application/octet-stream');
+      const body = await res.json().catch(() => ({})) as { valid?: boolean };
+      if (!res.ok) throw apiErrorFromBody(body, res.status);
+      setResult(body.valid === true);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mb-4 bg-surface border border-line rounded-lg p-4 space-y-3">
+      <div className="flex items-center gap-2">
+        <ShieldCheck size={16} className="text-fg-subtle" aria-hidden="true" />
+        <h2 className="text-sm font-semibold text-fg">{t('audit_verify_title')}</h2>
+      </div>
+      <p className="text-xs text-fg-subtle">{t('audit_verify_hint')}</p>
+      {lastSignature && (
+        <div className="flex items-center gap-2 text-xs">
+          <span className="text-fg-subtle shrink-0">{t('audit_last_signature')}</span>
+          <code className="font-mono text-fg-muted bg-surface-2 px-1.5 py-0.5 rounded truncate">{lastSignature}</code>
+          <button type="button" className="p-1 rounded text-fg-subtle hover:text-fg hover:bg-surface-2"
+            aria-label={t('audit_copy_signature')} title={t('audit_copy_signature')}
+            onClick={() => { void navigator.clipboard?.writeText(lastSignature).then(() => toast.success(t('audit_copy_signature'))); }}>
+            <Copy size={12} aria-hidden="true" />
+          </button>
+        </div>
+      )}
+      <div className="flex flex-wrap items-center gap-2">
+        <input type="file" accept=".csv,.json,.pdf" aria-label={t('audit_verify_file')} className="text-xs text-fg-muted"
+          onChange={(e) => { setFile(e.target.files?.[0] ?? null); setResult(null); }} />
+        <input value={signature} onChange={(e) => { setSignature(e.target.value); setResult(null); }}
+          className="input flex-1 min-w-64 font-mono text-xs" placeholder="hmac-sha256=…" aria-label={t('audit_verify_sig')} />
+        <button type="button" onClick={() => void verify()} disabled={!file || !signature.trim() || busy}
+          className="btn-secondary text-xs flex items-center gap-1.5 disabled:cursor-not-allowed">
+          {busy ? <Loader2 size={13} className="animate-spin" aria-hidden="true" /> : <ShieldCheck size={13} aria-hidden="true" />}
+          {t('audit_verify_btn')}
+        </button>
+      </div>
+      {result !== null && (
+        <p role="status" className={`flex items-center gap-1.5 text-xs font-medium ${result ? 'text-success-fg' : 'text-danger-fg'}`}>
+          {result ? <CheckCircle2 size={14} aria-hidden="true" /> : <XCircle size={14} aria-hidden="true" />}
+          {result ? t('audit_verify_valid') : t('audit_verify_invalid')}
+        </p>
+      )}
+    </div>
+  );
 }
 
 // v3.18.30: Human-readable action labels. The audit middleware writes the pattern
@@ -105,12 +165,6 @@ const ACTION_MAP: Record<string, ActionMeta> = {
   'auth.mfa_enabled':             { label: 'MFA aktiviert',                  tone: 'create' },
   'auth.mfa_disabled':            { label: 'MFA deaktiviert',                tone: 'critical' },
   'session.revoke':               { label: 'Session widerrufen',             tone: 'delete' },
-  // OAuth
-  'oauth.token_issued':           { label: 'OAuth-Token ausgestellt',        tone: 'auth' },
-  'oauth.token_revoked':          { label: 'OAuth-Token widerrufen',         tone: 'delete' },
-  'oauth.client.post':            { label: 'OAuth-Client angelegt',          tone: 'create' },
-  'oauth.client.put':             { label: 'OAuth-Client geändert',          tone: 'update' },
-  'oauth.client.delete':          { label: 'OAuth-Client gelöscht',          tone: 'delete' },
   // Backups (v3.18.34: extended action paths)
   'backups.post':                 { label: 'Backup gestartet',               tone: 'create' },
   'backups.delete':               { label: 'Backup gelöscht',                tone: 'delete' },
@@ -137,7 +191,6 @@ const ACTION_MAP: Record<string, ActionMeta> = {
   'rule.create':                  { label: 'Regel angelegt',                 tone: 'create' },
   'rule.update':                  { label: 'Regel geändert',                 tone: 'update' },
   'rule.delete':                  { label: 'Regel gelöscht',                 tone: 'delete' },
-  'journaling.rule_created':      { label: 'Journaling-Regel angelegt',      tone: 'create' },
   'retention.run':                { label: 'Aufbewahrung ausgeführt',        tone: 'update' },
   // Roles
   'user.role':                    { label: 'Rolle geändert',                 tone: 'critical' },
@@ -145,7 +198,14 @@ const ACTION_MAP: Record<string, ActionMeta> = {
   // Gateway
   'gateway.settings_updated':     { label: 'SMTP-Gateway konfiguriert',      tone: 'update' },
   // v3.18.34: Audit-Log (sensitive GETs)
-  'audit-log.export.get':         { label: 'Audit-Log exportiert',           tone: 'read' },
+  'audit-log.export.csv.get':     { label: 'Audit-Log exportiert (CSV)',     tone: 'read' },
+  'audit-log.export.json.get':    { label: 'Audit-Log exportiert (JSON)',    tone: 'read' },
+  'audit-log.export.pdf.get':     { label: 'Audit-Log exportiert (PDF)',     tone: 'read' },
+  'audit-log.verify-export.post': { label: 'Export-Signatur geprüft',        tone: 'read' },
+  'message-trace.export.get':     { label: 'Nachrichtenverfolgung exportiert', tone: 'read' },
+  'mailbox.sessions.revoke':      { label: 'Sitzungen abgemeldet',           tone: 'delete' },
+  'quarantine.release':           { label: 'Quarantäne-Mail freigegeben',    tone: 'update' },
+  'backup.archive.download':      { label: 'Backup-Archiv heruntergeladen',  tone: 'read' },
   'audit-log.anomalies.get':      { label: 'Anomalien-Report abgerufen',     tone: 'read' },
   // v3.18.37: Legacy action strings (before the v3.18.34 path fix — sub-router mutation)
   'anomalies.get':                { label: 'Anomalien-Report abgerufen',     tone: 'read' },
@@ -168,8 +228,6 @@ const ACTION_MAP: Record<string, ActionMeta> = {
   'upload.post':                  { label: 'Zertifikat hochgeladen',         tone: 'create' },
   'self-signed.post':             { label: 'Selbst-signiertes Zertifikat erzeugt', tone: 'create' },
   'regenerate-dkim.post':         { label: 'DKIM-Schlüssel neu erzeugt',     tone: 'update' },
-  'members.post':                 { label: 'Gruppenmitglied hinzugefügt',    tone: 'create' },
-  'members.delete':               { label: 'Gruppenmitglied entfernt',       tone: 'delete' },
   'make-primary.post':            { label: 'Primäre Domain gesetzt',         tone: 'update' },
   'dkim-record.get':              { label: 'DKIM DNS-Eintrag abgerufen',     tone: 'read' },
   'dns-check.get':                { label: 'DNS-Einrichtung geprüft',        tone: 'read' },
@@ -206,12 +264,7 @@ const ACTION_MAP: Record<string, ActionMeta> = {
   'smtp-config.settings.get':            { label: 'SMTP-Outbound-Konfiguration abgerufen',  tone: 'read' },
   'smtp-config.settings.put':            { label: 'SMTP-Outbound-Konfiguration geändert',   tone: 'update' },
   'smtp-config.test-smarthost.post':     { label: 'Smarthost-Verbindung getestet',          tone: 'read' },
-  // v3.18.34: Groups, aliases, mailboxes (submenus)
-  'groups.post':                  { label: 'Verteilergruppe angelegt',       tone: 'create' },
-  'groups.put':                   { label: 'Verteilergruppe geändert',       tone: 'update' },
-  'groups.delete':                { label: 'Verteilergruppe gelöscht',       tone: 'delete' },
-  'groups.members.post':          { label: 'Gruppenmitglied hinzugefügt',    tone: 'create' },
-  'groups.members.delete':        { label: 'Gruppenmitglied entfernt',       tone: 'delete' },
+  // v3.18.34: aliases, Shared Mailboxes (submenus)
   'aliases.post':                 { label: 'E-Mail-Alias angelegt',          tone: 'create' },
   'aliases.delete':               { label: 'E-Mail-Alias gelöscht',          tone: 'delete' },
   'shared-mailboxes.post':        { label: 'Shared Mailbox angelegt',        tone: 'create' },
@@ -225,10 +278,6 @@ const ACTION_MAP: Record<string, ActionMeta> = {
   'quarantine.delete':            { label: 'Quarantäne-Mail gelöscht',       tone: 'delete' },
   'queues.flush.post':            { label: 'Warteschlange geleert',          tone: 'update' },
   'queues.retry.post':            { label: 'Warteschlange erneut versucht',  tone: 'update' },
-  // v3.18.34: OAuth Clients (Sub-Routes)
-  'oauth.clients.post':           { label: 'OAuth-Client angelegt',          tone: 'create' },
-  'oauth.clients.put':            { label: 'OAuth-Client geändert',          tone: 'update' },
-  'oauth.clients.delete':         { label: 'OAuth-Client gelöscht',          tone: 'delete' },
 };
 
 function actionMeta(action: string): ActionMeta {
@@ -244,12 +293,12 @@ function actionMeta(action: string): ActionMeta {
 
 function ActionBadge({ action }: { action: string }) {
   const meta = actionMeta(action);
-  const color = meta.tone === 'create'   ? 'bg-green-100 text-green-700'
-              : meta.tone === 'delete'   ? 'bg-red-100 text-red-700'
-              : meta.tone === 'update'   ? 'bg-blue-100 text-blue-700'
-              : meta.tone === 'auth'     ? 'bg-purple-100 text-purple-700'
-              : meta.tone === 'critical' ? 'bg-amber-100 text-amber-800 border border-amber-200'
-              : 'bg-gray-100 text-gray-600';
+  const color = meta.tone === 'create'   ? 'bg-success-bg text-success-fg'
+              : meta.tone === 'delete'   ? 'bg-danger-bg text-danger-fg'
+              : meta.tone === 'update'   ? 'bg-info-bg text-info-fg'
+              : meta.tone === 'auth'     ? 'bg-info-bg text-info-fg'
+              : meta.tone === 'critical' ? 'bg-warning-bg text-warning-fg border border-warning-line'
+              : 'bg-surface-2 text-fg-muted';
   return (
     <span
       className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${color}`}
@@ -269,18 +318,18 @@ function KpiCard({
   accent: string;
 }) {
   return (
-    <div className="bg-white border border-gray-200 rounded-lg p-4">
+    <div className="bg-surface border border-line rounded-lg p-4">
       <div className="flex items-center justify-between mb-2">
-        <span className="text-xs text-gray-500 uppercase tracking-wide">{label}</span>
+        <span className="text-xs text-fg-subtle uppercase tracking-wide">{label}</span>
         <Icon size={16} className={accent} />
       </div>
-      <div className="text-2xl font-semibold text-gray-900">{value}</div>
+      <div className="text-2xl font-semibold text-fg">{value}</div>
     </div>
   );
 }
 
 function TopList({
-  title, icon: Icon, items, valueColor = 'bg-blue-500',
+  title, icon: Icon, items, valueColor = 'bg-accent',
 }: {
   title: string;
   icon: typeof Users;
@@ -289,25 +338,25 @@ function TopList({
 }) {
   const max = items.length > 0 ? items[0]!.count : 1;
   return (
-    <div className="bg-white border border-gray-200 rounded-lg p-4">
+    <div className="bg-surface border border-line rounded-lg p-4">
       <div className="flex items-center gap-2 mb-3">
-        <Icon size={16} className="text-gray-500" />
-        <h3 className="text-sm font-semibold text-gray-800">{title}</h3>
+        <Icon size={16} className="text-fg-subtle" />
+        <h3 className="text-sm font-semibold text-fg">{title}</h3>
       </div>
       {items.length === 0 ? (
-        <p className="text-xs text-gray-400">—</p>
+        <p className="text-xs text-fg-subtle">—</p>
       ) : (
         <div className="space-y-1.5">
           {items.map((it) => (
             <div key={it.label} className="flex items-center gap-2 text-xs">
-              <div className="w-44 truncate text-gray-700" title={it.label}>{it.label || '(unknown)'}</div>
-              <div className="flex-1 bg-gray-100 rounded-full h-1.5 overflow-hidden">
+              <div className="w-44 truncate text-fg-muted" title={it.label}>{it.label || '(unknown)'}</div>
+              <div className="flex-1 bg-surface-2 rounded-full h-1.5 overflow-hidden">
                 <div
                   className={`${valueColor} h-full`}
                   style={{ width: `${Math.max(2, (it.count / max) * 100)}%` }}
                 />
               </div>
-              <div className="w-10 text-right font-mono text-gray-600">{it.count}</div>
+              <div className="w-10 text-right font-mono text-fg-muted">{it.count}</div>
             </div>
           ))}
         </div>
@@ -341,8 +390,10 @@ export function AuditLogPage() {
     if (filters.actorEmail)  p.set('actorEmail', filters.actorEmail);
     if (filters.ipAddress)   p.set('ipAddress', filters.ipAddress);
     if (filters.searchText)  p.set('searchText', filters.searchText);
-    if (filters.from)        p.set('from', dateFromIso(filters.from));
-    if (filters.to)          p.set('to', dateToIso(filters.to));
+    const from = dayStartIso(filters.from);
+    const to = dayEndIso(filters.to);
+    if (from)                p.set('from', from);
+    if (to)                  p.set('to', to);
     if (filters.success !== '') p.set('success', filters.success);
     return p;
   };
@@ -364,11 +415,24 @@ export function AuditLogPage() {
   // v3.18.34: Anomalies query removed — banner was too noisy
 
   // Fetch-to-blob with the Authorization header — no ?token= in URLs (logs/history)
-  const handleExport = (format: 'csv' | 'pdf' | 'json') => {
-    const params = buildParams();
-    const stamp = new Date().toISOString().slice(0, 10);
-    downloadFile(`/admin/audit-log/export.${format}?${params.toString()}`, `audit-log-${stamp}.${format}`)
-      .catch((err: unknown) => toast.error(err instanceof Error ? err.message : 'Export fehlgeschlagen'));
+  // The signature header is kept so the admin can copy it for a later check.
+  const [exporting, setExporting] = useState<'csv' | 'pdf' | 'json' | null>(null);
+  const [lastSignature, setLastSignature] = useState<string | null>(null);
+  const handleExport = async (format: 'csv' | 'pdf' | 'json') => {
+    if (exporting) return;
+    setExporting(format);
+    try {
+      const params = buildParams();
+      const res = await apiFetch(`/admin/audit-log/export.${format}?${params.toString()}`, {}, null);
+      if (!res.ok) throw apiErrorFromBody(await res.json().catch(() => ({ error: res.statusText })), res.status);
+      const stamp = new Date().toISOString().slice(0, 10);
+      saveBlob(await res.blob(), `audit-log-${stamp}.${format}`);
+      setLastSignature(signatureFromHeader(res.headers.get('x-coremail-signature')));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Export fehlgeschlagen');
+    } finally {
+      setExporting(null);
+    }
   };
 
   const dismissNotice = () => {
@@ -393,32 +457,32 @@ export function AuditLogPage() {
   const s = stats.data;
 
   const columns: Column<AuditEntry>[] = [
-    { key: 'ts', header: 'Zeitpunkt', className: 'text-xs text-gray-600 whitespace-nowrap', cell: (e) => fmtDt(e.timestamp) },
+    { key: 'ts', header: 'Zeitpunkt', className: 'text-xs text-fg-muted whitespace-nowrap', cell: (e) => fmtDt(e.timestamp) },
     {
       key: 'actor', header: 'Akteur',
       cell: (e) => (
         // v3.18.37: Fallback when actorEmail is empty (e.g. cron jobs, system actions)
-        <p className="text-gray-900 text-xs font-medium">
-          {e.actorEmail || (e.actorId ? <span className="text-gray-400 italic">System ({e.actorId.slice(0, 8)}…)</span> : <span className="text-gray-400 italic">System</span>)}
+        <p className="text-fg text-xs font-medium">
+          {e.actorEmail || (e.actorId ? <span className="text-fg-subtle italic">System ({e.actorId.slice(0, 8)}…)</span> : <span className="text-fg-subtle italic">System</span>)}
         </p>
       ),
     },
     { key: 'action', header: 'Aktion', cell: (e) => <ActionBadge action={e.action} /> },
     {
-      key: 'target', header: 'Ziel', className: 'text-xs text-gray-600',
+      key: 'target', header: 'Ziel', className: 'text-xs text-fg-muted',
       cell: (e) => (
         <>
-          <span className="text-gray-400">{e.targetType}</span>
-          {e.targetName && <span className="ml-1 text-gray-700">{e.targetName}</span>}
+          <span className="text-fg-subtle">{e.targetType}</span>
+          {e.targetName && <span className="ml-1 text-fg-muted">{e.targetName}</span>}
         </>
       ),
     },
-    { key: 'ip', header: 'IP', className: 'text-xs text-gray-500 font-mono', cell: (e) => e.ipAddress ?? '—' },
+    { key: 'ip', header: 'IP', className: 'text-xs text-fg-subtle font-mono', cell: (e) => e.ipAddress ?? '—' },
     {
       key: 'ok', header: 'Status', headerClassName: 'text-center', className: 'text-center',
       cell: (e) => e.success
-        ? <CheckCircle2 size={15} className="text-green-500 mx-auto" aria-label="Erfolgreich" />
-        : <XCircle size={15} className="text-red-500 mx-auto" aria-label="Fehlgeschlagen" />,
+        ? <CheckCircle2 size={15} className="text-success-fg mx-auto" aria-label="Erfolgreich" />
+        : <XCircle size={15} className="text-danger-fg mx-auto" aria-label="Fehlgeschlagen" />,
     },
   ];
 
@@ -427,24 +491,24 @@ export function AuditLogPage() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
-          <ClipboardList size={22} className="text-accent" />
+          <ClipboardList size={22} className="text-accent-fg" />
           <div>
-            <h1 className="text-xl font-semibold text-gray-900">Audit-Log</h1>
-            <p className="text-sm text-gray-500">Alle Admin-Aktionen protokolliert</p>
+            <h1 className="text-xl font-semibold text-fg">Audit-Log</h1>
+            <p className="text-sm text-fg-subtle">Alle Admin-Aktionen protokolliert</p>
           </div>
         </div>
         <div className="flex gap-2">
-          <button onClick={() => handleExport('csv')}
-            className="flex items-center gap-1.5 px-3 py-2 text-sm text-gray-700 border border-gray-300 rounded hover:bg-gray-50">
-            <Download size={14} /> {t('audit_export_csv')}
+          <button onClick={() => void handleExport('csv')} disabled={exporting !== null}
+            className="flex items-center gap-1.5 px-3 py-2 text-sm text-fg-muted border border-line-strong rounded hover:bg-surface-2 disabled:cursor-wait">
+            {exporting === 'csv' ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} {t('audit_export_csv')}
           </button>
-          <button onClick={() => handleExport('pdf')}
-            className="flex items-center gap-1.5 px-3 py-2 text-sm text-gray-700 border border-gray-300 rounded hover:bg-gray-50"
+          <button onClick={() => void handleExport('pdf')} disabled={exporting !== null}
+            className="flex items-center gap-1.5 px-3 py-2 text-sm text-fg-muted border border-line-strong rounded hover:bg-surface-2 disabled:cursor-wait"
             title="PDF — signiert mit HMAC-SHA256 (siehe X-CoreMail-Signature-Header)">
-            <FileText size={14} /> PDF
+            {exporting === 'pdf' ? <Loader2 size={14} className="animate-spin" /> : <FileText size={14} />} PDF
           </button>
-          <button onClick={() => handleExport('json')}
-            className="flex items-center gap-1.5 px-3 py-2 text-sm text-gray-700 border border-gray-300 rounded hover:bg-gray-50"
+          <button onClick={() => void handleExport('json')} disabled={exporting !== null}
+            className="flex items-center gap-1.5 px-3 py-2 text-sm text-fg-muted border border-line-strong rounded hover:bg-surface-2 disabled:cursor-wait"
             title="JSON — signiert mit HMAC-SHA256, für SIEM-Integration (Splunk, Azure Sentinel, ELK)">
             <Code2 size={14} /> JSON
           </button>
@@ -457,45 +521,47 @@ export function AuditLogPage() {
 
       {/* Immutability notice + signature hint */}
       {!noticeDismissed && (
-        <div className="mb-4 flex items-start gap-2 bg-blue-50 border border-blue-200 text-blue-900 rounded px-3 py-2 text-xs">
-          <Info size={14} className="text-blue-500 shrink-0 mt-0.5" />
+        <div className="mb-4 flex items-start gap-2 bg-info-bg border border-info-line text-info-fg rounded px-3 py-2 text-xs">
+          <Info size={14} className="text-info-fg shrink-0 mt-0.5" />
           <span className="flex-1">
             {t('audit_immutable_notice')}
             {' '}<strong>Exports sind kryptografisch signiert:</strong> Der HTTP-Response-Header
-            <code className="mx-1 font-mono bg-white px-1 rounded">X-CoreMail-Signature: hmac-sha256=…</code>
+            <code className="mx-1 font-mono bg-surface px-1 rounded">X-CoreMail-Signature: hmac-sha256=…</code>
             enthält einen HMAC-SHA256 über den exakten Datei-Inhalt, berechnet mit einem
-            Server-Schlüssel (abgeleitet aus JWT_SECRET + PEPPER). Eine veränderte Datei lässt
-            sich ohne diesen Schlüssel nicht neu signieren; die Prüfung erfolgt daher
-            serverseitig bzw. durch den Betreiber mit dem Schlüssel — ein einfacher
-            <code className="mx-1 font-mono bg-white px-1 rounded">shasum</code>-Vergleich passt nicht mehr.
+            Server-Schlüssel (AUDIT_EXPORT_SIGNING_KEY, sonst abgeleitet aus JWT_SECRET + PEPPER).
+            Eine veränderte Datei lässt sich ohne diesen Schlüssel nicht neu signieren; geprüft
+            wird unten mit „{t('audit_verify_btn')}" — ein einfacher
+            <code className="mx-1 font-mono bg-surface px-1 rounded">shasum</code>-Vergleich passt nicht.
           </span>
-          <button onClick={dismissNotice} className="text-blue-500 hover:text-blue-700" aria-label="Dismiss">
+          <button onClick={dismissNotice} className="text-info-fg hover:text-info-fg" aria-label="Dismiss">
             <X size={14} />
           </button>
         </div>
       )}
 
+      <VerifyExportPanel lastSignature={lastSignature} />
+
       {/* Statistics dashboard */}
       {s && (
         <div className="mb-6 space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-            <KpiCard icon={Activity}      label={t('audit_stat_total')}        value={s.totalEntries.toLocaleString('de-DE')} accent="text-gray-400" />
-            <KpiCard icon={Activity}      label={t('audit_stat_24h')}          value={s.last24h.toLocaleString('de-DE')}      accent="text-blue-500" />
-            <KpiCard icon={Activity}      label={t('audit_stat_7d')}           value={s.last7d.toLocaleString('de-DE')}       accent="text-indigo-500" />
-            <KpiCard icon={AlertTriangle} label={t('audit_stat_failure_rate')} value={`${(s.failureRate * 100).toFixed(2)}%`} accent="text-red-500" />
+            <KpiCard icon={Activity}      label={t('audit_stat_total')}        value={s.totalEntries.toLocaleString('de-DE')} accent="text-fg-subtle" />
+            <KpiCard icon={Activity}      label={t('audit_stat_24h')}          value={s.last24h.toLocaleString('de-DE')}      accent="text-info-fg" />
+            <KpiCard icon={Activity}      label={t('audit_stat_7d')}           value={s.last7d.toLocaleString('de-DE')}       accent="text-info-fg" />
+            <KpiCard icon={AlertTriangle} label={t('audit_stat_failure_rate')} value={`${(s.failureRate * 100).toFixed(2)}%`} accent="text-danger-fg" />
           </div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
             <TopList
               title={t('audit_top_actors')}
               icon={Users}
               items={s.topActors.map(a => ({ label: a.actorEmail, count: a.count }))}
-              valueColor="bg-blue-500"
+              valueColor="bg-accent"
             />
             <TopList
               title={t('audit_top_actions')}
               icon={BarChart3}
               items={s.topActions.map(a => ({ label: a.action, count: a.count }))}
-              valueColor="bg-indigo-500"
+              valueColor="bg-info-fg"
             />
           </div>
         </div>
@@ -504,15 +570,15 @@ export function AuditLogPage() {
       {/* Additional filters (server-side, like every filter of this list) */}
       <div className="flex flex-wrap gap-2 mb-3">
         <input value={filters.actorEmail} onChange={e => setFilter('actorEmail', e.target.value)}
-          className="border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent w-56"
+          className="border border-line-strong rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent-fg w-56"
           placeholder={t('audit_filter_actor_email')} aria-label={t('audit_filter_actor_email')} />
         <input value={filters.ipAddress} onChange={e => setFilter('ipAddress', e.target.value)}
-          className="border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent w-44"
+          className="border border-line-strong rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent-fg w-44"
           placeholder={t('audit_filter_ip')} aria-label={t('audit_filter_ip')} />
         <input type="date" value={filters.from} onChange={e => setFilter('from', e.target.value)} aria-label="Von"
-          className="border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent" />
+          className="border border-line-strong rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent-fg" />
         <input type="date" value={filters.to} onChange={e => setFilter('to', e.target.value)} aria-label="Bis"
-          className="border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent" />
+          className="border border-line-strong rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent-fg" />
         {hasAnyFilter && (
           <button
             onClick={() => {
@@ -522,7 +588,7 @@ export function AuditLogPage() {
               });
               setOffset(0);
             }}
-            className="px-3 py-1.5 text-xs text-gray-500 border border-gray-200 rounded hover:bg-gray-50">
+            className="px-3 py-1.5 text-xs text-fg-subtle border border-line rounded hover:bg-surface-2">
             Filter zurücksetzen
           </button>
         )}
@@ -561,19 +627,19 @@ export function AuditLogPage() {
         )}
         renderExpanded={(e) => expandedId === e.id ? (
           <div className="grid grid-cols-3 gap-2 text-xs">
-            {e.targetId && <div><span className="text-gray-500">Ziel-ID: </span><span className="font-mono text-gray-700">{e.targetId}</span></div>}
-            {e.actorId && <div><span className="text-gray-500">Akteur-ID: </span><span className="font-mono text-gray-700">{e.actorId}</span></div>}
+            {e.targetId && <div><span className="text-fg-subtle">Ziel-ID: </span><span className="font-mono text-fg-muted">{e.targetId}</span></div>}
+            {e.actorId && <div><span className="text-fg-subtle">Akteur-ID: </span><span className="font-mono text-fg-muted">{e.actorId}</span></div>}
             {e.userAgent && (
               <div className="col-span-3">
-                <span className="text-gray-500">User-Agent: </span>
-                <span className="font-mono text-gray-700 break-all">{e.userAgent}</span>
+                <span className="text-fg-subtle">User-Agent: </span>
+                <span className="font-mono text-fg-muted break-all">{e.userAgent}</span>
               </div>
             )}
-            {e.errorMsg && <div className="col-span-3"><span className="text-red-500">Fehler: </span><span className="text-gray-700">{e.errorMsg}</span></div>}
+            {e.errorMsg && <div className="col-span-3"><span className="text-danger-fg">Fehler: </span><span className="text-fg-muted">{e.errorMsg}</span></div>}
             {e.changes && Object.keys(e.changes).length > 0 && (
               <div className="col-span-3">
-                <span className="text-gray-500">Änderungen: </span>
-                <pre className="inline text-gray-700 text-xs">{JSON.stringify(e.changes, null, 2)}</pre>
+                <span className="text-fg-subtle">Änderungen: </span>
+                <pre className="inline text-fg-muted text-xs">{JSON.stringify(e.changes, null, 2)}</pre>
               </div>
             )}
           </div>

@@ -8,7 +8,7 @@ import { prisma } from '@coremail/storage';
 import {
   authenticateMail, dmarcDisposition, applyDmarcPct, isDomainAuthenticated, addressDomain, type AuthResult,
 } from '../spf-dkim/index.js';
-import { scanBuffer as clamavScan, type ClamavResult } from '../clamav/index.js';
+import { scanBuffer as clamavScan, classifySignature, type ClamavResult, type ScanOptions } from '../clamav/index.js';
 import { scanMessage as rspamdScan } from '../rspamd/index.js';
 import { checkBlacklist } from '../blacklist/index.js';
 import { checkAttachments } from '../attachment/index.js';
@@ -49,6 +49,28 @@ export interface PipelineConfig {
   clamavAction?: 'quarantine' | 'reject' | 'pass';
   /** SecuritySettings.clamavBlockOnFailure — scan error → defer (4xx) instead of accept (default false) */
   clamavBlockOnFailure?: boolean;
+  /** SecuritySettings.clamavTimeoutSec in ms (default 20 000) */
+  clamavTimeoutMs?: number;
+  /** SecuritySettings.clamavScanLimitMb in bytes — larger messages are not sent to clamd (default 50 MB) */
+  clamavScanLimitBytes?: number;
+  /** SecuritySettings.clamavOversizeAction — not scanned because of size: accept (tagged) | reject (default accept) */
+  clamavOversizeAction?: 'accept' | 'reject';
+  /** Treat Heuristics.* results as a virus (default true); false → deliver, tagged "suspicious" */
+  clamavHeuristicsAsVirus?: boolean;
+  /** Treat PUA.* results as a virus (default true) */
+  clamavPuaAsVirus?: boolean;
+  /** Treat Heuristics.Encrypted.* results as a virus (default true) */
+  clamavEncryptedAsVirus?: boolean;
+}
+
+/**
+ * Virus-scan note for a message that is delivered or quarantined without a
+ * clean scan. smtp-server writes it as the `X-CoreMail-Virus-Scan` header.
+ */
+export interface VirusScanNote {
+  status: 'infected' | 'suspicious' | 'unscanned';
+  signature?: string;
+  reason?: 'too-large' | 'scanner-error';
 }
 
 export interface PipelineResult {
@@ -65,6 +87,8 @@ export interface PipelineResult {
   authHeaders?: string;
   /** Domains the message is authenticated for (DMARC/SPF/DKIM pass) — used by iTIP. */
   verifiedDomains?: string[];
+  /** Set when the message was not scanned clean (see VirusScanNote). */
+  virusScan?: VirusScanNote;
 }
 
 export interface ConnectionContext {
@@ -96,7 +120,7 @@ export interface PipelineDeps {
   authenticate: typeof authenticateMail;
   blacklist: typeof checkBlacklist;
   parse: typeof parseRawMessage;
-  clamav: (raw: Buffer) => Promise<ClamavResult>;
+  clamav: (raw: Buffer, opts?: ScanOptions) => Promise<ClamavResult>;
   rspamd: typeof rspamdScan;
   /** Is the domain one of ours (active Domain row)? */
   isLocalDomain: (domain: string) => Promise<boolean>;
@@ -124,22 +148,80 @@ const defaultDeps: PipelineDeps = {
  *  - scan error            → defer (451) when clamavBlockOnFailure, else continue
  */
 export function decideClamav(result: ClamavResult, config: PipelineConfig): PipelineResult | null {
+  return evaluateClamav(result, config).decision;
+}
+
+/** Is a FOUND result with this signature treated as a virus under the config? */
+export function clamavCountsAsVirus(signature: string | undefined, config: PipelineConfig): boolean {
+  switch (classifySignature(signature)) {
+    case 'encrypted': return config.clamavEncryptedAsVirus !== false;
+    case 'pua':       return config.clamavPuaAsVirus !== false;
+    case 'heuristic': return config.clamavHeuristicsAsVirus !== false;
+    default:          return true;
+  }
+}
+
+/**
+ * Pure: full ClamAV policy. `decision` stops the pipeline (null = continue);
+ * `note` travels with a message that continues or is quarantined without a
+ * clean scan (X-CoreMail-Virus-Scan header).
+ *  - infected, counted as virus → clamavAction (quarantine | reject | pass = deliver, tagged)
+ *  - infected, category not counted (Heuristics/PUA/Encrypted switched off) → deliver, tagged "suspicious"
+ *  - oversize → clamavOversizeAction (reject = 552-class reject | accept = deliver, tagged)
+ *  - error    → defer (451) when clamavBlockOnFailure, else deliver, tagged
+ */
+export function evaluateClamav(
+  result: ClamavResult,
+  config: PipelineConfig,
+): { decision: PipelineResult | null; note?: VirusScanNote } {
+  const sig = result.virusName ? { signature: result.virusName } : {};
   if (result.status === 'infected') {
+    if (!clamavCountsAsVirus(result.virusName, config)) {
+      return { decision: null, note: { status: 'suspicious', ...sig } };
+    }
     const virus = result.virusName ?? 'unknown';
     const action = config.clamavAction ?? 'quarantine';
-    if (action === 'pass') return null;
+    const note: VirusScanNote = { status: 'infected', ...sig };
+    if (action === 'pass') return { decision: null, note };
     return {
-      action: action === 'reject' ? 'reject' : 'quarantine',
-      reason: `Virus detected: ${virus}`,
-      ...(result.virusName ? { virusName: result.virusName } : {}),
+      decision: {
+        action: action === 'reject' ? 'reject' : 'quarantine',
+        reason: `Virus detected: ${virus}`,
+        ...(result.virusName ? { virusName: result.virusName } : {}),
+        ...(action === 'quarantine' ? { virusScan: note } : {}),
+      },
+      note,
     };
   }
-  if (result.status === 'error') {
-    return config.clamavBlockOnFailure
-      ? { action: 'defer', reason: 'Virus scanner unavailable — please retry later' }
-      : null;
+  if (result.status === 'oversize') {
+    const note: VirusScanNote = { status: 'unscanned', reason: 'too-large' };
+    return config.clamavOversizeAction === 'reject'
+      ? { decision: { action: 'reject', reason: 'Message too large for virus scanning' }, note }
+      : { decision: null, note };
   }
-  return null;
+  if (result.status === 'error') {
+    const note: VirusScanNote = { status: 'unscanned', reason: 'scanner-error' };
+    return config.clamavBlockOnFailure
+      ? { decision: { action: 'defer', reason: 'Virus scanner unavailable — please retry later' }, note }
+      : { decision: null, note };
+  }
+  return { decision: null };
+}
+
+/**
+ * Runs the ClamAV stage with the configured size limit and timeout. A message
+ * above clamavScanLimitBytes is never sent to clamd (result `oversize`).
+ */
+export async function scanWithPolicy(
+  rawMessage: Buffer,
+  config: PipelineConfig,
+  clamav: PipelineDeps['clamav'],
+): Promise<ClamavResult> {
+  const limit = config.clamavScanLimitBytes;
+  if (limit !== undefined && limit > 0 && rawMessage.length > limit) {
+    return { status: 'oversize', clean: false, error: `message ${rawMessage.length} bytes > scan limit ${limit}` };
+  }
+  return clamav(rawMessage, config.clamavTimeoutMs !== undefined ? { timeoutMs: config.clamavTimeoutMs } : {});
 }
 
 // Connection-level checks are split by SMTP stage (`connect` → IP checks,
@@ -423,9 +505,6 @@ async function runContentStages(
   auth: AuthResult,
   hostname: string,
 ): Promise<PipelineResult> {
-  const spamJunk   = config.spamScoreJunk   ?? 6.0;
-  const spamReject = config.spamScoreReject ?? 15.0;
-
   // ── Stage 3: Address blacklist ───────────────────────────────────────────
   const blacklist = await deps.blacklist(ctx.mailFrom, ctx.domainId, ctx.userId);
   if (blacklist.blocked) {
@@ -453,22 +532,44 @@ async function runContentStages(
   }
 
   // ── Stage 4c: ClamAV antivirus ───────────────────────────────────────────
+  let virusNote: VirusScanNote | undefined;
   if (config.clamavEnabled !== false) {
-    const clamav = await deps.clamav(rawMessage);
-    const decision = decideClamav(clamav, config);
+    const clamav = await scanWithPolicy(rawMessage, config, deps.clamav);
+    const { decision, note } = evaluateClamav(clamav, config);
     if (decision) {
       if (clamav.status === 'infected') log.warn({ virusName: clamav.virusName, mailFrom: ctx.mailFrom, action: decision.action }, 'Virus detected');
+      else if (clamav.status === 'oversize') log.warn({ size: rawMessage.length, mailFrom: ctx.mailFrom }, 'Message too large for virus scanning — rejected (clamavOversizeAction=reject)');
       else log.warn({ err: clamav.error, mailFrom: ctx.mailFrom }, 'ClamAV scan failed — deferring (clamavBlockOnFailure)');
       return decision;
     }
-    if (clamav.status === 'infected') {
+    if (note?.status === 'infected') {
       log.warn({ virusName: clamav.virusName, mailFrom: ctx.mailFrom }, 'Virus detected — delivered anyway (clamavAction=pass)');
-    } else if (clamav.status === 'error') {
+    } else if (note?.status === 'suspicious') {
+      log.info({ virusName: clamav.virusName, mailFrom: ctx.mailFrom }, 'ClamAV heuristic/PUA/encrypted finding — delivered tagged (category not treated as virus)');
+    } else if (note?.reason === 'too-large') {
+      log.info({ size: rawMessage.length, mailFrom: ctx.mailFrom }, 'Message too large for virus scanning — accepting unscanned');
+    } else if (note?.reason === 'scanner-error') {
       log.warn({ err: clamav.error }, 'ClamAV scan failed — accepting unscanned (clamavBlockOnFailure=false)');
     }
+    virusNote = note;
   } else {
     log.debug('ClamAV scan skipped (disabled in settings)');
   }
+
+  const result = await runSpamStage(rawMessage, ctx, config, deps, auth, hostname);
+  return virusNote && result.action !== 'reject' ? { ...result, virusScan: virusNote } : result;
+}
+
+async function runSpamStage(
+  rawMessage: Buffer,
+  ctx: ConnectionContext,
+  config: PipelineConfig,
+  deps: PipelineDeps,
+  auth: AuthResult,
+  hostname: string,
+): Promise<PipelineResult> {
+  const spamJunk   = config.spamScoreJunk   ?? 6.0;
+  const spamReject = config.spamScoreReject ?? 15.0;
 
   // ── Stage 4d: rspamd anti-spam (with the SMTP session data) ─────────────
   if (config.rspamdEnabled !== false) {

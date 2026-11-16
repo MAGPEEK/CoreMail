@@ -12,6 +12,7 @@ import { useT } from '../i18n/useT.js';
 import { usePermissions } from '../hooks/usePermissions.js';
 import { Can } from '../components/Can.js';
 import { DataTable, type Column } from '../components/DataTable.js';
+import { errorMessage } from '../lib/errors.js';
 
 interface Condition { field: string; op: string; value: string }
 interface Action    { type: string; value: string }
@@ -22,7 +23,7 @@ interface TransportRule {
 }
 
 const CONDITION_FIELDS = [
-  { value: 'from', label: 'Absender' }, { value: 'to', label: 'Empfänger' },
+  { value: 'from', label: 'Absender' }, { value: 'to', label: 'Empfänger' }, { value: 'cc', label: 'Cc' },
   { value: 'subject', label: 'Betreff' }, { value: 'body', label: 'Nachrichtentext' },
   { value: 'hasAttachment', label: 'Hat Anhang' }, { value: 'size', label: 'Größe (Bytes)' },
   { value: 'spamScore', label: 'Spam-Score' },
@@ -30,18 +31,20 @@ const CONDITION_FIELDS = [
 const CONDITION_OPS = [
   { value: 'contains', label: 'enthält' }, { value: 'notContains', label: 'enthält nicht' },
   { value: 'equals', label: 'ist gleich' }, { value: 'startsWith', label: 'beginnt mit' },
+  { value: 'endsWith', label: 'endet mit' },
   { value: 'regex', label: 'Regex' }, { value: 'greaterThan', label: '>' },
   { value: 'lessThan', label: '<' }, { value: 'is', label: 'ist' },
 ];
 const ACTION_TYPES = [
   { value: 'addHeader', label: 'Header hinzufügen' }, { value: 'removeHeader', label: 'Header entfernen' },
   { value: 'redirect', label: 'Umleiten an' }, { value: 'reject', label: 'Ablehnen' },
-  { value: 'addRecipient', label: 'Empfänger hinzufügen' }, { value: 'setSubjectPrefix', label: 'Betreff-Präfix' },
+  { value: 'addRecipient', label: 'Empfänger hinzufügen' }, { value: 'removeRecipient', label: 'Empfänger entfernen' },
+  { value: 'setSubjectPrefix', label: 'Betreff-Präfix' },
   { value: 'setSubjectSuffix', label: 'Betreff-Suffix' }, { value: 'quarantine', label: 'Quarantäne' },
   { value: 'addDisclaimer', label: 'Haftungsausschluss anhängen' },
 ];
 
-// ── Templates (typical Exchange 2019 "From template" options) ───────────────
+// ── Templates (typical "from template" options) ───────────────
 // Each template prefills the conditions + actions. Placeholders like
 // @firma.com must be adjusted by the admin after selection.
 interface RuleTemplate {
@@ -64,7 +67,7 @@ const RULE_TEMPLATES: RuleTemplate[] = [
   {
     id: 'external-prefix',
     category: 'tagging',
-    icon: ShieldAlert, iconClass: 'text-amber-600 bg-amber-50',
+    icon: ShieldAlert, iconClass: 'text-warning-fg bg-warning-bg',
     name: '[EXTERN]-Markierung im Betreff',
     description: 'Hängt „[EXTERN] " vor den Betreff aller Mails, die nicht aus der eigenen Domain kommen.',
     rule: {
@@ -78,7 +81,7 @@ const RULE_TEMPLATES: RuleTemplate[] = [
   {
     id: 'outgoing-disclaimer',
     category: 'compliance',
-    icon: BookOpen, iconClass: 'text-blue-600 bg-blue-50',
+    icon: BookOpen, iconClass: 'text-info-fg bg-info-bg',
     name: 'Disclaimer für ausgehende Mails',
     description: 'Hängt einen Standard-Haftungsausschluss an alle Mails an externe Empfänger an.',
     rule: {
@@ -92,7 +95,7 @@ const RULE_TEMPLATES: RuleTemplate[] = [
   {
     id: 'spam-quarantine',
     category: 'security',
-    icon: ShieldCheck, iconClass: 'text-red-600 bg-red-50',
+    icon: ShieldCheck, iconClass: 'text-danger-fg bg-danger-bg',
     name: 'Spam-Score > 5 quarantänieren',
     description: 'Verschiebt Mails mit hoher Spam-Bewertung direkt in die Quarantäne.',
     rule: {
@@ -106,7 +109,7 @@ const RULE_TEMPLATES: RuleTemplate[] = [
   {
     id: 'oversize-reject',
     category: 'governance',
-    icon: FileWarning, iconClass: 'text-orange-600 bg-orange-50',
+    icon: FileWarning, iconClass: 'text-warning-fg bg-warning-bg',
     name: 'Mails > 25 MB ablehnen',
     description: 'Lehnt eingehende Mails ab, die größer als 25 MB sind. Schützt vor Quota-Verbrauch.',
     rule: {
@@ -120,12 +123,12 @@ const RULE_TEMPLATES: RuleTemplate[] = [
   {
     id: 'malware-extensions',
     category: 'security',
-    icon: Ban, iconClass: 'text-red-700 bg-red-100',
+    icon: Ban, iconClass: 'text-danger-fg bg-danger-bg',
     name: 'Verdächtige Anhang-Endungen quarantänieren',
-    description: 'Quarantäne bei Subject- oder Body-Treffer auf .exe, .bat, .scr, .cmd, .vbs, .js, .jar, .hta.',
+    description: 'Quarantäne, wenn der Betreff .exe, .bat, .scr, .cmd, .vbs, .js, .jar oder .hta nennt.',
     rule: {
       name: 'Malware-Endungen',
-      description: 'Klassische ausführbare Dateinamen im Betreff oder Body',
+      description: 'Klassische ausführbare Dateinamen im Betreff',
       priority: 30,
       conditions: [{ field: 'subject', op: 'regex', value: '\\.(exe|bat|scr|cmd|vbs|js|jar|hta)\\b' }],
       actions:    [{ type: 'quarantine', value: '' }],
@@ -134,7 +137,7 @@ const RULE_TEMPLATES: RuleTemplate[] = [
   {
     id: 'credit-card-detect',
     category: 'compliance',
-    icon: CreditCard, iconClass: 'text-purple-600 bg-purple-50',
+    icon: CreditCard, iconClass: 'text-info-fg bg-info-bg',
     name: 'Kreditkartennummern erkennen',
     description: 'Quarantäne bei Body-Treffer auf 13–16-stellige Zahlenfolgen (möglicher PAN). Hilft bei PCI-DSS.',
     rule: {
@@ -148,7 +151,7 @@ const RULE_TEMPLATES: RuleTemplate[] = [
   {
     id: 'compliance-bcc',
     category: 'compliance',
-    icon: Mail, iconClass: 'text-indigo-600 bg-indigo-50',
+    icon: Mail, iconClass: 'text-info-fg bg-info-bg',
     name: 'BCC an Compliance-Postfach',
     description: 'Kopiert alle Mails an einen festen Compliance-Empfänger zur Aufbewahrung.',
     rule: {
@@ -162,21 +165,24 @@ const RULE_TEMPLATES: RuleTemplate[] = [
   {
     id: 'ceo-phishing',
     category: 'security',
-    icon: AlertTriangle, iconClass: 'text-rose-600 bg-rose-50',
+    icon: AlertTriangle, iconClass: 'text-danger-fg bg-danger-bg',
     name: 'CEO-Phishing-Schutz',
-    description: 'Markiert verdächtige Mails, deren Absendername „CEO/Geschäftsführer/Chef" enthält, aber von außerhalb der Domain stammt.',
+    description: 'Markiert Mails von externen Absenderadressen, die mit „ceo/chef/director/geschäftsführer“ beginnen.',
     rule: {
       name: 'CEO-Phishing-Warnung',
       description: 'Klassischer Business-Email-Compromise-Indikator',
       priority: 25,
-      conditions: [{ field: 'from', op: 'regex', value: '(ceo|geschäftsführer|chef|director).*@(?!DEINE-DOMAIN\\.com).+' }],
+      conditions: [
+        { field: 'from', op: 'regex',       value: '^(ceo|geschäftsführer|chef|director)[^@]*@' },
+        { field: 'from', op: 'notContains', value: '@DEINE-DOMAIN.com' },
+      ],
       actions:    [{ type: 'setSubjectPrefix', value: '⚠ MÖGLICHES PHISHING — ' }],
     },
   },
   {
     id: 'block-attachments-external',
     category: 'governance',
-    icon: Forward, iconClass: 'text-teal-600 bg-teal-50',
+    icon: Forward, iconClass: 'text-success-fg bg-success-bg',
     name: 'Anhänge an Externe X-Header markieren',
     description: 'Setzt einen X-Coremail-External-Attachment-Header wenn Mail mit Anhang an externe Empfänger geht (zur DLP-Auswertung).',
     rule: {
@@ -216,27 +222,27 @@ function TemplatePickerModal({
       labelledBy={titleId}
 
       closeOnBackdrop={false}
-      overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-      className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col"
+      overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-scrim/40 p-4"
+      className="bg-surface rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col"
     >
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 shrink-0">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-line shrink-0">
           <div>
-            <h2 id={titleId} className="font-semibold text-gray-900 flex items-center gap-2">
-              <Sparkles size={17} className="text-blue-600" /> Regel aus Vorlage erstellen
+            <h2 id={titleId} className="font-semibold text-fg flex items-center gap-2">
+              <Sparkles size={17} className="text-accent-fg" /> Regel aus Vorlage erstellen
             </h2>
-            <p className="text-xs text-gray-500 mt-0.5">
+            <p className="text-xs text-fg-subtle mt-0.5">
               Wähle eine Vorlage als Ausgangsbasis — Bedingungen und Aktionen werden vorgefüllt, du passt sie danach an.
             </p>
           </div>
-          <button type="button" onClick={onClose} aria-label="Schließen" className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+          <button type="button" onClick={onClose} aria-label="Schließen" className="text-fg-subtle hover:text-fg-muted"><X size={18} /></button>
         </div>
 
-        <div className="px-5 py-2 border-b border-gray-100 shrink-0 flex items-center gap-1.5 text-xs flex-wrap">
-          <span className="text-gray-500 mr-1">Filter:</span>
+        <div className="px-5 py-2 border-b border-line shrink-0 flex items-center gap-1.5 text-xs flex-wrap">
+          <span className="text-fg-subtle mr-1">Filter:</span>
           {(['all', 'tagging', 'compliance', 'security', 'governance'] as const).map((c) => (
             <button key={c} type="button" onClick={() => setFilter(c)}
               className={`px-2.5 py-1 rounded border ${
-                filter === c ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+                filter === c ? 'bg-accent text-white border-accent-fg' : 'bg-surface text-fg-muted border-line-strong hover:bg-surface-2'
               }`}>
               {c === 'all' ? `Alle (${RULE_TEMPLATES.length})` : `${CATEGORY_LABELS[c]} (${RULE_TEMPLATES.filter((t) => t.category === c).length})`}
             </button>
@@ -252,7 +258,7 @@ function TemplatePickerModal({
                   key={t.id}
                   type="button"
                   onClick={() => onSelect(t)}
-                  className="text-left p-3 border border-gray-200 rounded-lg hover:border-blue-400 hover:bg-blue-50/30 transition-colors group"
+                  className="text-left p-3 border border-line rounded-lg hover:border-accent-fg hover:bg-info-bg/30 transition-colors group"
                 >
                   <div className="flex items-start gap-2.5">
                     <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${t.iconClass}`}>
@@ -260,10 +266,10 @@ function TemplatePickerModal({
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 mb-0.5">
-                        <p className="text-sm font-medium text-gray-900 truncate group-hover:text-blue-700">{t.name}</p>
+                        <p className="text-sm font-medium text-fg truncate group-hover:text-accent-fg">{t.name}</p>
                       </div>
-                      <p className="text-[10px] uppercase tracking-wide text-gray-400 mb-1">{CATEGORY_LABELS[t.category]}</p>
-                      <p className="text-xs text-gray-600 leading-relaxed">{t.description}</p>
+                      <p className="text-[10px] uppercase tracking-wide text-fg-subtle mb-1">{CATEGORY_LABELS[t.category]}</p>
+                      <p className="text-xs text-fg-muted leading-relaxed">{t.description}</p>
                     </div>
                   </div>
                 </button>
@@ -272,12 +278,12 @@ function TemplatePickerModal({
           </div>
         </div>
 
-        <div className="px-5 py-3 border-t border-gray-100 flex items-center justify-between shrink-0">
-          <p className="text-xs text-gray-400">
-            Platzhalter wie <code className="bg-gray-100 px-1 rounded">@DEINE-DOMAIN.com</code> bitte nach Auswahl anpassen.
+        <div className="px-5 py-3 border-t border-line flex items-center justify-between shrink-0">
+          <p className="text-xs text-fg-subtle">
+            Platzhalter wie <code className="bg-surface-2 px-1 rounded">@DEINE-DOMAIN.com</code> bitte nach Auswahl anpassen.
           </p>
           <button onClick={onClose}
-            className="px-3 py-1.5 text-sm text-gray-600 border border-gray-300 rounded hover:bg-gray-50">
+            className="px-3 py-1.5 text-sm text-fg-muted border border-line-strong rounded hover:bg-surface-2">
             Abbrechen
           </button>
         </div>
@@ -304,13 +310,13 @@ export function TransportRulesPage() {
   const toggleMutation = useMutation({
     mutationFn: (id: string) => api.patch(`/admin/transport-rules/${id}/toggle`, {}),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['admin-transport-rules'] }),
-    onError: () => toast.error('Fehler'),
+    onError: (e) => toast.error(errorMessage(e, 'Status konnte nicht geändert werden')),
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.delete(`/admin/transport-rules/${id}`),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['admin-transport-rules'] }); toast.success(t('shared_deleted')); },
-    onError: () => toast.error(t('shared_delete_failed')),
+    onError: (e) => toast.error(errorMessage(e, t('shared_delete_failed'))),
   });
   const bulkDelete = useMutation({
     mutationFn: async (ids: string[]) => {
@@ -326,14 +332,17 @@ export function TransportRulesPage() {
   const columns: Column<TransportRule>[] = [
     {
       key: 'priority', header: t('tr_col_priority'), sortValue: (r) => r.priority, className: 'w-24',
-      cell: (r) => <span className="text-sm font-mono text-gray-500">{r.priority}</span>,
+      cell: (r) => <span className="text-sm font-mono text-fg-subtle">{r.priority}</span>,
     },
     {
       key: 'name', header: t('tr_col_name'), sortValue: (r) => r.name,
       cell: (rule) => (
         <>
-          <p className="font-medium text-gray-900 text-sm">{rule.name}</p>
-          {rule.description && <p className="text-xs text-gray-400">{rule.description}</p>}
+          <p className="font-medium text-fg text-sm">
+            {rule.name}
+            {!rule.enabled && <span className="ml-2 text-[10px] font-normal bg-surface-3 text-fg-muted px-1.5 py-0.5 rounded">{t('status_inactive')}</span>}
+          </p>
+          {rule.description && <p className="text-xs text-fg-subtle">{rule.description}</p>}
         </>
       ),
     },
@@ -342,13 +351,13 @@ export function TransportRulesPage() {
       cell: (rule) => (
         <div className="space-y-0.5">
           {rule.conditions.slice(0, 2).map((c, i) => (
-            <p key={i} className="text-xs text-gray-600">
+            <p key={i} className="text-xs text-fg-muted">
               <span className="font-medium">{CONDITION_FIELDS.find(f => f.value === c.field)?.label ?? c.field}</span>
               {' '}{CONDITION_OPS.find(o => o.value === c.op)?.label ?? c.op}
-              {' '}<span className="font-mono bg-gray-100 px-1 rounded">{c.value}</span>
+              {' '}<span className="font-mono bg-surface-2 px-1 rounded">{c.value}</span>
             </p>
           ))}
-          {rule.conditions.length > 2 && <p className="text-xs text-gray-400">+{rule.conditions.length - 2}</p>}
+          {rule.conditions.length > 2 && <p className="text-xs text-fg-subtle">+{rule.conditions.length - 2}</p>}
         </div>
       ),
     },
@@ -357,9 +366,9 @@ export function TransportRulesPage() {
       cell: (rule) => (
         <div className="space-y-0.5">
           {rule.actions.slice(0, 2).map((a, i) => (
-            <p key={i} className="text-xs text-gray-600">
+            <p key={i} className="text-xs text-fg-muted">
               <span className="font-medium">{ACTION_TYPES.find(at => at.value === a.type)?.label ?? a.type}</span>
-              {a.value && <span className="font-mono bg-gray-100 px-1 rounded ml-1">{a.value.slice(0, 30)}</span>}
+              {a.value && <span className="font-mono bg-surface-2 px-1 rounded ml-1">{a.value.slice(0, 30)}</span>}
             </p>
           ))}
         </div>
@@ -369,21 +378,21 @@ export function TransportRulesPage() {
       key: 'enabled', header: t('mbox_col_status'), sortValue: (r) => r.enabled, headerClassName: 'text-right', className: 'text-right',
       cell: (rule) => (
         <div className="flex items-center justify-end gap-1">
-          <Can area="hygiene" access="write" fallback={<span className="text-xs text-gray-500">{rule.enabled ? t('status_active') : t('status_inactive')}</span>}>
+          <Can area="hygiene" access="write" fallback={<span className="text-xs text-fg-subtle">{rule.enabled ? t('status_active') : t('status_inactive')}</span>}>
             <button onClick={() => toggleMutation.mutate(rule.id)}
               title={rule.enabled ? t('mbox_quick_disable') : t('mbox_quick_enable')}
               aria-label={`${rule.enabled ? t('mbox_quick_disable') : t('mbox_quick_enable')}: ${rule.name}`}
               aria-pressed={rule.enabled}
-              className={`p-1.5 rounded transition-colors ${rule.enabled ? 'text-green-500 hover:text-green-700 hover:bg-green-50' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'}`}>
+              className={`p-1.5 rounded transition-colors ${rule.enabled ? 'text-success-fg hover:text-success-fg hover:bg-success-bg' : 'text-fg-subtle hover:text-fg-muted hover:bg-surface-2'}`}>
               {rule.enabled ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
             </button>
             <button onClick={() => setEditItem(rule)} title={t('tb_edit')} aria-label={`${t('tb_edit')}: ${rule.name}`}
-              className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded transition-colors">
+              className="p-1.5 text-fg-subtle hover:text-fg-muted hover:bg-surface-2 rounded transition-colors">
               <Pencil size={14} />
             </button>
             <button onClick={() => { if (window.confirm(`"${rule.name}" ${t('shared_delete_confirm')}`)) deleteMutation.mutate(rule.id); }}
               title={t('tb_delete')} aria-label={`${t('tb_delete')}: ${rule.name}`}
-              className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors">
+              className="p-1.5 text-fg-subtle hover:text-danger-fg hover:bg-danger-bg rounded transition-colors">
               <Trash2 size={14} />
             </button>
           </Can>
@@ -395,10 +404,10 @@ export function TransportRulesPage() {
   return (
     <div className="p-6 space-y-4">
       <div className="flex items-center gap-3">
-        <Workflow size={22} className="text-blue-600" aria-hidden="true" />
+        <Workflow size={22} className="text-accent-fg" aria-hidden="true" />
         <div>
-          <h1 className="text-xl font-bold text-gray-900">{t('nav_transport_rules')}</h1>
-          <p className="text-sm text-gray-500">{rules.length} {t('tr_count')}</p>
+          <h1 className="text-xl font-bold text-fg">{t('nav_transport_rules')}</h1>
+          <p className="text-sm text-fg-subtle">{rules.length} {t('tr_count')}</p>
         </div>
       </div>
 
@@ -412,7 +421,7 @@ export function TransportRulesPage() {
         search={{ placeholder: t('dt_search'), text: (r) => [r.name, r.description, ...r.conditions.map((c) => c.value), ...r.actions.map((a) => a.value)] }}
         selectable={canWrite}
         {...(canWrite ? { onActivate: (r: TransportRule) => setEditItem(r) } : {})}
-        rowClassName={(r) => (!r.enabled ? 'opacity-60' : '')}
+        rowClassName={(r) => (!r.enabled ? 'bg-surface-2' : '')}
         emptyText={t('tr_empty')}
         toolbar={({ selectedRows, clearSelection }) => (
           <>
@@ -434,7 +443,7 @@ export function TransportRulesPage() {
               </button>
             </Can>
             <Can area="hygiene" access="write">
-              <button className="btn-secondary flex items-center gap-1.5 text-xs text-red-600 disabled:opacity-40"
+              <button className="btn-secondary flex items-center gap-1.5 text-xs text-danger-fg disabled:opacity-40"
                 disabled={selectedRows.length === 0 || bulkDelete.isPending}
                 onClick={() => {
                   if (!window.confirm(`${t('tb_delete_selected_confirm')} (${selectedRows.length})\n${selectedRows.map((r) => r.name).join('\n')}`)) return;
@@ -502,7 +511,8 @@ function RuleModal({ rule, initial, onClose }: {
       toast.success(rule ? 'Gespeichert' : 'Erstellt');
       onClose();
     },
-    onError: () => toast.error('Fehler'),
+    // e.g. 400 INVALID_RULE_PATTERN — the server explains which regex it refuses
+    onError: (e) => toast.error(errorMessage(e, 'Regel konnte nicht gespeichert werden')),
   });
 
   function updateCond(i: number, field: Partial<Condition>) { setConds(cs => cs.map((c, j) => j === i ? { ...c, ...field } : c)); }
@@ -515,12 +525,12 @@ function RuleModal({ rule, initial, onClose }: {
       labelledBy={titleId}
 
       closeOnBackdrop={false}
-      overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-      className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto"
+      overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-scrim/40 p-4"
+      className="bg-surface rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto"
     >
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 sticky top-0 bg-white">
-          <h2 id={titleId} className="font-semibold text-gray-900">{rule ? 'Regel bearbeiten' : 'Neue Transportregel'}</h2>
-          <button type="button" onClick={onClose} aria-label="Schließen" className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-line sticky top-0 bg-surface">
+          <h2 id={titleId} className="font-semibold text-fg">{rule ? 'Regel bearbeiten' : 'Neue Transportregel'}</h2>
+          <button type="button" onClick={onClose} aria-label="Schließen" className="text-fg-subtle hover:text-fg-muted"><X size={18} /></button>
         </div>
         <div className="p-5 space-y-5">
           {/* Basic data */}
@@ -548,9 +558,9 @@ function RuleModal({ rule, initial, onClose }: {
           {/* Conditions */}
           <div>
             <div className="flex items-center justify-between mb-2">
-              <p className="text-xs font-semibold text-gray-500 uppercase">Bedingungen (alle müssen zutreffen)</p>
+              <p className="text-xs font-semibold text-fg-subtle uppercase">Bedingungen (alle müssen zutreffen)</p>
               <button onClick={() => setConds(cs => [...cs, { field: 'from', op: 'contains', value: '' }])}
-                className="text-xs text-blue-600 hover:text-blue-800">+ Bedingung</button>
+                className="text-xs text-accent-fg hover:text-accent-fg">+ Bedingung</button>
             </div>
             {conditions.map((c, i) => (
               <div key={i} className="flex gap-2 mb-2 items-center">
@@ -561,7 +571,7 @@ function RuleModal({ rule, initial, onClose }: {
                   {CONDITION_OPS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
                 <input value={c.value} onChange={e => updateCond(i, { value: e.target.value })} className="input flex-1" placeholder="Wert" />
-                <button aria-label="Bedingung entfernen" onClick={() => setConds(cs => cs.filter((_, j) => j !== i))} className="p-1.5 text-gray-400 hover:text-red-500">
+                <button aria-label="Bedingung entfernen" onClick={() => setConds(cs => cs.filter((_, j) => j !== i))} className="p-1.5 text-fg-subtle hover:text-danger-fg">
                   <X size={14} />
                 </button>
               </div>
@@ -571,9 +581,9 @@ function RuleModal({ rule, initial, onClose }: {
           {/* Actions */}
           <div>
             <div className="flex items-center justify-between mb-2">
-              <p className="text-xs font-semibold text-gray-500 uppercase">Aktionen</p>
+              <p className="text-xs font-semibold text-fg-subtle uppercase">Aktionen</p>
               <button onClick={() => setActions(as => [...as, { type: 'addHeader', value: '' }])}
-                className="text-xs text-blue-600 hover:text-blue-800">+ Aktion</button>
+                className="text-xs text-accent-fg hover:text-accent-fg">+ Aktion</button>
             </div>
             {actions.map((a, i) => (
               <div key={i} className="flex gap-2 mb-2 items-center">
@@ -581,7 +591,7 @@ function RuleModal({ rule, initial, onClose }: {
                   {ACTION_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
                 </select>
                 <input value={a.value} onChange={e => updateAction(i, { value: e.target.value })} className="input flex-1" placeholder="Wert (optional)" />
-                <button aria-label="Aktion entfernen" onClick={() => setActions(as => as.filter((_, j) => j !== i))} className="p-1.5 text-gray-400 hover:text-red-500">
+                <button aria-label="Aktion entfernen" onClick={() => setActions(as => as.filter((_, j) => j !== i))} className="p-1.5 text-fg-subtle hover:text-danger-fg">
                   <X size={14} />
                 </button>
               </div>

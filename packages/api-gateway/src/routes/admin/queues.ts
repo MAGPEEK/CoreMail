@@ -13,8 +13,8 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { Queue, type Job } from 'bullmq';
 import { z } from 'zod';
-import { createBullMqConnection, createLogger } from '@coremail/core';
-import { prisma, adminRetryJobData } from '@coremail/storage';
+import { createBullMqConnection, createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
+import { prisma, adminRetryJobData, invalidateQueueSettingsCache } from '@coremail/storage';
 import { requireArea } from '../../middleware/auth.js';
 
 const log = createLogger('admin:queues');
@@ -84,8 +84,8 @@ adminQueuesRouter.get('/stats', async (_req: Request, res: Response) => {
 // ── GET /jobs ─────────────────────────────────────────────────────────────────
 adminQueuesRouter.get('/jobs', async (req: Request, res: Response) => {
   const state = (req.query['state'] as string) || 'all';
-  const page  = Math.max(1, parseInt(String(req.query['page'] ?? '1'), 10));
-  const limit = Math.min(parseInt(String(req.query['limit'] ?? '50'), 10), 200);
+  const page  = Math.max(1, parseInt(String(req.query['page'] ?? '1'), 10) || 1);
+  const limit = Math.min(Math.max(1, parseInt(String(req.query['limit'] ?? '50'), 10) || 50), 200);
   const start = (page - 1) * limit;
   const end   = start + limit - 1;
 
@@ -141,6 +141,23 @@ export async function adminRetryJob(
   await job.retry('failed', { resetAttemptsMade: true, resetAttemptsStarted: true });
 }
 
+/**
+ * "Retry now" for one job: a dead letter (failed) is retried with a fresh
+ * retry window; a job waiting for its next attempt (delayed — the "Retry"
+ * section and the overview) is promoted to run at once. `job.retry('failed')`
+ * throws for delayed jobs, so before this the button always answered 500.
+ * Returns false when the job is in neither state (waiting/active/completed).
+ */
+export async function adminRetryOrPromoteJob(
+  job: Pick<Job, 'data' | 'updateData' | 'retry' | 'promote' | 'getState'>,
+  now = Date.now(),
+): Promise<boolean> {
+  const state = await job.getState();
+  if (state === 'failed') { await adminRetryJob(job, now); return true; }
+  if (state === 'delayed') { await job.promote(); return true; }
+  return false;
+}
+
 // ── POST /jobs/:id/retry ──────────────────────────────────────────────────────
 adminQueuesRouter.post('/jobs/:id/retry', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
@@ -148,7 +165,10 @@ adminQueuesRouter.post('/jobs/:id/retry', async (req: Request, res: Response) =>
     await withQueue(async (q) => {
       const job = await q.getJob(id);
       if (!job) { res.status(404).json({ error: 'Job nicht gefunden' }); return; }
-      await adminRetryJob(job);
+      if (!(await adminRetryOrPromoteJob(job))) {
+        res.status(409).json({ error: 'Job wartet nicht auf einen erneuten Versuch' });
+        return;
+      }
       log.info({ id }, 'Queue job retried');
       res.json({ ok: true });
     });
@@ -244,5 +264,9 @@ adminQueuesRouter.put('/settings', async (req: Request, res: Response) => {
     create: { id: 'singleton', ...(p.data as Record<string, unknown>) },
   });
   log.info({ settings: p.data }, 'Queue settings updated');
+  // 60 s caches: this process (REST producers) and the smtp-server worker
+  // (settings:reload subscriber) pick the new retry/retention values up at once.
+  invalidateQueueSettingsCache();
+  await getRedisClient().publish(CHANNEL_SETTINGS_RELOAD, JSON.stringify({ kind: 'queues' })).catch(() => undefined);
   res.json(settings);
 });

@@ -1,22 +1,14 @@
 import type { Config } from 'tailwindcss';
+import { themeColors } from './src/theme/tailwind-colors';
 
 export default {
   content: ['./index.html', './src/**/*.{ts,tsx}'],
   darkMode: 'class',
   theme: {
     extend: {
-      colors: {
-        // CSS-Variable-basierter Accent — ermöglicht dynamische Farbwechsel.
-        // RGB-Werte werden via --color-accent auf <html> gesetzt.
-        // Das /[alpha] Opacity-Modifier Pattern (bg-accent/10) funktioniert
-        // mit dem "<channels> / <alpha-value>" Tailwind-Muster.
-        accent: {
-          DEFAULT: 'rgb(var(--color-accent, 0 120 212) / <alpha-value>)',
-          hover:   'rgb(var(--color-accent, 0 120 212) / 0.85)',
-          active:  'rgb(var(--color-accent, 0 120 212) / 0.7)',
-          light:   'rgb(var(--color-accent, 0 120 212) / 0.08)',
-        },
-      },
+      // Semantic, WCAG-checked tokens (src/theme/tokens.css). The accent channels are
+      // set at runtime (--color-accent / --color-accent-fg, see App.tsx ThemeApplier).
+      colors: themeColors,
       fontFamily: {
         sans: ['"Segoe UI"', 'system-ui', 'sans-serif'],
       },

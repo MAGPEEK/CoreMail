@@ -26,6 +26,15 @@ export const MAIL_BODY_STYLE: CSSProperties = {
 };
 
 /**
+ * Sender HTML is written for a white page (dark text, light backgrounds, transparent
+ * images). It is therefore always rendered on a fixed light "paper" with
+ * `color-scheme: light`, in both app themes; the frame around it uses the tokens.
+ */
+// theme-guard-ignore: sender HTML assumes a light page
+export const MAIL_PAPER_CLASS = 'bg-white text-gray-900';
+const MAIL_PAPER_STYLE: CSSProperties = { ...MAIL_BODY_STYLE, colorScheme: 'light' };
+
+/**
  * Sanitized mail HTML with inline (cid:) images, the external-image privacy
  * toggle and image-proxy loading. `resetKey` (the message id) resets the toggle.
  */
@@ -75,22 +84,22 @@ export function MailBody({ messageId, html, attachments, scrollClassName, bodyCl
   return (
     <>
       {mail.blockedCount > 0 && !mail.showExternal && (
-        <div className="px-4 py-2.5 border-b border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 flex items-center gap-2.5 text-sm shrink-0">
-          <ImageIcon size={16} className="text-blue-600 dark:text-blue-300 shrink-0" aria-hidden="true" />
+        <div className="px-4 py-2.5 border-b border-info-line bg-info-bg flex items-center gap-2.5 text-sm shrink-0">
+          <ImageIcon size={16} className="text-info-fg shrink-0" aria-hidden="true" />
           <div className="flex-1 min-w-0">
-            <p className="font-semibold text-blue-900 dark:text-blue-200 leading-tight">
+            <p className="font-semibold text-info-fg leading-tight">
               {mail.blockedCount === 1
                 ? '1 externes Bild wurde blockiert.'
                 : `${mail.blockedCount} externe Bilder wurden blockiert.`}
             </p>
-            <p className="text-xs text-blue-800/80 dark:text-blue-300/80 leading-tight">
+            <p className="text-xs text-info-fg leading-tight">
               Externe Bilder können verwendet werden, um Ihr Lese-Verhalten zu verfolgen (Tracking-Pixel).
             </p>
           </div>
           <button
             type="button"
             onClick={() => mail.setShowExternal(true)}
-            className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-white dark:bg-gray-800 border border-blue-300 dark:border-blue-700 rounded hover:bg-blue-100 dark:hover:bg-blue-900/40 transition-colors"
+            className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-surface text-fg border border-line-strong rounded hover:bg-surface-2 transition-colors"
             title="Externe Bilder über den Server-Proxy nachladen"
           >
             <ImageIcon size={13} aria-hidden="true" /> Bilder anzeigen
@@ -99,8 +108,8 @@ export function MailBody({ messageId, html, attachments, scrollClassName, bodyCl
       )}
       <div className={scrollClassName}>
         <div
-          className={bodyClassName}
-          style={MAIL_BODY_STYLE}
+          className={`${MAIL_PAPER_CLASS} rounded-md border border-line p-4 ${bodyClassName ?? ''}`}
+          style={MAIL_PAPER_STYLE}
           // eslint-disable-next-line react/no-danger -- sanitized with DOMPurify (lib/mailHtml.ts)
           dangerouslySetInnerHTML={{ __html: mail.html }}
         />

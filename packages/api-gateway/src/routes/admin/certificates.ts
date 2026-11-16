@@ -14,6 +14,7 @@
  * GET    /.well-known/acme-challenge/:token      — ACME HTTP-01 challenge (registered in server.ts)
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
+import { X509Certificate, createPrivateKey, randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
@@ -32,6 +33,28 @@ export { storeAcmeChallenge, getAcmeChallenge, runAcmeIssuance };
 const log = createLogger('admin:certificates');
 export const adminCertificatesRouter: RouterType = Router();
 adminCertificatesRouter.use(requireArea('servers'));
+
+// Mail protocols only (HTTPS is the lock icon, not a service); unknown strings used
+// to be stored and shown as badges.
+const ServicesSchema = z.array(z.enum(['SMTP', 'IMAP', 'POP3'])).transform((s) => [...new Set(s)]);
+const DomainsSchema = z.array(
+  // host names (single labels such as "localhost" allowed for self-signed), optional "*." wildcard
+  z.string().trim().toLowerCase()
+    .regex(/^(\*\.)?[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/, 'Invalid domain name'),
+).min(1).max(100);
+
+/**
+ * null when the private key belongs to the certificate, otherwise a readable error.
+ * A mismatched upload used to be accepted and broke TLS once activated.
+ */
+export function pemKeyMismatch(certPem: string, keyPem: string): string | null {
+  try {
+    const x509 = new X509Certificate(certPem);
+    return x509.checkPrivateKey(createPrivateKey(keyPem)) ? null : 'The private key does not belong to this certificate';
+  } catch {
+    return 'Invalid certificate or private key PEM';
+  }
+}
 
 // ── Helper: hide private key ──────────────────────────────────────────────────
 function safe(cert: Record<string, unknown>) {
@@ -106,15 +129,15 @@ adminCertificatesRouter.get('/:id', async (req: Request, res: Response) => {
 adminCertificatesRouter.post('/letsencrypt', async (req: Request, res: Response) => {
   const schema = z.object({
     name:      z.string().min(1).max(100),
-    domains:   z.array(z.string().min(3)).min(1).max(10),
+    domains:   DomainsSchema.max(10).refine((d) => d.every((x) => !x.startsWith('*.')), 'Wildcards need DNS-01 — HTTP-01 cannot issue them'),
     email:     z.string().email(),
-    services:  z.array(z.string()).default([]),
+    services:  ServicesSchema.default([]),
     autoRenew: z.boolean().default(true),
     staging:   z.boolean().default(false), // true = Let's Encrypt staging (test)
   });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: 'Invalid input', details: parsed.error.issues });
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Invalid input', details: parsed.error.issues });
     return;
   }
 
@@ -153,8 +176,8 @@ adminCertificatesRouter.post('/letsencrypt', async (req: Request, res: Response)
 adminCertificatesRouter.post('/upload', async (req: Request, res: Response) => {
   const schema = z.object({
     name:      z.string().min(1).max(100),
-    domains:   z.array(z.string()).min(1),
-    services:  z.array(z.string()).default([]),
+    domains:   DomainsSchema,
+    services:  ServicesSchema.default([]),
     certPem:   z.string().min(50),
     keyPem:    z.string().min(50),
     chainPem:  z.string().optional(),
@@ -162,7 +185,7 @@ adminCertificatesRouter.post('/upload', async (req: Request, res: Response) => {
   });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: 'Invalid input', details: parsed.error.issues });
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Invalid input', details: parsed.error.issues });
     return;
   }
 
@@ -173,6 +196,8 @@ adminCertificatesRouter.post('/upload', async (req: Request, res: Response) => {
     return;
   }
   const expiresAt = validity.validTo;
+  const mismatch = pemKeyMismatch(parsed.data.certPem, parsed.data.keyPem);
+  if (mismatch) { res.status(400).json({ error: mismatch }); return; }
 
   const cert = await prisma.certificate.create({
     data: {
@@ -204,72 +229,50 @@ adminCertificatesRouter.post('/upload', async (req: Request, res: Response) => {
 adminCertificatesRouter.post('/self-signed', async (req: Request, res: Response) => {
   const schema = z.object({
     name:     z.string().min(1).max(100),
-    domains:  z.array(z.string().min(1)).min(1),
-    services: z.array(z.string()).default([]),
+    domains:  DomainsSchema,
+    services: ServicesSchema.default([]),
     days:     z.number().int().min(1).max(3650).default(365),
   });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: 'Invalid input', details: parsed.error.issues });
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Invalid input', details: parsed.error.issues });
     return;
   }
 
   const { name, domains, services, days } = parsed.data;
 
   try {
-    // Self-signed certificate via Node.js crypto + forge-like approach
-    // We use @peculiar/x509 (already transitive via acme-client) OR
-    // the simpler way: openssl via child_process (not ideal) OR
-    // directly with forge. For maximum compatibility we use the crypto + asn1.js approach
-    // via acme-client's crypto utilities:
+    // RSA key from acme-client, certificate signed with node-forge (a direct
+    // dependency). The old "fallback" stored a bare public key as certPem.
     const acme = await import('acme-client');
-    const [key, csr] = await acme.crypto.createCsr({ altNames: domains });
-    const keyPem = key.toString();
+    const forge = (await import('node-forge')).default;
+    const keyPem = (await acme.crypto.createPrivateKey()).toString();
 
-    // Self-signed: we sign the CSR ourselves
-    // Since acme-client has no direct self-sign API, we use Node.js X.509
-    const forge = await import('node-forge').catch(() => null);
+    const pki = forge.pki;
+    const privateKey = pki.privateKeyFromPem(keyPem);
+    const publicKey  = pki.setRsaPublicKey(privateKey.n, privateKey.e);
 
-    let certPem: string;
-    let expiresAt: Date;
+    const cert_ = pki.createCertificate();
+    cert_.publicKey = publicKey;
+    // Unique positive serial: browsers reject two certificates with the same
+    // issuer + serial (every self-signed cert used to get serial 01).
+    cert_.serialNumber = '00' + randomBytes(16).toString('hex');
+    cert_.validity.notBefore = new Date();
+    cert_.validity.notAfter  = new Date();
+    cert_.validity.notAfter.setDate(cert_.validity.notAfter.getDate() + days);
 
-    if (forge) {
-      // node-forge for a complete self-signed cert
-      const pki = forge.pki;
-      const privateKey = pki.privateKeyFromPem(keyPem);
-      const publicKey  = pki.setRsaPublicKey(privateKey.n, privateKey.e);
-
-      const cert_ = pki.createCertificate();
-      cert_.publicKey = publicKey;
-      cert_.serialNumber = '01';
-      cert_.validity.notBefore = new Date();
-      cert_.validity.notAfter  = new Date();
-      cert_.validity.notAfter.setDate(cert_.validity.notAfter.getDate() + days);
-
-      const attrs = [{ name: 'commonName', value: domains[0] }];
-      cert_.setSubject(attrs);
-      cert_.setIssuer(attrs);
-      cert_.setExtensions([
-        { name: 'basicConstraints', cA: false },
-        { name: 'subjectAltName', altNames: domains.map(d => ({ type: 2, value: d })) },
-        { name: 'keyUsage', keyCertSign: false, digitalSignature: true, nonRepudiation: true, keyEncipherment: true, dataEncipherment: true },
-      ]);
-      cert_.sign(privateKey, forge.md.sha256.create());
-      certPem   = pki.certificateToPem(cert_);
-      expiresAt = cert_.validity.notAfter;
-    } else {
-      // Fallback: ACME client CSR as placeholder (without a complete cert)
-      // — direct crypto solution
-      const { generateKeyPairSync, createSign } = await import('crypto');
-      const kp = generateKeyPairSync('rsa', {
-        modulusLength: 2048,
-        privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
-        publicKeyEncoding:  { type: 'spki',  format: 'pem' },
-      });
-      certPem   = kp.publicKey; // Placeholder (PEM key only, no complete cert)
-      expiresAt = new Date(Date.now() + days * 24 * 3600 * 1000);
-      void createSign; // suppress unused warning
-    }
+    const attrs = [{ name: 'commonName', value: domains[0] }];
+    cert_.setSubject(attrs);
+    cert_.setIssuer(attrs);
+    cert_.setExtensions([
+      { name: 'basicConstraints', cA: false },
+      { name: 'subjectAltName', altNames: domains.map(d => ({ type: 2, value: d })) },
+      { name: 'keyUsage', keyCertSign: false, digitalSignature: true, nonRepudiation: true, keyEncipherment: true, dataEncipherment: true },
+      { name: 'extKeyUsage', serverAuth: true },
+    ]);
+    cert_.sign(privateKey, forge.md.sha256.create());
+    const certPem   = pki.certificateToPem(cert_);
+    const expiresAt = cert_.validity.notAfter;
 
     const cert = await prisma.certificate.create({
       data: {
@@ -305,7 +308,7 @@ adminCertificatesRouter.put('/:id', async (req: Request, res: Response) => {
   const id = req.params['id'] ?? '';
   const schema = z.object({
     name:      z.string().min(1).max(100).optional(),
-    services:  z.array(z.string()).optional(),
+    services:  ServicesSchema.optional(),
     autoRenew: z.boolean().optional(),
   });
   const parsed = schema.safeParse(req.body);
@@ -462,11 +465,9 @@ adminCertificatesRouter.post('/:id/activate-protocol', async (req: Request, res:
 // isActiveProtocol is kept — SMTP/IMAP/POP3 keep using the cert.
 adminCertificatesRouter.delete('/:id/activate-https', async (req: Request, res: Response) => {
   const id = req.params['id'] ?? '';
-  await prisma.certificate.update({
-    where: { id },
-    data: { isActiveHttps: false },
-    // isActiveProtocol is NOT reset — protocol TLS keeps running.
-  }).catch(() => {});
+  // isActiveProtocol is NOT reset — protocol TLS keeps running.
+  const r = await prisma.certificate.updateMany({ where: { id }, data: { isActiveHttps: false } });
+  if (r.count === 0) { res.status(404).json({ error: 'Certificate not found' }); return; }
 
   await publishTlsReload('');
 

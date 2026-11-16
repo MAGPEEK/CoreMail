@@ -19,6 +19,7 @@ import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import { requireArea } from '../../middleware/auth.js';
+import { addressCollision } from '../../lib/address-collision.js';
 
 const log = createLogger('admin:aliases');
 export const adminAliasesRouter: RouterType = Router();
@@ -50,43 +51,26 @@ async function resolveAliasInput(input: z.infer<typeof CreateBody>): Promise<
 > {
   if (input.address) {
     const at = input.address.lastIndexOf('@');
-    if (at < 1) return { ok: false, error: 'Ungültige E-Mail-Adresse' };
+    if (at < 1) return { ok: false, error: 'Invalid email address' };
     const localPart = input.address.slice(0, at).toLowerCase();
     const domainName = input.address.slice(at + 1).toLowerCase();
     if (!LOCAL_PART_RE.test(localPart) || localPart.startsWith('.') || localPart.endsWith('.')) {
-      return { ok: false, error: 'Ungültiger Local-Part — erlaubt: a-z 0-9 . _ + -' };
+      return { ok: false, error: 'Invalid local part — allowed: a-z 0-9 . _ + -' };
     }
     const domain = await prisma.domain.findUnique({ where: { name: domainName }, select: { id: true } });
-    if (!domain) return { ok: false, error: `Domain "${domainName}" ist nicht im System konfiguriert` };
+    if (!domain) return { ok: false, error: `Domain "${domainName}" is not configured on this server` };
     return { ok: true, address: `${localPart}@${domainName}`, localPart, domainId: domain.id };
   }
   if (!input.localPart || !input.domainId) {
-    return { ok: false, error: 'Entweder `address` oder `localPart`+`domainId` muss gesetzt sein' };
+    return { ok: false, error: 'Either address or localPart + domainId is required' };
   }
   const localPart = input.localPart.toLowerCase();
   if (!LOCAL_PART_RE.test(localPart) || localPart.startsWith('.') || localPart.endsWith('.')) {
-    return { ok: false, error: 'Ungültiger Local-Part — erlaubt: a-z 0-9 . _ + -' };
+    return { ok: false, error: 'Invalid local part — allowed: a-z 0-9 . _ + -' };
   }
   const domain = await prisma.domain.findUnique({ where: { id: input.domainId }, select: { id: true, name: true } });
-  if (!domain) return { ok: false, error: 'Unbekannte Domain' };
+  if (!domain) return { ok: false, error: 'Unknown domain' };
   return { ok: true, address: `${localPart}@${domain.name}`, localPart, domainId: domain.id };
-}
-
-/**
- * Checks for collisions: an alias must not collide with an existing user/SharedMailbox/alias
- * address. Returns null if free, otherwise an error string.
- */
-async function checkAddressCollision(address: string, excludeAliasId?: string): Promise<string | null> {
-  const lower = address.toLowerCase();
-  const [user, shared, alias] = await Promise.all([
-    prisma.user.findUnique({ where: { email: lower }, select: { id: true } }),
-    prisma.sharedMailbox.findUnique({ where: { email: lower }, select: { id: true } }),
-    prisma.emailAlias.findUnique({ where: { address: lower }, select: { id: true } }),
-  ]);
-  if (user)   return `Adresse ist bereits Haupt-Adresse eines Users`;
-  if (shared) return `Adresse ist bereits Haupt-Adresse einer Shared Mailbox`;
-  if (alias && alias.id !== excludeAliasId) return 'Adresse ist bereits als Alias vergeben';
-  return null;
 }
 
 const ALIAS_SELECT = {
@@ -126,14 +110,14 @@ adminAliasesRouter.post('/mailboxes/:id/aliases', async (req: Request, res: Resp
   if (!p.success) { res.status(400).json({ error: 'Invalid input', details: p.error.issues }); return; }
 
   const user = await prisma.user.findUnique({ where: { id }, select: { id: true, domainId: true } });
-  if (!user) { res.status(404).json({ error: 'User nicht gefunden' }); return; }
+  if (!user) { res.status(404).json({ error: 'User not found' }); return; }
 
   // Default domain = the user's (for localPart-only mode)
   const input = { ...p.data, domainId: p.data.domainId ?? user.domainId };
   const resolved = await resolveAliasInput(input);
   if (!resolved.ok) { res.status(400).json({ error: resolved.error }); return; }
 
-  const collision = await checkAddressCollision(resolved.address);
+  const collision = await addressCollision(resolved.address);
   if (collision) { res.status(409).json({ error: collision }); return; }
 
   const alias = await prisma.emailAlias.create({
@@ -169,13 +153,13 @@ adminAliasesRouter.post('/shared-mailboxes/:id/aliases', async (req: Request, re
   if (!p.success) { res.status(400).json({ error: 'Invalid input', details: p.error.issues }); return; }
 
   const sm = await prisma.sharedMailbox.findUnique({ where: { id }, select: { id: true, domainId: true } });
-  if (!sm) { res.status(404).json({ error: 'Shared Mailbox nicht gefunden' }); return; }
+  if (!sm) { res.status(404).json({ error: 'Shared mailbox not found' }); return; }
 
   const input = { ...p.data, domainId: p.data.domainId ?? sm.domainId };
   const resolved = await resolveAliasInput(input);
   if (!resolved.ok) { res.status(400).json({ error: resolved.error }); return; }
 
-  const collision = await checkAddressCollision(resolved.address);
+  const collision = await addressCollision(resolved.address);
   if (collision) { res.status(409).json({ error: collision }); return; }
 
   const alias = await prisma.emailAlias.create({

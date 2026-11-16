@@ -237,10 +237,10 @@ export function SharedMailboxPage() {
     return (
       <div className="h-full flex items-center justify-center p-8">
         <div className="text-center max-w-md">
-          <AlertCircle size={36} className="mx-auto text-red-400 mb-2" />
-          <p className="text-base font-medium text-gray-800">Postfach nicht erreichbar</p>
-          <p className="text-sm text-gray-500 mt-1">{(mailboxError as Error).message}</p>
-          <Link to="/mail" className="inline-flex items-center gap-1.5 mt-4 text-sm text-accent hover:underline">
+          <AlertCircle size={36} className="mx-auto text-danger-fg mb-2" />
+          <p className="text-base font-medium text-fg">Postfach nicht erreichbar</p>
+          <p className="text-sm text-fg-subtle mt-1">{(mailboxError as Error).message}</p>
+          <Link to="/mail" className="inline-flex items-center gap-1.5 mt-4 text-sm text-accent-fg hover:underline">
             <ArrowLeft size={14} /> Zurück zu meinem Postfach
           </Link>
         </div>
@@ -249,30 +249,30 @@ export function SharedMailboxPage() {
   }
 
   if (loadingMailbox || !mailbox) {
-    return <div className="flex items-center justify-center h-full text-gray-400 text-sm">Lade Postfach…</div>;
+    return <div className="flex items-center justify-center h-full text-fg-subtle text-sm">Lade Postfach…</div>;
   }
 
   const isReadOnly = !mailbox.permissions.includes('FULL_ACCESS');
   const mayRecover = canRecoverShared(mailbox.permissions);
 
   return (
-    <div className="h-full flex flex-col bg-gray-50">
+    <div className="h-full flex flex-col bg-surface-2">
       {/* ── Banner ───────────────────────────────────────────────────────── */}
       <div className="bg-accent/10 border-b border-accent/30 px-4 py-2 flex items-center gap-3 shrink-0">
-        <Inbox size={16} className="text-accent shrink-0" />
+        <Inbox size={16} className="text-accent-fg shrink-0" />
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium text-gray-900 truncate">
-            Du siehst gerade: <span className="text-accent">{mailbox.displayName || mailbox.email}</span>
-            <span className="text-gray-500 ml-2">({mailbox.email})</span>
+          <p className="text-sm font-medium text-fg truncate">
+            Du siehst gerade: <span className="text-accent-fg">{mailbox.displayName || mailbox.email}</span>
+            <span className="text-fg-subtle ml-2">({mailbox.email})</span>
           </p>
-          <p className="text-xs text-gray-500">
+          <p className="text-xs text-fg-subtle">
             {isReadOnly ? 'Nur Lesezugriff' : 'Vollzugriff'} ·
             {mailbox.permissions.map((p) => ` ${p.replace('_', ' ').toLowerCase()}`).join(' ·')}
           </p>
         </div>
         <button
           onClick={() => navigate('/mail')}
-          className="flex items-center gap-1.5 px-3 py-1 text-xs text-gray-700 bg-white border border-gray-300 rounded hover:bg-gray-50"
+          className="flex items-center gap-1.5 px-3 py-1 text-xs text-fg-muted bg-surface border border-line-strong rounded hover:bg-surface-2"
         >
           <ArrowLeft size={12} /> Zu meinem Postfach
         </button>
@@ -290,10 +290,10 @@ export function SharedMailboxPage() {
       <div className="flex-1 flex min-h-0">
 
         {/* ── Folder-Sidebar ────────────────────────────────────────────────── */}
-        <aside className="w-52 bg-white border-r border-gray-200 overflow-y-auto shrink-0 flex flex-col">
+        <aside className="w-52 bg-surface border-r border-line overflow-y-auto shrink-0 flex flex-col">
           {/* "New folder" button (full access only) */}
           {!isReadOnly && (
-            <div className="px-3 py-2 border-b border-gray-100 shrink-0">
+            <div className="px-3 py-2 border-b border-line shrink-0">
               {showNewFolder ? (
                 <div className="flex items-center gap-1">
                   <input
@@ -305,7 +305,7 @@ export function SharedMailboxPage() {
                       if (e.key === 'Escape') { setShowNewFolder(false); setNewFolderName(''); }
                     }}
                     placeholder="Name des Ordners"
-                    className="flex-1 min-w-0 text-xs border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-accent"
+                    className="flex-1 min-w-0 text-xs border border-line-strong rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-accent-fg"
                   />
                   <button type="button"
                     onClick={() => newFolderName.trim() && createFolder.mutate(newFolderName.trim())}
@@ -314,12 +314,12 @@ export function SharedMailboxPage() {
                   >OK</button>
                   <button aria-label="Abbrechen" type="button"
                     onClick={() => { setShowNewFolder(false); setNewFolderName(''); }}
-                    className="text-gray-400 hover:text-gray-700"
+                    className="text-fg-subtle hover:text-fg-muted"
                   ><X size={12} /></button>
                 </div>
               ) : (
                 <button type="button" onClick={() => setShowNewFolder(true)}
-                  className="w-full flex items-center justify-center gap-1.5 text-xs text-gray-600 hover:text-accent hover:bg-accent/5 rounded py-1 border border-dashed border-gray-300 hover:border-accent"
+                  className="w-full flex items-center justify-center gap-1.5 text-xs text-fg-muted hover:text-accent-fg hover:bg-accent/5 rounded py-1 border border-dashed border-line-strong hover:border-accent-fg"
                 >
                   <FolderPlus size={12} /> Neuer Ordner
                 </button>
@@ -329,9 +329,9 @@ export function SharedMailboxPage() {
 
           <nav className="flex-1 overflow-y-auto py-1">
             {loadingFolders ? (
-              <p className="text-xs text-gray-400 p-3">Lade Ordner…</p>
+              <p className="text-xs text-fg-subtle p-3">Lade Ordner…</p>
             ) : sortedFolders.length === 0 ? (
-              <p className="text-xs text-gray-400 p-3">Keine Ordner verfügbar.</p>
+              <p className="text-xs text-fg-subtle p-3">Keine Ordner verfügbar.</p>
             ) : (
               <ul className="space-y-0.5 px-1">
                 {sortedFolders.map((f) => {
@@ -354,7 +354,7 @@ export function SharedMailboxPage() {
                                 renameFolder.mutate({ folderId: f.id, displayName: renameValue.trim() });
                               if (e.key === 'Escape') { setRenamingId(null); setRenameValue(''); }
                             }}
-                            className="flex-1 min-w-0 text-xs border border-gray-300 rounded px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-accent"
+                            className="flex-1 min-w-0 text-xs border border-line-strong rounded px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-accent-fg"
                           />
                           <button type="button"
                             onClick={() => renameValue.trim() && renameFolder.mutate({ folderId: f.id, displayName: renameValue.trim() })}
@@ -362,10 +362,10 @@ export function SharedMailboxPage() {
                             className="text-[10px] text-white bg-accent rounded px-1.5 py-0.5"
                           >OK</button>
                           <button aria-label="Umbenennen abbrechen" type="button" onClick={() => { setRenamingId(null); setRenameValue(''); }}
-                            className="text-gray-400"><X size={11} /></button>
+                            className="text-fg-subtle"><X size={11} /></button>
                         </div>
                       ) : (
-                        <div className={`relative flex items-center pr-1 rounded-sm transition-all duration-150 ${active ? '' : 'hover:bg-gray-100 dark:hover:bg-gray-700'}`}>
+                        <div className={`relative flex items-center pr-1 rounded-sm transition-all duration-150 ${active ? '' : 'hover:bg-surface-2'}`}>
                           {/* active accent bar on the left */}
                           {active && (
                             <span className="absolute left-0 top-1 bottom-1 w-[3px] bg-accent rounded-r" />
@@ -375,15 +375,15 @@ export function SharedMailboxPage() {
                             onClick={() => { setSelectedFolderId(f.id); setSelectedMessageId(null); }}
                             className={`flex-1 min-w-0 text-left flex items-center gap-1.5 pl-2 pr-1 py-1.5 text-sm transition-colors ${
                               active
-                                ? 'bg-accent/10 text-accent font-medium'
-                                : 'text-gray-700 dark:text-gray-200'
+                                ? 'bg-accent/10 text-accent-fg font-medium'
+                                : 'text-fg-muted'
                             }`}
                           >
-                            {f.isFavorite && <Star size={11} className="text-amber-400 shrink-0" />}
+                            {f.isFavorite && <Star size={11} className="text-warning-fg shrink-0" />}
                             <Icon size={15} className="shrink-0" style={f.color ? { color: f.color } : undefined} />
                             <span className="flex-1 truncate">{label}</span>
                             {f.unreadCount > 0 && (
-                              <span className={`text-xs font-bold tabular-nums ${active ? 'text-accent' : 'text-gray-500'}`}>
+                              <span className={`text-xs font-bold tabular-nums ${active ? 'text-accent-fg' : 'text-fg-subtle'}`}>
                                 {f.unreadCount}
                               </span>
                             )}
@@ -393,7 +393,7 @@ export function SharedMailboxPage() {
                             <button aria-label={t('recover_title')} type="button"
                               onClick={() => setRecoverOpen(true)}
                               title={t('recover_title')}
-                              className="p-1 text-gray-400 hover:text-accent rounded opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity shrink-0"
+                              className="p-1 text-fg-subtle hover:text-accent-fg rounded opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity shrink-0"
                             ><RotateCcw size={11} /></button>
                           )}
                           {/* Rename/delete buttons (custom folders + full access only) */}
@@ -402,7 +402,7 @@ export function SharedMailboxPage() {
                               <button aria-label="Umbenennen" type="button"
                                 onClick={() => { setRenamingId(f.id); setRenameValue(f.displayName); }}
                                 title="Umbenennen"
-                                className="p-1 text-gray-400 hover:text-accent rounded"
+                                className="p-1 text-fg-subtle hover:text-accent-fg rounded"
                               ><Pencil size={11} /></button>
                               <button aria-label="Löschen" type="button"
                                 onClick={() => {
@@ -410,7 +410,7 @@ export function SharedMailboxPage() {
                                     deleteFolder.mutate(f.id);
                                 }}
                                 title="Löschen"
-                                className="p-1 text-gray-400 hover:text-red-500 rounded"
+                                className="p-1 text-fg-subtle hover:text-danger-fg rounded"
                               ><Trash2 size={11} /></button>
                             </div>
                           )}
@@ -425,9 +425,9 @@ export function SharedMailboxPage() {
 
           {/* 9.1: Recover deleted items + quota of THIS shared mailbox */}
           {mayRecover && (
-            <div className="px-3 py-2 border-t border-gray-100 shrink-0">
+            <div className="px-3 py-2 border-t border-line shrink-0">
               <button type="button" onClick={() => setRecoverOpen(true)}
-                className="w-full flex items-center gap-1.5 text-xs text-gray-600 hover:text-accent rounded py-1"
+                className="w-full flex items-center gap-1.5 text-xs text-fg-muted hover:text-accent-fg rounded py-1"
               >
                 <RotateCcw size={12} /> {t('recover_title')}
               </button>
@@ -437,16 +437,16 @@ export function SharedMailboxPage() {
         </aside>
 
         {/* ── Message list ────────────────────────────────────────────────────── */}
-        <div className="w-80 bg-white border-r border-gray-200 overflow-y-auto shrink-0">
+        <div className="w-80 bg-surface border-r border-line overflow-y-auto shrink-0">
           {loadingMessages ? (
             <MessageListSkeleton rows={8} />
           ) : !messageList || messageList.messages.length === 0 ? (
             selectedFolderId
               ? <EmptyInbox />
-              : <p className="text-xs text-gray-400 p-6 text-center">Bitte einen Ordner wählen.</p>
+              : <p className="text-xs text-fg-subtle p-6 text-center">Bitte einen Ordner wählen.</p>
           ) : (
             <>
-              <div className="px-3 py-1.5 text-[11px] uppercase tracking-wide text-gray-400 border-b border-gray-100">
+              <div className="px-3 py-1.5 text-[11px] uppercase tracking-wide text-fg-subtle border-b border-line">
                 {messageList.total.toLocaleString('de-DE')} Nachrichten
                 {messageList.total > messageList.messages.length && ` · zeigt ${messageList.messages.length}`}
               </div>
@@ -457,21 +457,21 @@ export function SharedMailboxPage() {
                   return (
                     <li key={m.id}>
                       <button type="button" onClick={() => setSelectedMessageId(m.id)}
-                        className={`w-full text-left px-3 py-2 border-b border-gray-50 border-l-2 transition-colors ${
-                          active ? 'bg-accent/10 border-l-accent' : 'hover:bg-gray-50 border-l-transparent'
+                        className={`w-full text-left px-3 py-2 border-b border-line border-l-2 transition-colors ${
+                          active ? 'bg-accent/10 border-l-accent-fg' : 'hover:bg-surface-2 border-l-transparent'
                         }`}
                       >
                         <div className="flex items-center justify-between gap-2 mb-0.5">
-                          <span className={`text-xs truncate ${unread ? 'font-semibold text-gray-900' : 'text-gray-600'}`}>
+                          <span className={`text-xs truncate ${unread ? 'font-semibold text-fg' : 'text-fg-muted'}`}>
                             {m.fromName || m.fromAddr}
                           </span>
-                          <span className="text-[10px] text-gray-400 shrink-0">{fmtDate(m.date).slice(0, 10)}</span>
+                          <span className="text-[10px] text-fg-subtle shrink-0">{fmtDate(m.date).slice(0, 10)}</span>
                         </div>
-                        <p className={`text-sm truncate ${unread ? 'text-gray-900 font-medium' : 'text-gray-700'}`}>
+                        <p className={`text-sm truncate ${unread ? 'text-fg font-medium' : 'text-fg-muted'}`}>
                           {m.subject || '(kein Betreff)'}
                         </p>
                         {m.bodyText && (
-                          <p className="text-[11px] text-gray-400 truncate mt-0.5">{m.bodyText.slice(0, 90)}</p>
+                          <p className="text-[11px] text-fg-subtle truncate mt-0.5">{m.bodyText.slice(0, 90)}</p>
                         )}
                       </button>
                     </li>
@@ -483,31 +483,31 @@ export function SharedMailboxPage() {
         </div>
 
         {/* ── Reader-Pane ─────────────────────────────────────────────────────── */}
-        <div className="flex-1 bg-white overflow-y-auto">
+        <div className="flex-1 bg-surface overflow-y-auto">
           {loadingMessage ? (
-            <p className="text-xs text-gray-400 p-6 text-center">Lade Nachricht…</p>
+            <p className="text-xs text-fg-subtle p-6 text-center">Lade Nachricht…</p>
           ) : !messageDetail ? (
-            <div className="h-full flex items-center justify-center text-gray-400">
+            <div className="h-full flex items-center justify-center text-fg-subtle">
               <div className="text-center">
-                <Inbox size={32} className="mx-auto text-gray-300 mb-2" />
+                <Inbox size={32} className="mx-auto text-fg-subtle mb-2" />
                 <p className="text-sm">Nachricht zum Lesen auswählen.</p>
               </div>
             </div>
           ) : (
             <article className="p-6 max-w-3xl">
-              <header className="border-b border-gray-200 pb-4 mb-4">
-                <h2 className="text-lg font-semibold text-gray-900">{messageDetail.subject || '(kein Betreff)'}</h2>
-                <div className="text-xs text-gray-500 mt-2 space-y-0.5">
-                  <p><span className="text-gray-400">Von:</span> {messageDetail.fromName ? `${messageDetail.fromName} <${messageDetail.fromAddr}>` : messageDetail.fromAddr}</p>
-                  <p><span className="text-gray-400">An:</span> {messageDetail.toAddrs.join(', ')}</p>
-                  <p><span className="text-gray-400">Datum:</span> {fmtDate(messageDetail.date)}</p>
-                  <p><span className="text-gray-400">Ordner:</span> {folderLabel({ ...messageDetail.folder, parentId: null, totalCount: 0, unreadCount: 0, isFavorite: false, sortOrder: 0, color: null })}</p>
+              <header className="border-b border-line pb-4 mb-4">
+                <h2 className="text-lg font-semibold text-fg">{messageDetail.subject || '(kein Betreff)'}</h2>
+                <div className="text-xs text-fg-subtle mt-2 space-y-0.5">
+                  <p><span className="text-fg-subtle">Von:</span> {messageDetail.fromName ? `${messageDetail.fromName} <${messageDetail.fromAddr}>` : messageDetail.fromAddr}</p>
+                  <p><span className="text-fg-subtle">An:</span> {messageDetail.toAddrs.join(', ')}</p>
+                  <p><span className="text-fg-subtle">Datum:</span> {fmtDate(messageDetail.date)}</p>
+                  <p><span className="text-fg-subtle">Ordner:</span> {folderLabel({ ...messageDetail.folder, parentId: null, totalCount: 0, unreadCount: 0, isFavorite: false, sortOrder: 0, color: null })}</p>
                 </div>
                 {messageDetail.attachments.length > 0 && (
                   <div className="mt-3 flex flex-wrap gap-1.5">
                     {messageDetail.attachments.map((a) => (
-                      <span key={a.id} className="inline-flex items-center gap-1 px-2 py-0.5 bg-gray-100 text-xs text-gray-700 rounded">
-                        <Paperclip size={10} /> {a.filename} <span className="text-gray-400">({fmtBytes(a.size)})</span>
+                      <span key={a.id} className="inline-flex items-center gap-1 px-2 py-0.5 bg-surface-2 text-xs text-fg-muted rounded">
+                        <Paperclip size={10} /> {a.filename} <span className="text-fg-subtle">({fmtBytes(a.size)})</span>
                       </span>
                     ))}
                   </div>
@@ -518,13 +518,13 @@ export function SharedMailboxPage() {
                   messageId={messageDetail.id}
                   html={messageDetail.bodyHtml}
                   attachments={messageDetail.attachments}
-                  bodyClassName="prose prose-sm max-w-none text-gray-800"
+                  bodyClassName="prose prose-sm max-w-none"
                 />
               ) : (
-                <pre className="whitespace-pre-wrap text-sm text-gray-800 font-sans">{messageDetail.bodyText}</pre>
+                <pre className="whitespace-pre-wrap text-sm text-fg font-sans">{messageDetail.bodyText}</pre>
               )}
               {isReadOnly && (
-                <div className="mt-6 px-3 py-2 bg-amber-50 border border-amber-200 rounded text-xs text-amber-800">
+                <div className="mt-6 px-3 py-2 bg-warning-bg border border-warning-line rounded text-xs text-warning-fg">
                   Du hast nur Lesezugriff auf dieses Postfach. Antworten oder Verschieben ist nicht möglich.
                 </div>
               )}

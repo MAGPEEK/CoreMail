@@ -1,5 +1,8 @@
-import { useState } from 'react';
+import { createContext, useContext, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { errorMessage } from '../lib/errors.js';
+import { WriteGuard } from '../components/Can.js';
+import { protectionFeatureMatrix } from '../lib/protectionStatus.js';
 import {
   LayoutDashboard, Zap, Bug, Database, Clock, Globe, Paperclip,
   CheckCircle, XCircle, RefreshCw, Plus, Trash2, AlertTriangle,
@@ -7,6 +10,7 @@ import {
 import { api } from '../api/client.js';
 import toast from 'react-hot-toast';
 import { Toggle } from '../components/Toggle.js';
+import { ClamavSettingsSection } from '../components/ClamavSettingsSection.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -67,13 +71,21 @@ interface ContainerStatus {
   clamav: { online: boolean; version?: string; error?: string };
 }
 
+/** GET /admin/security/clamav/status (clamd VERSION/STATS). */
+interface ClamavLiveStatus {
+  online: boolean;
+  version?: { raw: string; engine?: string; signatureVersion?: number; signatureDate?: string };
+  signatureAgeHours?: number;
+  error?: string;
+}
+
 // ── Sub-navigation ────────────────────────────────────────────────────────────
 
 type Section = 'overview' | 'rspamd' | 'antivirus' | 'dnsbl' | 'greylisting' | 'geoip' | 'attachments';
 
 const SUB_NAV: { id: Section; label: string; icon: React.ElementType }[] = [
   { id: 'overview',    label: 'Übersicht',    icon: LayoutDashboard },
-  { id: 'rspamd',      label: 'Rspamd 4.0',   icon: Zap },
+  { id: 'rspamd',      label: 'Rspamd',       icon: Zap },
   { id: 'antivirus',   label: 'Antivirus',    icon: Bug },
   { id: 'dnsbl',       label: 'DNSBL',        icon: Database },
   { id: 'greylisting', label: 'Greylisting',  icon: Clock },
@@ -86,9 +98,9 @@ const SUB_NAV: { id: Section; label: string; icon: React.ElementType }[] = [
 function OnlineBadge({ online }: { online: boolean }) {
   return (
     <span className={`inline-flex items-center gap-1.5 text-xs font-medium px-2 py-0.5 rounded-full ${
-      online ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-600'
+      online ? 'bg-success-bg text-success-fg' : 'bg-danger-bg text-danger-fg'
     }`}>
-      <span className={`w-1.5 h-1.5 rounded-full ${online ? 'bg-green-500' : 'bg-red-500'}`} />
+      <span className={`w-1.5 h-1.5 rounded-full ${online ? 'bg-success' : 'bg-danger'}`} />
       {online ? 'Online' : 'Offline'}
     </span>
   );
@@ -96,7 +108,11 @@ function OnlineBadge({ online }: { online: boolean }) {
 
 // ── Helper: section save button ───────────────────────────────────────────────
 
-function SaveBtn({ onClick, pending }: { onClick: () => void; pending: boolean }) {
+/** The page's settings save is running (no double submits from any section). */
+const SavePendingContext = createContext(false);
+
+function SaveBtn({ onClick, pending: pendingProp }: { onClick: () => void; pending: boolean }) {
+  const pending = useContext(SavePendingContext) || pendingProp;
   return (
     <button onClick={onClick} disabled={pending} className="btn-primary text-sm disabled:opacity-50">
       {pending ? 'Speichern...' : 'Speichern'}
@@ -109,15 +125,15 @@ function SaveBtn({ onClick, pending }: { onClick: () => void; pending: boolean }
 function NumInput({ label, value, onChange, min, max, step = 1, unit }:
   { label: string; value: number; onChange: (v: number) => void; min: number; max: number; step?: number; unit?: string }) {
   return (
-    <div className="flex items-center justify-between py-2.5 border-b border-gray-100 last:border-0">
-      <span className="text-sm text-gray-700">{label}</span>
+    <div className="flex items-center justify-between py-2.5 border-b border-line last:border-0">
+      <span className="text-sm text-fg-muted">{label}</span>
       <div className="flex items-center gap-1.5">
         <input
           type="number" min={min} max={max} step={step} value={value}
           onChange={e => onChange(parseFloat(e.target.value) || min)}
-          className="w-24 border border-gray-300 rounded px-2 py-1 text-sm text-right focus:outline-none focus:ring-1 focus:ring-accent"
+          className="w-24 border border-line-strong rounded px-2 py-1 text-sm text-right focus:outline-none focus:ring-2 focus:ring-accent-fg"
         />
-        {unit && <span className="text-xs text-gray-400 w-8">{unit}</span>}
+        {unit && <span className="text-xs text-fg-subtle w-8">{unit}</span>}
       </div>
     </div>
   );
@@ -128,10 +144,10 @@ function NumInput({ label, value, onChange, min, max, step = 1, unit }:
 function ToggleRow({ label, desc, value, onChange }:
   { label: string; desc?: string; value: boolean; onChange: (v: boolean) => void }) {
   return (
-    <div className="flex items-center justify-between py-2.5 border-b border-gray-100 last:border-0">
+    <div className="flex items-center justify-between py-2.5 border-b border-line last:border-0">
       <div>
-        <p className="text-sm text-gray-800 font-medium">{label}</p>
-        {desc && <p className="text-xs text-gray-400 mt-0.5">{desc}</p>}
+        <p className="text-sm text-fg font-medium">{label}</p>
+        {desc && <p className="text-xs text-fg-subtle mt-0.5">{desc}</p>}
       </div>
       <Toggle active={value} onToggle={() => onChange(!value)} />
     </div>
@@ -166,17 +182,40 @@ const COUNTRIES: [string, string][] = [
 // OverviewSection
 // ═════════════════════════════════════════════════════════════════════════════
 
-function OverviewSection() {
+function OverviewSection({ settings }: { settings: SecuritySettings }) {
   const qc = useQueryClient();
   const { data: status, isLoading, dataUpdatedAt } = useQuery({
     queryKey: ['admin', 'security', 'status'],
     queryFn: () => api.get<ContainerStatus>('/admin/security/status'),
     refetchInterval: 30_000,
   });
+  // /status only pings rspamd — the counters come from /rspamd/stat (was never shown)
+  const { data: rspamdStat } = useQuery({
+    queryKey: ['admin', 'security', 'rspamd', 'stat'],
+    queryFn:  () => api.get<RspamdStat>('/admin/security/rspamd/stat'),
+    enabled:  !!status?.rspamd.online,
+    retry: false,
+  });
+  const { data: zones } = useQuery({
+    queryKey: ['admin', 'dnsbl-zones'],
+    queryFn: () => api.get<DnsblZone[]>('/admin/security/dnsbl'),
+  });
+
+  // ClamAV: the clamd VERSION/STATS status (same query as the Antivirus section)
+  const { data: c, isLoading: clamavLoading } = useQuery({
+    queryKey: ['admin', 'security', 'clamav', 'status'],
+    queryFn:  () => api.get<ClamavLiveStatus>('/admin/security/clamav/status'),
+    refetchInterval: 60_000,
+    retry: false,
+  });
 
   const r = status?.rspamd;
-  const c = status?.clamav;
-  const stat = r?.stat as RspamdStat | undefined;
+  const stat = rspamdStat ?? r?.stat;
+  const features = protectionFeatureMatrix(
+    settings,
+    { rspamd: status ? !!r?.online : undefined, clamav: c ? c.online : undefined },
+    zones?.filter((z) => z.enabled && !z.isWhitelist).map((z) => z.host),
+  );
 
   function fmtUptime(sec?: number) {
     if (!sec) return '—';
@@ -187,8 +226,11 @@ function OverviewSection() {
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
-        <h2 className="text-base font-semibold text-gray-900">Container-Status</h2>
-        <button onClick={() => qc.invalidateQueries({ queryKey: ['admin', 'security', 'status'] })}
+        <h2 className="text-base font-semibold text-fg">Container-Status</h2>
+        <button onClick={() => {
+          void qc.invalidateQueries({ queryKey: ['admin', 'security', 'status'] });
+          void qc.invalidateQueries({ queryKey: ['admin', 'security', 'clamav', 'status'] });
+        }}
           className="btn-ghost text-xs gap-1">
           <RefreshCw size={13} className={isLoading ? 'animate-spin' : ''} />
           Aktualisieren
@@ -196,7 +238,7 @@ function OverviewSection() {
       </div>
 
       {dataUpdatedAt > 0 && (
-        <p className="text-xs text-gray-400">
+        <p className="text-xs text-fg-subtle">
           Zuletzt aktualisiert: {new Date(dataUpdatedAt).toLocaleTimeString('de-DE')}
         </p>
       )}
@@ -206,40 +248,40 @@ function OverviewSection() {
         <div className="card p-4 space-y-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-lg bg-purple-100 flex items-center justify-center">
-                <Zap size={16} className="text-purple-600" />
+              <div className="w-8 h-8 rounded-lg bg-info-bg flex items-center justify-center">
+                <Zap size={16} className="text-info-fg" />
               </div>
               <div>
-                <p className="text-sm font-semibold text-gray-900">Rspamd</p>
-                <p className="text-xs text-gray-400">{stat?.version ?? 'v4.0'} · Anti-Spam</p>
+                <p className="text-sm font-semibold text-fg">Rspamd</p>
+                <p className="text-xs text-fg-subtle">{stat?.version ? `v${stat.version} · ` : ''}Anti-Spam</p>
               </div>
             </div>
-            {isLoading ? <span className="text-xs text-gray-400">…</span> : <OnlineBadge online={!!r?.online} />}
+            {isLoading ? <span className="text-xs text-fg-subtle">…</span> : <OnlineBadge online={!!r?.online} />}
           </div>
 
           {r?.online && stat && (
-            <div className="grid grid-cols-3 gap-2 pt-1 border-t border-gray-100">
+            <div className="grid grid-cols-3 gap-2 pt-1 border-t border-line">
               <div className="text-center">
-                <p className="text-lg font-bold text-gray-900">{(stat.scanned ?? 0).toLocaleString()}</p>
-                <p className="text-[10px] text-gray-400">Gescannt</p>
+                <p className="text-lg font-bold text-fg">{(stat.scanned ?? 0).toLocaleString()}</p>
+                <p className="text-[10px] text-fg-subtle">Gescannt</p>
               </div>
               <div className="text-center">
-                <p className="text-lg font-bold text-red-600">{(stat.spam_count ?? 0).toLocaleString()}</p>
-                <p className="text-[10px] text-gray-400">Spam</p>
+                <p className="text-lg font-bold text-danger-fg">{(stat.spam_count ?? 0).toLocaleString()}</p>
+                <p className="text-[10px] text-fg-subtle">Spam</p>
               </div>
               <div className="text-center">
-                <p className="text-lg font-bold text-green-600">{(stat.ham_count ?? 0).toLocaleString()}</p>
-                <p className="text-[10px] text-gray-400">Ham</p>
+                <p className="text-lg font-bold text-success-fg">{(stat.ham_count ?? 0).toLocaleString()}</p>
+                <p className="text-[10px] text-fg-subtle">Ham</p>
               </div>
             </div>
           )}
           {r?.online && stat?.uptime !== undefined && (
-            <p className="text-xs text-gray-400 border-t border-gray-100 pt-2">
+            <p className="text-xs text-fg-subtle border-t border-line pt-2">
               Uptime: {fmtUptime(stat.uptime)}
             </p>
           )}
           {!r?.online && r?.error && (
-            <p className="text-xs text-red-500 flex items-center gap-1">
+            <p className="text-xs text-danger-fg flex items-center gap-1">
               <AlertTriangle size={11} /> {r.error}
             </p>
           )}
@@ -249,32 +291,33 @@ function OverviewSection() {
         <div className="card p-4 space-y-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-lg bg-emerald-100 flex items-center justify-center">
-                <Bug size={16} className="text-emerald-600" />
+              <div className="w-8 h-8 rounded-lg bg-success-bg flex items-center justify-center">
+                <Bug size={16} className="text-success-fg" />
               </div>
               <div>
-                <p className="text-sm font-semibold text-gray-900">ClamAV</p>
-                <p className="text-xs text-gray-400">Open-Source Antivirus</p>
+                <p className="text-sm font-semibold text-fg">ClamAV</p>
+                <p className="text-xs text-fg-subtle">Open-Source Antivirus</p>
               </div>
             </div>
-            {isLoading ? <span className="text-xs text-gray-400">…</span> : <OnlineBadge online={!!c?.online} />}
+            {clamavLoading ? <span className="text-xs text-fg-subtle">…</span> : <OnlineBadge online={!!c?.online} />}
           </div>
 
           {c?.online && c.version && (
-            <div className="pt-1 border-t border-gray-100">
-              <p className="text-xs text-gray-600 font-mono bg-gray-50 rounded px-2 py-1 break-all">
-                {c.version}
+            <div className="pt-1 border-t border-line">
+              <p className="text-xs text-fg-muted font-mono bg-surface-2 rounded px-2 py-1 break-all">
+                {c.version.engine ? `ClamAV ${c.version.engine}` : c.version.raw}
+                {c.version.signatureVersion !== undefined && ` · Signaturen ${c.version.signatureVersion}`}
               </p>
             </div>
           )}
           {!c?.online && c?.error && (
-            <p className="text-xs text-red-500 flex items-center gap-1">
+            <p className="text-xs text-danger-fg flex items-center gap-1">
               <AlertTriangle size={11} /> {c.error}
             </p>
           )}
-          {c?.online && (
-            <p className="text-xs text-gray-400 border-t border-gray-100 pt-2">
-              Signaturdatenbank wird täglich aktualisiert (freshclam)
+          {c?.online && c.signatureAgeHours !== undefined && (
+            <p className={`text-xs border-t border-line pt-2 ${c.signatureAgeHours > 48 ? 'text-warning-fg' : 'text-fg-subtle'}`}>
+              Signaturdatenbank vor {c.signatureAgeHours} h aktualisiert
             </p>
           )}
         </div>
@@ -282,30 +325,19 @@ function OverviewSection() {
 
       {/* Feature matrix */}
       <div className="card overflow-hidden">
-        <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-200">
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Aktive Schutzmaßnahmen</p>
+        <div className="px-4 py-2.5 bg-surface-2 border-b border-line">
+          <p className="text-xs font-semibold text-fg-subtle uppercase tracking-wide">Aktive Schutzmaßnahmen</p>
         </div>
         <table className="w-full text-sm">
-          <tbody className="divide-y divide-gray-100">
-            {[
-              { label: 'SPF-Prüfung',          ok: true,  note: 'Sender Policy Framework' },
-              { label: 'DKIM-Validierung',      ok: true,  note: 'DomainKeys Identified Mail' },
-              { label: 'DMARC-Auswertung',      ok: true,  note: 'Domain-based Message Authentication' },
-              { label: 'ARC-Validierung',       ok: true,  note: 'Authenticated Received Chain' },
-              { label: 'Anti-Spam (Rspamd)',     ok: !!r?.online, note: r?.online ? `v${stat?.version ?? '4.0'} aktiv` : 'Container nicht erreichbar' },
-              { label: 'Antivirus (ClamAV)',     ok: !!c?.online, note: c?.online ? 'Signaturen aktuell' : 'Container nicht erreichbar' },
-              { label: 'Greylisting',           ok: true,  note: '5 min Wartezeit für Erstverbindungen' },
-              { label: 'DNSBL (Spamhaus ZEN)',  ok: true,  note: 'zen.spamhaus.org' },
-              { label: 'DNSBL (SpamCop)',       ok: true,  note: 'bl.spamcop.net' },
-              { label: 'Attachment-Filter',     ok: true,  note: 'Gefährliche Dateitypen blockiert' },
-            ].map(f => (
-              <tr key={f.label} className="hover:bg-gray-50 transition-colors">
-                <td className="px-4 py-2.5 font-medium text-gray-800 w-48">{f.label}</td>
-                <td className="px-4 py-2.5 text-gray-400 text-xs">{f.note}</td>
+          <tbody className="divide-y divide-line">
+            {features.map(f => (
+              <tr key={f.label} className="hover:bg-surface-2 transition-colors">
+                <td className="px-4 py-2.5 font-medium text-fg w-48">{f.label}</td>
+                <td className="px-4 py-2.5 text-fg-subtle text-xs">{f.note}</td>
                 <td className="px-4 py-2.5 text-right pr-5">
                   {f.ok
-                    ? <CheckCircle size={16} className="text-green-500 ml-auto" />
-                    : <XCircle    size={16} className="text-red-400  ml-auto" />}
+                    ? <CheckCircle size={16} className="text-success-fg ml-auto" aria-label="aktiv" />
+                    : <XCircle    size={16} className="text-danger-fg  ml-auto" aria-label="inaktiv" />}
                 </td>
               </tr>
             ))}
@@ -321,25 +353,13 @@ function OverviewSection() {
 // ═════════════════════════════════════════════════════════════════════════════
 
 function RspamdSection({ settings, onSave }: { settings: SecuritySettings; onSave: (d: Partial<SecuritySettings>) => void }) {
-  // Thresholds
-  const [enabled,  setEnabled]  = useState(settings.rspamdEnabled);
-  const [greylist, setGreylist] = useState(settings.rspamdGreylistScore);
-  const [spam,     setSpam]     = useState(settings.rspamdSpamScore);
-  const [reject,   setReject]   = useState(settings.rspamdRejectScore);
-  // Autolearn
-  const [autolearn,        setAutolearn]        = useState(settings.rspamdAutolearn);
-  const [autolearnSpam,    setAutolearnSpam]    = useState(settings.rspamdAutolearnSpam);
-  const [autolearnHam,     setAutolearnHam]     = useState(settings.rspamdAutolearnHam);
-  // Header
-  const [addSpamHeader,    setAddSpamHeader]    = useState(settings.rspamdAddSpamHeader);
-  const [extendedHeaders,  setExtendedHeaders]  = useState(settings.rspamdExtendedHeaders);
-  const [rewriteSubject,   setRewriteSubject]   = useState(settings.rspamdRewriteSubject);
-  const [subjectTag,       setSubjectTag]       = useState(settings.rspamdSubjectTag);
-  // Modules
-  const [phishing, setPhishing] = useState(settings.rspamdPhishingEnabled);
-  const [fuzzy,    setFuzzy]    = useState(settings.rspamdFuzzyEnabled);
-  const [url,      setUrl]      = useState(settings.rspamdUrlEnabled);
-  const [mxCheck,  setMxCheck]  = useState(settings.rspamdMxCheckEnabled);
+  // Only what the security filter evaluates: switch + spam (→ Junk) and reject
+  // thresholds. Greylist score, autolearn, header rewriting and module switches
+  // were saved but never applied (CoreMail decides on the score itself; rspamd
+  // modules and Bayes autolearn are configured in the rspamd container).
+  const [enabled, setEnabled] = useState(settings.rspamdEnabled);
+  const [spam,    setSpam]    = useState(settings.rspamdSpamScore);
+  const [reject,  setReject]  = useState(settings.rspamdRejectScore);
 
   const { data: stat, isLoading } = useQuery({
     queryKey: ['admin', 'security', 'rspamd', 'stat'],
@@ -347,44 +367,20 @@ function RspamdSection({ settings, onSave }: { settings: SecuritySettings; onSav
     retry: false,
   });
 
-  const learnMut = useMutation({
-    mutationFn: (type: 'spam' | 'ham') =>
-      api.post<{ ok: boolean }>(`/admin/security/rspamd/learn/${type}`, {}),
-    onSuccess: (_, type) => toast.success(`Rspamd Bayes: ${type === 'spam' ? 'Spam' : 'Ham'} gelernt`),
-    onError:   () => toast.error('Rspamd nicht erreichbar'),
-  });
-
   function save() {
-    if (greylist >= spam) { toast.error('Greylisting-Score muss kleiner als Spam-Score sein'); return; }
-    if (spam >= reject)   { toast.error('Spam-Score muss kleiner als Reject-Score sein'); return; }
-    onSave({
-      rspamdEnabled:         enabled,
-      rspamdGreylistScore:   greylist,
-      rspamdSpamScore:       spam,
-      rspamdRejectScore:     reject,
-      rspamdAutolearn:       autolearn,
-      rspamdAutolearnSpam:   autolearnSpam,
-      rspamdAutolearnHam:    autolearnHam,
-      rspamdAddSpamHeader:   addSpamHeader,
-      rspamdExtendedHeaders: extendedHeaders,
-      rspamdRewriteSubject:  rewriteSubject,
-      rspamdSubjectTag:      subjectTag,
-      rspamdPhishingEnabled: phishing,
-      rspamdFuzzyEnabled:    fuzzy,
-      rspamdUrlEnabled:      url,
-      rspamdMxCheckEnabled:  mxCheck,
-    });
+    if (spam >= reject) { toast.error('Der Spam-Score muss kleiner als der Ablehnungs-Score sein'); return; }
+    onSave({ rspamdEnabled: enabled, rspamdSpamScore: spam, rspamdRejectScore: reject });
   }
 
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
-        <h2 className="text-base font-semibold text-gray-900">Rspamd 4.0 Konfiguration</h2>
+        <h2 className="text-base font-semibold text-fg">Rspamd-Konfiguration</h2>
         <SaveBtn onClick={save} pending={false} />
       </div>
 
       {/* Live stats */}
-      {isLoading && <p className="text-xs text-gray-400">Lade Rspamd-Statistiken…</p>}
+      {isLoading && <p className="text-xs text-fg-subtle">Lade Rspamd-Statistiken…</p>}
       {stat && (
         <div className="grid grid-cols-4 gap-3">
           {[
@@ -394,8 +390,8 @@ function RspamdSection({ settings, onSave }: { settings: SecuritySettings; onSav
             { label: 'Uptime',   value: stat.uptime ? `${Math.floor(stat.uptime / 3600)}h` : '—' },
           ].map(s => (
             <div key={s.label} className="card p-3 text-center">
-              <p className="text-lg font-bold text-gray-900">{s.value}</p>
-              <p className="text-xs text-gray-400">{s.label}</p>
+              <p className="text-lg font-bold text-fg">{s.value}</p>
+              <p className="text-xs text-fg-subtle">{s.label}</p>
             </div>
           ))}
         </div>
@@ -403,340 +399,21 @@ function RspamdSection({ settings, onSave }: { settings: SecuritySettings; onSav
 
       {/* ── Action thresholds ──────────────────────────────────────────── */}
       <div className="card p-4 space-y-1">
-        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide pb-2 border-b border-gray-100">
+        <p className="text-xs font-semibold text-fg-subtle uppercase tracking-wide pb-2 border-b border-line">
           Aktions-Schwellwerte
         </p>
-        <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-700 my-2">
-          Score ≥ Greylist → Greylisting &nbsp;·&nbsp; Score ≥ Spam → Header hinzufügen &nbsp;·&nbsp; Score ≥ Reject → Ablehnen
+        <div className="bg-info-bg border border-info-line rounded-lg px-3 py-2 text-xs text-info-fg my-2">
+          Score ≥ Spam → Zustellung in den Junk-Ordner &nbsp;·&nbsp; Score ≥ Ablehnen → Annahme verweigert
         </div>
-        <ToggleRow label="Rspamd aktiviert" value={enabled} onChange={setEnabled} />
-        <NumInput label="Greylisting-Score"       value={greylist} onChange={setGreylist} min={0}  max={20}  step={0.5} />
-        <NumInput label="Spam-Score (Add Header)" value={spam}     onChange={setSpam}     min={0}  max={30}  step={0.5} />
-        <NumInput label="Reject-Score"            value={reject}   onChange={setReject}   min={0}  max={100} step={0.5} />
+        <ToggleRow label="Rspamd aktiviert" desc="Eingehende Mails werden von Rspamd bewertet" value={enabled} onChange={setEnabled} />
+        <NumInput label="Spam-Score (Junk-Ordner)" value={spam}   onChange={setSpam}   min={0} max={100} step={0.5} />
+        <NumInput label="Ablehnungs-Score"         value={reject} onChange={setReject} min={0} max={100} step={0.5} />
       </div>
 
-      {/* ── Autolearn ─────────────────────────────────────────────────── */}
-      <div className="card p-4 space-y-1">
-        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide pb-2 border-b border-gray-100">
-          Bayes Autolearn
-        </p>
-        <p className="text-xs text-gray-400 py-1">
-          Rspamd lernt automatisch aus eindeutigen Mails. Nachrichten mit Score über dem Spam-Schwellwert
-          werden als Spam trainiert, unter dem Ham-Schwellwert als Ham.
-        </p>
-        <ToggleRow
-          label="Autolearn aktiviert"
-          desc="Bayes-Klassifikator lernt automatisch ohne manuelles Training"
-          value={autolearn}
-          onChange={setAutolearn}
-        />
-        <NumInput label="Autolearn Spam-Schwellwert" value={autolearnSpam} onChange={setAutolearnSpam} min={6}    max={100} step={0.5} />
-        <NumInput label="Autolearn Ham-Schwellwert"  value={autolearnHam}  onChange={setAutolearnHam}  min={-10}  max={0}   step={0.5} />
-      </div>
-
-      {/* ── Email headers ─────────────────────────────────────────────── */}
-      <div className="card p-4 space-y-1">
-        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide pb-2 border-b border-gray-100">
-          E-Mail-Header Modifikation
-        </p>
-        <ToggleRow
-          label="X-Spam-Header hinzufügen"
-          desc="Fügt X-Spam-Flag, X-Spam-Score und X-Spam-Status zu verdächtigen Mails hinzu"
-          value={addSpamHeader}
-          onChange={setAddSpamHeader}
-        />
-        <ToggleRow
-          label="Erweiterte Rspamd-Header"
-          desc="X-Rspamd-Score, X-Rspamd-Action und X-Rspamd-Pre-Result bei allen Mails"
-          value={extendedHeaders}
-          onChange={setExtendedHeaders}
-        />
-        <ToggleRow
-          label="Betreff umschreiben"
-          desc="Spam-Mails erhalten einen Präfix im Betreff (z.B. [SPAM])"
-          value={rewriteSubject}
-          onChange={setRewriteSubject}
-        />
-        {rewriteSubject && (
-          <div className="flex items-center justify-between py-2.5 border-b border-gray-100">
-            <span className="text-sm text-gray-700">Betreff-Präfix</span>
-            <input
-              type="text"
-              value={subjectTag}
-              onChange={e => setSubjectTag(e.target.value)}
-              maxLength={32}
-              className="w-32 border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
-            />
-          </div>
-        )}
-      </div>
-
-      {/* ── Modules ───────────────────────────────────────────────────── */}
-      <div className="card p-4 space-y-1">
-        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide pb-2 border-b border-gray-100">
-          Rspamd-Module
-        </p>
-        <p className="text-xs text-gray-400 py-1">
-          SPF, DKIM, DMARC und ARC sind immer aktiv. Die folgenden Module können einzeln gesteuert werden:
-        </p>
-        <ToggleRow
-          label="Phishing-Erkennung"
-          desc="Analysiert URLs und Header auf Phishing-Merkmale (phishing_detection)"
-          value={phishing}
-          onChange={setPhishing}
-        />
-        <ToggleRow
-          label="Fuzzy-Hash-Matching"
-          desc="Erkennt bekannte Spam-Muster anhand von Fuzzy-Hashes (Rspamd-Fuzzy-Storage)"
-          value={fuzzy}
-          onChange={setFuzzy}
-        />
-        <ToggleRow
-          label="URL-Reputationsprüfung"
-          desc="Prüft Links gegen URIBL und SURBL Blacklisten (rbl-Modul)"
-          value={url}
-          onChange={setUrl}
-        />
-        <ToggleRow
-          label="MX-DNS-Prüfung"
-          desc="Verifiziert ob die Absender-Domain gültige MX-Einträge hat"
-          value={mxCheck}
-          onChange={setMxCheck}
-        />
-        {/* Always-active modules */}
-        <div className="pt-2 mt-1 border-t border-gray-100">
-          <p className="text-xs text-gray-400 mb-2">Immer aktiv (nicht deaktivierbar):</p>
-          <div className="grid grid-cols-2 gap-1.5">
-            {[
-              ['SPF',     'Sender Policy Framework'],
-              ['DKIM',    'DKIM-Signatur Validierung'],
-              ['DMARC',   'DMARC Policy Auswertung'],
-              ['ARC',     'Authenticated Received Chain'],
-              ['Bayes',   'Bayes-Klassifikator'],
-              ['MIME',    'MIME-Struktur-Analyse'],
-            ].map(([name, desc]) => (
-              <div key={name} className="flex items-center gap-2 text-xs bg-gray-50 rounded px-2.5 py-1.5">
-                <CheckCircle size={12} className="text-green-500 shrink-0" />
-                <span className="font-medium text-gray-700">{name}</span>
-                <span className="text-gray-400 truncate">{desc}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* ── Train Bayes manually ───────────────────────────────────────── */}
-      <div className="card p-4">
-        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide pb-2 border-b border-gray-100 mb-3">
-          Bayes manuell trainieren
-        </p>
-        <p className="text-xs text-gray-400 mb-3">
-          Manuelle Trainingsimpulse für den Bayes-Klassifikator. Im Normalbetrieb übernimmt Autolearn diese Aufgabe automatisch.
-        </p>
-        <div className="flex gap-2">
-          <button onClick={() => learnMut.mutate('spam')} disabled={learnMut.isPending}
-            className="btn-secondary text-sm text-red-600 border-red-200 hover:bg-red-50">
-            Als Spam trainieren
-          </button>
-          <button onClick={() => learnMut.mutate('ham')} disabled={learnMut.isPending}
-            className="btn-secondary text-sm text-green-600 border-green-200 hover:bg-green-50">
-            Als Ham trainieren
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ═════════════════════════════════════════════════════════════════════════════
-// AntivirusSection
-// ═════════════════════════════════════════════════════════════════════════════
-
-function AntivirusSection({ settings, onSave }: { settings: SecuritySettings; onSave: (d: Partial<SecuritySettings>) => void }) {
-  const [enabled,          setEnabled]          = useState(settings.clamavEnabled);
-  const [action,           setAction]           = useState<'quarantine' | 'reject' | 'pass'>(settings.clamavAction ?? 'quarantine');
-  const [blockOnFailure,   setBlockOnFailure]   = useState(settings.clamavBlockOnFailure ?? false);
-  const [scanArchives,     setScanArchives]     = useState(settings.clamavScanArchives ?? true);
-  const [scanHtml,         setScanHtml]         = useState(settings.clamavScanHtml ?? true);
-  const [blockEncrypted,   setBlockEncrypted]   = useState(settings.clamavBlockEncryptedArch ?? false);
-  const [maxFileSize,      setMaxFileSize]      = useState(settings.clamavMaxFileSizeMb ?? 25);
-  const [maxScanSize,      setMaxScanSize]      = useState(settings.clamavMaxScanSizeMb ?? 100);
-
-  const { data: status } = useQuery({
-    queryKey: ['admin', 'security', 'status'],
-    queryFn:  () => api.get<ContainerStatus>('/admin/security/status'),
-    refetchInterval: 30_000,
-  });
-
-  const c = status?.clamav;
-
-  function save() {
-    onSave({
-      clamavEnabled:           enabled,
-      clamavAction:            action,
-      clamavBlockOnFailure:    blockOnFailure,
-      clamavScanArchives:      scanArchives,
-      clamavScanHtml:          scanHtml,
-      clamavBlockEncryptedArch: blockEncrypted,
-      clamavMaxFileSizeMb:     maxFileSize,
-      clamavMaxScanSizeMb:     maxScanSize,
-    });
-  }
-
-  const actionLabels: Record<string, { label: string; desc: string; color: string }> = {
-    quarantine: { label: 'Quarantäne',   desc: 'Virus-Mail in Junk verschieben',       color: 'amber'  },
-    reject:     { label: 'Ablehnen',     desc: 'SMTP-Verbindung mit Fehler abweisen',  color: 'red'    },
-    pass:       { label: 'Durchlassen',  desc: 'Nur markieren, nicht blockieren',       color: 'gray'   },
-  };
-
-  return (
-    <div className="space-y-5">
-      <div className="flex items-center justify-between">
-        <h2 className="text-base font-semibold text-gray-900">Antivirus — ClamAV</h2>
-        <SaveBtn onClick={save} pending={false} />
-      </div>
-
-      {/* Status card */}
-      <div className="grid grid-cols-2 gap-4">
-        <div className="card p-4 space-y-3">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-emerald-100 rounded-lg flex items-center justify-center">
-              <Bug size={16} className="text-emerald-600" />
-            </div>
-            <div>
-              <p className="text-sm font-semibold">ClamAV</p>
-              <p className="text-xs text-gray-400">Open-Source Antivirus Engine</p>
-            </div>
-          </div>
-          <div className="flex items-center justify-between py-1">
-            <span className="text-sm text-gray-600">Status</span>
-            <OnlineBadge online={!!c?.online} />
-          </div>
-          {c?.version && (
-            <div className="flex items-start justify-between py-1">
-              <span className="text-sm text-gray-600">Version</span>
-              <span className="text-xs font-mono text-gray-700 text-right max-w-[200px] break-all">{c.version}</span>
-            </div>
-          )}
-          <div className="flex items-center justify-between py-1">
-            <span className="text-sm text-gray-600">Signaturen</span>
-            <span className="text-xs text-gray-500">Täglich via freshclam</span>
-          </div>
-          <div className="flex items-center justify-between py-1">
-            <span className="text-sm text-gray-600">Verbindung</span>
-            <span className="text-xs font-mono text-gray-500">clamav:3310 (INSTREAM)</span>
-          </div>
-        </div>
-
-        <div className="card p-4 space-y-2">
-          <p className="text-sm font-semibold text-gray-700">Über ClamAV</p>
-          <p className="text-xs text-gray-500 leading-relaxed">
-            ClamAV ist eine freie, plattformübergreifende Anti-Malware Engine (GPL).
-            Sie erkennt Viren, Trojaner und andere schädliche Bedrohungen in
-            E-Mail-Anhängen via TCP INSTREAM-Protokoll.
-          </p>
-          <div className="flex flex-wrap gap-1.5 pt-1">
-            {['GPL Open-Source', 'ClamDB Signaturen', 'Archive-Scan', 'freshclam Updates'].map(t => (
-              <span key={t} className="text-[10px] bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full border border-emerald-200">
-                {t}
-              </span>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* ── Basic settings ────────────────────────────────────────────── */}
-      <div className="card p-4 space-y-1">
-        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide pb-2 border-b border-gray-100">
-          Grundeinstellungen
-        </p>
-        <ToggleRow
-          label="ClamAV aktiviert"
-          desc="Scannt alle eingehenden E-Mail-Anhänge auf Viren und Malware"
-          value={enabled}
-          onChange={setEnabled}
-        />
-        <ToggleRow
-          label="Bei ClamAV-Ausfall blockieren"
-          desc="Eingehende Mails ablehnen wenn ClamAV nicht erreichbar ist (fail-closed)"
-          value={blockOnFailure}
-          onChange={setBlockOnFailure}
-        />
-      </div>
-
-      {/* ── Action on detection ───────────────────────────────────────── */}
-      <div className="card p-4 space-y-3">
-        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide pb-2 border-b border-gray-100">
-          Aktion bei Virenfund
-        </p>
-        <div className="grid grid-cols-3 gap-2">
-          {(['quarantine', 'reject', 'pass'] as const).map(a => {
-            const meta = actionLabels[a];
-            return (
-              <button key={a} onClick={() => setAction(a)}
-                className={`rounded-lg border px-3 py-2.5 text-sm font-medium transition-colors text-left ${
-                  action === a
-                    ? 'border-accent bg-accent/10 text-accent'
-                    : 'border-gray-200 text-gray-600 hover:border-gray-300'
-                }`}>
-                <p className="font-semibold">{meta?.label}</p>
-                <p className="text-[10px] mt-0.5 opacity-70">{meta?.desc}</p>
-              </button>
-            );
-          })}
-        </div>
-        {action === 'pass' && (
-          <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-700 flex items-start gap-1.5">
-            <AlertTriangle size={12} className="shrink-0 mt-0.5" />
-            Modus "Durchlassen" schützt nicht vor Viren — nur für Diagnose-Zwecke empfohlen.
-          </div>
-        )}
-      </div>
-
-      {/* ── Scan options ──────────────────────────────────────────────── */}
-      <div className="card p-4 space-y-1">
-        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide pb-2 border-b border-gray-100">
-          Scan-Optionen
-        </p>
-        <ToggleRow
-          label="Archive scannen"
-          desc="ZIP, RAR, TAR, GZ und andere Archivformate werden entpackt und gescannt"
-          value={scanArchives}
-          onChange={setScanArchives}
-        />
-        <ToggleRow
-          label="HTML-Inhalt scannen"
-          desc="HTML-Teile der E-Mail auf eingebettete Schadskripte prüfen"
-          value={scanHtml}
-          onChange={setScanHtml}
-        />
-        <ToggleRow
-          label="Verschlüsselte Archive blockieren"
-          desc="Passwortgeschützte Archive ablehnen (können nicht gescannt werden)"
-          value={blockEncrypted}
-          onChange={setBlockEncrypted}
-        />
-        <NumInput
-          label="Max. Dateigröße (je Anhang)"
-          value={maxFileSize}
-          onChange={setMaxFileSize}
-          min={1} max={500} unit="MB"
-        />
-        <NumInput
-          label="Max. Gesamt-Scan-Größe"
-          value={maxScanSize}
-          onChange={setMaxScanSize}
-          min={1} max={2048} unit="MB"
-        />
-      </div>
-
-      <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-700 flex items-start gap-2">
-        <AlertTriangle size={13} className="shrink-0 mt-0.5" />
-        <span>
-          ClamAV läuft als separater Docker-Container (<code className="bg-blue-100 px-1 rounded">clamav/clamav:stable</code>).
-          freshclam aktualisiert die Signaturdatenbank täglich automatisch.
-          Signaturdatenbank: <strong>ClamAV DB (CVD)</strong> + optionale 3rd-Party Signaturen.
-        </span>
+      <div className="bg-surface-2 border border-line rounded-lg px-4 py-3 text-xs text-fg-muted">
+        SPF, DKIM, DMARC und ARC prüft CoreMail selbst. Rspamd-Module (Phishing, Fuzzy, URL-Reputation),
+        Bayes-Autolearn und Header werden in der Rspamd-Konfiguration des Containers gepflegt.
+        Der Bayes-Klassifikator lernt aus den Aktionen „Junk“ / „Kein Junk“ der Benutzer.
       </div>
     </div>
   );
@@ -778,9 +455,9 @@ interface DnsblStats {
 
 function ActionBadge({ action }: { action: DnsblZone['action'] }) {
   const styles = {
-    REJECT:     'bg-red-50 text-red-700 border-red-200',
-    TAG:        'bg-amber-50 text-amber-700 border-amber-200',
-    SCORE_ONLY: 'bg-blue-50 text-blue-700 border-blue-200',
+    REJECT:     'bg-danger-bg text-danger-fg border-danger-line',
+    TAG:        'bg-warning-bg text-warning-fg border-warning-line',
+    SCORE_ONLY: 'bg-info-bg text-info-fg border-info-line',
   } as const;
   const labels = { REJECT: 'Ablehnen', TAG: 'Markieren', SCORE_ONLY: 'Score' } as const;
   return (
@@ -852,7 +529,7 @@ function DnsblSection({ settings, onSave }: { settings: SecuritySettings; onSave
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
-        <h2 className="text-base font-semibold text-gray-900">DNSBL-Konfiguration</h2>
+        <h2 className="text-base font-semibold text-fg">DNSBL-Konfiguration</h2>
         <SaveBtn onClick={masterSave} pending={false} />
       </div>
 
@@ -866,7 +543,7 @@ function DnsblSection({ settings, onSave }: { settings: SecuritySettings; onSave
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 border-b border-gray-200">
+      <div className="flex gap-1 border-b border-line">
         {[
           { id: 'zones' as const, label: 'Zonen', count: zones.length },
           { id: 'test'  as const, label: 'Test',  count: undefined },
@@ -877,13 +554,13 @@ function DnsblSection({ settings, onSave }: { settings: SecuritySettings; onSave
             onClick={() => setTab(id)}
             className={`px-4 py-2 text-sm border-b-2 transition-colors ${
               tab === id
-                ? 'border-accent text-accent font-semibold'
-                : 'border-transparent text-gray-500 hover:text-gray-700'
+                ? 'border-accent-fg text-accent-fg font-semibold'
+                : 'border-transparent text-fg-subtle hover:text-fg-muted'
             }`}
           >
             {label}
             {count !== undefined && (
-              <span className="ml-1.5 text-xs bg-gray-100 px-1.5 py-0.5 rounded-full text-gray-600">{count}</span>
+              <span className="ml-1.5 text-xs bg-surface-2 px-1.5 py-0.5 rounded-full text-fg-muted">{count}</span>
             )}
           </button>
         ))}
@@ -893,34 +570,38 @@ function DnsblSection({ settings, onSave }: { settings: SecuritySettings; onSave
       {tab === 'zones' && (
         <>
           <div className="flex items-center justify-between">
-            <p className="text-sm text-gray-600">{zones.filter(z => z.enabled).length} aktive von {zones.length} Zonen</p>
+            <p className="text-sm text-fg-muted">{zones.filter(z => z.enabled).length} aktive von {zones.length} Zonen</p>
             <button onClick={() => setShowAdd((v) => !v)} className="btn-secondary text-sm gap-1">
               <Plus size={13} /> Eigene Zone
             </button>
           </div>
+          <p className="text-xs text-fg-subtle">
+            „Ablehnen“ weist die Verbindung ab, ein DNSWL-Treffer überspringt die übrigen Verbindungsprüfungen.
+            „Markieren“ und „Score“ werden derzeit nur in der Statistik erfasst und beeinflussen die Zustellung nicht.
+          </p>
 
           {showAdd && (
             <div className="card p-4 border-2 border-accent/30 space-y-3">
-              <p className="text-sm font-semibold text-gray-700">Neue DNSBL/DNSWL-Zone anlegen</p>
+              <p className="text-sm font-semibold text-fg-muted">Neue DNSBL/DNSWL-Zone anlegen</p>
               <div className="grid grid-cols-2 gap-2">
                 <input value={newHost} onChange={(e) => setNewHost(e.target.value)} placeholder="zen.spamhaus.org"
-                  className="border border-gray-300 rounded px-2 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-accent" />
+                  className="border border-line-strong rounded px-2 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent-fg" />
                 <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Anzeigename"
-                  className="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent" />
+                  className="border border-line-strong rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-accent-fg" />
               </div>
               <div className="flex items-center gap-3 flex-wrap">
                 <select value={newAction} onChange={(e) => setNewAction(e.target.value as DnsblZone['action'])}
-                  className="border border-gray-300 rounded px-2 py-1.5 text-sm">
+                  className="border border-line-strong rounded px-2 py-1.5 text-sm">
                   <option value="REJECT">Ablehnen</option>
                   <option value="TAG">Als Spam markieren</option>
                   <option value="SCORE_ONLY">Nur Score (rspamd)</option>
                 </select>
-                <label className="text-sm text-gray-700 flex items-center gap-1">
+                <label className="text-sm text-fg-muted flex items-center gap-1">
                   Score:
                   <input type="number" min={0} max={100} value={newWeight} onChange={(e) => setNewWeight(parseInt(e.target.value, 10) || 0)}
-                    className="w-16 border border-gray-300 rounded px-2 py-1 text-sm" />
+                    className="w-16 border border-line-strong rounded px-2 py-1 text-sm" />
                 </label>
-                <label className="text-sm text-gray-700 flex items-center gap-1.5">
+                <label className="text-sm text-fg-muted flex items-center gap-1.5">
                   <input type="checkbox" checked={newWhitelist} onChange={(e) => setNewWhitelist(e.target.checked)} />
                   Whitelist (DNSWL)
                 </label>
@@ -939,52 +620,55 @@ function DnsblSection({ settings, onSave }: { settings: SecuritySettings; onSave
 
           {/* Zone cards */}
           <div className="space-y-2">
-            {zonesLoading && <p className="text-sm text-gray-400">Lade …</p>}
+            {zonesLoading && <p className="text-sm text-fg-subtle">Lade …</p>}
             {zones.map((z) => (
-              <div key={z.id} className={`card p-3 ${!z.enabled ? 'opacity-60' : ''}`}>
+              <div key={z.id} className={`card p-3 ${!z.enabled ? 'bg-surface-2' : ''}`}>
                 <div className="flex items-start gap-3">
                   <Toggle active={z.enabled} onToggle={() => patchZone.mutate({ id: z.id, body: { enabled: !z.enabled } })} />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-sm font-semibold text-gray-900">{z.name}</span>
-                      <code className="text-xs text-gray-500">{z.host}</code>
+                      <span className="text-sm font-semibold text-fg">{z.name}</span>
+                      <code className="text-xs text-fg-subtle">{z.host}</code>
                       {z.isWhitelist && (
-                        <span className="text-[10px] bg-emerald-50 text-emerald-700 border border-emerald-200 px-1.5 py-0.5 rounded">WHITELIST</span>
+                        <span className="text-[10px] bg-success-bg text-success-fg border border-success-line px-1.5 py-0.5 rounded">WHITELIST</span>
                       )}
                       {z.isBuiltin && (
-                        <span className="text-[10px] bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">Built-in</span>
+                        <span className="text-[10px] bg-surface-2 text-fg-muted px-1.5 py-0.5 rounded">Built-in</span>
+                      )}
+                      {!z.enabled && (
+                        <span className="text-[10px] bg-surface-3 text-fg-muted px-1.5 py-0.5 rounded">Deaktiviert</span>
                       )}
                       <ActionBadge action={z.action} />
                     </div>
                     {z.description && (
-                      <p className="text-xs text-gray-500 mt-1">{z.description}</p>
+                      <p className="text-xs text-fg-subtle mt-1">{z.description}</p>
                     )}
                     <div className="flex items-center gap-3 mt-2">
-                      <label className="flex items-center gap-1 text-xs text-gray-600">
+                      <label className="flex items-center gap-1 text-xs text-fg-muted">
                         Aktion:
                         <select value={z.action}
                           onChange={(e) => patchZone.mutate({ id: z.id, body: { action: e.target.value as DnsblZone['action'] } })}
-                          className="border border-gray-200 rounded px-1.5 py-0.5 text-xs">
+                          className="border border-line rounded px-1.5 py-0.5 text-xs">
                           <option value="REJECT">Ablehnen</option>
                           <option value="TAG">Markieren</option>
                           <option value="SCORE_ONLY">Score</option>
                         </select>
                       </label>
-                      <label className="flex items-center gap-1 text-xs text-gray-600">
+                      <label className="flex items-center gap-1 text-xs text-fg-muted">
                         Score:
                         <input type="number" min={0} max={100} defaultValue={z.weight}
                           onBlur={(e) => {
                             const v = parseInt(e.target.value, 10);
-                            if (v !== z.weight) patchZone.mutate({ id: z.id, body: { weight: v } });
+                            if (Number.isFinite(v) && v !== z.weight) patchZone.mutate({ id: z.id, body: { weight: v } });
                           }}
-                          className="w-14 border border-gray-200 rounded px-1.5 py-0.5 text-xs" />
+                          className="w-14 border border-line rounded px-1.5 py-0.5 text-xs" />
                       </label>
                     </div>
                   </div>
                   {!z.isBuiltin && (
                     <button aria-label={`Zone ${z.name} löschen`} onClick={() => {
                       if (window.confirm(`Zone „${z.name}" wirklich löschen?`)) deleteZone.mutate(z.id);
-                    }} className="text-gray-400 hover:text-red-500 transition-colors p-1">
+                    }} className="text-fg-subtle hover:text-danger-fg transition-colors p-1">
                       <Trash2 size={14} />
                     </button>
                   )}
@@ -998,15 +682,15 @@ function DnsblSection({ settings, onSave }: { settings: SecuritySettings; onSave
       {/* TAB: Test */}
       {tab === 'test' && (
         <div className="card p-4 space-y-3">
-          <p className="text-sm font-semibold text-gray-700">DNSBL-Check für IP testen</p>
-          <p className="text-xs text-gray-500">Prüft die IP gegen alle konfigurierten Zonen (auch deaktivierte). Antwortzeit ca. 2 s pro Zone.</p>
+          <p className="text-sm font-semibold text-fg-muted">DNSBL-Check für IP testen</p>
+          <p className="text-xs text-fg-subtle">Prüft die IP gegen alle konfigurierten Zonen (auch deaktivierte). Antwortzeit ca. 2 s pro Zone.</p>
           <div className="flex gap-2">
             <input
               value={testIp}
               onChange={(e) => setTestIp(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && testIp.trim() && testMutation.mutate(testIp.trim())}
               placeholder="z. B. 185.220.101.1 oder 2001:db8::1"
-              className="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-accent"
+              className="flex-1 border border-line-strong rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent-fg"
             />
             <button onClick={() => testIp.trim() && testMutation.mutate(testIp.trim())}
               disabled={!testIp.trim() || testMutation.isPending}
@@ -1017,24 +701,24 @@ function DnsblSection({ settings, onSave }: { settings: SecuritySettings; onSave
           </div>
 
           {testMutation.data && (
-            <div className="border-t border-gray-100 pt-3 space-y-1.5">
-              <p className="text-xs text-gray-500">Ergebnis für <code className="font-mono">{testMutation.data.ip}</code>:</p>
+            <div className="border-t border-line pt-3 space-y-1.5">
+              <p className="text-xs text-fg-subtle">Ergebnis für <code className="font-mono">{testMutation.data.ip}</code>:</p>
               {testMutation.data.results.map((r) => (
                 <div key={r.zoneId} className={`flex items-center gap-2 px-3 py-1.5 rounded text-sm ${
                   r.listed
-                    ? (r.isWhitelist ? 'bg-emerald-50' : 'bg-red-50')
-                    : 'bg-gray-50'
+                    ? (r.isWhitelist ? 'bg-success-bg' : 'bg-danger-bg')
+                    : 'bg-surface-2'
                 }`}>
                   {r.listed
-                    ? <CheckCircle size={14} className={r.isWhitelist ? 'text-emerald-600' : 'text-red-600'} />
-                    : <XCircle size={14} className="text-gray-400" />}
+                    ? <CheckCircle size={14} className={r.isWhitelist ? 'text-success-fg' : 'text-danger-fg'} />
+                    : <XCircle size={14} className="text-fg-subtle" />}
                   <span className="font-medium">{r.name}</span>
-                  <code className="text-xs text-gray-500">{r.host}</code>
-                  {!r.enabled && <span className="text-[10px] bg-gray-200 px-1.5 rounded">deaktiviert</span>}
+                  <code className="text-xs text-fg-subtle">{r.host}</code>
+                  {!r.enabled && <span className="text-[10px] bg-surface-3 px-1.5 rounded">deaktiviert</span>}
                   <span className="ml-auto text-xs">
                     {r.listed
-                      ? <span className={r.isWhitelist ? 'text-emerald-700 font-mono' : 'text-red-700 font-mono'}>gelistet → {r.response}</span>
-                      : <span className="text-gray-400">nicht gelistet</span>}
+                      ? <span className={r.isWhitelist ? 'text-success-fg font-mono' : 'text-danger-fg font-mono'}>gelistet → {r.response}</span>
+                      : <span className="text-fg-subtle">nicht gelistet</span>}
                   </span>
                 </div>
               ))}
@@ -1047,12 +731,12 @@ function DnsblSection({ settings, onSave }: { settings: SecuritySettings; onSave
       {tab === 'stats' && (
         <div className="space-y-3">
           <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-600">Zeitraum:</span>
+            <span className="text-sm text-fg-muted">Zeitraum:</span>
             {[1, 7, 30].map((d) => (
               <button key={d}
                 onClick={() => setStatsDays(d)}
                 className={`px-3 py-1 text-xs rounded-full transition-colors ${
-                  statsDays === d ? 'bg-accent text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  statsDays === d ? 'bg-accent text-white' : 'bg-surface-2 text-fg-muted hover:bg-surface-3'
                 }`}>
                 {d === 1 ? '24 h' : `${d} Tage`}
               </button>
@@ -1062,38 +746,38 @@ function DnsblSection({ settings, onSave }: { settings: SecuritySettings; onSave
           {stats && (
             <>
               <div className="card p-4">
-                <p className="text-2xl font-bold text-gray-900">{stats.total.toLocaleString('de-DE')}</p>
-                <p className="text-xs text-gray-500">Treffer in den letzten {stats.days === 1 ? '24 h' : `${stats.days} Tagen`}</p>
+                <p className="text-2xl font-bold text-fg">{stats.total.toLocaleString('de-DE')}</p>
+                <p className="text-xs text-fg-subtle">Treffer in den letzten {stats.days === 1 ? '24 h' : `${stats.days} Tagen`}</p>
               </div>
 
               <div className="card p-4">
-                <p className="text-sm font-semibold text-gray-700 mb-2">Top-Zonen</p>
+                <p className="text-sm font-semibold text-fg-muted mb-2">Top-Zonen</p>
                 {stats.perZone.length === 0
-                  ? <p className="text-xs text-gray-400">Keine Treffer</p>
+                  ? <p className="text-xs text-fg-subtle">Keine Treffer</p>
                   : stats.perZone.map((p) => (
                       <div key={p.zoneId} className="flex items-center gap-2 py-1.5">
-                        <span className="text-sm font-medium text-gray-700">{p.name}</span>
-                        <code className="text-xs text-gray-400">{p.host}</code>
-                        <div className="flex-1 bg-gray-100 h-2 rounded">
+                        <span className="text-sm font-medium text-fg-muted">{p.name}</span>
+                        <code className="text-xs text-fg-subtle">{p.host}</code>
+                        <div className="flex-1 bg-surface-2 h-2 rounded">
                           <div className="bg-accent h-2 rounded" style={{ width: `${stats.perZone[0] ? (p.hits / stats.perZone[0].hits) * 100 : 0}%` }} />
                         </div>
-                        <span className="text-sm tabular-nums text-gray-700 w-16 text-right">{p.hits}</span>
+                        <span className="text-sm tabular-nums text-fg-muted w-16 text-right">{p.hits}</span>
                       </div>
                     ))}
               </div>
 
               <div className="card p-4">
-                <p className="text-sm font-semibold text-gray-700 mb-2">Letzte Treffer</p>
+                <p className="text-sm font-semibold text-fg-muted mb-2">Letzte Treffer</p>
                 {stats.recent.length === 0
-                  ? <p className="text-xs text-gray-400">Keine Treffer</p>
+                  ? <p className="text-xs text-fg-subtle">Keine Treffer</p>
                   : (
                     <div className="space-y-1 max-h-80 overflow-y-auto">
                       {stats.recent.map((h) => (
-                        <div key={h.id} className="flex items-center gap-2 text-xs py-1 border-b border-gray-50 last:border-0">
-                          <AlertTriangle size={11} className="text-red-500 shrink-0" />
-                          <code className="font-mono text-gray-700 w-32 truncate">{h.ip}</code>
-                          <span className="text-gray-600">{h.zoneName}</span>
-                          <span className="ml-auto text-gray-400">{new Date(h.hitAt).toLocaleString('de-DE')}</span>
+                        <div key={h.id} className="flex items-center gap-2 text-xs py-1 border-b border-line last:border-0">
+                          <AlertTriangle size={11} className="text-danger-fg shrink-0" />
+                          <code className="font-mono text-fg-muted w-32 truncate">{h.ip}</code>
+                          <span className="text-fg-muted">{h.zoneName}</span>
+                          <span className="ml-auto text-fg-subtle">{new Date(h.hitAt).toLocaleString('de-DE')}</span>
                         </div>
                       ))}
                     </div>
@@ -1119,7 +803,7 @@ function GreylistingSection({ settings, onSave }: { settings: SecuritySettings; 
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
-        <h2 className="text-base font-semibold text-gray-900">Greylisting</h2>
+        <h2 className="text-base font-semibold text-fg">Greylisting</h2>
         <SaveBtn onClick={() => onSave({ greylistEnabled: enabled, greylistWaitSec: wait, greylistTtlHours: ttl })} pending={false} />
       </div>
 
@@ -1134,9 +818,9 @@ function GreylistingSection({ settings, onSave }: { settings: SecuritySettings; 
         <NumInput label="Whitelist-TTL (nach Passieren)" value={ttl} onChange={setTtl} min={1} max={168} unit="Std" />
       </div>
 
-      <div className="card p-4 text-sm text-gray-600 space-y-2">
-        <p className="font-medium text-gray-800">Wie Greylisting funktioniert</p>
-        <ol className="list-decimal list-inside space-y-1 text-xs text-gray-500">
+      <div className="card p-4 text-sm text-fg-muted space-y-2">
+        <p className="font-medium text-fg">Wie Greylisting funktioniert</p>
+        <ol className="list-decimal list-inside space-y-1 text-xs text-fg-subtle">
           <li>Erstkontakt: Verbindung wird mit SMTP 451 (Temp. Fehler) abgelehnt</li>
           <li>Legitime Server versuchen es nach {Math.round(wait / 60)} min erneut → wird akzeptiert</li>
           <li>Das Triplet (IP + Absender + Empfänger) wird {ttl}h lang in die Whitelist aufgenommen</li>
@@ -1167,22 +851,22 @@ function GeoipSection({ settings, onSave }: { settings: SecuritySettings; onSave
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
-        <h2 className="text-base font-semibold text-gray-900">GeoIP-Länderfilter</h2>
+        <h2 className="text-base font-semibold text-fg">GeoIP-Länderfilter</h2>
         <SaveBtn onClick={() => onSave({ geoipMode: mode, geoipCountries: countries })} pending={false} />
       </div>
 
       <div className="card p-4 space-y-3">
-        <p className="text-sm font-semibold text-gray-700">Filtermodus</p>
+        <p className="text-sm font-semibold text-fg-muted">Filtermodus</p>
         <div className="grid grid-cols-3 gap-2">
           {(['DISABLED', 'WHITELIST', 'BLACKLIST'] as const).map(m => (
             <button key={m} onClick={() => setMode(m)}
               className={`rounded-lg border px-3 py-2.5 text-sm font-medium transition-colors text-left ${
-                mode === m ? 'border-accent bg-accent/10 text-accent' : 'border-gray-200 text-gray-600 hover:border-gray-300'
+                mode === m ? 'border-accent-fg bg-accent/10 text-accent-fg' : 'border-line text-fg-muted hover:border-line-strong'
               }`}>
               <p className="font-semibold">
                 {m === 'DISABLED' ? 'Deaktiviert' : m === 'WHITELIST' ? 'Whitelist' : 'Blacklist'}
               </p>
-              <p className="text-[10px] mt-0.5 opacity-70">
+              <p className="text-[10px] mt-0.5 text-fg-subtle">
                 {m === 'DISABLED' ? 'Kein Länderfilter' :
                  m === 'WHITELIST' ? 'Nur ausgewählte Länder' : 'Ausgewählte Länder blockieren'}
               </p>
@@ -1194,30 +878,30 @@ function GeoipSection({ settings, onSave }: { settings: SecuritySettings; onSave
       {mode !== 'DISABLED' && (
         <div className="card p-4 space-y-3">
           <div className="flex items-center justify-between">
-            <p className="text-sm font-semibold text-gray-700">
+            <p className="text-sm font-semibold text-fg-muted">
               {mode === 'WHITELIST' ? 'Erlaubte Länder' : 'Blockierte Länder'}
-              <span className="ml-2 text-xs font-normal text-gray-400">({countries.length} ausgewählt)</span>
+              <span className="ml-2 text-xs font-normal text-fg-subtle">({countries.length} ausgewählt)</span>
             </p>
             <input
               value={search}
               onChange={e => setSearch(e.target.value)}
               placeholder="Suchen…"
-              className="border border-gray-200 rounded px-2 py-1 text-xs w-36 focus:outline-none focus:ring-1 focus:ring-accent"
+              className="border border-line-strong rounded px-2 py-1 text-xs w-36 focus:outline-none focus:ring-2 focus:ring-accent-fg"
             />
           </div>
           <div className="grid grid-cols-3 gap-1 max-h-64 overflow-y-auto">
             {filtered.map(([code, name]) => (
-              <label key={code} className="flex items-center gap-1.5 px-2 py-1.5 rounded hover:bg-gray-50 cursor-pointer">
+              <label key={code} className="flex items-center gap-1.5 px-2 py-1.5 rounded hover:bg-surface-2 cursor-pointer">
                 <input type="checkbox" checked={countries.includes(code)} onChange={() => toggle(code)}
-                  className="rounded border-gray-300 text-accent focus:ring-accent" />
-                <span className="text-xs text-gray-700 truncate" title={name}>
-                  <span className="font-mono text-gray-400 mr-1">{code}</span>{name}
+                  className="rounded border-line-strong text-accent-fg focus:ring-accent-fg" />
+                <span className="text-xs text-fg-muted truncate" title={name}>
+                  <span className="font-mono text-fg-subtle mr-1">{code}</span>{name}
                 </span>
               </label>
             ))}
           </div>
           {countries.length > 0 && (
-            <button onClick={() => setCountries([])} className="text-xs text-gray-400 hover:text-red-500">
+            <button onClick={() => setCountries([])} className="text-xs text-fg-subtle hover:text-danger-fg">
               Auswahl zurücksetzen
             </button>
           )}
@@ -1247,7 +931,7 @@ function AttachmentsSection({ settings, onSave }: { settings: SecuritySettings; 
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
-        <h2 className="text-base font-semibold text-gray-900">Anhänge-Filter</h2>
+        <h2 className="text-base font-semibold text-fg">Anhänge-Filter</h2>
         <SaveBtn onClick={() => onSave({ attachmentEnabled: enabled, attachmentMaxSizeMb: maxSize, attachmentBlockedExt: exts })} pending={false} />
       </div>
 
@@ -1257,13 +941,13 @@ function AttachmentsSection({ settings, onSave }: { settings: SecuritySettings; 
       </div>
 
       <div className="card p-4 space-y-3">
-        <p className="text-sm font-semibold text-gray-700">Blockierte Dateiendungen</p>
+        <p className="text-sm font-semibold text-fg-muted">Blockierte Dateiendungen</p>
         <div className="flex flex-wrap gap-1.5">
           {exts.map(ext => (
-            <span key={ext} className="flex items-center gap-1 bg-red-50 border border-red-200 text-red-700 text-xs px-2 py-0.5 rounded-full">
+            <span key={ext} className="flex items-center gap-1 bg-danger-bg border border-danger-line text-danger-fg text-xs px-2 py-0.5 rounded-full">
               .{ext}
               <button aria-label={`.${ext} entfernen`} onClick={() => setExts(prev => prev.filter(e => e !== ext))}
-                className="hover:text-red-900 ml-0.5">
+                className="hover:text-danger-fg ml-0.5">
                 <XCircle size={11} />
               </button>
             </span>
@@ -1275,17 +959,17 @@ function AttachmentsSection({ settings, onSave }: { settings: SecuritySettings; 
             onChange={e => setNewExt(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && addExt()}
             placeholder="z.B. exe"
-            className="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
+            className="flex-1 border border-line-strong rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-accent-fg"
           />
           <button onClick={addExt} className="btn-secondary text-sm gap-1">
             <Plus size={13} /> Hinzufügen
           </button>
         </div>
-        <div className="flex flex-wrap gap-1.5 pt-1 border-t border-gray-100">
-          <p className="w-full text-xs text-gray-400 mb-1">Schnell hinzufügen:</p>
+        <div className="flex flex-wrap gap-1.5 pt-1 border-t border-line">
+          <p className="w-full text-xs text-fg-subtle mb-1">Schnell hinzufügen:</p>
           {['ps1','vba','jar','msp','reg','inf','lnk','url','xls','doc'].filter(e => !exts.includes(e)).map(e => (
             <button key={e} onClick={() => setExts(prev => [...prev, e])}
-              className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-2 py-0.5 rounded transition-colors">
+              className="text-xs bg-surface-2 hover:bg-surface-3 text-fg-muted px-2 py-0.5 rounded transition-colors">
               +.{e}
             </button>
           ))}
@@ -1313,9 +997,9 @@ export function ProtectionPage() {
       api.put<SecuritySettings>('/admin/security/settings', data),
     onSuccess: () => {
       toast.success('Einstellungen gespeichert');
-      qc.invalidateQueries({ queryKey: ['admin', 'security', 'settings'] });
+      void qc.invalidateQueries({ queryKey: ['admin', 'security', 'settings'] });
     },
-    onError: () => toast.error('Fehler beim Speichern'),
+    onError: (e) => toast.error(errorMessage(e, 'Fehler beim Speichern')),
   });
 
   function handleSave(data: Partial<SecuritySettings>) {
@@ -1325,17 +1009,17 @@ export function ProtectionPage() {
   return (
     <div className="flex h-full">
       {/* ── Left sub-nav ────────────────────────────────────────────────── */}
-      <aside className="w-44 shrink-0 bg-[#1e2433] flex flex-col h-full">
-        <div className="px-3 py-3 border-b border-white/10">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Schutzfilter</p>
+      <aside className="w-44 shrink-0 bg-surface-2 border-r border-line flex flex-col h-full">
+        <div className="px-3 py-3 border-b border-line">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-fg-subtle">Schutzfilter</p>
         </div>
         <nav className="flex-1 py-2 space-y-0.5">
           {SUB_NAV.map(({ id, label, icon: Icon }) => (
             <button key={id} onClick={() => setSection(id)}
               className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left transition-colors ${
                 section === id
-                  ? 'bg-white/10 text-white border-l-2 border-accent'
-                  : 'text-gray-400 hover:bg-white/5 hover:text-gray-200'
+                  ? 'bg-surface-3 text-fg border-l-2 border-accent-fg'
+                  : 'text-fg-muted hover:bg-surface-3 hover:text-fg'
               }`}>
               <Icon size={13} className="shrink-0" />
               {label}
@@ -1347,18 +1031,23 @@ export function ProtectionPage() {
       {/* ── Main content ────────────────────────────────────────────────── */}
       <div className="flex-1 overflow-y-auto p-6">
         {!settings && (
-          <div className="text-sm text-gray-400">Lade Einstellungen…</div>
+          <div className="text-sm text-fg-subtle">Lade Einstellungen…</div>
         )}
         {settings && (
-          <>
-            {section === 'overview'    && <OverviewSection />}
-            {section === 'rspamd'      && <RspamdSection    settings={settings} onSave={handleSave} />}
-            {section === 'antivirus'   && <AntivirusSection  settings={settings} onSave={handleSave} />}
-            {section === 'dnsbl'       && <DnsblSection       settings={settings} onSave={handleSave} />}
-            {section === 'greylisting' && <GreylistingSection settings={settings} onSave={handleSave} />}
-            {section === 'geoip'       && <GeoipSection       settings={settings} onSave={handleSave} />}
-            {section === 'attachments' && <AttachmentsSection settings={settings} onSave={handleSave} />}
-          </>
+          <SavePendingContext.Provider value={saveMut.isPending}>
+            {section === 'overview'    && <OverviewSection settings={settings} />}
+            {/* Read-only roles (hygiene: read) see the settings disabled — the API answers 403 */}
+            {section !== 'overview' && (
+              <WriteGuard area="hygiene">
+                {section === 'rspamd'      && <RspamdSection    settings={settings} onSave={handleSave} />}
+                {section === 'antivirus'   && <ClamavSettingsSection />}
+                {section === 'dnsbl'       && <DnsblSection       settings={settings} onSave={handleSave} />}
+                {section === 'greylisting' && <GreylistingSection settings={settings} onSave={handleSave} />}
+                {section === 'geoip'       && <GeoipSection       settings={settings} onSave={handleSave} />}
+                {section === 'attachments' && <AttachmentsSection settings={settings} onSave={handleSave} />}
+              </WriteGuard>
+            )}
+          </SavePendingContext.Provider>
         )}
       </div>
     </div>

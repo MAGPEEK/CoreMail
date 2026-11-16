@@ -29,6 +29,7 @@
  *   POST   /api/v1/admin/compliance/retention/:id/assignments
  *   DELETE /api/v1/admin/compliance/retention/:id/assignments/:aid
  *   POST   /api/v1/admin/compliance/retention/run                — run MFA now
+ *   GET    /api/v1/admin/compliance/retention/targets?q=         — domains + users for assignments
  *   GET    /api/v1/admin/compliance/retention/runs               — MFA run history
  */
 
@@ -38,6 +39,7 @@ import { z } from 'zod';
 import { patchSchema } from '../../lib/zod-compat.js';
 import { requireArea } from '../../middleware/auth.js';
 import { internalAuthHeaders } from '@coremail/core';
+import { invalidInputMessage } from '../../lib/zod-message.js';
 
 export const adminRetentionRouter: RouterType = Router();
 adminRetentionRouter.use(requireArea('compliance'));
@@ -58,6 +60,30 @@ const TagSchema = z.object({
   enabled:       z.boolean().default(true),
 });
 
+type TagType = typeof TAG_TYPES[number];
+type FolderTarget = typeof FOLDER_TARGETS[number];
+
+/**
+ * Effective folderTarget of a tag (9.1.x): RPT needs one (never ALL_OTHER),
+ * DPT is always ALL_OTHER, PERSONAL has none. Returns an error text instead
+ * when the combination is invalid. Shared by create and update, so switching
+ * a tag's type can no longer leave a stale / missing folderTarget behind.
+ */
+export function resolveFolderTarget(type: TagType, folderTarget: FolderTarget | null | undefined): { folderTarget: FolderTarget | null } | { error: string } {
+  if (type === 'RPT') {
+    if (!folderTarget || folderTarget === 'ALL_OTHER') return { error: 'RPT-Tags benötigen einen Standardordner (Posteingang, Gesendet, …)' };
+    return { folderTarget };
+  }
+  if (type === 'DPT') {
+    if (folderTarget && folderTarget !== 'ALL_OTHER') return { error: 'DPT-Tags gelten für das ganze Postfach (folderTarget=ALL_OTHER)' };
+    return { folderTarget: 'ALL_OTHER' };
+  }
+  return { folderTarget: null };
+}
+
+const isUniqueViolation = (err: unknown): boolean =>
+  (err as { code?: unknown })?.code === 'P2002' || String(err).includes('Unique');
+
 adminRetentionRouter.get('/tags', async (_req: Request, res: Response) => {
   const tags = await prisma.retentionTag.findMany({
     include: { _count: { select: { policyTags: true, messages: true, folders: true } } },
@@ -68,32 +94,23 @@ adminRetentionRouter.get('/tags', async (_req: Request, res: Response) => {
 
 adminRetentionRouter.post('/tags', async (req: Request, res: Response) => {
   const p = TagSchema.safeParse(req.body);
-  if (!p.success) { res.status(400).json({ error: 'Invalid request', details: p.error.issues }); return; }
-
-  // RPT must have a folderTarget
-  if (p.data.type === 'RPT' && !p.data.folderTarget) {
-    res.status(400).json({ error: 'RPT-Tags benötigen einen folderTarget (Inbox, Sent, …)' });
-    return;
-  }
-  // DPT must not have a folderTarget (or only ALL_OTHER)
-  if (p.data.type === 'DPT' && p.data.folderTarget && p.data.folderTarget !== 'ALL_OTHER') {
-    res.status(400).json({ error: 'DPT-Tags dürfen nur folderTarget=ALL_OTHER haben' });
-    return;
-  }
+  if (!p.success) { res.status(400).json({ error: invalidInputMessage(p.error), details: p.error.issues }); return; }
+  const target = resolveFolderTarget(p.data.type, p.data.folderTarget);
+  if ('error' in target) { res.status(400).json({ error: target.error }); return; }
 
   try {
     const tag = await prisma.retentionTag.create({
       data: {
         name: p.data.name, description: p.data.description,
         type: p.data.type, action: p.data.action, retentionDays: p.data.retentionDays,
-        ...(p.data.folderTarget ? { folderTarget: p.data.folderTarget } : {}),
+        ...(target.folderTarget ? { folderTarget: target.folderTarget } : {}),
         enabled: p.data.enabled,
         createdBy: req.apiUser?.userId ?? '',
       },
     });
     res.status(201).json(tag);
   } catch (err) {
-    if (String(err).includes('Unique')) { res.status(409).json({ error: 'Tag-Name bereits vergeben' }); return; }
+    if (isUniqueViolation(err)) { res.status(409).json({ error: 'Tag-Name bereits vergeben' }); return; }
     throw err;
   }
 });
@@ -105,21 +122,40 @@ adminRetentionRouter.put('/tags/:id', async (req: Request, res: Response) => {
   if (tag.isSystem) { res.status(403).json({ error: 'System-Tags können nicht geändert werden' }); return; }
 
   const p = patchSchema(TagSchema).safeParse(req.body);
-  if (!p.success) { res.status(400).json({ error: 'Invalid request' }); return; }
+  if (!p.success) { res.status(400).json({ error: invalidInputMessage(p.error), details: p.error.issues }); return; }
 
-  const updated = await prisma.retentionTag.update({
-    where: { id },
-    data: {
-      ...(p.data.name !== undefined ? { name: p.data.name } : {}),
-      ...(p.data.description !== undefined ? { description: p.data.description } : {}),
-      ...(p.data.type !== undefined ? { type: p.data.type } : {}),
-      ...(p.data.action !== undefined ? { action: p.data.action } : {}),
-      ...(p.data.retentionDays !== undefined ? { retentionDays: p.data.retentionDays } : {}),
-      ...(p.data.folderTarget !== undefined ? { folderTarget: p.data.folderTarget } : {}),
-      ...(p.data.enabled !== undefined ? { enabled: p.data.enabled } : {}),
-    },
-  });
-  res.json(updated);
+  // Re-validate the EFFECTIVE type/folderTarget (a type switch used to keep the old target)
+  const type = p.data.type ?? tag.type;
+  const target = resolveFolderTarget(type, p.data.folderTarget !== undefined ? p.data.folderTarget : (p.data.type !== undefined ? undefined : tag.folderTarget));
+  if ('error' in target) { res.status(400).json({ error: target.error }); return; }
+
+  // Becoming a DPT must not give a policy a second DPT
+  if (type === 'DPT' && tag.type !== 'DPT') {
+    const clash = await prisma.retentionPolicyTag.findFirst({
+      where: { tag: { type: 'DPT', NOT: { id } }, policy: { policyTags: { some: { tagId: id } } } },
+      select: { policyId: true },
+    });
+    if (clash) { res.status(409).json({ error: 'Eine Richtlinie mit diesem Tag hat bereits einen DPT' }); return; }
+  }
+
+  try {
+    const updated = await prisma.retentionTag.update({
+      where: { id },
+      data: {
+        ...(p.data.name !== undefined ? { name: p.data.name } : {}),
+        ...(p.data.description !== undefined ? { description: p.data.description } : {}),
+        type,
+        ...(p.data.action !== undefined ? { action: p.data.action } : {}),
+        ...(p.data.retentionDays !== undefined ? { retentionDays: p.data.retentionDays } : {}),
+        folderTarget: target.folderTarget,
+        ...(p.data.enabled !== undefined ? { enabled: p.data.enabled } : {}),
+      },
+    });
+    res.json(updated);
+  } catch (err) {
+    if (isUniqueViolation(err)) { res.status(409).json({ error: 'Tag-Name bereits vergeben' }); return; }
+    throw err;
+  }
 });
 
 adminRetentionRouter.delete('/tags/:id', async (req: Request, res: Response) => {
@@ -176,6 +212,27 @@ adminRetentionRouter.get('/runs', async (_req: Request, res: Response) => {
     take: 30,
   });
   res.json(runs);
+});
+
+// ── Assignment targets (picker) ───────────────────────────────────────────────
+
+/**
+ * GET /api/v1/admin/compliance/retention/targets?q=
+ * Domains (all) and up to 20 matching users for the assignment picker — the
+ * compliance role has no access to the recipients/domains areas.
+ */
+adminRetentionRouter.get('/targets', async (req: Request, res: Response) => {
+  const q = typeof req.query['q'] === 'string' ? req.query['q'].trim().slice(0, 100) : '';
+  const [domains, users] = await Promise.all([
+    prisma.domain.findMany({ select: { id: true, name: true }, orderBy: { name: 'asc' } }),
+    prisma.user.findMany({
+      where: q ? { OR: [{ email: { contains: q, mode: 'insensitive' } }, { displayName: { contains: q, mode: 'insensitive' } }] } : {},
+      select: { id: true, email: true, displayName: true },
+      orderBy: { email: 'asc' },
+      take: 20,
+    }),
+  ]);
+  res.json({ domains, users });
 });
 
 // ── Policy CRUD ───────────────────────────────────────────────────────────────
@@ -307,8 +364,25 @@ adminRetentionRouter.put('/:id', async (req: Request, res: Response) => {
     return;
   }
 
-  if (retentionDays !== undefined && retentionDays < 0) {
+  if (retentionDays !== undefined && (typeof retentionDays !== 'number' || !Number.isInteger(retentionDays) || retentionDays < 0)) {
     res.status(400).json({ error: 'retentionDays muss 0 oder größer sein (0 = Frist wird durch Tags gesteuert)' });
+    return;
+  }
+  if (name !== undefined && (typeof name !== 'string' || !name.trim())) {
+    res.status(400).json({ error: 'name darf nicht leer sein' });
+    return;
+  }
+  // 9.1.x: same enum checks as POST (an invalid value used to end in a 500)
+  if (action !== undefined && !['ARCHIVE', 'DELETE', 'MOVE_TO_FOLDER'].includes(action)) {
+    res.status(400).json({ error: 'action must be one of: ARCHIVE, DELETE, MOVE_TO_FOLDER' });
+    return;
+  }
+  if (scope !== undefined && !['ALL_ITEMS', 'INBOX', 'SENT_ITEMS', 'DELETED_ITEMS', 'JUNK'].includes(scope)) {
+    res.status(400).json({ error: 'scope must be one of: ALL_ITEMS, INBOX, SENT_ITEMS, DELETED_ITEMS, JUNK' });
+    return;
+  }
+  if ((action ?? existing.action) === 'MOVE_TO_FOLDER' && !(targetFolder ?? existing.targetFolder)) {
+    res.status(400).json({ error: 'targetFolder is required when action is MOVE_TO_FOLDER' });
     return;
   }
 
@@ -374,7 +448,18 @@ adminRetentionRouter.get('/:id/assignments', async (req: Request, res: Response)
     where: { policyId: id },
     orderBy: { createdAt: 'asc' },
   });
-  res.json(assignments);
+  // 9.1.x: readable label (USER targets are ids; DOMAIN targets are domain names)
+  const userIds = assignments.filter((a) => a.target === 'USER').map((a) => a.targetId);
+  const users = userIds.length
+    ? await prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, email: true } })
+    : [];
+  const emailById = new Map(users.map((u) => [u.id, u.email]));
+  res.json(assignments.map((a) => ({
+    ...a,
+    label: a.target === 'GLOBAL' ? 'Alle Postfächer'
+      : a.target === 'USER' ? (emailById.get(a.targetId) ?? `${a.targetId} (gelöscht)`)
+      : a.targetId,
+  })));
 });
 
 /**

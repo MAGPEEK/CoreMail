@@ -52,12 +52,12 @@ export function PasswordPromptDialog({ title, description, confirmLabel = 'Best�
   };
 
   return (
-    <Modal onClose={onClose} labelledBy="pw-prompt-title" className="bg-white dark:bg-gray-900 rounded-lg shadow-2xl w-full max-w-sm p-5">
+    <Modal onClose={onClose} labelledBy="pw-prompt-title" className="bg-surface rounded-lg shadow-2xl w-full max-w-sm p-5">
       <form onSubmit={submit} className="space-y-3">
-        <h2 id="pw-prompt-title" className="text-base font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+        <h2 id="pw-prompt-title" className="text-base font-semibold text-fg flex items-center gap-2">
           <Lock size={15} /> {title}
         </h2>
-        <p className="text-xs text-gray-500 dark:text-gray-400">
+        <p className="text-xs text-fg-subtle">
           {kind === 'mfa'
             ? 'Bitte bestätigen Sie diese Änderung mit einem Code aus Ihrer Authenticator-App oder einem Backup-Code.'
             : (description ?? 'Bitte bestätigen Sie diese Änderung mit Ihrem aktuellen Passwort.')}
@@ -89,11 +89,11 @@ export function PasswordPromptDialog({ title, description, confirmLabel = 'Best�
           />
         )}
         {allowMfaCode && (
-          <button type="button" onClick={switchKind} className="text-xs text-accent hover:underline">
+          <button type="button" onClick={switchKind} className="text-xs text-accent-fg hover:underline">
             {kind === 'mfa' ? 'Stattdessen Passwort verwenden' : 'Stattdessen Authenticator- oder Backup-Code verwenden'}
           </button>
         )}
-        {error && <p role="alert" className="text-xs text-red-600">{error}</p>}
+        {error && <p role="alert" className="text-xs text-danger-fg">{error}</p>}
         <div className="flex justify-end gap-2 pt-1">
           <button type="button" onClick={onClose} className="btn-secondary text-xs">Abbrechen</button>
           <button type="submit" disabled={busy || !secret} className="btn-primary text-xs flex items-center gap-1.5 disabled:opacity-50">

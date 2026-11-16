@@ -32,6 +32,13 @@ export interface SecuritySettingsRow {
   clamavEnabled: boolean;
   clamavAction: string;
   clamavBlockOnFailure: boolean;
+  // 9.2 policy fields — optional so that rows/fakes without them keep the defaults
+  clamavTimeoutSec?: number;
+  clamavScanLimitMb?: number;
+  clamavOversizeAction?: string;
+  clamavHeuristicsAsVirus?: boolean;
+  clamavPuaAsVirus?: boolean;
+  clamavEncryptedAsVirus?: boolean;
 }
 
 export interface SmtpGreylistRow {
@@ -41,7 +48,9 @@ export interface SmtpGreylistRow {
 /** Schema defaults (packages/storage/prisma/schema.prisma). */
 export const DEFAULT_PIPELINE_CONFIG: Readonly<Required<Pick<PipelineConfig,
   'greylistingEnabled' | 'dnsblEnabled' | 'rspamdEnabled' | 'clamavEnabled' | 'spamScoreJunk' | 'spamScoreReject'
-  | 'clamavAction' | 'clamavBlockOnFailure' | 'attachmentEnabled' | 'maxAttachmentBytes' | 'blockedExtensions'>>
+  | 'clamavAction' | 'clamavBlockOnFailure' | 'attachmentEnabled' | 'maxAttachmentBytes' | 'blockedExtensions'
+  | 'clamavTimeoutMs' | 'clamavScanLimitBytes' | 'clamavOversizeAction' | 'clamavHeuristicsAsVirus'
+  | 'clamavPuaAsVirus' | 'clamavEncryptedAsVirus'>>
   & { countryFilter: null }> = {
   greylistingEnabled:   true,
   dnsblEnabled:         true,
@@ -51,6 +60,12 @@ export const DEFAULT_PIPELINE_CONFIG: Readonly<Required<Pick<PipelineConfig,
   spamScoreReject:      15.0,
   clamavAction:         'quarantine',
   clamavBlockOnFailure: false,
+  clamavTimeoutMs:      20_000,
+  clamavScanLimitBytes: 50 * 1024 * 1024,
+  clamavOversizeAction: 'accept',
+  clamavHeuristicsAsVirus: true,
+  clamavPuaAsVirus:     true,
+  clamavEncryptedAsVirus: true,
   attachmentEnabled:    true,
   maxAttachmentBytes:   50 * 1024 * 1024,
   blockedExtensions:    DEFAULT_BLOCKED_EXTENSIONS,
@@ -59,6 +74,14 @@ export const DEFAULT_PIPELINE_CONFIG: Readonly<Required<Pick<PipelineConfig,
 
 function stringArray(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+}
+
+/** Bounds of the BCP fields (api-gateway validates the same ranges). */
+export const CLAMAV_TIMEOUT_SEC_RANGE = [5, 25] as const;
+export const CLAMAV_SCAN_LIMIT_MB_RANGE = [1, 50] as const;
+
+function clampInt(v: unknown, [min, max]: readonly [number, number], fallback: number): number {
+  return typeof v === 'number' && Number.isFinite(v) ? Math.min(max, Math.max(min, Math.round(v))) : fallback;
 }
 
 export function normalizeClamavAction(v: unknown): ClamavAction {
@@ -109,5 +132,11 @@ export function buildPipelineConfig(
     clamavEnabled:        sec.clamavEnabled,
     clamavAction:         normalizeClamavAction(sec.clamavAction),
     clamavBlockOnFailure: sec.clamavBlockOnFailure,
+    clamavTimeoutMs:      clampInt(sec.clamavTimeoutSec, CLAMAV_TIMEOUT_SEC_RANGE, d.clamavTimeoutMs / 1000) * 1000,
+    clamavScanLimitBytes: clampInt(sec.clamavScanLimitMb, CLAMAV_SCAN_LIMIT_MB_RANGE, d.clamavScanLimitBytes / 1048576) * 1024 * 1024,
+    clamavOversizeAction: sec.clamavOversizeAction === 'reject' ? 'reject' : 'accept',
+    clamavHeuristicsAsVirus: sec.clamavHeuristicsAsVirus ?? d.clamavHeuristicsAsVirus,
+    clamavPuaAsVirus:     sec.clamavPuaAsVirus ?? d.clamavPuaAsVirus,
+    clamavEncryptedAsVirus: sec.clamavEncryptedAsVirus ?? d.clamavEncryptedAsVirus,
   }, env);
 }

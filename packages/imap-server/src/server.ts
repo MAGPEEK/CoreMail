@@ -4,7 +4,7 @@ import net from 'node:net';
 import {
   createLogger, getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD, CHANNEL_SETTINGS_RELOAD,
   generateSelfSignedCert, tlsPemToBuffers, applyTlsToListeners, tlsMaterialEquals, installProcessGuards,
-  startAuthInvalidationSubscriber, onAuthInvalidation,
+  startAuthInvalidationSubscriber, onAuthInvalidation, resolveBindAddress, listenWithRecovery,
 } from '@coremail/core';
 import { namespaceConfig } from './commands/namespaces.js';
 import { connectDatabase, waitForObjectStorage, prisma, loadProtocolCert } from '@coremail/storage';
@@ -177,6 +177,45 @@ function closeImapServer(tracked: TrackedImapServer, port: number): void {
 
 // ── Listener reload ───────────────────────────────────────────────────────────
 
+/**
+ * Bind address of a listener ('' → all interfaces). Only IP literals are used;
+ * a host name (the field used to be ignored free text) means 0.0.0.0 —
+ * listenWithRecovery() logs it and recovers from bind errors.
+ */
+function bindAddress(address: string | null | undefined): string {
+  return resolveBindAddress(address);
+}
+
+/** SSL flag + bind address a running port was started with (9.1.x). */
+const appliedListener = new Map<number, string>();
+const listenerSignature = (l: { ssl: boolean; address: string }): string => `${l.ssl ? 'ssl' : 'plain'}|${bindAddress(l.address)}`;
+
+/**
+ * 9.1.x: a changed SSL flag / bind address of a RUNNING port used to be ignored
+ * until the next restart. Such ports are closed here and started again by a
+ * follow-up reload once the socket is released. Returns the closed ports.
+ */
+function stopChangedListeners(listeners: Array<{ port: number; ssl: boolean; address: string; active: boolean }>): Set<number> {
+  const wanted = new Map<number, string>();
+  for (const l of listeners) if (l.active && !wanted.has(l.port)) wanted.set(l.port, listenerSignature(l));
+  const restarted = new Set<number>();
+  for (const [port, sig] of wanted) {
+    const running = servers.get(port);
+    const applied = appliedListener.get(port);
+    if (running && applied !== undefined && applied !== sig) {
+      servers.delete(port);
+      appliedListener.delete(port);
+      closeImapServer(running, port);
+      restarted.add(port);
+    }
+  }
+  if (restarted.size > 0) {
+    log.info({ ports: [...restarted] }, 'IMAP listener settings changed — restarting');
+    setTimeout(scheduleReload, 500).unref?.();
+  }
+  return restarted;
+}
+
 async function reloadListeners(): Promise<void> {
   try {
     const listeners = await prisma.serviceListener.findMany({ where: { service: 'IMAP' } });
@@ -185,13 +224,25 @@ async function reloadListeners(): Promise<void> {
     log.debug({ activePorts: [...activePorts], runningPorts: [...servers.keys()] }, 'IMAP reload');
 
     // Start newly active ports
+    const restarted = stopChangedListeners(listeners);
     for (const l of listeners) {
-      if (l.active && !servers.has(l.port)) {
+      if (l.active && !servers.has(l.port) && !restarted.has(l.port)) {
         try {
           const tracked = createTrackedImapServer(l.ssl);
           servers.set(l.port, tracked);
-          tracked.server.listen(l.port, '0.0.0.0', () =>
-            log.info({ port: l.port, ssl: l.ssl }, 'IMAP listener started'));
+          appliedListener.set(l.port, listenerSignature(l));
+          // Bind errors (address not in the container, port still in use after a
+          // restart) are logged and recovered — never an uncaught 'error' event.
+          listenWithRecovery(tracked.server, {
+            port: l.port, address: l.address, label: 'IMAP', log,
+            isCurrent: () => servers.get(l.port) === tracked,
+            onListening: (address) => log.info({ port: l.port, ssl: l.ssl, address }, 'IMAP listener started'),
+            onGiveUp: () => {
+              if (servers.get(l.port) !== tracked) return;
+              servers.delete(l.port);
+              appliedListener.delete(l.port);
+            },
+          });
         } catch (portErr) {
           log.error({ err: portErr, port: l.port, ssl: l.ssl },
             'Failed to start IMAP listener — port skipped');
@@ -202,7 +253,8 @@ async function reloadListeners(): Promise<void> {
     // Close deactivated/removed ports (synchronously)
     for (const [port, tracked] of servers) {
       if (!activePorts.has(port)) {
-        servers.delete(port);   // Remove from map before closing
+        servers.delete(port);
+        appliedListener.delete(port);   // Remove from map before closing
         closeImapServer(tracked, port);
       }
     }

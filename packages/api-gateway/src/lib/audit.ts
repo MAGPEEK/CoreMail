@@ -65,7 +65,10 @@ async function isAuditEnabled(): Promise<boolean> {
  * itself (compliance requirement — otherwise one could silently disable
  * logging, exfiltrate data, and re-enable it).
  */
-const ALWAYS_AUDIT = /^(settings\.|audit\.|user\.role|oauth\.client|mailbox\.delete|domain\.delete)/i;
+// The audit middleware names actions after the path (mailboxes.delete,
+// domains.delete, audit-log.export.csv.get, …) — the plural forms are the ones
+// that actually occur; the singular forms cover explicit audit() calls.
+export const ALWAYS_AUDIT = /^(settings\.|audit\.|audit-log\.|user\.role|mailbox(es)?\.delete|domains?\.delete)/i;
 
 /**
  * Write an audit log entry asynchronously (fire-and-forget).

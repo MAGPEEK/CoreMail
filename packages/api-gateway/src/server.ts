@@ -2,6 +2,7 @@ import { initRuntimeLogLevel } from '@coremail/core';
 import express from 'express';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import { existsSync, readFileSync } from 'node:fs';
+import { parseChangelog } from './lib/changelog.js';
 import { join, resolve } from 'node:path';
 import type { ClientRequest, IncomingMessage } from 'node:http';
 import {
@@ -334,31 +335,7 @@ const CHANGELOG_PATH = process.env['CHANGELOG_PATH']
 app.get('/api/v1/changelog', (_req, res) => {
   try {
     const raw = readFileSync(CHANGELOG_PATH, 'utf-8');
-    const versions: Array<{ version: string; date: string; sections: Record<string, string[]> }> = [];
-    let current: (typeof versions)[0] | null = null;
-    let currentSection = '';
-
-    for (const line of raw.split('\n')) {
-      const versionMatch = /^## \[(.+?)\](?:\s*[—-]\s*(\d{4}-\d{2}-\d{2}))?/.exec(line);
-      if (versionMatch) {
-        if (current) versions.push(current);
-        current = { version: versionMatch[1]!, date: versionMatch[2] ?? '', sections: {} };
-        currentSection = '';
-        continue;
-      }
-      const sectionMatch = /^### (.+)/.exec(line);
-      if (sectionMatch && current) {
-        currentSection = sectionMatch[1]!;
-        current.sections[currentSection] = [];
-        continue;
-      }
-      const itemMatch = /^[-*] (.+)/.exec(line);
-      if (itemMatch && current && currentSection) {
-        current.sections[currentSection]!.push(itemMatch[1]!);
-      }
-    }
-    if (current) versions.push(current);
-    res.json({ versions, raw });
+    res.json({ versions: parseChangelog(raw), raw });
   } catch {
     res.status(503).json({ error: 'Changelog not available' });
   }

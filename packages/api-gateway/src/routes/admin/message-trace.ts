@@ -33,63 +33,78 @@ export function matchesTraceFilter(metadata: unknown, f: TraceFilter): boolean {
 }
 adminMessageTraceRouter.use(requireArea('compliance'));
 
+/** Max. rows scanned for a filtered search / export (metadata is JSON, filtered in memory). */
+export const TRACE_SCAN_LIMIT = 5000;
+
+/** Page window: page ≥ 1, limit 1–500 (default 100); garbage → defaults. */
+export function tracePage(pageStr: unknown, limitStr: unknown): { page: number; limit: number } {
+  const p = Number.parseInt(typeof pageStr === 'string' ? pageStr : '', 10);
+  const l = Number.parseInt(typeof limitStr === 'string' ? limitStr : '', 10);
+  return {
+    page: Number.isFinite(p) && p > 0 ? p : 1,
+    limit: Number.isFinite(l) ? Math.min(Math.max(l, 1), 500) : 100,
+  };
+}
+
+/** Prisma where (MAIL_FLOW + time range), or an error message for an invalid date. */
+export function traceWhere(fromDate: string, toDate: string): { where: Record<string, unknown> } | { error: string } {
+  const where: Record<string, unknown> = { category: 'MAIL_FLOW' };
+  const ts: Record<string, Date> = {};
+  for (const [key, v, op] of [['from', fromDate, 'gte'], ['to', toDate, 'lte']] as const) {
+    if (!v) continue;
+    const d = new Date(v);
+    if (Number.isNaN(d.getTime())) return { error: `Invalid date in "${key}"` };
+    ts[op] = d;
+  }
+  if (Object.keys(ts).length) where['timestamp'] = ts;
+  return { where };
+}
+
+/**
+ * One page of a filtered search: the filter runs over the newest
+ * TRACE_SCAN_LIMIT rows, so page, total and the rows agree (an over-fetch
+ * window per page would skip matches and report the unfiltered total).
+ */
+export function pageFiltered<T extends { metadata: unknown }>(rows: T[], f: TraceFilter, page: number, limit: number): { items: T[]; total: number } {
+  const matched = rows.filter((r) => matchesTraceFilter(r.metadata, f));
+  return { items: matched.slice((page - 1) * limit, page * limit), total: matched.length };
+}
+
+const str = (v: unknown): string => (typeof v === 'string' ? v : '');
+
 // ── GET / ─────────────────────────────────────────────────────────────────────
 adminMessageTraceRouter.get('/', async (req: Request, res: Response) => {
-  const {
-    sender = '', recipient = '', subject = '',
-    status = '',   // ACCEPTED | REJECTED | DEFERRED | DELIVERED
-    from: fromDate = '', to: toDate = '',
-    page = '1', limit = '100',
-  } = req.query as Record<string, string>;
+  const q = req.query;
+  // status: ACCEPTED | DELIVERED | JUNK | QUARANTINE | REJECTED | DEFERRED
+  const filter: TraceFilter = { sender: str(q['sender']), recipient: str(q['recipient']), subject: str(q['subject']), status: str(q['status']) };
+  const { page, limit } = tracePage(q['page'], q['limit']);
+  const w = traceWhere(str(q['from']), str(q['to']));
+  if ('error' in w) { res.status(400).json({ error: w.error }); return; }
+  const select = { id: true, timestamp: true, level: true, message: true, metadata: true, userId: true } as const;
 
-  const skip = (parseInt(page) - 1) * parseInt(limit);
-
-  // SystemLog entries with category MAIL_FLOW contain metadata:
-  // { sender, recipient, subject, status, messageId, size, spamScore }
-  const where: Record<string, unknown> = { category: 'MAIL_FLOW' };
-
-  if (fromDate) where['timestamp'] = { gte: new Date(fromDate) };
-  if (toDate) {
-    const existing = (where['timestamp'] as Record<string, unknown>) ?? {};
-    where['timestamp'] = { ...existing, lte: new Date(toDate) };
+  if (!filter.sender && !filter.recipient && !filter.subject && !filter.status) {
+    const [items, total] = await Promise.all([
+      prisma.systemLog.findMany({ where: w.where, orderBy: { timestamp: 'desc' }, skip: (page - 1) * limit, take: limit, select }),
+      prisma.systemLog.count({ where: w.where }),
+    ]);
+    res.json({ items, total, page, limit, truncated: false });
+    return;
   }
 
-  // For text searches we filter in memory after fetch (SystemLog metadata is Json)
-  // For production scale: add GIN index on metadata
-  const [rawItems, total] = await Promise.all([
-    prisma.systemLog.findMany({
-      where,
-      orderBy: { timestamp: 'desc' },
-      skip,
-      take: parseInt(limit) * 3, // overfetch to allow client-side filter
-      select: { id: true, timestamp: true, level: true, message: true, metadata: true, userId: true },
-    }),
-    prisma.systemLog.count({ where }),
-  ]);
-
-  // Post-filter by sender/recipient/subject/status
-  const filtered = rawItems
-    .filter(row => matchesTraceFilter(row.metadata, { sender, recipient, subject, status }))
-    .slice(0, parseInt(limit));
-
-  res.json({ items: filtered, total, page: parseInt(page), limit: parseInt(limit) });
+  const rows = await prisma.systemLog.findMany({ where: w.where, orderBy: { timestamp: 'desc' }, take: TRACE_SCAN_LIMIT, select });
+  const { items, total } = pageFiltered(rows, filter, page, limit);
+  res.json({ items, total, page, limit, truncated: rows.length >= TRACE_SCAN_LIMIT });
 });
 
 // ── GET /export ───────────────────────────────────────────────────────────────
 adminMessageTraceRouter.get('/export', async (req: Request, res: Response) => {
-  const {
-    from: fromDate = '', to: toDate = '', sender = '', recipient = '', subject = '', status = '',
-  } = req.query as Record<string, string>;
-
-  const where: Record<string, unknown> = { category: 'MAIL_FLOW' };
-  if (fromDate) where['timestamp'] = { gte: new Date(fromDate) };
-  if (toDate) {
-    const existing = (where['timestamp'] as Record<string, unknown>) ?? {};
-    where['timestamp'] = { ...existing, lte: new Date(toDate) };
-  }
+  const q = req.query;
+  const sender = str(q['sender']), recipient = str(q['recipient']), subject = str(q['subject']), status = str(q['status']);
+  const w = traceWhere(str(q['from']), str(q['to']));
+  if ('error' in w) { res.status(400).json({ error: w.error }); return; }
 
   const rows = await prisma.systemLog.findMany({
-    where, orderBy: { timestamp: 'desc' }, take: 5000,
+    where: w.where, orderBy: { timestamp: 'desc' }, take: TRACE_SCAN_LIMIT,
     select: { timestamp: true, message: true, metadata: true },
   });
 

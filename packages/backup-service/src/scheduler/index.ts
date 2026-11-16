@@ -7,7 +7,8 @@ import { runRetentionPolicies, type RetentionRunResult } from '../retention/work
 import { createLogger, getRedisClient } from '@coremail/core';
 import { exportZip } from '../export/zip.js';
 import { exportMbox } from '../export/mbox.js';
-import { uploadToS3, getSignedDownloadUrl } from '../upload/s3.js';
+import { uploadToS3, getSignedDownloadUrl, deleteObject } from '../upload/s3.js';
+import { scheduleSignature, retentionCutoff, retentionWindow, newestArchivePerMailbox, fullBackupUserKey, type ScheduleData } from './schedule-input.js';
 import { claimSlot, withLock, LOCK_KEYS, type LockRedis, type LockResult } from './locks.js';
 
 const log = createLogger('backup:scheduler');
@@ -93,6 +94,60 @@ export function startBackupScheduler() {
   return { scheduleReloader, retentionJob };
 }
 
+/** Signature each registered CronJob was created with (9.1.x: scope/format/target changes re-register). */
+const activeSignatures = new Map<string, string>();
+
+const RETENTION_SINCE_KEY = 'backup:retention:enforced-since';
+
+/**
+ * First time schedule retention was enforced on this installation (Redis, set once).
+ * If the key is lost it is set again to "now" — that only ever keeps more backups.
+ */
+async function retentionEnforcedSince(now: Date): Promise<Date> {
+  const redis = getRedisClient() as unknown as {
+    set(k: string, v: string, nx: 'NX'): Promise<unknown>; get(k: string): Promise<string | null>;
+  };
+  await redis.set(RETENTION_SINCE_KEY, now.toISOString(), 'NX');
+  const raw = await redis.get(RETENTION_SINCE_KEY);
+  const since = raw ? new Date(raw) : now;
+  return Number.isNaN(since.getTime()) ? now : since;
+}
+
+/**
+ * 9.1.x: BackupSchedule.retentionDays was stored but never applied. After a
+ * schedule run, backups of THAT schedule older than retentionDays are removed
+ * (stored object + job row). Manual backups are never touched. Best effort.
+ */
+export async function purgeExpiredScheduleBackups(scheduleId: string, retentionDays: number, now: Date = new Date()): Promise<number> {
+  const window = retentionWindow(await retentionEnforcedSince(now), retentionCutoff(retentionDays, now));
+  if (!window) return 0;
+  // The newest completed archive of every mailbox in the schedule is always kept
+  // (full schedules store one archive per user in child jobs).
+  const completed = await prisma.backupJob.findMany({
+    where: { scheduleId, status: 'COMPLETED' },
+    orderBy: { createdAt: 'desc' },
+    select: { id: true, userId: true, downloadUrl: true },
+    take: 5000,
+  });
+  const keep = newestArchivePerMailbox(completed);
+  const expired = (await prisma.backupJob.findMany({
+    where: { scheduleId, status: { in: ['COMPLETED', 'FAILED', 'EXPIRED'] }, createdAt: window },
+    select: { id: true, downloadUrl: true },
+    take: 500,
+  })).filter((j) => !keep.has(j.id));
+  let removed = 0;
+  for (const j of expired) {
+    if (j.downloadUrl) {
+      try { await deleteObject(j.downloadUrl); }
+      catch (err) { log.warn({ err, jobId: j.id }, 'Expired backup object could not be deleted — kept'); continue; }
+    }
+    await prisma.backupJob.delete({ where: { id: j.id } }).catch(() => undefined);
+    removed++;
+  }
+  if (removed > 0) log.info({ scheduleId, removed, retentionDays }, 'Expired scheduled backups removed');
+  return removed;
+}
+
 /**
  * v3.18.26: synchronize active cron jobs with DB content.
  */
@@ -106,6 +161,7 @@ async function reloadSchedules(): Promise<void> {
       if (!dbIds.has(id)) {
         job.stop();
         activeJobs.delete(id);
+        activeSignatures.delete(id);
         log.info({ scheduleId: id }, 'Schedule deactivated — stopped CronJob');
       }
     }
@@ -113,12 +169,13 @@ async function reloadSchedules(): Promise<void> {
     // New or changed schedules: start
     for (const schedule of dbSchedules) {
       const existing = activeJobs.get(schedule.id);
-      const currentCron = existing?.cronTime?.source as string | undefined;
-      if (existing && currentCron === schedule.cron) continue; // unchanged
+      const signature = scheduleSignature(schedule as unknown as ScheduleData);
+      if (existing && activeSignatures.get(schedule.id) === signature) continue; // unchanged
 
       if (existing) {
         existing.stop();
         activeJobs.delete(schedule.id);
+        activeSignatures.delete(schedule.id);
       }
 
       try {
@@ -144,6 +201,13 @@ async function reloadSchedules(): Promise<void> {
                   where: { id: schedule.id },
                   data: { lastRunAt: new Date(), lastStatus: 'COMPLETED' },
                 });
+                // retentionDays: expire older backups of this schedule once the new one is done
+                void (started?.done ?? Promise.resolve())
+                  .then(async () => {
+                    const cur = await prisma.backupSchedule.findUnique({ where: { id: schedule.id }, select: { retentionDays: true } });
+                    if (cur) await purgeExpiredScheduleBackups(schedule.id, cur.retentionDays);
+                  })
+                  .catch((err: unknown) => log.warn({ err, scheduleId: schedule.id }, 'Backup retention cleanup failed'));
                 return started;
               });
               if (outcome !== 'ran') {
@@ -162,6 +226,7 @@ async function reloadSchedules(): Promise<void> {
           'UTC',
         );
         activeJobs.set(schedule.id, job);
+        activeSignatures.set(schedule.id, signature);
         log.info({ scheduleId: schedule.id, cron: schedule.cron, name: schedule.name }, 'Schedule registered');
       } catch (err) {
         // invalid cron expression — DB update + skip
@@ -205,7 +270,6 @@ export async function runFullBackup(opts: RunOpts = {}): Promise<{ jobId: string
         where: { active: true },
         select: { id: true, email: true },
       });
-      const dateStr = new Date().toISOString().slice(0, 10);
       let total = 0;
       let totalSize = 0n;
       let totalMessages = 0;
@@ -224,7 +288,7 @@ export async function runFullBackup(opts: RunOpts = {}): Promise<{ jobId: string
         try {
           const outPath = join(tmpdir(), `coremail-backup-${user.id}-${Date.now()}.zip`);
           const { fileCount } = await exportZip(user.id, null, outPath);
-          const s3Key = `full-backup/${dateStr}/${user.email.replace('@', '_at_')}.zip`;
+          const s3Key = fullBackupUserKey(startedAt, masterJob.id, user.email);
           const fileSize = (await stat(outPath).catch(() => null))?.size ?? 0;
           // Stored encrypted under <s3Key>.enc; the plaintext temp file is removed even on failure
           const stored = await uploadToS3(outPath, s3Key, 'application/zip').finally(() => unlink(outPath).catch(() => undefined));

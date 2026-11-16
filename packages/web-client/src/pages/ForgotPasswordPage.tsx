@@ -39,54 +39,54 @@ export function ForgotPasswordPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-accent to-blue-800">
-      <div className="bg-white rounded-lg shadow-2xl p-8 w-full max-w-sm">
+      <div className="bg-surface rounded-lg shadow-2xl p-8 w-full max-w-sm">
         {/* Logo */}
         <div className="flex items-center justify-center gap-2 mb-6">
           <div className="w-10 h-10 bg-accent rounded-lg flex items-center justify-center">
             <KeyRound size={22} className="text-white" />
           </div>
           <div>
-            <h1 className="text-xl font-bold text-gray-900">{orgName}</h1>
-            <p className="text-xs text-gray-500">Passwort zurücksetzen</p>
+            <h1 className="text-xl font-bold text-fg">{orgName}</h1>
+            <p className="text-xs text-fg-subtle">Passwort zurücksetzen</p>
           </div>
         </div>
 
         {!allowed ? (
           <div className="text-center space-y-4">
-            <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-800">
+            <div className="bg-warning-bg border border-warning-line rounded-lg px-4 py-3 text-sm text-warning-fg">
               Die selbstständige Passwort-Zurücksetzung ist deaktiviert.<br />
               Bitte wenden Sie sich an Ihren Administrator.
             </div>
-            <Link to="/login" className="flex items-center justify-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 py-1">
+            <Link to="/login" className="flex items-center justify-center gap-1.5 text-sm text-fg-subtle hover:text-fg-muted py-1">
               <ArrowLeft size={13} /> Zurück zur Anmeldung
             </Link>
           </div>
         ) : sent ? (
           /* Success view */
           <div className="text-center space-y-4">
-            <CheckCircle size={48} className="mx-auto text-green-500" />
-            <h2 className="font-semibold text-gray-900">E-Mail gesendet</h2>
-            <p className="text-sm text-gray-600">
+            <CheckCircle size={48} className="mx-auto text-success-fg" />
+            <h2 className="font-semibold text-fg">E-Mail gesendet</h2>
+            <p className="text-sm text-fg-muted">
               Falls <strong>{email}</strong> einem aktiven Konto entspricht, haben Sie in Kürze eine E-Mail mit einem Reset-Link erhalten.
               Der Link ist <strong>15 Minuten</strong> gültig.
             </p>
-            <p className="text-xs text-gray-400">
+            <p className="text-xs text-fg-subtle">
               Keine E-Mail erhalten? Prüfen Sie Ihren Spam-Ordner oder wenden Sie sich an Ihren Administrator.
             </p>
-            <Link to="/login" className="flex items-center justify-center gap-1.5 text-sm text-accent hover:underline py-1">
+            <Link to="/login" className="flex items-center justify-center gap-1.5 text-sm text-accent-fg hover:underline py-1">
               <ArrowLeft size={13} /> Zurück zur Anmeldung
             </Link>
           </div>
         ) : (
           /* Form */
           <form onSubmit={handleSubmit} className="space-y-4">
-            <p className="text-sm text-gray-600">
+            <p className="text-sm text-fg-muted">
               Geben Sie Ihre E-Mail-Adresse ein. Falls ein Konto existiert, erhalten Sie einen Link zum Zurücksetzen Ihres Passworts.
             </p>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">E-Mail-Adresse</label>
+              <label className="block text-sm font-medium text-fg-muted mb-1">E-Mail-Adresse</label>
               <div className="relative">
-                <Mail size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <Mail size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-subtle" />
                 <input
                   type="email"
                   value={email}
@@ -101,7 +101,7 @@ export function ForgotPasswordPage() {
             </div>
 
             {error && (
-              <div className="bg-red-50 border border-red-200 rounded px-3 py-2 text-sm text-red-700">
+              <div className="bg-danger-bg border border-danger-line rounded px-3 py-2 text-sm text-danger-fg">
                 {error}
               </div>
             )}
@@ -116,7 +116,7 @@ export function ForgotPasswordPage() {
 
             <Link
               to="/login"
-              className="w-full flex items-center justify-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 py-1"
+              className="w-full flex items-center justify-center gap-1.5 text-sm text-fg-subtle hover:text-fg-muted py-1"
             >
               <ArrowLeft size={13} /> Zurück zur Anmeldung
             </Link>

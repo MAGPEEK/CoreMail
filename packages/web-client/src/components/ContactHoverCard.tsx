@@ -60,7 +60,7 @@ export function ContactHoverCard({ email, name, anchorRef, onClose }: ContactHov
   return createPortal(
     <div
       ref={cardRef}
-      className="fixed z-[150] w-[260px] bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl p-4 animate-fly-in"
+      className="fixed z-[150] w-[260px] bg-surface border border-line rounded-lg shadow-xl p-4 animate-fly-in"
       style={{ left: pos.x, top: pos.y }}
       onMouseEnter={handleEnter}
       onMouseLeave={handleLeave}
@@ -68,10 +68,10 @@ export function ContactHoverCard({ email, name, anchorRef, onClose }: ContactHov
       <div className="flex items-start gap-3">
         <Avatar seed={email} size="lg" />
         <div className="flex-1 min-w-0">
-          <p className="font-semibold text-gray-900 dark:text-gray-100 text-sm truncate">
+          <p className="font-semibold text-fg text-sm truncate">
             {name || email.split('@')[0]}
           </p>
-          <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{email}</p>
+          <p className="text-xs text-fg-subtle truncate">{email}</p>
         </div>
       </div>
 
@@ -84,10 +84,10 @@ export function ContactHoverCard({ email, name, anchorRef, onClose }: ContactHov
         </a>
         <button aria-label="Adresse kopieren"
           onClick={copy}
-          className="flex items-center justify-center gap-1 px-2 py-1.5 text-xs rounded border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-all duration-150 active:scale-95"
+          className="flex items-center justify-center gap-1 px-2 py-1.5 text-xs rounded border border-line text-fg-muted hover:bg-surface-2 transition-all duration-150 active:scale-95"
           title="Adresse kopieren"
         >
-          {copied ? <Check size={12} className="text-green-600" /> : <Copy size={12} />}
+          {copied ? <Check size={12} className="text-success-fg" /> : <Copy size={12} />}
         </button>
       </div>
     </div>,

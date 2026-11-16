@@ -86,20 +86,20 @@ export function Sidebar() {
     .filter((entry) => ('groupKey' in entry ? entry.items.length > 0 : visible(entry.path)));
 
   return (
-    <aside className="w-52 shrink-0 bg-gray-900 text-gray-300 flex flex-col h-full">
+    <aside className="w-52 shrink-0 bg-surface border-r border-line text-fg-muted flex flex-col h-full">
       <nav className="flex-1 overflow-y-auto py-2">
         {NAV.map(entry => {
           if ('groupKey' in entry) {
             return (
               <div key={entry.groupKey}>
-                <p className="px-4 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+                <p className="px-4 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-widest text-fg-subtle">
                   {t(entry.groupKey as Parameters<typeof t>[0])}
                 </p>
                 {entry.items.map(({ path, labelKey, icon: Icon }) => (
                   <NavLink key={path} to={path}
                     className={({ isActive }) =>
-                      `flex items-center gap-2.5 px-4 py-2 text-sm transition-colors ${
-                        isActive ? 'bg-gray-800 text-white border-l-2 border-accent' : 'hover:bg-gray-800 hover:text-white'
+                      `flex items-center gap-2.5 pl-3 pr-4 py-2 text-sm transition-colors ${
+                        isActive ? 'bg-surface-3 text-fg font-semibold border-l-4 border-accent' : 'border-l-4 border-transparent hover:bg-surface-2 hover:text-fg'
                       }`
                     }>
                     <Icon size={14} />
@@ -113,8 +113,8 @@ export function Sidebar() {
           return (
             <NavLink key={path} to={path}
               className={({ isActive }) =>
-                `flex items-center gap-2.5 px-4 py-2.5 text-sm transition-colors ${
-                  isActive ? 'bg-gray-800 text-white border-l-2 border-accent' : 'hover:bg-gray-800 hover:text-white'
+                `flex items-center gap-2.5 pl-3 pr-4 py-2.5 text-sm transition-colors ${
+                  isActive ? 'bg-surface-3 text-fg font-semibold border-l-4 border-accent' : 'border-l-4 border-transparent hover:bg-surface-2 hover:text-fg'
                 }`
               }>
               <Icon size={15} />

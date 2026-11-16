@@ -13,6 +13,7 @@ import { useT } from '../i18n/useT.js';
 import { usePermissions } from '../hooks/usePermissions.js';
 import { Can } from '../components/Can.js';
 import { DataTable, type Column } from '../components/DataTable.js';
+import { errorMessage } from '../lib/errors.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -48,9 +49,9 @@ interface Stats {
 
 function ReasonBadge({ reason, size = 'sm' }: { reason: Reason; size?: 'sm' | 'lg' }) {
   const cfg = {
-    VIRUS:  { icon: Bug,           cls: 'bg-red-100 text-red-700 border-red-200',    label: 'Virus'      },
-    SPAM:   { icon: AlertTriangle, cls: 'bg-amber-100 text-amber-700 border-amber-200', label: 'Spam'    },
-    POLICY: { icon: FileWarning,   cls: 'bg-blue-100 text-blue-700 border-blue-200', label: 'Richtlinie' },
+    VIRUS:  { icon: Bug,           cls: 'bg-danger-bg text-danger-fg border-danger-line',    label: 'Virus'      },
+    SPAM:   { icon: AlertTriangle, cls: 'bg-warning-bg text-warning-fg border-warning-line', label: 'Spam'    },
+    POLICY: { icon: FileWarning,   cls: 'bg-info-bg text-info-fg border-info-line', label: 'Richtlinie' },
   }[reason];
   const Icon = cfg.icon;
   const px = size === 'lg' ? 'px-3 py-1 text-sm' : 'px-2 py-0.5 text-xs';
@@ -95,22 +96,22 @@ function DetailPanel({ id, onClose, onRelease, onDelete }: {
     <Modal
       onClose={onClose}
       labelledBy={titleId}
-      overlayClassName="fixed inset-0 z-50 flex justify-end bg-black/30"
-      className="w-[600px] max-w-full bg-white h-full shadow-2xl flex flex-col overflow-hidden"
+      overlayClassName="fixed inset-0 z-50 flex justify-end bg-scrim/30"
+      className="w-[600px] max-w-full bg-surface h-full shadow-2xl flex flex-col overflow-hidden"
     >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 bg-gray-50 shrink-0">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-line bg-surface-2 shrink-0">
           <div className="flex items-center gap-2">
-            <Eye size={16} className="text-gray-500" aria-hidden="true" />
-            <h2 id={titleId} className="font-semibold text-gray-900 text-sm">{t('quar_detail_title')}</h2>
+            <Eye size={16} className="text-fg-subtle" aria-hidden="true" />
+            <h2 id={titleId} className="font-semibold text-fg text-sm">{t('quar_detail_title')}</h2>
           </div>
-          <button type="button" onClick={onClose} aria-label="Schließen" className="p-1 hover:bg-gray-200 rounded">
+          <button type="button" onClick={onClose} aria-label="Schließen" className="p-1 hover:bg-surface-3 rounded">
             <X size={16} aria-hidden="true" />
           </button>
         </div>
 
         {isLoading && (
-          <div className="flex-1 flex items-center justify-center text-gray-400">
+          <div className="flex-1 flex items-center justify-center text-fg-subtle">
             <Loader2 size={20} className="animate-spin mr-2" /> {t('quar_detail_loading')}
           </div>
         )}
@@ -118,10 +119,10 @@ function DetailPanel({ id, onClose, onRelease, onDelete }: {
         {data && (
           <div className="flex-1 overflow-y-auto">
             {/* Metadata */}
-            <div className="px-5 py-4 space-y-4 border-b border-gray-100">
+            <div className="px-5 py-4 space-y-4 border-b border-line">
               <div className="flex items-start justify-between gap-3">
                 <div className="flex-1 min-w-0">
-                  <h2 className="font-semibold text-gray-900 text-base leading-tight truncate">
+                  <h2 className="font-semibold text-fg text-base leading-tight truncate">
                     {data.subject || t('quar_no_subject')}
                   </h2>
                 </div>
@@ -136,22 +137,22 @@ function DetailPanel({ id, onClose, onRelease, onDelete }: {
                   ...(data.messageId ? [{ icon: Mail, label: t('quar_detail_msgid'), val: data.messageId }] : []),
                 ].map(({ icon: Icon, label, val }) => (
                   <div key={label} className="flex items-start gap-2 text-sm">
-                    <Icon size={13} className="text-gray-400 mt-0.5 shrink-0" />
-                    <span className="text-gray-500 w-20 shrink-0">{label}:</span>
-                    <span className="text-gray-800 break-all">{val}</span>
+                    <Icon size={13} className="text-fg-subtle mt-0.5 shrink-0" />
+                    <span className="text-fg-subtle w-20 shrink-0">{label}:</span>
+                    <span className="text-fg break-all">{val}</span>
                   </div>
                 ))}
               </div>
 
               {/* Status */}
               {data.released ? (
-                <div className="flex items-center gap-2 bg-green-50 border border-green-200 rounded-lg px-3 py-2 text-xs text-green-700">
+                <div className="flex items-center gap-2 bg-success-bg border border-success-line rounded-lg px-3 py-2 text-xs text-success-fg">
                   <CheckCircle size={13} />
                   {t('quar_detail_released_at')} {data.releasedAt ? new Date(data.releasedAt).toLocaleString('de-DE') : '—'}
                   {data.releasedBy && ` · ${data.releasedBy}`}
                 </div>
               ) : (
-                <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-700">
+                <div className="flex items-center gap-2 bg-warning-bg border border-warning-line rounded-lg px-3 py-2 text-xs text-warning-fg">
                   <Clock size={13} />
                   {t('quar_detail_pending_msg')}
                 </div>
@@ -160,13 +161,13 @@ function DetailPanel({ id, onClose, onRelease, onDelete }: {
 
             {/* Reason details */}
             {Object.keys(data.details).length > 0 && (
-              <div className="px-5 py-4 border-b border-gray-100">
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">{t('quar_detail_filter')}</p>
+              <div className="px-5 py-4 border-b border-line">
+                <p className="text-xs font-semibold text-fg-subtle uppercase tracking-wide mb-2">{t('quar_detail_filter')}</p>
                 <div className="space-y-1.5">
                   {Object.entries(data.details).map(([k, v]) => (
                     <div key={k} className="flex gap-2 text-xs">
-                      <span className="text-gray-400 font-mono w-28 shrink-0">{k}:</span>
-                      <span className="text-gray-700 break-all">{String(v)}</span>
+                      <span className="text-fg-subtle font-mono w-28 shrink-0">{k}:</span>
+                      <span className="text-fg-muted break-all">{String(v)}</span>
                     </div>
                   ))}
                 </div>
@@ -175,13 +176,13 @@ function DetailPanel({ id, onClose, onRelease, onDelete }: {
 
             {/* E-Mail Headers */}
             {filteredHdrs.length > 0 && (
-              <div className="px-5 py-4 border-b border-gray-100">
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">{t('quar_detail_headers')}</p>
-                <div className="bg-gray-50 rounded-lg p-3 space-y-1 text-xs font-mono max-h-52 overflow-y-auto">
+              <div className="px-5 py-4 border-b border-line">
+                <p className="text-xs font-semibold text-fg-subtle uppercase tracking-wide mb-2">{t('quar_detail_headers')}</p>
+                <div className="bg-surface-2 rounded-lg p-3 space-y-1 text-xs font-mono max-h-52 overflow-y-auto">
                   {filteredHdrs.map(([h, v]) => (
                     <div key={h} className="flex gap-2">
-                      <span className="text-blue-600 shrink-0 w-36">{h}:</span>
-                      <span className="text-gray-700 break-all">{v}</span>
+                      <span className="text-info-fg shrink-0 w-36">{h}:</span>
+                      <span className="text-fg-muted break-all">{v}</span>
                     </div>
                   ))}
                 </div>
@@ -190,13 +191,13 @@ function DetailPanel({ id, onClose, onRelease, onDelete }: {
 
             {/* Body Preview */}
             {body && (
-              <div className="px-5 py-4 border-b border-gray-100">
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">{t('quar_detail_body')}</p>
-                <div className="bg-gray-50 rounded-lg p-3 text-xs text-gray-700 whitespace-pre-wrap max-h-48 overflow-y-auto font-mono leading-relaxed">
+              <div className="px-5 py-4 border-b border-line">
+                <p className="text-xs font-semibold text-fg-subtle uppercase tracking-wide mb-2">{t('quar_detail_body')}</p>
+                <div className="bg-surface-2 rounded-lg p-3 text-xs text-fg-muted whitespace-pre-wrap max-h-48 overflow-y-auto font-mono leading-relaxed">
                   {body}
                 </div>
                 {body.length >= 2000 && (
-                  <p className="text-xs text-gray-400 mt-1 flex items-center gap-1">
+                  <p className="text-xs text-fg-subtle mt-1 flex items-center gap-1">
                     <Info size={10} /> {t('quar_detail_body_limit')}
                   </p>
                 )}
@@ -205,7 +206,7 @@ function DetailPanel({ id, onClose, onRelease, onDelete }: {
 
             {!data.preview && (
               <div className="px-5 py-4">
-                <div className="bg-gray-50 rounded-lg p-4 text-xs text-gray-400 text-center flex items-center justify-center gap-2">
+                <div className="bg-surface-2 rounded-lg p-4 text-xs text-fg-subtle text-center flex items-center justify-center gap-2">
                   <Download size={13} />
                   {t('quar_detail_no_preview')}
                 </div>
@@ -217,7 +218,7 @@ function DetailPanel({ id, onClose, onRelease, onDelete }: {
         {/* Actions (hidden without write access to the hygiene area) */}
         {data && (
           <Can area="hygiene" access="write" mode="hide">
-          <div className="px-5 py-4 border-t border-gray-200 bg-gray-50 flex items-center gap-2 shrink-0">
+          <div className="px-5 py-4 border-t border-line bg-surface-2 flex items-center gap-2 shrink-0">
             {!data.released && data.reason !== 'VIRUS' && (
               <button
                 onClick={() => { onRelease(data.id); onClose(); }}
@@ -227,13 +228,13 @@ function DetailPanel({ id, onClose, onRelease, onDelete }: {
               </button>
             )}
             {data.reason === 'VIRUS' && !data.released && (
-              <div className="flex-1 text-xs text-red-600 flex items-center gap-1.5 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+              <div className="flex-1 text-xs text-danger-fg flex items-center gap-1.5 bg-danger-bg border border-danger-line rounded-lg px-3 py-2">
                 <Bug size={13} /> {t('quar_detail_virus_block')}
               </div>
             )}
             <button
               onClick={() => { onDelete(data.id); onClose(); }}
-              className="btn-secondary text-sm gap-1.5 text-red-600 border-red-200 hover:bg-red-50"
+              className="btn-secondary text-sm gap-1.5 text-danger-fg border-danger-line hover:bg-danger-bg"
             >
               <Trash2 size={14} /> {t('quar_detail_delete_btn')}
             </button>
@@ -256,38 +257,38 @@ function CleanupModal({ onClose, onConfirm }: { onClose: () => void; onConfirm: 
     <Modal
       onClose={onClose}
       labelledBy={titleId}
-      overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-      className="relative bg-white rounded-xl shadow-2xl w-[400px] max-w-full p-6 space-y-5"
+      overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-scrim/40 p-4"
+      className="relative bg-surface rounded-xl shadow-2xl w-[400px] max-w-full p-6 space-y-5"
     >
         <div className="flex items-center gap-2">
-          <Trash2 size={18} className="text-red-500" aria-hidden="true" />
-          <h2 id={titleId} className="text-base font-semibold text-gray-900">{t('quar_cleanup_title')}</h2>
+          <Trash2 size={18} className="text-danger-fg" aria-hidden="true" />
+          <h2 id={titleId} className="text-base font-semibold text-fg">{t('quar_cleanup_title')}</h2>
         </div>
 
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">
+            <label className="block text-sm font-medium text-fg-muted mb-1.5">
               {t('quar_cleanup_older_than')}
             </label>
             <div className="flex items-center gap-2">
               <input
                 type="number" min={1} max={365} value={days}
                 onChange={e => setDays(parseInt(e.target.value, 10) || 1)}
-                className="w-24 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
+                className="w-24 border border-line-strong rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent-fg"
               />
-              <span className="text-sm text-gray-600">{t('quar_cleanup_warn_days')}</span>
+              <span className="text-sm text-fg-muted">{t('quar_cleanup_warn_days')}</span>
             </div>
           </div>
 
           <label className="flex items-center gap-2 cursor-pointer">
             <input
               type="checkbox" checked={onlyReleased} onChange={e => setOnlyReleased(e.target.checked)}
-              className="rounded border-gray-300 text-accent"
+              className="rounded border-line-strong text-accent-fg"
             />
-            <span className="text-sm text-gray-700">{t('quar_cleanup_only_released')}</span>
+            <span className="text-sm text-fg-muted">{t('quar_cleanup_only_released')}</span>
           </label>
 
-          <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-700 flex items-start gap-1.5">
+          <div className="bg-warning-bg border border-warning-line rounded-lg px-3 py-2 text-xs text-warning-fg flex items-start gap-1.5">
             <AlertTriangle size={12} className="shrink-0 mt-0.5" />
             <span>
               {onlyReleased
@@ -302,7 +303,7 @@ function CleanupModal({ onClose, onConfirm }: { onClose: () => void; onConfirm: 
           <button onClick={onClose} className="btn-secondary text-sm flex-1 justify-center">{t('action_cancel')}</button>
           <button
             onClick={() => { onConfirm(days, onlyReleased); onClose(); }}
-            className="flex-1 justify-center btn-primary text-sm bg-red-600 hover:bg-red-700 border-red-600"
+            className="flex-1 justify-center btn-primary text-sm bg-danger hover:bg-danger/85 border-danger-line"
           >
             <Trash2 size={13} /> {t('quar_cleanup_btn')}
           </button>
@@ -360,33 +361,33 @@ export function QuarantinePage() {
   const releaseMut = useMutation({
     mutationFn: (id: string) => api.post(`/admin/quarantine/${id}/release`, {}),
     onSuccess: () => { invalidate(); toast.success(t('quar_released_toast')); },
-    onError:   () => toast.error(t('quar_release_error')),
+    onError:   (e) => toast.error(errorMessage(e, t('quar_release_error'))),
   });
 
   const releaseManyMut = useMutation({
     mutationFn: (ids: string[]) => Promise.all(ids.map(id => api.post(`/admin/quarantine/${id}/release`, {}))),
     onSuccess: (r) => { invalidate(); toast.success(`${r.length} × ${t('quar_released_toast')}`); },
-    onError:   () => { invalidate(); toast.error(t('quar_release_error')); },
+    onError:   (e) => { invalidate(); toast.error(errorMessage(e, t('quar_release_error'))); },
   });
 
   const deleteMut = useMutation({
     mutationFn: (id: string) => api.delete(`/admin/quarantine/${id}`),
     onSuccess: () => { invalidate(); toast.success(t('quar_deleted_toast')); },
-    onError:   () => toast.error(t('quar_delete_error')),
+    onError:   (e) => toast.error(errorMessage(e, t('quar_delete_error'))),
   });
 
   const bulkDeleteMut = useMutation({
     mutationFn: (ids: string[]) =>
       Promise.all(ids.map(id => api.delete(`/admin/quarantine/${id}`))),
     onSuccess: (r) => { invalidate(); toast.success(`${r.length} ${t('quar_deleted_toast')}`); },
-    onError:   () => { invalidate(); toast.error(t('quar_delete_error')); },
+    onError:   (e) => { invalidate(); toast.error(errorMessage(e, t('quar_delete_error'))); },
   });
 
   const cleanupMut = useMutation({
     mutationFn: ({ days, onlyReleased }: { days: number; onlyReleased: boolean }) =>
       api.deleteWithBody<{ deleted: number }>('/admin/quarantine', { olderThanDays: days, onlyReleased }),
     onSuccess: (res) => { invalidate(); toast.success(`${res.deleted} ${t('quar_cleanup_success')}`); },
-    onError:   () => toast.error(t('quar_cleanup_error')),
+    onError:   (e) => toast.error(errorMessage(e, t('quar_cleanup_error'))),
   });
 
   function resetFilters() {
@@ -398,8 +399,8 @@ export function QuarantinePage() {
       key: 'from', header: t('quar_col_from_to'),
       cell: (item) => (
         <>
-          <p className="font-medium text-gray-800 truncate max-w-[170px]">{item.fromAddr}</p>
-          <p className="text-xs text-gray-400 flex items-center gap-0.5 truncate max-w-[170px]">
+          <p className="font-medium text-fg truncate max-w-[170px]">{item.fromAddr}</p>
+          <p className="text-xs text-fg-subtle flex items-center gap-0.5 truncate max-w-[170px]">
             <ArrowRight size={9} aria-hidden="true" /> {item.toAddr}
           </p>
         </>
@@ -407,24 +408,24 @@ export function QuarantinePage() {
     },
     {
       key: 'subject', header: t('quar_col_subject'),
-      cell: (item) => <p className="text-gray-700 truncate max-w-[220px]">{item.subject || <span className="italic text-gray-400">{t('quar_no_subject')}</span>}</p>,
+      cell: (item) => <p className="text-fg-muted truncate max-w-[220px]">{item.subject || <span className="italic text-fg-subtle">{t('quar_no_subject')}</span>}</p>,
     },
     { key: 'reason', header: t('quar_col_reason'), cell: (item) => <ReasonBadge reason={item.reason} /> },
     {
-      key: 'date', header: t('quar_col_date'), className: 'text-xs text-gray-500 whitespace-nowrap',
+      key: 'date', header: t('quar_col_date'), className: 'text-xs text-fg-subtle whitespace-nowrap',
       cell: (item) => (
         <>
           {new Date(item.createdAt).toLocaleDateString()}<br />
-          <span className="text-gray-400">{new Date(item.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+          <span className="text-fg-subtle">{new Date(item.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
         </>
       ),
     },
     {
       key: 'status', header: t('quar_col_status'),
       cell: (item) => item.released ? (
-        <span className="inline-flex items-center gap-1 text-xs text-green-600"><CheckCircle size={11} aria-hidden="true" /> {t('quar_status_released')}</span>
+        <span className="inline-flex items-center gap-1 text-xs text-success-fg"><CheckCircle size={11} aria-hidden="true" /> {t('quar_status_released')}</span>
       ) : (
-        <span className="inline-flex items-center gap-1 text-xs text-amber-600"><Clock size={11} aria-hidden="true" /> {t('quar_status_pending')}</span>
+        <span className="inline-flex items-center gap-1 text-xs text-warning-fg"><Clock size={11} aria-hidden="true" /> {t('quar_status_pending')}</span>
       ),
     },
     {
@@ -434,20 +435,20 @@ export function QuarantinePage() {
           <button
             onClick={() => setSelectedId(item.id === selectedId ? null : item.id)}
             title={t('quar_btn_preview')} aria-label={`${t('quar_btn_preview')}: ${item.subject || item.fromAddr}`}
-            className={`p-1.5 rounded transition-colors ${selectedId === item.id ? 'bg-accent/10 text-accent' : 'text-gray-400 hover:text-accent hover:bg-accent/10'}`}
+            className={`p-1.5 rounded transition-colors ${selectedId === item.id ? 'bg-accent/10 text-accent-fg' : 'text-fg-subtle hover:text-accent-fg hover:bg-accent/10'}`}
           >
             <Eye size={14} />
           </button>
           <Can area="hygiene" access="write">
             {!item.released && item.reason !== 'VIRUS' && (
               <button onClick={() => releaseMut.mutate(item.id)} title={t('quar_btn_release')} aria-label={t('quar_btn_release')}
-                className="p-1.5 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded transition-colors">
+                className="p-1.5 text-fg-subtle hover:text-success-fg hover:bg-success-bg rounded transition-colors">
                 <CheckCircle size={14} />
               </button>
             )}
             <button onClick={() => { if (window.confirm(t('quar_delete_confirm'))) deleteMut.mutate(item.id); }}
               title={t('quar_btn_delete')} aria-label={t('quar_btn_delete')}
-              className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors">
+              className="p-1.5 text-fg-subtle hover:text-danger-fg hover:bg-danger-bg rounded transition-colors">
               <Trash2 size={14} />
             </button>
           </Can>
@@ -459,26 +460,26 @@ export function QuarantinePage() {
   // ── Stat cards config ────────────────────────────────────────────────────
 
   const STAT_CARDS = [
-    { label: t('quar_stat_pending'),  value: stats?.pending  ?? '—', color: 'text-amber-600', bg: 'bg-amber-50',  icon: Clock },
-    { label: t('quar_stat_virus'),    value: stats?.virus    ?? '—', color: 'text-red-600',   bg: 'bg-red-50',    icon: Bug },
-    { label: t('quar_stat_spam'),     value: stats?.spam     ?? '—', color: 'text-yellow-600',bg: 'bg-yellow-50', icon: AlertTriangle },
-    { label: t('quar_stat_policy'),   value: stats?.policy   ?? '—', color: 'text-blue-600',  bg: 'bg-blue-50',   icon: FileWarning },
-    { label: t('quar_stat_released'), value: stats?.released ?? '—', color: 'text-green-600', bg: 'bg-green-50',  icon: CheckCircle },
-    { label: t('quar_stat_total'),    value: stats?.total    ?? '—', color: 'text-gray-700',  bg: 'bg-gray-50',   icon: ShieldAlert },
+    { label: t('quar_stat_pending'),  value: stats?.pending  ?? '—', color: 'text-warning-fg', bg: 'bg-warning-bg',  icon: Clock },
+    { label: t('quar_stat_virus'),    value: stats?.virus    ?? '—', color: 'text-danger-fg',   bg: 'bg-danger-bg',    icon: Bug },
+    { label: t('quar_stat_spam'),     value: stats?.spam     ?? '—', color: 'text-warning-fg',bg: 'bg-warning-bg', icon: AlertTriangle },
+    { label: t('quar_stat_policy'),   value: stats?.policy   ?? '—', color: 'text-info-fg',  bg: 'bg-info-bg',   icon: FileWarning },
+    { label: t('quar_stat_released'), value: stats?.released ?? '—', color: 'text-success-fg', bg: 'bg-success-bg',  icon: CheckCircle },
+    { label: t('quar_stat_total'),    value: stats?.total    ?? '—', color: 'text-fg-muted',  bg: 'bg-surface-2',   icon: ShieldAlert },
   ];
 
   return (
-    <div className="flex flex-col h-full bg-gray-50">
+    <div className="flex flex-col h-full bg-surface-2">
       {/* ── Header ────────────────────────────────────────────────────── */}
-      <div className="px-6 py-4 bg-white border-b border-gray-200 shrink-0">
+      <div className="px-6 py-4 bg-surface border-b border-line shrink-0">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 bg-amber-100 rounded-lg flex items-center justify-center">
-              <ShieldAlert size={18} className="text-amber-600" />
+            <div className="w-9 h-9 bg-warning-bg rounded-lg flex items-center justify-center">
+              <ShieldAlert size={18} className="text-warning-fg" />
             </div>
             <div>
-              <h1 className="text-lg font-bold text-gray-900">{t('quar_page_title')}</h1>
-              <p className="text-xs text-gray-400">
+              <h1 className="text-lg font-bold text-fg">{t('quar_page_title')}</h1>
+              <p className="text-xs text-fg-subtle">
                 {statsLoading ? '…' : `${stats?.pending ?? 0} ${t('quar_pending')} · ${stats?.total ?? 0} ${t('quar_total')}`}
               </p>
             </div>
@@ -510,11 +511,11 @@ export function QuarantinePage() {
                 else if (label === t('quar_stat_pending'))  { setReleased('false'); setReason(''); setPage(1); }
                 else resetFilters();
               }}
-              className={`${bg} rounded-xl p-3 text-left border border-transparent hover:border-gray-200 transition-colors`}
+              className={`${bg} rounded-xl p-3 text-left border border-transparent hover:border-line transition-colors`}
             >
               <div className="flex items-center gap-1.5 mb-1">
                 <Icon size={12} className={color} />
-                <span className="text-xs text-gray-500">{label}</span>
+                <span className="text-xs text-fg-subtle">{label}</span>
               </div>
               <p className={`text-xl font-bold ${color}`}>{value}</p>
             </button>
@@ -535,13 +536,13 @@ export function QuarantinePage() {
           selectable={canWrite}
           onActivate={(i) => setSelectedId(i.id)}
           activeKey={selectedId}
-          rowClassName={(i) => (i.released ? 'opacity-60' : '')}
+          rowClassName={(i) => (i.released ? 'bg-surface-2' : '')}
           emptyText={
             <span className="inline-flex flex-col items-center gap-2">
-              <ShieldAlert size={32} className="text-gray-200" aria-hidden="true" />
+              <ShieldAlert size={32} className="text-fg-subtle" aria-hidden="true" />
               {t('quar_empty')}
               {(search || reason) && (
-                <button onClick={resetFilters} className="text-xs text-accent hover:underline">{t('quar_reset_filter')}</button>
+                <button onClick={resetFilters} className="text-xs text-accent-fg hover:underline">{t('quar_reset_filter')}</button>
               )}
             </span>
           }
@@ -555,20 +556,20 @@ export function QuarantinePage() {
                 <option value="SPAM">{t('quar_stat_spam')}</option>
                 <option value="POLICY">{t('quar_stat_policy')}</option>
               </select>
-              <div className="flex rounded-lg border border-gray-300 overflow-hidden text-sm" role="group" aria-label={t('quar_col_status')}>
+              <div className="flex rounded-lg border border-line-strong overflow-hidden text-sm" role="group" aria-label={t('quar_col_status')}>
                 {([[`false`, t('quar_filter_pending')],[`true`, t('quar_filter_released')],[``, t('quar_filter_all')]] as [string, string][]).map(([val, label]) => (
                   <button
                     key={val}
                     onClick={() => { setReleased(val); setPage(1); }}
                     aria-pressed={released === val}
-                    className={`px-3 py-1.5 transition-colors ${released === val ? 'bg-accent text-white' : 'text-gray-600 hover:bg-gray-50'}`}
+                    className={`px-3 py-1.5 transition-colors ${released === val ? 'bg-accent text-white' : 'text-fg-muted hover:bg-surface-2'}`}
                   >
                     {label}
                   </button>
                 ))}
               </div>
               {(search || reason || released !== 'false') && (
-                <button onClick={resetFilters} className="text-xs text-gray-400 hover:text-gray-600 flex items-center gap-1">
+                <button onClick={resetFilters} className="text-xs text-fg-subtle hover:text-fg-muted flex items-center gap-1">
                   <X size={12} aria-hidden="true" /> {t('quar_filter_clear')}
                 </button>
               )}
@@ -588,7 +589,7 @@ export function QuarantinePage() {
                 <button
                   onClick={() => { if (window.confirm(`${t('tb_delete_selected_confirm')} (${selectedRows.length})`)) bulkDeleteMut.mutate(selectedRows.map((i) => i.id), { onSuccess: clearSelection }); }}
                   disabled={bulkDeleteMut.isPending || selectedRows.length === 0}
-                  className="btn-secondary text-xs text-red-600 gap-1 disabled:opacity-40">
+                  className="btn-secondary text-xs text-danger-fg gap-1 disabled:opacity-40">
                   <Trash2 size={12} aria-hidden="true" /> {t('quar_bulk_delete')}
                 </button>
               </Can>

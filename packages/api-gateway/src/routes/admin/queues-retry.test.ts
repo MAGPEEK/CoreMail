@@ -10,7 +10,7 @@ import { installFakePrisma, setTestEnv } from '../../test-support/fake-prisma.js
 setTestEnv();
 installFakePrisma({});
 
-const { adminRetryJob } = await import('./queues.js');
+const { adminRetryJob, adminRetryOrPromoteJob } = await import('./queues.js');
 const { isExpiredInQueue } = await import('@coremail/storage');
 
 test('adminRetryJob sets expiryBaseMs before retrying and resets the attempts', async () => {
@@ -28,4 +28,27 @@ test('adminRetryJob sets expiryBaseMs before retrying and resets the attempts', 
   assert.deepEqual(job.data['deliveredRcpts'], ['y@ext.test']);
   // a job enqueued 100 h ago is no longer expired after the retry
   assert.equal(isExpiredInQueue({ timestamp: now - 100 * 3_600_000, data: job.data }, null, now + 60_000), false);
+});
+
+test('"Retry now" promotes a delayed job and retries a dead letter; other states are refused', async () => {
+  const mk = (state: string) => {
+    const calls: string[] = [];
+    const job = {
+      data: {} as Record<string, unknown>,
+      async getState() { return state; },
+      async promote() { calls.push('promote'); },
+      async updateData(d: Record<string, unknown>) { calls.push('updateData'); job.data = d; },
+      async retry(s?: string) { calls.push(`retry:${s}`); },
+    };
+    return { job, calls };
+  };
+  const delayed = mk('delayed');
+  assert.equal(await adminRetryOrPromoteJob(delayed.job as never), true);
+  assert.deepEqual(delayed.calls, ['promote']);
+  const failed = mk('failed');
+  assert.equal(await adminRetryOrPromoteJob(failed.job as never), true);
+  assert.deepEqual(failed.calls, ['updateData', 'retry:failed']);
+  const active = mk('active');
+  assert.equal(await adminRetryOrPromoteJob(active.job as never), false);
+  assert.deepEqual(active.calls, []);
 });

@@ -242,3 +242,9 @@ test('v8.1 review: the default per-IP cap is 50 (NAT offices)', { skip: !!proces
   assert.equal(imapConnectionLimiter.acquire('198.51.100.77').ok, false);
   for (const release of releases) release();
 });
+
+test('isPeerDisconnect: client resets are not server errors (live BCP test 9.2)', async () => {
+  const { isPeerDisconnect } = await import('./limits.js');
+  for (const code of ['ECONNRESET', 'EPIPE', 'ETIMEDOUT', 'ECONNABORTED']) assert.equal(isPeerDisconnect(Object.assign(new Error('x'), { code })), true, code);
+  for (const e of [new Error('boom'), Object.assign(new Error('x'), { code: 'ERR_SSL_WRONG_VERSION_NUMBER' }), null, undefined, 'ECONNRESET']) assert.equal(isPeerDisconnect(e), false, String(e));
+});

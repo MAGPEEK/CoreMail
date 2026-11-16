@@ -20,6 +20,7 @@ import { parseConnectionRequest, runConnectionStage } from './connection-request
 import { parseContentContext, contentErrorResult } from './content-request.js';
 import { buildPipelineConfig } from './settings.js';
 import { invalidateGreylistOptsCache } from './greylisting/index.js';
+import { registerClamavRoutes } from './clamav/routes.js';
 
 const log = createLogger('security-filter:server');
 installProcessGuards(log);
@@ -137,6 +138,9 @@ app.post('/learn/ham', async (req, res) => {
 app.get('/health', (_req, res) => {
   res.json({ status: 'healthy', service: 'security-filter' });
 });
+
+// ClamAV status + EICAR self-test for the BCP (clamav/routes.ts)
+registerClamavRoutes(app, () => pipelineConfig);
 
 // ── GET /dns-integrity ────────────────────────────────────────────────────────
 // Runs the DNS-poisoning integrity check (for the admin panel).

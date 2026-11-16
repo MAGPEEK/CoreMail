@@ -81,3 +81,9 @@ test('mailbox-data classification is case-insensitive; the app routes case-sensi
   assert.ok(setAt > 0, 'server.ts enables case-sensitive routing');
   assert.ok(setAt < src.indexOf('app.use('), 'before the first middleware/route creates the router');
 });
+
+test('isSafeArchiveKey: traversal / malformed archive keys are refused (live BCP test 9.2)', async () => {
+  const { isSafeArchiveKey } = await import('./http-utils.js');
+  for (const ok of ['backups/full-2026-11-16.zip', 'mailbox/user@example.com/backup.mbox.enc', 'a.zip']) assert.equal(isSafeArchiveKey(ok), true, ok);
+  for (const bad of ['', '../../etc/passwd', 'backups/../x', './x', 'a//b', '/abs', 'a\\b', 'a\0b', 'a\nb', 'x/.', 'x'.repeat(1025)]) assert.equal(isSafeArchiveKey(bad), false, JSON.stringify(bad));
+});

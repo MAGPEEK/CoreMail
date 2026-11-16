@@ -14,7 +14,7 @@
  */
 import crypto from 'node:crypto';
 import {
-  QUARANTINE_RELEASE_HEADER, INTERNAL_MAIL_HEADERS, prependHeader, quarantineEnvelope, stripHeaders,
+  QUARANTINE_RELEASE_HEADER, VIRUS_SCAN_HEADER, INTERNAL_MAIL_HEADERS, prependHeader, quarantineEnvelope, stripHeaders,
 } from '@coremail/storage';
 
 export interface QuarantineRow {
@@ -63,6 +63,10 @@ export async function releaseQuarantine(id: string, actorId: string, deps: Relea
   const item = await deps.findById(id);
   if (!item) throw new ReleaseError(404, 'Not found');
   if (item.released) throw new ReleaseError(409, 'Already released');
+  // The BCP never offers a release for virus findings; the API enforces it too.
+  if (item.reason === 'VIRUS') {
+    throw new ReleaseError(409, 'Virus-infected messages cannot be released');
+  }
 
   const envelope = quarantineEnvelope(item);
   if (envelope.recipients.length === 0) throw new ReleaseError(422, 'Quarantine item has no recipients');
@@ -79,7 +83,13 @@ export async function releaseQuarantine(id: string, actorId: string, deps: Relea
   if (claimed === 0) throw new ReleaseError(409, 'Already released');
 
   // Trace header: replace anything stored with ours (never trusted, informational).
-  const released = prependHeader(stripHeaders(raw, INTERNAL_MAIL_HEADERS), QUARANTINE_RELEASE_HEADER, id);
+  // The X-CoreMail-Virus-Scan verdict stays: smtp-server strips sender copies on
+  // receipt, so the stored one is ours (e.g. "infected" with clamavAction=pass
+  // on a transport-rule quarantine) and must survive the release.
+  const released = prependHeader(
+    stripHeaders(raw, INTERNAL_MAIL_HEADERS.filter((h) => h.toLowerCase() !== VIRUS_SCAN_HEADER.toLowerCase())),
+    QUARANTINE_RELEASE_HEADER, id,
+  );
 
   let jobId: string;
   try {

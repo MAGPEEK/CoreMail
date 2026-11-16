@@ -4,18 +4,17 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ShieldHalf, Search, ChevronDown } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
+import { useT } from '../i18n/useT.js';
+import { usePermissions } from '../hooks/usePermissions.js';
+import { canAssignRoles } from '../lib/permissions.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type UserRole =
-  | 'USER'
-  | 'HELP_DESK'
-  | 'RECIPIENT_MANAGEMENT'
-  | 'COMPLIANCE_MANAGEMENT'
-  | 'HYGIENE_MANAGEMENT'
-  | 'SERVER_MANAGEMENT'
-  | 'VIEW_ONLY_ORG'
-  | 'ORGANIZATION_MANAGEMENT';
+const ROLES = [
+  'ORGANIZATION_MANAGEMENT', 'RECIPIENT_MANAGEMENT', 'SERVER_MANAGEMENT',
+  'COMPLIANCE_MANAGEMENT', 'HYGIENE_MANAGEMENT', 'HELP_DESK', 'VIEW_ONLY_ORG', 'USER',
+] as const;
+type UserRole = typeof ROLES[number];
 
 interface AdminUser {
   id: string;
@@ -26,62 +25,24 @@ interface AdminUser {
   domainId: string;
 }
 
-interface MailboxesResponse {
-  mailboxes?: AdminUser[];
-  users?: AdminUser[];
-  total?: number;
-}
+// ─── Role Metadata (labels/descriptions via i18n role_label_* / role_desc_*) ──
 
-// ─── Role Metadata ────────────────────────────────────────────────────────────
-
-const ROLE_META: Record<UserRole, { label: string; description: string; color: string }> = {
-  ORGANIZATION_MANAGEMENT: {
-    label: 'Organization Management',
-    description: 'Vollzugriff auf alle BCP-Bereiche',
-    color: 'bg-red-100 text-red-700',
-  },
-  RECIPIENT_MANAGEMENT: {
-    label: 'Recipient Management',
-    description: 'Empfänger, Gruppen, Postfächer verwalten',
-    color: 'bg-orange-100 text-orange-700',
-  },
-  SERVER_MANAGEMENT: {
-    label: 'Server Management',
-    description: 'Server, Zertifikate, Queues verwalten',
-    color: 'bg-yellow-100 text-yellow-700',
-  },
-  COMPLIANCE_MANAGEMENT: {
-    label: 'Compliance Management',
-    description: 'Aufbewahrungsrichtlinien',
-    color: 'bg-purple-100 text-purple-700',
-  },
-  HYGIENE_MANAGEMENT: {
-    label: 'Hygiene Management',
-    description: 'Spam-/Malware-Schutzrichtlinien',
-    color: 'bg-blue-100 text-blue-700',
-  },
-  HELP_DESK: {
-    label: 'Help Desk',
-    description: 'Passwort-Reset, Postfach-Status',
-    color: 'bg-cyan-100 text-cyan-700',
-  },
-  VIEW_ONLY_ORG: {
-    label: 'View Only Organization',
-    description: 'Nur-Lesen auf alle Einstellungen',
-    color: 'bg-gray-100 text-gray-600',
-  },
-  USER: {
-    label: 'User',
-    description: 'Kein Administratorzugriff',
-    color: 'bg-gray-100 text-gray-400',
-  },
+const ROLE_COLOR: Record<UserRole, string> = {
+  ORGANIZATION_MANAGEMENT: 'bg-danger-bg text-danger-fg',
+  RECIPIENT_MANAGEMENT:    'bg-warning-bg text-warning-fg',
+  SERVER_MANAGEMENT:       'bg-warning-bg text-warning-fg',
+  COMPLIANCE_MANAGEMENT:   'bg-info-bg text-info-fg',
+  HYGIENE_MANAGEMENT:      'bg-info-bg text-info-fg',
+  HELP_DESK:               'bg-info-bg text-info-fg',
+  VIEW_ONLY_ORG:           'bg-surface-2 text-fg-muted',
+  USER:                    'bg-surface-2 text-fg-subtle',
 };
 
 function RoleBadge({ role }: { role: UserRole }) {
-  const m = ROLE_META[role];
+  const t = useT();
   return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${m.color}`}>
-      {m.label}
+    <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${ROLE_COLOR[role] ?? ROLE_COLOR.USER}`}>
+      {ROLES.includes(role) ? t(`role_label_${role}`) : role}
     </span>
   );
 }
@@ -89,6 +50,7 @@ function RoleBadge({ role }: { role: UserRole }) {
 // ─── Role Selector ────────────────────────────────────────────────────────────
 
 function RoleSelector({ userId, currentRole }: { userId: string; currentRole: UserRole }) {
+  const t = useT();
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -99,49 +61,42 @@ function RoleSelector({ userId, currentRole }: { userId: string; currentRole: Us
     mutationFn: (role: UserRole) => api.put(`/admin/mailboxes/${userId}`, { role }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['admin-rbac-users'] });
-      toast.success('Rolle aktualisiert');
+      void qc.invalidateQueries({ queryKey: ['admin-mailboxes'] });
+      void qc.invalidateQueries({ queryKey: ['admin-mailbox-detail'] });
+      toast.success(t('rbac_role_updated'));
       setOpen(false);
     },
     onError: (e: Error) => toast.error(e.message),
   });
 
-  const adminRoles: UserRole[] = [
-    'ORGANIZATION_MANAGEMENT', 'RECIPIENT_MANAGEMENT', 'SERVER_MANAGEMENT',
-    'COMPLIANCE_MANAGEMENT', 'HYGIENE_MANAGEMENT', 'HELP_DESK', 'VIEW_ONLY_ORG', 'USER',
-  ];
+  const pick = (r: UserRole) => {
+    if (r === currentRole) { setOpen(false); return; }
+    // A role change ends the account's web sessions (server side).
+    if (!confirm(t('rbac_change_confirm'))) return;
+    update.mutate(r);
+  };
 
   return (
-    <div className="relative">
-      <button ref={triggerRef} type="button" onClick={() => setOpen(o => !o)}
-        aria-haspopup="menu" aria-expanded={open} aria-label={`Rolle ändern (aktuell: ${ROLE_META[currentRole].label})`}
-        className="flex items-center gap-1.5 px-2 py-1 rounded border border-gray-200 hover:border-accent hover:bg-accent/5 transition-colors">
+    <div className="relative inline-block">
+      <button ref={triggerRef} type="button" onClick={() => setOpen(o => !o)} disabled={update.isPending}
+        aria-haspopup="menu" aria-expanded={open} aria-label={`${t('rbac_change_aria')}: ${t(`role_label_${currentRole}`)}`}
+        className="flex items-center gap-1.5 px-2 py-1 rounded border border-line hover:border-accent hover:bg-accent/5 transition-colors disabled:cursor-wait">
         <RoleBadge role={currentRole} />
-        <ChevronDown size={11} className="text-gray-400" aria-hidden="true" />
+        <ChevronDown size={11} className="text-fg-subtle" aria-hidden="true" />
       </button>
 
+      {open && <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} aria-hidden="true" />}
       {open && (
-        <>
-          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div ref={menuRef} role="menu" aria-label="Rolle wählen" className="absolute right-0 top-full mt-1 w-72 bg-white rounded-lg border border-gray-200 shadow-lg z-20 py-1 overflow-hidden">
-            {adminRoles.map(r => {
-              const m = ROLE_META[r];
-              return (
-                <button key={r} type="button" role="menuitemradio" aria-checked={r === currentRole} onClick={() => update.mutate(r)}
-                  className={`w-full text-left px-4 py-2.5 hover:bg-gray-50 flex items-start gap-3 ${r === currentRole ? 'bg-accent/5' : ''}`}>
-                  <div className="pt-0.5">
-                    <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${m.color}`}>
-                      {m.label}
-                    </span>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500">{m.description}</p>
-                  </div>
-                  {r === currentRole && <span className="ml-auto text-accent text-xs">✓</span>}
-                </button>
-              );
-            })}
-          </div>
-        </>
+        <div ref={menuRef} role="menu" aria-label={t('rbac_pick_aria')} className="absolute right-0 top-full mt-1 w-72 bg-surface rounded-lg border border-line shadow-lg z-20 py-1 overflow-hidden">
+          {ROLES.map(r => (
+            <button key={r} type="button" role="menuitemradio" aria-checked={r === currentRole} onClick={() => pick(r)}
+              className={`w-full text-left px-4 py-2.5 hover:bg-surface-2 flex items-start gap-3 ${r === currentRole ? 'bg-accent/5' : ''}`}>
+              <div className="pt-0.5"><RoleBadge role={r} /></div>
+              <p className="text-xs text-fg-subtle">{t(`role_desc_${r}`)}</p>
+              {r === currentRole && <span className="ml-auto text-accent-fg text-xs" aria-hidden="true">✓</span>}
+            </button>
+          ))}
+        </div>
       )}
     </div>
   );
@@ -150,23 +105,26 @@ function RoleSelector({ userId, currentRole }: { userId: string; currentRole: Us
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export function RbacPage() {
+  const t = useT();
+  const { role: actorRole } = usePermissions();
+  // Server: only ORGANIZATION_MANAGEMENT may assign roles (canAssignRole); every
+  // other role sees the badges read-only instead of a selector that would fail.
+  const mayAssign = canAssignRoles(actorRole);
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState<UserRole | 'ALL' | 'ADMINS'>('ALL');
 
-  const { data, isLoading } = useQuery<MailboxesResponse>({
+  // Organisation-area endpoint (the page's own area): every role that can open
+  // the page can load it — GET /admin/mailboxes needs the recipients area.
+  const { data: users = [], isLoading, isError, error } = useQuery<AdminUser[]>({
     queryKey: ['admin-rbac-users'],
-    queryFn: () => api.get('/admin/mailboxes?limit=500'),
+    queryFn: () => api.get<AdminUser[]>('/admin/organisation/role-assignments').then((r) => (Array.isArray(r) ? r : [])),
   });
 
-  const users: AdminUser[] = Array.isArray(data)
-    ? (data as AdminUser[])
-    : ((data?.mailboxes ?? data?.users ?? []) as AdminUser[]);
-
+  const q = search.trim().toLowerCase();
   const filtered = users.filter(u => {
     if (roleFilter === 'ADMINS' && u.role === 'USER') return false;
     if (roleFilter !== 'ALL' && roleFilter !== 'ADMINS' && u.role !== roleFilter) return false;
-    if (search && !u.displayName.toLowerCase().includes(search.toLowerCase()) &&
-        !u.email.toLowerCase().includes(search.toLowerCase())) return false;
+    if (q && !(u.displayName ?? '').toLowerCase().includes(q) && !u.email.toLowerCase().includes(q)) return false;
     return true;
   });
 
@@ -176,82 +134,80 @@ export function RbacPage() {
     <div className="p-6">
       {/* Header */}
       <div className="flex items-center gap-3 mb-6">
-        <ShieldHalf size={22} className="text-accent" />
+        <ShieldHalf size={22} className="text-accent-fg" aria-hidden="true" />
         <div>
-          <h1 className="text-xl font-semibold text-gray-900">Berechtigungen (RBAC)</h1>
-          <p className="text-sm text-gray-500">
-            {users.length} Benutzer · {adminCount} mit Admin-Rollen
+          <h1 className="text-xl font-semibold text-fg">{t('rbac_title')}</h1>
+          <p className="text-sm text-fg-subtle">
+            {users.length} {t('rbac_users')} · {adminCount} {t('rbac_with_admin')}
           </p>
         </div>
       </div>
 
       {/* Role legend */}
-      <div className="bg-white rounded-lg border border-gray-200 p-4 mb-4">
-        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Rollenbeschreibungen</p>
-        <div className="grid grid-cols-2 gap-2">
-          {(Object.entries(ROLE_META) as [UserRole, typeof ROLE_META[UserRole]][])
-            .filter(([r]) => r !== 'USER')
-            .map(([role, m]) => (
-              <div key={role} className="flex items-start gap-2">
-                <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium whitespace-nowrap ${m.color}`}>
-                  {m.label}
-                </span>
-                <span className="text-xs text-gray-500">{m.description}</span>
-              </div>
-            ))}
+      <div className="bg-surface rounded-lg border border-line p-4 mb-4">
+        <p className="text-xs font-semibold text-fg-subtle uppercase tracking-wide mb-3">{t('rbac_legend')}</p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {ROLES.filter((r) => r !== 'USER').map((role) => (
+            <div key={role} className="flex items-start gap-2">
+              <span className="whitespace-nowrap"><RoleBadge role={role} /></span>
+              <span className="text-xs text-fg-subtle">{t(`role_desc_${role}`)}</span>
+            </div>
+          ))}
         </div>
+        {!mayAssign && <p className="mt-3 text-xs text-fg-subtle">{t('rbac_readonly_hint')}</p>}
       </div>
 
       {/* Filters */}
-      <div className="flex gap-3 mb-4">
-        <div className="flex items-center gap-2 bg-white border border-gray-300 rounded px-3 py-1.5 flex-1 max-w-xs">
-          <Search size={14} className="text-gray-400" />
-          <input value={search} onChange={e => setSearch(e.target.value)}
-            className="flex-1 text-sm focus:outline-none"
-            placeholder="Name oder E-Mail…" />
+      <div className="flex flex-wrap gap-3 mb-4">
+        <div className="flex items-center gap-2 bg-surface border border-line-strong rounded px-3 py-1.5 flex-1 max-w-xs focus-within:ring-2 focus-within:ring-accent-fg">
+          <Search size={14} className="text-fg-subtle" aria-hidden="true" />
+          <input value={search} onChange={e => setSearch(e.target.value)} aria-label={t('rbac_search_ph')}
+            className="flex-1 text-sm bg-transparent text-fg placeholder-fg-subtle focus:outline-none"
+            placeholder={t('rbac_search_ph')} />
         </div>
         <select value={roleFilter} onChange={e => setRoleFilter(e.target.value as UserRole | 'ALL' | 'ADMINS')}
-          className="border border-gray-300 rounded px-3 py-1.5 text-sm text-gray-700 focus:outline-none focus:ring-1 focus:ring-accent">
-          <option value="ALL">Alle Rollen</option>
-          <option value="ADMINS">Nur Admins</option>
-          {(Object.keys(ROLE_META) as UserRole[]).map(r => (
-            <option key={r} value={r}>{ROLE_META[r].label}</option>
-          ))}
+          aria-label={t('rbac_col_role')}
+          className="bg-surface border border-line-strong rounded px-3 py-1.5 text-sm text-fg-muted focus:outline-none focus:ring-1 focus:ring-accent-fg">
+          <option value="ALL">{t('rbac_filter_all')}</option>
+          <option value="ADMINS">{t('rbac_filter_admins')}</option>
+          {ROLES.map(r => <option key={r} value={r}>{t(`role_label_${r}`)}</option>)}
         </select>
       </div>
 
       {/* Table */}
-      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+      <div className="bg-surface rounded-lg border border-line overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
-            <tr className="bg-gray-50 border-b border-gray-200 text-xs font-semibold text-gray-500 uppercase tracking-wide">
-              <th className="text-left px-4 py-3">Benutzer</th>
-              <th className="text-left px-4 py-3">Status</th>
-              <th className="text-left px-4 py-3">Aktuelle Rolle</th>
-              <th className="text-right px-4 py-3">Rolle ändern</th>
+            <tr className="bg-surface-2 border-b border-line text-xs font-semibold text-fg-subtle uppercase tracking-wide">
+              <th scope="col" className="text-left px-4 py-3">{t('rbac_col_user')}</th>
+              <th scope="col" className="text-left px-4 py-3">{t('rbac_col_status')}</th>
+              <th scope="col" className="text-right px-4 py-3">{mayAssign ? t('rbac_col_change') : t('rbac_col_role')}</th>
             </tr>
           </thead>
           <tbody>
             {isLoading ? (
-              <tr><td colSpan={4} className="text-center py-12 text-gray-400">Laden…</td></tr>
+              <tr><td colSpan={3} className="text-center py-12 text-fg-subtle">{t('rbac_loading')}</td></tr>
+            ) : isError ? (
+              <tr><td colSpan={3} className="text-center py-12 text-danger-fg" role="alert">
+                {t('rbac_load_error')}{error instanceof Error && error.message ? `: ${error.message}` : ''}
+              </td></tr>
             ) : filtered.length === 0 ? (
-              <tr><td colSpan={4} className="text-center py-12 text-gray-400">Keine Benutzer gefunden</td></tr>
+              <tr><td colSpan={3} className="text-center py-12 text-fg-subtle">{t('rbac_empty')}</td></tr>
             ) : filtered.map(u => (
-              <tr key={u.id} className="border-b border-gray-100 hover:bg-gray-50">
+              <tr key={u.id} className="border-b border-line hover:bg-surface-2">
                 <td className="px-4 py-3">
-                  <p className="font-medium text-gray-900">{u.displayName}</p>
-                  <p className="text-xs text-gray-500">{u.email}</p>
+                  <p className="font-medium text-fg">{u.displayName}</p>
+                  <p className="text-xs text-fg-subtle">{u.email}</p>
                 </td>
                 <td className="px-4 py-3">
                   <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                    u.active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'
+                    u.active ? 'bg-success-bg text-success-fg' : 'bg-surface-2 text-fg-subtle'
                   }`}>
-                    {u.active ? 'Aktiv' : 'Inaktiv'}
+                    {u.active ? t('status_active') : t('status_inactive')}
                   </span>
                 </td>
-                <td className="px-4 py-3"><RoleBadge role={u.role} /></td>
                 <td className="px-4 py-3 text-right">
-                  <RoleSelector userId={u.id} currentRole={u.role} />
+                  {mayAssign ? <RoleSelector userId={u.id} currentRole={u.role} /> : <RoleBadge role={u.role} />}
                 </td>
               </tr>
             ))}

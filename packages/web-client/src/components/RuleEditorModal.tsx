@@ -94,7 +94,7 @@ function ConditionRow({ value, onChange, onRemove }: {
           const newField = e.target.value as RuleField;
           onChange({ field: newField, operator: defaultOperator(newField), value: BOOL_FIELDS.includes(newField) ? true : '' });
         }}
-        className="text-sm border border-gray-300 dark:border-gray-600 dark:bg-gray-800 rounded px-2 py-1.5 min-w-[140px]"
+        className="text-sm border border-line-strong rounded px-2 py-1.5 min-w-[140px]"
       >
         {Object.entries(FIELD_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
       </select>
@@ -102,7 +102,7 @@ function ConditionRow({ value, onChange, onRemove }: {
       <select
         value={value.operator}
         onChange={(e) => onChange({ ...value, operator: e.target.value as RuleOperator })}
-        className="text-sm border border-gray-300 dark:border-gray-600 dark:bg-gray-800 rounded px-2 py-1.5 min-w-[120px]"
+        className="text-sm border border-line-strong rounded px-2 py-1.5 min-w-[120px]"
       >
         {ops.map((op) => <option key={op} value={op}>{OP_LABEL[op]}</option>)}
       </select>
@@ -111,7 +111,7 @@ function ConditionRow({ value, onChange, onRemove }: {
         <select
           value={String(value.value)}
           onChange={(e) => onChange({ ...value, value: e.target.value === 'true' })}
-          className="text-sm border border-gray-300 dark:border-gray-600 dark:bg-gray-800 rounded px-2 py-1.5"
+          className="text-sm border border-line-strong rounded px-2 py-1.5"
         >
           <option value="true">ja</option>
           <option value="false">nein</option>
@@ -120,7 +120,7 @@ function ConditionRow({ value, onChange, onRemove }: {
         <select
           value={String(value.value)}
           onChange={(e) => onChange({ ...value, value: e.target.value })}
-          className="text-sm border border-gray-300 dark:border-gray-600 dark:bg-gray-800 rounded px-2 py-1.5"
+          className="text-sm border border-line-strong rounded px-2 py-1.5"
         >
           <option value="high">Hoch</option>
           <option value="normal">Normal</option>
@@ -131,14 +131,14 @@ function ConditionRow({ value, onChange, onRemove }: {
           type={NUM_FIELDS.includes(value.field) ? 'number' : 'text'}
           value={String(value.value)}
           onChange={(e) => onChange({ ...value, value: NUM_FIELDS.includes(value.field) ? Number(e.target.value) : e.target.value })}
-          className="flex-1 text-sm border border-gray-300 dark:border-gray-600 dark:bg-gray-800 rounded px-2 py-1.5"
+          className="flex-1 text-sm border border-line-strong rounded px-2 py-1.5"
           placeholder={NUM_FIELDS.includes(value.field) ? 'Bytes' : 'Wert eingeben…'}
         />
       )}
 
       <button aria-label="Bedingung entfernen"
         onClick={onRemove}
-        className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded"
+        className="p-1.5 text-fg-subtle hover:text-danger-fg hover:bg-danger-bg rounded"
         title="Bedingung entfernen"
       >
         <Trash2 size={14} />
@@ -172,7 +172,7 @@ function ActionRow({ value, onChange, onRemove, folders, categories }: {
       <select
         value={value.type}
         onChange={(e) => changeType(e.target.value as RuleAction['type'])}
-        className="text-sm border border-gray-300 dark:border-gray-600 dark:bg-gray-800 rounded px-2 py-1.5 min-w-[200px]"
+        className="text-sm border border-line-strong rounded px-2 py-1.5 min-w-[200px]"
       >
         {Object.entries(ACTION_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
       </select>
@@ -181,7 +181,7 @@ function ActionRow({ value, onChange, onRemove, folders, categories }: {
         <select
           value={value.folderId}
           onChange={(e) => onChange({ ...value, folderId: e.target.value })}
-          className="flex-1 text-sm border border-gray-300 dark:border-gray-600 dark:bg-gray-800 rounded px-2 py-1.5"
+          className="flex-1 text-sm border border-line-strong rounded px-2 py-1.5"
         >
           <option value="">— Ordner wählen —</option>
           {folders.map((f) => <option key={f.id} value={f.id}>{f.displayName ?? f.name}</option>)}
@@ -192,7 +192,7 @@ function ActionRow({ value, onChange, onRemove, folders, categories }: {
         <select
           value={value.categoryId}
           onChange={(e) => onChange({ ...value, categoryId: e.target.value })}
-          className="flex-1 text-sm border border-gray-300 dark:border-gray-600 dark:bg-gray-800 rounded px-2 py-1.5"
+          className="flex-1 text-sm border border-line-strong rounded px-2 py-1.5"
         >
           <option value="">— Kategorie wählen —</option>
           {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -205,7 +205,7 @@ function ActionRow({ value, onChange, onRemove, folders, categories }: {
           value={value.address}
           onChange={(e) => onChange({ ...value, address: e.target.value })}
           placeholder="empfänger@beispiel.de"
-          className="flex-1 text-sm border border-gray-300 dark:border-gray-600 dark:bg-gray-800 rounded px-2 py-1.5"
+          className="flex-1 text-sm border border-line-strong rounded px-2 py-1.5"
         />
       )}
 
@@ -213,7 +213,7 @@ function ActionRow({ value, onChange, onRemove, folders, categories }: {
         <select
           value={value.value}
           onChange={(e) => onChange({ ...value, value: e.target.value as 'high' | 'normal' | 'low' })}
-          className="flex-1 text-sm border border-gray-300 dark:border-gray-600 dark:bg-gray-800 rounded px-2 py-1.5"
+          className="flex-1 text-sm border border-line-strong rounded px-2 py-1.5"
         >
           <option value="high">Hoch</option>
           <option value="normal">Normal</option>
@@ -223,7 +223,7 @@ function ActionRow({ value, onChange, onRemove, folders, categories }: {
 
       <button aria-label="Aktion entfernen"
         onClick={onRemove}
-        className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded"
+        className="p-1.5 text-fg-subtle hover:text-danger-fg hover:bg-danger-bg rounded"
         title="Aktion entfernen"
       >
         <Trash2 size={14} />
@@ -291,12 +291,12 @@ export function RuleEditorModal({ rule, preset, onClose, onSaved }: Props) {
     <Modal
       onClose={onClose}
       label="Regel bearbeiten"
-      overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-      className="bg-white dark:bg-gray-900 rounded-lg shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col"
+      overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-scrim/50 p-4"
+      className="bg-surface rounded-lg shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col"
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-700 shrink-0">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-line shrink-0">
+          <h2 className="text-lg font-semibold text-fg">
             {isNew ? 'Neue Regel' : 'Regel bearbeiten'}
           </h2>
           <button aria-label="Schließen" onClick={onClose} className="btn-ghost p-1.5"><X size={18} /></button>
@@ -306,14 +306,14 @@ export function RuleEditorModal({ rule, preset, onClose, onSaved }: Props) {
         <div className="flex-1 overflow-y-auto p-5 space-y-6">
           {/* Name */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1.5">
+            <label className="block text-sm font-medium text-fg-muted mb-1.5">
               Name der Regel
             </label>
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="z.B. Newsletter in Archiv verschieben"
-              className="w-full text-sm border border-gray-300 dark:border-gray-600 dark:bg-gray-800 rounded px-3 py-2"
+              className="w-full text-sm border border-line-strong rounded px-3 py-2"
               autoFocus
             />
           </div>
@@ -321,16 +321,16 @@ export function RuleEditorModal({ rule, preset, onClose, onSaved }: Props) {
           {/* Conditions */}
           <div>
             <div className="flex items-center justify-between mb-2">
-              <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-200">
+              <h3 className="text-sm font-semibold text-fg-muted">
                 <span className="inline-block w-6 h-6 rounded-full bg-accent text-white text-xs font-bold leading-6 text-center mr-2">1</span>
                 Wenn die Nachricht eintrifft und …
               </h3>
-              <label className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300">
+              <label className="flex items-center gap-2 text-xs text-fg-muted">
                 <span>Verknüpfung:</span>
                 <select
                   value={matchAll ? 'all' : 'any'}
                   onChange={(e) => setMatchAll(e.target.value === 'all')}
-                  className="border border-gray-300 dark:border-gray-600 dark:bg-gray-800 rounded px-2 py-1 text-xs"
+                  className="border border-line-strong rounded px-2 py-1 text-xs"
                 >
                   <option value="all">UND (alle Bedingungen)</option>
                   <option value="any">ODER (irgendeine)</option>
@@ -338,7 +338,7 @@ export function RuleEditorModal({ rule, preset, onClose, onSaved }: Props) {
               </label>
             </div>
             {conditions.length === 0 && (
-              <p className="text-xs text-gray-400 italic mb-2">Keine Bedingungen — die Regel greift bei JEDER eingehenden Nachricht.</p>
+              <p className="text-xs text-fg-subtle italic mb-2">Keine Bedingungen — die Regel greift bei JEDER eingehenden Nachricht.</p>
             )}
             {conditions.map((c, i) => (
               <ConditionRow
@@ -350,7 +350,7 @@ export function RuleEditorModal({ rule, preset, onClose, onSaved }: Props) {
             ))}
             <button
               onClick={() => setConditions([...conditions, { field: 'from', operator: 'contains', value: '' }])}
-              className="text-xs text-accent hover:underline flex items-center gap-1 mt-1"
+              className="text-xs text-accent-fg hover:underline flex items-center gap-1 mt-1"
             >
               <Plus size={12} /> Bedingung hinzufügen
             </button>
@@ -358,12 +358,12 @@ export function RuleEditorModal({ rule, preset, onClose, onSaved }: Props) {
 
           {/* Actions */}
           <div>
-            <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-200 mb-2">
+            <h3 className="text-sm font-semibold text-fg-muted mb-2">
               <span className="inline-block w-6 h-6 rounded-full bg-accent text-white text-xs font-bold leading-6 text-center mr-2">2</span>
               Folgendes tun:
             </h3>
             {actions.length === 0 && (
-              <p className="text-xs text-red-500 italic mb-2 flex items-center gap-1">
+              <p className="text-xs text-danger-fg italic mb-2 flex items-center gap-1">
                 <Info size={12} /> Mindestens eine Aktion erforderlich.
               </p>
             )}
@@ -379,7 +379,7 @@ export function RuleEditorModal({ rule, preset, onClose, onSaved }: Props) {
             ))}
             <button
               onClick={() => setActions([...actions, { type: 'moveTo', folderId: folders[0]?.id ?? '' }])}
-              className="text-xs text-accent hover:underline flex items-center gap-1 mt-1"
+              className="text-xs text-accent-fg hover:underline flex items-center gap-1 mt-1"
             >
               <Plus size={12} /> Aktion hinzufügen
             </button>
@@ -389,16 +389,16 @@ export function RuleEditorModal({ rule, preset, onClose, onSaved }: Props) {
           <div>
             <button
               onClick={() => setShowExceptions((s) => !s)}
-              className="flex items-center gap-1.5 text-sm font-semibold text-gray-700 dark:text-gray-200 hover:text-accent"
+              className="flex items-center gap-1.5 text-sm font-semibold text-fg-muted hover:text-accent-fg"
             >
               {showExceptions ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-              <span className="inline-block w-6 h-6 rounded-full bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200 text-xs font-bold leading-6 text-center">3</span>
+              <span className="inline-block w-6 h-6 rounded-full bg-surface-3 text-fg-muted text-xs font-bold leading-6 text-center">3</span>
               Außer wenn … (Ausnahmen, optional)
             </button>
             {showExceptions && (
               <div className="mt-2 ml-6">
                 {exceptions.length === 0 && (
-                  <p className="text-xs text-gray-400 italic mb-2">Keine Ausnahmen.</p>
+                  <p className="text-xs text-fg-subtle italic mb-2">Keine Ausnahmen.</p>
                 )}
                 {exceptions.map((e, i) => (
                   <ConditionRow
@@ -410,7 +410,7 @@ export function RuleEditorModal({ rule, preset, onClose, onSaved }: Props) {
                 ))}
                 <button
                   onClick={() => setExceptions([...exceptions, { field: 'from', operator: 'contains', value: '' }])}
-                  className="text-xs text-accent hover:underline flex items-center gap-1 mt-1"
+                  className="text-xs text-accent-fg hover:underline flex items-center gap-1 mt-1"
                 >
                   <Plus size={12} /> Ausnahme hinzufügen
                 </button>
@@ -419,33 +419,33 @@ export function RuleEditorModal({ rule, preset, onClose, onSaved }: Props) {
           </div>
 
           {/* Footer options */}
-          <div className="space-y-2 pt-3 border-t border-gray-200 dark:border-gray-700">
+          <div className="space-y-2 pt-3 border-t border-line">
             <label className="flex items-center gap-2 text-sm cursor-pointer">
               <input
                 type="checkbox"
                 checked={stopProcessing}
                 onChange={(e) => setStopProcessing(e.target.checked)}
-                className="rounded border-gray-300 text-accent focus:ring-accent"
+                className="rounded border-line-strong text-accent-fg focus:ring-accent-fg"
               />
-              <span className="text-gray-700 dark:text-gray-200">Verarbeitung weiterer Regeln beenden</span>
-              <span className="text-xs text-gray-400">(Stop-Processing)</span>
+              <span className="text-fg-muted">Verarbeitung weiterer Regeln beenden</span>
+              <span className="text-xs text-fg-subtle">(Stop-Processing)</span>
             </label>
             <label className="flex items-center gap-2 text-sm cursor-pointer">
               <input
                 type="checkbox"
                 checked={enabled}
                 onChange={(e) => setEnabled(e.target.checked)}
-                className="rounded border-gray-300 text-accent focus:ring-accent"
+                className="rounded border-line-strong text-accent-fg focus:ring-accent-fg"
               />
-              <span className="text-gray-700 dark:text-gray-200">Regel ist aktiviert</span>
+              <span className="text-fg-muted">Regel ist aktiviert</span>
             </label>
           </div>
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-gray-200 dark:border-gray-700 shrink-0">
+        <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-line shrink-0">
           {saveError && (
-            <p role="alert" className="mr-auto text-xs text-red-600 dark:text-red-400 flex items-center gap-1 break-all">
+            <p role="alert" className="mr-auto text-xs text-danger-fg flex items-center gap-1 break-all">
               <Info size={12} className="shrink-0" /> {saveError}
             </p>
           )}

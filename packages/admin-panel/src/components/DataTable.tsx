@@ -156,7 +156,7 @@ export function DataTable<T>(props: DataTableProps<T>) {
           {filters}
           {search && (
             <div className="relative">
-              <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" aria-hidden="true" />
+              <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-fg-subtle pointer-events-none" aria-hidden="true" />
               <input
                 type="search"
                 value={serverSearch ? search.value ?? '' : query}
@@ -167,7 +167,7 @@ export function DataTable<T>(props: DataTableProps<T>) {
               />
               {(serverSearch ? search.value : query) && (
                 <button type="button" onClick={() => (serverSearch ? search.onChange!('') : setQuery(''))}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600" aria-label={t('dt_clear_search')}>
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-fg-subtle hover:text-fg-muted" aria-label={t('dt_clear_search')}>
                   <X size={12} />
                 </button>
               )}
@@ -177,11 +177,11 @@ export function DataTable<T>(props: DataTableProps<T>) {
       </div>
 
       {selectable && (
-        <p className="text-xs text-gray-500 dark:text-gray-400 min-h-4" aria-live="polite">
+        <p className="text-xs text-fg-subtle min-h-4" aria-live="polite">
           {selected.size > 0 && (
             <>
               {selected.size} {t('dt_selected')}
-              <button type="button" className="ml-2 text-accent hover:underline" onClick={() => setSelected(new Set())}>{t('dt_clear_selection')}</button>
+              <button type="button" className="ml-2 text-accent-fg hover:underline" onClick={() => setSelected(new Set())}>{t('dt_clear_selection')}</button>
             </>
           )}
         </p>
@@ -190,7 +190,7 @@ export function DataTable<T>(props: DataTableProps<T>) {
       <div className="card p-0 overflow-x-auto">
         <table className="w-full text-sm" aria-busy={loading ? 'true' : undefined}>
           <caption className="sr-only">{caption}</caption>
-          <thead className="bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
+          <thead className="bg-surface-2 border-b border-line">
             <tr>
               {selectable && (
                 <th scope="col" className="w-10 px-3 py-2.5">
@@ -210,10 +210,10 @@ export function DataTable<T>(props: DataTableProps<T>) {
                 return (
                   <th key={c.key} scope="col"
                     {...(sortable ? { 'aria-sort': ariaSort(sort, c.key) } : {})}
-                    className={`text-left px-4 py-2.5 font-medium text-gray-500 dark:text-gray-400 text-xs ${c.headerClassName ?? ''}`}>
+                    className={`text-left px-4 py-2.5 font-medium text-fg-subtle text-xs ${c.headerClassName ?? ''}`}>
                     {c.srOnlyHeader ? <span className="sr-only">{label}</span> : sortable ? (
                       <button type="button" onClick={() => setSort((s) => nextSort(s, c.key))}
-                        className="inline-flex items-center gap-1 hover:text-gray-800 dark:hover:text-gray-200"
+                        className="inline-flex items-center gap-1 hover:text-fg"
                         aria-label={`${label}: ${t('dt_sort')}`}>
                         {c.header}
                         {sort?.key === c.key
@@ -226,15 +226,15 @@ export function DataTable<T>(props: DataTableProps<T>) {
               })}
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+          <tbody className="divide-y divide-line">
             {loading && (
               <tr><td colSpan={colCount} className="px-4 py-8 text-center">
-                <Loader2 size={20} className="animate-spin mx-auto text-gray-400" aria-hidden="true" />
+                <Loader2 size={20} className="animate-spin mx-auto text-fg-subtle" aria-hidden="true" />
                 <span className="sr-only">{t('dt_loading')}</span>
               </td></tr>
             )}
             {!loading && visible.length === 0 && (
-              <tr><td colSpan={colCount} className="py-10 text-center text-gray-400 text-sm">
+              <tr><td colSpan={colCount} className="py-10 text-center text-fg-subtle text-sm">
                 {emptyText ?? (query || search?.value ? t('dt_no_results') : t('dt_empty'))}
               </td></tr>
             )}
@@ -252,9 +252,9 @@ export function DataTable<T>(props: DataTableProps<T>) {
                   onKeyDown={(e) => onRowKeyDown(e, row, i)}
                   onClick={(e) => onRowClick(e, row, i)}
                   onFocus={(e) => { if (e.target === e.currentTarget) setFocusIdx(i); }}
-                  className={`outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent transition-colors ${
+                  className={`outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-fg transition-colors ${
                     onActivate ? 'cursor-pointer' : ''} ${
-                    isActive ? 'bg-blue-50 dark:bg-blue-900/20' : isSelected ? 'bg-blue-50/50 dark:bg-blue-900/10' : 'hover:bg-gray-50 dark:hover:bg-gray-800/50'} ${
+                    isActive ? 'bg-accent/10' : isSelected ? 'bg-accent-light' : 'hover:bg-surface-2'} ${
                     rowClassName?.(row) ?? ''}`}
                 >
                   {selectable && (
@@ -270,7 +270,7 @@ export function DataTable<T>(props: DataTableProps<T>) {
                 </tr>,
                 expanded ? (
                   <tr key={`${key}-expanded`}>
-                    <td colSpan={colCount} className="px-6 py-4 bg-blue-50/30 dark:bg-gray-800/40">{expanded}</td>
+                    <td colSpan={colCount} className="px-6 py-4 bg-surface-2">{expanded}</td>
                   </tr>
                 ) : null,
               ];
@@ -280,7 +280,7 @@ export function DataTable<T>(props: DataTableProps<T>) {
       </div>
 
       {total > 0 && (
-        <nav className="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400" aria-label={t('dt_pagination')}>
+        <nav className="flex items-center justify-between text-xs text-fg-subtle" aria-label={t('dt_pagination')}>
           <span aria-live="polite">{range.from}–{range.to} {t('dt_of')} {range.total}</span>
           {pages > 1 && (
             <div className="flex items-center gap-2">

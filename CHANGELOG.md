@@ -13,6 +13,67 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [9.2.0] — 2026-11-16 — Accessible dark mode, every BCP function reviewed, ClamAV settings
+
+Minor release (SemVer: new features and fixes, no schema data loss, no change for mail clients).
+The admin panel was reviewed page by page for contract, logic, RBAC and leftovers, both in code
+and live against a running stack; every finding was fixed with a regression test where possible.
+
+### Added
+- **WCAG 2.2 AA colour system for webmail and BCP.** Semantic colour tokens (`src/theme/tokens.css`) for light and dark mode replace the raw palette classes in every window. Text reaches 4.5:1 and controls 3:1 in both themes, including all six accent presets (the accent text colour is derived per theme). Every element has a visible keyboard focus ring, and `prefers-reduced-motion` is honoured. A theme-guard test fails the build on raw colour classes, `dark:` variants and arbitrary colour values. Mail HTML keeps rendering on a light "paper" so sender-styled mails stay readable.
+- BCP → System information shows the newest three releases from the `CHANGELOG.md` shipped in the image (`/changelog` parses headings with date and title) instead of a hard-coded list.
+- BCP → Services shows a health status per service; the retention page shows assignments; the backup page shows the encryption status.
+- **ClamAV settings in BCP → Protection → Antivirus** (`/api/v1/admin/security/clamav`, docs/antivirus.md). The defaults keep the previous behaviour, with one exception listed in the upgrade notes (mail over clamd's stream limit).
+  - Policy, applied by the security filter without a restart: action on a virus, scanner failure (deliver tagged or `451`), scan timeout (5–25 s, default 20 s), scan size limit (1–50 MB) with accept-tagged or reject above it, and whether `Heuristics.*`, `PUA.*` and `Heuristics.Encrypted.*` findings count as a virus. New additive `SecuritySettings` columns: `clamavTimeoutSec`, `clamavScanLimitMb`, `clamavOversizeAction`, `clamavHeuristicsAsVirus`, `clamavPuaAsVirus`, `clamavEncryptedAsVirus`. Changes are audited as `settings.clamav.update` with a field diff.
+  - Mail delivered or quarantined without a clean scan carries `X-CoreMail-Virus-Scan` (`infected` / `suspicious` / `unscanned; reason=…`). The header is internal: copies from outside senders are stripped.
+  - Live status (reachable, engine, signature version and date with an age warning, queue) and an EICAR self-test that scans a test message through the inbound path.
+  - The clamd engine limits are shown as read-only recommendations; they belong in the clamav container's `clamd.conf` (documented, with compose example).
+
+### Changed
+- The ClamAV scan timeout defaults to 20 s (was a fixed 30 s, equal to the SMTP → filter request timeout, so a hanging clamd aborted the request instead of applying the failure policy).
+- clamd's `INSTREAM size limit exceeded` answer is treated as "too large to scan" (size policy) instead of a scanner failure.
+- The former Antivirus scan options in the BCP (scan archives/HTML, block encrypted archives, max file/scan size) were removed: they were saved but never applied. Their columns stay in the schema.
+- Admin API input is validated more strictly: rspamd score thresholds (range and order), the public hostname, backup schedule values. Invalid values now return `400` with the reason instead of being stored.
+- Making an inactive domain the primary domain returns `409`.
+- User-visible texts no longer mention Exchange or RFC numbers; the Outlook Autodiscover setup box from the MAPI era is gone from BCP → Servers.
+
+### Fixed
+- SMTP connection limits from BCP (total and per IP) were saved but never applied; smtp-server now enforces them and reloads them without a restart.
+- Queues → Retry answered `500`.
+- The smarthost connection test now checks TLS the way the relay uses it.
+- Server settings: saving one section no longer resets fields of other sections, and deriving URLs from the hostname no longer overwrites the organisation name and ports. Port 587 is shown as STARTTLS.
+- Mailboxes: "unlimited" quota was stored as 100 GB. A role change is audited as `user.role.change`.
+- Critical admin actions are audited even with the audit log switched off again (action names had drifted from the always-audit list).
+- Dashboard widgets respect the admin's role; message trace paging returns all pages.
+- DNS setup shows SRV records split into their fields, with IMAP/POP3 records marked optional.
+- Self-signed certificates get random serial numbers.
+- Editing a retention policy created before 9.0 works again; backup schedules keep their retention value.
+- Two backups started in the same second no longer overwrite each other's archive (the key contains the run id).
+- Logging out from the "MFA required" page works.
+- IMAP no longer logs client connection resets as errors.
+
+### Deprecated
+- `POST /api/v1/admin/security/rspamd/learn/:type` now answers `410 Gone` with an explanation, and its BCP button is gone: it sent a JSON body instead of a message, so rspamd never learned anything. Training stays available through the webmail's Junk / Not junk actions. The route will be removed in the next major release.
+
+### Removed
+- The BCP Reports page: it showed static placeholder numbers. `/bcp/reports` redirects to the dashboard.
+
+### Security
+- The last active organisation admin can no longer be deleted, deactivated or demoted, and admins cannot delete themselves.
+- Backup archive keys with path traversal are rejected with `400`.
+- `X-CoreMail-Virus-Scan` is also stripped from authenticated submission and from every local delivery path (REST, JMAP, ActiveSync, rule forwards), so users cannot plant it to trigger other users' rules.
+
+### Upgrade notes
+No configuration change is required. Settings that were saved but never applied now take effect, so check them once:
+- **SMTP connection limits** (BCP → SMTP): the total connection limit and the per-IP limit now apply to port 25 from public IPs. Submission (587/465) keeps only the per-IP limit, and loopback/private networks are exempt. An explicitly set `SMTP_MAX_CONNS_PER_IP` still wins over the BCP value. Failed AUTH attempts before disconnect now follow the BCP value (default 5; the old built-in value was 3).
+- **Listener addresses** (BCP → Services): the stored bind address is now used. A value that is not an IP address (for example a host name) is ignored with a warning and the listener binds to all interfaces; a bind failure falls back the same way instead of stopping the service.
+- **Backup schedule retention**: `retentionDays` now deletes a schedule's backups that are older than the limit. Only backups created after the upgrade are ever deleted, and the newest archive of every mailbox in a schedule is always kept. Delete older archives by hand if you no longer need them.
+- **ClamAV stream limit**: mail that clamd refuses as too large is now handled by the size policy (default: deliver with `X-CoreMail-Virus-Scan: unscanned`) instead of the failure policy. If you set the scanner-failure action to "Vorübergehend abweisen" (defer), set "Aktion für Mails über der Scan-Grenze" to "Ablehnen" to keep refusing such mail.
+- **Quarantine**: messages quarantined as `VIRUS` can no longer be released (API `409`). If heuristic or PUA findings cause false positives, switch those categories off in BCP → Protection → Antivirus.
+- **Server settings** now validate host names; a previously stored value with a port, an underscore or an IPv6 literal has to be corrected before the page saves. Log and audit filters for service and target type match substrings.
+
+---
+
 ## [9.1.0] — 2026-11-15 — Shared mailboxes over IMAP, full REFERENCES threading, Helm tested on a real cluster
 
 Minor release (SemVer: new features, no breaking changes). It closes the known limitations of
@@ -62,7 +123,7 @@ Minor release (SemVer: new features, no breaking changes). It closes the known l
 
 ---
 
-## [9.0.0] — 2026-11-15 — OWASP security hardening, Exchange-parity mail logic, encrypted backups
+## [9.0.0] — 2026-11-15 — OWASP security hardening, mailbox and transport upgrades, encrypted backups
 
 Major release (SemVer: several security fixes and new limits change behaviour for operators,
 API clients and non-conformant senders — read "Upgrade notes (breaking)" at the end of this

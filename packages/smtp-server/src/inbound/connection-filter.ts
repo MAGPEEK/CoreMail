@@ -9,6 +9,8 @@
  * previously a 400 was silently read as "accept" and the checks never ran.
  */
 
+import { parseVirusScanNote, type VirusScanNote } from './virus-scan-header.js';
+
 export type FilterAction = 'accept' | 'defer' | 'reject' | 'quarantine';
 
 export type ConnectionFilterDecision =
@@ -55,6 +57,8 @@ export interface ContentFilterResult {
   authHeaders?: string;
   /** Domains the message is authenticated for (DMARC/SPF/DKIM pass). */
   verifiedDomains?: string[];
+  /** Not scanned clean by ClamAV → X-CoreMail-Virus-Scan header (virus-scan-header.ts). */
+  virusScan?: VirusScanNote;
 }
 
 /** Body limit of `/check/content` (security-filter: express.raw limit '52mb'). */
@@ -98,6 +102,7 @@ export function interpretContentFilterResponse(
       ...(typeof b['spamScore'] === 'number' ? { spamScore: b['spamScore'] } : {}),
       ...(typeof b['virusName'] === 'string' ? { virusName: b['virusName'] } : {}),
       ...(typeof b['authHeaders'] === 'string' && b['authHeaders'] ? { authHeaders: b['authHeaders'] } : {}),
+      ...(parseVirusScanNote(b['virusScan']) ? { virusScan: parseVirusScanNote(b['virusScan'])! } : {}),
       ...(Array.isArray(b['verifiedDomains'])
         ? { verifiedDomains: (b['verifiedDomains'] as unknown[]).filter((d): d is string => typeof d === 'string' && /^[a-z0-9.-]{1,253}$/i.test(d)).map((d) => d.toLowerCase()) }
         : {}),

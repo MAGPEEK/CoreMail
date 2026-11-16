@@ -33,8 +33,8 @@ interface ModalProps {
  */
 export function Modal({
   onClose, label, labelledBy, children,
-  className = 'bg-white dark:bg-gray-900 rounded-lg shadow-2xl',
-  overlayClassName = 'fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4',
+  className = 'bg-surface rounded-lg shadow-2xl',
+  overlayClassName = 'fixed inset-0 z-50 flex items-center justify-center bg-scrim/50 p-4',
   closeOnBackdrop = true,
 }: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);

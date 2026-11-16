@@ -24,9 +24,9 @@ export function QuotaIndicator({ sharedMailboxId, label, className }: { sharedMa
     : data.level === 'prohibitSend' ? t('quota_prohibit_send')
       : data.level === 'warning' ? t('quota_warning') : null;
   return (
-    <div className={className ?? 'px-3 py-2 border-t border-gray-200 dark:border-gray-700'} title={`${pct.toFixed(1)} %`}>
-      {label && <p className="mb-1 text-[11px] font-medium text-gray-600 dark:text-gray-300 truncate">{label}</p>}
-      <div className="h-1.5 w-full bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden"
+    <div className={className ?? 'px-3 py-2 border-t border-line'} title={`${pct.toFixed(1)} %`}>
+      {label && <p className="mb-1 text-[11px] font-medium text-fg-muted truncate">{label}</p>}
+      <div className="h-1.5 w-full bg-surface-3 rounded-full overflow-hidden"
         role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100}
         {...(label ? { 'aria-label': label } : {})}>
         <div className={`h-full ${color.bar}`} style={{ width: `${pct}%` }} />

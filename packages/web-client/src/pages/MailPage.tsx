@@ -199,9 +199,9 @@ export function MailPage() {
       <MessageReader messageId={selectedMessageId} />
     </div>
   ) : (
-    <div className="flex-1 bg-gray-50 dark:bg-gray-900 flex min-w-0 min-h-0">
+    <div className="flex-1 bg-surface-2 flex min-w-0 min-h-0">
       {selectedIds.size > 0
-        ? <div className="flex-1 flex items-center justify-center text-gray-400 text-sm">{selectedIds.size} Nachrichten ausgewählt</div>
+        ? <div className="flex-1 flex items-center justify-center text-fg-subtle text-sm">{selectedIds.size} Nachrichten ausgewählt</div>
         : readingPane !== 'off' ? <EmptyReader /> : null}
     </div>
   );
@@ -226,7 +226,7 @@ export function MailPage() {
                 <MessageList folderId={selectedFolderId} />
                 {selectedIds.size > 0 && <BulkToolbar currentFolderId={selectedFolderId} />}
               </div>
-              <div className="h-px bg-gray-200 dark:bg-gray-700 shrink-0 cursor-row-resize" />
+              <div className="h-px bg-line shrink-0 cursor-row-resize" />
               {readerPanel}
             </div>
           ) : (
@@ -245,7 +245,7 @@ export function MailPage() {
             </>
           )
         ) : (
-          <div className="flex-1 flex items-center justify-center text-gray-400 text-sm">
+          <div className="flex-1 flex items-center justify-center text-fg-subtle text-sm">
             Ordner auswählen
           </div>
         )}
@@ -253,10 +253,10 @@ export function MailPage() {
 
       <DragOverlay dropAnimation={{ duration: 180, easing: 'ease-out' }}>
         {activeDrag ? (
-          <div className="bg-white dark:bg-gray-800 border-2 border-accent shadow-2xl rounded-md px-3 py-2 flex items-center gap-2 text-sm font-medium text-gray-900 dark:text-gray-100 cursor-grabbing">
+          <div className="bg-surface border-2 border-accent-fg shadow-2xl rounded-md px-3 py-2 flex items-center gap-2 text-sm font-medium text-fg cursor-grabbing">
             {activeDrag.kind === 'message'
-              ? <MailIcon size={14} className="text-accent" />
-              : <FolderIcon size={14} className="text-accent" />}
+              ? <MailIcon size={14} className="text-accent-fg" />
+              : <FolderIcon size={14} className="text-accent-fg" />}
             <span>{activeDrag.label}</span>
             {activeDrag.kind === 'message' && (activeDrag.count ?? 0) > 1 && (
               <span className="ml-1 bg-accent text-white text-xs px-1.5 py-0.5 rounded-full">{activeDrag.count}</span>

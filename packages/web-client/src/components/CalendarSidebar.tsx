@@ -25,6 +25,7 @@ import { PromptDialog } from './PromptDialog.js';
 import { MiniCalendar } from './MiniCalendar.js';
 import { ShareCalendarDialog } from './ShareCalendarDialog.js';
 import { useT } from '../i18n/useT.js';
+import { readableTextOn } from '../lib/readableText.js';
 
 // ─── Icon-Map: Lucide-Icon-Name → Component ───────────────────────────────────
 export const ICON_MAP: Record<string, React.ElementType> = {
@@ -224,7 +225,7 @@ export function CalendarSidebar({
         children: [
           {
             label: 'Automatisch',
-            icon: <span className="w-3.5 h-3.5 rounded-full bg-gray-300 ring-1 ring-inset ring-black/10" />,
+            icon: <span className="w-3.5 h-3.5 rounded-full bg-surface-3 ring-1 ring-inset ring-line" />,
             onClick: () => patchCal.mutate({ id: cal.id, body: { color: '#0078D4' } }),
           },
           { type: 'divider' },
@@ -242,7 +243,7 @@ export function CalendarSidebar({
         children: [
           {
             label: 'Kein Symbol',
-            icon: <CalendarIcon size={14} className="text-gray-400" />,
+            icon: <CalendarIcon size={14} className="text-fg-subtle" />,
             onClick: () => patchCal.mutate({ id: cal.id, body: { icon: null } }),
           },
           { type: 'divider' },
@@ -310,7 +311,7 @@ export function CalendarSidebar({
         children: [
           {
             label: 'Original-Farbe (vom Owner)',
-            icon: <span className="w-3.5 h-3.5 rounded-full bg-gray-300 ring-1 ring-inset ring-black/10" />,
+            icon: <span className="w-3.5 h-3.5 rounded-full bg-surface-3 ring-1 ring-inset ring-line" />,
             onClick: () => patchMineShare.mutate({ shareId, body: { localColor: null } }),
           },
           { type: 'divider' },
@@ -355,7 +356,7 @@ export function CalendarSidebar({
     return (
       <div
         key={cal.id}
-        className="group flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+        className="group flex items-center gap-2 px-2 py-1.5 rounded hover:bg-surface-2 transition-colors"
       >
         {/* Checkbox / color circle */}
         <button
@@ -367,7 +368,7 @@ export function CalendarSidebar({
           }}
           aria-label={isHidden ? 'Kalender anzeigen' : 'Kalender ausblenden'}
         >
-          {!isHidden && <span className="text-[10px] text-white leading-none">✓</span>}
+          {!isHidden && <span className="text-[10px] leading-none" style={{ color: readableTextOn(cal.color) }}>✓</span>}
         </button>
 
         {isShared
@@ -376,9 +377,9 @@ export function CalendarSidebar({
         }
 
         <div className="flex-1 min-w-0">
-          <span className="block text-sm text-gray-700 dark:text-gray-200 truncate">{cal.name}</span>
+          <span className="block text-sm text-fg-muted truncate">{cal.name}</span>
           {isShared && (
-            <span className="block text-[10px] text-gray-500 dark:text-gray-400 truncate">
+            <span className="block text-[10px] text-fg-subtle truncate">
               {cal.permission === 'WRITE' ? 'R/W' : 'R'} · {cal.ownerDisplayName ?? cal.ownerEmail ?? '?'}
             </span>
           )}
@@ -394,7 +395,7 @@ export function CalendarSidebar({
               items: isShared ? buildSharedMenu(cal) : buildOwnedMenu(cal),
             });
           }}
-          className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-500 transition-all duration-150 active:scale-90"
+          className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-surface-3 text-fg-subtle transition-all duration-150 active:scale-90"
           aria-label="Optionen"
         >
           <MoreHorizontal size={14} />
@@ -404,16 +405,16 @@ export function CalendarSidebar({
   };
 
   return (
-    <aside className="w-60 shrink-0 bg-gray-50 dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 flex flex-col">
+    <aside className="w-60 shrink-0 bg-surface-2 border-r border-line flex flex-col">
       {/* Mini calendar at the top */}
       <MiniCalendar selectedDate={selectedDate} onSelectDate={onSelectDate} />
 
-      <div className="border-t border-gray-200 dark:border-gray-700 mx-2" />
+      <div className="border-t border-line mx-2" />
 
       <div className="px-3 my-2">
         <button
           onClick={() => setDialog({ kind: 'create' })}
-          className="w-full flex items-center gap-2 px-2 py-1.5 text-sm text-accent hover:bg-accent/10 rounded transition-all duration-150 active:scale-95"
+          className="w-full flex items-center gap-2 px-2 py-1.5 text-sm text-accent-fg hover:bg-accent/10 rounded transition-all duration-150 active:scale-95"
         >
           <Plus size={15} />
           <span className="font-medium">Kalender hinzufügen</span>
@@ -424,7 +425,7 @@ export function CalendarSidebar({
         {/* Own calendars */}
         <button
           onClick={() => setExpandedOwned(!expandedOwned)}
-          className="w-full flex items-center gap-1 mt-2 mb-1 px-2 text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide hover:text-gray-600 dark:hover:text-gray-300"
+          className="w-full flex items-center gap-1 mt-2 mb-1 px-2 text-xs font-semibold text-fg-subtle uppercase tracking-wide hover:text-fg-muted"
         >
           {expandedOwned ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
           {t('cal_share_my_calendars')}
@@ -437,7 +438,7 @@ export function CalendarSidebar({
           <>
             <button
               onClick={() => setExpandedShared(!expandedShared)}
-              className="w-full flex items-center gap-1 mt-3 mb-1 px-2 text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide hover:text-gray-600 dark:hover:text-gray-300"
+              className="w-full flex items-center gap-1 mt-3 mb-1 px-2 text-xs font-semibold text-fg-subtle uppercase tracking-wide hover:text-fg-muted"
             >
               {expandedShared ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
               {t('cal_share_shared_with_me')}

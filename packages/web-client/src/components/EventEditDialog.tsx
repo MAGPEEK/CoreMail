@@ -58,10 +58,10 @@ const TIME_OPTIONS: string[] = (() => {
 })();
 
 const PARTSTAT_BADGE: Record<string, { icon: React.ReactNode; color: string; label: string }> = {
-  ACCEPTED:       { icon: <CheckCircle2 size={12} />, color: 'text-green-600 bg-green-50 dark:bg-green-500/10', label: 'Zugesagt' },
-  DECLINED:       { icon: <XCircle size={12} />,      color: 'text-red-600 bg-red-50 dark:bg-red-500/10',       label: 'Abgesagt' },
-  TENTATIVE:      { icon: <HelpCircle size={12} />,   color: 'text-amber-600 bg-amber-50 dark:bg-amber-500/10', label: 'Vielleicht' },
-  'NEEDS-ACTION': { icon: <Clock size={12} />,        color: 'text-gray-500 bg-gray-100 dark:bg-gray-800',      label: 'Wartet' },
+  ACCEPTED:       { icon: <CheckCircle2 size={12} />, color: 'text-success-fg bg-success-bg', label: 'Zugesagt' },
+  DECLINED:       { icon: <XCircle size={12} />,      color: 'text-danger-fg bg-danger-bg',       label: 'Abgesagt' },
+  TENTATIVE:      { icon: <HelpCircle size={12} />,   color: 'text-warning-fg bg-warning-bg', label: 'Vielleicht' },
+  'NEEDS-ACTION': { icon: <Clock size={12} />,        color: 'text-fg-subtle bg-surface-2',      label: 'Wartet' },
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -311,10 +311,10 @@ export function EventEditDialog({
   // Loading spinner for edit mode during GET
   if (isEdit && existingLoading) {
     return (
-      <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-        <div className="bg-white dark:bg-gray-900 rounded-lg shadow-xl p-8 text-center">
-          <Loader2 size={28} className="animate-spin mx-auto text-accent" />
-          <p className="text-sm text-gray-500 mt-3">Termin wird geladen…</p>
+      <div className="fixed inset-0 bg-scrim/40 flex items-center justify-center z-50">
+        <div className="bg-surface rounded-lg shadow-xl p-8 text-center">
+          <Loader2 size={28} className="animate-spin mx-auto text-accent-fg" />
+          <p className="text-sm text-fg-subtle mt-3">Termin wird geladen…</p>
         </div>
       </div>
     );
@@ -325,31 +325,31 @@ export function EventEditDialog({
       onClose={onClose}
       label={isEdit ? 'Termin bearbeiten' : 'Neuer Termin'}
       closeOnBackdrop={false}
-      overlayClassName="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
-      className="bg-white dark:bg-gray-900 rounded-lg shadow-xl w-full max-w-3xl max-h-[92vh] flex flex-col"
+      overlayClassName="fixed inset-0 bg-scrim/40 flex items-center justify-center z-50 p-4"
+      className="bg-surface rounded-lg shadow-xl w-full max-w-3xl max-h-[92vh] flex flex-col"
     >
 
         {/* Header — title + refresh + close */}
-        <div className="px-5 py-3 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between gap-2">
-          <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-200">
+        <div className="px-5 py-3 border-b border-line flex items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold text-fg-muted">
             {isEdit ? 'Termin bearbeiten' : 'Neuer Termin'}
           </h2>
           <div className="flex items-center gap-2">
             {readOnly && (
-              <span className="text-xs text-amber-600 bg-amber-50 dark:bg-amber-500/10 px-2 py-1 rounded">
+              <span className="text-xs text-warning-fg bg-warning-bg px-2 py-1 rounded">
                 Nur Lesezugriff
               </span>
             )}
             {isEdit && (
               <button aria-label="Status der Gäste aktualisieren"
                 onClick={() => void refetchEvent()}
-                className="p-1.5 text-gray-400 hover:text-accent hover:bg-accent/10 rounded"
+                className="p-1.5 text-fg-subtle hover:text-accent-fg hover:bg-accent/10 rounded"
                 title="Status der Gäste aktualisieren"
               >
                 <RefreshCw size={14} />
               </button>
             )}
-            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-xl leading-none px-2" aria-label="Schließen">×</button>
+            <button onClick={onClose} className="text-fg-subtle hover:text-fg-muted text-xl leading-none px-2" aria-label="Schließen">×</button>
           </div>
         </div>
 
@@ -363,7 +363,7 @@ export function EventEditDialog({
               value={calendarId}
               onChange={(e) => setCalendarId(e.target.value)}
               disabled={isEdit || readOnly}
-              className="text-xs bg-transparent border-0 text-gray-600 dark:text-gray-400 focus:outline-none focus:ring-0 disabled:opacity-50"
+              className="text-xs bg-transparent border-0 text-fg-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-fg rounded-sm disabled:opacity-50"
             >
               {calendars.filter((c) => isEdit ? true : c.permission !== 'READ').map((c) => (
                 <option key={c.id} value={c.id}>
@@ -381,29 +381,29 @@ export function EventEditDialog({
               onChange={(e) => setSummary(e.target.value)}
               placeholder="Titel hinzufügen"
               disabled={readOnly}
-              className="w-full border-b-2 border-gray-200 dark:border-gray-700 focus:border-accent text-lg font-medium bg-transparent px-1 py-2 focus:outline-none placeholder:text-gray-400 dark:text-gray-100 disabled:opacity-60"
+              className="w-full border-b-2 border-line-strong focus:border-accent-fg text-lg font-medium bg-transparent px-1 py-2 focus:outline-none placeholder:text-fg-subtle disabled:opacity-60"
             />
           </div>
 
           {/* Attendees */}
           <div>
             <div className="flex items-start gap-3">
-              <Users size={18} className="text-gray-400 mt-2 shrink-0" />
+              <Users size={18} className="text-fg-subtle mt-2 shrink-0" />
               <div className="flex-1 min-w-0">
                 {attendees.length > 0 && (
                   <div className="flex flex-wrap gap-1.5 mb-2">
                     {attendees.map((a) => {
                       const badge = PARTSTAT_BADGE[a.partstat ?? 'NEEDS-ACTION']!;
                       return (
-                        <div key={a.email} className="inline-flex items-center gap-1.5 pl-2 pr-1 py-1 bg-gray-100 dark:bg-gray-800 rounded text-xs">
-                          <span className="font-medium text-gray-900 dark:text-gray-100 truncate max-w-[160px]">
+                        <div key={a.email} className="inline-flex items-center gap-1.5 pl-2 pr-1 py-1 bg-surface-2 rounded text-xs">
+                          <span className="font-medium text-fg truncate max-w-[160px]">
                             {a.cn && a.cn !== a.email ? `${a.cn}` : a.email}
                           </span>
                           <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded ${badge.color}`} title={badge.label}>
                             {badge.icon}
                           </span>
                           {!readOnly && (
-                            <button aria-label={`Gast ${a.email} entfernen`} onClick={() => removeAttendee(a.email)} className="p-0.5 text-gray-400 hover:text-red-500 ml-0.5">
+                            <button aria-label={`Gast ${a.email} entfernen`} onClick={() => removeAttendee(a.email)} className="p-0.5 text-fg-subtle hover:text-danger-fg ml-0.5">
                               <X size={11} />
                             </button>
                           )}
@@ -421,20 +421,20 @@ export function EventEditDialog({
                       onKeyDown={onAttendeeKeyDown}
                       onBlur={() => setTimeout(() => setShowSug(false), 150)}
                       placeholder={attendees.length === 0 ? 'Erforderliche Teilnehmer einladen' : 'Weiteren Teilnehmer einladen…'}
-                      className="w-full border-b border-gray-200 dark:border-gray-700 focus:border-accent bg-transparent px-1 py-1.5 text-sm focus:outline-none placeholder:text-gray-400 dark:text-gray-100"
+                      className="w-full border-b border-line-strong focus:border-accent-fg bg-transparent px-1 py-1.5 text-sm focus:outline-none placeholder:text-fg-subtle"
                     />
                     {showSug && suggestions.length > 0 && (
-                      <div className="absolute left-0 right-0 top-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded shadow-lg z-10 max-h-60 overflow-y-auto">
+                      <div className="absolute left-0 right-0 top-full mt-1 bg-surface border border-line rounded shadow-lg z-10 max-h-60 overflow-y-auto">
                         {suggestions.map((s, idx) => (
                           <button
                             key={s.id}
                             type="button"
                             onMouseDown={(e) => { e.preventDefault(); addAttendee(s.email, s.displayName); }}
                             onMouseEnter={() => setActiveIdx(idx)}
-                            className={`w-full text-left px-3 py-2 text-sm ${idx === activeIdx ? 'bg-accent/10' : 'hover:bg-gray-50 dark:hover:bg-gray-700'}`}
+                            className={`w-full text-left px-3 py-2 text-sm ${idx === activeIdx ? 'bg-accent/10' : 'hover:bg-surface-2'}`}
                           >
-                            <div className="font-medium text-gray-900 dark:text-gray-100 truncate">{s.displayName}</div>
-                            <div className="text-xs text-gray-500 dark:text-gray-400 truncate">{s.email}</div>
+                            <div className="font-medium text-fg truncate">{s.displayName}</div>
+                            <div className="text-xs text-fg-subtle truncate">{s.email}</div>
                           </button>
                         ))}
                       </div>
@@ -442,7 +442,7 @@ export function EventEditDialog({
                   </div>
                 )}
                 {attendees.length > 0 && (
-                  <p className="text-[11px] text-gray-400 mt-1">
+                  <p className="text-[11px] text-fg-subtle mt-1">
                     {attendees.filter((a) => a.partstat === 'ACCEPTED').length} zugesagt ·
                     {' '}{attendees.filter((a) => a.partstat === 'DECLINED').length} abgesagt ·
                     {' '}{attendees.filter((a) => a.partstat === 'TENTATIVE').length} vielleicht ·
@@ -456,7 +456,7 @@ export function EventEditDialog({
           {/* v3.18.28: Date + time — type=time with datalist allows dropdown
               AND manual typing ("HH:MM"). Better UX than a plain <select>. */}
           <div className="flex items-start gap-3">
-            <Clock size={18} className="text-gray-400 mt-2 shrink-0" />
+            <Clock size={18} className="text-fg-subtle mt-2 shrink-0" />
             <div className="flex-1 grid grid-cols-1 sm:grid-cols-[1fr_auto_1fr_auto] gap-2 items-center">
               <input
                 type="date"
@@ -466,7 +466,7 @@ export function EventEditDialog({
                   if (!endDate || endDate < e.target.value) setEndDate(e.target.value);
                 }}
                 disabled={readOnly}
-                className="border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-60"
+                className="border border-line-strong rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent-fg disabled:opacity-60"
               />
               {!allDay && (
                 <input
@@ -476,16 +476,16 @@ export function EventEditDialog({
                   value={startTime}
                   onChange={(e) => setStartTime(e.target.value)}
                   disabled={readOnly}
-                  className="border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-60 w-[110px]"
+                  className="border border-line-strong rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent-fg disabled:opacity-60 w-[110px]"
                 />
               )}
-              {allDay && <span className="text-xs text-gray-400 px-2">ganztägig</span>}
+              {allDay && <span className="text-xs text-fg-subtle px-2">ganztägig</span>}
               <input
                 type="date"
                 value={endDate}
                 onChange={(e) => setEndDate(e.target.value)}
                 disabled={readOnly}
-                className="border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-60"
+                className="border border-line-strong rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent-fg disabled:opacity-60"
               />
               {!allDay && (
                 <input
@@ -495,7 +495,7 @@ export function EventEditDialog({
                   value={endTime}
                   onChange={(e) => setEndTime(e.target.value)}
                   disabled={readOnly}
-                  className="border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-60 w-[110px]"
+                  className="border border-line-strong rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent-fg disabled:opacity-60 w-[110px]"
                 />
               )}
               {/* Datalist with 15-min suggestions — the browser shows them as a dropdown
@@ -503,7 +503,7 @@ export function EventEditDialog({
               <datalist id="cal-time-options">
                 {TIME_OPTIONS.map((t) => <option key={t} value={t} />)}
               </datalist>
-              <label className="col-span-full inline-flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400 mt-1">
+              <label className="col-span-full inline-flex items-center gap-2 text-xs text-fg-subtle mt-1">
                 <input type="checkbox" checked={allDay} onChange={(e) => setAllDay(e.target.checked)} disabled={readOnly} className="rounded" />
                 Ganztägig
               </label>
@@ -512,25 +512,25 @@ export function EventEditDialog({
 
           {/* Location */}
           <div className="flex items-center gap-3">
-            <MapPin size={18} className="text-gray-400 shrink-0" />
+            <MapPin size={18} className="text-fg-subtle shrink-0" />
             <input
               type="text"
               value={location}
               onChange={(e) => setLocation(e.target.value)}
               placeholder="Hinzufügen eines Raums oder Standorts"
               disabled={readOnly}
-              className="flex-1 border-b border-gray-200 dark:border-gray-700 focus:border-accent bg-transparent px-1 py-1.5 text-sm focus:outline-none placeholder:text-gray-400 dark:text-gray-100"
+              className="flex-1 border-b border-line-strong focus:border-accent-fg bg-transparent px-1 py-1.5 text-sm focus:outline-none placeholder:text-fg-subtle"
             />
           </div>
 
           {/* Classification */}
           <div className="flex items-center gap-3">
-            <Eye size={18} className="text-gray-400 shrink-0" />
+            <Eye size={18} className="text-fg-subtle shrink-0" />
             <select
               value={classification}
               onChange={(e) => setClassification(e.target.value as 'PUBLIC' | 'PRIVATE' | 'CONFIDENTIAL')}
               disabled={readOnly}
-              className="border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
+              className="border border-line-strong rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent-fg"
             >
               <option value="PUBLIC">Öffentlich (alle Details sichtbar)</option>
               <option value="PRIVATE">Privat (nur „Beschäftigt")</option>
@@ -540,23 +540,23 @@ export function EventEditDialog({
 
           {/* Notes / Description */}
           <div className="flex items-start gap-3">
-            <AlignLeft size={18} className="text-gray-400 mt-2 shrink-0" />
+            <AlignLeft size={18} className="text-fg-subtle mt-2 shrink-0" />
             <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Notizen, Tagesordnung, Links zur Besprechung…"
               rows={6}
               disabled={readOnly}
-              className="flex-1 border border-gray-200 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded p-2 text-sm focus:outline-none focus:ring-1 focus:ring-accent placeholder:text-gray-400 resize-y"
+              className="flex-1 border border-line-strong rounded p-2 text-sm focus:outline-none focus:ring-1 focus:ring-accent-fg placeholder:text-fg-subtle resize-y"
             />
           </div>
 
           {/* Edit mode info box */}
           {isEdit && existing && (
-            <div className="text-[11px] text-gray-400 border-t border-gray-100 dark:border-gray-700 pt-3 flex items-center gap-3">
+            <div className="text-[11px] text-fg-subtle border-t border-line pt-3 flex items-center gap-3">
               <CalendarIcon size={12} />
               <span>
-                Organisator: <strong className="text-gray-600 dark:text-gray-300">{existing.organizer ?? '—'}</strong>
+                Organisator: <strong className="text-fg-muted">{existing.organizer ?? '—'}</strong>
               </span>
               {(existing.sequence ?? 0) > 0 && <span>· {existing.sequence}× geändert</span>}
               {attendees.length > 0 && <span>· Status-Updates kommen automatisch alle 30s</span>}
@@ -565,7 +565,7 @@ export function EventEditDialog({
         </div>
 
         {/* v3.18.28: Footer with Save bottom-right + Delete left + Cancel */}
-        <div className="px-5 py-3 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 flex items-center justify-between gap-2 flex-wrap">
+        <div className="px-5 py-3 border-t border-line bg-surface-2 flex items-center justify-between gap-2 flex-wrap">
           <div>
             {isEdit && !readOnly && (
               <button
@@ -575,7 +575,7 @@ export function EventEditDialog({
                   }
                 }}
                 disabled={deleteMut.isPending}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-700 text-red-600 hover:bg-red-50 dark:hover:bg-red-500/10 rounded disabled:opacity-50"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-line-strong text-danger-fg hover:bg-danger-bg rounded disabled:opacity-50"
               >
                 <Trash2 size={14} />
                 Löschen
@@ -585,7 +585,7 @@ export function EventEditDialog({
           <div className="flex items-center gap-2">
             <button
               onClick={onClose}
-              className="px-4 py-1.5 text-sm border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-200 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
+              className="px-4 py-1.5 text-sm border border-line-strong text-fg-muted rounded hover:bg-surface-2"
             >
               Abbrechen
             </button>

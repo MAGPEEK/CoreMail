@@ -52,15 +52,15 @@ function CountdownToast({ visible, seconds, onUndo }: {
     <div
       role="status"
       aria-live="polite"
-      className={`flex items-center gap-3 px-4 py-2.5 bg-gray-900 text-white rounded-md shadow-lg text-sm ${visible ? '' : 'opacity-0'}`}
+      className={`flex items-center gap-3 px-4 py-2.5 bg-surface text-fg border border-line rounded-md shadow-lg text-sm ${visible ? '' : 'opacity-0'}`}
       style={{ minWidth: 300, maxWidth: 420 }}
     >
-      <Send size={14} className="text-blue-300 shrink-0" aria-hidden="true" />
+      <Send size={14} className="text-accent-fg shrink-0" aria-hidden="true" />
       <span className="flex-1">
         <span className="tabular-nums block">{fmt(translate('send_sending_in'), { n: seconds })}</span>
-        <span className="block text-[11px] text-gray-300">{translate('send_server_hold_hint')}</span>
+        <span className="block text-[11px] text-fg-subtle">{translate('send_server_hold_hint')}</span>
       </span>
-      <button onClick={onUndo} aria-keyshortcuts="Z" className="font-semibold text-blue-300 hover:text-blue-200 inline-flex items-center gap-1 shrink-0">
+      <button onClick={onUndo} aria-keyshortcuts="Z" className="font-semibold text-accent-fg hover:underline inline-flex items-center gap-1 shrink-0">
         <Undo2 size={13} aria-hidden="true" /> {translate('undo')}
       </button>
     </div>

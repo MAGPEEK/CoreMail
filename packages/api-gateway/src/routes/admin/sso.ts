@@ -18,6 +18,7 @@ import { createLogger } from '@coremail/core';
 import { describeDiscovery, invalidateOidcClient, ssoRedirectUri } from '@coremail/auth-sso';
 import { requireArea } from '../../middleware/auth.js';
 import { publicBaseUrl } from '../sso.js';
+import { invalidInputMessage } from '../../lib/zod-message.js';
 
 const log = createLogger('admin:sso');
 export const adminSsoRouter: RouterType = Router();
@@ -25,6 +26,14 @@ adminSsoRouter.use(requireArea('identity'));
 
 const domainList = z.array(z.string().trim().toLowerCase().regex(/^[a-z0-9.-]+\.[a-z]{2,}$/)).max(100);
 const httpsUrl = z.string().url().refine((u) => /^https?:\/\//i.test(u), 'http(s) URL required');
+
+/** forcedDomains entries that are not CoreMail domains (9.1.x: rejected with 400). */
+export async function unknownDomains(names: string[]): Promise<string[]> {
+  if (names.length === 0) return [];
+  const found = await prisma.domain.findMany({ where: { name: { in: names } }, select: { name: true } });
+  const known = new Set(found.map((d) => d.name.toLowerCase()));
+  return [...new Set(names)].filter((n) => !known.has(n));
+}
 
 // ── GET /providers ────────────────────────────────────────────────────────────
 adminSsoRouter.get('/providers', async (_req: Request, res: Response) => {
@@ -87,10 +96,12 @@ adminSsoRouter.post('/providers', async (req: Request, res: Response) => {
     active:        ProviderFields.active.default(true),
   });
   const p = schema.safeParse(req.body);
-  if (!p.success) { res.status(400).json({ error: 'Ungültige Eingabe', issues: p.error.issues }); return; }
+  if (!p.success) { res.status(400).json({ error: invalidInputMessage(p.error), issues: p.error.issues }); return; }
 
   const domain = await prisma.domain.findUnique({ where: { id: p.data.domainId } });
   if (!domain) { res.status(404).json({ error: 'Domain nicht gefunden' }); return; }
+  const unknown = await unknownDomains(p.data.forcedDomains);
+  if (unknown.length) { res.status(400).json({ error: `Unbekannte Domain(s): ${unknown.join(', ')} — erst unter Domains anlegen` }); return; }
 
   const provider = await prisma.oidcProvider.create({ data: p.data });
   log.info({ id: provider.id, name: p.data.name, domainId: p.data.domainId }, 'OIDC provider created');
@@ -115,8 +126,12 @@ adminSsoRouter.put('/providers/:id', async (req: Request, res: Response) => {
     active:        ProviderFields.active.optional(),
   });
   const p = schema.safeParse(req.body);
-  if (!p.success) { res.status(400).json({ error: 'Ungültige Eingabe', issues: p.error.issues }); return; }
+  if (!p.success) { res.status(400).json({ error: invalidInputMessage(p.error), issues: p.error.issues }); return; }
 
+  if (p.data.forcedDomains) {
+    const unknown = await unknownDomains(p.data.forcedDomains);
+    if (unknown.length) { res.status(400).json({ error: `Unbekannte Domain(s): ${unknown.join(', ')} — erst unter Domains anlegen` }); return; }
+  }
   const { clientSecret, ...rest } = p.data;
   const data: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(rest)) if (v !== undefined) data[k] = v;

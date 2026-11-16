@@ -2,17 +2,21 @@
  * Admin API: global server settings
  *
  * GET  /api/v1/admin/settings          — read all settings
- * PUT  /api/v1/admin/settings          — save all settings
  * PUT  /api/v1/admin/settings/org      — organisation section only
  * PUT  /api/v1/admin/settings/mail     — mail limits only
  * PUT  /api/v1/admin/settings/security — security policies only
  * PUT  /api/v1/admin/settings/maintenance — maintenance mode on/off
+ *
+ * Every PUT is a partial update: fields left out keep their stored value
+ * (no schema defaults that would silently reset them). After a save the
+ * services are told via CHANNEL_SETTINGS_RELOAD (e.g. maxMessageSizeMb is
+ * cached by IMAP/JMAP).
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { requireArea } from '../../middleware/auth.js';
-import { createLogger } from '@coremail/core';
+import { createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 import { audit, auditContext, invalidateAuditCache } from '../../lib/audit.js';
 import { publicServerSettings } from '../../lib/secrets.js';
 
@@ -52,42 +56,59 @@ async function getOrCreate() {
 
 // ── Zod schemas per section ────────────────────────────────────────────────────
 
-const OrgSchema = z.object({
-  orgName:        z.string().min(1).max(100),
-  orgDescription: z.string().max(500).default(''),
-  adminEmail:     z.string().email().or(z.literal('')).default(''),
-  language:       z.enum(['de', 'en']).default('de'),
-  timezone:       z.string().min(1).max(60).default('Europe/Berlin'),
-  welcomeMessage: z.string().max(1000).default(''),
-  logoUrl:        z.string().url().or(z.literal('')).default(''),
-});
+export const OrgSchema = z.object({
+  orgName:        z.string().trim().min(1).max(100),
+  orgDescription: z.string().max(500),
+  adminEmail:     z.string().email().or(z.literal('')),
+  language:       z.enum(['de', 'en']),
+  timezone:       z.string().min(1).max(60),
+  welcomeMessage: z.string().max(1000),
+  logoUrl:        z.string().url().or(z.literal('')),
+}).partial();
 
-const MailSchema = z.object({
-  maxMessageSizeMb:    z.number().int().min(1).max(500).default(25),
-  maxAttachmentSizeMb: z.number().int().min(1).max(500).default(25),
-  trashRetentionDays:  z.number().int().min(1).max(3650).default(30),
-});
+export const MailSchema = z.object({
+  maxMessageSizeMb:    z.number().int().min(1).max(500),
+  maxAttachmentSizeMb: z.number().int().min(1).max(500),
+  trashRetentionDays:  z.number().int().min(1).max(3650),
+}).partial();
 
-const SecuritySchema = z.object({
-  minPasswordLength:          z.number().int().min(4).max(64).default(8),
-  maxLoginAttempts:           z.number().int().min(1).max(100).default(5),
-  sessionTimeoutMinutes:      z.number().int().min(5).max(10080).default(480),
+export const SecuritySchema = z.object({
+  // 8 = OWASP ASVS minimum for passwords without other factors
+  minPasswordLength:          z.number().int().min(8).max(64),
+  maxLoginAttempts:           z.number().int().min(1).max(100),
+  sessionTimeoutMinutes:      z.number().int().min(5).max(10080),
   // 0 = disabled; 1–1440 = minutes until automatic logout on browser inactivity
-  inactivityTimeoutMinutes:   z.number().int().min(0).max(1440).default(30),
-  requireMfaForAdmins:        z.boolean().default(false),
-  allowSelfRegistration:      z.boolean().default(false),
-  selfServicePasswordReset:   z.boolean().default(true),
+  inactivityTimeoutMinutes:   z.number().int().min(0).max(1440),
+  requireMfaForAdmins:        z.boolean(),
+  allowSelfRegistration:      z.boolean(),
+  selfServicePasswordReset:   z.boolean(),
   // v3.18.30: audit log globally on/off. The toggle is always logged as a
   // critical event regardless of its own value (see ALWAYS_AUDIT in audit.ts).
-  auditLogEnabled:            z.boolean().default(true),
-});
+  auditLogEnabled:            z.boolean(),
+}).partial();
 
-const MaintenanceSchema = z.object({
+export const MaintenanceSchema = z.object({
   maintenanceMode:    z.boolean(),
-  maintenanceMessage: z.string().max(500).default(
-    'Der Server befindet sich derzeit in Wartung. Bitte versuchen Sie es später erneut.',
-  ),
-});
+  maintenanceMessage: z.string().max(500),
+}).partial();
+
+/** 400 body: the first problems with their field names (shown by the BCP). */
+function invalid(res: Response, issues: z.ZodIssue[]): void {
+  const fields = issues.slice(0, 5).map((i) => `${i.path.join('.') || 'body'}: ${i.message}`);
+  res.status(400).json({ error: `Ungültige Eingabe — ${fields.join('; ')}`, details: issues });
+}
+
+/** The provided fields only (partial update; exactOptionalPropertyTypes-safe for Prisma). */
+export function definedOnly<T extends Record<string, unknown>>(o: T): { [K in keyof T]?: Exclude<T[K], undefined> } {
+  return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as { [K in keyof T]?: Exclude<T[K], undefined> };
+}
+
+/** Tell the other services (fire-and-forget; a missing Redis must not fail the save). */
+function publishReload(section: string): void {
+  try {
+    void getRedisClient().publish(CHANNEL_SETTINGS_RELOAD, JSON.stringify({ type: 'global-settings', section })).catch(() => undefined);
+  } catch { /* Redis unavailable */ }
+}
 
 // ── GET /api/v1/admin/settings ─────────────────────────────────────────────────
 adminGlobalSettingsRouter.get('/', async (_req: Request, res: Response) => {
@@ -103,42 +124,35 @@ adminGlobalSettingsRouter.get('/', async (_req: Request, res: Response) => {
 // ── PUT /api/v1/admin/settings/org ────────────────────────────────────────────
 adminGlobalSettingsRouter.put('/org', async (req: Request, res: Response) => {
   const parsed = OrgSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: 'Ungültige Eingabe', details: parsed.error.issues });
-    return;
-  }
+  if (!parsed.success) { invalid(res, parsed.error.issues); return; }
   const cfg = await prisma.serverSettings.upsert({
     where:  { id: 'singleton' },
-    create: { id: 'singleton', ...parsed.data },
-    update: parsed.data,
+    create: { id: 'singleton', ...definedOnly(parsed.data) },
+    update: definedOnly(parsed.data),
   });
   log.info({ orgName: parsed.data.orgName }, 'Organisation settings updated');
+  publishReload('org');
   res.json(publicServerSettings(cfg));
 });
 
 // ── PUT /api/v1/admin/settings/mail ───────────────────────────────────────────
 adminGlobalSettingsRouter.put('/mail', async (req: Request, res: Response) => {
   const parsed = MailSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: 'Ungültige Eingabe', details: parsed.error.issues });
-    return;
-  }
+  if (!parsed.success) { invalid(res, parsed.error.issues); return; }
   const cfg = await prisma.serverSettings.upsert({
     where:  { id: 'singleton' },
-    create: { id: 'singleton', ...parsed.data },
-    update: parsed.data,
+    create: { id: 'singleton', ...definedOnly(parsed.data) },
+    update: definedOnly(parsed.data),
   });
   log.info(parsed.data, 'Mail settings updated');
+  publishReload('mail');
   res.json(publicServerSettings(cfg));
 });
 
 // ── PUT /api/v1/admin/settings/security ───────────────────────────────────────
 adminGlobalSettingsRouter.put('/security', async (req: Request, res: Response) => {
   const parsed = SecuritySchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: 'Ungültige Eingabe', details: parsed.error.issues });
-    return;
-  }
+  if (!parsed.success) { invalid(res, parsed.error.issues); return; }
 
   // v3.18.30: log audit-toggle changes SPECIFICALLY, BEFORE the cache is invalidated.
   // Even if the admin is about to turn auditing off — this action is guaranteed to be
@@ -147,12 +161,13 @@ adminGlobalSettingsRouter.put('/security', async (req: Request, res: Response) =
     where: { id: 'singleton' },
     select: { auditLogEnabled: true },
   });
-  const auditFlagChanged = (before?.auditLogEnabled ?? true) !== parsed.data.auditLogEnabled;
+  const auditFlagChanged = parsed.data.auditLogEnabled !== undefined
+    && (before?.auditLogEnabled ?? true) !== parsed.data.auditLogEnabled;
 
   const cfg = await prisma.serverSettings.upsert({
     where:  { id: 'singleton' },
-    create: { id: 'singleton', ...parsed.data },
-    update: parsed.data,
+    create: { id: 'singleton', ...definedOnly(parsed.data) },
+    update: definedOnly(parsed.data),
   });
 
   if (auditFlagChanged) {
@@ -177,21 +192,20 @@ adminGlobalSettingsRouter.put('/security', async (req: Request, res: Response) =
   invalidateAuditCache();
 
   log.info(parsed.data, 'Security policies updated');
+  publishReload('security');
   res.json(publicServerSettings(cfg));
 });
 
 // ── PUT /api/v1/admin/settings/maintenance ────────────────────────────────────
 adminGlobalSettingsRouter.put('/maintenance', async (req: Request, res: Response) => {
   const parsed = MaintenanceSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: 'Ungültige Eingabe', details: parsed.error.issues });
-    return;
-  }
+  if (!parsed.success) { invalid(res, parsed.error.issues); return; }
   const cfg = await prisma.serverSettings.upsert({
     where:  { id: 'singleton' },
-    create: { id: 'singleton', ...parsed.data },
-    update: parsed.data,
+    create: { id: 'singleton', ...definedOnly(parsed.data) },
+    update: definedOnly(parsed.data),
   });
   log.info({ maintenanceMode: parsed.data.maintenanceMode }, 'Maintenance mode changed');
+  publishReload('maintenance');
   res.json(publicServerSettings(cfg));
 });

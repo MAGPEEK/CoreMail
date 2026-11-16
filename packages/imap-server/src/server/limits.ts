@@ -49,3 +49,14 @@ export const imapConnectionLimiter = new ConnectionLimiter({
   maxTotal: envLimit('IMAP_MAX_CONNS', 2000),
   isExempt: exempt.isExempt,
 });
+
+const PEER_DISCONNECT_CODES = new Set(['ECONNRESET', 'EPIPE', 'ETIMEDOUT', 'ECONNABORTED']);
+/**
+ * 9.2: a client that simply goes away (TCP reset, broken pipe — e.g. the BCP
+ * health probe every 30 s) is not a server error; it is logged at debug level
+ * instead of filling the error log.
+ */
+export function isPeerDisconnect(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  return typeof code === 'string' && PEER_DISCONNECT_CODES.has(code);
+}

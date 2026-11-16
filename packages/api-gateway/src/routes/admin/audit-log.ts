@@ -98,7 +98,8 @@ function buildWhere(filters: AuditFilters): Record<string, unknown> {
   if (filters.actorId) where['actorId'] = filters.actorId;
   if (filters.actorEmail) where['actorEmail'] = { contains: filters.actorEmail, mode: 'insensitive' };
   if (filters.action) where['action'] = { contains: filters.action, mode: 'insensitive' };
-  if (filters.targetType) where['targetType'] = filters.targetType;
+  // free-text field in the BCP ("mail" finds "mailboxes")
+  if (filters.targetType) where['targetType'] = { contains: filters.targetType, mode: 'insensitive' };
   if (filters.targetId) where['targetId'] = filters.targetId;
   if (filters.ipAddress) where['ipAddress'] = filters.ipAddress;
   if (filters.success !== undefined && filters.success !== '') {
@@ -116,6 +117,7 @@ function buildWhere(filters: AuditFilters): Record<string, unknown> {
     where['OR'] = [
       { action: { contains: filters.searchText, mode: 'insensitive' } },
       { targetName: { contains: filters.searchText, mode: 'insensitive' } },
+      { actorEmail: { contains: filters.searchText, mode: 'insensitive' } },
       { errorMsg: { contains: filters.searchText, mode: 'insensitive' } },
     ];
   }
@@ -123,14 +125,48 @@ function buildWhere(filters: AuditFilters): Record<string, unknown> {
   return where;
 }
 
+/** Only string query values count (a repeated parameter arrives as an array). */
+function stringQuery(q: Request['query']): Record<string, string | undefined> {
+  const out: Record<string, string | undefined> = {};
+  for (const [k, v] of Object.entries(q)) if (typeof v === 'string') out[k] = v;
+  return out;
+}
+
+/** Error message for unusable filters (an invalid date would make Prisma throw → 500). */
+export function auditFilterError(filters: AuditFilters): string | null {
+  for (const key of ['from', 'to'] as const) {
+    const v = filters[key];
+    if (v !== undefined && Number.isNaN(new Date(v).getTime())) return `Invalid date in "${key}"`;
+  }
+  if (filters.success !== undefined && !['', 'true', 'false'].includes(filters.success)) return 'success must be true or false';
+  return null;
+}
+
+/** Page window of the list: limit 1–500 (default 100), offset ≥ 0; garbage → defaults. */
+export function auditPage(limitStr: string | undefined, offsetStr: string | undefined): { limit: number; offset: number } {
+  const l = Number.parseInt(limitStr ?? '', 10);
+  const o = Number.parseInt(offsetStr ?? '', 10);
+  return {
+    limit: Number.isFinite(l) ? Math.min(Math.max(l, 1), 500) : 100,
+    offset: Number.isFinite(o) && o > 0 ? o : 0,
+  };
+}
+
+/** Filters of an audit request, or null after answering 400. */
+function requestFilters(req: Request, res: Response): AuditFilters | null {
+  const filters = parseFilters(stringQuery(req.query));
+  const err = auditFilterError(filters);
+  if (err) { res.status(400).json({ error: err, code: 'INVALID_FILTER' }); return null; }
+  return filters;
+}
+
 // ─── GET /api/v1/admin/audit-log ─────────────────────────────────────────────
 
 adminAuditLogRouter.get('/', async (req: Request, res: Response) => {
-  const filters = parseFilters(req.query as Record<string, string | undefined>);
-  const { limit: limitStr, offset: offsetStr } = req.query as Record<string, string | undefined>;
-
-  const limit = Math.min(parseInt(limitStr ?? '100', 10), 500);
-  const offset = parseInt(offsetStr ?? '0', 10);
+  const filters = requestFilters(req, res);
+  if (!filters) return;
+  const q = stringQuery(req.query);
+  const { limit, offset } = auditPage(q['limit'], q['offset']);
   const where = buildWhere(filters);
 
   const [entries, total] = await Promise.all([
@@ -201,7 +237,8 @@ adminAuditLogRouter.get('/stats', async (_req: Request, res: Response) => {
 // ─── GET /api/v1/admin/audit-log/export.csv ─────────────────────────────────
 
 adminAuditLogRouter.get('/export.csv', async (req: Request, res: Response) => {
-  const filters = parseFilters(req.query as Record<string, string | undefined>);
+  const filters = requestFilters(req, res);
+  if (!filters) return;
   const where = buildWhere(filters);
 
   const entries = await prisma.auditLog.findMany({
@@ -264,7 +301,8 @@ adminAuditLogRouter.get('/export.csv', async (req: Request, res: Response) => {
 // For SIEM integration (Splunk, Azure Sentinel, ELK). Structured + signed.
 
 adminAuditLogRouter.get('/export.json', async (req: Request, res: Response) => {
-  const filters = parseFilters(req.query as Record<string, string | undefined>);
+  const filters = requestFilters(req, res);
+  if (!filters) return;
   const where = buildWhere(filters);
 
   const entries = await prisma.auditLog.findMany({
@@ -313,7 +351,8 @@ adminAuditLogRouter.get('/export.json', async (req: Request, res: Response) => {
 // ─── GET /api/v1/admin/audit-log/export.pdf ─────────────────────────────────
 
 adminAuditLogRouter.get('/export.pdf', async (req: Request, res: Response) => {
-  const filters = parseFilters(req.query as Record<string, string | undefined>);
+  const filters = requestFilters(req, res);
+  if (!filters) return;
   const where = buildWhere(filters);
 
   const entries = await prisma.auditLog.findMany({
@@ -467,7 +506,9 @@ adminAuditLogRouter.get('/export.pdf', async (req: Request, res: Response) => {
 // Suspicious patterns: bursts, failure bursts, critical actions, off-hours.
 // Evaluates the last 24h (read-only — no persistence, every request recomputes).
 
-const CRITICAL_ACTIONS_PATTERN = /^(user\.delete|mailbox\.delete|domain\.delete|transport-rules\.|oauth\.|settings\.|certificate\.|gateway\.|connector\.|smime\.|setup\.)/i;
+// Action strings come from the audit middleware (<path segments>.<verb>, e.g. mailboxes.delete,
+// certificates.post, settings.security.put) and from explicit audit() calls (audit.disabled, …).
+const CRITICAL_ACTIONS_PATTERN = /^(mailbox(es)?\.delete|domains?\.delete|shared-mailboxes\.delete|transport-rules\.|settings\.|servers\.settings\.|certificates?\.|connectors?\.|smtp-config\.|sso\.|ldap\.|storage\.|audit\.|backups?\.)/i;
 
 interface Anomaly {
   type:     'BURST_ACTIONS' | 'BURST_FAILURES' | 'CRITICAL_ACTION' | 'OFF_HOURS_LOGIN';

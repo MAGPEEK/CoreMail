@@ -208,6 +208,10 @@ RUN mkdir -p /app/www
 COPY --from=frontend-builder /app/packages/web-client/dist  /app/www/owa
 COPY --from=frontend-builder /app/packages/admin-panel/dist /app/www/bcp
 
+# Release notes for the BCP info page (GET /api/v1/changelog)
+COPY CHANGELOG.md /app/CHANGELOG.md
+ENV CHANGELOG_PATH=/app/CHANGELOG.md
+
 # Admin CLI: `docker exec coremail coremail --help`
 RUN chmod +x /app/packages/cli/dist/index.js \
  && ln -sf /app/packages/cli/dist/index.js /usr/local/bin/coremail

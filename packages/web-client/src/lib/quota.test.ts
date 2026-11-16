@@ -10,9 +10,10 @@ test('quotaPercent: share of the prohibit-send-receive quota, capped, 0 when unl
 
 test('quotaColor: amber at the warning level, red once sending is blocked', () => {
   assert.equal(quotaColor('ok').bar, 'bg-accent');
-  assert.equal(quotaColor('warning').bar, 'bg-amber-500');
-  assert.equal(quotaColor('prohibitSend').bar, 'bg-red-500');
-  assert.equal(quotaColor('prohibitSendReceive').bar, 'bg-red-500');
+  assert.equal(quotaColor('warning').bar, 'bg-warning');
+  assert.equal(quotaColor('prohibitSend').bar, 'bg-danger');
+  assert.equal(quotaColor('prohibitSendReceive').bar, 'bg-danger');
+  assert.equal(quotaColor('warning').text, 'text-warning-fg');
 });
 
 test('fmtQuotaBytes', () => {

@@ -23,9 +23,9 @@ function Keys({ keys, then, noMeta }: { keys: string; then: string; noMeta?: boo
     <span className="inline-flex items-center gap-1 flex-wrap">
       {steps.map((combo, i) => (
         <Fragment key={i}>
-          {i > 0 && <span className="text-[10px] text-gray-400">{then}</span>}
+          {i > 0 && <span className="text-[10px] text-fg-subtle">{then}</span>}
           {combo.map((k, j) => (
-            <kbd key={j} className="min-w-[1.5rem] text-center px-1.5 py-0.5 text-[11px] font-mono rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-800 text-gray-700 dark:text-gray-200 shadow-[0_1px_0_rgba(0,0,0,0.1)]">{k}</kbd>
+            <kbd key={j} className="min-w-[1.5rem] text-center px-1.5 py-0.5 text-[11px] font-mono rounded border border-line-strong bg-surface-2 text-fg-muted shadow-[0_1px_0_rgba(0,0,0,0.1)]">{k}</kbd>
           ))}
         </Fragment>
       ))}
@@ -57,18 +57,18 @@ export function ShortcutHelpDialog() {
     <Modal
       onClose={() => setShortcutHelpOpen(false)}
       labelledBy="shortcut-help-title"
-      className="bg-white dark:bg-gray-900 rounded-lg shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col"
+      className="bg-surface rounded-lg shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col"
     >
-      <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200 dark:border-gray-700 shrink-0">
+      <div className="flex items-center justify-between px-5 py-3 border-b border-line shrink-0">
         <div>
-          <h2 id="shortcut-help-title" className="text-base font-semibold text-gray-800 dark:text-gray-100 flex items-center gap-2">
+          <h2 id="shortcut-help-title" className="text-base font-semibold text-fg flex items-center gap-2">
             <Keyboard size={16} aria-hidden="true" /> {t('sc_help_title')}
           </h2>
-          <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+          <p className="text-xs text-fg-subtle mt-0.5">
             {shortcutsEnabled ? fmt(t('sc_help_active_set'), { set: setName }) : t('sc_help_disabled')}
           </p>
           {shortcutsEnabled && (
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{t('sc_help_browser_keys')}</p>
+            <p className="text-xs text-fg-subtle mt-0.5">{t('sc_help_browser_keys')}</p>
           )}
         </div>
         <button aria-label={t('close')} className="btn-ghost p-1" onClick={() => setShortcutHelpOpen(false)}>
@@ -78,17 +78,17 @@ export function ShortcutHelpDialog() {
       <div className="overflow-y-auto px-5 py-4 grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-5">
         {groups.map(({ group, rows }) => (
           <section key={group} aria-labelledby={`sc-group-${group}`}>
-            <h3 id={`sc-group-${group}`} className="text-xs font-semibold uppercase tracking-wide text-accent mb-2">
+            <h3 id={`sc-group-${group}`} className="text-xs font-semibold uppercase tracking-wide text-accent-fg mb-2">
               {t(`sc_group_${group}` as TranslationKey)}
             </h3>
             <dl className="space-y-1.5">
               {rows.map(([action, keys]) => (
                 <div key={action} className="flex items-center justify-between gap-3 text-sm">
-                  <dt className="text-gray-700 dark:text-gray-200">{t(actionLabelKey(action))}</dt>
+                  <dt className="text-fg-muted">{t(actionLabelKey(action))}</dt>
                   <dd className="flex items-center gap-1.5 shrink-0">
                     {keys.map((b, i) => (
                       <Fragment key={b.keys}>
-                        {i > 0 && <span className="text-[10px] text-gray-400">{t('sc_or')}</span>}
+                        {i > 0 && <span className="text-[10px] text-fg-subtle">{t('sc_or')}</span>}
                         <Keys keys={b.keys} then={t('sc_then')} noMeta={b.noMeta} />
                       </Fragment>
                     ))}

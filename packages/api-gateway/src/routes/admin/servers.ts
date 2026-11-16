@@ -4,33 +4,41 @@
  * GET  /api/v1/admin/servers/settings  — read current settings
  * PUT  /api/v1/admin/servers/settings  — save settings
  * POST /api/v1/admin/servers/settings/derive — derive URLs automatically from hostname
+ * GET  /api/v1/admin/servers/health  — reachability of the services + PostgreSQL/Redis/storage
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { prisma } from '@coremail/storage';
+import { prisma, peekStorageHealth } from '@coremail/storage';
 import { requireArea } from '../../middleware/auth.js';
 import { createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 import { deriveServerUrls } from '../../lib/server-urls.js';
 import { publicServerSettings } from '../../lib/secrets.js';
+import { collectHealth, tcpProbe } from '../../lib/service-health.js';
 
 const log = createLogger('admin:servers');
 export const adminServersRouter: RouterType = Router();
 adminServersRouter.use(requireArea('servers'));
 
+// 9.2: host names end up in the SMTP greeting/EHLO, the client setup data and
+// the derived URLs — a value like "bad host!" used to be stored as is.
+// RFC 1123 labels; a single label (localhost) and IPv4 literals pass.
+const HOSTNAME_RE = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/i;
+const hostnameSchema = z.string().trim().regex(HOSTNAME_RE, 'Invalid host name');
+
 const SettingsSchema = z.object({
-  publicHostname:   z.string().min(1),
+  publicHostname:   hostnameSchema,
   useHttps:         z.boolean(),
   httpPort:         z.number().int().min(1).max(65535),
   owaUrl:           z.string().url(),
   easUrl:           z.string().url(),
   autodiscoverBase: z.string().url(),
-  imapHost:         z.string().min(1),
+  imapHost:         hostnameSchema,
   imapPort:         z.number().int().min(1).max(65535),
   imapSsl:          z.boolean(),
-  pop3Host:         z.string().min(1),
+  pop3Host:         hostnameSchema,
   pop3Port:         z.number().int().min(1).max(65535),
   pop3Ssl:          z.boolean(),
-  smtpHost:         z.string().min(1),
+  smtpHost:         hostnameSchema,
   smtpPort:         z.number().int().min(1).max(65535),
   smtpTls:          z.boolean(),
   orgName:          z.string().min(1),
@@ -125,7 +133,7 @@ adminServersRouter.put('/settings', async (req: Request, res: Response) => {
 // Derive URLs automatically from hostname + port (convenience endpoint for ECP)
 adminServersRouter.post('/settings/derive', async (req: Request, res: Response) => {
   const schema = z.object({
-    publicHostname: z.string().min(1),
+    publicHostname: hostnameSchema,
     useHttps:       z.boolean().default(false),
     httpPort:       z.number().int().min(1).max(65535).default(8080),
   });
@@ -136,44 +144,56 @@ adminServersRouter.post('/settings/derive', async (req: Request, res: Response) 
   }
 
   const { publicHostname, useHttps, httpPort } = parsed.data;
-  const proto = useHttps ? 'https' : 'http';
-  // Omit the standard port (443 for https, 80 for http)
-  const portSuffix = (useHttps && httpPort === 443) || (!useHttps && httpPort === 80)
-    ? ''
-    : `:${httpPort}`;
-  const base = `${proto}://${publicHostname}${portSuffix}`;
-
-  // Autodiscover MUST run on its own CNAME (Microsoft Exchange spec):
-  // Outlook ALWAYS checks `autodiscover.{primary-domain}` first.
-  // Hostname `mail.stefanwuestner.de` → autodiscover host `autodiscover.stefanwuestner.de`
-  // Hostname `stefanwuestner.de` (no subdomain) → `autodiscover.stefanwuestner.de`
-  // If the hostname already starts with `autodiscover.` → unchanged
-  const autodiscoverHost = (() => {
-    if (publicHostname.startsWith('autodiscover.')) return publicHostname;
-    const labels = publicHostname.split('.');
-    // ≥ 3 labels → strip the first subdomain (mail.stefanwuestner.de → stefanwuestner.de)
-    // ≤ 2 labels → use the root domain directly
-    const rootDomain = labels.length >= 3 ? labels.slice(1).join('.') : publicHostname;
-    return `autodiscover.${rootDomain}`;
-  })();
-  const autodiscoverBase = `${proto}://${autodiscoverHost}${portSuffix}`;
-
+  // Same derivation as PUT / setup / domain changes (lib/server-urls.ts):
+  // mail.example.com → autodiscover.example.com, standard ports omitted.
+  const derived = deriveServerUrls(publicHostname, useHttps, httpPort);
+  // The BCP merges only the URL fields into its form. The other keys are kept
+  // for compatibility; they are suggestions and never stored by this route.
   res.json({
     publicHostname,
     useHttps,
     httpPort,
-    owaUrl:           `${base}/owa/`,
-    easUrl:           `${base}/Microsoft-Server-ActiveSync`,
-    autodiscoverBase,
-    imapHost:         publicHostname,
-    imapPort:         useHttps ? 993 : 993,
+    ...derived,
+    imapPort:         993,
     imapSsl:          true,
-    pop3Host:         publicHostname,
     pop3Port:         995,
     pop3Ssl:          true,
-    smtpHost:         publicHostname,
     smtpPort:         587,
     smtpTls:          true,
     orgName:          'CoreMail',
   });
+});
+
+// GET /api/v1/admin/servers/health — BCP "Health & Status" tab (read access suffices)
+adminServersRouter.get('/health', async (_req: Request, res: Response) => {
+  const report = await collectHealth({
+    listenerPorts: async () => {
+      const rows = await prisma.serviceListener.findMany({
+        where: { active: true, service: { in: ['SMTP_RECEIVE', 'IMAP', 'POP3'] } },
+        select: { service: true, port: true, address: true },
+      });
+      const out: Record<'SMTP_RECEIVE' | 'IMAP' | 'POP3', Array<{ port: number; address: string }>> = { SMTP_RECEIVE: [], IMAP: [], POP3: [] };
+      for (const r of rows) if (r.service in out) out[r.service as keyof typeof out].push({ port: r.port, address: r.address });
+      return out;
+    },
+    probe: (host, port) => tcpProbe(host, port),
+    db: async () => { await prisma.$queryRaw`SELECT 1`; },
+    redis: async () => {
+      let timer: NodeJS.Timeout | undefined;
+      try {
+        const pong = await Promise.race([
+          getRedisClient().ping(),
+          new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new Error('timeout')), 1500); }),
+        ]);
+        if (pong !== 'PONG') throw new Error('unexpected reply');
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    },
+    storage: () => {
+      const s = peekStorageHealth();
+      return s ? { driver: s.driver, status: s.status, blocking: s.blocking } : null;
+    },
+  });
+  res.set('Cache-Control', 'no-store').json(report);
 });

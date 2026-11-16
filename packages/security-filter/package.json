@@ -1,6 +1,6 @@
 {
   "name": "@coremail/security-filter",
-  "version": "9.1.0",
+  "version": "9.2.0",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
@@ -9,7 +9,7 @@
     "dev": "node --watch dist/server.js",
     "start": "node dist/server.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --import tsx --test src/connection-request.test.ts src/filter-settings.test.ts src/dnsbl/dnsbl.test.ts src/rspamd/rspamd.test.ts src/spf-dkim/auth.test.ts src/spf-dkim/local-spoof.test.ts"
+    "test": "node --import tsx --test src/connection-request.test.ts src/filter-settings.test.ts src/dnsbl/dnsbl.test.ts src/rspamd/rspamd.test.ts src/spf-dkim/auth.test.ts src/spf-dkim/local-spoof.test.ts src/clamav/clamav-policy.test.ts"
   },
   "dependencies": {
     "@coremail/core": "workspace:*",

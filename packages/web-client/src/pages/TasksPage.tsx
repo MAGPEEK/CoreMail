@@ -12,9 +12,9 @@ import { Modal } from '../components/Modal.js';
 import { localInputToIso, isoToLocalInput } from '../lib/datetime.js';
 
 const PRIORITY_COLOR: Record<string, string> = {
-  LOW:    'text-gray-400',
-  NORMAL: 'text-blue-500',
-  HIGH:   'text-red-500',
+  LOW:    'text-fg-subtle',
+  NORMAL: 'text-info-fg',
+  HIGH:   'text-danger-fg',
 };
 
 const PRIORITY_LABEL: Record<string, string> = {
@@ -264,16 +264,16 @@ export function TasksPage() {
   };
 
   return (
-    <div className="flex flex-1 overflow-hidden bg-gray-50">
+    <div className="flex flex-1 overflow-hidden bg-surface-2">
       <div className="w-full max-w-2xl mx-auto p-6 flex flex-col gap-4">
 
         {/* ── Header ─────────────────────────────────────────────────────────── */}
         <div className="flex items-center justify-between">
-          <h1 className="text-xl font-semibold text-gray-900">Aufgaben</h1>
-          <div className="flex gap-1 bg-white border border-gray-200 rounded p-0.5">
+          <h1 className="text-xl font-semibold text-fg">Aufgaben</h1>
+          <div className="flex gap-1 bg-surface border border-line rounded p-0.5">
             {(['pending', 'all', 'completed'] as const).map((f) => (
               <button key={f} onClick={() => setFilter(f)}
-                className={`text-xs px-3 py-1 rounded transition-colors ${filter === f ? 'bg-accent text-white' : 'text-gray-600 hover:bg-gray-100'}`}>
+                className={`text-xs px-3 py-1 rounded transition-colors ${filter === f ? 'bg-accent text-white' : 'text-fg-muted hover:bg-surface-2'}`}>
                 {f === 'pending' ? 'Offen' : f === 'all' ? 'Alle' : 'Erledigt'}
               </button>
             ))}
@@ -282,7 +282,7 @@ export function TasksPage() {
 
         {/* ── New task ────────────────────────────────────────────────────────── */}
         {showForm ? (
-          <form onSubmit={handleSubmit} className="bg-white border border-accent/30 rounded-lg shadow-sm p-4 space-y-3">
+          <form onSubmit={handleSubmit} className="bg-surface border border-accent/30 rounded-lg shadow-sm p-4 space-y-3">
             <input
               autoFocus
               value={form.subject}
@@ -317,7 +317,7 @@ export function TasksPage() {
 
               {/* Due date */}
               <div className="flex items-center gap-1.5">
-                <Calendar size={13} className="text-gray-400" />
+                <Calendar size={13} className="text-fg-subtle" />
                 <input
                   type="date"
                   value={form.dueDate}
@@ -328,7 +328,7 @@ export function TasksPage() {
 
               {/* Reminder — date + time */}
               <div className="flex items-center gap-1.5" title="Erinnerung: Datum und Uhrzeit → erscheint im Kalender und als Popup">
-                <Bell size={13} className="text-amber-400" />
+                <Bell size={13} className="text-warning-fg" />
                 <input
                   type="datetime-local"
                   value={form.reminder}
@@ -344,10 +344,10 @@ export function TasksPage() {
                     type="checkbox"
                     checked={form.reminderByMail}
                     onChange={(e) => setForm((p) => ({ ...p, reminderByMail: e.target.checked }))}
-                    className="h-3 w-3 rounded border-gray-300 accent-blue-500"
+                    className="h-3 w-3 rounded border-line-strong accent-accent"
                   />
-                  <Mail size={12} className="text-blue-500" />
-                  <span className="text-xs text-gray-500">per E-Mail</span>
+                  <Mail size={12} className="text-info-fg" />
+                  <span className="text-xs text-fg-subtle">per E-Mail</span>
                 </label>
               )}
             </div>
@@ -365,7 +365,7 @@ export function TasksPage() {
           <button
             type="button"
             onClick={() => setShowForm(true)}
-            className="flex items-center gap-2 w-full px-4 py-2.5 bg-white border border-gray-200 border-dashed rounded-lg text-sm text-gray-500 hover:text-accent hover:border-accent transition-colors"
+            className="flex items-center gap-2 w-full px-4 py-2.5 bg-surface border border-line border-dashed rounded-lg text-sm text-fg-subtle hover:text-accent-fg hover:border-accent-fg transition-colors"
           >
             <Plus size={15} />
             Neue Aufgabe hinzufügen…
@@ -373,12 +373,12 @@ export function TasksPage() {
         )}
 
         {/* ── Task list ───────────────────────────────────────────────────────── */}
-        <div className="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
+        <div className="bg-surface rounded-lg border border-line divide-y divide-line">
           {isLoading && (
-            <div className="py-8 text-center text-gray-400 text-sm">Lade Aufgaben…</div>
+            <div className="py-8 text-center text-fg-subtle text-sm">Lade Aufgaben…</div>
           )}
           {!isLoading && (tasks ?? []).length === 0 && (
-            <div className="py-10 text-center text-gray-400 text-sm">Keine Aufgaben</div>
+            <div className="py-10 text-center text-fg-subtle text-sm">Keine Aufgaben</div>
           )}
           {(tasks ?? []).map((task) => {
             const done    = task.status === 'COMPLETED';
@@ -389,7 +389,7 @@ export function TasksPage() {
               <div key={task.id}>
                 {/* Double-click opens edit modal (Feature 1) */}
                 <div
-                  className="flex items-center gap-3 px-4 py-3 group hover:bg-gray-50 transition-colors cursor-default"
+                  className="flex items-center gap-3 px-4 py-3 group hover:bg-surface-2 transition-colors cursor-default"
                   onDoubleClick={() => handleRowDoubleClick(task)}
                   title="Doppelklick zum Bearbeiten"
                 >
@@ -400,20 +400,20 @@ export function TasksPage() {
                     title={done ? 'Als offen markieren' : 'Als erledigt markieren'}
                   >
                     {done
-                      ? <CheckCircle2 size={18} className="text-green-500" />
-                      : <Circle      size={18} className="text-gray-300 hover:text-accent" />}
+                      ? <CheckCircle2 size={18} className="text-success-fg" />
+                      : <Circle      size={18} className="text-fg-subtle hover:text-accent-fg" />}
                   </button>
 
                   {/* Subject + expand button */}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5">
-                      <p className={`text-sm ${done ? 'line-through text-gray-400' : 'text-gray-800'}`}>
+                      <p className={`text-sm ${done ? 'line-through text-fg-subtle' : 'text-fg'}`}>
                         {task.subject}
                       </p>
                       {hasBody && (
                         <button aria-label="Beschreibung ein-/ausblenden"
                           onClick={(e) => { e.stopPropagation(); toggleExpand(task.id); }}
-                          className="text-gray-300 hover:text-gray-500 shrink-0"
+                          className="text-fg-subtle hover:text-fg-muted shrink-0"
                         >
                           <AlignLeft size={12} />
                         </button>
@@ -425,19 +425,19 @@ export function TasksPage() {
                   <div className="flex items-center gap-2 shrink-0">
                     <Flag size={13} className={PRIORITY_COLOR[task.priority]} />
                     {task.dueDate && (
-                      <span className={`text-xs flex items-center gap-1 ${overdue ? 'text-red-500 font-medium' : 'text-gray-400'}`}>
+                      <span className={`text-xs flex items-center gap-1 ${overdue ? 'text-danger-fg font-medium' : 'text-fg-subtle'}`}>
                         <Calendar size={11} />
                         {format(new Date(task.dueDate), 'dd.MM.yy')}
                       </span>
                     )}
                     {task.reminder && (
                       <span title={`Erinnerung: ${format(new Date(task.reminder), 'dd.MM.yy HH:mm')}${task.reminderByMail ? ' · per E-Mail' : ''}`}>
-                        <Bell size={11} className="text-amber-400" />
+                        <Bell size={11} className="text-warning-fg" />
                       </span>
                     )}
                     {task.reminderByMail && (
                       <span title="E-Mail-Erinnerung aktiv">
-                        <Mail size={11} className="text-blue-400" />
+                        <Mail size={11} className="text-info-fg" />
                       </span>
                     )}
                     <button aria-label="Aufgabe löschen"
@@ -447,14 +447,14 @@ export function TasksPage() {
                           deleteMutation.mutate(task.id);
                         }
                       }}
-                      className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-500 transition-all"
+                      className="opacity-0 group-hover:opacity-100 text-fg-subtle hover:text-danger-fg transition-all"
                     >
                       <Trash2 size={14} />
                     </button>
                     {hasBody && (
                       <button aria-label={isOpen ? 'Beschreibung ausblenden' : 'Beschreibung einblenden'}
                         onClick={(e) => { e.stopPropagation(); toggleExpand(task.id); }}
-                        className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-gray-600 transition-all"
+                        className="opacity-0 group-hover:opacity-100 text-fg-subtle hover:text-fg-muted transition-all"
                       >
                         {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                       </button>
@@ -464,7 +464,7 @@ export function TasksPage() {
 
                 {/* Body/notes expanded */}
                 {isOpen && hasBody && (
-                  <div className="px-11 pb-3 text-sm text-gray-600 whitespace-pre-wrap leading-relaxed bg-gray-50/50">
+                  <div className="px-11 pb-3 text-sm text-fg-muted whitespace-pre-wrap leading-relaxed bg-surface-2/50">
                     {task.body}
                   </div>
                 )}
@@ -479,16 +479,16 @@ export function TasksPage() {
         <Modal
           onClose={handleEditClose}
           labelledBy="task-edit-title"
-          overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-          className="bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden"
+          overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-scrim/40"
+          className="bg-surface rounded-2xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden"
         >
 
             {/* Modal header */}
-            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
-              <h2 id="task-edit-title" className="text-base font-semibold text-gray-900">Aufgabe bearbeiten</h2>
+            <div className="flex items-center justify-between px-5 py-4 border-b border-line">
+              <h2 id="task-edit-title" className="text-base font-semibold text-fg">Aufgabe bearbeiten</h2>
               <button
                 onClick={handleEditClose}
-                className="text-gray-400 hover:text-gray-600 transition-colors"
+                className="text-fg-subtle hover:text-fg-muted transition-colors"
                 title="Schließen"
                 aria-label="Schließen"
               >
@@ -499,7 +499,7 @@ export function TasksPage() {
             {/* Modal form */}
             <form onSubmit={handleEditSave} className="p-5 flex flex-col gap-4">
               <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">Betreff *</label>
+                <label className="block text-xs font-medium text-fg-muted mb-1">Betreff *</label>
                 <input
                   autoFocus
                   type="text"
@@ -511,7 +511,7 @@ export function TasksPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">Notizen</label>
+                <label className="block text-xs font-medium text-fg-muted mb-1">Notizen</label>
                 <textarea
                   value={editForm.body}
                   onChange={(e) => setEditForm((f) => ({ ...f, body: e.target.value }))}
@@ -522,7 +522,7 @@ export function TasksPage() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">Priorität</label>
+                  <label className="block text-xs font-medium text-fg-muted mb-1">Priorität</label>
                   <div className="flex items-center gap-1.5">
                     <Flag size={13} className={PRIORITY_COLOR[editForm.priority]} />
                     <select
@@ -538,9 +538,9 @@ export function TasksPage() {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">Fälligkeit</label>
+                  <label className="block text-xs font-medium text-fg-muted mb-1">Fälligkeit</label>
                   <div className="flex items-center gap-1.5">
-                    <Calendar size={13} className="text-gray-400 shrink-0" />
+                    <Calendar size={13} className="text-fg-subtle shrink-0" />
                     <input
                       type="date"
                       value={editForm.dueDate}
@@ -552,9 +552,9 @@ export function TasksPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">Erinnerung</label>
+                <label className="block text-xs font-medium text-fg-muted mb-1">Erinnerung</label>
                 <div className="flex items-center gap-1.5">
-                  <Bell size={13} className="text-amber-400 shrink-0" />
+                  <Bell size={13} className="text-warning-fg shrink-0" />
                   <input
                     type="datetime-local"
                     value={editForm.reminder}
@@ -568,10 +568,10 @@ export function TasksPage() {
                       type="checkbox"
                       checked={editForm.reminderByMail}
                       onChange={(e) => setEditForm((f) => ({ ...f, reminderByMail: e.target.checked }))}
-                      className="h-3.5 w-3.5 rounded border-gray-300 accent-blue-500"
+                      className="h-3.5 w-3.5 rounded border-line-strong accent-accent"
                     />
-                    <Mail size={13} className="text-blue-500" />
-                    <span className="text-xs text-gray-600">Auch per E-Mail benachrichtigen</span>
+                    <Mail size={13} className="text-info-fg" />
+                    <span className="text-xs text-fg-muted">Auch per E-Mail benachrichtigen</span>
                   </label>
                 )}
               </div>

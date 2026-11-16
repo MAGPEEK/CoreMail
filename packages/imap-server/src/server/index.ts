@@ -26,7 +26,7 @@ import { CommandReader, type LiteralDecision } from './command-reader.js';
 import type { ConnectionLimiter } from '@coremail/core';
 import {
   imapConnectionLimiter, PRE_AUTH_MAX_LINE, PRE_AUTH_MAX_LITERAL, PRE_AUTH_IDLE_MS,
-  POST_AUTH_IDLE_MS, TLS_HANDSHAKE_MS,
+  POST_AUTH_IDLE_MS, TLS_HANDSHAKE_MS, isPeerDisconnect,
 } from './limits.js';
 import { unregisterLiveSession } from '../session/live.js';
 import { invalidateAccessCaches, revalidateSelected } from '../commands/namespaces.js';
@@ -243,7 +243,8 @@ export function createImapServer(tlsConfig?: ImapTlsConfig, options: ImapServerO
     });
 
     socket.on('error', (err) => {
-      log.error({ err, id: session.id }, 'IMAP socket error');
+      if (isPeerDisconnect(err)) log.debug({ err, id: session.id }, 'IMAP client disconnected abruptly');
+      else log.error({ err, id: session.id }, 'IMAP socket error');
       sessions.delete(session.id);
       stopIdleTimer(session);
       unregisterLiveSession(session);

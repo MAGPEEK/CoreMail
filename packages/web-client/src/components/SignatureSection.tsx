@@ -81,7 +81,7 @@ const MAX_IMAGE_BYTES = 500 * 1024; // 500 KB as data:URL — otherwise mails ge
 // ─────────────────────────────────────────────────────────────────────────────
 
 function Sep() {
-  return <div className="w-px h-5 bg-gray-200 mx-0.5 shrink-0" />;
+  return <div className="w-px h-5 bg-surface-3 mx-0.5 shrink-0" />;
 }
 
 function ToolBtn({
@@ -101,8 +101,8 @@ function ToolBtn({
       disabled={disabled}
       className={`w-7 h-7 flex items-center justify-center rounded transition-colors ${
         active
-          ? 'bg-blue-100 text-blue-700'
-          : 'hover:bg-gray-200 text-gray-700'
+          ? 'bg-info-bg text-accent-fg'
+          : 'hover:bg-surface-3 text-fg-muted'
       } disabled:opacity-30 disabled:cursor-default`}
     >
       {children}
@@ -128,8 +128,8 @@ function ColorPickerPopover({
     return () => document.removeEventListener('mousedown', handler);
   }, [onClose]);
   return (
-    <div ref={ref} className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-xl p-2.5 z-50 min-w-[180px]">
-      <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-1.5">{title}</p>
+    <div ref={ref} className="absolute top-full left-0 mt-1 bg-surface border border-line rounded-lg shadow-xl p-2.5 z-50 min-w-[180px]">
+      <p className="text-[10px] font-semibold text-fg-subtle uppercase tracking-wide mb-1.5">{title}</p>
       <div className="grid grid-cols-6 gap-1">
         {colors.map((c) => (
           <button
@@ -138,17 +138,17 @@ function ColorPickerPopover({
             onMouseDown={(e) => { e.preventDefault(); onSelect(c); onClose(); }}
             style={{
               backgroundColor: c,
-              border: c === currentColor ? '2px solid #1a73e8' : '1px solid #e0e0e0',
+              border: c === currentColor ? '2px solid rgb(var(--color-accent-fg))' : '1px solid rgb(var(--line-strong))',
             }}
             className="w-5 h-5 rounded cursor-pointer hover:scale-110 transition-transform"
-            title={c}
+            title={c} aria-label={c}
           />
         ))}
       </div>
       <button
         type="button"
         onMouseDown={(e) => { e.preventDefault(); onSelect(''); onClose(); }}
-        className="mt-2 pt-2 border-t border-gray-100 w-full text-xs text-gray-500 hover:text-gray-800 text-center"
+        className="mt-2 pt-2 border-t border-line w-full text-xs text-fg-subtle hover:text-fg text-center"
       >
         Farbe entfernen
       </button>
@@ -180,23 +180,23 @@ function FontDropdown({
       <button
         type="button"
         onMouseDown={(e) => { e.preventDefault(); setOpen((o) => !o); }}
-        className="flex items-center gap-1 px-2 h-7 text-xs rounded hover:bg-gray-200 border border-transparent"
+        className="flex items-center gap-1 px-2 h-7 text-xs rounded hover:bg-surface-3 border border-transparent"
         style={{ minWidth: width }}
       >
-        <span className="flex-1 text-left text-gray-700 truncate" style={current ? { fontFamily: current.includes(',') ? current : undefined, fontSize: current.endsWith('px') ? current : undefined } : undefined}>
+        <span className="flex-1 text-left text-fg-muted truncate" style={current ? { fontFamily: current.includes(',') ? current : undefined, fontSize: current.endsWith('px') ? current : undefined } : undefined}>
           {activeLabel}
         </span>
-        <ChevronDown size={11} className="shrink-0 text-gray-400" />
+        <ChevronDown size={11} className="shrink-0 text-fg-subtle" />
       </button>
       {open && (
-        <div className="absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-xl py-1 z-50" style={{ minWidth: width + 20 }}>
+        <div className="absolute top-full left-0 mt-1 bg-surface border border-line rounded-lg shadow-xl py-1 z-50" style={{ minWidth: width + 20 }}>
           {options.map(({ label: l, value }) => (
             <button
               type="button"
               key={l}
               onMouseDown={(e) => { e.preventDefault(); setOpen(false); onSelect(value); }}
-              className={`block w-full text-left px-3 py-1.5 hover:bg-gray-50 text-sm ${
-                current === value ? 'text-blue-600' : 'text-gray-700'
+              className={`block w-full text-left px-3 py-1.5 hover:bg-surface-2 text-sm ${
+                current === value ? 'text-accent-fg' : 'text-fg-muted'
               }`}
               style={value ? { fontFamily: value.includes(',') ? value : undefined, fontSize: value.endsWith('px') ? value : undefined } : undefined}
             >
@@ -239,7 +239,7 @@ export function SignatureSection() {
       UnderlineExt,
       LinkExt.configure({
         openOnClick: false,
-        HTMLAttributes: { class: 'text-blue-600 underline cursor-pointer' },
+        HTMLAttributes: { class: 'text-accent-fg underline cursor-pointer' },
       }),
       TextAlignExt.configure({ types: ['heading', 'paragraph'] }),
       TextStyle,
@@ -251,7 +251,7 @@ export function SignatureSection() {
     ],
     content: '',
     editorProps: {
-      attributes: { class: 'outline-none min-h-[200px] text-sm text-gray-800 prose prose-sm max-w-none' },
+      attributes: { class: 'outline-none min-h-[200px] text-sm text-fg prose prose-sm max-w-none' },
     },
   });
 
@@ -348,7 +348,7 @@ export function SignatureSection() {
 
   if (isLoading) {
     return (
-      <div className="flex justify-center py-12 text-gray-400">
+      <div className="flex justify-center py-12 text-fg-subtle">
         <Loader2 size={18} className="animate-spin" />
       </div>
     );
@@ -366,8 +366,8 @@ export function SignatureSection() {
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
-          <h2 className="text-lg font-semibold text-gray-900">Signaturen</h2>
-          <p className="text-sm text-gray-500 mt-0.5">
+          <h2 className="text-lg font-semibold text-fg">Signaturen</h2>
+          <p className="text-sm text-fg-subtle mt-0.5">
             Wird automatisch an deine E-Mails angehängt. Unterstützt Formatierung, Bilder, Links und Schriftarten.
           </p>
         </div>
@@ -383,31 +383,31 @@ export function SignatureSection() {
 
       {/* Editor + Preview */}
       <div
-        className="border border-gray-200 rounded-lg overflow-hidden bg-white relative"
+        className="border border-line-strong rounded-lg overflow-hidden bg-surface relative focus-within:ring-2 focus-within:ring-accent-fg"
         onDragOver={onDragOver}
         onDragLeave={onDragLeave}
         onDrop={onDrop}
       >
         {dragOver && (
-          <div className="absolute inset-0 z-20 bg-blue-50/95 border-4 border-dashed border-blue-400 rounded-lg flex flex-col items-center justify-center pointer-events-none">
-            <ImageIcon size={36} className="text-blue-500 mb-2" />
-            <p className="text-blue-700 font-semibold text-sm">Bild hier ablegen</p>
+          <div className="absolute inset-0 z-20 bg-info-bg/95 border-4 border-dashed border-info-line rounded-lg flex flex-col items-center justify-center pointer-events-none">
+            <ImageIcon size={36} className="text-accent-fg mb-2" />
+            <p className="text-accent-fg font-semibold text-sm">Bild hier ablegen</p>
           </div>
         )}
 
         {showPreview ? (
           /* Preview mode: how it looks in the mail reader */
-          <div className="p-4 bg-gray-50">
-            <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-3">Vorschau</p>
+          <div className="p-4 bg-surface-2">
+            <p className="text-[10px] font-semibold text-fg-subtle uppercase tracking-wider mb-3">Vorschau</p>
             <div
-              className="bg-white border border-gray-200 rounded p-4 text-sm text-gray-800 prose prose-sm max-w-none"
+              className="bg-surface border border-line rounded p-4 text-sm text-fg prose prose-sm max-w-none"
               dangerouslySetInnerHTML={{ __html: editor.getHTML() }}
             />
           </div>
         ) : (
           <>
             {/* Toolbar */}
-            <div className="flex items-center gap-0.5 px-2 py-1.5 border-b border-gray-200 bg-gray-50 flex-wrap">
+            <div className="flex items-center gap-0.5 px-2 py-1.5 border-b border-line bg-surface-2 flex-wrap">
               {/* Undo/Redo */}
               <ToolBtn title="Rückgängig" disabled={!editor.can().undo()} onClick={() => editor.chain().focus().undo().run()}>
                 <Undo2 size={13} />
@@ -460,9 +460,9 @@ export function SignatureSection() {
                   type="button"
                   onMouseDown={(e) => { e.preventDefault(); setShowTextColor((s) => !s); setShowHighlight(false); }}
                   title="Schriftfarbe"
-                  className="w-8 h-7 flex flex-col items-center justify-center rounded hover:bg-gray-200 px-0.5"
+                  className="w-8 h-7 flex flex-col items-center justify-center rounded hover:bg-surface-3 px-0.5"
                 >
-                  <Type size={11} className="text-gray-700" />
+                  <Type size={11} className="text-fg-muted" />
                   <div className="w-5 h-1 rounded-sm" style={{ backgroundColor: currentTextColor ?? '#000000' }} />
                 </button>
                 {showTextColor && (
@@ -485,9 +485,9 @@ export function SignatureSection() {
                   type="button"
                   onMouseDown={(e) => { e.preventDefault(); setShowHighlight((s) => !s); setShowTextColor(false); }}
                   title="Markierungsfarbe"
-                  className="w-8 h-7 flex flex-col items-center justify-center rounded hover:bg-gray-200 px-0.5"
+                  className="w-8 h-7 flex flex-col items-center justify-center rounded hover:bg-surface-3 px-0.5"
                 >
-                  <Highlighter size={11} className="text-gray-700" />
+                  <Highlighter size={11} className="text-fg-muted" />
                   <div className="w-5 h-1 rounded-sm" style={{ backgroundColor: currentHighlight ?? '#ffff00' }} />
                 </button>
                 {showHighlight && (
@@ -555,7 +555,7 @@ export function SignatureSection() {
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                className="text-[10px] px-1.5 h-7 rounded hover:bg-gray-200 text-gray-600 ml-0.5"
+                className="text-[10px] px-1.5 h-7 rounded hover:bg-surface-3 text-fg-muted ml-0.5"
                 title="Bild von Datei hochladen (max 500 KB)"
               >
                 Hochladen
@@ -576,21 +576,21 @@ export function SignatureSection() {
             </div>
 
             {/* Editor area */}
-            <div className="px-4 py-3">
+            <div className="px-4 py-3 bg-surface text-fg">
               <EditorContent
                 editor={editor}
                 className={[
                   '[&_.ProseMirror]:min-h-[200px] [&_.ProseMirror]:outline-none',
-                  '[&_.ProseMirror_a]:text-blue-600 [&_.ProseMirror_a]:underline [&_.ProseMirror_a]:cursor-pointer',
+                  '[&_.ProseMirror_a]:text-accent-fg [&_.ProseMirror_a]:underline [&_.ProseMirror_a]:cursor-pointer',
                   '[&_.ProseMirror_img]:max-w-full [&_.ProseMirror_img]:h-auto [&_.ProseMirror_img]:rounded [&_.ProseMirror_img]:inline-block',
-                  '[&_.ProseMirror_blockquote]:border-l-4 [&_.ProseMirror_blockquote]:border-gray-300 [&_.ProseMirror_blockquote]:pl-3 [&_.ProseMirror_blockquote]:text-gray-600 [&_.ProseMirror_blockquote]:italic',
+                  '[&_.ProseMirror_blockquote]:border-l-4 [&_.ProseMirror_blockquote]:border-line-strong [&_.ProseMirror_blockquote]:pl-3 [&_.ProseMirror_blockquote]:text-fg-muted [&_.ProseMirror_blockquote]:italic',
                   '[&_.ProseMirror_ul]:list-disc [&_.ProseMirror_ul]:pl-5',
                   '[&_.ProseMirror_ol]:list-decimal [&_.ProseMirror_ol]:pl-5',
-                  '[&_.ProseMirror_hr]:border-gray-300 [&_.ProseMirror_hr]:my-3',
+                  '[&_.ProseMirror_hr]:border-line-strong [&_.ProseMirror_hr]:my-3',
                   '[&_.ProseMirror_p]:my-0.5',
                 ].join(' ')}
               />
-              <p className="mt-2 text-[10px] text-gray-400">
+              <p className="mt-2 text-[10px] text-fg-subtle">
                 💡 Tipp: Bilder können per Drag & Drop eingefügt werden. Empfohlene Größe: max 500 KB für leichtgewichtige E-Mails.
               </p>
             </div>
@@ -599,25 +599,25 @@ export function SignatureSection() {
       </div>
 
       {/* Auto-insert options */}
-      <div className="space-y-3 py-3 border-t border-gray-100">
-        <p className="text-sm font-medium text-gray-700">Signatur automatisch einfügen</p>
+      <div className="space-y-3 py-3 border-t border-line">
+        <p className="text-sm font-medium text-fg-muted">Signatur automatisch einfügen</p>
         <label className="flex items-center gap-3 cursor-pointer">
           <input
             type="checkbox"
             checked={autoNew}
             onChange={(e) => setAutoNew(e.target.checked)}
-            className="rounded border-gray-300 text-accent focus:ring-accent w-4 h-4"
+            className="rounded border-line-strong text-accent-fg focus:ring-accent-fg w-4 h-4"
           />
-          <span className="text-sm text-gray-700">Bei neuen E-Mails</span>
+          <span className="text-sm text-fg-muted">Bei neuen E-Mails</span>
         </label>
         <label className="flex items-center gap-3 cursor-pointer">
           <input
             type="checkbox"
             checked={autoReply}
             onChange={(e) => setAutoReply(e.target.checked)}
-            className="rounded border-gray-300 text-accent focus:ring-accent w-4 h-4"
+            className="rounded border-line-strong text-accent-fg focus:ring-accent-fg w-4 h-4"
           />
-          <span className="text-sm text-gray-700">Bei Antworten und Weiterleitungen</span>
+          <span className="text-sm text-fg-muted">Bei Antworten und Weiterleitungen</span>
         </label>
       </div>
 

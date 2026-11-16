@@ -64,26 +64,26 @@ export function SsoCallbackPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-accent to-blue-800">
-      <div className="bg-white dark:bg-gray-900 rounded-lg shadow-2xl p-8 w-full max-w-sm space-y-4">
-        <h1 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
+      <div className="bg-surface rounded-lg shadow-2xl p-8 w-full max-w-sm space-y-4">
+        <h1 className="text-lg font-bold text-fg flex items-center gap-2">
           <ShieldCheck size={18} /> Single Sign-On
         </h1>
         {challengeToken ? (
           <form onSubmit={submitMfa} className="space-y-3">
-            <p className="text-sm text-gray-600">Bitte den Code aus Ihrer Authenticator-App oder einen Backup-Code eingeben.</p>
+            <p className="text-sm text-fg-muted">Bitte den Code aus Ihrer Authenticator-App oder einen Backup-Code eingeben.</p>
             <input className="input" value={code} onChange={(e) => setCode(e.target.value)} autoFocus autoComplete="one-time-code" />
-            {error && <div className="text-sm text-red-700">{error}</div>}
+            {error && <div className="text-sm text-danger-fg">{error}</div>}
             <button type="submit" disabled={loading || code.trim().length < 6} className="btn-primary w-full justify-center py-2 disabled:opacity-60">
               {loading ? 'Prüfen...' : 'Bestätigen'}
             </button>
           </form>
         ) : error ? (
           <>
-            <div className="bg-red-50 border border-red-200 rounded px-3 py-2 text-sm text-red-700">{error}</div>
-            <Link to="/login" className="text-sm text-accent hover:underline">Zurück zur Anmeldung</Link>
+            <div className="bg-danger-bg border border-danger-line rounded px-3 py-2 text-sm text-danger-fg">{error}</div>
+            <Link to="/login" className="text-sm text-accent-fg hover:underline">Zurück zur Anmeldung</Link>
           </>
         ) : (
-          <p className="text-sm text-gray-500 animate-pulse">Anmeldung wird abgeschlossen…</p>
+          <p className="text-sm text-fg-subtle animate-pulse">Anmeldung wird abgeschlossen…</p>
         )}
       </div>
     </div>

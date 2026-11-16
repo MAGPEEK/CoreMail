@@ -74,8 +74,15 @@ adminQuarantineRouter.get('/stats', async (_req: Request, res: Response) => {
 
 // ── GET / ─────────────────────────────────────────────────────────────────────
 adminQuarantineRouter.get('/', async (req: Request, res: Response) => {
-  const { search = '', reason = '', released = '', page = '1', limit = '50' } = req.query as Record<string, string>;
-  const skip = (parseInt(page) - 1) * parseInt(limit);
+  const { search = '', reason = '', released = '', page: pageQ = '1', limit: limitQ = '50' } = req.query as Record<string, string>;
+  // Malformed paging/filters must not reach Prisma (NaN skip / invalid enum → 500).
+  const page  = Math.max(1, parseInt(String(pageQ), 10) || 1);
+  const limit = Math.min(200, Math.max(1, parseInt(String(limitQ), 10) || 50));
+  const skip = (page - 1) * limit;
+  if (reason && !['VIRUS', 'SPAM', 'POLICY'].includes(String(reason))) {
+    res.status(400).json({ error: 'Invalid reason' });
+    return;
+  }
 
   const where: Record<string, unknown> = {};
   if (reason) where['reason'] = reason;
@@ -92,7 +99,7 @@ adminQuarantineRouter.get('/', async (req: Request, res: Response) => {
     prisma.quarantine.findMany({
       where,
       orderBy: { createdAt: 'desc' },
-      skip, take: parseInt(limit),
+      skip, take: limit,
       select: {
         id: true, messageId: true, fromAddr: true, toAddr: true,
         subject: true, reason: true, details: true,
@@ -101,7 +108,7 @@ adminQuarantineRouter.get('/', async (req: Request, res: Response) => {
     }),
     prisma.quarantine.count({ where }),
   ]);
-  res.json({ items, total, page: parseInt(page), limit: parseInt(limit) });
+  res.json({ items, total, page, limit });
 });
 
 // ── GET /:id ──────────────────────────────────────────────────────────────────

@@ -9,6 +9,7 @@ import { ensureMailboxProvisioned } from '../../lib/provision-mailbox.js';
 import { audit, auditContext } from '../../lib/audit.js';
 import { quotaLevelError, quotaLevelPatchError } from '../../lib/quota-levels.js';
 import { publishPermissionChange } from '../../lib/permission-events.js';
+import { addressCollision } from '../../lib/address-collision.js';
 
 export const adminMailboxesRouter: RouterType = Router();
 // v6 RBAC: area 'recipients'. HELP_DESK may additionally PUT /:id (password
@@ -86,6 +87,30 @@ const ROLE_ENUM = z.enum(USER_ROLES);
 function forbidden(res: Response, error: string): void {
   res.status(403).json({ error, code: 'FORBIDDEN_ROLE' });
 }
+
+/**
+ * Lock-out guard: true when the change would leave no active ORGANIZATION_MANAGEMENT
+ * account (demoting, deactivating or deleting the last one). Only that role can
+ * assign roles, so the organisation could not be administered any more.
+ */
+async function removesLastOrgAdmin(
+  user: { id: string; role: string; active: boolean },
+  change: { role?: string | undefined; active?: boolean | undefined; deleted?: boolean },
+): Promise<boolean> {
+  if (user.role !== 'ORGANIZATION_MANAGEMENT' || !user.active) return false;
+  const losesRole = change.deleted === true
+    || (change.role !== undefined && change.role !== 'ORGANIZATION_MANAGEMENT')
+    || change.active === false;
+  if (!losesRole) return false;
+  const others = await prisma.user.count({
+    where: { role: 'ORGANIZATION_MANAGEMENT', active: true, id: { not: user.id } },
+  });
+  return others === 0;
+}
+const LAST_ORG_ADMIN = {
+  error: 'This is the last active Organization Management account — assign the role to another account first.',
+  code: 'LAST_ORG_ADMIN',
+} as const;
 
 // ── Helper: compute real storage from messages ───────────────────────────────
 // Aggregates rawSize of all non-deleted messages of a user.
@@ -201,12 +226,12 @@ adminMailboxesRouter.post('/recalculate-all-quotas', requireRecipientsWrite, asy
 });
 
 const CreateMailboxSchema = z.object({
-  email: z.string().email(),
-  displayName: z.string().min(1),
+  email: z.string().trim().email(),
+  displayName: z.string().trim().min(1).max(200),
   password: z.string().min(1).max(128),
   domainId: z.string(),
   role: ROLE_ENUM.default('USER'),
-  quotaBytes: z.number().int().default(5368709120),
+  quotaBytes: z.number().int().min(0).default(5368709120),
   quotaWarningBytes: z.number().int().min(0).nullable().optional(),
   quotaProhibitSendBytes: z.number().int().min(0).nullable().optional(),
 });
@@ -228,11 +253,17 @@ adminMailboxesRouter.post('/', async (req: Request, res: Response) => {
   if (policyError) { res.status(400).json({ error: policyError }); return; }
 
   {
-    const existing = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
-    if (existing) { res.status(409).json({ error: 'E-Mail-Adresse wird bereits verwendet' }); return; }
+    // users, shared mailboxes and aliases share one address namespace
+    const collision = await addressCollision(email);
+    if (collision) { res.status(409).json({ error: collision }); return; }
 
     const domain = await prisma.domain.findUnique({ where: { id: domainId } });
-    if (!domain) { res.status(404).json({ error: 'Domain nicht gefunden' }); return; }
+    if (!domain) { res.status(404).json({ error: 'Domain not found' }); return; }
+    // The address must belong to the chosen domain (domain-scoped settings, LDAP/SSO
+    // and the domain filter all go by domainId).
+    if (email.toLowerCase().split('@')[1] !== domain.name.toLowerCase()) {
+      res.status(400).json({ error: `The address must end in @${domain.name}` }); return;
+    }
 
     const passwordHash = await hashPassword(password);
 
@@ -266,7 +297,7 @@ adminMailboxesRouter.post('/', async (req: Request, res: Response) => {
 });
 
 const UpdateMailboxSchema = z.object({
-  displayName: z.string().min(1).optional(),
+  displayName: z.string().trim().min(1).max(200).optional(),
   role: ROLE_ENUM.optional(), // v6: was z.string() → invalid enum value crashed Prisma
   active: z.boolean().optional(),
   quotaBytes: z.number().int().min(0).optional(),
@@ -292,7 +323,7 @@ adminMailboxesRouter.put('/:id', async (req: Request, res: Response) => {
 
   const user = await prisma.user.findUnique({
     where: { id },
-    select: { id: true, role: true, active: true, quotaBytes: true, quotaWarningBytes: true, quotaProhibitSendBytes: true },
+    select: { id: true, email: true, role: true, active: true, quotaBytes: true, quotaWarningBytes: true, quotaProhibitSendBytes: true },
   });
   if (!user) { res.status(404).json({ error: 'Mailbox not found' }); return; }
 
@@ -314,6 +345,7 @@ adminMailboxesRouter.put('/:id', async (req: Request, res: Response) => {
   if (revokeAppPasswords && !password) {
     res.status(400).json({ error: 'revokeAppPasswords is only valid together with password' }); return;
   }
+  if (await removesLastOrgAdmin(user, { role, active })) { res.status(409).json(LAST_ORG_ADMIN); return; }
   // 8.1: partial updates are validated against the stored levels
   const levelError = quotaLevelPatchError({ quotaBytes, quotaWarningBytes, quotaProhibitSendBytes }, user);
   if (levelError) { res.status(400).json({ error: levelError }); return; }
@@ -338,6 +370,16 @@ adminMailboxesRouter.put('/:id', async (req: Request, res: Response) => {
   // (app passwords are kept unless revokeAppPasswords is set; inactive users
   // cannot use them anyway).
   const roleChanged = !!role && role !== user.role;
+  if (roleChanged) {
+    // always logged (ALWAYS_AUDIT matches user.role), with the old/new role diff —
+    // the generic middleware entry is only `mailboxes.put`
+    audit({
+      actorId: actor.userId, actorEmail: actor.email,
+      action: 'user.role.change', targetType: 'user', targetId: id, targetName: user.email,
+      changes: { before: { role: user.role }, after: { role } },
+      ...auditContext(req),
+    });
+  }
   if (password || (active === false && user.active)) {
     const r = await revokeAllSessions(id, {
       reason: password ? 'admin-password-reset' : 'deactivated',
@@ -363,11 +405,16 @@ adminMailboxesRouter.put('/:id', async (req: Request, res: Response) => {
 adminMailboxesRouter.delete('/:id', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
 
-  const user = await prisma.user.findUnique({ where: { id }, select: { id: true, role: true } });
+  const user = await prisma.user.findUnique({ where: { id }, select: { id: true, role: true, active: true } });
   if (!user) { res.status(404).json({ error: 'Mailbox not found' }); return; }
   if (!canManageAccount(req.apiUser?.role, user.role)) {
     forbidden(res, 'Only Organization Management may delete admin accounts'); return;
   }
+  // e.g. a bulk delete with the own row selected
+  if (req.apiUser?.userId === id) {
+    res.status(409).json({ error: 'You cannot delete your own account', code: 'SELF_DELETE' }); return;
+  }
+  if (await removesLastOrgAdmin(user, { deleted: true })) { res.status(409).json(LAST_ORG_ADMIN); return; }
   await prisma.user.delete({ where: { id } });
   // v7.1.0: access tokens + cached mail logins of the deleted user end now
   // (session rows are already gone via cascade; this sets the revocation mark).

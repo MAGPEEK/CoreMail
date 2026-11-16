@@ -15,23 +15,13 @@ interface GlobalSettings {
   id: string;
   // Organisation
   orgName:        string;
-  orgDescription: string;
   adminEmail:     string;
-  language:       string;
-  timezone:       string;
-  welcomeMessage: string;
-  logoUrl:        string;
   // Mail
   maxMessageSizeMb:    number;
-  maxAttachmentSizeMb: number;
-  trashRetentionDays:  number;
   // Security
   minPasswordLength:           number;
-  maxLoginAttempts:            number;
-  sessionTimeoutMinutes:       number;
   inactivityTimeoutMinutes:    number;
   requireMfaForAdmins:         boolean;
-  allowSelfRegistration:       boolean;
   selfServicePasswordReset:    boolean;
   auditLogEnabled:             boolean;
   // Maintenance
@@ -50,48 +40,13 @@ function fmtDate(iso: string) {
   });
 }
 
-// ── IANA time zones ───────────────────────────────────────────────────────────
-// All IANA zones supported by the runtime (~400). Label contains the current
-// UTC offset for orientation. Sorted: UTC first, then alphabetically.
-function buildTimezoneOptions(): { value: string; label: string }[] {
-  type IntlEx = typeof Intl & { supportedValuesOf?: (k: string) => string[] };
-  const intlAny = Intl as IntlEx;
-  const raw = (intlAny.supportedValuesOf?.('timeZone') ?? [
-    // Fallback for older runtimes — small curated list
-    'UTC', 'Europe/Berlin', 'Europe/Vienna', 'Europe/Zurich', 'Europe/London',
-    'Europe/Madrid', 'Europe/Paris', 'Europe/Rome', 'Europe/Amsterdam', 'Europe/Warsaw',
-    'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles',
-    'America/Sao_Paulo', 'Asia/Tokyo', 'Asia/Singapore', 'Asia/Dubai', 'Asia/Shanghai',
-    'Australia/Sydney', 'Pacific/Auckland',
-  ]);
-
-  function offsetLabel(tz: string): string {
-    try {
-      const fmt = new Intl.DateTimeFormat('en', { timeZone: tz, timeZoneName: 'shortOffset' });
-      const parts = fmt.formatToParts(new Date());
-      const off = parts.find((p) => p.type === 'timeZoneName')?.value ?? '';
-      return off || '';
-    } catch {
-      return '';
-    }
-  }
-
-  const utcFirst = raw.filter((z) => z === 'UTC');
-  const rest = raw.filter((z) => z !== 'UTC').sort((a, b) => a.localeCompare(b));
-  return [...utcFirst, ...rest].map((z) => {
-    const off = offsetLabel(z);
-    return { value: z, label: off ? `${z} (${off})` : z };
-  });
-}
-const TIMEZONE_OPTIONS = buildTimezoneOptions();
-
 // ── Field components ──────────────────────────────────────────────────────────
 function FieldGroup({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
-    <div className="grid grid-cols-[220px_1fr] gap-4 py-4 border-b border-gray-100 last:border-0">
+    <div className="grid grid-cols-[220px_1fr] gap-4 py-4 border-b border-line last:border-0">
       <div>
-        <label className="text-sm font-medium text-gray-700">{label}</label>
-        {hint && <p className="text-xs text-gray-400 mt-0.5 leading-snug">{hint}</p>}
+        <label className="text-sm font-medium text-fg-muted">{label}</label>
+        {hint && <p className="text-xs text-fg-subtle mt-0.5 leading-snug">{hint}</p>}
       </div>
       <div className="space-y-1">{children}</div>
     </div>
@@ -115,7 +70,7 @@ function NumberInput({ value, onChange, min, max, unit }: {
     <div className="flex items-center gap-2">
       <input type="number" value={value} onChange={(e) => onChange(parseInt(e.target.value, 10) || min)}
         min={min} max={max} className="input w-28" />
-      {unit && <span className="text-sm text-gray-500">{unit}</span>}
+      {unit && <span className="text-sm text-fg-subtle">{unit}</span>}
     </div>
   );
 }
@@ -132,21 +87,10 @@ function Textarea({ value, onChange, placeholder = '', rows = 3 }: {
 function Toggle({ value, onChange, label }: { value: boolean; onChange: (v: boolean) => void; label?: string }) {
   return (
     <button type="button" onClick={() => onChange(!value)}
-      className={`flex items-center gap-2 text-sm transition-colors ${value ? 'text-accent' : 'text-gray-500'}`}>
-      {value ? <ToggleRight size={26} className="text-accent" /> : <ToggleLeft size={26} className="text-gray-400" />}
+      className={`flex items-center gap-2 text-sm transition-colors ${value ? 'text-accent-fg' : 'text-fg-subtle'}`}>
+      {value ? <ToggleRight size={26} className="text-accent-fg" /> : <ToggleLeft size={26} className="text-fg-subtle" />}
       {label && <span>{label}</span>}
     </button>
-  );
-}
-
-function Select({ value, onChange, options }: {
-  value: string; onChange: (v: string) => void;
-  options: { value: string; label: string }[];
-}) {
-  return (
-    <select value={value} onChange={(e) => onChange(e.target.value)} className="input w-auto">
-      {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-    </select>
   );
 }
 
@@ -161,11 +105,11 @@ function Section({ icon: Icon, title, description, children, saving, onSave, dir
       <div className="flex items-start justify-between mb-1">
         <div className="flex items-start gap-3">
           <div className="w-9 h-9 rounded-lg bg-accent/10 flex items-center justify-center shrink-0 mt-0.5">
-            <Icon size={16} className="text-accent" />
+            <Icon size={16} className="text-accent-fg" />
           </div>
           <div>
-            <h2 className="text-sm font-semibold text-gray-900">{title}</h2>
-            <p className="text-xs text-gray-400 mt-0.5">{description}</p>
+            <h2 className="text-sm font-semibold text-fg">{title}</h2>
+            <p className="text-xs text-fg-subtle mt-0.5">{description}</p>
           </div>
         </div>
         {onSave && (
@@ -191,19 +135,15 @@ export function SettingsPage() {
     queryFn:  () => api.get<GlobalSettings>('/admin/settings'),
   });
 
-  const [org, setOrg] = useState({
-    orgName: '', orgDescription: '', adminEmail: '',
-    language: 'de', timezone: 'Europe/Berlin',
-    welcomeMessage: '', logoUrl: '',
-  });
-  const [mail, setMail] = useState({
-    maxMessageSizeMb: 25, maxAttachmentSizeMb: 25, trashRetentionDays: 30,
-  });
+  // Only settings the server actually applies are offered (v9.1 review: the former
+  // description/logo/language/time zone/welcome text, attachment size, trash days,
+  // lockout count, token lifetime and self-registration fields were saved but never read).
+  const [org, setOrg] = useState({ orgName: '', adminEmail: '' });
+  const [mail, setMail] = useState({ maxMessageSizeMb: 25 });
   const [sec, setSec] = useState({
-    minPasswordLength: 8, maxLoginAttempts: 5,
-    sessionTimeoutMinutes: 480,
+    minPasswordLength: 8,
     inactivityTimeoutMinutes: 30,
-    requireMfaForAdmins: false, allowSelfRegistration: false,
+    requireMfaForAdmins: false,
     selfServicePasswordReset: true,
     auditLogEnabled: true,
   });
@@ -219,13 +159,11 @@ export function SettingsPage() {
 
   useEffect(() => {
     if (!cfg) return;
-    setOrg({ orgName: cfg.orgName, orgDescription: cfg.orgDescription, adminEmail: cfg.adminEmail,
-             language: cfg.language, timezone: cfg.timezone, welcomeMessage: cfg.welcomeMessage, logoUrl: cfg.logoUrl });
-    setMail({ maxMessageSizeMb: cfg.maxMessageSizeMb, maxAttachmentSizeMb: cfg.maxAttachmentSizeMb, trashRetentionDays: cfg.trashRetentionDays });
-    setSec({ minPasswordLength: cfg.minPasswordLength, maxLoginAttempts: cfg.maxLoginAttempts,
-             sessionTimeoutMinutes: cfg.sessionTimeoutMinutes,
+    setOrg({ orgName: cfg.orgName, adminEmail: cfg.adminEmail });
+    setMail({ maxMessageSizeMb: cfg.maxMessageSizeMb });
+    setSec({ minPasswordLength: cfg.minPasswordLength,
              inactivityTimeoutMinutes: cfg.inactivityTimeoutMinutes,
-             requireMfaForAdmins: cfg.requireMfaForAdmins, allowSelfRegistration: cfg.allowSelfRegistration,
+             requireMfaForAdmins: cfg.requireMfaForAdmins,
              selfServicePasswordReset: cfg.selfServicePasswordReset ?? true,
              auditLogEnabled: cfg.auditLogEnabled ?? true });
     setMaint({ maintenanceMode: cfg.maintenanceMode, maintenanceMessage: cfg.maintenanceMessage });
@@ -263,25 +201,12 @@ export function SettingsPage() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="flex items-center gap-2 text-gray-400">
+        <div className="flex items-center gap-2 text-fg-subtle">
           <RefreshCw size={16} className="animate-spin" />
           <span className="text-sm">{t('settings_loading')}</span>
         </div>
       </div>
     );
-  }
-
-  // ── Format times ────────────────────────────────────────────────────────────
-  function fmtTrash(days: number) {
-    if (days === 1) return `1 ${t('unit_day')}`;
-    if (days <= 7)  return `${days} ${t('unit_days')}`;
-    if (days <= 30) return `${days} ${t('unit_days')} (${Math.round(days / 7)} ${t('unit_weeks')})`;
-    return `${days} ${t('unit_days')} (ca. ${Math.round(days / 30)} ${t('unit_months')})`;
-  }
-  function fmtSession(min: number) {
-    if (min < 60)   return `${min} ${t('unit_minutes')}`;
-    if (min < 1440) return `${Math.round(min / 60 * 10) / 10} ${t('unit_hours')}`;
-    return `${Math.round(min / 1440 * 10) / 10} ${t('unit_days')}`;
   }
 
   return (
@@ -290,8 +215,8 @@ export function SettingsPage() {
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold text-gray-900">{t('settings_page_title')}</h1>
-          <p className="text-xs text-gray-400 mt-0.5">
+          <h1 className="text-xl font-semibold text-fg">{t('settings_page_title')}</h1>
+          <p className="text-xs text-fg-subtle mt-0.5">
             {t('settings_page_saved')} {cfg ? fmtDate(cfg.updatedAt) : '—'}
             {cfg?.publicHostname && (
               <span className="ml-3 inline-flex items-center gap-1">
@@ -305,8 +230,8 @@ export function SettingsPage() {
 
       {/* ── Maintenance mode banner ────────────────────────────────────────── */}
       {maint.maintenanceMode && (
-        <div className="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-amber-800">
-          <AlertTriangle size={16} className="shrink-0 text-amber-500" />
+        <div className="flex items-center gap-3 bg-warning-bg border border-warning-line rounded-lg px-4 py-3 text-warning-fg">
+          <AlertTriangle size={16} className="shrink-0 text-warning-fg" />
           <div>
             <p className="text-sm font-semibold">{t('settings_maint_banner_hd')}</p>
             <p className="text-xs mt-0.5">{t('settings_maint_banner_body')}</p>
@@ -322,35 +247,10 @@ export function SettingsPage() {
           <TextInput value={org.orgName} onChange={(v) => updOrg('orgName', v)} placeholder="z.B. Musterfirma Mail" maxLength={100} />
         </FieldGroup>
 
-        <FieldGroup label={t('settings_org_desc_field')} hint={t('settings_org_desc_hint')}>
-          <Textarea value={org.orgDescription} onChange={(v) => updOrg('orgDescription', v)} rows={2} />
-        </FieldGroup>
-
         <FieldGroup label={t('settings_org_admin_email')} hint={t('settings_org_admin_hint')}>
           <TextInput value={org.adminEmail} onChange={(v) => updOrg('adminEmail', v)} type="email" placeholder="admin@example.com" />
         </FieldGroup>
 
-        <FieldGroup label={t('settings_org_logo')} hint={t('settings_org_logo_hint')}>
-          <TextInput value={org.logoUrl} onChange={(v) => updOrg('logoUrl', v)} placeholder="https://example.com/logo.png" />
-          {org.logoUrl && (
-            <img src={org.logoUrl} alt="Logo" className="h-10 mt-1 object-contain border border-gray-100 rounded p-1"
-              onError={(e) => { (e.target as HTMLImageElement).hidden = true; }} />
-          )}
-        </FieldGroup>
-
-        <FieldGroup label={t('settings_org_lang')} hint={t('settings_org_lang_hint')}>
-          <Select value={org.language} onChange={(v) => updOrg('language', v)}
-            options={[{ value: 'de', label: '🇩🇪 Deutsch' }, { value: 'en', label: '🇬🇧 English' }]} />
-        </FieldGroup>
-
-        <FieldGroup label={t('settings_org_tz')} hint={t('settings_org_tz_hint')}>
-          <Select value={org.timezone} onChange={(v) => updOrg('timezone', v)}
-            options={TIMEZONE_OPTIONS} />
-        </FieldGroup>
-
-        <FieldGroup label={t('settings_org_welcome')} hint={t('settings_org_welcome_hint')}>
-          <Textarea value={org.welcomeMessage} onChange={(v) => updOrg('welcomeMessage', v)} rows={2} />
-        </FieldGroup>
       </Section>
 
       {/* ══ SECTION 2: MAIL SETTINGS ═════════════════════════════════════════ */}
@@ -361,14 +261,6 @@ export function SettingsPage() {
           <NumberInput value={mail.maxMessageSizeMb} onChange={(v) => updMail('maxMessageSizeMb', v)} min={1} max={500} unit={t('unit_mb')} />
         </FieldGroup>
 
-        <FieldGroup label={t('settings_mail_max_att')} hint={t('settings_mail_max_att_hint')}>
-          <NumberInput value={mail.maxAttachmentSizeMb} onChange={(v) => updMail('maxAttachmentSizeMb', v)} min={1} max={500} unit={t('unit_mb')} />
-        </FieldGroup>
-
-        <FieldGroup label={t('settings_mail_trash')} hint={t('settings_mail_trash_hint')}>
-          <NumberInput value={mail.trashRetentionDays} onChange={(v) => updMail('trashRetentionDays', v)} min={1} max={3650} unit={t('unit_days')} />
-          <p className="text-xs text-gray-400">{fmtTrash(mail.trashRetentionDays)}</p>
-        </FieldGroup>
       </Section>
 
       {/* ══ SECTION 3: SECURITY POLICIES ═════════════════════════════════════ */}
@@ -376,24 +268,15 @@ export function SettingsPage() {
         saving={secMut.isPending} dirty={secDirty} onSave={() => secMut.mutate()}>
 
         <FieldGroup label={t('settings_sec_pw_len')} hint={t('settings_sec_pw_len_hint')}>
-          <NumberInput value={sec.minPasswordLength} onChange={(v) => updSec('minPasswordLength', v)} min={4} max={64} unit={t('unit_chars')} />
+          <NumberInput value={sec.minPasswordLength} onChange={(v) => updSec('minPasswordLength', v)} min={8} max={64} unit={t('unit_chars')} />
           <div className="flex gap-1 mt-1">
-            {[4, 6, 8, 10, 12, 16].map((n) => (
+            {[8, 10, 12, 14, 16].map((n) => (
               <button key={n} type="button" onClick={() => updSec('minPasswordLength', n)}
-                className={`text-xs px-2 py-0.5 rounded border transition-colors ${sec.minPasswordLength === n ? 'border-accent bg-accent/10 text-accent' : 'border-gray-200 text-gray-500 hover:border-gray-300'}`}>
+                className={`text-xs px-2 py-0.5 rounded border transition-colors ${sec.minPasswordLength === n ? 'border-accent bg-accent/10 text-accent-fg' : 'border-line text-fg-subtle hover:border-line-strong'}`}>
                 {n}
               </button>
             ))}
           </div>
-        </FieldGroup>
-
-        <FieldGroup label={t('settings_sec_max_login')} hint={t('settings_sec_max_login_hint')}>
-          <NumberInput value={sec.maxLoginAttempts} onChange={(v) => updSec('maxLoginAttempts', v)} min={1} max={100} unit={t('unit_attempts')} />
-        </FieldGroup>
-
-        <FieldGroup label={t('settings_sec_session')} hint={t('settings_sec_session_hint')}>
-          <NumberInput value={sec.sessionTimeoutMinutes} onChange={(v) => updSec('sessionTimeoutMinutes', v)} min={5} max={10080} unit={t('unit_minutes')} />
-          <p className="text-xs text-gray-400 mt-1">{fmtSession(sec.sessionTimeoutMinutes)}</p>
         </FieldGroup>
 
         <FieldGroup label={t('settings_sec_inactivity')} hint={t('settings_sec_inactivity_hint')}>
@@ -401,18 +284,18 @@ export function SettingsPage() {
           <div className="flex gap-1 mt-1 flex-wrap">
             {[0, 5, 10, 15, 30, 60, 120].map((n) => (
               <button key={n} type="button" onClick={() => updSec('inactivityTimeoutMinutes', n)}
-                className={`text-xs px-2 py-0.5 rounded border transition-colors ${sec.inactivityTimeoutMinutes === n ? 'border-accent bg-accent/10 text-accent' : 'border-gray-200 text-gray-500 hover:border-gray-300'}`}>
+                className={`text-xs px-2 py-0.5 rounded border transition-colors ${sec.inactivityTimeoutMinutes === n ? 'border-accent bg-accent/10 text-accent-fg' : 'border-line text-fg-subtle hover:border-line-strong'}`}>
                 {n === 0 ? t('settings_sec_inactivity_off') : `${n} min`}
               </button>
             ))}
           </div>
           {sec.inactivityTimeoutMinutes === 0 ? (
-            <p className="text-xs text-gray-400 mt-1">{t('settings_sec_inactivity_off')} — Benutzer werden nur beim Token-Ablauf abgemeldet</p>
+            <p className="text-xs text-fg-subtle mt-1">{t('settings_sec_inactivity_off')} — Benutzer werden nur beim Token-Ablauf abgemeldet</p>
           ) : (
-            <p className="text-xs text-gray-400 mt-1">
+            <p className="text-xs text-fg-subtle mt-1">
               Automatischer Logout nach {sec.inactivityTimeoutMinutes} {sec.inactivityTimeoutMinutes === 1 ? 'Minute' : 'Minuten'} Inaktivität
               {sec.inactivityTimeoutMinutes < 5 && (
-                <span className="text-amber-500 ml-2">⚠ Sehr kurze Zeit — könnte Benutzer stören</span>
+                <span className="text-warning-fg ml-2">⚠ Sehr kurze Zeit — könnte Benutzer stören</span>
               )}
             </p>
           )}
@@ -422,20 +305,9 @@ export function SettingsPage() {
           <Toggle value={sec.requireMfaForAdmins} onChange={(v) => updSec('requireMfaForAdmins', v)}
             label={sec.requireMfaForAdmins ? t('settings_sec_mfa_on') : t('status_disabled')} />
           {sec.requireMfaForAdmins && (
-            <div className="flex items-center gap-2 mt-2 text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded px-3 py-2">
+            <div className="flex items-center gap-2 mt-2 text-xs text-warning-fg bg-warning-bg border border-warning-line rounded px-3 py-2">
               <AlertTriangle size={12} />
               {t('settings_sec_mfa_warn')}
-            </div>
-          )}
-        </FieldGroup>
-
-        <FieldGroup label={t('settings_sec_selfreg')} hint={t('settings_sec_selfreg_hint')}>
-          <Toggle value={sec.allowSelfRegistration} onChange={(v) => updSec('allowSelfRegistration', v)}
-            label={sec.allowSelfRegistration ? t('settings_sec_selfreg_on') : t('settings_sec_selfreg_off')} />
-          {sec.allowSelfRegistration && (
-            <div className="flex items-center gap-2 mt-2 text-xs text-blue-700 bg-blue-50 border border-blue-100 rounded px-3 py-2">
-              <Info size={12} />
-              {t('settings_sec_selfreg_info')}
             </div>
           )}
         </FieldGroup>
@@ -450,7 +322,7 @@ export function SettingsPage() {
             label={sec.selfServicePasswordReset ? 'Aktiviert — Benutzer können Passwort selbst zurücksetzen' : 'Deaktiviert — nur Administratoren können Passwörter zurücksetzen'}
           />
           {!sec.selfServicePasswordReset && (
-            <div className="flex items-center gap-2 mt-2 text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded px-3 py-2">
+            <div className="flex items-center gap-2 mt-2 text-xs text-warning-fg bg-warning-bg border border-warning-line rounded px-3 py-2">
               <AlertTriangle size={12} />
               Der „Passwort vergessen?"-Link wird im Login-Formular ausgeblendet.
             </div>
@@ -459,7 +331,7 @@ export function SettingsPage() {
 
         <FieldGroup
           label="Audit-Log"
-          hint="Protokolliert alle administrativen Aktionen (Benutzerverwaltung, Domain-Änderungen, Logins). Kritische Aktionen (Einstellungen-Änderung, Audit-Toggle selbst, Rolle/OAuth/Mailbox-/Domain-Löschungen) werden auch bei ausgeschaltetem Audit-Log IMMER protokolliert — Compliance-Anforderung gegen Insider-Threats."
+          hint="Protokolliert alle ändernden Admin-Aktionen sowie Exporte und Backup-Downloads. Kritische Aktionen (Einstellungen, der Audit-Schalter selbst, Audit-Log-Exporte, Postfach- und Domain-Löschungen) werden auch bei ausgeschaltetem Audit-Log IMMER protokolliert — Compliance-Anforderung gegen Insider-Threats."
         >
           <Toggle
             value={sec.auditLogEnabled}
@@ -469,7 +341,7 @@ export function SettingsPage() {
               : 'Deaktiviert — nur kritische Aktionen werden noch protokolliert'}
           />
           {!sec.auditLogEnabled && (
-            <div className="flex items-start gap-2 mt-2 text-xs text-red-700 bg-red-50 border border-red-100 rounded px-3 py-2">
+            <div className="flex items-start gap-2 mt-2 text-xs text-danger-fg bg-danger-bg border border-danger-line rounded px-3 py-2">
               <AlertTriangle size={12} className="shrink-0 mt-0.5" />
               <div>
                 <strong>Achtung:</strong> Compliance-Anforderungen (DSGVO Art. 32, SOX, HIPAA, TISAX, ISO 27001) verlangen lückenlose Protokollierung administrativer Aktionen.
@@ -488,7 +360,7 @@ export function SettingsPage() {
           <Toggle value={maint.maintenanceMode} onChange={(v) => updMaint('maintenanceMode', v)}
             label={maint.maintenanceMode ? t('settings_maint_on') : t('settings_maint_off')} />
           {maint.maintenanceMode && (
-            <div className="flex items-center gap-2 mt-2 px-3 py-2 bg-red-50 border border-red-100 rounded text-xs text-red-700">
+            <div className="flex items-center gap-2 mt-2 px-3 py-2 bg-danger-bg border border-danger-line rounded text-xs text-danger-fg">
               <AlertTriangle size={12} className="shrink-0" />
               <strong>Achtung:</strong>&nbsp;{t('settings_maint_warn')}
             </div>
@@ -497,25 +369,25 @@ export function SettingsPage() {
 
         <FieldGroup label={t('settings_maint_msg')} hint={t('settings_maint_msg_hint')}>
           <Textarea value={maint.maintenanceMessage} onChange={(v) => updMaint('maintenanceMessage', v)} rows={3} />
-          <p className="text-xs text-gray-400">{t('settings_maint_msg_chars')}</p>
+          <p className="text-xs text-fg-subtle">{t('settings_maint_msg_chars')}</p>
         </FieldGroup>
 
         {maint.maintenanceMessage && (
-          <div className="mt-3 border border-dashed border-amber-200 rounded-lg p-4 bg-amber-50">
-            <p className="text-xs font-medium text-amber-700 mb-2 flex items-center gap-1">
+          <div className="mt-3 border border-dashed border-warning-line rounded-lg p-4 bg-warning-bg">
+            <p className="text-xs font-medium text-warning-fg mb-2 flex items-center gap-1">
               <Eye size={12} /> {t('settings_maint_preview')}
             </p>
-            <div className="bg-white rounded p-3 border border-amber-100 text-sm text-gray-700 text-center">
-              <Wrench size={28} className="mx-auto mb-2 text-amber-400" />
-              <p className="font-semibold text-gray-800 mb-1">{t('settings_maint_preview_hd')}</p>
-              <p className="text-gray-600 text-xs">{maint.maintenanceMessage}</p>
+            <div className="bg-surface rounded p-3 border border-warning-line text-sm text-fg-muted text-center">
+              <Wrench size={28} className="mx-auto mb-2 text-warning-fg" />
+              <p className="font-semibold text-fg mb-1">{t('settings_maint_preview_hd')}</p>
+              <p className="text-fg-muted text-xs">{maint.maintenanceMessage}</p>
             </div>
           </div>
         )}
       </Section>
 
       {/* ── Info-Box ──────────────────────────────────────────────────────────── */}
-      <div className="flex items-center gap-3 bg-blue-50 border border-blue-100 rounded-lg px-4 py-3 text-blue-700">
+      <div className="flex items-center gap-3 bg-info-bg border border-info-line rounded-lg px-4 py-3 text-info-fg">
         <Info size={15} className="shrink-0" />
         <p className="text-xs">
           {t('settings_urls_info')}

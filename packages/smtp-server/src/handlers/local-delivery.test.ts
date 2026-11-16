@@ -178,6 +178,17 @@ test('local deliveries strip Authentication-Results with any of our authserv-ids
   assert.equal(await localDeliveryBuffer(forged, { quarantineReleaseId: 'q1' }), forged);
 });
 
+test('9.2 review: local deliveries (REST/JMAP/EAS/submission via the queue) strip X-CoreMail-Virus-Scan', async () => {
+  const forged = Buffer.from([
+    'X-CoreMail-Virus-Scan: suspicious; signature="PUA.Win.Packer.Upx-1"; host=mx.corp.test',
+    'From: mallory@corp.test', 'Subject: s', '', 'body', '',
+  ].join('\r\n'));
+  assert.doesNotMatch((await stripForLocalDelivery(forged)).toString(), /X-CoreMail-Virus-Scan/i);
+  assert.doesNotMatch((await localDeliveryBuffer(forged, {})).toString(), /X-CoreMail-Virus-Scan/i);
+  // a BCP quarantine release keeps our own genuine verdict
+  assert.equal(await localDeliveryBuffer(forged, { quarantineReleaseId: 'q1' }), forged);
+});
+
 // ── Finding 10: X-Filter-Context size ───────────────────────────────────────
 
 test('X-Filter-Context lists at most 100 recipients and carries the total count', () => {

@@ -70,6 +70,7 @@ const EXPECTED: Record<string, [string, string, string]> = {
   imaps:           ['SRV',   '_imaps._tcp',       '0 1 993 mail.example.com.'],
   imap:            ['SRV',   '_imap._tcp',        '0 1 143 mail.example.com.'],
   pop3s:           ['SRV',   '_pop3s._tcp',       '0 1 995 mail.example.com.'],
+  pop3:            ['SRV',   '_pop3._tcp',        '0 1 110 mail.example.com.'],
   autodiscoverSrv: ['SRV',   '_autodiscover._tcp', '0 0 443 mail.example.com.'],
   autoconfig:      ['CNAME', 'autoconfig',        'mail.example.com'],
   caldavs:         ['SRV',   '_caldavs._tcp',     '0 1 443 mail.example.com.'],
@@ -102,6 +103,7 @@ test('correct zone: every client-setup record is ok', async () => {
     srv: {
       '_submissions._tcp.example.com': s(465), '_submission._tcp.example.com': s(587),
       '_imaps._tcp.example.com': s(993), '_imap._tcp.example.com': s(143), '_pop3s._tcp.example.com': s(995),
+      '_pop3._tcp.example.com': s(110),
       '_autodiscover._tcp.example.com': s(443, 0),
       '_caldavs._tcp.example.com': s(443), '_carddavs._tcp.example.com': s(443),
     },
@@ -143,4 +145,38 @@ test('HTTPS SRV records follow a configured HTTPS port', async () => {
   assert.equal(r['caldavs']!.expected, '0 1 8443 mail.example.com.');
   assert.equal(r['autodiscoverSrv']!.expected, '0 0 8443 mail.example.com.');
   assert.equal(r['imaps']!.expected, '0 1 993 mail.example.com.');
+});
+
+test('SRV records carry split fields (provider form, target without trailing dot)', async () => {
+  zone = { srv: {}, txt: {}, cname: {}, a: {} };
+  const r = await domains.checkClientSetupRecords(fakeDns, 'example.com', 'Mail.Example.com.', 443);
+  assert.deepEqual(r['imaps']!.srv, { priority: 0, weight: 1, port: 993, target: 'mail.example.com' });
+  assert.deepEqual(r['autodiscoverSrv']!.srv, { priority: 0, weight: 0, port: 443, target: 'mail.example.com' });
+  // the zone-file form stays unchanged in `expected`
+  assert.equal(r['imaps']!.expected, '0 1 993 mail.example.com.');
+  // non-SRV records have no split fields
+  assert.equal(r['autoconfig']!.srv, undefined);
+  assert.equal(r['caldavsPath']!.srv, undefined);
+});
+
+test('plain IMAP 143 / POP3 110 are optional; a "." target (not offered) counts as ok', async () => {
+  zone = {
+    srv: {
+      '_imap._tcp.example.com': [{ priority: 0, weight: 0, port: 0, name: '.' }],
+      '_pop3._tcp.example.com': [{ priority: 0, weight: 0, port: 0, name: '' }],
+      '_imaps._tcp.example.com': [{ priority: 0, weight: 0, port: 0, name: '.' }],
+    },
+    txt: {}, cname: {}, a: {},
+  };
+  const r = await domains.checkClientSetupRecords(fakeDns, 'example.com', 'mail.example.com', 443);
+  assert.equal(r['imap']!.optional, true);
+  assert.equal(r['pop3']!.optional, true);
+  assert.equal(r['imap']!.ok, true);
+  assert.equal(r['pop3']!.ok, true);
+  // only the plain-text protocols are optional; "." on IMAPS is still a warning
+  for (const k of ['submissions', 'submission', 'imaps', 'pop3s', 'autodiscoverSrv', 'caldavs', 'carddavs']) {
+    assert.equal(r[k]!.optional, undefined, k);
+  }
+  assert.equal(r['imaps']!.ok, false);
+  assert.ok(r['imaps']!.warning);
 });

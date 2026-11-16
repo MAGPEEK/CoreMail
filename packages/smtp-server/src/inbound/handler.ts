@@ -13,6 +13,7 @@ import { notifyLocalOutcomes } from '../handlers/local-notify.js';
 import crypto from 'crypto';
 import { storeInboundMessage } from '../handlers/message.js';
 import { quarantineMessage } from '../handlers/quarantine.js';
+import { virusScanHeaderLine } from './virus-scan-header.js';
 import { expandRecipientsWithOrigins, isPostmasterAddress, canonicalRecipient, isLocalDomainAddress } from '../handlers/expand.js';
 import { enqueueOutbound } from '../outbound/queue.js';
 import { dsnForRecipients } from '../core/dsn-params.js';
@@ -237,7 +238,9 @@ async function onMessage(
   }
 
   // RFC 8601: our verdict travels with the stored message.
-  const authHeaders = filterResult.authHeaders ? sanitizeAuthHeaders(filterResult.authHeaders) : '';
+  const authHeaders = (filterResult.authHeaders ? sanitizeAuthHeaders(filterResult.authHeaders) : '')
+    // Not scanned clean by ClamAV (infected+pass, suspicious, too large, scanner error).
+    + (filterResult.virusScan ? virusScanHeaderLine(filterResult.virusScan, hostname) : '');
   const delivered = authHeaders ? prependHeader(raw, authHeaders) : raw;
   const senderAuth: SenderAuth = authUser
     ? { authenticatedSender: from }

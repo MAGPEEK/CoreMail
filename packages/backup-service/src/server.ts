@@ -6,12 +6,13 @@ import {
   getRedisClient, createLogger, verifyAccessToken,
   installProcessGuards, installAsyncErrorHandling, errorMiddleware, requireInternal, resolveBindHost,
 } from '@coremail/core';
-import { parseLimit, isBackupAdmin } from './http-utils.js';
+import { parseLimit, isBackupAdmin, isSafeArchiveKey } from './http-utils.js';
 import { runUserBackup, runFullBackup, runSingleMailboxBackup, startBackupScheduler, runRetentionLocked } from './scheduler/index.js';
 import { listRestorableMessages, restoreMessage, importMbox } from './restore/index.js';
 import { listBackups, ensureBackupBucket, openBackupDownload, deleteObject, backupKeyring } from './upload/s3.js';
 import { BackupDecryptError, BackupKeyConfigError } from './crypto/backup-crypto.js';
 import { prepareImportFile } from './restore/import-file.js';
+import { parseScheduleInput, type ScheduleData } from './scheduler/schedule-input.js';
 import { pipeline } from 'node:stream/promises';
 import { prisma } from '@coremail/storage';
 
@@ -147,6 +148,32 @@ app.post('/backup/admin/mailbox/:userId', requireAdmin, async (req, res) => {
   }
 });
 
+/** Cron smoke test via the CronJob constructor (same parser the scheduler uses). */
+async function validCron(cron: string): Promise<boolean> {
+  try {
+    const { CronJob } = await import('cron');
+    new CronJob(cron, () => undefined, null, false, 'UTC');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// 9.1.x — GET /backup/admin/encryption — key state for the BCP (never the key itself)
+app.get('/backup/admin/encryption', requireAdmin, (_req, res) => {
+  try {
+    const ring = backupKeyring();
+    res.json({
+      encrypted: true,
+      keySource: ring.current.source, // 'env' = BACKUP_ENCRYPTION_KEY, 'derived' = from JWT_SECRET + PEPPER
+      keyId: ring.current.id.toString('hex'),
+      decryptKeys: ring.keys.length,
+    });
+  } catch (err) {
+    res.json({ encrypted: false, keySource: null, error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 // v3.18.26 — backup schedules CRUD (DB-driven instead of env variable)
 
 // GET /backup/admin/schedules — list all schedules
@@ -159,20 +186,13 @@ app.get('/backup/admin/schedules', requireAdmin, async (_req, res) => {
 
 // POST /backup/admin/schedules — create a new schedule
 app.post('/backup/admin/schedules', requireAdmin, async (req, res) => {
-  const body = req.body as {
-    name?: string; cron?: string; scope?: string; format?: string;
-    targetUserId?: string; retentionDays?: number; enabled?: boolean;
-  };
-  if (!body.name || !body.cron) {
-    res.status(400).json({ error: 'name and cron required' });
-    return;
-  }
-  // Cron validation: simple smoke test via the CronJob constructor
-  try {
-    const { CronJob } = await import('cron');
-    new CronJob(body.cron, () => undefined, null, false, 'UTC');
-  } catch {
-    res.status(400).json({ error: 'Invalid cron expression' });
+  // 9.1.x: scope/format/target/retention validated (scope 'user' without a target never ran)
+  const parsed = parseScheduleInput(req.body);
+  if (!parsed.ok) { res.status(400).json({ error: parsed.error }); return; }
+  const body = parsed.data as ScheduleData;
+  if (!(await validCron(body.cron))) { res.status(400).json({ error: 'Invalid cron expression' }); return; }
+  if (body.targetUserId && !(await prisma.user.findUnique({ where: { id: body.targetUserId }, select: { id: true } }))) {
+    res.status(404).json({ error: 'User not found' });
     return;
   }
   const actorId = (req as express.Request & { userId: string }).userId;
@@ -180,11 +200,11 @@ app.post('/backup/admin/schedules', requireAdmin, async (req, res) => {
     data: {
       name: body.name,
       cron: body.cron,
-      scope: body.scope ?? 'full',
-      format: body.format ?? 'zip',
+      scope: body.scope,
+      format: body.format,
       ...(body.targetUserId ? { targetUserId: body.targetUserId } : {}),
-      retentionDays: body.retentionDays ?? 30,
-      enabled: body.enabled !== false,
+      retentionDays: body.retentionDays,
+      enabled: body.enabled,
       createdBy: actorId,
     },
   });
@@ -194,27 +214,18 @@ app.post('/backup/admin/schedules', requireAdmin, async (req, res) => {
 // PUT /backup/admin/schedules/:id — edit a schedule
 app.put('/backup/admin/schedules/:id', requireAdmin, async (req, res) => {
   const { id } = req.params as { id: string };
-  const body = req.body as {
-    name?: string; cron?: string; scope?: string; format?: string;
-    targetUserId?: string | null; retentionDays?: number; enabled?: boolean;
-  };
-  if (body.cron) {
-    try {
-      const { CronJob } = await import('cron');
-      new CronJob(body.cron, () => undefined, null, false, 'UTC');
-    } catch {
-      res.status(400).json({ error: 'Invalid cron expression' });
-      return;
-    }
+  const current = await prisma.backupSchedule.findUnique({ where: { id } });
+  if (!current) { res.status(404).json({ error: 'Schedule not found' }); return; }
+  const parsed = parseScheduleInput(req.body, current as unknown as ScheduleData);
+  if (!parsed.ok) { res.status(400).json({ error: parsed.error }); return; }
+  const body = parsed.data;
+  if (body.cron !== undefined && !(await validCron(body.cron))) { res.status(400).json({ error: 'Invalid cron expression' }); return; }
+  if (body.targetUserId && !(await prisma.user.findUnique({ where: { id: body.targetUserId }, select: { id: true } }))) {
+    res.status(404).json({ error: 'User not found' });
+    return;
   }
   const updates: Record<string, unknown> = {};
-  if (body.name !== undefined)         updates['name'] = body.name;
-  if (body.cron !== undefined)         updates['cron'] = body.cron;
-  if (body.scope !== undefined)        updates['scope'] = body.scope;
-  if (body.format !== undefined)       updates['format'] = body.format;
-  if (body.targetUserId !== undefined) updates['targetUserId'] = body.targetUserId;
-  if (body.retentionDays !== undefined) updates['retentionDays'] = body.retentionDays;
-  if (body.enabled !== undefined)      updates['enabled'] = body.enabled;
+  for (const [k, v] of Object.entries(body)) if (v !== undefined) updates[k] = v;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const updated = await prisma.backupSchedule.update({ where: { id }, data: updates as any });
   res.json(updated);
@@ -292,6 +303,7 @@ async function sendBackup(res: express.Response, key: string, ctx: Record<string
 app.get('/backup/admin/archive/download', requireAdmin, async (req, res) => {
   const key = typeof req.query['key'] === 'string' ? req.query['key'] : '';
   if (!key) { res.status(400).json({ error: 'key query param required' }); return; }
+  if (!isSafeArchiveKey(key)) { res.status(400).json({ error: 'Invalid archive key' }); return; }
   await sendBackup(res, key, { key });
 });
 
@@ -301,6 +313,7 @@ app.get('/backup/admin/archive/download', requireAdmin, async (req, res) => {
 app.delete('/backup/admin/archive', requireAdmin, async (req, res) => {
   const key = typeof req.query['key'] === 'string' ? req.query['key'] : '';
   if (!key) { res.status(400).json({ error: 'key query param required' }); return; }
+  if (!isSafeArchiveKey(key)) { res.status(400).json({ error: 'Invalid archive key' }); return; }
   try {
     await deleteObject(key);
     // Null out BackupJob records with this downloadUrl (cosmetic, optional)

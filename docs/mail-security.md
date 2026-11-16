@@ -139,6 +139,12 @@ transport rules, whether it failed closed).
 |----------|---------|--------|
 | `RSPAMD_CONTROLLER_PASSWORD` | unset | When set, every rspamd controller call (security-filter `/learnspam` + `/learnham`; api-gateway Bayes learning from "mark as junk/not junk" and the BCP threshold/stat calls) sends it as the `Password` header (9.0). Set the same value as the controller `password` / `enable_password` in rspamd, so the controller no longer needs to trust the app's IP via `secure_ip`. Values with CR/LF are ignored. |
 
+## Antivirus (ClamAV)
+
+Policy (action on a virus, scanner failure, timeout, size limit, Heuristics/PUA/encrypted
+findings), the `X-CoreMail-Virus-Scan` header, the status card, the EICAR test and the
+recommended `clamd.conf` limits: [antivirus.md](antivirus.md).
+
 ## Failure policy
 
 | Variable | Default | Effect |

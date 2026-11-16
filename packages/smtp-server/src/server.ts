@@ -5,9 +5,9 @@ import { X509Certificate } from 'node:crypto';
 import {
   createLogger, getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD, CHANNEL_SETTINGS_RELOAD,
   generateSelfSignedCert, tlsPemToBuffers, applyTlsToListeners, tlsMaterialEquals, installProcessGuards,
-  startAuthInvalidationSubscriber,
+  startAuthInvalidationSubscriber, resolveBindAddress, listenWithRecovery,
 } from '@coremail/core';
-import { connectDatabase, waitForObjectStorage, prisma, loadProtocolCert } from '@coremail/storage';
+import { connectDatabase, waitForObjectStorage, prisma, loadProtocolCert, invalidateQueueSettingsCache } from '@coremail/storage';
 import { createSmtpServer } from './core/factory.js';
 import { smtpLiveSessions } from './core/live-sessions.js';
 import { inboundTarpitMaxDelayMs } from './core/session.js';
@@ -50,9 +50,12 @@ let _bannerText: string = '';
 // restarting the listeners.
 import { DEFAULT_ESMTP_EXTENSIONS, type EsmtpExtensions } from './core/types.js';
 import { esmtpEnvFlags } from './core/esmtp-env.js';
+import { smtpConnectionLimits, type SmtpConnectionLimits } from './core/connection-limits.js';
 let _esmtp: EsmtpExtensions = { ...DEFAULT_ESMTP_EXTENSIONS };
 let _maxSize: number = 25 * 1024 * 1024; // 25 MB default (matches SmtpSettings.maxMessageSizeMb default)
 let _maxRcpt: number = 100;
+// Connection settings (BCP → SMTP → Connection), schema defaults until loaded.
+let _limits: SmtpConnectionLimits = smtpConnectionLimits(null);
 
 async function refreshSmtpSettings(): Promise<void> {
   try {
@@ -67,8 +70,11 @@ async function refreshSmtpSettings(): Promise<void> {
         // exposes them (their stored values are stale). v8.1: SMTPUTF8/DSN/CHUNKING are
         // controlled by SMTP_EXT_* env vars (default on), CRAM-MD5 stays off.
         maxMessageSizeMb: true, maxRecipients: true,
+        maxConnections: true, maxConnectionsPerIp: true, connectionTimeoutSec: true,
+        greetingDelaySec: true, maxAuthFailures: true,
       },
     });
+    _limits = smtpConnectionLimits(s);
     _bannerText = (s?.bannerOverride && s.bannerText) ? s.bannerText : '';
     _esmtp = {
       starttls:       s?.extStarttls       ?? true,
@@ -88,7 +94,7 @@ async function refreshSmtpSettings(): Promise<void> {
       log.warn({ configured: _maxSize, inbound: inboundMaxSize(_maxSize) },
         'maxMessageSizeMb exceeds what the content filter can scan — inbound (port 25) is limited to the filter size');
     }
-    log.info({ banner: _bannerText || '(default)', maxSize: _maxSize, maxRcpt: _maxRcpt, esmtp: _esmtp }, 'SMTP settings refreshed');
+    log.info({ banner: _bannerText || '(default)', maxSize: _maxSize, maxRcpt: _maxRcpt, esmtp: _esmtp, limits: _limits }, 'SMTP settings refreshed');
   } catch (err) {
     log.error({ err }, 'Failed to refresh SMTP settings');
   }
@@ -291,6 +297,13 @@ function createTrackedSmtpServer(port: number, ssl: boolean): TrackedSmtpServer 
       maxSize:    { get: () => (isSubmission ? _maxSize : inboundMaxSize(_maxSize)), enumerable: true, configurable: true },
       maxRcpt:    { get: () => _maxRcpt,    enumerable: true, configurable: true },
       esmtp:      { get: () => _esmtp,      enumerable: true, configurable: true },
+      // BCP → SMTP → Connection (live, per new connection/session)
+      maxConnections:      { get: () => _limits.maxConnections,      enumerable: true, configurable: true },
+      maxConnectionsPerIp: { get: () => _limits.maxConnectionsPerIp, enumerable: true, configurable: true },
+      commandTimeoutMs:    { get: () => _limits.commandTimeoutMs,    enumerable: true, configurable: true },
+      maxAuthFailures:     { get: () => _limits.maxAuthFailures,     enumerable: true, configurable: true },
+      // The greeting delay only applies to MTA traffic on port 25, never to submission clients.
+      greetingDelayMs:     { get: () => (isSubmission ? 0 : _limits.greetingDelayMs), enumerable: true, configurable: true },
       // ALWAYS advertise STARTTLS (on all ports incl. 25 inbound) — opportunistic TLS
       // (RFC 7435) works for most MTAs even with a self-signed cert. A cert whose name
       // does not match publicHostname is only logged (refreshTlsConfig), never
@@ -337,6 +350,45 @@ function closeSmtpServer(tracked: TrackedSmtpServer, port: number): void {
 
 // ── Listener reload ───────────────────────────────────────────────────────────
 
+/**
+ * Bind address of a listener ('' → all interfaces). Only IP literals are used;
+ * a host name (the field used to be ignored free text) means 0.0.0.0 —
+ * listenWithRecovery() logs it and recovers from bind errors.
+ */
+function bindAddress(address: string | null | undefined): string {
+  return resolveBindAddress(address);
+}
+
+/** SSL flag + bind address a running port was started with (9.1.x). */
+const appliedListener = new Map<number, string>();
+const listenerSignature = (l: { ssl: boolean; address: string }): string => `${l.ssl ? 'ssl' : 'plain'}|${bindAddress(l.address)}`;
+
+/**
+ * 9.1.x: a changed SSL flag / bind address of a RUNNING port used to be ignored
+ * until the next restart. Such ports are closed here and started again by a
+ * follow-up reload once the socket is released. Returns the closed ports.
+ */
+function stopChangedListeners(listeners: Array<{ port: number; ssl: boolean; address: string; active: boolean }>): Set<number> {
+  const wanted = new Map<number, string>();
+  for (const l of listeners) if (l.active && !wanted.has(l.port)) wanted.set(l.port, listenerSignature(l));
+  const restarted = new Set<number>();
+  for (const [port, sig] of wanted) {
+    const running = servers.get(port);
+    const applied = appliedListener.get(port);
+    if (running && applied !== undefined && applied !== sig) {
+      servers.delete(port);
+      appliedListener.delete(port);
+      closeSmtpServer(running, port);
+      restarted.add(port);
+    }
+  }
+  if (restarted.size > 0) {
+    log.info({ ports: [...restarted] }, 'SMTP listener settings changed — restarting');
+    setTimeout(scheduleReload, 500).unref?.();
+  }
+  return restarted;
+}
+
 async function reloadListeners(): Promise<void> {
   try {
     const listeners   = await prisma.serviceListener.findMany({ where: { service: 'SMTP_RECEIVE' } });
@@ -346,14 +398,26 @@ async function reloadListeners(): Promise<void> {
 
     // Start newly active ports — per-listener error isolation:
     // A failure on one port (e.g. missing TLS cert) must not block the other ports.
+    const restarted = stopChangedListeners(listeners);
     for (const l of listeners) {
-      if (l.active && !servers.has(l.port)) {
+      if (l.active && !servers.has(l.port) && !restarted.has(l.port)) {
         try {
           const tracked = createTrackedSmtpServer(l.port, l.ssl);
           servers.set(l.port, tracked);
           const mode = SUBMISSION_PORTS.has(l.port) ? 'submission' : 'inbound';
-          tracked.handle.listen(l.port, () =>
-            log.info({ port: l.port, ssl: l.ssl, mode }, 'SMTP listener started'));
+          appliedListener.set(l.port, listenerSignature(l));
+          // Bind errors (address not in the container, port still in use after a
+          // restart) are logged and recovered — never an uncaught 'error' event.
+          listenWithRecovery(tracked.handle.server, {
+            port: l.port, address: l.address, label: 'SMTP', log,
+            isCurrent: () => servers.get(l.port) === tracked,
+            onListening: (address) => log.info({ port: l.port, ssl: l.ssl, mode, address }, 'SMTP listener started'),
+            onGiveUp: () => {
+              if (servers.get(l.port) !== tracked) return;
+              servers.delete(l.port);
+              appliedListener.delete(l.port);
+            },
+          });
         } catch (portErr) {
           log.error({ err: portErr, port: l.port, ssl: l.ssl },
             'Failed to start SMTP listener — port skipped, others continue');
@@ -365,6 +429,7 @@ async function reloadListeners(): Promise<void> {
     for (const [port, tracked] of servers) {
       if (!activePorts.has(port)) {
         servers.delete(port);
+        appliedListener.delete(port);
         closeSmtpServer(tracked, port);
       }
     }
@@ -415,6 +480,8 @@ async function main(): Promise<void> {
       // Invalidate outbound smarthost/relay cache — new provider credentials
       // thus take effect on the next send attempt (instead of after the 60s TTL).
       invalidateOutboundConfigCache();
+      // BCP → Queues → Settings (retry/backoff/retention) take effect at once.
+      invalidateQueueSettingsCache();
       // Reload TLS certificate and swap it into running listeners
       // (setSecureContext), then start any listener that is missing.
       void refreshTlsConfig().then(() => { applyTlsToRunningListeners(); scheduleReload(); });

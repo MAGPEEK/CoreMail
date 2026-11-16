@@ -76,7 +76,7 @@ export function trackedConnRateIps(): number {
  * Checks whether a new connection from this IP is allowed.
  * Returns true if OK, false if it should be rejected.
  */
-export function checkAndTrackConnection(rawIp: string, now = Date.now()): boolean {
+export function checkAndTrackConnection(rawIp: string, now = Date.now(), maxPerIp = MAX_CONNS_PER_IP): boolean {
   const ip = normalizeIp(rawIp);
 
   // Always allow private / loopback IPs
@@ -85,9 +85,11 @@ export function checkAndTrackConnection(rawIp: string, now = Date.now()): boolea
   if (now - lastPrune > RATE_WINDOW_MS) pruneConnTimestamps(now);
 
   // 1. Concurrent-Connection-Limit
+  // SmtpSettings.maxConnectionsPerIp (BCP) — falls back to SMTP_MAX_CONNS_PER_IP
+  const limit = Number.isFinite(maxPerIp) && maxPerIp > 0 ? maxPerIp : MAX_CONNS_PER_IP;
   const current = activeConns.get(ip) ?? 0;
-  if (current >= MAX_CONNS_PER_IP) {
-    log.warn({ ip, current, limit: MAX_CONNS_PER_IP }, 'SMTP: max concurrent connections exceeded');
+  if (current >= limit) {
+    log.warn({ ip, current, limit }, 'SMTP: max concurrent connections exceeded');
     return false;
   }
 
@@ -105,6 +107,64 @@ export function checkAndTrackConnection(rawIp: string, now = Date.now()): boolea
   // Increment counters
   activeConns.set(ip, current + 1);
   return true;
+}
+
+// ── Global connection limit (SmtpSettings.maxConnections) ─────────────────────
+
+export interface SmtpConnectionCaps {
+  /** Global cap for this connection, or null when it is neither limited nor counted. */
+  global: number | null;
+  /** Per-IP cap (undefined → SMTP_MAX_CONNS_PER_IP, the pre-9.2 limit). */
+  perIp: number | undefined;
+}
+
+/**
+ * Pure: which connection caps apply to a new SMTP connection (9.2 review).
+ *
+ *  - The global cap (SmtpSettings.maxConnections) and the BCP per-IP cap
+ *    (SmtpSettings.maxConnectionsPerIp) apply to inbound MX listeners (port 25)
+ *    only. Otherwise a flood on port 25 — or many NATed office clients — would
+ *    lock users out of submission (587/465).
+ *  - Submission keeps the pre-9.2 behaviour: per-IP limit SMTP_MAX_CONNS_PER_IP,
+ *    no global cap.
+ *  - Loopback/private sources are exempt from the global cap (and not counted);
+ *    checkAndTrackConnection() exempts them from the per-IP cap as before.
+ */
+export function connectionCaps(opts: {
+  submission: boolean;
+  ip: string;
+  maxConnections?: number | undefined;
+  maxConnectionsPerIp?: number | undefined;
+}): SmtpConnectionCaps {
+  if (opts.submission) return { global: null, perIp: undefined };
+  const global = isPrivateIp(normalizeIp(opts.ip)) || opts.maxConnections === undefined ? null : opts.maxConnections;
+  return { global, perIp: opts.maxConnectionsPerIp };
+}
+
+/** Open port-25 connections from public IPs (the ones the global limit counts). */
+let totalActive = 0;
+
+/**
+ * Reserves a slot under the global limit. Returns false when `max` (> 0)
+ * connections are already open. Every successful call must be paired with
+ * releaseGlobalSlot() when the socket closes.
+ */
+export function acquireGlobalSlot(max: number | undefined): boolean {
+  if (max !== undefined && Number.isFinite(max) && max > 0 && totalActive >= max) {
+    log.warn({ open: totalActive, limit: max }, 'SMTP: global connection limit reached');
+    return false;
+  }
+  totalActive++;
+  return true;
+}
+
+export function releaseGlobalSlot(): void {
+  if (totalActive > 0) totalActive--;
+}
+
+/** Open connections counted by the global limit (tests/metrics). */
+export function openConnectionCount(): number {
+  return totalActive;
 }
 
 /** Must be called when a connection is closed. */

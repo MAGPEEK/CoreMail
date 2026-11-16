@@ -2,12 +2,14 @@ import { useId, useState } from 'react';
 import { Modal } from '../components/Modal.js';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  Archive, Plus, Pencil, Trash2, Tag, ListChecks,
+  Archive, Plus, Pencil, Trash2, Tag, ListChecks, Play, Loader2, Globe, User as UserIcon,
   X, Folder as FolderIcon, AlertCircle,
   Sparkles, Inbox, Send, Mail as MailIcon, ShieldCheck, FileText, Clock,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
+import { errorMessage } from '../lib/errors.js';
+import { parseRetentionDays, policyBody, tagChangePlan } from '../lib/retention.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -43,15 +45,134 @@ interface RetentionPolicy {
   policyTags?: { policyId: string; tagId: string; tag: RetentionTag }[];
 }
 
+interface ManagedFolderRun {
+  id: string;
+  startedAt: string;
+  completedAt: string | null;
+  mailboxesScanned: number;
+  itemsScanned: number;
+  itemsArchived: number;
+  itemsSoftDeleted: number;
+  itemsHardDeleted: number;
+  throttled: boolean;
+  errorMessage: string | null;
+}
+
+interface PolicyAssignment { id: string; target: 'GLOBAL' | 'DOMAIN' | 'USER'; targetId: string; label?: string }
+interface AssignTargets { domains: { id: string; name: string }[]; users: { id: string; email: string; displayName: string | null }[] }
+
+// ─── Assignments (GLOBAL / DOMAIN / USER) ─────────────────────────────────────
+function AssignmentsModal({ policy, onClose }: { policy: RetentionPolicy; onClose: () => void }) {
+  const qc = useQueryClient();
+  const titleId = useId();
+  const [target, setTarget] = useState<'GLOBAL' | 'DOMAIN' | 'USER'>('DOMAIN');
+  const [targetId, setTargetId] = useState('');
+  const [q, setQ] = useState('');
+
+  const { data: list = [], isLoading } = useQuery<PolicyAssignment[]>({
+    queryKey: ['admin-retention-assignments', policy.id],
+    queryFn:  () => api.get(`/admin/compliance/retention/${policy.id}/assignments`),
+  });
+  const { data: targets } = useQuery<AssignTargets>({
+    queryKey: ['admin-retention-targets', q],
+    queryFn:  () => api.get(`/admin/compliance/retention/targets?q=${encodeURIComponent(q)}`),
+  });
+
+  const refresh = () => {
+    void qc.invalidateQueries({ queryKey: ['admin-retention-assignments', policy.id] });
+    void qc.invalidateQueries({ queryKey: ['admin-retention'] });
+  };
+  const add = useMutation({
+    mutationFn: () => api.post(`/admin/compliance/retention/${policy.id}/assignments`, { target, targetId: target === 'GLOBAL' ? '' : targetId }),
+    onSuccess: () => { refresh(); setTargetId(''); toast.success('Zuweisung hinzugefügt'); },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  const remove = useMutation({
+    mutationFn: (aid: string) => api.delete(`/admin/compliance/retention/${policy.id}/assignments/${aid}`),
+    onSuccess: () => { refresh(); toast.success('Zuweisung entfernt'); },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+
+  return (
+    <Modal
+      onClose={onClose}
+      labelledBy={titleId}
+      overlayClassName="fixed inset-0 bg-scrim/40 flex items-center justify-center z-50 p-4"
+      className="bg-surface rounded-lg shadow-xl w-full max-w-lg max-h-[90vh] flex flex-col"
+    >
+      <div className="px-6 py-4 border-b border-line flex items-center justify-between shrink-0">
+        <h2 id={titleId} className="text-base font-semibold text-fg">Zuweisungen: {policy.name}</h2>
+        <button type="button" onClick={onClose} aria-label="Schließen" className="text-fg-subtle hover:text-fg-muted"><X size={18} /></button>
+      </div>
+      <div className="px-6 py-4 space-y-4 overflow-y-auto">
+        <p className="text-xs text-fg-subtle">Die Richtlinie gilt für alle zugewiesenen Postfächer. Ein Postfach mit mehreren Richtlinien erhält die Tags aller Richtlinien.</p>
+        {isLoading ? (
+          <p className="text-sm text-fg-subtle">Laden…</p>
+        ) : list.length === 0 ? (
+          <p className="text-sm text-warning-fg">Keine Zuweisung — die Richtlinie wird auf kein Postfach angewendet.</p>
+        ) : (
+          <ul className="divide-y divide-line border border-line rounded">
+            {list.map((a) => (
+              <li key={a.id} className="flex items-center gap-2 px-3 py-2 text-sm">
+                {a.target === 'GLOBAL' ? <Globe size={13} className="text-fg-subtle" /> : a.target === 'USER' ? <UserIcon size={13} className="text-fg-subtle" /> : <FolderIcon size={13} className="text-fg-subtle" />}
+                <span className="text-xs text-fg-subtle w-16">{a.target === 'GLOBAL' ? 'Global' : a.target === 'DOMAIN' ? 'Domain' : 'Benutzer'}</span>
+                <span className="flex-1 text-fg truncate">{a.label ?? (a.targetId || 'Alle Postfächer')}</span>
+                <button aria-label="Zuweisung entfernen" onClick={() => remove.mutate(a.id)} disabled={remove.isPending}
+                  className="p-1 text-fg-subtle hover:text-danger-fg disabled:opacity-40"><Trash2 size={13} /></button>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <div className="border-t border-line pt-4 space-y-2">
+          <p className="text-xs font-semibold text-fg-subtle uppercase tracking-wide">Neue Zuweisung</p>
+          <div className="flex gap-2">
+            {(['GLOBAL', 'DOMAIN', 'USER'] as const).map((t) => (
+              <button key={t} type="button" onClick={() => { setTarget(t); setTargetId(''); }}
+                className={`px-3 py-1.5 text-xs rounded border ${target === t ? 'border-accent-fg text-accent-fg bg-accent/10' : 'border-line-strong text-fg-muted hover:bg-surface-2'}`}>
+                {t === 'GLOBAL' ? 'Alle Postfächer' : t === 'DOMAIN' ? 'Domain' : 'Benutzer'}
+              </button>
+            ))}
+          </div>
+          {target === 'DOMAIN' && (
+            <select aria-label="Domain" value={targetId} onChange={(e) => setTargetId(e.target.value)}
+              className="w-full border border-line-strong rounded px-3 py-1.5 text-sm">
+              <option value="">Domain wählen…</option>
+              {(targets?.domains ?? []).map((d) => <option key={d.id} value={d.name}>{d.name}</option>)}
+            </select>
+          )}
+          {target === 'USER' && (
+            <>
+              <input aria-label="Benutzer suchen" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Benutzer suchen…"
+                className="w-full border border-line-strong rounded px-3 py-1.5 text-sm" />
+              <select aria-label="Benutzer" value={targetId} onChange={(e) => setTargetId(e.target.value)}
+                className="w-full border border-line-strong rounded px-3 py-1.5 text-sm">
+                <option value="">Benutzer wählen…</option>
+                {(targets?.users ?? []).map((u) => <option key={u.id} value={u.id}>{u.displayName ? `${u.displayName} — ${u.email}` : u.email}</option>)}
+              </select>
+            </>
+          )}
+          <div className="flex justify-end">
+            <button onClick={() => add.mutate()} disabled={add.isPending || (target !== 'GLOBAL' && !targetId)}
+              className="flex items-center gap-1.5 px-4 py-2 text-sm text-white bg-accent rounded hover:bg-accent/90 disabled:opacity-50">
+              <Plus size={14} /> Zuweisen
+            </button>
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // ─── Labels ──────────────────────────────────────────────────────────────────
 
 const TAG_TYPE_LABELS: Record<TagType, string> = {
   DPT: 'Default Policy Tag', RPT: 'Retention Policy Tag', PERSONAL: 'Personal Tag',
 };
 const TAG_TYPE_COLORS: Record<TagType, string> = {
-  DPT: 'bg-purple-100 text-purple-700',
-  RPT: 'bg-blue-100 text-blue-700',
-  PERSONAL: 'bg-amber-100 text-amber-700',
+  DPT: 'bg-info-bg text-info-fg',
+  RPT: 'bg-info-bg text-info-fg',
+  PERSONAL: 'bg-warning-bg text-warning-fg',
 };
 const TAG_ACTION_LABELS: Record<TagAction, string> = {
   MOVE_TO_ARCHIVE: 'In Archiv verschieben',
@@ -72,7 +193,7 @@ const LEGACY_ACTION_LABELS: Record<RetentionPolicy['action'], string> = {
   ARCHIVE: 'Archivieren', DELETE: 'Löschen', MOVE_TO_FOLDER: 'In Ordner verschieben',
 };
 const LEGACY_ACTION_COLORS: Record<RetentionPolicy['action'], string> = {
-  ARCHIVE: 'bg-blue-100 text-blue-700', DELETE: 'bg-red-100 text-red-700', MOVE_TO_FOLDER: 'bg-yellow-100 text-yellow-700',
+  ARCHIVE: 'bg-info-bg text-info-fg', DELETE: 'bg-danger-bg text-danger-fg', MOVE_TO_FOLDER: 'bg-warning-bg text-warning-fg',
 };
 
 function daysLabel(d: number): string {
@@ -82,7 +203,7 @@ function daysLabel(d: number): string {
   return `${d} Tag${d !== 1 ? 'e' : ''}`;
 }
 
-// ─── Templates (typical Exchange 2019 retention scenarios) ─────────────────
+// ─── Templates (typical retention scenarios) ─────────────────
 // Each template consists of: a tag + a policy (bundling that tag)
 // + GLOBAL assignment to all mailboxes. Created atomically with one click via
 // frontend orchestration.
@@ -107,7 +228,7 @@ interface RetentionTemplate {
 const RETENTION_TEMPLATES: RetentionTemplate[] = [
   {
     id: 'trash-30d',
-    icon: Trash2, iconClass: 'text-red-600 bg-red-50',
+    icon: Trash2, iconClass: 'text-danger-fg bg-danger-bg',
     name: 'Papierkorb nach 30 Tagen leeren',
     description: 'Verschiebt Items aus „Gelöschte Elemente" nach 30 Tagen in Recoverable Items.',
     policyName: 'Standard — Papierkorb 30 Tage',
@@ -120,7 +241,7 @@ const RETENTION_TEMPLATES: RetentionTemplate[] = [
   },
   {
     id: 'junk-14d',
-    icon: ShieldCheck, iconClass: 'text-amber-600 bg-amber-50',
+    icon: ShieldCheck, iconClass: 'text-warning-fg bg-warning-bg',
     name: 'Junk nach 14 Tagen endgültig löschen',
     description: 'Spam wird nach 14 Tagen direkt in Purges verschoben — Speicherplatz frei.',
     policyName: 'Standard — Junk 14 Tage',
@@ -133,7 +254,7 @@ const RETENTION_TEMPLATES: RetentionTemplate[] = [
   },
   {
     id: 'inbox-archive-1y',
-    icon: Inbox, iconClass: 'text-blue-600 bg-blue-50',
+    icon: Inbox, iconClass: 'text-info-fg bg-info-bg',
     name: 'Posteingang nach 1 Jahr archivieren',
     description: 'Mails im Posteingang werden nach 365 Tagen ins Archiv-Postfach verschoben.',
     policyName: 'Standard — Posteingang 1 Jahr → Archiv',
@@ -146,7 +267,7 @@ const RETENTION_TEMPLATES: RetentionTemplate[] = [
   },
   {
     id: 'sent-archive-2y',
-    icon: Send, iconClass: 'text-indigo-600 bg-indigo-50',
+    icon: Send, iconClass: 'text-info-fg bg-info-bg',
     name: 'Gesendet nach 2 Jahren archivieren',
     description: 'Items aus „Gesendet" werden nach 2 Jahren ins Archiv-Postfach verschoben.',
     policyName: 'Standard — Gesendet 2 Jahre → Archiv',
@@ -159,7 +280,7 @@ const RETENTION_TEMPLATES: RetentionTemplate[] = [
   },
   {
     id: 'drafts-90d',
-    icon: FileText, iconClass: 'text-gray-600 bg-gray-100',
+    icon: FileText, iconClass: 'text-fg-muted bg-surface-2',
     name: 'Entwürfe nach 90 Tagen löschen',
     description: 'Nicht-abgesendete Entwürfe werden nach 90 Tagen in Deletions verschoben.',
     policyName: 'Standard — Entwürfe 90 Tage',
@@ -172,7 +293,7 @@ const RETENTION_TEMPLATES: RetentionTemplate[] = [
   },
   {
     id: 'dpt-7y-compliance',
-    icon: Clock, iconClass: 'text-purple-600 bg-purple-50',
+    icon: Clock, iconClass: 'text-info-fg bg-info-bg',
     name: 'Compliance: 7 Jahre Aufbewahrung (Markierung)',
     description: 'DPT — markiert alle Items nach 7 Jahren als „über Aufbewahrungsfrist" (keine Bewegung).',
     policyName: 'Compliance — 7 Jahre Aufbewahrung',
@@ -185,7 +306,7 @@ const RETENTION_TEMPLATES: RetentionTemplate[] = [
   },
   {
     id: 'dpt-3y-archive',
-    icon: Archive, iconClass: 'text-emerald-600 bg-emerald-50',
+    icon: Archive, iconClass: 'text-success-fg bg-success-bg',
     name: 'Standard 3 Jahre → Archiv (alle Items)',
     description: 'DPT — verschiebt alle Items nach 3 Jahren ins Archiv-Postfach.',
     policyName: 'Standard — Alle Items 3 Jahre → Archiv',
@@ -198,7 +319,7 @@ const RETENTION_TEMPLATES: RetentionTemplate[] = [
   },
   {
     id: 'dpt-5y-delete',
-    icon: MailIcon, iconClass: 'text-rose-600 bg-rose-50',
+    icon: MailIcon, iconClass: 'text-danger-fg bg-danger-bg',
     name: '5 Jahre wiederherstellbar löschen',
     description: 'DPT — alle Items nach 5 Jahren in Recoverable Items\\Deletions. Compliance-tauglich.',
     policyName: 'Standard — Alle Items 5 Jahre löschen',
@@ -218,12 +339,16 @@ function TemplatePickerModal({ onClose }: { onClose: () => void }) {
 
   async function applyTemplate(tpl: RetentionTemplate) {
     setBusyId(tpl.id);
+    // 9.1.x: created objects are removed again when a later step fails (no half-applied template)
+    let createdTagId: string | null = null;
+    let createdPolicyId: string | null = null;
     try {
       // 1. Create tag
       const tag = await api.post<{ id: string }>('/admin/compliance/retention/tags', {
         ...tpl.tag,
         enabled: true,
       });
+      createdTagId = tag.id;
       // 2. Create policy (legacy fields empty, tags control everything)
       const policy = await api.post<{ id: string }>('/admin/compliance/retention', {
         name: tpl.policyName,
@@ -233,6 +358,7 @@ function TemplatePickerModal({ onClose }: { onClose: () => void }) {
         action: 'ARCHIVE',
         scope: 'ALL_ITEMS',
       });
+      createdPolicyId = policy.id;
       // 3. Attach tag to policy
       await api.post(`/admin/compliance/retention/${policy.id}/tags/${tag.id}`, {});
       // 4. GLOBAL assignment to all mailboxes
@@ -246,6 +372,10 @@ function TemplatePickerModal({ onClose }: { onClose: () => void }) {
       onClose();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+      if (createdPolicyId) await api.delete(`/admin/compliance/retention/${createdPolicyId}`).catch(() => undefined);
+      if (createdTagId) await api.delete(`/admin/compliance/retention/tags/${createdTagId}`).catch(() => undefined);
+      void qc.invalidateQueries({ queryKey: ['admin-retention'] });
+      void qc.invalidateQueries({ queryKey: ['admin-retention-tags'] });
       toast.error(`Konnte Vorlage nicht anwenden: ${msg}`);
       setBusyId(null);
     }
@@ -258,19 +388,19 @@ function TemplatePickerModal({ onClose }: { onClose: () => void }) {
       labelledBy={titleId}
 
       closeOnBackdrop={false}
-      overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-      className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col"
+      overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-scrim/40 p-4"
+      className="bg-surface rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col"
     >
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 shrink-0">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-line shrink-0">
           <div>
-            <h2 id={titleId} className="font-semibold text-gray-900 flex items-center gap-2">
-              <Sparkles size={17} className="text-accent" /> Aufbewahrungsrichtlinie aus Vorlage
+            <h2 id={titleId} className="font-semibold text-fg flex items-center gap-2">
+              <Sparkles size={17} className="text-accent-fg" /> Aufbewahrungsrichtlinie aus Vorlage
             </h2>
-            <p className="text-xs text-gray-500 mt-0.5">
+            <p className="text-xs text-fg-subtle mt-0.5">
               Wähle eine Vorlage — Tag + Richtlinie + Zuweisung auf alle Postfächer werden in einem Schritt erstellt.
             </p>
           </div>
-          <button type="button" onClick={onClose} aria-label="Schließen" className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+          <button type="button" onClick={onClose} aria-label="Schließen" className="text-fg-subtle hover:text-fg-muted"><X size={18} /></button>
         </div>
         <div className="flex-1 overflow-y-auto p-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -283,35 +413,35 @@ function TemplatePickerModal({ onClose }: { onClose: () => void }) {
                   type="button"
                   disabled={busyId !== null}
                   onClick={() => applyTemplate(t)}
-                  className="text-left p-3 border border-gray-200 rounded-lg hover:border-accent hover:bg-accent/5 transition-colors group disabled:opacity-50"
+                  className="text-left p-3 border border-line rounded-lg hover:border-accent-fg hover:bg-accent/5 transition-colors group disabled:opacity-50"
                 >
                   <div className="flex items-start gap-2.5">
                     <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${t.iconClass}`}>
                       <Icon size={16} />
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium text-gray-900 mb-0.5 group-hover:text-accent">{t.name}</p>
-                      <p className="text-xs text-gray-600 leading-relaxed mb-1.5">{t.description}</p>
+                      <p className="text-sm font-medium text-fg mb-0.5 group-hover:text-accent-fg">{t.name}</p>
+                      <p className="text-xs text-fg-muted leading-relaxed mb-1.5">{t.description}</p>
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${TAG_TYPE_COLORS[t.tag.type]}`}>{t.tag.type}</span>
-                        <span className="text-[10px] text-gray-500">
+                        <span className="text-[10px] text-fg-subtle">
                           {TAG_ACTION_LABELS[t.tag.action]} · nach {daysLabel(t.tag.retentionDays)}
                         </span>
                       </div>
                     </div>
-                    {isBusy && <div className="text-xs text-gray-400">Erstelle…</div>}
+                    {isBusy && <div className="text-xs text-fg-subtle">Erstelle…</div>}
                   </div>
                 </button>
               );
             })}
           </div>
         </div>
-        <div className="px-5 py-3 border-t border-gray-100 flex items-center justify-between shrink-0">
-          <p className="text-xs text-gray-400">
+        <div className="px-5 py-3 border-t border-line flex items-center justify-between shrink-0">
+          <p className="text-xs text-fg-subtle">
             Du kannst die erstellte Richtlinie danach beliebig anpassen.
           </p>
           <button onClick={onClose}
-            className="px-3 py-1.5 text-sm text-gray-600 border border-gray-300 rounded hover:bg-gray-50">
+            className="px-3 py-1.5 text-sm text-fg-muted border border-line-strong rounded hover:bg-surface-2">
             Schließen
           </button>
         </div>
@@ -343,7 +473,7 @@ function TagModal({ tag, onClose }: { tag: RetentionTag | null; onClose: () => v
         description:   form.description,
         type:          form.type,
         action:        form.action,
-        retentionDays: parseInt(form.retentionDays),
+        retentionDays: parseRetentionDays(form.retentionDays) ?? 0,
         enabled:       form.enabled,
         ...(form.type === 'RPT' ? { folderTarget: form.folderTarget } : {}),
         ...(form.type === 'DPT' ? { folderTarget: 'ALL_OTHER' } : {}),
@@ -368,35 +498,35 @@ function TagModal({ tag, onClose }: { tag: RetentionTag | null; onClose: () => v
       labelledBy={titleId}
 
       closeOnBackdrop={false}
-      overlayClassName="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
-      className="bg-white rounded-lg shadow-xl w-full max-w-lg"
+      overlayClassName="fixed inset-0 bg-scrim/40 flex items-center justify-center z-50 p-4"
+      className="bg-surface rounded-lg shadow-xl w-full max-w-lg"
     >
-        <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-          <h2 id={titleId} className="text-base font-semibold text-gray-900">{isEdit ? 'Tag bearbeiten' : 'Neuer Retention Tag'}</h2>
-          <button type="button" onClick={onClose} aria-label="Schließen" className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+        <div className="px-6 py-4 border-b border-line flex items-center justify-between">
+          <h2 id={titleId} className="text-base font-semibold text-fg">{isEdit ? 'Tag bearbeiten' : 'Neuer Retention Tag'}</h2>
+          <button type="button" onClick={onClose} aria-label="Schließen" className="text-fg-subtle hover:text-fg-muted"><X size={18} /></button>
         </div>
         <div className="px-6 py-4 space-y-3">
           <div>
-            <label className="block text-xs font-medium text-gray-700 mb-1">Name *</label>
+            <label className="block text-xs font-medium text-fg-muted mb-1">Name *</label>
             <input value={form.name} onChange={(e) => set('name', e.target.value)}
-              className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
+              className="w-full border border-line-strong rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-accent-fg"
               placeholder="z.B. Default 1 Year Move to Archive" />
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-gray-700 mb-1">Typ *</label>
+            <label className="block text-xs font-medium text-fg-muted mb-1">Typ *</label>
             <div className="grid grid-cols-3 gap-2">
               {(['DPT', 'RPT', 'PERSONAL'] as const).map((t) => (
                 <button key={t} type="button" onClick={() => set('type', t)}
                   className={`px-3 py-2 text-sm rounded border ${
-                    form.type === t ? 'bg-accent/10 border-accent text-accent font-medium' : 'bg-white border-gray-300 text-gray-600 hover:bg-gray-50'
+                    form.type === t ? 'bg-accent/10 border-accent-fg text-accent-fg font-medium' : 'bg-surface border-line-strong text-fg-muted hover:bg-surface-2'
                   }`}>
                   <p className="text-xs font-semibold">{t}</p>
-                  <p className="text-[10px] opacity-70 mt-0.5">{TAG_TYPE_LABELS[t]}</p>
+                  <p className="text-[10px] text-fg-subtle mt-0.5">{TAG_TYPE_LABELS[t]}</p>
                 </button>
               ))}
             </div>
-            <p className="text-[11px] text-gray-400 mt-1">
+            <p className="text-[11px] text-fg-subtle mt-1">
               {form.type === 'DPT' && 'Gilt fürs ganze Postfach — wenn kein spezifischeres Tag passt'}
               {form.type === 'RPT' && 'Bindet an einen Standardordner (Inbox, Sent, …)'}
               {form.type === 'PERSONAL' && 'User kann ihn manuell auf Items/Ordner anwenden'}
@@ -405,9 +535,9 @@ function TagModal({ tag, onClose }: { tag: RetentionTag | null; onClose: () => v
 
           {form.type === 'RPT' && (
             <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">Standardordner *</label>
+              <label className="block text-xs font-medium text-fg-muted mb-1">Standardordner *</label>
               <select value={form.folderTarget} onChange={(e) => set('folderTarget', e.target.value as FolderTarget)}
-                className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent">
+                className="w-full border border-line-strong rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-accent-fg">
                 {(['INBOX', 'SENT_ITEMS', 'DELETED_ITEMS', 'JUNK_EMAIL', 'DRAFTS', 'OUTBOX', 'ARCHIVE', 'RECOVERABLE_ITEMS'] as FolderTarget[]).map((t) => (
                   <option key={t} value={t}>{FOLDER_TARGET_LABELS[t]}</option>
                 ))}
@@ -417,16 +547,16 @@ function TagModal({ tag, onClose }: { tag: RetentionTag | null; onClose: () => v
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">Aufbewahrungsdauer (Tage)</label>
+              <label className="block text-xs font-medium text-fg-muted mb-1">Aufbewahrungsdauer (Tage)</label>
               <input type="number" min="1" value={form.retentionDays}
                 onChange={(e) => set('retentionDays', e.target.value)}
-                className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent" />
-              <p className="text-[11px] text-gray-400 mt-0.5">{daysLabel(parseInt(form.retentionDays) || 0)}</p>
+                className="w-full border border-line-strong rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-accent-fg" />
+              <p className="text-[11px] text-fg-subtle mt-0.5">{daysLabel(parseInt(form.retentionDays) || 0)}</p>
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">Aktion *</label>
+              <label className="block text-xs font-medium text-fg-muted mb-1">Aktion *</label>
               <select value={form.action} onChange={(e) => set('action', e.target.value as TagAction)}
-                className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent">
+                className="w-full border border-line-strong rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-accent-fg">
                 {(Object.entries(TAG_ACTION_LABELS) as [TagAction, string][]).map(([v, l]) => (
                   <option key={v} value={v}>{l}</option>
                 ))}
@@ -435,19 +565,19 @@ function TagModal({ tag, onClose }: { tag: RetentionTag | null; onClose: () => v
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-gray-700 mb-1">Beschreibung</label>
+            <label className="block text-xs font-medium text-fg-muted mb-1">Beschreibung</label>
             <textarea value={form.description} onChange={(e) => set('description', e.target.value)}
-              rows={2} className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent resize-none" />
+              rows={2} className="w-full border border-line-strong rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-accent-fg resize-none" />
           </div>
 
           <label className="flex items-center gap-2 cursor-pointer">
             <input type="checkbox" checked={form.enabled} onChange={(e) => set('enabled', e.target.checked)} className="accent-accent" />
-            <span className="text-sm text-gray-700">Aktiviert</span>
+            <span className="text-sm text-fg-muted">Aktiviert</span>
           </label>
         </div>
-        <div className="px-6 py-4 border-t border-gray-200 flex justify-end gap-2">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded hover:bg-gray-50">Abbrechen</button>
-          <button onClick={() => save.mutate()} disabled={save.isPending || !form.name}
+        <div className="px-6 py-4 border-t border-line flex justify-end gap-2">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-fg-muted border border-line-strong rounded hover:bg-surface-2">Abbrechen</button>
+          <button onClick={() => save.mutate()} disabled={save.isPending || !form.name.trim() || parseRetentionDays(form.retentionDays) === null}
             className="px-4 py-2 text-sm text-white bg-accent rounded hover:bg-accent/90 disabled:opacity-50">
             {save.isPending ? 'Speichern…' : isEdit ? 'Speichern' : 'Erstellen'}
           </button>
@@ -482,35 +612,29 @@ function PolicyModal({ policy, allTags, onClose }: { policy: RetentionPolicy | n
 
   const save = useMutation({
     mutationFn: async () => {
-      const body = {
-        name: form.name,
-        description: form.description,
-        enabled: form.enabled,
-        // Legacy defaults — new policies control everything via tags
-        retentionDays: 0,
-        action: 'ARCHIVE',
-        scope: 'ALL_ITEMS',
-      };
+      // New policies are tag-based; editing keeps the stored legacy fields (lib/retention.ts)
+      const body = policyBody(form, isEdit);
       const saved = isEdit
         ? await api.put<RetentionPolicy>(`/admin/compliance/retention/${policy.id}`, body)
         : await api.post<RetentionPolicy>('/admin/compliance/retention', body);
 
-      // Reconcile tags
-      const existingTagIds = new Set((policy?.policyTags ?? []).map((pt) => pt.tagId));
-      const toAdd    = [...selectedTags].filter((id) => !existingTagIds.has(id));
-      const toRemove = [...existingTagIds].filter((id) => !selectedTags.has(id));
-      await Promise.all([
-        ...toAdd.map((tagId) => api.post(`/admin/compliance/retention/${saved.id}/tags/${tagId}`, {})),
-        ...toRemove.map((tagId) => api.delete(`/admin/compliance/retention/${saved.id}/tags/${tagId}`)),
-      ]);
+      // Reconcile tags — detach first, then attach (a DPT swap must not hit "already has a DPT")
+      const { toRemove, toAdd } = tagChangePlan((policy?.policyTags ?? []).map((pt) => pt.tagId), selectedTags);
+      for (const tagId of toRemove) await api.delete(`/admin/compliance/retention/${saved.id}/tags/${tagId}`);
+      for (const tagId of toAdd) await api.post(`/admin/compliance/retention/${saved.id}/tags/${tagId}`, {});
       return saved;
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['admin-retention'] });
+      void qc.invalidateQueries({ queryKey: ['admin-retention-tags'] });
       toast.success(isEdit ? 'Richtlinie aktualisiert' : 'Richtlinie erstellt');
       onClose();
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => {
+      // the policy itself may already be saved — show the current state
+      void qc.invalidateQueries({ queryKey: ['admin-retention'] });
+      toast.error(e.message);
+    },
   });
 
   const tagsByType = {
@@ -526,65 +650,65 @@ function PolicyModal({ policy, allTags, onClose }: { policy: RetentionPolicy | n
       labelledBy={titleId}
 
       closeOnBackdrop={false}
-      overlayClassName="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
-      className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col"
+      overlayClassName="fixed inset-0 bg-scrim/40 flex items-center justify-center z-50 p-4"
+      className="bg-surface rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col"
     >
-        <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between shrink-0">
-          <h2 id={titleId} className="text-base font-semibold text-gray-900">{isEdit ? 'Richtlinie bearbeiten' : 'Neue Aufbewahrungsrichtlinie'}</h2>
-          <button type="button" onClick={onClose} aria-label="Schließen" className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+        <div className="px-6 py-4 border-b border-line flex items-center justify-between shrink-0">
+          <h2 id={titleId} className="text-base font-semibold text-fg">{isEdit ? 'Richtlinie bearbeiten' : 'Neue Aufbewahrungsrichtlinie'}</h2>
+          <button type="button" onClick={onClose} aria-label="Schließen" className="text-fg-subtle hover:text-fg-muted"><X size={18} /></button>
         </div>
 
         <div className="px-6 py-4 space-y-4 overflow-y-auto flex-1">
           <div>
-            <label className="block text-xs font-medium text-gray-700 mb-1">Name *</label>
+            <label className="block text-xs font-medium text-fg-muted mb-1">Name *</label>
             <input value={form.name} onChange={(e) => set('name', e.target.value)}
-              className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
+              className="w-full border border-line-strong rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-accent-fg"
               placeholder="z.B. Standard Mitarbeiter" />
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-gray-700 mb-1">Beschreibung</label>
+            <label className="block text-xs font-medium text-fg-muted mb-1">Beschreibung</label>
             <textarea value={form.description} onChange={(e) => set('description', e.target.value)}
-              rows={2} className="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent resize-none" />
+              rows={2} className="w-full border border-line-strong rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-accent-fg resize-none" />
           </div>
 
           <label className="flex items-center gap-2 cursor-pointer">
             <input type="checkbox" checked={form.enabled} onChange={(e) => set('enabled', e.target.checked)} className="accent-accent" />
-            <span className="text-sm text-gray-700">Aktiviert</span>
+            <span className="text-sm text-fg-muted">Aktiviert</span>
           </label>
 
-          <div className="border-t border-gray-100 pt-4">
+          <div className="border-t border-line pt-4">
             <div className="flex items-center justify-between mb-2">
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Retention Tags zuweisen</p>
-              <span className="text-[11px] text-gray-400">{selectedTags.size} ausgewählt</span>
+              <p className="text-xs font-semibold text-fg-subtle uppercase tracking-wide">Retention Tags zuweisen</p>
+              <span className="text-[11px] text-fg-subtle">{selectedTags.size} ausgewählt</span>
             </div>
             {dptCount > 1 && (
-              <div className="flex items-center gap-2 mb-3 px-3 py-2 bg-amber-50 border border-amber-200 rounded text-xs text-amber-700">
+              <div className="flex items-center gap-2 mb-3 px-3 py-2 bg-warning-bg border border-warning-line rounded text-xs text-warning-fg">
                 <AlertCircle size={13} /> Eine Policy darf nur einen DPT haben — bitte nur einen markieren.
               </div>
             )}
 
             {(['DPT', 'RPT', 'PERSONAL'] as TagType[]).map((tt) => (
               <div key={tt} className="mb-3">
-                <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wider mb-1.5">
-                  {TAG_TYPE_LABELS[tt]} {tt === 'DPT' && <span className="text-amber-600">(max. 1)</span>}
+                <p className="text-[11px] font-medium text-fg-subtle uppercase tracking-wider mb-1.5">
+                  {TAG_TYPE_LABELS[tt]} {tt === 'DPT' && <span className="text-warning-fg">(max. 1)</span>}
                 </p>
                 {tagsByType[tt].length === 0 ? (
-                  <p className="text-xs text-gray-400 italic">Keine {tt}-Tags vorhanden</p>
+                  <p className="text-xs text-fg-subtle italic">Keine {tt}-Tags vorhanden</p>
                 ) : (
                   <div className="space-y-1">
                     {tagsByType[tt].map((t) => (
-                      <label key={t.id} className="flex items-center gap-3 px-3 py-1.5 hover:bg-gray-50 rounded cursor-pointer">
+                      <label key={t.id} className="flex items-center gap-3 px-3 py-1.5 hover:bg-surface-2 rounded cursor-pointer">
                         <input type="checkbox" checked={selectedTags.has(t.id)} onChange={() => toggleTag(t.id)}
-                          className="h-4 w-4 rounded border-gray-300 text-accent focus:ring-accent" />
+                          className="h-4 w-4 rounded border-line-strong text-accent-fg focus:ring-accent-fg" />
                         <div className="min-w-0 flex-1">
-                          <p className="text-sm text-gray-800">{t.name}</p>
-                          <p className="text-[11px] text-gray-500">
+                          <p className="text-sm text-fg">{t.name}</p>
+                          <p className="text-[11px] text-fg-subtle">
                             {TAG_ACTION_LABELS[t.action]} · nach {daysLabel(t.retentionDays)}
                             {t.folderTarget && t.type === 'RPT' ? ` · Ordner: ${FOLDER_TARGET_LABELS[t.folderTarget]}` : ''}
                           </p>
                         </div>
-                        {!t.enabled && <span className="text-[10px] bg-gray-200 text-gray-600 rounded px-1.5">deaktiviert</span>}
+                        {!t.enabled && <span className="text-[10px] bg-surface-3 text-fg-muted rounded px-1.5">deaktiviert</span>}
                       </label>
                     ))}
                   </div>
@@ -594,9 +718,9 @@ function PolicyModal({ policy, allTags, onClose }: { policy: RetentionPolicy | n
           </div>
         </div>
 
-        <div className="px-6 py-4 border-t border-gray-200 flex justify-end gap-2 shrink-0">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded hover:bg-gray-50">Abbrechen</button>
-          <button onClick={() => save.mutate()} disabled={save.isPending || !form.name || dptCount > 1}
+        <div className="px-6 py-4 border-t border-line flex justify-end gap-2 shrink-0">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-fg-muted border border-line-strong rounded hover:bg-surface-2">Abbrechen</button>
+          <button onClick={() => save.mutate()} disabled={save.isPending || !form.name.trim() || dptCount > 1}
             className="px-4 py-2 text-sm text-white bg-accent rounded hover:bg-accent/90 disabled:opacity-50">
             {save.isPending ? 'Speichern…' : isEdit ? 'Speichern' : 'Erstellen'}
           </button>
@@ -615,6 +739,22 @@ export function RetentionPage() {
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
   const [deletePolicyConfirm, setDeletePolicyConfirm] = useState<RetentionPolicy | null>(null);
   const [deleteTagConfirm, setDeleteTagConfirm] = useState<RetentionTag | null>(null);
+  const [assignPolicy, setAssignPolicy] = useState<RetentionPolicy | null>(null);
+
+  const { data: runs = [] } = useQuery<ManagedFolderRun[]>({
+    queryKey: ['admin-retention-runs'],
+    queryFn:  () => api.get('/admin/compliance/retention/runs'),
+  });
+  const lastRun = runs[0];
+
+  const runNow = useMutation({
+    mutationFn: () => api.post<{ itemsScanned?: number; itemsArchived?: number; itemsSoftDeleted?: number; itemsHardDeleted?: number; errors?: string[] }>('/admin/compliance/retention/run', {}),
+    onSuccess: (r) => {
+      void qc.invalidateQueries({ queryKey: ['admin-retention-runs'] });
+      toast.success(`Lauf beendet: ${r.itemsScanned ?? 0} geprüft · ${r.itemsArchived ?? 0} archiviert · ${(r.itemsSoftDeleted ?? 0) + (r.itemsHardDeleted ?? 0)} gelöscht${r.errors?.length ? ` · ${r.errors.length} Fehler` : ''}`);
+    },
+    onError: (e) => { void qc.invalidateQueries({ queryKey: ['admin-retention-runs'] }); toast.error(`Lauf fehlgeschlagen: ${errorMessage(e)}`); },
+  });
 
   const { data: policies = [], isLoading: loadingPolicies } = useQuery<RetentionPolicy[]>({
     queryKey: ['admin-retention'],
@@ -657,18 +797,23 @@ export function RetentionPage() {
     <div className="p-6">
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
-          <Archive size={22} className="text-accent" />
+          <Archive size={22} className="text-accent-fg" />
           <div>
-            <h1 className="text-xl font-semibold text-gray-900">Aufbewahrungsrichtlinien</h1>
-            <p className="text-sm text-gray-500">
+            <h1 className="text-xl font-semibold text-fg">Aufbewahrungsrichtlinien</h1>
+            <p className="text-sm text-fg-subtle">
               Definiere, wann E-Mails automatisch archiviert oder gelöscht werden — per Vorlage oder eigener Regel.
             </p>
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <button onClick={() => runNow.mutate()} disabled={runNow.isPending}
+            title="Wendet alle aktiven Richtlinien jetzt an (sonst automatisch einmal täglich)"
+            className="flex items-center gap-1.5 px-4 py-2 text-sm border border-line-strong rounded-lg hover:bg-surface-2 disabled:opacity-50">
+            {runNow.isPending ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />} Jetzt anwenden
+          </button>
           {tab === 'policies' && (
             <button onClick={() => setTemplatePickerOpen(true)}
-              className="flex items-center gap-1.5 px-4 py-2 text-blue-700 bg-blue-50 border border-blue-200 text-sm font-medium rounded-lg hover:bg-blue-100 transition-colors">
+              className="flex items-center gap-1.5 px-4 py-2 text-info-fg bg-info-bg border border-info-line text-sm font-medium rounded-lg hover:bg-info-bg transition-colors">
               <Sparkles size={14} /> Aus Vorlage
             </button>
           )}
@@ -680,27 +825,37 @@ export function RetentionPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex border-b border-gray-200 mb-4">
+      <div className="flex border-b border-line mb-4">
         <button onClick={() => setTab('policies')}
           className={`px-4 py-2 text-sm font-medium border-b-2 flex items-center gap-1.5 ${
-            tab === 'policies' ? 'border-accent text-accent' : 'border-transparent text-gray-500 hover:text-gray-700'
+            tab === 'policies' ? 'border-accent-fg text-accent-fg' : 'border-transparent text-fg-subtle hover:text-fg-muted'
           }`}>
           <ListChecks size={13} /> Richtlinien ({policies.length})
         </button>
         <button onClick={() => setTab('tags')}
           className={`px-4 py-2 text-sm font-medium border-b-2 flex items-center gap-1.5 ${
-            tab === 'tags' ? 'border-accent text-accent' : 'border-transparent text-gray-500 hover:text-gray-700'
+            tab === 'tags' ? 'border-accent-fg text-accent-fg' : 'border-transparent text-fg-subtle hover:text-fg-muted'
           }`}>
           <Tag size={13} /> Tags ({tags.length})
         </button>
       </div>
 
+      {lastRun && (
+        <p className="text-xs text-fg-subtle mb-3">
+          Letzter Lauf: {new Date(lastRun.startedAt).toLocaleString('de-DE')}
+          {lastRun.completedAt
+            ? ` · ${lastRun.mailboxesScanned} Postfächer · ${lastRun.itemsScanned} Elemente · ${lastRun.itemsArchived} archiviert · ${lastRun.itemsSoftDeleted + lastRun.itemsHardDeleted} gelöscht${lastRun.throttled ? ' · Zeitlimit erreicht' : ''}`
+            : ' · läuft oder abgebrochen'}
+          {lastRun.errorMessage && <span className="text-danger-fg"> · {lastRun.errorMessage}</span>}
+        </p>
+      )}
+
       {/* Policies */}
       {tab === 'policies' && (
-        <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+        <div className="bg-surface rounded-lg border border-line overflow-hidden">
           <table className="w-full text-sm">
             <thead>
-              <tr className="bg-gray-50 border-b border-gray-200 text-xs font-semibold text-gray-500 uppercase tracking-wide">
+              <tr className="bg-surface-2 border-b border-line text-xs font-semibold text-fg-subtle uppercase tracking-wide">
                 <th className="text-left px-4 py-3">Richtlinie</th>
                 <th className="text-left px-4 py-3">Tags</th>
                 <th className="text-left px-4 py-3">Zuweisungen</th>
@@ -710,14 +865,14 @@ export function RetentionPage() {
             </thead>
             <tbody>
               {loadingPolicies ? (
-                <tr><td colSpan={5} className="text-center py-12 text-gray-400">Laden…</td></tr>
+                <tr><td colSpan={5} className="text-center py-12 text-fg-subtle">Laden…</td></tr>
               ) : policies.length === 0 ? (
-                <tr><td colSpan={5} className="text-center py-12 text-gray-400">Noch keine Richtlinien konfiguriert</td></tr>
+                <tr><td colSpan={5} className="text-center py-12 text-fg-subtle">Noch keine Richtlinien konfiguriert</td></tr>
               ) : policies.map((p) => (
-                <tr key={p.id} className="border-b border-gray-100 hover:bg-gray-50">
+                <tr key={p.id} className="border-b border-line hover:bg-surface-2">
                   <td className="px-4 py-3">
-                    <p className="font-medium text-gray-900">{p.name}</p>
-                    {p.description && <p className="text-xs text-gray-500">{p.description}</p>}
+                    <p className="font-medium text-fg">{p.name}</p>
+                    {p.description && <p className="text-xs text-fg-subtle">{p.description}</p>}
                   </td>
                   <td className="px-4 py-3">
                     {p.policyTags && p.policyTags.length > 0 ? (
@@ -733,14 +888,18 @@ export function RetentionPage() {
                         Legacy: {LEGACY_ACTION_LABELS[p.action]} nach {daysLabel(p.retentionDays)} ({SCOPE_LABELS[p.scope]})
                       </span>
                     ) : (
-                      <span className="text-xs text-gray-400 italic">keine Tags</span>
+                      <span className="text-xs text-fg-subtle italic">keine Tags</span>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-gray-600">{p._count?.assignments ?? 0}</td>
+                  <td className="px-4 py-3 text-fg-muted">
+                    <button onClick={() => setAssignPolicy(p)} className="text-accent-fg hover:underline" title="Zuweisungen verwalten">
+                      {p._count?.assignments ?? 0} {(p._count?.assignments ?? 0) === 0 ? '— zuweisen' : 'verwalten'}
+                    </button>
+                  </td>
                   <td className="px-4 py-3">
-                    <button onClick={() => toggle.mutate(p)}>
+                    <button onClick={() => toggle.mutate(p)} disabled={toggle.isPending} title={p.enabled ? 'Deaktivieren' : 'Aktivieren'}>
                       <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                        p.enabled ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'
+                        p.enabled ? 'bg-success-bg text-success-fg' : 'bg-surface-2 text-fg-subtle'
                       }`}>
                         {p.enabled ? 'Aktiv' : 'Deaktiviert'}
                       </span>
@@ -749,9 +908,9 @@ export function RetentionPage() {
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-end gap-1">
                       <button aria-label="Bearbeiten" onClick={() => setPolicyModal(p)}
-                        className="p-1.5 text-gray-400 hover:text-accent hover:bg-accent/10 rounded"><Pencil size={13} /></button>
+                        className="p-1.5 text-fg-subtle hover:text-accent-fg hover:bg-accent/10 rounded"><Pencil size={13} /></button>
                       <button aria-label="Löschen" onClick={() => setDeletePolicyConfirm(p)}
-                        className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded"><Trash2 size={13} /></button>
+                        className="p-1.5 text-fg-subtle hover:text-danger-fg hover:bg-danger-bg rounded"><Trash2 size={13} /></button>
                     </div>
                   </td>
                 </tr>
@@ -763,10 +922,10 @@ export function RetentionPage() {
 
       {/* Tags */}
       {tab === 'tags' && (
-        <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+        <div className="bg-surface rounded-lg border border-line overflow-hidden">
           <table className="w-full text-sm">
             <thead>
-              <tr className="bg-gray-50 border-b border-gray-200 text-xs font-semibold text-gray-500 uppercase tracking-wide">
+              <tr className="bg-surface-2 border-b border-line text-xs font-semibold text-fg-subtle uppercase tracking-wide">
                 <th className="text-left px-4 py-3">Tag</th>
                 <th className="text-left px-4 py-3">Typ</th>
                 <th className="text-left px-4 py-3">Aktion</th>
@@ -779,30 +938,30 @@ export function RetentionPage() {
             </thead>
             <tbody>
               {loadingTags ? (
-                <tr><td colSpan={8} className="text-center py-12 text-gray-400">Laden…</td></tr>
+                <tr><td colSpan={8} className="text-center py-12 text-fg-subtle">Laden…</td></tr>
               ) : tags.length === 0 ? (
-                <tr><td colSpan={8} className="text-center py-12 text-gray-400">Noch keine Tags konfiguriert</td></tr>
+                <tr><td colSpan={8} className="text-center py-12 text-fg-subtle">Noch keine Tags konfiguriert</td></tr>
               ) : tags.map((t) => (
-                <tr key={t.id} className="border-b border-gray-100 hover:bg-gray-50">
+                <tr key={t.id} className="border-b border-line hover:bg-surface-2">
                   <td className="px-4 py-3">
-                    <p className="font-medium text-gray-900">{t.name}</p>
-                    {t.description && <p className="text-xs text-gray-500">{t.description}</p>}
+                    <p className="font-medium text-fg">{t.name}</p>
+                    {t.description && <p className="text-xs text-fg-subtle">{t.description}</p>}
                   </td>
                   <td className="px-4 py-3">
                     <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold ${TAG_TYPE_COLORS[t.type]}`}>{t.type}</span>
                   </td>
-                  <td className="px-4 py-3 text-xs text-gray-700">{TAG_ACTION_LABELS[t.action]}</td>
-                  <td className="px-4 py-3 text-xs text-gray-700 font-medium">{daysLabel(t.retentionDays)}</td>
-                  <td className="px-4 py-3 text-xs text-gray-600">
+                  <td className="px-4 py-3 text-xs text-fg-muted">{TAG_ACTION_LABELS[t.action]}</td>
+                  <td className="px-4 py-3 text-xs text-fg-muted font-medium">{daysLabel(t.retentionDays)}</td>
+                  <td className="px-4 py-3 text-xs text-fg-muted">
                     {t.folderTarget ? <span className="inline-flex items-center gap-1"><FolderIcon size={11} /> {FOLDER_TARGET_LABELS[t.folderTarget]}</span> : '—'}
                   </td>
-                  <td className="px-4 py-3 text-xs text-gray-600">
+                  <td className="px-4 py-3 text-xs text-fg-muted">
                     {t._count?.policyTags ?? 0} Policies
-                    {t._count && t._count.messages > 0 ? <span className="text-gray-400"> · {t._count.messages} Mails</span> : null}
+                    {t._count && t._count.messages > 0 ? <span className="text-fg-subtle"> · {t._count.messages} Mails</span> : null}
                   </td>
                   <td className="px-4 py-3">
                     <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                      t.enabled ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'
+                      t.enabled ? 'bg-success-bg text-success-fg' : 'bg-surface-2 text-fg-subtle'
                     }`}>
                       {t.enabled ? 'Aktiv' : 'Deaktiviert'}
                     </span>
@@ -812,13 +971,13 @@ export function RetentionPage() {
                       {!t.isSystem && (
                         <>
                           <button aria-label="Bearbeiten" onClick={() => setTagModal(t)}
-                            className="p-1.5 text-gray-400 hover:text-accent hover:bg-accent/10 rounded"><Pencil size={13} /></button>
+                            className="p-1.5 text-fg-subtle hover:text-accent-fg hover:bg-accent/10 rounded"><Pencil size={13} /></button>
                           <button aria-label="Löschen" onClick={() => setDeleteTagConfirm(t)}
-                            className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded"><Trash2 size={13} /></button>
+                            className="p-1.5 text-fg-subtle hover:text-danger-fg hover:bg-danger-bg rounded"><Trash2 size={13} /></button>
                         </>
                       )}
                       {t.isSystem && (
-                        <span className="text-[10px] text-gray-400 italic">System</span>
+                        <span className="text-[10px] text-fg-subtle italic">System</span>
                       )}
                     </div>
                   </td>
@@ -832,20 +991,21 @@ export function RetentionPage() {
       {policyModal !== null && <PolicyModal policy={policyModal === 'create' ? null : policyModal} allTags={tags} onClose={() => setPolicyModal(null)} />}
       {tagModal !== null && <TagModal tag={tagModal === 'create' ? null : tagModal} onClose={() => setTagModal(null)} />}
       {templatePickerOpen && <TemplatePickerModal onClose={() => setTemplatePickerOpen(false)} />}
+      {assignPolicy && <AssignmentsModal policy={assignPolicy} onClose={() => setAssignPolicy(null)} />}
 
       {deletePolicyConfirm && (
         <Modal
           onClose={() => setDeletePolicyConfirm(null)}
           label="Richtlinie löschen"
-          overlayClassName="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
-          className="bg-white rounded-lg shadow-xl w-full max-w-sm p-6"
+          overlayClassName="fixed inset-0 bg-scrim/40 flex items-center justify-center z-50 p-4"
+          className="bg-surface rounded-lg shadow-xl w-full max-w-sm p-6"
         >
-            <h2 className="text-base font-semibold text-gray-900 mb-2">Richtlinie löschen</h2>
-            <p className="text-sm text-gray-600 mb-4">Soll <strong>{deletePolicyConfirm.name}</strong> wirklich gelöscht werden?</p>
+            <h2 className="text-base font-semibold text-fg mb-2">Richtlinie löschen</h2>
+            <p className="text-sm text-fg-muted mb-4">Soll <strong>{deletePolicyConfirm.name}</strong> wirklich gelöscht werden?</p>
             <div className="flex justify-end gap-2">
-              <button onClick={() => setDeletePolicyConfirm(null)} className="px-4 py-2 text-sm border border-gray-300 rounded hover:bg-gray-50">Abbrechen</button>
+              <button onClick={() => setDeletePolicyConfirm(null)} className="px-4 py-2 text-sm border border-line-strong rounded hover:bg-surface-2">Abbrechen</button>
               <button onClick={() => deletePolicy.mutate(deletePolicyConfirm.id)} disabled={deletePolicy.isPending}
-                className="px-4 py-2 text-sm text-white bg-red-500 rounded hover:bg-red-600 disabled:opacity-50">
+                className="px-4 py-2 text-sm text-white bg-danger rounded hover:bg-danger/90 disabled:opacity-50">
                 {deletePolicy.isPending ? 'Löschen…' : 'Löschen'}
               </button>
             </div>
@@ -856,15 +1016,15 @@ export function RetentionPage() {
         <Modal
           onClose={() => setDeleteTagConfirm(null)}
           label="Tag löschen"
-          overlayClassName="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
-          className="bg-white rounded-lg shadow-xl w-full max-w-sm p-6"
+          overlayClassName="fixed inset-0 bg-scrim/40 flex items-center justify-center z-50 p-4"
+          className="bg-surface rounded-lg shadow-xl w-full max-w-sm p-6"
         >
-            <h2 className="text-base font-semibold text-gray-900 mb-2">Tag löschen</h2>
-            <p className="text-sm text-gray-600 mb-4">Soll der Tag <strong>{deleteTagConfirm.name}</strong> wirklich gelöscht werden? Er wird auch aus allen Policies entfernt.</p>
+            <h2 className="text-base font-semibold text-fg mb-2">Tag löschen</h2>
+            <p className="text-sm text-fg-muted mb-4">Soll der Tag <strong>{deleteTagConfirm.name}</strong> wirklich gelöscht werden? Er wird auch aus allen Policies entfernt.</p>
             <div className="flex justify-end gap-2">
-              <button onClick={() => setDeleteTagConfirm(null)} className="px-4 py-2 text-sm border border-gray-300 rounded hover:bg-gray-50">Abbrechen</button>
+              <button onClick={() => setDeleteTagConfirm(null)} className="px-4 py-2 text-sm border border-line-strong rounded hover:bg-surface-2">Abbrechen</button>
               <button onClick={() => deleteTag.mutate(deleteTagConfirm.id)} disabled={deleteTag.isPending}
-                className="px-4 py-2 text-sm text-white bg-red-500 rounded hover:bg-red-600 disabled:opacity-50">
+                className="px-4 py-2 text-sm text-white bg-danger rounded hover:bg-danger/90 disabled:opacity-50">
                 {deleteTag.isPending ? 'Löschen…' : 'Löschen'}
               </button>
             </div>

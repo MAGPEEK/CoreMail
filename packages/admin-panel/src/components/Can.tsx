@@ -62,7 +62,7 @@ export function WriteGuard({ area, children, className }: { area: AdminArea; chi
     <fieldset disabled={!writable} className={`min-w-0 border-0 p-0 m-0 ${className ?? ''}`}
       {...(!writable ? { title: t('perm_readonly_tooltip'), 'aria-describedby': noteId } : {})}>
       {!writable && (
-        <p id={noteId} className="mb-3 text-xs text-amber-700 dark:text-amber-300">{t('perm_readonly_form')}</p>
+        <p id={noteId} className="mb-3 text-xs text-warning-fg">{t('perm_readonly_form')}</p>
       )}
       {children}
     </fieldset>

@@ -19,12 +19,12 @@ export function ForbiddenPage() {
   useEffect(() => { headingRef.current?.focus(); }, []);
   return (
     <div className="p-8 max-w-xl mx-auto mt-16 text-center space-y-3" role="alert">
-      <ShieldOff size={32} className="mx-auto text-gray-400" aria-hidden="true" />
-      <h1 ref={headingRef} tabIndex={-1} className="text-lg font-semibold text-gray-800 dark:text-gray-100 outline-none">{t('forbidden_title')}</h1>
-      <p className="text-sm text-gray-500 dark:text-gray-400">{t('forbidden_text')}</p>
+      <ShieldOff size={32} className="mx-auto text-fg-subtle" aria-hidden="true" />
+      <h1 ref={headingRef} tabIndex={-1} className="text-lg font-semibold text-fg outline-none">{t('forbidden_title')}</h1>
+      <p className="text-sm text-fg-subtle">{t('forbidden_text')}</p>
       {role && (
-        <p className="text-xs text-gray-400">
-          {t('forbidden_role')}: <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">{role}</code>
+        <p className="text-xs text-fg-subtle">
+          {t('forbidden_role')}: <code className="bg-surface-2 px-1 rounded">{role}</code>
         </p>
       )}
       <Link to={firstAllowedPath(areas)} className="btn-secondary inline-flex text-sm">{t('forbidden_back')}</Link>

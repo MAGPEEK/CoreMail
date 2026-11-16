@@ -67,13 +67,13 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
       ref={ref}
       role="menu"
       data-coremail-contextmenu
-      className="fixed z-[100] min-w-[220px] bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md shadow-lg py-1 text-sm select-none animate-fly-in"
+      className="fixed z-[100] min-w-[220px] bg-surface border border-line rounded-md shadow-lg py-1 text-sm select-none animate-fly-in"
       style={{ left: pos.x, top: pos.y }}
       onContextMenu={(e) => e.preventDefault()}
     >
       {items.map((item, i) => {
         if (item.type === 'divider') {
-          return <div key={`d-${i}`} className="my-1 border-t border-gray-100 dark:border-gray-700" />;
+          return <div key={`d-${i}`} className="my-1 border-t border-line" />;
         }
         if (item.type === 'color-grid' && item.colors) {
           return (
@@ -87,7 +87,7 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
                       type="button"
                       onClick={() => { item.onPick?.(c); onClose(); }}
                       className={`w-5 h-5 rounded-full transition-all duration-150 hover:scale-125 active:scale-90 ${
-                        isActive ? 'ring-2 ring-offset-1 ring-gray-700 dark:ring-gray-200' : 'ring-1 ring-inset ring-black/10'
+                        isActive ? 'ring-2 ring-offset-1 ring-line-strong' : 'ring-1 ring-inset ring-line'
                       }`}
                       style={{ backgroundColor: c }}
                       aria-label={c}
@@ -104,7 +104,7 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
         return (
           <div key={i}>
             {item.separator === 'before' && (
-              <div className="my-1 border-t border-gray-100 dark:border-gray-700" />
+              <div className="my-1 border-t border-line" />
             )}
             <button
               type="button"
@@ -124,18 +124,18 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
               }}
               className={`w-full flex items-center gap-2.5 px-3 py-1.5 text-left transition-colors ${
                 item.disabled
-                  ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed'
+                  ? 'text-fg-disabled cursor-not-allowed'
                   : item.danger
-                    ? 'text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30'
-                    : 'text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700'
+                    ? 'text-danger-fg hover:bg-danger-bg'
+                    : 'text-fg-muted hover:bg-surface-2'
               }`}
             >
-              <span className="w-4 h-4 flex items-center justify-center shrink-0 text-gray-400">{item.icon}</span>
+              <span className="w-4 h-4 flex items-center justify-center shrink-0 text-fg-subtle">{item.icon}</span>
               <span className="flex-1 truncate">{item.label}</span>
-              {hasChildren && <span className="text-gray-400">›</span>}
+              {hasChildren && <span className="text-fg-subtle">›</span>}
             </button>
             {item.separator === 'after' && (
-              <div className="my-1 border-t border-gray-100 dark:border-gray-700" />
+              <div className="my-1 border-t border-line" />
             )}
             {hasChildren && isOpen && submenuFor && (
               <ContextMenu
