@@ -8,9 +8,11 @@ import type { UserProfile } from '../api/types.js';
 import { MfaChallengeForm } from '../components/MfaChallengeForm.js';
 import { SsoButtons } from '../components/SsoButtons.js';
 import { AuthShell, AuthBrandHeader } from '../components/AuthShell.js';
+import { useT } from '../i18n/useT.js';
 
 export function LoginPage() {
   const navigate = useNavigate();
+  const t = useT();
   const { setTokens, setProfile } = useAuthStore();
 
   // Step 1: Credentials
@@ -72,7 +74,7 @@ export function LoginPage() {
       if (msg.startsWith('maintenance:')) {
         setError(msg.replace('maintenance:', '').trim());
       } else {
-        setError(msg || 'Anmeldung fehlgeschlagen');
+        setError(msg || t('auth_login_failed'));
       }
     } finally {
       setLoading(false);
@@ -98,11 +100,11 @@ export function LoginPage() {
         <div className="fixed top-0 inset-x-0 z-50 bg-warning text-white px-4 py-3 flex items-start gap-3 shadow-lg">
           <AlertTriangle size={18} className="mt-0.5 shrink-0" />
           <div>
-            <span className="font-semibold">Wartungsmodus aktiv — </span>
+            <span className="font-semibold">{t('auth_maintenance_title')}</span>
             <span className="text-sm">
-              {maintenanceMessage || 'Der Server befindet sich derzeit in Wartung. Bitte versuchen Sie es später erneut.'}
+              {maintenanceMessage || t('auth_maintenance_default')}
             </span>
-            <span className="ml-2 text-xs opacity-80">(Nur Administratoren können sich anmelden.)</span>
+            <span className="ml-2 text-xs opacity-80">{t('auth_maintenance_admins_only')}</span>
           </div>
         </div>
       )}
@@ -111,7 +113,7 @@ export function LoginPage() {
         {/* Logo, product name, login text (branding) */}
         <AuthBrandHeader
           withLoginText={step === 'credentials'}
-          subtitle={step === 'mfa' ? 'Zwei-Faktor-Authentifizierung' : 'Mail Web Access'}
+          subtitle={step === 'mfa' ? t('auth_two_factor') : 'Mail Web Access'}
           icon={
             <div className="w-10 h-10 bg-accent rounded-lg flex items-center justify-center">
               {step === 'mfa'
@@ -126,7 +128,7 @@ export function LoginPage() {
         {step === 'credentials' && (
           <form onSubmit={handleSubmitCredentials} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-fg-muted mb-1">E-Mail-Adresse</label>
+              <label className="block text-sm font-medium text-fg-muted mb-1">{t('auth_email')}</label>
               <div className="relative">
                 <Mail size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-subtle" />
                 <input
@@ -134,7 +136,7 @@ export function LoginPage() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className="input pl-9"
-                  placeholder="benutzer@domain.com"
+                  placeholder={t('auth_email_placeholder')}
                   required
                   autoComplete="email"
                 />
@@ -142,7 +144,7 @@ export function LoginPage() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-fg-muted mb-1">Passwort</label>
+              <label className="block text-sm font-medium text-fg-muted mb-1">{t('auth_password')}</label>
               <div className="relative">
                 <Lock size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-subtle" />
                 <input
@@ -164,13 +166,13 @@ export function LoginPage() {
             )}
 
             <button type="submit" disabled={loading} className="btn-primary w-full justify-center py-2 disabled:opacity-60">
-              {loading ? 'Anmelden...' : 'Anmelden'}
+              {loading ? t('auth_signing_in') : t('auth_sign_in')}
             </button>
 
             {selfServicePasswordReset && (
               <div className="text-center pt-1">
                 <Link to="/forgot-password" className="text-xs text-accent-fg hover:underline">
-                  Passwort vergessen?
+                  {t('auth_forgot_password')}
                 </Link>
               </div>
             )}

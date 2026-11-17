@@ -3,6 +3,7 @@ import { ArrowLeft, KeyRound } from 'lucide-react';
 import { verifyMfa, verifyMfaWebAuthn, startMfaWebAuthn, type MfaMethod } from '../api/client.js';
 import { ApiError } from '../lib/errors.js';
 import { webauthnAuthenticate, webauthnErrorMessage, webauthnSupported } from '../lib/webauthn.js';
+import { useT } from '../i18n/useT.js';
 
 type Tokens = { accessToken: string; refreshToken: string };
 type Mode = 'totp' | 'backup' | 'webauthn';
@@ -31,6 +32,7 @@ function cleanBackupCode(v: string): string {
  * WebAuthn security key, depending on the user's MFA setup.
  */
 export function MfaChallengeForm({ challengeToken, method, methods, email, onSuccess, onBack }: Props) {
+  const t = useT();
   const available: MfaMethod[] = methods && methods.length > 0
     ? methods
     : [method === 'webauthn' ? 'webauthn' : 'totp', 'backup_code'];
@@ -45,11 +47,11 @@ export function MfaChallengeForm({ challengeToken, method, methods, email, onSuc
   const backupRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
-    const t = setTimeout(() => {
+    const timer = setTimeout(() => {
       if (mode === 'totp') digitRefs.current[0]?.focus();
       if (mode === 'backup') backupRef.current?.focus();
     }, 50);
-    return () => clearTimeout(t);
+    return () => clearTimeout(timer);
   }, [mode]);
 
   const run = async (fn: () => Promise<Tokens>, onFail?: () => void) => {
@@ -63,7 +65,7 @@ export function MfaChallengeForm({ challengeToken, method, methods, email, onSuc
         onBack(err.message);
         return;
       }
-      setError(err instanceof Error ? err.message : 'Überprüfung fehlgeschlagen');
+      setError(err instanceof Error ? err.message : t('auth_mfa_failed'));
       onFail?.();
     } finally {
       setLoading(false);
@@ -74,14 +76,14 @@ export function MfaChallengeForm({ challengeToken, method, methods, email, onSuc
     e.preventDefault();
     if (mode === 'totp') {
       const code = digits.join('');
-      if (code.length < 6) { setError('Bitte alle 6 Ziffern eingeben'); return; }
+      if (code.length < 6) { setError(t('auth_mfa_enter_digits')); return; }
       void run(() => verifyMfa(challengeToken, code), () => {
         setDigits(EMPTY_DIGITS);
         setTimeout(() => digitRefs.current[0]?.focus(), 50);
       });
     } else if (mode === 'backup') {
       const code = backupCode.trim();
-      if (code.length < 6) { setError('Bitte den vollständigen Backup-Code eingeben'); return; }
+      if (code.length < 6) { setError(t('auth_mfa_enter_backup')); return; }
       void run(() => verifyMfa(challengeToken, code), () => backupRef.current?.select());
     }
   };
@@ -126,9 +128,9 @@ export function MfaChallengeForm({ challengeToken, method, methods, email, onSuc
     <form onSubmit={submitCode} className="space-y-5">
       <div className="text-center">
         <p className="text-sm text-fg-muted">
-          {mode === 'totp' && 'Geben Sie den 6-stelligen Code aus Ihrer Authenticator-App ein.'}
-          {mode === 'backup' && 'Geben Sie einen Ihrer Backup-Codes ein. Jeder Code ist nur einmal gültig.'}
-          {mode === 'webauthn' && 'Melden Sie sich mit Ihrem Sicherheitsschlüssel oder Passkey an.'}
+          {mode === 'totp' && t('auth_mfa_hint_totp')}
+          {mode === 'backup' && t('auth_mfa_hint_backup')}
+          {mode === 'webauthn' && t('auth_mfa_hint_webauthn')}
         </p>
         <p className="text-xs text-fg-subtle mt-1">{email}</p>
       </div>
@@ -142,7 +144,7 @@ export function MfaChallengeForm({ challengeToken, method, methods, email, onSuc
               type="text"
               inputMode="numeric"
               autoComplete={i === 0 ? 'one-time-code' : 'off'}
-              aria-label={`Ziffer ${i + 1}`}
+              aria-label={`${t('auth_mfa_digit')} ${i + 1}`}
               maxLength={1}
               value={d}
               onChange={(e) => handleDigitChange(i, e.target.value)}
@@ -162,8 +164,8 @@ export function MfaChallengeForm({ challengeToken, method, methods, email, onSuc
           onChange={(e) => setBackupCode(cleanBackupCode(e.target.value))}
           autoComplete="one-time-code"
           spellCheck={false}
-          aria-label="Backup-Code"
-          placeholder="z. B. ABCD-1234"
+          aria-label={t('auth_mfa_backup_code')}
+          placeholder={t('auth_mfa_backup_placeholder')}
           className="input text-center font-mono tracking-wider"
         />
       )}
@@ -175,7 +177,7 @@ export function MfaChallengeForm({ challengeToken, method, methods, email, onSuc
           disabled={loading}
           className="btn-primary w-full justify-center py-2 disabled:opacity-60"
         >
-          <KeyRound size={15} /> {loading ? 'Warte auf Schlüssel…' : 'Mit Sicherheitsschlüssel anmelden'}
+          <KeyRound size={15} /> {loading ? t('auth_mfa_waiting_key') : t('auth_mfa_sign_in_key')}
         </button>
       )}
 
@@ -191,24 +193,24 @@ export function MfaChallengeForm({ challengeToken, method, methods, email, onSuc
           disabled={loading || (mode === 'totp' ? digits.join('').length < 6 : backupCode.trim().length < 6)}
           className="btn-primary w-full justify-center py-2 disabled:opacity-60"
         >
-          {loading ? 'Prüfen...' : 'Bestätigen'}
+          {loading ? t('auth_verifying') : t('auth_confirm')}
         </button>
       )}
 
       <div className="flex flex-col items-center gap-1 text-xs">
         {mode !== 'backup' && (
           <button type="button" onClick={() => switchMode('backup')} className="text-accent-fg hover:underline">
-            Backup-Code verwenden
+            {t('auth_mfa_use_backup')}
           </button>
         )}
         {mode !== 'totp' && hasTotp && (
           <button type="button" onClick={() => switchMode('totp')} className="text-accent-fg hover:underline">
-            Code aus der Authenticator-App verwenden
+            {t('auth_mfa_use_totp')}
           </button>
         )}
         {mode !== 'webauthn' && canWebAuthn && (
           <button type="button" onClick={() => switchMode('webauthn')} className="text-accent-fg hover:underline">
-            Sicherheitsschlüssel verwenden
+            {t('auth_mfa_use_key')}
           </button>
         )}
       </div>
@@ -218,7 +220,7 @@ export function MfaChallengeForm({ challengeToken, method, methods, email, onSuc
         onClick={() => onBack()}
         className="w-full flex items-center justify-center gap-1.5 text-sm text-fg-subtle hover:text-fg-muted py-1"
       >
-        <ArrowLeft size={13} /> Zurück zur Anmeldung
+        <ArrowLeft size={13} /> {t('auth_back_to_login')}
       </button>
     </form>
   );

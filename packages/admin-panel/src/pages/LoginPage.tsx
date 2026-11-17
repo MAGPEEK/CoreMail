@@ -3,17 +3,20 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Mail, Lock, Shield, ShieldCheck } from 'lucide-react';
 import { loginAdmin, setToken, type MfaMethod } from '../api/client.js';
 import { MfaChallengeForm } from '../components/MfaChallengeForm.js';
-
-// Reasons passed by the API client when it sends the admin back to the login page
-const REASON_TEXT: Record<string, string> = {
-  revoked: 'Ihre Sitzung wurde beendet. Bitte melden Sie sich erneut an.',
-  mfa:     'Für diesen Bereich ist eine Anmeldung mit zweitem Faktor erforderlich.',
-};
 import { SsoButtons } from '../components/SsoButtons.js';
 import { AuthShell, AuthBrandHeader } from '../components/AuthShell.js';
+import { useT } from '../i18n/useT.js';
+import type { TranslationKey } from '../i18n/translations.js';
+
+// Reasons passed by the API client when it sends the admin back to the login page
+const REASON_KEY: Record<string, TranslationKey> = {
+  revoked: 'auth_reason_revoked',
+  mfa:     'auth_reason_mfa',
+};
 
 export function LoginPage() {
   const navigate = useNavigate();
+  const t = useT();
   const [searchParams] = useSearchParams();
 
   // Step 1: Credentials
@@ -26,7 +29,10 @@ export function LoginPage() {
   const [mfaMethod, setMfaMethod]           = useState('totp');
   const [mfaMethods, setMfaMethods]         = useState<MfaMethod[] | undefined>(undefined);
 
-  const [error, setError]     = useState(() => REASON_TEXT[searchParams.get('reason') ?? ''] ?? '');
+  const [error, setError]     = useState(() => {
+    const key = REASON_KEY[searchParams.get('reason') ?? ''];
+    return key ? t(key) : '';
+  });
   const [loading, setLoading] = useState(false);
 
   // ── Step 1: Email + password ─────────────────────────────────────────────────
@@ -46,7 +52,7 @@ export function LoginPage() {
         navigate('/dashboard');
       }
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Anmeldung fehlgeschlagen');
+      setError(err instanceof Error ? err.message : t('auth_login_failed'));
     } finally {
       setLoading(false);
     }
@@ -59,7 +65,7 @@ export function LoginPage() {
         <AuthBrandHeader
           nameSuffix=" BCP"
           withLoginText={step === 'credentials'}
-          subtitle={step === 'mfa' ? 'Zwei-Faktor-Authentifizierung' : 'Backend Control Panel'}
+          subtitle={step === 'mfa' ? t('auth_two_factor') : 'Backend Control Panel'}
           icon={
             <div className="w-10 h-10 bg-accent rounded-lg flex items-center justify-center">
               {step === 'mfa'
@@ -74,7 +80,7 @@ export function LoginPage() {
         {step === 'credentials' && (
           <form onSubmit={handleSubmitCredentials} className="space-y-4">
             <div>
-              <label htmlFor="bcp-email" className="block text-sm font-medium text-fg-muted mb-1">Administrator-E-Mail</label>
+              <label htmlFor="bcp-email" className="block text-sm font-medium text-fg-muted mb-1">{t('auth_admin_email')}</label>
               <div className="relative">
                 <Mail size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-subtle" />
                 <input id="bcp-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)}
@@ -82,7 +88,7 @@ export function LoginPage() {
               </div>
             </div>
             <div>
-              <label htmlFor="bcp-password" className="block text-sm font-medium text-fg-muted mb-1">Passwort</label>
+              <label htmlFor="bcp-password" className="block text-sm font-medium text-fg-muted mb-1">{t('auth_password')}</label>
               <div className="relative">
                 <Lock size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-subtle" />
                 <input id="bcp-password" type="password" value={password} onChange={(e) => setPassword(e.target.value)}
@@ -94,7 +100,7 @@ export function LoginPage() {
             )}
             <button type="submit" disabled={loading}
               className="btn-primary w-full justify-center py-2 disabled:opacity-60">
-              {loading ? 'Anmelden...' : 'Anmelden'}
+              {loading ? t('auth_signing_in') : t('auth_sign_in')}
             </button>
           </form>
         )}

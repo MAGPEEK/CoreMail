@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { ExternalLink, Tag, Clock, GitBranch, BookOpen, Shield, Github, HardDriveDownload } from 'lucide-react';
 import { api } from '../api/client';
+import { useT } from '../i18n/useT.js';
 
 const GITHUB_URL       = 'https://github.com/MAGPEEK/CoreMail';
 const CHANGELOG_URL    = `${GITHUB_URL}/blob/main/CHANGELOG.md`;
@@ -21,6 +22,7 @@ function StatBadge({ label, value }: { label: string; value: string }) {
 
 
 export function ComplianceInfoPage() {
+  const t = useT();
   // Version and release notes come live from the server (the CHANGELOG.md shipped in the image)
   const { data: versionInfo } = useQuery<VersionInfo>({
     queryKey: ['admin', 'version'],
@@ -43,7 +45,7 @@ export function ComplianceInfoPage() {
       {/* Header */}
       <div className="flex items-center gap-2">
         <Shield size={20} className="text-accent-fg" />
-        <h1 className="text-xl font-semibold text-fg">System-Informationen</h1>
+        <h1 className="text-xl font-semibold text-fg">{t('page_system_info')}</h1>
       </div>
 
       {/* Version card */}

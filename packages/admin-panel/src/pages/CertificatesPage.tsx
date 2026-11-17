@@ -340,7 +340,7 @@ export function CertificatesPage() {
         <div className="flex items-center gap-3">
           <ShieldCheck size={22} className="text-info-fg" />
           <div>
-            <h1 className="text-xl font-bold text-fg">SSL/TLS Zertifikate</h1>
+            <h1 className="text-xl font-bold text-fg">{t('page_certificates')}</h1>
             <p className="text-sm text-fg-subtle">{certs.length} Zertifikat{certs.length !== 1 ? 'e' : ''}</p>
           </div>
         </div>

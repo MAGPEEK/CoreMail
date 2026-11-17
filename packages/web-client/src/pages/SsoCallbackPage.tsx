@@ -4,6 +4,7 @@ import { ShieldCheck } from 'lucide-react';
 import { api, verifyMfa, exchangeSsoCode } from '../api/client.js';
 import { useAuthStore } from '../store/auth.js';
 import type { UserProfile } from '../api/types.js';
+import { useT } from '../i18n/useT.js';
 
 /**
  * v6.1: landing page after the OIDC callback (/sso/callback?code=…).
@@ -13,6 +14,7 @@ import type { UserProfile } from '../api/types.js';
  */
 export function SsoCallbackPage() {
   const navigate = useNavigate();
+  const t = useT();
   const { setTokens, setProfile } = useAuthStore();
   const [error, setError] = useState('');
   const [challengeToken, setChallengeToken] = useState('');
@@ -36,14 +38,14 @@ export function SsoCallbackPage() {
       try {
         const { ok, body } = await exchangeSsoCode(oneTime);
         if (!ok) {
-          setError(body['error'] === 'maintenance' ? String(body['message'] ?? 'Wartungsmodus aktiv') : String(body['error'] ?? 'SSO-Anmeldung fehlgeschlagen'));
+          setError(body['error'] === 'maintenance' ? String(body['message'] ?? t('auth_maintenance_active')) : String(body['error'] ?? t('auth_sso_failed')));
           return;
         }
         if (body['mfaRequired']) { setChallengeToken(String(body['challengeToken'])); return; }
         // v8.1: the refresh token is the HttpOnly cookie; only an older server sends it in the body
         await finalize(String(body['accessToken']), typeof body['refreshToken'] === 'string' ? body['refreshToken'] : '');
       } catch {
-        setError('SSO-Anmeldung fehlgeschlagen');
+        setError(t('auth_sso_failed'));
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -53,10 +55,10 @@ export function SsoCallbackPage() {
     e.preventDefault();
     setLoading(true); setError('');
     try {
-      const t = await verifyMfa(challengeToken, code.trim());
-      await finalize(t.accessToken, t.refreshToken);
+      const tokens = await verifyMfa(challengeToken, code.trim());
+      await finalize(tokens.accessToken, tokens.refreshToken);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ungültiger Code');
+      setError(err instanceof Error ? err.message : t('auth_invalid_code'));
     } finally {
       setLoading(false);
     }
@@ -70,20 +72,20 @@ export function SsoCallbackPage() {
         </h1>
         {challengeToken ? (
           <form onSubmit={submitMfa} className="space-y-3">
-            <p className="text-sm text-fg-muted">Bitte den Code aus Ihrer Authenticator-App oder einen Backup-Code eingeben.</p>
+            <p className="text-sm text-fg-muted">{t('auth_sso_code_hint')}</p>
             <input className="input" value={code} onChange={(e) => setCode(e.target.value)} autoFocus autoComplete="one-time-code" />
             {error && <div className="text-sm text-danger-fg">{error}</div>}
             <button type="submit" disabled={loading || code.trim().length < 6} className="btn-primary w-full justify-center py-2 disabled:opacity-60">
-              {loading ? 'Prüfen...' : 'Bestätigen'}
+              {loading ? t('auth_verifying') : t('auth_confirm')}
             </button>
           </form>
         ) : error ? (
           <>
             <div className="bg-danger-bg border border-danger-line rounded px-3 py-2 text-sm text-danger-fg">{error}</div>
-            <Link to="/login" className="text-sm text-accent-fg hover:underline">Zurück zur Anmeldung</Link>
+            <Link to="/login" className="text-sm text-accent-fg hover:underline">{t('auth_back_to_login')}</Link>
           </>
         ) : (
-          <p className="text-sm text-fg-subtle animate-pulse">Anmeldung wird abgeschlossen…</p>
+          <p className="text-sm text-fg-subtle animate-pulse">{t('auth_completing')}</p>
         )}
       </div>
     </div>

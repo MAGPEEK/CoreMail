@@ -497,7 +497,7 @@ export function AuditLogPage() {
         <div className="flex items-center gap-3">
           <ClipboardList size={22} className="text-accent-fg" />
           <div>
-            <h1 className="text-xl font-semibold text-fg">Audit-Log</h1>
+            <h1 className="text-xl font-semibold text-fg">{t('nav_audit_log')}</h1>
             <p className="text-sm text-fg-subtle">Alle Admin-Aktionen protokolliert</p>
           </div>
         </div>

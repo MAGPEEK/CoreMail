@@ -1,5 +1,6 @@
 import { ShieldAlert, ExternalLink, LogOut, RefreshCw } from 'lucide-react';
 import { logoutSession } from '../api/client.js';
+import { useT } from '../i18n/useT.js';
 
 /**
  * v3.18.19 D5: Mandatory 2FA setup page.
@@ -11,6 +12,7 @@ import { logoutSession } from '../api/client.js';
  * MFA setup UI of its own). After activation the user can return to /bcp/.
  */
 export function MfaRequiredPage() {
+  const t = useT();
   return (
     <div className="min-h-screen flex items-center justify-center bg-surface-2 p-4">
       <div className="bg-surface rounded-lg shadow-xl max-w-lg w-full p-8 border border-warning-line">
@@ -20,23 +22,21 @@ export function MfaRequiredPage() {
           </div>
           <div className="flex-1">
             <h1 className="text-lg font-semibold text-fg">
-              Zwei-Faktor-Authentifizierung erforderlich
+              {t('mfa_req_title')}
             </h1>
             <p className="text-sm text-fg-muted mt-2">
-              Dein Konto hat Administrator-Rechte. Aus Sicherheitsgründen ist
-              die Aktivierung der Zwei-Faktor-Authentifizierung (2FA)
-              verpflichtend, bevor du das Admin-Panel weiter nutzen kannst.
+              {t('mfa_req_text')}
             </p>
 
             <div className="mt-5 p-4 bg-surface-2 rounded border border-line">
               <h2 className="text-sm font-medium text-fg mb-2">
-                So aktivierst du 2FA:
+                {t('mfa_req_howto')}
               </h2>
               <ol className="text-sm text-fg-muted space-y-1 list-decimal pl-5">
-                <li>Webmail öffnen</li>
-                <li>Einstellungen → Sicherheit → Zwei-Faktor-Authentifizierung</li>
-                <li>Authenticator-App (TOTP) oder Sicherheitsschlüssel einrichten</li>
-                <li>Hier „Erneut prüfen“ wählen und sich mit dem zweiten Faktor neu anmelden</li>
+                <li>{t('mfa_req_step_open')}</li>
+                <li>{t('mfa_req_step_settings')}</li>
+                <li>{t('mfa_req_step_setup')}</li>
+                <li>{t('mfa_req_step_recheck')}</li>
               </ol>
             </div>
 
@@ -48,14 +48,14 @@ export function MfaRequiredPage() {
                 className="inline-flex items-center gap-2 px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-sm font-medium rounded transition-colors"
               >
                 <ExternalLink size={14} />
-                Webmail öffnen
+                {t('mfa_req_step_open')}
               </a>
               <button
                 onClick={() => { window.location.href = '/bcp/'; }}
                 className="inline-flex items-center gap-2 px-4 py-2 border border-line-strong text-fg-muted text-sm rounded hover:bg-surface-2 transition-colors"
               >
                 <RefreshCw size={14} />
-                Erneut prüfen
+                {t('mfa_req_recheck')}
               </button>
               <button
                 onClick={() => {
@@ -64,7 +64,7 @@ export function MfaRequiredPage() {
                 className="inline-flex items-center gap-2 px-4 py-2 border border-line-strong text-fg-muted text-sm rounded hover:bg-surface-2 transition-colors ml-auto"
               >
                 <LogOut size={14} />
-                Abmelden
+                {t('topbar_sign_out')}
               </button>
             </div>
           </div>

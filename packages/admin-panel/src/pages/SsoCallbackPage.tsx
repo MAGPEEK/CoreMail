@@ -3,6 +3,7 @@ import { MfaChallengeForm } from '../components/MfaChallengeForm.js';
 import { useNavigate, Link } from 'react-router-dom';
 import { ShieldCheck } from 'lucide-react';
 import { setToken, setRefreshToken, exchangeSsoCode, type MfaMethod } from '../api/client.js';
+import { useT } from '../i18n/useT.js';
 
 /**
  * v6.1: BCP landing page after the OIDC callback (/bcp/sso/callback?code=…).
@@ -12,6 +13,7 @@ import { setToken, setRefreshToken, exchangeSsoCode, type MfaMethod } from '../a
  */
 export function SsoCallbackPage() {
   const navigate = useNavigate();
+  const t = useT();
   const [error, setError] = useState('');
   const [challengeToken, setChallengeToken] = useState('');
   const [mfaMethod, setMfaMethod] = useState('totp');
@@ -23,12 +25,12 @@ export function SsoCallbackPage() {
     started.current = true;
     const oneTime = new URLSearchParams(window.location.search).get('code') ?? '';
     window.history.replaceState(null, '', '/bcp/sso/callback');
-    if (!oneTime) { setError('SSO-Anmeldung abgebrochen oder abgelaufen — bitte erneut versuchen'); return; }
+    if (!oneTime) { setError(t('auth_sso_cancelled')); return; }
     void (async () => {
       try {
         const { ok, body } = await exchangeSsoCode(oneTime);
         if (!ok) {
-          setError(body['error'] === 'maintenance' ? String(body['message'] ?? 'Wartungsmodus aktiv') : String(body['error'] ?? 'SSO-Anmeldung fehlgeschlagen'));
+          setError(body['error'] === 'maintenance' ? String(body['message'] ?? t('auth_maintenance_active')) : String(body['error'] ?? t('auth_sso_failed')));
           return;
         }
         if (body['mfaRequired']) {
@@ -42,7 +44,7 @@ export function SsoCallbackPage() {
         setToken(String(body['accessToken']));
         navigate('/dashboard', { replace: true });
       } catch {
-        setError('SSO-Anmeldung fehlgeschlagen');
+        setError(t('auth_sso_failed'));
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -62,15 +64,15 @@ export function SsoCallbackPage() {
             methods={mfaMethods}
             email=""
             onSuccess={(accessToken) => { setToken(accessToken); navigate('/dashboard', { replace: true }); }}
-            onBack={(reason) => { setChallengeToken(''); setError(reason ?? 'SSO-Anmeldung abgebrochen'); }}
+            onBack={(reason) => { setChallengeToken(''); setError(reason ?? t('auth_sso_aborted')); }}
           />
         ) : error ? (
           <>
             <div role="alert" className="bg-danger-bg border border-danger-line rounded px-3 py-2 text-sm text-danger-fg">{error}</div>
-            <Link to="/login" className="text-sm text-accent-fg hover:underline">Zurück zur Anmeldung</Link>
+            <Link to="/login" className="text-sm text-accent-fg hover:underline">{t('auth_back_to_login')}</Link>
           </>
         ) : (
-          <p className="text-sm text-fg-subtle animate-pulse">Anmeldung wird abgeschlossen…</p>
+          <p className="text-sm text-fg-subtle animate-pulse">{t('auth_completing')}</p>
         )}
       </div>
     </div>
