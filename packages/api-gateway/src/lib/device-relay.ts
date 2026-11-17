@@ -121,7 +121,7 @@ export function containerNatWarnings(networks: readonly string[]): string[] {
     `Container-/Cluster-NAT-Bereich in den erlaubten Netzen: ${hits.join(', ')}. ` +
     'Läuft CoreMail hinter Docker- oder Kubernetes-NAT, können alle Clients mit der Gateway-Adresse erscheinen — ' +
     'dann wäre das Relay für jeden offen, der den Host erreicht. Empfehlung: Host-Netzwerk (network_mode: host), ' +
-    'beim Kubernetes-Service externalTrafficPolicy: Local oder PROXY-Protokoll mit vertrauenswürdigen Proxys, ' +
+    'beim Kubernetes-Service externalTrafficPolicy: Local, ' +
     'damit die echte Client-Adresse ankommt.',
   ];
 }

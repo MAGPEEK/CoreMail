@@ -219,7 +219,7 @@ test('containerNatWarnings: Docker/Kubernetes/CGNAT/ULA ranges warn, ordinary LA
     assert.match(w[0]!, label, net);
     assert.match(w[0]!, /Gateway-Adresse/);
     assert.match(w[0]!, /externalTrafficPolicy: Local/);
-    assert.match(w[0]!, /PROXY-Protokoll/);
+    assert.doesNotMatch(w[0]!, /PROXY-Protokoll/, "SMTP has no PROXY protocol support — do not recommend it");
     assert.match(w[0]!, /Host-Netzwerk/);
   }
   const both = containerNatWarnings(['10.1.0.0/16', '192.168.1.0/24', '172.17.0.2']);
