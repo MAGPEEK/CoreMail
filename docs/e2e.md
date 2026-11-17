@@ -125,10 +125,12 @@ and ends with `POST /api/v1/admin/branding/reset` (defaults back, old assets 404
 POP3 session open, changes the password in the web client and expects `* BYE`, `421 4.7.0` and
 `-ERR [AUTH]` right away; A's IDLE connection (app password) stays usable. The new password of B
 is written to `credentials.json`.
-`protocols` (9.4): the admin switches IMAP off for B (`PUT /api/v1/admin/protocol-access/users/:id`)
+`protocols` (9.4): `inherit` on the server level is refused (400, two-state); the admin switches
+IMAP off for B (`PUT /api/v1/admin/protocol-access/users/:id`)
 → B's IMAP IDLE connection gets `* BYE IMAP access has been disabled for this account` and is
 closed, a new login with the correct password gets `NO [AUTHORIZATIONFAILED]`, a wrong one still
-`NO [AUTHENTICATIONFAILED]`; Webmail off → `POST /auth/login` and B's existing session on
+`NO [AUTHENTICATIONFAILED]`, B's `/api/v1/user/client-config` lists no IMAP server; Webmail off →
+`POST /auth/login` and B's existing session on
 `/api/v1/mail/folders` answer 403 `PROTOCOL_DISABLED`; back to inherit → web login and IMAP work.
 B's switches are reset to inherit at the end. See [protocol-access.md](protocol-access.md).
 `setup` reads the one-time setup token from `docker logs coremail-e2e`. Each run prints

@@ -33,6 +33,12 @@ export async function run(state) {
     return `imap ${r.json.settings.imap}, mapi ${r.json.settings.mapi}`;
   });
 
+  await check('protocols: the server level is two-state (inherit refused)', async () => {
+    const r = await http('PUT', ADMIN_PATH, { token: admin, body: { imap: 'inherit' } });
+    assert(r.status === 400, `${r.status} ${r.text.slice(0, 200)}`);
+    return '400';
+  });
+
   const imapB = await imapLogin(B, c.userB);
   try {
     await check('protocols: IMAP off for B ends B\'s IDLE session with BYE', async () => {
@@ -59,6 +65,14 @@ export async function run(state) {
     });
 
     const tokB = await session(state, 'b', B, c.userB);
+    await check('protocols: B\'s external clients page leaves IMAP out', async () => {
+      const r = await http('GET', '/api/v1/user/client-config', { token: tokB });
+      assert(r.status === 200, `${r.status} ${r.text.slice(0, 200)}`);
+      assert(r.json.protocols?.imap === false && r.json.mail?.imap === null && r.json.mail?.pop3?.host,
+        JSON.stringify({ protocols: r.json.protocols, mail: r.json.mail }));
+      return 'imap null, pop3 listed';
+    });
+
     await check('protocols: Webmail off for B → web login 403 PROTOCOL_DISABLED, existing session refused', async () => {
       const r = await setB({ imap: 'inherit', webmail: 'off' });
       assert(r.status === 200 && r.json.effective.webmail === false && r.json.effective.imap === true, `${r.status} ${r.text.slice(0, 200)}`);
