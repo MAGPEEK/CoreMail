@@ -108,7 +108,7 @@ app.post(
       // Device access: provisioned, current policy key, not blocked / wiped ([MS-ASPROV]).
       const access = deviceAccess(device, command, parsed.line.policyKey);
       if (!access.allow) {
-        const denied = deniedResponse(command, access.status, version);
+        const denied = deniedResponse(command, access.status, version, parsed.line.policyKey);
         log.info({ userId: user.userId, deviceId, command, version, status: access.status }, 'EAS request refused by device policy');
         if (denied.body) res.status(denied.httpStatus).send(denied.body);
         else sendStatusOnly(res, denied.httpStatus);

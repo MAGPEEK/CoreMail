@@ -9,7 +9,8 @@
  *
  * Protocol 14.0+ gets the global status inside the command's WBXML response
  * (`<Sync><Status>142</Status></Sync>`); 12.1 (no global status codes) and commands
- * without a WBXML response such as GetAttachment get HTTP 449 (provision) / 403 (blocked).
+ * without a WBXML response such as GetAttachment get HTTP 449 (provision) / 403 (blocked,
+ * or a pending wipe without policy key) — see `httpStatusOf`.
  *
  * No runtime imports besides the WBXML and version helpers.
  */
@@ -56,15 +57,24 @@ const RESPONSE_ROOT: Record<string, string> = {
   ResolveRecipients: 'ResolveRecipients',
 };
 
-/** HTTP status of a refusal without WBXML body: 403 for a blocked device, else 449 (provision first). */
-export function httpStatusOf(status: EasGlobalStatus): number {
-  return status === EAS_GLOBAL_STATUS.DEVICE_BLOCKED ? 403 : 449;
+/**
+ * HTTP status of a refusal without WBXML body — the codes [MS-ASCMD] 2.2.2 (Common Status
+ * Codes) gives for protocol versions without Status 1xx: 142 / 144 → 449 (provision first),
+ * 140 RemoteWipeRequested → 449, but 403 when the request carries no policy key. 129 has no
+ * HTTP code in that table; a blocked device gets 403 Forbidden ([MS-ASHTTP] 2.2.2.1.1).
+ */
+export function httpStatusOf(status: EasGlobalStatus, policyKey?: string): number {
+  if (status === EAS_GLOBAL_STATUS.DEVICE_BLOCKED) return 403;
+  if (status === EAS_GLOBAL_STATUS.REMOTE_WIPE_REQUESTED && (policyKey ?? '').trim() === '') return 403;
+  return 449;
 }
 
-/** HTTP answer for a refused request. */
-export function deniedResponse(command: string, status: EasGlobalStatus, version: EasVersion): { httpStatus: number; body?: Buffer } {
+/** HTTP answer for a refused request (`policyKey`: the request's policy key, undefined = none sent). */
+export function deniedResponse(
+  command: string, status: EasGlobalStatus, version: EasVersion, policyKey: string | undefined,
+): { httpStatus: number; body?: Buffer } {
   const root = RESPONSE_ROOT[command];
-  if (!root || !supports(version, 'globalStatus')) return { httpStatus: httpStatusOf(status) };
+  if (!root || !supports(version, 'globalStatus')) return { httpStatus: httpStatusOf(status, policyKey) };
   return { httpStatus: 200, body: encodeWbxml(el(root, undefined, [el('Status', status)])) };
 }
 

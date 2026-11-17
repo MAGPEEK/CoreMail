@@ -47,35 +47,41 @@ test('no device / unprovisioned / missing key → 142, wrong key → 144, Provis
 
 test('refusal bytes: global status inside the command element (14.x), HTTP 449/403 otherwise', () => {
   // <Sync><Status>142</Status></Sync> on page 0
-  const sync = deniedResponse('Sync', EAS_GLOBAL_STATUS.DEVICE_NOT_PROVISIONED, '14.1');
+  const sync = deniedResponse('Sync', EAS_GLOBAL_STATUS.DEVICE_NOT_PROVISIONED, '14.1', '77');
   assert.equal(sync.httpStatus, 200);
   assert.deepEqual([...sync.body!], [0x03, 0x01, 0x6a, 0x00, 0x00, 0x00, 0x45, 0x4e, 0x03, 0x31, 0x34, 0x32, 0x00, 0x01, 0x01]);
   // FolderSync (page 7): FolderSync 0x16, Status 0x0c
-  const fs = deniedResponse('FolderSync', EAS_GLOBAL_STATUS.DEVICE_BLOCKED, '14.0');
+  const fs = deniedResponse('FolderSync', EAS_GLOBAL_STATUS.DEVICE_BLOCKED, '14.0', '77');
   assert.deepEqual(wbxmlTags(fs.body!), [[7, 0x16], [7, 0x0c]]);
   assert.equal(kid(decodeWbxml(fs.body!), 'Status')?.text, '129');
   // Ping (page 13), ItemOperations (page 20)
-  assert.deepEqual(wbxmlTags(deniedResponse('Ping', EAS_GLOBAL_STATUS.REMOTE_WIPE_REQUESTED, '14.1').body!), [[13, 0x05], [13, 0x07]]);
-  assert.deepEqual(wbxmlTags(deniedResponse('ItemOperations', EAS_GLOBAL_STATUS.INVALID_POLICY_KEY, '14.1').body!), [[20, 0x05], [20, 0x0d]]);
+  assert.deepEqual(wbxmlTags(deniedResponse('Ping', EAS_GLOBAL_STATUS.REMOTE_WIPE_REQUESTED, '14.1', undefined).body!), [[13, 0x05], [13, 0x07]]);
+  assert.deepEqual(wbxmlTags(deniedResponse('ItemOperations', EAS_GLOBAL_STATUS.INVALID_POLICY_KEY, '14.1', '78').body!), [[20, 0x05], [20, 0x0d]]);
   // no WBXML response (GetAttachment) or protocol < 14 → HTTP status
-  assert.deepEqual(deniedResponse('GetAttachment', EAS_GLOBAL_STATUS.DEVICE_NOT_PROVISIONED, '14.1'), { httpStatus: 449 });
-  assert.deepEqual(deniedResponse('Sync', EAS_GLOBAL_STATUS.INVALID_POLICY_KEY, '12.1'), { httpStatus: 449 });
-  assert.deepEqual(deniedResponse('Sync', EAS_GLOBAL_STATUS.DEVICE_BLOCKED, '12.1'), { httpStatus: 403 });
+  assert.deepEqual(deniedResponse('GetAttachment', EAS_GLOBAL_STATUS.DEVICE_NOT_PROVISIONED, '14.1', undefined), { httpStatus: 449 });
+  assert.deepEqual(deniedResponse('Sync', EAS_GLOBAL_STATUS.INVALID_POLICY_KEY, '12.1', '78'), { httpStatus: 449 });
+  assert.deepEqual(deniedResponse('Sync', EAS_GLOBAL_STATUS.DEVICE_BLOCKED, '12.1', '77'), { httpStatus: 403 });
 });
 
-test('12.1 has no global status codes: every refusal of every command is HTTP 449, a blocked device 403', () => {
+test('12.1 has no global status codes: the HTTP codes of [MS-ASCMD] 2.2.2 for every command (449; 403 blocked, or wipe without key)', () => {
   const commands = ['Sync', 'FolderSync', 'Ping', 'SendMail', 'SmartReply', 'SmartForward', 'ItemOperations', 'GetItemEstimate',
     'Settings', 'Search', 'MoveItems', 'MeetingResponse', 'ResolveRecipients', 'GetAttachment'];
+  const expected = (status: string, key: string | undefined) => (status === '129' || (status === '140' && key === undefined) ? 403 : 449);
   for (const command of commands) {
     for (const status of Object.values(EAS_GLOBAL_STATUS)) {
-      assert.deepEqual(deniedResponse(command, status, '12.1'), { httpStatus: status === '129' ? 403 : 449 }, `${command} ${status}`);
+      for (const key of ['77', undefined]) {
+        assert.deepEqual(deniedResponse(command, status, '12.1', key), { httpStatus: expected(status, key) }, `${command} ${status} key=${key}`);
+      }
     }
     if (command !== 'GetAttachment') {
-      const wbxml = deniedResponse(command, EAS_GLOBAL_STATUS.DEVICE_NOT_PROVISIONED, '14.0');
+      const wbxml = deniedResponse(command, EAS_GLOBAL_STATUS.DEVICE_NOT_PROVISIONED, '14.0', undefined);
       assert.equal(wbxml.httpStatus, 200, command);
       assert.equal(kid(decodeWbxml(wbxml.body!), 'Status')?.text, '142', command);
     }
   }
+  // a wipe with a key header (also "0") → 449: the device provisions and receives <RemoteWipe/>; a blank header = no key
+  assert.deepEqual(deniedResponse('Sync', EAS_GLOBAL_STATUS.REMOTE_WIPE_REQUESTED, '12.1', '0'), { httpStatus: 449 });
+  assert.deepEqual(deniedResponse('Sync', EAS_GLOBAL_STATUS.REMOTE_WIPE_REQUESTED, '12.1', ' '), { httpStatus: 403 });
 });
 
 test('Provision phase 1 → temporary key (not usable), phase 2 → final key (usable); wrong key → policy Status 5', async () => {
