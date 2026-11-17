@@ -79,3 +79,23 @@ test('redirect URL uses HTTPS_PUBLIC_PORT, not the internal listener port', asyn
   assert.equal(trustProxyConfigured({ TRUST_PROXY: 'false' }), false);
   assert.equal(trustProxyConfigured({ TRUST_PROXY: '1' }), true);
 });
+
+test('Autodiscover HTTP redirect method: plain-HTTP autodiscover.xml gets 302 (older Outlook does not follow 308)', async () => {
+  const { redirectStatusFor } = await import('./https-redirect.js');
+  assert.equal(redirectStatusFor('/autodiscover/autodiscover.xml'), 302);
+  assert.equal(redirectStatusFor('/Autodiscover/Autodiscover.xml'), 302);
+  assert.equal(redirectStatusFor('/AutoDiscover/AutoDiscover.XML'), 302);
+  assert.equal(redirectStatusFor('/inbox'), 308);
+  assert.equal(redirectStatusFor('/autodiscover/autodiscover.json'), 308);
+
+  const base = await remoteApp({ trustProxy: false, state: () => ({ active: true, port: 443, covers: (h) => h === 'autodiscover.ex.com' }) });
+  const res = await new Promise<{ status: number | undefined; location: string | undefined }>((resolve, reject) => {
+    const u = new URL(base);
+    const r = http.request({ host: u.hostname, port: u.port, path: '/autodiscover/autodiscover.xml', headers: { host: 'autodiscover.ex.com' } }, (rs) => {
+      rs.resume();
+      resolve({ status: rs.statusCode, location: rs.headers['location'] });
+    });
+    r.on('error', reject); r.end();
+  });
+  assert.deepEqual(res, { status: 302, location: 'https://autodiscover.ex.com/autodiscover/autodiscover.xml' });
+});

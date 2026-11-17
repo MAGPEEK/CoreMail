@@ -8,6 +8,11 @@
  * PATCH  /api/v1/admin/services/listeners/:id/toggle              — enable/disable listener
  * DELETE /api/v1/admin/services/listeners/:id                     — delete listener
  * POST   /api/v1/admin/services/listeners/:service/restore-defaults — restore default ports
+ * GET    /api/v1/admin/services/https-tls                         — HTTPS proxy TLS policy
+ * PUT    /api/v1/admin/services/https-tls                         — allow TLS 1.0/1.1 on HTTPS
+ *
+ * `allowLegacyTls` (listener) / `allowLegacyTls` (HTTPS) accept TLS 1.0/1.1 for
+ * old clients; every change of it is audited with before/after.
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { isIP } from 'node:net';
@@ -15,6 +20,7 @@ import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { requireArea } from '../../middleware/auth.js';
 import { invalidInputMessage } from '../../lib/zod-message.js';
+import { audit, auditContext } from '../../lib/audit.js';
 import { createLogger, getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD } from '@coremail/core';
 
 const log = createLogger('admin:services');
@@ -48,7 +54,39 @@ const ListenerSchema = z.object({
   port:    z.number().int().min(1).max(65535),
   ssl:     z.boolean().default(false),
   active:  z.boolean().default(true),
+  // TLS 1.0/1.1 for old clients. Absent on PUT = unchanged, on POST = off.
+  allowLegacyTls: z.boolean().optional(),
 });
+
+/** Redis channel of the HTTPS proxy (tls-proxy.ts) — rebuilds its TLS contexts. */
+const TLS_PROXY_RELOAD_CHANNEL = 'coremail:tls:reload';
+
+/** Pure: audit action for a legacy-TLS change (settings.* = always audited), or null when unchanged. */
+export function legacyTlsAuditAction(before: boolean, after: boolean): string | null {
+  if (before === after) return null;
+  return after ? 'settings.legacy-tls.enabled' : 'settings.legacy-tls.disabled';
+}
+
+const listenerTarget = (l: { id: string; service: string; address: string; port: number }) =>
+  ({ type: 'ServiceListener', id: l.id, name: `${l.service} ${l.address}:${l.port}` });
+
+/** Records a changed legacy-TLS flag (listener or HTTPS proxy). */
+function auditLegacyTls(req: Request, target: { type: string; id: string; name: string }, before: boolean, after: boolean): void {
+  const action = legacyTlsAuditAction(before, after);
+  if (!action) return;
+  audit({
+    ...(req.apiUser ? { actorId: req.apiUser.userId, actorEmail: req.apiUser.email } : {}),
+    action,
+    targetType: target.type,
+    targetId: target.id,
+    targetName: target.name,
+    changes: { allowLegacyTls: { from: before, to: after } },
+    ...auditContext(req),
+  });
+  log.warn({ target: target.name, allowLegacyTls: after }, after
+    ? 'TLS 1.0/1.1 enabled for old clients'
+    : 'TLS 1.0/1.1 disabled');
+}
 
 // ── Default listeners per service (seeded on first fetch) ──────────────────────
 const DEFAULTS: { service: SvcType; address: string; port: number; ssl: boolean }[] = [
@@ -134,10 +172,12 @@ adminServicesRouter.post('/listeners/:service', async (req: Request, res: Respon
     res.status(409).json({ error: `Port ${parsed.data.port} ist für diesen Dienst bereits konfiguriert` });
     return;
   }
+  const { allowLegacyTls, ...fields } = parsed.data;
   const listener = await prisma.serviceListener.create({
-    data: { service: svc, ...parsed.data },
+    data: { service: svc, ...fields, allowLegacyTls: allowLegacyTls ?? false },
   });
   log.info({ service: svc, port: parsed.data.port }, 'Listener added');
+  auditLegacyTls(req, listenerTarget(listener), false, listener.allowLegacyTls);
   await publishReload(svc);
   res.status(201).json(listener);
 });
@@ -150,18 +190,20 @@ adminServicesRouter.put('/listeners/:id', async (req: Request, res: Response) =>
     res.status(400).json({ error: invalidInputMessage(parsed.error), details: parsed.error.issues });
     return;
   }
-  const existing = await prisma.serviceListener.findUnique({ where: { id }, select: { service: true } });
+  const existing = await prisma.serviceListener.findUnique({ where: { id }, select: { service: true, allowLegacyTls: true } });
   if (!existing) { res.status(404).json({ error: 'Listener not found' }); return; }
   if (await portTaken(existing.service as SvcType, parsed.data.port, id)) {
     res.status(409).json({ error: `Port ${parsed.data.port} ist für diesen Dienst bereits konfiguriert` });
     return;
   }
+  const { allowLegacyTls, ...fields } = parsed.data;
   try {
     const listener = await prisma.serviceListener.update({
       where: { id },
-      data:  parsed.data,
+      data:  { ...fields, ...(allowLegacyTls !== undefined ? { allowLegacyTls } : {}) },
     });
     log.info({ id }, 'Listener updated');
+    auditLegacyTls(req, listenerTarget(listener), existing.allowLegacyTls === true, listener.allowLegacyTls === true);
     await publishReload(listener.service as SvcType);
     res.json(listener);
   } catch {
@@ -243,6 +285,36 @@ adminServicesRouter.post('/listeners/:service/restore-defaults', async (req: Req
     log.error({ err, service: svc }, 'Failed to restore listener defaults');
     res.status(500).json({ error: 'Internal server error' });
   }
+});
+
+// ── HTTPS proxy TLS policy ────────────────────────────────────────────────────
+adminServicesRouter.get('/https-tls', async (_req: Request, res: Response) => {
+  const s = await prisma.serverSettings.findUnique({ where: { id: 'singleton' }, select: { httpsAllowLegacyTls: true } });
+  res.json({ allowLegacyTls: s?.httpsAllowLegacyTls === true });
+});
+
+const HttpsTlsSchema = z.object({ allowLegacyTls: z.boolean() });
+
+adminServicesRouter.put('/https-tls', async (req: Request, res: Response) => {
+  const parsed = HttpsTlsSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: invalidInputMessage(parsed.error), details: parsed.error.issues });
+    return;
+  }
+  const before = await prisma.serverSettings.findUnique({ where: { id: 'singleton' }, select: { httpsAllowLegacyTls: true } });
+  const after = parsed.data.allowLegacyTls;
+  await prisma.serverSettings.upsert({
+    where:  { id: 'singleton' },
+    update: { httpsAllowLegacyTls: after },
+    create: { id: 'singleton', httpsAllowLegacyTls: after },
+  });
+  auditLegacyTls(req, { type: 'ServerSettings', id: 'singleton', name: 'HTTPS' }, before?.httpsAllowLegacyTls === true, after);
+  try {
+    await getRedisClient().publish(TLS_PROXY_RELOAD_CHANNEL, JSON.stringify({ reason: 'https-tls' }));
+  } catch (err) {
+    log.warn({ err }, 'Failed to publish TLS proxy reload — applies on the next certificate reload');
+  }
+  res.json({ allowLegacyTls: after });
 });
 
 // ── Re-export Zod schema for type inference ───────────────────────────────────

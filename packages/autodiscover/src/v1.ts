@@ -1,5 +1,5 @@
 import type { Request, Response } from 'express';
-import { createLogger } from '@coremail/core';
+import { createLogger, PROTO_VERIFIED_HEADER } from '@coremail/core';
 import { prisma, verifyMailCredentials, clientIpFromRequest, type MailAuthUser } from '@coremail/storage';
 import { getServerConfig, ServerConfigUnavailableError, type ServerConfig } from './settings.js';
 import { SMTPS_PORT } from './v2.js';
@@ -74,6 +74,35 @@ export function xmlElementText(body: string, name: string): string | null {
   return m ? decodeXmlEntities(m[1]!).trim() : null;
 }
 
+/** IMAP encryption: implicit TLS, else STARTTLS (CoreMail refuses login before TLS). */
+export function imapEncryption(cfg: Pick<ServerConfig, 'imapSsl'>): 'SSL' | 'TLS' {
+  return cfg.imapSsl ? 'SSL' : 'TLS';
+}
+
+/**
+ * Pure: an unauthenticated GET/HEAD that verifiably reached us over plain HTTP.
+ * The gateway sets X-Forwarded-Proto and, only when that scheme is known,
+ * X-CoreMail-Proto-Verified: behind a reverse proxy without TRUST_PROXY the
+ * scheme is a guess ("http" also for HTTPS clients) and a redirect would loop.
+ */
+export function isPlainHttpProbe(r: {
+  method: string; forwardedProto: string | undefined; protoVerified: boolean; hasAuthorization: boolean;
+}): boolean {
+  return (r.method === 'GET' || r.method === 'HEAD') && !r.hasAuthorization
+    && r.protoVerified && r.forwardedProto?.toLowerCase() === 'http';
+}
+
+/**
+ * MS-OXDSCLI "HTTP redirect method": a plain-HTTP probe (isPlainHttpProbe) is
+ * answered with a 302 to the HTTPS Autodiscover endpoint — never with a Basic
+ * challenge, which would invite the client to send the password in clear
+ * text. Null when no HTTPS endpoint is configured.
+ */
+export function plainHttpRedirectTarget(autodiscoverBase: string): string | null {
+  if (!/^https:\/\//i.test(autodiscoverBase)) return null;
+  return `${autodiscoverBase.replace(/\/+$/, '')}/Autodiscover/Autodiscover.xml`;
+}
+
 function sendChallenge(res: Response): void {
   res.set('WWW-Authenticate', REALM_CHALLENGE);
   res.status(401).send('Unauthorized');
@@ -94,10 +123,19 @@ function sendError(res: Response, err: AutodiscoverError): void {
 </Autodiscover>`);
 }
 
-function buildOutlookResponse(user: MailAuthUser, email: string, cfg: ServerConfig): string {
+/**
+ * Outlook schema response. The account is always described by its PRIMARY
+ * address — also when the client asked for one of its aliases: the mail
+ * protocols log in with the primary address only, and AutoDiscoverSMTPAddress
+ * tells Outlook which address the profile belongs to. (No redirectAddr: the
+ * caller is already authenticated for this account, a redirect would only cost
+ * another round trip and a client prompt.)
+ */
+function buildOutlookResponse(user: MailAuthUser, cfg: ServerConfig): string {
   // Outlook LTSC 2019/2021/2024 compatible (v3.18.38): <User><LegacyDN> is mandatory.
   // The LegacyDN carries the caller's own id — the response only ever describes
   // the authenticated account itself.
+  const email = user.email;
   const webHost = (() => {
     try { return new URL(cfg.owaUrl).hostname; } catch { return cfg.smtpHost; }
   })();
@@ -122,6 +160,7 @@ function buildOutlookResponse(user: MailAuthUser, email: string, cfg: ServerConf
         <DomainRequired>off</DomainRequired>
         <SPA>off</SPA>
         <SSL>${cfg.imapSsl ? 'on' : 'off'}</SSL>
+        <Encryption>${imapEncryption(cfg)}</Encryption>
         <AuthRequired>on</AuthRequired>
       </Protocol>
       <Protocol>
@@ -145,7 +184,8 @@ function buildOutlookResponse(user: MailAuthUser, email: string, cfg: ServerConf
 }
 
 /** MS-ASCMD Autodiscover response (mobilesync schema): the ActiveSync URL. */
-function buildMobileSyncResponse(user: MailAuthUser, email: string, cfg: ServerConfig): string {
+function buildMobileSyncResponse(user: MailAuthUser, cfg: ServerConfig): string {
+  const email = user.email;
   return `<?xml version="1.0" encoding="utf-8"?>
 <Autodiscover xmlns="${NS_RESPONSE}">
   <Response xmlns="${NS_MOBILESYNC}">
@@ -198,12 +238,36 @@ async function isOwnAddress(user: MailAuthUser, email: string): Promise<boolean>
   return alias !== null;
 }
 
+/** HTTPS target for a plain-HTTP probe, or null (not a probe / no HTTPS endpoint / settings unreadable). */
+async function redirectTargetForPlainHttp(req: Request, hasAuthorization: boolean): Promise<string | null> {
+  const probe = isPlainHttpProbe({
+    method: req.method,
+    forwardedProto: req.get('X-Forwarded-Proto'),
+    protoVerified: req.get(PROTO_VERIFIED_HEADER) === '1',
+    hasAuthorization,
+  });
+  if (!probe) return null;
+  try {
+    return plainHttpRedirectTarget((await getServerConfig()).autodiscoverBase);
+  } catch (err) {
+    if (!(err instanceof ServerConfigUnavailableError)) throw err;
+    return null;
+  }
+}
+
 export async function handleAutodiscoverV1(req: Request, res: Response): Promise<void> {
   // v5.2.3: Outlook first probes without an Authorization header and expects
   // 401 + WWW-Authenticate before it sends credentials.
   const authHeader = req.get('Authorization') ?? '';
   // v5.2.15: the scheme is case-insensitive (RFC 7235 §2.1) — some Outlook builds send `basic`.
   const scheme = authHeader.split(' ')[0]?.toLowerCase() ?? '';
+  const httpsTarget = await redirectTargetForPlainHttp(req, authHeader !== '');
+  if (httpsTarget) {
+    log.debug({ method: req.method }, 'Autodiscover v1: plain HTTP probe → 302 to HTTPS');
+    res.set('Cache-Control', 'no-store');
+    res.redirect(302, httpsTarget);
+    return;
+  }
   if (scheme !== 'basic') {
     // No header, Negotiate/NTLM, Bearer (Outlook Modern Auth tokens we cannot
     // validate) …: ask for Basic. No database access and no persistent log for
@@ -300,6 +364,6 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
   log.info({ userId: auth.user.id, schema: parsed.schema, method: req.method }, 'Autodiscover v1 request (authenticated)');
   res.set('Content-Type', 'text/xml; charset=utf-8');
   res.send(parsed.schema === 'mobilesync'
-    ? buildMobileSyncResponse(auth.user, email, cfg)
-    : buildOutlookResponse(auth.user, email, cfg));
+    ? buildMobileSyncResponse(auth.user, cfg)
+    : buildOutlookResponse(auth.user, cfg));
 }

@@ -75,3 +75,17 @@ test('allowedClientHeader validates name and value', () => {
   assert.equal(allowedClientHeader('x-coremail-user', 'web'), undefined);
   assert.equal(allowedClientHeader('x-coremail-app', undefined), undefined);
 });
+
+test('X-CoreMail-Proto-Verified: set by the gateway only when the scheme is known, never taken from the client', async () => {
+  // direct plain-HTTP client: scheme known
+  const direct = await through({});
+  assert.equal(direct['x-forwarded-proto'], 'http');
+  assert.equal(direct['x-coremail-proto-verified'], '1');
+  // reverse proxy without TRUST_PROXY: "http" is only a guess (Autodiscover must not redirect → loop)
+  const untrusted = await through({ 'X-Forwarded-Proto': 'https', 'X-Forwarded-For': '198.51.100.7' });
+  assert.equal(untrusted['x-forwarded-proto'], 'http');
+  assert.equal(untrusted['x-coremail-proto-verified'], undefined);
+  // a client cannot claim it
+  const forged = await through({ 'X-Forwarded-For': '198.51.100.7', 'X-CoreMail-Proto-Verified': '1' });
+  assert.equal(forged['x-coremail-proto-verified'], undefined);
+});

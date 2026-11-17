@@ -80,7 +80,7 @@ node scripts/e2e/run.mjs imap pop3       # single steps (state is kept in state.
 node --test scripts/e2e/repo-hygiene.test.mjs   # static regression checks (no stack needed)
 ```
 
-Steps: `setup users smtp imap pop3 jmap dav eas eas-body eas-commands eas-legacy rest webmail admin tls backup branding mfa live lockout restart storage schema-upgrade`.
+Steps: `setup users smtp imap pop3 jmap dav eas eas-body eas-commands eas-legacy rest webmail admin tls legacy-clients backup branding mfa live lockout restart storage schema-upgrade`.
 `eas-legacy`: OPTIONS announces `12.1,14.0,14.1` and an unannounced version (2.5) is served as 14.1
 (Status 142 in WBXML for the unprovisioned device); a 12.1
 device gets HTTP 449 without a policy key, provisions, syncs (no Email2 / 14.x tags in any
@@ -107,6 +107,14 @@ intermediate is sent) and `GET /api/v1/admin/certificates/served` to agree; remo
 must bring every port back to the self-signed default for `mail.<E2E_DOMAIN>` (one certificate on
 all ports, visible as the SELF_SIGNED protocol certificate). The uploaded certificate is deleted.
 See [certificates.md](certificates.md).
+`legacy-clients`: the IMAPS listener refuses a TLS 1.0 client by default, accepts TLS 1.0/1.1 a few
+seconds after „Ältere Clients erlauben" is switched on (no container restart) and refuses it again
+after switching off; Autodiscover answers 401 Basic first, then IMAP/SMTP with an explicit
+`<Encryption>` (mixed-case path); the device relay refuses an external recipient while off, refuses
+`0.0.0.0/0` and `::ffff:0:0/96`, then (private networks + `<E2E_DOMAIN>`) accepts the external RCPT for that
+sender domain only, refuses a relayed message with an `.exe` attachment at DATA (attachment filter) and
+is switched off again. See [legacy-tls.md](legacy-tls.md), [device-relay.md](device-relay.md),
+[autodiscover.md](autodiscover.md).
 `backup` (9.3): B gets a folder `E2E-Backup` with two APPENDed messages (attachment, `\Flagged \Seen`);
 a mailbox backup of B (encrypted ZIP in the bucket) is restored from the STORED archive into A
 (`mode: subfolder`) and A must see `Wiederhergestellt <date>.E2E-Backup` over IMAP with both

@@ -13,6 +13,7 @@ import { smtpLiveSessions } from './core/live-sessions.js';
 import { inboundTarpitMaxDelayMs } from './core/session.js';
 import type { SmtpServerHandle } from './core/factory.js';
 import { inboundHandlers } from './inbound/handler.js';
+import { withDeviceRelay, invalidateDeviceRelayCache } from './inbound/device-relay.js';
 import { submissionHandlers } from './submission/handler.js';
 import { verifySmtpCredentials } from './auth/verifier.js';
 import { startOutboundWorker } from './outbound/queue.js';
@@ -221,6 +222,8 @@ interface TrackedSmtpServer {
   handle:  SmtpServerHandle;
   sockets: Set<net.Socket>;
   ssl:     boolean;
+  /** Listener accepts TLS 1.0/1.1 (kept on certificate rotation). */
+  allowLegacyTls: boolean;
 }
 
 /** TLS material the running listeners were last given (for change detection). */
@@ -235,7 +238,7 @@ let _appliedTls: { cert: Buffer; key: Buffer } | null = null;
 function applyTlsToRunningListeners(): void {
   if (!_tlsConfig || tlsMaterialEquals(_tlsConfig, _appliedTls)) return;
   const res = applyTlsToListeners(
-    [...servers].map(([port, t]) => ({ port, ssl: t.ssl, server: t.handle.server })),
+    [...servers].map(([port, t]) => ({ port, ssl: t.ssl, server: t.handle.server, allowLegacyTls: t.allowLegacyTls })),
     _tlsConfig,
   );
   for (const f of res.failed) log.error({ err: f.error, port: f.port }, 'SMTP TLS context update failed — keeping old cert');
@@ -273,7 +276,7 @@ function scheduleReload(): void {
  *  - Port 465 → Submission with implicit TLS (auth required)
  *  - Port 587 → Submission with STARTTLS (auth required)
  */
-function createTrackedSmtpServer(port: number, ssl: boolean): TrackedSmtpServer {
+function createTrackedSmtpServer(port: number, ssl: boolean, allowLegacyTls: boolean): TrackedSmtpServer {
   const isSubmission = SUBMISSION_PORTS.has(port);
 
   // Hostname, banner, maxSize, maxRcpt and ESMTP flags as getters — every new
@@ -282,7 +285,10 @@ function createTrackedSmtpServer(port: number, ssl: boolean): TrackedSmtpServer 
   const config = Object.defineProperties(
     {
       requireAuth: isSubmission,
-      handlers:    isSubmission ? submissionHandlers : inboundHandlers,
+      // Inbound listeners: the device relay (BCP → SMTP → Geräte-Relay) applies
+      // only to configured networks on its configured port.
+      handlers:    isSubmission ? submissionHandlers : withDeviceRelay(inboundHandlers, port),
+      allowLegacyTls,
       // Tarpit only for inbound MTA traffic (port 25); SMTP_TARPIT_MAX_DELAY_MS=0 disables it.
       ...(isSubmission ? {} : { tarpitMaxDelayMs: inboundTarpitMaxDelayMs() }),
       ...(isSubmission ? { verifyCredentials: verifySmtpCredentials } : {}),
@@ -321,7 +327,7 @@ function createTrackedSmtpServer(port: number, ssl: boolean): TrackedSmtpServer 
     socket.once('close', () => sockets.delete(socket));
   });
 
-  return { handle, sockets, ssl };
+  return { handle, sockets, ssl, allowLegacyTls };
 }
 
 /**
@@ -360,16 +366,17 @@ function bindAddress(address: string | null | undefined): string {
   return resolveBindAddress(address);
 }
 
-/** SSL flag + bind address a running port was started with (9.1.x). */
+/** SSL flag + bind address (9.1.x) + legacy-TLS policy a running port was started with. */
 const appliedListener = new Map<number, string>();
-const listenerSignature = (l: { ssl: boolean; address: string }): string => `${l.ssl ? 'ssl' : 'plain'}|${bindAddress(l.address)}`;
+const listenerSignature = (l: { ssl: boolean; address: string; allowLegacyTls: boolean }): string =>
+  `${l.ssl ? 'ssl' : 'plain'}|${bindAddress(l.address)}|${l.allowLegacyTls ? 'legacy-tls' : 'tls12'}`;
 
 /**
  * 9.1.x: a changed SSL flag / bind address of a RUNNING port used to be ignored
  * until the next restart. Such ports are closed here and started again by a
  * follow-up reload once the socket is released. Returns the closed ports.
  */
-function stopChangedListeners(listeners: Array<{ port: number; ssl: boolean; address: string; active: boolean }>): Set<number> {
+function stopChangedListeners(listeners: Array<{ port: number; ssl: boolean; address: string; active: boolean; allowLegacyTls: boolean }>): Set<number> {
   const wanted = new Map<number, string>();
   for (const l of listeners) if (l.active && !wanted.has(l.port)) wanted.set(l.port, listenerSignature(l));
   const restarted = new Set<number>();
@@ -403,7 +410,7 @@ async function reloadListeners(): Promise<void> {
     for (const l of listeners) {
       if (l.active && !servers.has(l.port) && !restarted.has(l.port)) {
         try {
-          const tracked = createTrackedSmtpServer(l.port, l.ssl);
+          const tracked = createTrackedSmtpServer(l.port, l.ssl, l.allowLegacyTls);
           servers.set(l.port, tracked);
           const mode = SUBMISSION_PORTS.has(l.port) ? 'submission' : 'inbound';
           appliedListener.set(l.port, listenerSignature(l));
@@ -412,7 +419,7 @@ async function reloadListeners(): Promise<void> {
           listenWithRecovery(tracked.handle.server, {
             port: l.port, address: l.address, label: 'SMTP', log,
             isCurrent: () => servers.get(l.port) === tracked,
-            onListening: (address) => log.info({ port: l.port, ssl: l.ssl, mode, address }, 'SMTP listener started'),
+            onListening: (address) => log.info({ port: l.port, ssl: l.ssl, mode, address, allowLegacyTls: l.allowLegacyTls }, 'SMTP listener started'),
             onGiveUp: () => {
               if (servers.get(l.port) !== tracked) return;
               servers.delete(l.port);
@@ -481,6 +488,8 @@ async function main(): Promise<void> {
       // Invalidate outbound smarthost/relay cache — new provider credentials
       // thus take effect on the next send attempt (instead of after the 60s TTL).
       invalidateOutboundConfigCache();
+      // BCP → SMTP → Geräte-Relay takes effect for the next transaction.
+      invalidateDeviceRelayCache();
       // BCP → Queues → Settings (retry/backoff/retention) take effect at once.
       invalidateQueueSettingsCache();
       // Reload TLS certificate and swap it into running listeners

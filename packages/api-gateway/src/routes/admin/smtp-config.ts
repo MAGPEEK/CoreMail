@@ -5,9 +5,77 @@ import { prisma } from '@coremail/storage';
 import { getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 import { requireArea } from '../../middleware/auth.js';
 import { smarthostTestOptions } from '../../lib/smarthost-test.js';
+import { validateDeviceRelay, type DeviceRelayInput } from '../../lib/device-relay.js';
+import { audit, auditContext } from '../../lib/audit.js';
 
 export const adminSmtpConfigRouter: RouterType = Router();
 adminSmtpConfigRouter.use(requireArea('servers'));
+
+// ── Device relay (Geräte-Relay) ──────────────────────────────────────────────
+
+const DEVICE_RELAY_DEFAULTS: DeviceRelayInput = {
+  enabled: false, allowedNetworks: [], senderDomains: [], port: 25, maxMessagesPerMinute: 30,
+};
+
+/** Stored configuration (defaults without a row) + whether an inbound listener serves its port. */
+async function deviceRelayView(): Promise<DeviceRelayInput & { listenerActive: boolean }> {
+  const row = await prisma.deviceRelaySettings.findUnique({ where: { id: 'singleton' } });
+  const cfg: DeviceRelayInput = row
+    ? { enabled: row.enabled, allowedNetworks: row.allowedNetworks, senderDomains: row.senderDomains, port: row.port, maxMessagesPerMinute: row.maxMessagesPerMinute }
+    : DEVICE_RELAY_DEFAULTS;
+  const listener = await prisma.serviceListener.findFirst({
+    where: { service: 'SMTP_RECEIVE', port: cfg.port, active: true }, select: { id: true },
+  });
+  return { ...cfg, listenerActive: listener !== null };
+}
+
+// GET /admin/smtp-config/device-relay
+adminSmtpConfigRouter.get('/device-relay', async (_req: Request, res: Response) => {
+  res.json(await deviceRelayView());
+});
+
+const DeviceRelaySchema = z.object({
+  enabled:              z.boolean(),
+  allowedNetworks:      z.array(z.string().max(64)).max(256),
+  senderDomains:        z.array(z.string().max(253)).max(256),
+  port:                 z.number().int().min(1).max(65535),
+  maxMessagesPerMinute: z.number().int().min(1).max(1000),
+});
+
+// PUT /admin/smtp-config/device-relay
+adminSmtpConfigRouter.put('/device-relay', async (req: Request, res: Response) => {
+  const parsed = DeviceRelaySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Ungültige Eingabe', details: parsed.error.issues });
+    return;
+  }
+  const hosted = await prisma.domain.findMany({ where: { active: true }, select: { name: true } });
+  const checked = validateDeviceRelay(parsed.data, hosted.map((d) => d.name));
+  if (!checked.ok) { res.status(400).json({ error: checked.error }); return; }
+
+  const before = await deviceRelayView();
+  const value = checked.value;
+  await prisma.deviceRelaySettings.upsert({
+    where:  { id: 'singleton' },
+    update: value,
+    create: { id: 'singleton', ...value },
+  });
+  audit({
+    ...(req.apiUser ? { actorId: req.apiUser.userId, actorEmail: req.apiUser.email } : {}),
+    action: 'settings.device-relay.updated',
+    targetType: 'DeviceRelaySettings',
+    targetId: 'singleton',
+    targetName: 'Geräte-Relay',
+    changes: {
+      before: { enabled: before.enabled, allowedNetworks: before.allowedNetworks, senderDomains: before.senderDomains, port: before.port, maxMessagesPerMinute: before.maxMessagesPerMinute },
+      after: value,
+    },
+    ...auditContext(req),
+  });
+  // The SMTP server drops its cached policy on this signal.
+  await getRedisClient().publish(CHANNEL_SETTINGS_RELOAD, JSON.stringify({ kind: 'device-relay' })).catch(() => undefined);
+  res.json(await deviceRelayView());
+});
 
 async function getOrCreate() {
   return prisma.smtpSettings.upsert({

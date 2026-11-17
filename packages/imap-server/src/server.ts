@@ -83,6 +83,8 @@ interface TrackedImapServer {
   server:  ReturnType<typeof createImapServer>;
   sockets: Set<net.Socket>;
   ssl:     boolean;
+  /** Listener accepts TLS 1.0/1.1 (kept on certificate rotation). */
+  allowLegacyTls: boolean;
 }
 
 const servers = new Map<number, TrackedImapServer>();
@@ -98,7 +100,7 @@ let _appliedTls: ImapTlsConfig | null = null;
 function applyTlsToRunningListeners(): void {
   if (!_tlsConfig || tlsMaterialEquals(_tlsConfig, _appliedTls)) return;
   const res = applyTlsToListeners(
-    [...servers].map(([port, t]) => ({ port, ssl: t.ssl, server: t.server })),
+    [...servers].map(([port, t]) => ({ port, ssl: t.ssl, server: t.server, allowLegacyTls: t.allowLegacyTls })),
     _tlsConfig,
   );
   for (const f of res.failed) log.error({ err: f.error, port: f.port }, 'IMAP TLS context update failed — keeping old cert');
@@ -128,20 +130,20 @@ function scheduleReload(): void {
 
 // ── Server lifecycle ──────────────────────────────────────────────────────────
 
-function createTrackedImapServer(ssl: boolean): TrackedImapServer {
+function createTrackedImapServer(ssl: boolean, allowLegacyTls: boolean): TrackedImapServer {
   // Pass TLS for implicit TLS (port 993); plaintext (port 143) offers STARTTLS
   // with the current protocol cert (read per upgrade → hot rotation). v7:
   // without a cert the plaintext port refuses authentication.
   const server = createImapServer(
     ssl && _tlsConfig ? _tlsConfig : undefined,
-    { starttls: () => _tlsConfig },
+    { starttls: () => _tlsConfig, allowLegacyTls },
   );
   const sockets = new Set<net.Socket>();
   server.on('connection', (socket: net.Socket) => {
     sockets.add(socket);
     socket.once('close', () => sockets.delete(socket));
   });
-  return { server, sockets, ssl };
+  return { server, sockets, ssl, allowLegacyTls };
 }
 
 /**
@@ -187,16 +189,17 @@ function bindAddress(address: string | null | undefined): string {
   return resolveBindAddress(address);
 }
 
-/** SSL flag + bind address a running port was started with (9.1.x). */
+/** SSL flag + bind address (9.1.x) + legacy-TLS policy a running port was started with. */
 const appliedListener = new Map<number, string>();
-const listenerSignature = (l: { ssl: boolean; address: string }): string => `${l.ssl ? 'ssl' : 'plain'}|${bindAddress(l.address)}`;
+const listenerSignature = (l: { ssl: boolean; address: string; allowLegacyTls: boolean }): string =>
+  `${l.ssl ? 'ssl' : 'plain'}|${bindAddress(l.address)}|${l.allowLegacyTls ? 'legacy-tls' : 'tls12'}`;
 
 /**
  * 9.1.x: a changed SSL flag / bind address of a RUNNING port used to be ignored
  * until the next restart. Such ports are closed here and started again by a
  * follow-up reload once the socket is released. Returns the closed ports.
  */
-function stopChangedListeners(listeners: Array<{ port: number; ssl: boolean; address: string; active: boolean }>): Set<number> {
+function stopChangedListeners(listeners: Array<{ port: number; ssl: boolean; address: string; active: boolean; allowLegacyTls: boolean }>): Set<number> {
   const wanted = new Map<number, string>();
   for (const l of listeners) if (l.active && !wanted.has(l.port)) wanted.set(l.port, listenerSignature(l));
   const restarted = new Set<number>();
@@ -229,7 +232,7 @@ async function reloadListeners(): Promise<void> {
     for (const l of listeners) {
       if (l.active && !servers.has(l.port) && !restarted.has(l.port)) {
         try {
-          const tracked = createTrackedImapServer(l.ssl);
+          const tracked = createTrackedImapServer(l.ssl, l.allowLegacyTls);
           servers.set(l.port, tracked);
           appliedListener.set(l.port, listenerSignature(l));
           // Bind errors (address not in the container, port still in use after a
@@ -237,7 +240,7 @@ async function reloadListeners(): Promise<void> {
           listenWithRecovery(tracked.server, {
             port: l.port, address: l.address, label: 'IMAP', log,
             isCurrent: () => servers.get(l.port) === tracked,
-            onListening: (address) => log.info({ port: l.port, ssl: l.ssl, address }, 'IMAP listener started'),
+            onListening: (address) => log.info({ port: l.port, ssl: l.ssl, address, allowLegacyTls: l.allowLegacyTls }, 'IMAP listener started'),
             onGiveUp: () => {
               if (servers.get(l.port) !== tracked) return;
               servers.delete(l.port);

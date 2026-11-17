@@ -116,10 +116,13 @@ test('another user\'s address, an unknown account and a foreign domain get the s
   assert.equal(withoutTime(unknown.text), withoutTime(foreign.text));
 });
 
-test('an alias of the caller and a different spelling of the own address are answered', async () => {
+test('an alias of the caller and a different spelling of the own address are answered with the primary address', async () => {
   const alias = await post(requestXml('info@example.com'));
   assert.equal(alias.status, 200);
-  assert.match(alias.text, /<AutoDiscoverSMTPAddress>info@example\.com<\/AutoDiscoverSMTPAddress>/);
+  // The mail protocols log in with the primary address only (w1-legacy-clients).
+  assert.match(alias.text, /<AutoDiscoverSMTPAddress>alice@example\.com<\/AutoDiscoverSMTPAddress>/);
+  assert.match(alias.text, /<LoginName>alice@example\.com<\/LoginName>/);
+  assert.doesNotMatch(alias.text, /<LoginName>info@/);
   const upper = await post(requestXml('Alice@Example.com'));
   assert.match(upper.text, /<Type>IMAP<\/Type>/);
 });
@@ -148,7 +151,12 @@ test('namespace prefixes and XML entities in the request are understood', async 
   const body = `<?xml version="1.0"?><a:Autodiscover xmlns:a="http://schemas.microsoft.com/exchange/autodiscover/outlook/requestschema/2006"><a:Request>
     <a:EMailAddress>info&#64;example.com</a:EMailAddress><a:AcceptableResponseSchema>${NS_MOBILESYNC}</a:AcceptableResponseSchema></a:Request></a:Autodiscover>`;
   const r = await post(body);
-  assert.match(r.text, /<EMailAddress>info@example\.com<\/EMailAddress>/);
+  // alias accepted (answered with the primary address) in the prefixed mobilesync schema
+  assert.match(r.text, new RegExp(`<Response xmlns="${NS_MOBILESYNC}">`));
+  assert.match(r.text, /<EMailAddress>alice@example\.com<\/EMailAddress>/);
+  // the entity-encoded address really is read: another user's address → Error 500
+  const other = await post(body.replace('info&#64;example.com', 'ceo&#64;example.com'));
+  assert.match(other.text, /<ErrorCode>500<\/ErrorCode>/);
   assert.equal(xmlElementText('<x:A>a&amp;b</x:A>', 'A'), 'a&b');
 });
 

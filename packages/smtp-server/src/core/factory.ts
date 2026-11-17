@@ -4,7 +4,7 @@
 
 import net from 'node:net';
 import tls from 'node:tls';
-import { createLogger } from '@coremail/core';
+import { createLogger, tlsServerOptions } from '@coremail/core';
 import { logTlsSocketError } from '@coremail/core/tls-errors';
 import { SmtpSession } from './session.js';
 import type { SmtpSessionConfig } from './types.js';
@@ -107,14 +107,8 @@ export function createSmtpServer(config: SmtpSessionConfig, implicitTls = false)
     if (!config.tls) {
       throw new Error('createSmtpServer: implicitTls=true but config.tls is not set');
     }
-    server = tls.createServer(
-      {
-        cert: config.tls.cert,
-        key: config.tls.key,
-        minVersion: 'TLSv1.2',
-      },
-      onConnection,
-    );
+    // TLS 1.2+ unless this listener allows old clients (TLS 1.0/1.1).
+    server = tls.createServer(tlsServerOptions(config.tls, config.allowLegacyTls === true), onConnection);
     // 9.3: handshake failures on 465 (e.g. the client rejects the certificate)
     server.on('tlsClientError', (err: Error, s: tls.TLSSocket) => {
       logTlsSocketError(log, err, { service: 'SMTP', ip: s.remoteAddress, port: s.localPort });

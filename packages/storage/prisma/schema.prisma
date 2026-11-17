@@ -1494,6 +1494,9 @@ model ServerSettings {
   easUrl          String   @default("http://mail.local:8080/Microsoft-Server-ActiveSync")
   // Autodiscover base URL
   autodiscoverBase String  @default("http://mail.local:8080")
+  // Integrated HTTPS proxy (tls-proxy.ts): also accept TLS 1.0/1.1 with the
+  // vetted legacy cipher list (@coremail/core tlsProtocolOptions). Default off.
+  httpsAllowLegacyTls Boolean @default(false)
   // IMAP
   imapHost        String   @default("mail.local")
   imapPort        Int      @default(993)
@@ -1621,10 +1624,32 @@ model ServiceListener {
   port      Int
   ssl       Boolean     @default(false)
   active    Boolean     @default(true)
+  // Accept TLS 1.0/1.1 (vetted legacy cipher list) on this listener — for old
+  // mail clients only. Default off: TLS 1.2+.
+  allowLegacyTls Boolean @default(false)
   createdAt DateTime    @default(now())
   updatedAt DateTime    @updatedAt
 
   @@map("service_listeners")
+}
+
+// ── Device SMTP relay (singleton) ─────────────────────────────────────────────
+// Unauthenticated relay for internal devices (scanners, printers, monitoring)
+// ONLY from `allowedNetworks` (CIDR) on listener port `port`, ONLY for MAIL FROM
+// / From: domains in `senderDomains`, at most `maxMessagesPerMinute` per source
+// IP. Active only when enabled AND both lists are non-empty. The legacy
+// SmtpSettings.relaying* fields are never evaluated (stale data must not open a
+// relay on upgrade).
+model DeviceRelaySettings {
+  id                   String   @id @default("singleton")
+  enabled              Boolean  @default(false)
+  allowedNetworks      String[]
+  senderDomains        String[]
+  port                 Int      @default(25)
+  maxMessagesPerMinute Int      @default(30)
+  updatedAt            DateTime @updatedAt
+
+  @@map("device_relay_settings")
 }
 
 // ── Mail connectors (send / receive connectors) ─────────────────────────────

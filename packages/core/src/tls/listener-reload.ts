@@ -7,7 +7,11 @@
  * no port is closed. A listener that was started with `ssl: true` but without
  * any TLS material (plain net.Server fallback) cannot be upgraded in place and
  * is reported for a restart.
+ *
+ * Every listener keeps its own protocol policy on rotation: an entry with
+ * `allowLegacyTls` gets the legacy options (legacy-tls.ts), all others TLS 1.2+.
  */
+import { tlsServerOptions, type TlsProtocolOptions } from './legacy-tls.js';
 
 export interface TlsMaterial {
   cert: Buffer;
@@ -16,7 +20,7 @@ export interface TlsMaterial {
 
 /** Anything with an optional setSecureContext — tls.Server or a test fake. */
 export interface TlsCapableServer {
-  setSecureContext?: (options: { cert: Buffer; key: Buffer; minVersion?: 'TLSv1.2' | 'TLSv1.3' }) => void;
+  setSecureContext?: (options: { cert: Buffer | string; key: Buffer | string } & TlsProtocolOptions) => void;
 }
 
 export interface TlsListenerEntry {
@@ -24,6 +28,8 @@ export interface TlsListenerEntry {
   /** Listener configured for implicit TLS. */
   ssl: boolean;
   server: TlsCapableServer | object;
+  /** Listener accepts TLS 1.0/1.1 (ServiceListener.allowLegacyTls). */
+  allowLegacyTls?: boolean;
 }
 
 export interface TlsApplyResult {
@@ -48,7 +54,6 @@ export function tlsMaterialEquals(a: TlsMaterial | null | undefined, b: TlsMater
 export function applyTlsToListeners(
   entries: Iterable<TlsListenerEntry>,
   material: TlsMaterial,
-  minVersion: 'TLSv1.2' | 'TLSv1.3' = 'TLSv1.2',
 ): TlsApplyResult {
   const result: TlsApplyResult = { updated: [], restart: [], failed: [] };
   for (const e of entries) {
@@ -59,7 +64,7 @@ export function applyTlsToListeners(
       continue;
     }
     try {
-      srv.setSecureContext({ cert: material.cert, key: material.key, minVersion });
+      srv.setSecureContext(tlsServerOptions(material, e.allowLegacyTls === true));
       result.updated.push(e.port);
     } catch (error) {
       result.failed.push({ port: e.port, error });

@@ -35,6 +35,7 @@ import { createMailCredentialVerifier, createMemoryAuthRedis } from '${MAIL_AUTH
 export { createMemoryAuthRedis, normalizeIp, isPrivateOrLoopbackIp, createExemptIpMatcher } from '${MAIL_AUTH_CORE_URL}';
 export * from '${new URL('../../core/src/net/connection-limiter.ts', import.meta.url).href}';
 export * from '${new URL('../../core/src/tls/tls-errors.ts', import.meta.url).href}';
+export * from '${new URL('../../core/src/tls/legacy-tls.ts', import.meta.url).href}';
 export * from '${storageUrl('mime/tree.ts')}';
 export * from '${storageUrl('mime/address.ts')}';
 export * from '${storageUrl('mime/build.ts')}';

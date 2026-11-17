@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Terminal, Package, MessageSquare, Clock,
   Network, Plus, Trash2, CheckCircle, Info, SendHorizonal,
-  Loader2, XCircle, Globe, Copy, Check, RefreshCw, AlertCircle,
+  Loader2, XCircle, Globe, Copy, Check, RefreshCw, AlertCircle, Printer,
 } from 'lucide-react';
 import { api } from '../api/client.js';
 import toast from 'react-hot-toast';
@@ -12,6 +12,7 @@ import { copyToClipboard } from '../utils/clipboard.js';
 import { errorMessage } from '../lib/errors.js';
 import { smtpGreetingPreview } from '../lib/smtpBanner.js';
 import { WriteGuard } from '../components/Can.js';
+import { DeviceRelaySection } from '../components/DeviceRelaySection.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -31,8 +32,9 @@ interface SmtpSettings {
   localDeliveryEnabled: boolean;
   bannerOverride:       boolean;
   bannerText:           string;
-  // relaying* and outboundFilterEnabled are still stored but not shown: the
-  // SMTP server implements neither IP/domain relaying nor outbound scanning.
+  // relaying* and outboundFilterEnabled are still stored but not shown and never
+  // evaluated (no outbound scanning). IP-based relay for devices is the separate
+  // "Geräte-Relay" (DeviceRelaySection, own settings row).
   greylistingEnabled:   boolean;
   greylistWaitSec:      number;
   greylistTtlHours:     number;
@@ -56,7 +58,7 @@ interface SmtpSettings {
 
 // ── Sub-Navigation ────────────────────────────────────────────────────────────
 
-type Section = 'esmtp' | 'delivery' | 'banner' | 'greylisting' | 'connection' | 'outgoing' | 'dns';
+type Section = 'esmtp' | 'delivery' | 'banner' | 'greylisting' | 'connection' | 'outgoing' | 'devicerelay' | 'dns';
 
 const SUB_NAV: { id: Section; label: string; icon: React.ElementType }[] = [
   { id: 'esmtp',       label: 'ESMTP-Befehle',    icon: Terminal },
@@ -65,6 +67,7 @@ const SUB_NAV: { id: Section; label: string; icon: React.ElementType }[] = [
   { id: 'banner',      label: 'SMTP-Banner',       icon: MessageSquare },
   { id: 'greylisting', label: 'Greylisting',       icon: Clock },
   { id: 'connection',  label: 'Verbindung',        icon: Network },
+  { id: 'devicerelay', label: 'Geräte-Relay',      icon: Printer },
   { id: 'dns',         label: 'DNS-Einträge',      icon: Globe },
 ];
 
@@ -1372,8 +1375,10 @@ export function SmtpConfigPage() {
       <div className="flex-1 overflow-y-auto p-6">
         {/* DNS tab needs no SmtpSettings — always renderable */}
         {section === 'dns' && <DnsSection />}
+        {/* Geräte-Relay has its own settings row and API */}
+        {section === 'devicerelay' && <DeviceRelaySection />}
 
-        {section !== 'dns' && (
+        {section !== 'dns' && section !== 'devicerelay' && (
           !settings ? (
             <div className="text-sm text-fg-subtle">Lade SMTP-Einstellungen…</div>
           ) : (

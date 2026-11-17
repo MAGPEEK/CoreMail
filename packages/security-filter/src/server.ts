@@ -11,9 +11,11 @@ import {
 import { connectDatabase, prisma } from '@coremail/storage';
 import {
   runContentChecks,
+  runMalwareChecks,
   runGreylistCheck,
   runIpChecks,
   type PipelineConfig,
+  type PipelineResult,
   type ConnectionContext,
 } from './pipeline/index.js';
 import { parseConnectionRequest, runConnectionStage } from './connection-request.js';
@@ -97,38 +99,55 @@ app.post('/check/connection', async (req, res) => {
 });
 
 /**
+ * Handler for a content-stage endpoint: X-Filter-Context header (JSON) + raw
+ * message body (application/octet-stream). An internal error answers the
+ * failure policy of content-request.ts (default: defer).
+ */
+function contentStageHandler(
+  label: string,
+  run: (raw: Buffer, ctx: ConnectionContext, config: PipelineConfig) => Promise<PipelineResult>,
+): express.RequestHandler {
+  return async (req, res) => {
+    const ctxHeader = req.headers['x-filter-context'];
+    if (!ctxHeader || typeof ctxHeader !== 'string') {
+      res.status(400).json({ error: 'Missing X-Filter-Context header' });
+      return;
+    }
+
+    const ctx: ConnectionContext | null = parseContentContext(ctxHeader);
+    if (!ctx) {
+      res.status(400).json({ error: 'Invalid X-Filter-Context (JSON object with a valid senderIp required)' });
+      return;
+    }
+
+    const rawMessage = req.body as Buffer;
+    if (!Buffer.isBuffer(rawMessage) || rawMessage.length === 0) {
+      res.status(400).json({ error: 'Missing raw message body' });
+      return;
+    }
+
+    try {
+      res.json(await run(rawMessage, ctx, effectiveConfig()));
+    } catch (err) {
+      const fallback = contentErrorResult();
+      log.error({ err, action: fallback.action }, `${label} error`);
+      res.json(fallback);
+    }
+  };
+}
+
+/**
  * POST /check/content
  * Called after DATA. Checks SPF/DKIM/DMARC, blacklist, attachments, ClamAV, rspamd.
- * Body: multipart — JSON context + raw message binary
  */
-app.post('/check/content', async (req, res) => {
-  const ctxHeader = req.headers['x-filter-context'];
-  if (!ctxHeader || typeof ctxHeader !== 'string') {
-    res.status(400).json({ error: 'Missing X-Filter-Context header' });
-    return;
-  }
+app.post('/check/content', contentStageHandler('Content check', (raw, ctx, cfg) => runContentChecks(raw, ctx, cfg)));
 
-  const ctx: ConnectionContext | null = parseContentContext(ctxHeader);
-  if (!ctx) {
-    res.status(400).json({ error: 'Invalid X-Filter-Context (JSON object with a valid senderIp required)' });
-    return;
-  }
-
-  const rawMessage = req.body as Buffer;
-  if (!Buffer.isBuffer(rawMessage) || rawMessage.length === 0) {
-    res.status(400).json({ error: 'Missing raw message body' });
-    return;
-  }
-
-  try {
-    const result = await runContentChecks(rawMessage, ctx, effectiveConfig());
-    res.json(result);
-  } catch (err) {
-    const fallback = contentErrorResult();
-    log.error({ err, action: fallback.action }, 'Content check error');
-    res.json(fallback);
-  }
-});
+/**
+ * POST /check/malware
+ * Attachment filter + ClamAV only (same failure policy) — for mail the SMTP
+ * server relays for trusted devices without SMTP AUTH (device relay).
+ */
+app.post('/check/malware', contentStageHandler('Malware check', (raw, ctx, cfg) => runMalwareChecks(raw, ctx, cfg)));
 
 /**
  * POST /learn/spam — forward message to rspamd for Bayes training

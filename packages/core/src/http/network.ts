@@ -46,6 +46,16 @@ export function isLoopbackAddress(addr: string | undefined | null): boolean {
 const FORWARDED_HEADERS = ['x-forwarded-for', 'x-forwarded-proto', 'x-forwarded-host', 'x-forwarded-port', 'x-real-ip', 'forwarded'];
 
 /**
+ * Set ("1") by the api-gateway on a proxied request when its X-Forwarded-Proto
+ * is known — TLS socket, a TRUST_PROXY-trusted proxy, or a direct client
+ * without any forwarding header — and absent when an untrusted reverse proxy
+ * forwarded it (the scheme the client used is unknown then). Internal services
+ * act on a plain-HTTP scheme (e.g. redirect to HTTPS) only when it is set;
+ * clients cannot send it (the gateway drops every X-CoreMail-* header).
+ */
+export const PROTO_VERIFIED_HEADER = 'x-coremail-proto-verified';
+
+/**
  * Remove proxy headers from a request that reached us DIRECTLY from the
  * client (integrated TLS proxy). Whatever TRUST_PROXY says, these headers
  * can only be client-forged on that path.

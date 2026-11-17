@@ -1,5 +1,6 @@
 /**
- * Client for the security-filter `/check/connection` endpoint (port 25).
+ * Client for the security-filter `/check/connection` endpoint (port 25) and
+ * the content-stage endpoints `/check/content` / `/check/malware`.
  *
  * Connect stage: only the client IP is known → DNSBL/DNSWL + GeoIP.
  * RCPT stage:    IP + MAIL FROM + RCPT TO   → greylisting.
@@ -108,6 +109,51 @@ export function interpretContentFilterResponse(
         : {}),
     },
   };
+}
+
+/**
+ * Content-stage endpoints of the security-filter: the full pipeline (port 25)
+ * and the malware-only checks (attachment filter + ClamAV, device relay).
+ */
+export type ContentFilterEndpoint = '/check/content' | '/check/malware';
+
+export type ContentFilterVerdict = ReturnType<typeof interpretContentFilterResponse>;
+
+type ContentFetchLike = (url: string, init: {
+  method: string;
+  headers: Record<string, string>;
+  body: Buffer;
+  signal: AbortSignal;
+}) => Promise<{ status: number; json(): Promise<unknown> }>;
+
+/**
+ * POSTs the raw message to a content-stage endpoint. `contextHeader` is the
+ * ASCII-only JSON of the X-Filter-Context header. A network error, a non-200
+ * answer or an invalid body is `unavailable` — the caller defers the message,
+ * it is never delivered unscanned.
+ */
+export async function callContentFilter(
+  baseUrl: string,
+  endpoint: ContentFilterEndpoint,
+  raw: Buffer,
+  contextHeader: string,
+  fetchImpl: ContentFetchLike = fetch as unknown as ContentFetchLike,
+  timeoutMs = 30_000,
+): Promise<ContentFilterVerdict> {
+  let res: { status: number; json(): Promise<unknown> };
+  try {
+    res = await fetchImpl(`${baseUrl}${endpoint}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream', 'X-Filter-Context': contextHeader },
+      body: raw,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (err) {
+    return { kind: 'unavailable', detail: `Request failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  let body: unknown;
+  try { body = await res.json(); } catch { body = undefined; }
+  return interpretContentFilterResponse(res.status, body);
 }
 
 /** Pure: connect-stage verdict. Only an explicit reject/defer closes the connection. */

@@ -29,6 +29,7 @@
  */
 import type { Request, Response, NextFunction } from 'express';
 import { createLogger, isLoopbackAddress } from '@coremail/core';
+import { hasForwardingHeader } from './proxy-headers.js';
 
 const log = createLogger('api:https-redirect');
 
@@ -55,6 +56,18 @@ export interface HttpsRedirectOptions {
 
 const EXEMPT = [/^\/\.well-known\/acme-challenge\//, /^\/healthz\/?$/, /^\/livez\/?$/];
 
+/**
+ * Autodiscover "HTTP redirect method" (MS-OXDSCLI §3.1.5.2): a client sends an
+ * unauthenticated GET to http://autodiscover.<domain>/autodiscover/autodiscover.xml
+ * and expects a 302 to the HTTPS endpoint — older Outlook builds do not follow 308.
+ */
+const AUTODISCOVER_XML = /^\/autodiscover\/autodiscover\.xml$/i;
+
+/** Pure: redirect status for a plain-HTTP request path. */
+export function redirectStatusFor(path: string): 302 | 308 {
+  return AUTODISCOVER_XML.test(path) ? 302 : 308;
+}
+
 export function httpRedirectEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return !/^(false|0|no|off)$/i.test((env['HTTP_REDIRECT_HTTPS'] ?? 'true').trim());
 }
@@ -69,11 +82,6 @@ export function httpsPublicPort(env: NodeJS.ProcessEnv = process.env): number {
 export function trustProxyConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
   const v = (env['TRUST_PROXY'] ?? '').trim();
   return v !== '' && !/^(false|no|off|0)$/i.test(v);
-}
-
-/** Does the request carry a forwarding header (X-Forwarded-*, Forwarded)? */
-export function hasForwardingHeader(req: Request): boolean {
-  return Object.keys(req.headers).some((h) => h === 'forwarded' || h.startsWith('x-forwarded-'));
 }
 
 function hostOnly(hostHeader: string | undefined): string | null {
@@ -110,7 +118,7 @@ export function createHttpsRedirect(opts: HttpsRedirectOptions) {
       if (!host) { next(); return; }
       const port = publicPort === 443 ? '' : `:${publicPort}`;
       res.setHeader('Cache-Control', 'no-store');
-      res.redirect(308, `https://${host}${port}${req.originalUrl}`);
+      res.redirect(redirectStatusFor(req.path), `https://${host}${port}${req.originalUrl}`);
     };
     if (requested && state.covers(requested)) { finish(requested); return; }
     opts.publicHostname().then((h) => finish(hostOnly(h ?? undefined)), () => next());

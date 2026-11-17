@@ -124,6 +124,11 @@ export interface SmtpSessionConfig {
   esmtp?: EsmtpExtensions;
   tls?: { cert: Buffer; key: Buffer };
   /**
+   * Accept TLS 1.0/1.1 (vetted legacy cipher list) for implicit TLS and
+   * STARTTLS on this listener (ServiceListener.allowLegacyTls). Default TLS 1.2+.
+   */
+  allowLegacyTls?: boolean;
+  /**
    * If true (default), STARTTLS is advertised in the EHLO response (if a TLS config exists).
    * On port 25 with a self-signed cert: set to false so that strict MTAs (Microsoft Exchange)
    * can deliver in plain instead of getting stuck on a failed TLS handshake.
