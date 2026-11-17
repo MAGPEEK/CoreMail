@@ -991,6 +991,20 @@ describe('CREATE, DELETE and RENAME (RFC 9051 §6.3.4–6)', () => {
     assert.ok(m.deletedAt instanceof Date, 'expunged → tombstone');
   });
 
+  test('DELETE of a name-based Trash child (Trash.Old, no parentId) is below Trash too: expunged, recoverable', async (t) => {
+    const { client, db } = await login(t);
+    db.folders.push(
+      { id: 'f-trash', mailboxId: 'mb1', name: 'Trash', displayName: 'Trash' },
+      { id: 'f-trash-old', mailboxId: 'mb1', name: 'Trash.Old', displayName: 'Old' },
+    );
+    const m = db.deliver('f-trash-old');
+
+    assert.equal((await client.cmd('DELETE Trash.Old')).status, 'OK');
+    assert.ok(!db.folders.some((f) => f.id === 'f-trash-old'));
+    assert.equal(m.folderId, 'f-trash');
+    assert.ok(m.deletedAt instanceof Date, 'expunged → tombstone, not a live message in Trash');
+  });
+
   test('DELETE INBOX fails with NO', async (t) => {
     const { client } = await login(t);
 

@@ -10,8 +10,9 @@
  * row goes, every message in it (live ones AND tombstones of recoverable items)
  * is moved into the mailbox's Trash through the message store (new UIDs + modSeq):
  *  - folder outside Trash: live messages become live messages in Trash;
- *  - folder inside Trash (below it via parentId): live messages are expunged first
- *    (tombstone, recoverable for DELETED_ITEM_RETENTION_DAYS), then moved;
+ *  - folder inside Trash (isInsideTrash: below it via parentId OR by name, e.g. an
+ *    IMAP-created `Trash.Old` without a parent link): live messages are expunged
+ *    first (tombstone, recoverable for DELETED_ITEM_RETENTION_DAYS), then moved;
  *  - tombstones keep `deletedAt`, so they stay recoverable.
  *
  * Two modes for the subfolders (parentId links):
@@ -84,16 +85,34 @@ export async function folderSubtree(db: FolderReader, target: FolderDeleteTarget
   return out;
 }
 
-async function isInsideFolder(tx: MessageStoreTx, mailboxId: string, folderParentId: string | null, ancestorId: string): Promise<boolean> {
+/** Hierarchy delimiter of stored folder names (IMAP personal namespace): `Trash.Old` is below `Trash`. */
+export const FOLDER_NAME_DELIMITER = '.';
+
+/** Pure: is `name` below `ancestorName` in the name hierarchy? */
+export function isBelowByName(name: string, ancestorName: string): boolean {
+  return name.startsWith(ancestorName + FOLDER_NAME_DELIMITER);
+}
+
+/**
+ * Is the folder inside Trash? One rule for both ways folders nest: a parentId
+ * chain that reaches Trash (webmail), or a name below `Trash` — the folder's own
+ * or an ancestor's on the chain (IMAP CREATE `Trash.Old` sets no parentId).
+ */
+export async function isInsideTrash(
+  tx: FolderReader, mailboxId: string, folder: Pick<FolderNode, 'name' | 'parentId'>, trash: { id: string; name: string },
+): Promise<boolean> {
+  if (isBelowByName(folder.name, trash.name)) return true;
   const seen = new Set<string>();
-  let cursor = folderParentId;
+  let cursor = folder.parentId;
   while (cursor && !seen.has(cursor)) {
-    if (cursor === ancestorId) return true;
+    if (cursor === trash.id) return true;
     seen.add(cursor);
-    const next: { parentId: string | null } | null = await tx.folder.findFirst({
-      where: { id: cursor, mailboxId }, select: { parentId: true },
+    const next: { name: string; parentId: string | null } | null = await tx.folder.findFirst({
+      where: { id: cursor, mailboxId }, select: { name: true, parentId: true },
     });
-    cursor = next?.parentId ?? null;
+    if (!next) return false;
+    if (isBelowByName(next.name, trash.name)) return true;
+    cursor = next.parentId ?? null;
   }
   return false;
 }
@@ -113,9 +132,9 @@ async function moveMailToTrash(
   });
   const liveIds = rows.filter((m) => m.deletedAt === null).map((m) => m.id);
   if (rows.length === 0) return { moved: 0, expunged: 0, live: 0 };
-  const trash: { id: string } | null = await tx.folder.findFirst({ where: { mailboxId, name: 'Trash' }, select: { id: true } });
+  const trash: { id: string; name: string } | null = await tx.folder.findFirst({ where: { mailboxId, name: 'Trash' }, select: { id: true, name: true } });
   if (!trash || ids.includes(trash.id)) return { noTrash: true, live: liveIds.length };
-  const insideTrash = await isInsideFolder(tx, mailboxId, root.parentId, trash.id);
+  const insideTrash = await isInsideTrash(tx, mailboxId, root, trash);
   if (insideTrash && liveIds.length > 0) {
     await expunge(tx, liveIds, { mailboxId, where: { folderId: { in: ids }, deletedAt: null } });
   }
