@@ -587,13 +587,9 @@ async function start() {
 }
 
 /**
- * 9.3: startup reconciliation of the protocol TLS state (SMTP/IMAP/POP3) —
- * idempotent, logged (lib/protocol-cert-assign.ts). The certificate holding
- * the mail services in the BCP is the one the servers serve; a stale
- * ServerSettings.tlsCert / isActiveProtocol is repaired, an orphaned or
- * missing protocol cert falls back to the self-signed default for the public
- * host name, and a self-signed default for mail.localhost is regenerated for
- * the real host name. Replaces the pre-9.3 orphan check.
+ * Encrypts certificate and ACME account private keys still stored as plain PEM
+ * (storage private-key-migration.ts; Redis-locked, idempotent). Logs counts only,
+ * never key material.
  */
 async function encryptStoredPrivateKeys(): Promise<void> {
   const r = await migratePrivateKeysAtRestLocked(getRedisClient() as unknown as PrivateKeyMigrationRedis);
@@ -605,6 +601,15 @@ async function encryptStoredPrivateKeys(): Promise<void> {
   }
 }
 
+/**
+ * 9.3: startup reconciliation of the protocol TLS state (SMTP/IMAP/POP3) —
+ * idempotent, logged (lib/protocol-cert-assign.ts). The certificate holding
+ * the mail services in the BCP is the one the servers serve; a stale
+ * ServerSettings.tlsCert / isActiveProtocol is repaired, an orphaned or
+ * missing protocol cert falls back to the self-signed default for the public
+ * host name, and a self-signed default for mail.localhost is regenerated for
+ * the real host name. Replaces the pre-9.3 orphan check.
+ */
 async function syncProtocolCertState(): Promise<void> {
   try {
     // Redis-locked (cert:protocol:reconcile:lock): with several api-gateway
