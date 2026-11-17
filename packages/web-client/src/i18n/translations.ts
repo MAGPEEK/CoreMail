@@ -101,6 +101,10 @@ const de = {
   folder_renamed:          'Ordner umbenannt',
   folder_deleted:          'Ordner gelöscht',
   folder_emptied:          'Ordner geleert',
+  folder_delete_confirm:   'Ordner „{name}“ löschen?',
+  folder_delete_confirm_mail: 'Ordner „{name}“ mit {count} Nachricht(en) löschen? Die Nachrichten werden in den Papierkorb verschoben.',
+  folder_delete_confirm_tree: 'Ordner „{name}“ mit {subfolders} Unterordner(n) und insgesamt {count} Nachricht(en) löschen? Die Unterordner werden ebenfalls gelöscht, die Nachrichten in den Papierkorb verschoben.',
+  folder_delete_changed:   'Der Ordner hat inzwischen weitere Unterordner. Bitte erneut löschen und die Angaben prüfen.',
 
   // Language settings
   lang_help:               'Wählen Sie die Anzeigesprache der Web-Oberfläche.',
@@ -397,6 +401,10 @@ const en: Record<TranslationKey, string> = {
   folder_renamed:          'Folder renamed',
   folder_deleted:          'Folder deleted',
   folder_emptied:          'Folder emptied',
+  folder_delete_confirm:   'Delete folder “{name}”?',
+  folder_delete_confirm_mail: 'Delete folder “{name}” with {count} message(s)? The messages are moved to the trash.',
+  folder_delete_confirm_tree: 'Delete folder “{name}” with {subfolders} subfolder(s) and {count} message(s) in total? The subfolders are deleted too, the messages are moved to the trash.',
+  folder_delete_changed:   'The folder has new subfolders in the meantime. Please delete it again and check the details.',
 
   lang_help:               'Choose the display language of the web interface.',
   lang_change_save:        'Save',
@@ -686,6 +694,10 @@ const es: Record<TranslationKey, string> = {
   folder_renamed:          'Carpeta renombrada',
   folder_deleted:          'Carpeta eliminada',
   folder_emptied:          'Carpeta vaciada',
+  folder_delete_confirm:   '¿Eliminar la carpeta «{name}»?',
+  folder_delete_confirm_mail: '¿Eliminar la carpeta «{name}» con {count} mensaje(s)? Los mensajes se moverán a la papelera.',
+  folder_delete_confirm_tree: '¿Eliminar la carpeta «{name}» con {subfolders} subcarpeta(s) y {count} mensaje(s) en total? Las subcarpetas también se eliminarán y los mensajes se moverán a la papelera.',
+  folder_delete_changed:   'Mientras tanto, la carpeta tiene nuevas subcarpetas. Vuelva a eliminarla y compruebe los datos.',
 
   lang_help:               'Elija el idioma de visualización de la interfaz web.',
   lang_change_save:        'Guardar',
@@ -974,6 +986,10 @@ const it: Record<TranslationKey, string> = {
   folder_renamed:          'Cartella rinominata',
   folder_deleted:          'Cartella eliminata',
   folder_emptied:          'Cartella svuotata',
+  folder_delete_confirm:   'Eliminare la cartella «{name}»?',
+  folder_delete_confirm_mail: 'Eliminare la cartella «{name}» con {count} messaggio/i? I messaggi vengono spostati nel cestino.',
+  folder_delete_confirm_tree: 'Eliminare la cartella «{name}» con {subfolders} sottocartella/e e {count} messaggio/i in totale? Anche le sottocartelle vengono eliminate, i messaggi vengono spostati nel cestino.',
+  folder_delete_changed:   'Nel frattempo la cartella ha nuove sottocartelle. Eliminarla di nuovo e controllare i dettagli.',
 
   lang_help:               "Scegli la lingua di visualizzazione dell'interfaccia web.",
   lang_change_save:        'Salva',

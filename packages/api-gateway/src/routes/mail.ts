@@ -23,7 +23,7 @@ import { createUserRateLimiter, envInt } from '../lib/user-rate-limit.js';
 import { resolveReplyHeaders, prismaReplyLookup, parseClientReferences } from '../lib/reply-headers.js';
 import { rspamdControllerHeaders } from '../lib/rspamd-controller.js';
 import { createImageProxyHandler } from '../lib/image-proxy.js';
-import { deleteFolderKeepingMail } from '../lib/folder-delete.js';
+import { deleteFolderTree, folderDeleteOptions, folderDeleteRefusal } from '../lib/folder-delete.js';
 import {
   parseSearchQuery, buildSearchConditions, resolveFolderScope, searchChips, hasCriteria,
   MAX_QUERY_LENGTH, type FolderRef,
@@ -260,10 +260,10 @@ mailRouter.patch('/folders/:id', async (req: Request, res: Response) => {
   res.json(updated);
 });
 
-// DELETE /api/v1/mail/folders/:id — delete user folder (must be empty or include ?force=true)
+// DELETE /api/v1/mail/folders/:id — delete a user folder. Subfolders need
+// ?recursive=true, live mail needs ?force=true (409 with { code, subfolders, count }).
 mailRouter.delete('/folders/:id', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
-  const force = req.query['force'] === 'true';
 
   const folder = await prisma.folder.findFirst({
     where: { id, mailbox: { userId: req.apiUser!.userId } },
@@ -273,18 +273,15 @@ mailRouter.delete('/folders/:id', async (req: Request, res: Response) => {
     res.status(400).json({ error: 'Systemordner kann nicht gelöscht werden' }); return;
   }
 
-  if (!force) {
-    const count = await prisma.message.count({ where: { folderId: id, deletedAt: null } });
-    if (count > 0) {
-      res.status(409).json({ error: 'Ordner nicht leer', count }); return;
-    }
-  }
+  const refusal = await folderDeleteRefusal(folder, folderDeleteOptions(req.query), SYSTEM_FOLDER_NAMES);
+  if (refusal) { res.status(409).json(refusal); return; }
 
-  // 9.3: messages go to Trash through the message store before the folder row is
-  // deleted (the Message→Folder cascade would remove them without tombstone/modSeq).
-  const done = await deleteFolderKeepingMail(folder);
+  // Messages of the whole subtree go to Trash through the message store before the
+  // folder rows are deleted (the Message→Folder cascade would remove them without
+  // tombstone/modSeq).
+  const done = await deleteFolderTree(folder);
   if (!done.ok) { res.status(409).json({ error: 'Papierkorb nicht gefunden' }); return; }
-  res.json({ ok: true });
+  res.json({ ok: true, folders: done.folders, movedToTrash: done.moved });
 });
 
 // PATCH /api/v1/mail/folders/:id/retention-tag — assign / clear PERSONAL retention tag

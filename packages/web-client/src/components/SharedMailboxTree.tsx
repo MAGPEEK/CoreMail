@@ -28,6 +28,8 @@ import {
 } from './FolderItem.js';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu.js';
 import { PromptDialog } from './PromptDialog.js';
+import { confirmFolderDelete } from './folderDeleteConfirm.js';
+import { isStaleSubfolderRefusal } from '../lib/folderDelete.js';
 import { RecoverDeletedItemsDialog } from './RecoverDeletedItems.js';
 import { QuotaIndicator } from './QuotaIndicator.js';
 import { OpenSharedMailboxModal } from './OpenSharedMailboxModal.js';
@@ -190,12 +192,12 @@ function ForeignMailboxNode({ entry, expanded, onToggle, onHide }: {
         writeItem(readOnly, {
           label: t('delete'), icon: <FolderMinus size={14} />, danger: true,
           onClick: () => {
-            const total = f.totalCount ?? 0;
-            const msg = total > 0
-              ? `Ordner „${label(f)}" mit ${total} Nachricht(en) in „${title}" wirklich löschen?`
-              : `Ordner „${label(f)}" in „${title}" löschen?`;
-            if (!window.confirm(msg)) return;
-            void run(api.delete(`${base}/folders/${f.id}?force=true`), t('folder_deleted'));
+            const query = confirmFolderDelete(t, `${label(f)} (${title})`, f.id, folders ?? []);
+            if (query === null) return;
+            const del = api.delete(`${base}/folders/${f.id}${query}`).catch((err: unknown) => {
+              throw isStaleSubfolderRefusal(err) ? new Error(t('folder_delete_changed')) : err;
+            });
+            void run(del, t('folder_deleted'));
           },
         }),
       );

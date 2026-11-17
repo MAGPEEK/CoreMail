@@ -11,7 +11,7 @@ import { checkPasswordPolicy, revokeAllSessions } from '@coremail/storage/auth';
 import { requireAuth } from '../middleware/auth.js';
 import { allowedAreas, isAdminRole } from '../lib/rbac.js';
 import { getReadableSharedMailbox, getWritableSharedMailbox, listForeignMailboxes, foreignMailboxRef } from '../lib/mailbox-access.js';
-import { deleteFolderKeepingMail } from '../lib/folder-delete.js';
+import { deleteFolderTree, folderDeleteOptions, folderDeleteRefusal } from '../lib/folder-delete.js';
 import { auditForeignWrite, type ForeignAuditAction } from '../lib/foreign-audit.js';
 
 export const userRouter: RouterType = Router();
@@ -962,25 +962,27 @@ userRouter.delete('/shared-mailboxes/:id/folders/:folderId', async (req: Request
 
   const folder = await prisma.folder.findFirst({
     where: { id: folderId, mailboxId: access.mailboxId },
-    include: { _count: { select: { children: true } } },
   });
   if (!folder) { res.status(404).json({ error: 'Ordner nicht gefunden' }); return; }
   if (PROTECTED_FOLDER_NAMES.has(folder.name)) {
     res.status(403).json({ error: `Standard-Ordner „${folder.name}" kann nicht gelöscht werden` });
     return;
   }
-  if (folder._count.children > 0) {
-    res.status(409).json({ error: 'Ordner hat Unter-Ordner — bitte erst diese entfernen' });
-    return;
-  }
+  // Subfolders need ?recursive=true (409 with counts otherwise). A non-empty folder
+  // never needed ?force on this pre-9.3 route, so force stays implied.
+  const { recursive } = folderDeleteOptions(req.query);
+  const refusal = await folderDeleteRefusal(folder, { recursive, force: true }, PROTECTED_FOLDER_NAMES);
+  if (refusal) { res.status(409).json(refusal); return; }
 
   // 9.3 (A1): the messages go to the mailbox Trash through the message store before
-  // the folder row is deleted — pre-9.3 the Message→Folder cascade removed them
+  // the folder rows are deleted — pre-9.3 the Message→Folder cascade removed them
   // without tombstone. The contract (204) is unchanged; without a Trash folder a
   // non-empty folder is refused (409) instead of losing its mail.
-  const done = await deleteFolderKeepingMail(folder);
+  const done = await deleteFolderTree(folder);
   if (!done.ok) { res.status(409).json({ error: 'Papierkorb nicht gefunden' }); return; }
-  auditCompat(req, id, access.mailboxId, 'mailbox.foreign.folder.delete', { folderId, name: folder.name, movedToTrash: done.moved, live: done.live });
+  auditCompat(req, id, access.mailboxId, 'mailbox.foreign.folder.delete', {
+    folderId, name: folder.name, movedToTrash: done.moved, live: done.live, folders: done.folders,
+  });
   res.status(204).end();
 });
 
