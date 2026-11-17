@@ -2,10 +2,11 @@
  * Change bus: Redis mail:new / mail:update → affected JMAP account →
  *  - local listeners (EventSource/WebSocket connections)
  *  - Web Push to verified PushSubscriptions of the authorized users
+ *    (9.4: only users with JMAP switched on)
  * StateChange objects are built per account from the current states.
  */
 import { EventEmitter } from 'node:events';
-import { prisma } from '@coremail/storage';
+import { prisma, isProtocolAllowed } from '@coremail/storage';
 import { getRedisClient, CHANNEL_MAIL_NEW, CHANNEL_MAIL_UPDATE, createLogger } from '@coremail/core';
 import { emailState, mailboxState } from '../state.js';
 import { SHARED_PREFIX, usersForAccount } from '../accounts.js';
@@ -32,8 +33,17 @@ async function accountForFolder(folderId: string): Promise<string | null> {
 
 const pendingPush = new Map<string, NodeJS.Timeout>();
 
+/** 9.4: only users with JMAP switched on keep receiving pushes (an unreadable switch withholds them). */
+export async function jmapPushRecipients(userIds: string[]): Promise<string[]> {
+  const allowed = await Promise.all(userIds.map((id) => isProtocolAllowed(id, 'jmap').catch((err: unknown) => {
+    log.warn({ err, userId: id }, 'JMAP switch not readable — push withheld');
+    return false;
+  })));
+  return userIds.filter((_, i) => allowed[i]);
+}
+
 async function pushToSubscribers(accountId: string, mailboxId: string | null): Promise<void> {
-  const users = await usersForAccount(accountId);
+  const users = await jmapPushRecipients(await usersForAccount(accountId));
   if (!users.length) return;
   const subs = await prisma.jmapPushSubscription.findMany({
     where: { userId: { in: users }, verified: true, OR: [{ expires: null }, { expires: { gt: new Date() } }] },

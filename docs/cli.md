@@ -209,8 +209,8 @@ coremail protocol set --scope user alice@example.com --imap off --webmail inheri
 ```
 
 Switches: `--imap --pop3 --smtp --activesync --jmap --dav --webmail --mapi`, each `on`, `off` or
-`inherit`; only the given ones change. The table shows the setting (`inherit (on)` = what inherit
-resolves to; `default` on the server level) and the effective value. Server and domain level need
+`inherit` (the server level is `on` / `off` only); only the given ones change. The table shows the
+setting (`inherit (on)` = what inherit resolves to) and the effective value. Server and domain level need
 SERVER_MANAGEMENT (or ORGANIZATION_MANAGEMENT), the mailbox level RECIPIENT_MANAGEMENT. The server
 level of `--jmap` is the same switch as `connector enable|disable jmap`. Details:
 [protocol-access.md](protocol-access.md).

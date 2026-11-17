@@ -15,6 +15,7 @@
  */
 import { test, describe, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
+import { fakeProtocolPolicies } from '@coremail/storage/auth/testing';
 import net from 'node:net';
 import tls from 'node:tls';
 
@@ -38,8 +39,7 @@ let listGate: Promise<void> | null = null;
 const policies: Array<Record<string, unknown>> = [];
 (globalThis as Record<string, unknown>)['__prisma'] = {
   $on: () => undefined,
-  protocolPolicy: { findMany: async () => policies, count: async () => 0 },
-  serverSettings: { findUnique: async () => null },
+  ...fakeProtocolPolicies(policies),
   domain: { findFirst: async () => ({ name: 'example.test' }) },
   user: { findFirst: async ({ where }: { where: { email: string } }) => users.find((u) => u.email === where.email) ?? null },
   appPassword: {

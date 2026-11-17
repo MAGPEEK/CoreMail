@@ -15,6 +15,11 @@
  *  - Web Push for mail:new is sent once per (user, message) — independent of
  *    open tabs and, via a Redis SET NX claim, of the number of api-gateway
  *    instances.
+ *  - 9.4: every user-routed event (mail, notifications, calendar shares) and
+ *    the Web Push only while Webmail is on for that user — an admin account
+ *    keeps its stream for the BCP, but no mailbox content reaches it, and the
+ *    browsers of a user whose Webmail was switched off get no more pushes.
+ *    Unreadable switch → not delivered (fails closed).
  */
 import { createHash } from 'node:crypto';
 import {
@@ -43,6 +48,8 @@ export interface SseHubDeps {
   pushMailNew(userId: string, payload: Record<string, unknown>): Promise<void>;
   /** Cluster-wide "send once" claim; true when this process should push. */
   claimPush(key: string): Promise<boolean>;
+  /** 9.4: may the user's mailbox events reach their sessions and devices (Webmail switch)? */
+  webmailAllowed(userId: string): Promise<boolean>;
 }
 
 export class SseHub {
@@ -76,6 +83,23 @@ export class SseHub {
     }
   }
 
+  /** 9.4: the Webmail switch of a user-routed event; an unreadable switch withholds it. */
+  private async mayDeliver(userId: string): Promise<boolean> {
+    try {
+      return await this.deps.webmailAllowed(userId);
+    } catch (err) {
+      log.warn({ err, userId }, 'Webmail switch not readable — event withheld');
+      return false;
+    }
+  }
+
+  /** Sends a user-routed event when Webmail is on for the user; returns whether it may reach them. */
+  private async deliver(userId: string, event: string, data: unknown): Promise<boolean> {
+    if (!(await this.mayDeliver(userId))) return false;
+    this.sendToUser(userId, event, data);
+    return true;
+  }
+
   /** Route one pub/sub message. Returns a promise that settles when a push (if any) was handed off. */
   async dispatch(channel: string, message: string): Promise<void> {
     let payload: Record<string, unknown>;
@@ -95,13 +119,14 @@ export class SseHub {
     if (channel === CHANNEL_CALENDAR_SHARES) {
       const affected = payload['affectedUserIds'];
       if (Array.isArray(affected)) {
-        for (const id of new Set(affected.filter((x): x is string => typeof x === 'string'))) this.sendToUser(id, 'calendar:shares', payload);
+        const ids = [...new Set(affected.filter((x): x is string => typeof x === 'string'))];
+        await Promise.all(ids.map((id) => this.deliver(id, 'calendar:shares', payload)));
       }
       return;
     }
     const userChannel = USER_EVENTS_RE.exec(channel);
     if (userChannel) {
-      this.sendToUser(userChannel[1]!, 'notification', payload);
+      await this.deliver(userChannel[1]!, 'notification', payload);
       return;
     }
 
@@ -109,7 +134,7 @@ export class SseHub {
     if (!userId) return; // never broadcast events without an owner
 
     if (channel === CHANNEL_MAIL_NEW) {
-      this.sendToUser(userId, 'mail:new', payload);
+      if (!(await this.deliver(userId, 'mail:new', payload))) return; // 9.4: no Web Push either
       const ref = typeof payload['messageId'] === 'string' && payload['messageId']
         ? payload['messageId']
         : createHash('sha256').update(message).digest('hex').slice(0, 32);
@@ -121,7 +146,7 @@ export class SseHub {
         log.warn({ err, userId }, 'Web Push for new mail failed');
       }
     } else if (channel === CHANNEL_MAIL_UPDATE) {
-      this.sendToUser(userId, 'mail:update', payload);
+      await this.deliver(userId, 'mail:update', payload);
     }
   }
 }
@@ -143,6 +168,7 @@ export function getSseHub(): SseHub {
         });
       },
       claimPush: async (key) => (await getRedisClient().set(key, '1', 'EX', PUSH_CLAIM_TTL_SEC, 'NX')) === 'OK',
+      webmailAllowed: async (userId) => (await import('@coremail/storage')).isProtocolAllowed(userId, 'webmail'),
     });
   }
   return hub;

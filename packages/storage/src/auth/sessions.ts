@@ -23,7 +23,9 @@ import { prisma } from '../prisma/index.js';
 import { authRedis } from './redis.js';
 import { publishUserAuthChange } from './invalidation.js';
 import { maintenanceBlock } from './policy.js';
-import { webLoginBlocked } from './web-access.js';
+import { webLoginBlocked, type WebSurface } from './web-access.js';
+import { sessionSurfaceOf } from './refresh-cookie.js';
+import type { IncomingHttpHeaders } from 'node:http';
 import { recordLastLogin } from './last-login.js';
 
 const log = createLogger('auth:sessions');
@@ -44,6 +46,18 @@ export interface TokenPair {
 export interface ClientInfo {
   ip: string;
   userAgent: string;
+  /**
+   * 9.4: the surface the session is asked for (the Webmail switch): the webmail
+   * client gets no session while Webmail is off — not even an admin account,
+   * which keeps the BCP and the admin CLI (`admin`, the default).
+   */
+  surface?: WebSurface | undefined;
+}
+
+/** The ClientInfo of an HTTP login / refresh / SSO request (Express request). */
+export function clientInfoOf(req: { ip?: string | undefined; headers: IncomingHttpHeaders }): ClientInfo {
+  const ua = req.headers['user-agent'];
+  return { ip: req.ip ?? 'unknown', userAgent: ua ?? '', surface: sessionSurfaceOf(req.headers) };
 }
 
 export function hashRefreshToken(token: string): string {
@@ -139,7 +153,7 @@ export async function rotateSession(refreshToken: string, client: ClientInfo): P
 
   const blocked = await maintenanceBlock(user.role);
   if (blocked) return { ok: false, status: 503, reason: 'maintenance', message: blocked };
-  if (await webLoginBlocked(user)) return { ok: false, status: 403, reason: 'protocol_disabled' };
+  if (await webLoginBlocked(user, client.surface)) return { ok: false, status: 403, reason: 'protocol_disabled' };
 
   const newRefresh = signRefreshToken(user.id, session.id);
   const swapped = await prisma.session.updateMany({

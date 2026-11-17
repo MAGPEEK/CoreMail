@@ -1,5 +1,6 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { fakeProtocolPolicies } from '@coremail/storage/auth/testing';
 
 process.env['DATABASE_URL'] ??= 'postgresql://test:test@localhost:5432/test';
 process.env['JWT_SECRET'] ??= 'test-secret-test-secret-test-secret-1234';
@@ -20,10 +21,9 @@ const state = { dbDown: false };
 /** 9.4: ProtocolPolicy rows (protocol switches). */
 const policies: Array<Record<string, unknown>> = [];
 
-(globalThis as Record<string, unknown>)['__prisma'] = {
+const prisma: Record<string, unknown> = {
   $on: () => undefined,
-  protocolPolicy: { findMany: async () => policies, count: async () => 0 },
-  serverSettings: { findUnique: async () => null },
+  ...fakeProtocolPolicies(policies),
   user: {
     findUnique: async (args: { where: { id: string } }) => users[args.where.id] ?? null,
     findFirst: async (args: { where: { email: string; active: boolean } }) => {
@@ -38,6 +38,7 @@ const policies: Array<Record<string, unknown>> = [];
   },
   domain: { findFirst: async () => ({ name: 'example.com' }) },
 };
+(globalThis as Record<string, unknown>)['__prisma'] = prisma;
 
 // v7.1.0: Bearer checks consult the session revocation markers (fake Redis).
 const { createFakeRedis } = await import('@coremail/storage/auth/testing');
@@ -166,4 +167,19 @@ test('9.4: CalDAV/CardDAV switched off → 403 for Basic and Bearer, a wrong pas
     storage.invalidateProtocolAccessCache();
   }
   assert.equal((await run(basic('alice@example.com', 'pw'))).nextCalled, true);
+});
+
+test('9.4: an unreadable CalDAV/CardDAV switch answers a Bearer request with 503, not 401', async () => {
+  const policy = prisma['protocolPolicy'] as { findMany: () => Promise<unknown> };
+  const findMany = policy.findMany;
+  policy.findMany = async () => { throw new Error('db down'); };
+  storage.invalidateProtocolAccessCache();
+  try {
+    const r = await run(`Bearer ${accessFor('alice')}`);
+    assert.equal(r.status, 503);
+    assert.equal(r.nextCalled, false);
+  } finally {
+    policy.findMany = findMany;
+    storage.invalidateProtocolAccessCache();
+  }
 });

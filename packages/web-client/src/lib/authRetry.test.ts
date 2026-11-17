@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { refreshFailureVerdict, shouldRefreshOn401, refreshBackoffMs } from './authRetry.ts';
+import { refreshFailureVerdict, shouldRefreshOn401, refreshBackoffMs, isWebmailDisabled } from './authRetry.ts';
 
 test('refresh: 429 / 5xx / network errors are temporary — never a logout', () => {
   for (const s of [429, 500, 502, 503, null]) assert.equal(refreshFailureVerdict(s, undefined), 'retry', String(s));
@@ -19,6 +19,13 @@ test('refresh: logout only on 401 with SESSION_REVOKED / REFRESH_* / TOKEN_*', (
 test('9.4 refresh: Webmail switched off (403 PROTOCOL_DISABLED) ends the session', () => {
   assert.equal(refreshFailureVerdict(403, 'PROTOCOL_DISABLED'), 'logout');
   assert.equal(refreshFailureVerdict(401, 'PROTOCOL_DISABLED'), 'fail');
+});
+
+test('9.4 API call: only 403 PROTOCOL_DISABLED means Webmail was switched off', () => {
+  assert.equal(isWebmailDisabled(403, 'PROTOCOL_DISABLED'), true);
+  assert.equal(isWebmailDisabled(403, 'FORBIDDEN_ROLE'), false);
+  assert.equal(isWebmailDisabled(403, undefined), false);
+  assert.equal(isWebmailDisabled(401, 'PROTOCOL_DISABLED'), false);
 });
 
 test('401 from an API call: refresh only for token/session problems, not for re-auth failures', () => {

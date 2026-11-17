@@ -270,6 +270,28 @@ test('web access: Webmail off refuses USER logins and refreshes, admins keep the
   assert.equal(await auth.webAccessPermitted({ id: String(user['id']), role: 'USER' }, 'webmail'), false);
 });
 
+test('web access: the webmail client gets no session for an admin either (no redirect loop), the BCP / CLI do', async () => {
+  const mwa = { 'x-coremail-client': 'web' };
+  const bcp = { 'x-coremail-client': 'web', 'x-coremail-app': 'bcp' };
+  assert.equal(auth.sessionSurfaceOf(mwa), 'webmail');
+  assert.equal(auth.sessionSurfaceOf(bcp), 'admin');
+  assert.equal(auth.sessionSurfaceOf({}), 'admin', 'admin CLI (no browser header)');
+  assert.deepEqual(auth.clientInfoOf({ ip: '203.0.113.7', headers: { ...mwa, 'user-agent': 'UA' } }),
+    { ip: '203.0.113.7', userAgent: 'UA', surface: 'webmail' });
+
+  await addUser('admin@one.test', 'd1', { role: 'SERVER_MANAGEMENT' });
+  const viaBcp = { ip: '203.0.113.9', userAgent: 'test', surface: 'admin' as const };
+  const viaMwa = { ...viaBcp, surface: 'webmail' as const };
+  const session = await auth.login('admin@one.test', PW, viaBcp);
+  await pa.updateProtocolSettings({ level: 'domain', domainId: 'd1' }, off('webmail'));
+  assert.equal((await auth.login('admin@one.test', PW, viaMwa)).kind, 'protocol_disabled');
+  assert.equal((await auth.login('admin@one.test', PW, viaBcp)).kind, 'tokens');
+  if (session.kind !== 'tokens') throw new Error('admin login failed');
+  const refused = await auth.rotateSession(session.tokens.refreshToken, viaMwa);
+  assert.deepEqual(refused, { ok: false, status: 403, reason: 'protocol_disabled' });
+  assert.equal((await auth.rotateSession(session.tokens.refreshToken, viaBcp)).ok, true, 'the refused refresh did not rotate');
+});
+
 test('webAccessRefusal: 403 PROTOCOL_DISABLED, null when allowed, 503 when the switch cannot be read', async () => {
   const user = await addUser('u@one.test', 'd1');
   const subject = { id: String(user['id']), role: 'USER', domainId: 'd1' };

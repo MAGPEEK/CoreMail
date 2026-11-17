@@ -21,6 +21,7 @@ import {
   APPLE_PROFILE_TICKET_PATH, appleProfileFileName, appleProfilePath, isAppleMobileDevice, openAppleProfileTicket,
   type AppleProfileKind,
 } from '../lib/appleProfile.js';
+import { externalClientSections, type ClientProtocols } from '../lib/externalClients.js';
 import { PasswordPromptDialog, type ReauthKind } from '../components/PasswordPromptDialog.js';
 import { apiErrorFromBody } from '../lib/errors.js';
 import { webauthnRegister, webauthnErrorMessage, webauthnSupported } from '../lib/webauthn.js';
@@ -2066,22 +2067,25 @@ function RetentionSection() {
 // Apple Calendar, Thunderbird, eM Client, iPhone, Android).
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// 9.4: only protocols switched on for the account — `protocols` lists them, the
+// setup data of a protocol that is off is null (lib/externalClients.ts).
 interface ClientConfig {
   user: { email: string; displayName: string };
   requiresAppPassword: boolean;
+  protocols?: ClientProtocols;
   mail: {
-    imap: { host: string; port: number; ssl: boolean };
-    pop3: { host: string; port: number; ssl: boolean };
-    smtp: { host: string; port: number; tls: boolean };
+    imap: { host: string; port: number; ssl: boolean } | null;
+    pop3: { host: string; port: number; ssl: boolean } | null;
+    smtp: { host: string; port: number; tls: boolean } | null;
   };
   caldav: {
     accountUrl: string;
     calendars: { id: string; name: string; isDefault: boolean; url: string }[];
-  };
+  } | null;
   carddav: {
     accountUrl: string;
     defaultUrl: string;
-  };
+  } | null;
 }
 
 function CopyRow({ label, value, mono = true }: { label: string; value: string; mono?: boolean }) {
@@ -2104,8 +2108,11 @@ function CopyRow({ label, value, mono = true }: { label: string; value: string; 
 
 // v8.1: automatic setup — Apple configuration profile (.mobileconfig) download and
 // hints for clients that configure themselves (Thunderbird autoconfig, Outlook).
-// Module level (never define components inline).
-function AutoSetupCard({ email, requiresAppPassword }: { email: string; requiresAppPassword: boolean }) {
+// Module level (never define components inline). 9.4: `profiles` = the variants
+// the account's protocol switches allow (lib/externalClients.ts).
+function AutoSetupCard({ email, requiresAppPassword, profiles }: {
+  email: string; requiresAppPassword: boolean; profiles: AppleProfileKind[];
+}) {
   const [busy, setBusy] = useState<AppleProfileKind | null>(null);
   const download = async (kind: AppleProfileKind) => {
     setBusy(kind);
@@ -2136,25 +2143,29 @@ function AutoSetupCard({ email, requiresAppPassword }: { email: string; requires
         gibt es ein Konfigurationsprofil mit E-Mail, Kalender und Kontakten.
       </p>
       <div className="flex flex-wrap gap-2">
-        <button
-          type="button"
-          onClick={() => void download('imap')}
-          disabled={busy !== null}
-          className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-accent rounded-lg hover:opacity-90 disabled:opacity-50"
-        >
-          {busy === 'imap' ? <Loader2 size={14} className="animate-spin" /> : <Smartphone size={14} />}
-          Profil für iPhone/iPad/Mac laden
-        </button>
-        <button
-          type="button"
-          onClick={() => void download('eas')}
-          disabled={busy !== null}
-          className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-fg-muted bg-surface-2 rounded-lg hover:bg-surface-3 disabled:opacity-50"
-          title="Ein ActiveSync-Konto statt IMAP + CalDAV + CardDAV"
-        >
-          {busy === 'eas' ? <Loader2 size={14} className="animate-spin" /> : <Smartphone size={14} />}
-          Variante ActiveSync
-        </button>
+        {profiles.includes('imap') && (
+          <button
+            type="button"
+            onClick={() => void download('imap')}
+            disabled={busy !== null}
+            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-accent rounded-lg hover:opacity-90 disabled:opacity-50"
+          >
+            {busy === 'imap' ? <Loader2 size={14} className="animate-spin" /> : <Smartphone size={14} />}
+            Profil für iPhone/iPad/Mac laden
+          </button>
+        )}
+        {profiles.includes('eas') && (
+          <button
+            type="button"
+            onClick={() => void download('eas')}
+            disabled={busy !== null}
+            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-fg-muted bg-surface-2 rounded-lg hover:bg-surface-3 disabled:opacity-50"
+            title="Ein ActiveSync-Konto statt IMAP + CalDAV + CardDAV"
+          >
+            {busy === 'eas' ? <Loader2 size={14} className="animate-spin" /> : <Smartphone size={14} />}
+            Variante ActiveSync
+          </button>
+        )}
       </div>
       <ol className="list-decimal ml-5 mt-4 text-xs text-fg-muted space-y-1">
         <li>Profil herunterladen (am besten direkt auf dem Gerät in Safari öffnen, oder per AirDrop übertragen).</li>
@@ -2183,6 +2194,8 @@ function ExternalClientsSection() {
     return <div className="p-8 text-center"><Loader2 className="animate-spin mx-auto text-fg-subtle" /></div>;
   }
   if (!cfg) return null;
+  const sections = externalClientSections(cfg.protocols);
+  const { caldav, carddav } = cfg;
 
   return (
     <section>
@@ -2196,8 +2209,14 @@ function ExternalClientsSection() {
         </p>
       </header>
 
-      {/* Outlook notice banner */}
-      <div className="mb-6 bg-warning-bg border border-warning-line rounded-lg p-4">
+      {!sections.any && (
+        <p className="text-sm text-fg-subtle">
+          Für dieses Konto sind keine externen Clients freigeschaltet. Bitte wenden Sie sich an Ihren Administrator.
+        </p>
+      )}
+
+      {/* Outlook notice banner (calendar / contacts) */}
+      {sections.dav && <div className="mb-6 bg-warning-bg border border-warning-line rounded-lg p-4">
         <div className="flex items-start gap-3">
           <Info size={18} className="text-warning-fg shrink-0 mt-0.5" />
           <div className="flex-1">
@@ -2227,7 +2246,7 @@ function ExternalClientsSection() {
             </ol>
           </div>
         </div>
-      </div>
+      </div>}
 
       {/* App password notice */}
       {cfg.requiresAppPassword && (
@@ -2246,10 +2265,12 @@ function ExternalClientsSection() {
         </div>
       )}
 
-      <AutoSetupCard email={cfg.user.email} requiresAppPassword={cfg.requiresAppPassword} />
+      {sections.profiles.length > 0 && (
+        <AutoSetupCard email={cfg.user.email} requiresAppPassword={cfg.requiresAppPassword} profiles={sections.profiles} />
+      )}
 
       {/* E-Mail (IMAP / SMTP / POP3) */}
-      <div className="mb-6 bg-surface border border-line rounded-lg p-5">
+      {sections.mail && <div className="mb-6 bg-surface border border-line rounded-lg p-5">
         <h3 className="text-base font-semibold text-fg flex items-center gap-2 mb-1">
           <MailIcon size={16} className="text-accent-fg" /> E-Mail (IMAP / SMTP)
         </h3>
@@ -2257,7 +2278,7 @@ function ExternalClientsSection() {
           Für Outlook, Apple Mail, Thunderbird, K-9 Mail (Android) — wird via Autodiscover automatisch erkannt.
         </p>
         <div className="grid md:grid-cols-2 gap-6">
-          <div>
+          {cfg.mail.imap && <div>
             <h4 className="text-xs font-semibold uppercase tracking-wide text-fg-subtle mb-2">
               Eingehend (IMAP)
             </h4>
@@ -2265,8 +2286,8 @@ function ExternalClientsSection() {
             <CopyRow label="Port" value={String(cfg.mail.imap.port)} mono={false} />
             <CopyRow label="Verschlüsselung" value={cfg.mail.imap.ssl ? 'SSL/TLS' : 'STARTTLS'} mono={false} />
             <CopyRow label="Benutzername" value={cfg.user.email} />
-          </div>
-          <div>
+          </div>}
+          {cfg.mail.smtp && <div>
             <h4 className="text-xs font-semibold uppercase tracking-wide text-fg-subtle mb-2">
               Ausgehend (SMTP)
             </h4>
@@ -2274,9 +2295,9 @@ function ExternalClientsSection() {
             <CopyRow label="Port" value={String(cfg.mail.smtp.port)} mono={false} />
             <CopyRow label="Verschlüsselung" value={cfg.mail.smtp.tls ? 'STARTTLS' : 'Keine'} mono={false} />
             <CopyRow label="Benutzername" value={cfg.user.email} />
-          </div>
+          </div>}
         </div>
-        <details className="mt-4 text-xs text-fg-subtle">
+        {cfg.mail.pop3 && <details className="mt-4 text-xs text-fg-subtle">
           <summary className="cursor-pointer hover:text-fg-muted">
             POP3 (für ältere Clients, nicht empfohlen — synchronisiert nicht zwischen Geräten)
           </summary>
@@ -2285,50 +2306,50 @@ function ExternalClientsSection() {
             <CopyRow label="Port" value={String(cfg.mail.pop3.port)} mono={false} />
             <CopyRow label="Verschlüsselung" value={cfg.mail.pop3.ssl ? 'SSL/TLS' : 'STARTTLS'} mono={false} />
           </div>
-        </details>
-      </div>
+        </details>}
+      </div>}
 
       {/* CalDAV */}
-      <div className="mb-6 bg-surface border border-line rounded-lg p-5">
+      {caldav && <div className="mb-6 bg-surface border border-line rounded-lg p-5">
         <h3 className="text-base font-semibold text-fg flex items-center gap-2 mb-1">
           <CalendarDays size={16} className="text-accent-fg" /> Kalender (CalDAV)
         </h3>
         <p className="text-xs text-fg-subtle mb-4">
           Für Apple Kalender, Thunderbird Lightning, eM Client, DAVx⁵ (Android), Outlook + CalDav-Synchronizer-Plugin.
         </p>
-        <CopyRow label="Account-URL" value={cfg.caldav.accountUrl} />
+        <CopyRow label="Account-URL" value={caldav.accountUrl} />
         <CopyRow label="Benutzername" value={cfg.user.email} />
         <CopyRow label="Passwort" value={cfg.requiresAppPassword ? '(App-Passwort)' : '(dein Login-Passwort)'} mono={false} />
-        {cfg.caldav.calendars.length > 0 && (
+        {caldav.calendars.length > 0 && (
           <details className="mt-3 text-xs">
             <summary className="cursor-pointer text-fg-muted hover:text-fg">
-              Direkte Kalender-URLs ({cfg.caldav.calendars.length}) — für Clients ohne Auto-Discovery
+              Direkte Kalender-URLs ({caldav.calendars.length}) — für Clients ohne Auto-Discovery
             </summary>
             <div className="mt-2 ml-3 space-y-1">
-              {cfg.caldav.calendars.map((c) => (
+              {caldav.calendars.map((c) => (
                 <CopyRow key={c.id} label={c.name + (c.isDefault ? ' ★' : '')} value={c.url} />
               ))}
             </div>
           </details>
         )}
-      </div>
+      </div>}
 
       {/* CardDAV */}
-      <div className="mb-6 bg-surface border border-line rounded-lg p-5">
+      {carddav && <div className="mb-6 bg-surface border border-line rounded-lg p-5">
         <h3 className="text-base font-semibold text-fg flex items-center gap-2 mb-1">
           <BookUser size={16} className="text-accent-fg" /> Kontakte (CardDAV)
         </h3>
         <p className="text-xs text-fg-subtle mb-4">
           Für Apple Kontakte, Thunderbird CardBook, eM Client, DAVx⁵, Outlook + CalDav-Synchronizer-Plugin.
         </p>
-        <CopyRow label="Account-URL" value={cfg.carddav.accountUrl} />
-        <CopyRow label="Adressbuch-URL" value={cfg.carddav.defaultUrl} />
+        <CopyRow label="Account-URL" value={carddav.accountUrl} />
+        <CopyRow label="Adressbuch-URL" value={carddav.defaultUrl} />
         <CopyRow label="Benutzername" value={cfg.user.email} />
         <CopyRow label="Passwort" value={cfg.requiresAppPassword ? '(App-Passwort)' : '(dein Login-Passwort)'} mono={false} />
-      </div>
+      </div>}
 
       {/* Outlook CalDav Synchronizer guide */}
-      <div className="bg-surface border border-line rounded-lg p-5">
+      {caldav && carddav && <div className="bg-surface border border-line rounded-lg p-5">
         <h3 className="text-base font-semibold text-fg flex items-center gap-2 mb-3">
           <ExternalLink size={16} className="text-accent-fg" /> Outlook CalDav Synchronizer einrichten
         </h3>
@@ -2352,7 +2373,7 @@ function ExternalClientsSection() {
             <strong>Kalender-Profil erstellen</strong>:
             <div className="text-xs text-fg-muted ml-2 mt-1 space-y-0.5">
               <div>• <strong>Outlook Folder</strong>: „Kalender" (lokaler Outlook-Kalender)</div>
-              <div>• <strong>DAV URL</strong>: <code className="bg-surface-2 px-1">{cfg.caldav.accountUrl}</code></div>
+              <div>• <strong>DAV URL</strong>: <code className="bg-surface-2 px-1">{caldav.accountUrl}</code></div>
               <div>• <strong>Username</strong>: <code className="bg-surface-2 px-1">{cfg.user.email}</code></div>
               <div>• <strong>Password</strong>: {cfg.requiresAppPassword ? 'App-Passwort (Einstellungen → App-Passwörter)' : 'dein Login-Passwort'}</div>
               <div>• <strong>Test Connection</strong> klicken → wählt automatisch verfügbare Kalender</div>
@@ -2363,7 +2384,7 @@ function ExternalClientsSection() {
             <strong>Kontakte-Profil erstellen</strong> (gleich wiederholen):
             <div className="text-xs text-fg-muted ml-2 mt-1 space-y-0.5">
               <div>• <strong>Outlook Folder</strong>: „Kontakte" (lokaler Outlook-Ordner)</div>
-              <div>• <strong>DAV URL</strong>: <code className="bg-surface-2 px-1">{cfg.carddav.defaultUrl}</code></div>
+              <div>• <strong>DAV URL</strong>: <code className="bg-surface-2 px-1">{carddav.defaultUrl}</code></div>
               <div>• Rest wie oben</div>
             </div>
           </li>
@@ -2373,7 +2394,7 @@ function ExternalClientsSection() {
             mit {productName} synchron.
           </li>
         </ol>
-      </div>
+      </div>}
     </section>
   );
 }

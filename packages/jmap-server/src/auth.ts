@@ -46,9 +46,20 @@ export class JmapDisabledError extends Error {
   }
 }
 
-/** 9.4: the JMAP switch, after any successful authentication (Basic — cached or not — and Bearer). */
+/**
+ * 9.4: the JMAP switch, after any successful authentication (Basic — cached or
+ * not — and Bearer). An unreadable switch is a temporary failure (503), never
+ * "allowed" and never a password prompt.
+ */
 async function assertJmapAllowed(user: JmapUser): Promise<JmapUser> {
-  if (!(await isProtocolAllowed({ id: user.userId, domainId: user.domainId }, 'jmap'))) throw new JmapDisabledError(user.userId);
+  let allowed: boolean;
+  try {
+    allowed = await isProtocolAllowed({ id: user.userId, domainId: user.domainId }, 'jmap');
+  } catch (err) {
+    log.error({ err, userId: user.userId }, 'JMAP switch not readable');
+    throw new AuthUnavailableError('temporary');
+  }
+  if (!allowed) throw new JmapDisabledError(user.userId);
   return user;
 }
 

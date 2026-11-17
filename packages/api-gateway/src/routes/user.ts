@@ -4,11 +4,11 @@ import { patchSchema } from '../lib/zod-compat.js';
 import { hashPassword, verifyPassword } from '@coremail/core';
 import {
   prisma, expunge, countRegexConditions, MAX_REGEX_CONDITIONS_PER_USER, saveOofSettings, getQuotaStatus, hasMfa,
-  reservedFolderPrefix, reservedFolderNameError,
+  reservedFolderPrefix, reservedFolderNameError, effectiveProtocolAccess,
 } from '@coremail/storage';
 import { invalidRegexConditionMessage } from '../lib/rule-validation.js';
 import { checkPasswordPolicy, revokeAllSessions } from '@coremail/storage/auth';
-import { requireAuth } from '../middleware/auth.js';
+import { protocolSubject, requireAuth } from '../middleware/auth.js';
 import { allowedAreas, isAdminRole } from '../lib/rbac.js';
 import { getReadableSharedMailbox, getWritableSharedMailbox, listForeignMailboxes, foreignMailboxRef } from '../lib/mailbox-access.js';
 import { deleteFolderKeepingMail } from '../lib/folder-delete.js';
@@ -22,8 +22,11 @@ userRouter.use(requireAuth);
 // clients (Outlook + CalDAV plugin, Apple Calendar, Thunderbird, eM Client).
 // Outlook desktop has no native CalDAV/CardDAV support → calendar + contacts
 // require the (free, OSS) „Outlook CalDav Synchronizer" plugin.
+// 9.4: only protocols switched on for the account — `protocols` lists them,
+// the setup data of a protocol that is off is null.
 userRouter.get('/client-config', async (req: Request, res: Response) => {
   const userId = req.apiUser!.userId;
+  const access = await effectiveProtocolAccess(protocolSubject(req.apiUser!));
   const [settings, user, calendars, mfa] = await Promise.all([
     prisma.serverSettings.findUnique({
       where: { id: 'singleton' },
@@ -38,11 +41,11 @@ userRouter.get('/client-config', async (req: Request, res: Response) => {
       where: { id: userId },
       select: { email: true, displayName: true },
     }),
-    prisma.calendar.findMany({
+    access.dav ? prisma.calendar.findMany({
       where: { userId },
       select: { id: true, name: true, isDefault: true },
       orderBy: [{ isDefault: 'desc' }, { sortOrder: 'asc' }, { name: 'asc' }],
-    }),
+    }) : Promise.resolve([]),
     prisma.userMfa.findUnique({
       where: { userId },
       select: { totpEnabled: true, webAuthnCredentials: true },
@@ -68,24 +71,27 @@ userRouter.get('/client-config', async (req: Request, res: Response) => {
       displayName: user?.displayName ?? '',
     },
     requiresAppPassword: mfaEnabled,
+    protocols: {
+      imap: access.imap, pop3: access.pop3, smtp: access.smtp, activesync: access.activesync, dav: access.dav,
+    },
     mail: {
-      imap: {
+      imap: access.imap ? {
         host: settings?.imapHost ?? hostname,
         port: settings?.imapPort ?? 993,
         ssl:  settings?.imapSsl ?? true,
-      },
-      pop3: {
+      } : null,
+      pop3: access.pop3 ? {
         host: settings?.pop3Host ?? hostname,
         port: settings?.pop3Port ?? 995,
         ssl:  settings?.pop3Ssl ?? true,
-      },
-      smtp: {
+      } : null,
+      smtp: access.smtp ? {
         host: settings?.smtpHost ?? hostname,
         port: settings?.smtpPort ?? 587,
         tls:  settings?.smtpTls ?? true,
-      },
+      } : null,
     },
-    caldav: {
+    caldav: access.dav ? {
       accountUrl: `${baseUrl}/dav/calendars/${userId}/`,
       calendars: calendars.map((c) => ({
         id: c.id,
@@ -93,14 +99,14 @@ userRouter.get('/client-config', async (req: Request, res: Response) => {
         isDefault: c.isDefault,
         url: `${baseUrl}/dav/calendars/${userId}/${c.id}/`,
       })),
-    },
-    carddav: {
+    } : null,
+    carddav: access.dav ? {
       // Account URL for client auto-discovery (Apple Contacts, Thunderbird,
       // Outlook CalDav Synchronizer). CoreMail currently has ONE default
       // address book per user under the path „/default/".
       accountUrl: `${baseUrl}/dav/addressbooks/${userId}/`,
       defaultUrl: `${baseUrl}/dav/addressbooks/${userId}/default/`,
-    },
+    } : null,
   });
 });
 

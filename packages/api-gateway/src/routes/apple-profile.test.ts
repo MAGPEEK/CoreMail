@@ -25,7 +25,7 @@ const state = {
   mfa: null as null | { totpEnabled: boolean; webAuthnCredentials: unknown },
 };
 
-installFakePrisma({
+const fakeDb = installFakePrisma({
   user: {
     findUnique: (a) => {
       const id = (a as { where: { id: string } }).where.id;
@@ -270,6 +270,39 @@ test('9.4 protocol switches: only enabled protocols are set up', async () => {
   assert.equal(appleProfileAvailable({ imap: false, pop3: false, dav: false, activesync: true }, 'imap'), false);
   assert.equal(appleProfileAvailable({ imap: false, pop3: false, dav: false, activesync: true }, 'eas'), true);
   assert.equal(appleProfileAvailable({ imap: true, pop3: true, dav: true, activesync: false }, 'eas'), false);
+});
+
+test('9.4 client-config (external clients page): only protocols switched on for the account', async () => {
+  type ClientConfig = {
+    protocols: Record<string, boolean>;
+    mail: Record<'imap' | 'pop3' | 'smtp', { host: string } | null>;
+    caldav: { accountUrl: string } | null;
+    carddav: { accountUrl: string } | null;
+  };
+  const get = async () => (await fetch(`${base}/api/v1/user/client-config`, {
+    headers: { authorization: `Bearer ${tok('alice')}` },
+  })).json() as Promise<ClientConfig>;
+  const { invalidateProtocolAccessCache } = await import('@coremail/storage');
+  const all = await get();
+  assert.deepEqual(all.protocols, { imap: true, pop3: true, smtp: true, activesync: true, dav: true });
+  assert.equal(all.mail.imap?.host, 'imap.example.com');
+  assert.ok(all.caldav?.accountUrl && all.carddav?.accountUrl);
+
+  fakeDb.models['protocolPolicy'] = {
+    findMany: () => [{ id: 'p-alice', userId: 'alice', domainId: null, imap: 'OFF', dav: 'OFF', activesync: 'OFF' }],
+  };
+  invalidateProtocolAccessCache();
+  try {
+    const some = await get();
+    assert.deepEqual(some.protocols, { imap: false, pop3: true, smtp: true, activesync: false, dav: false });
+    assert.equal(some.mail.imap, null);
+    assert.ok(some.mail.pop3 && some.mail.smtp);
+    assert.equal(some.caldav, null);
+    assert.equal(some.carddav, null);
+  } finally {
+    delete fakeDb.models['protocolPolicy'];
+    invalidateProtocolAccessCache();
+  }
 });
 
 test('plist writer: escaping, empty containers, booleans', () => {

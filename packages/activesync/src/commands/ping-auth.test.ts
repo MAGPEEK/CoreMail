@@ -10,6 +10,7 @@
  */
 import { test, describe, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { fakeProtocolPolicies } from '@coremail/storage/auth/testing';
 import type { AddressInfo } from 'node:net';
 import type { Request, RequestHandler } from 'express';
 
@@ -28,8 +29,7 @@ let countGate: Promise<void> | null = null;
 const policies: Array<Record<string, unknown>> = [];
 (globalThis as Record<string, unknown>)['__prisma'] = {
   $on: () => undefined,
-  protocolPolicy: { findMany: async () => policies, count: async () => 0 },
-  serverSettings: { findUnique: async () => null },
+  ...fakeProtocolPolicies(policies),
   user: { findFirst: async ({ where }: { where: { email: string } }) => users.find((u) => u.email === where.email) ?? null },
   appPassword: {
     findMany: async ({ where }: { where: { userId: string } }) => (where.userId === 'u1'

@@ -67,11 +67,12 @@ export async function webAccessRefusal(user: WebAccessUser, surface: WebSurface)
 }
 
 /**
- * Login / refresh check (like maintenanceBlock): true when the account may not
- * get a web session — Webmail is off and the account has no admin role.
+ * Login / refresh / SSO check (like maintenanceBlock): true when the account
+ * may not get a session for `surface` (ClientInfo.surface) — Webmail is off,
+ * and it is the webmail asking or the account has no admin role.
  */
-export async function webLoginBlocked(user: WebAccessUser): Promise<boolean> {
-  return !(await webAccessPermitted(user, 'admin'));
+export async function webLoginBlocked(user: WebAccessUser, surface: WebSurface = 'admin'): Promise<boolean> {
+  return !(await webAccessPermitted(user, surface));
 }
 
 /** JSON body of a 403 answer for a disabled protocol. */

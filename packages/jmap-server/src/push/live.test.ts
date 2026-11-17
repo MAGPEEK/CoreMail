@@ -13,6 +13,7 @@
  */
 import { test, describe, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { fakeProtocolPolicies } from '@coremail/storage/auth/testing';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 
@@ -27,7 +28,7 @@ const users = [user('u1', 'bob@example.com'), user('u2', 'carol@example.com')];
 const policies: Array<Record<string, unknown>> = [];
 (globalThis as Record<string, unknown>)['__prisma'] = {
   $on: () => undefined,
-  protocolPolicy: { findMany: async () => policies, count: async () => 0 },
+  ...fakeProtocolPolicies(policies),
   user: {
     findFirst: async ({ where }: { where: { email?: string; id?: string } }) =>
       users.find((u) => (where.email ? u.email === where.email : u.id === where.id)) ?? null,

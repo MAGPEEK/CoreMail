@@ -418,7 +418,7 @@ export async function exchangeSsoCode(code: string, cookie: string | undefined, 
   if (!user?.active) return { kind: 'invalid' };
   const blocked = await maintenanceBlock(user.role);
   if (blocked) return { kind: 'maintenance', message: blocked };
-  if (await webLoginBlocked(user)) return { kind: 'protocol_disabled' };
+  if (await webLoginBlocked(user, client.surface)) return { kind: 'protocol_disabled' };
   const tokens = await issueSession(user, { ...client, mfaVerified: o.mfaVerified });
   log.info({ userId: user.id, source: 'oidc' }, 'Login successful (SSO)');
   return { kind: 'tokens', tokens };

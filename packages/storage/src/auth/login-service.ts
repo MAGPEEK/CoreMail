@@ -201,8 +201,8 @@ export async function login(email: string, password: string, client: ClientInfo)
     return { kind: 'maintenance', message: blocked };
   }
   // 9.4: only after the password was verified (a wrong one stays `invalid`).
-  if (await webLoginBlocked(user)) {
-    log.info({ userId: user.id }, 'Login refused — Webmail is disabled for this account');
+  if (await webLoginBlocked(user, client.surface)) {
+    log.info({ userId: user.id, surface: client.surface }, 'Login refused — Webmail is disabled for this account');
     return { kind: 'protocol_disabled' };
   }
 
@@ -289,7 +289,7 @@ export async function completeMfaLogin(
   if (!user?.active) return { kind: 'invalid' };
   const blocked = await maintenanceBlock(user.role);
   if (blocked) return { kind: 'maintenance', message: blocked };
-  if (await webLoginBlocked(user)) return { kind: 'protocol_disabled' };
+  if (await webLoginBlocked(user, client.surface)) return { kind: 'protocol_disabled' };
 
   const tokens = await issueSession(user, { ...client, mfaVerified: true });
   await lockout.success(lockEmail);

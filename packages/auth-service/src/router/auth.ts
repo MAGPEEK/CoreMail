@@ -23,6 +23,7 @@ import {
   revokeSessionByRefreshToken,
   tokenPairResponse,
   protocolDisabledBody,
+  clientInfoOf,
   type LoginOutcome,
 } from '@coremail/storage/auth';
 import { finishWebAuthnAuthentication } from '../mfa/webauthn.js';
@@ -61,10 +62,6 @@ const RefreshSchema = z.object({
 
 export const authRouter: RouterType = Router();
 
-function clientInfo(req: Request): { ip: string; userAgent: string } {
-  return { ip: req.ip ?? 'unknown', userAgent: req.get('user-agent') ?? '' };
-}
-
 authRouter.post('/login', async (req: Request, res: Response) => {
   const parsed = LoginSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -72,7 +69,7 @@ authRouter.post('/login', async (req: Request, res: Response) => {
     return;
   }
   try {
-    sendOutcome(req, res, await login(parsed.data.email, parsed.data.password, clientInfo(req)));
+    sendOutcome(req, res, await login(parsed.data.email, parsed.data.password, clientInfoOf(req)));
   } catch (err) {
     log.error({ err }, 'Login error');
     res.status(500).json({ error: 'Internal server error' });
@@ -94,7 +91,7 @@ authRouter.post('/mfa/verify', async (req: Request, res: Response) => {
         ...(backupCode !== undefined ? { backupCode } : {}),
         ...(webauthnResponse !== undefined ? { webauthnResponse } : {}),
       },
-      clientInfo(req),
+      clientInfoOf(req),
       {
         verifyWebAuthn: (userId, response, token) =>
           finishWebAuthnAuthentication(userId, response as Parameters<typeof finishWebAuthnAuthentication>[1], token),
@@ -114,7 +111,7 @@ authRouter.post('/refresh', async (req: Request, res: Response) => {
     return;
   }
   try {
-    const r = await rotateSession(parsed.data.refreshToken, clientInfo(req));
+    const r = await rotateSession(parsed.data.refreshToken, clientInfoOf(req));
     if (r.ok) { res.json(r.tokens); return; }
     if (r.status === 503) { res.status(503).json({ error: 'maintenance', message: r.message }); return; }
     if (r.status === 403) { res.status(403).json(protocolDisabledBody('webmail')); return; }

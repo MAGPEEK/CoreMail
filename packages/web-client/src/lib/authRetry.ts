@@ -15,8 +15,16 @@ export type RefreshVerdict = 'logout' | 'retry' | 'fail';
 export function refreshFailureVerdict(status: number | null, code?: string | null): RefreshVerdict {
   if (status === null || status === 429 || status >= 500) return 'retry';
   if (status === 401 && typeof code === 'string' && /^(SESSION_REVOKED$|REFRESH_|TOKEN_)/.test(code)) return 'logout';
-  if (status === 403 && code === 'PROTOCOL_DISABLED') return 'logout';
+  if (isWebmailDisabled(status, code)) return 'logout';
   return 'fail';
+}
+
+/**
+ * 9.4: Webmail was switched off for the account (403 PROTOCOL_DISABLED) — the
+ * session is over for the webmail: a refresh and every API call are refused.
+ */
+export function isWebmailDisabled(status: number, code?: string | null): boolean {
+  return status === 403 && code === 'PROTOCOL_DISABLED';
 }
 
 /**

@@ -7,6 +7,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { fakeProtocolPolicies } from '@coremail/storage/auth/testing';
 
 const state = { dbDown: false };
 const base = { domainId: 'd1', role: 'USER', mailbox: null, active: true };
@@ -18,15 +19,15 @@ const users = [
 ];
 /** 9.4: ProtocolPolicy rows (protocol switches). */
 const policies: Array<Record<string, unknown>> = [];
-(globalThis as Record<string, unknown>)['__prisma'] = {
+const prisma: Record<string, unknown> = {
   $on: () => undefined,
-  protocolPolicy: { findMany: async () => policies, count: async () => 0 },
-  serverSettings: { findUnique: async () => null },
+  ...fakeProtocolPolicies(policies),
   user: {
     findFirst: async ({ where }: { where: { email: string } }) => {
       if (state.dbDown) throw new Error('db down');
       return users.find((u) => u.email === where.email) ?? null;
     },
+    findUnique: async ({ where }: { where: { id: string } }) => users.find((u) => u.id === where.id) ?? null,
   },
   appPassword: {
     findMany: async ({ where }: { where: { userId: string } }) => (where.userId === 'u2' ? [{ id: 'ap', hash: 'hash:APP-PW' }] : []),
@@ -34,6 +35,7 @@ const policies: Array<Record<string, unknown>> = [];
   },
   domain: { findFirst: async () => ({ name: 'example.com' }) },
 };
+(globalThis as Record<string, unknown>)['__prisma'] = prisma;
 const storage = await import('@coremail/storage');
 (globalThis as Record<string, unknown>)['__mailAuthRedis'] = storage.createMemoryAuthRedis();
 storage.configureMailAuth({
@@ -89,6 +91,34 @@ test('9.4: JMAP switched off → JmapDisabledError after correct credentials onl
     storage.invalidateProtocolAccessCache();
   }
   assert.equal((await authenticateCredentials(basic('pw'), undefined, '203.0.113.3'))?.userId, 'u1');
+});
+
+test('9.4: an unreadable JMAP switch is a temporary failure (503), never a password prompt', async () => {
+  const basic = `Basic ${Buffer.from('bob@example.com:pw').toString('base64')}`;
+  assert.equal((await authenticateCredentials(basic, undefined, '203.0.113.4'))?.userId, 'u1', 'cached credentials');
+  const policy = prisma['protocolPolicy'] as { findMany: () => Promise<unknown> };
+  const findMany = policy.findMany;
+  policy.findMany = async () => { throw new Error('db down'); };
+  storage.invalidateProtocolAccessCache();
+  try {
+    await assert.rejects(authenticateCredentials(basic, undefined, '203.0.113.4'),
+      (e: unknown) => e instanceof AuthUnavailableError && e.reason === 'temporary');
+  } finally {
+    policy.findMany = findMany;
+    storage.invalidateProtocolAccessCache();
+  }
+});
+
+test('9.4: JMAP push subscriptions are only notified for users with JMAP on', async () => {
+  const { jmapPushRecipients } = await import('./push/bus.js');
+  policies.push({ id: 'p-u2', userId: 'u2', domainId: null, jmap: 'OFF' });
+  storage.invalidateProtocolAccessCache();
+  try {
+    assert.deepEqual(await jmapPushRecipients(['u1', 'u2', 'u3']), ['u1', 'u3']);
+  } finally {
+    policies.length = 0;
+    storage.invalidateProtocolAccessCache();
+  }
 });
 
 test('shared lockout → AuthUnavailableError(locked)', async () => {

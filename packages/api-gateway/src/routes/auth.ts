@@ -37,6 +37,7 @@ import {
   clearRefreshCookieHeader,
   isWebClient,
   protocolDisabledBody,
+  clientInfoOf,
   type TokenPair,
 } from '@coremail/storage/auth';
 import { ldapAuthenticator } from '@coremail/auth-ldap';
@@ -55,10 +56,6 @@ registerAuthenticator(ldapAuthenticator());
 const RESET_RATE_PREFIX  = 'pwreset:rate:';
 const RESET_RATE_LIMIT   = 3;
 const RESET_RATE_WINDOW  = 3600; // 1 hour in seconds
-
-function clientInfo(req: Request): { ip: string; userAgent: string } {
-  return { ip: req.ip ?? 'unknown', userAgent: req.get('user-agent') ?? '' };
-}
 
 /** Sends an email via internal SMTP submission (localhost:587). */
 async function sendResetEmail(to: string, resetUrl: string): Promise<void> {
@@ -130,7 +127,7 @@ authRouter.post('/login', async (req: Request, res: Response) => {
     return;
   }
   try {
-    const outcome = await login(parsed.data.email, parsed.data.password, clientInfo(req));
+    const outcome = await login(parsed.data.email, parsed.data.password, clientInfoOf(req));
     if (outcome.kind === 'tokens') { sendTokens(req, res, outcome.tokens); return; }
     const { status, body, headers } = loginOutcomeToHttp(outcome);
     if (headers) res.set(headers);
@@ -158,7 +155,7 @@ authRouter.post('/refresh', async (req: Request, res: Response) => {
   if (src === 'rejected') return;
   if (!src) { res.status(401).json({ error: 'Invalid refresh token', code: 'REFRESH_MISSING' }); return; }
   try {
-    const r = await rotateSession(src.token, clientInfo(req));
+    const r = await rotateSession(src.token, clientInfoOf(req));
     if (r.ok) { sendTokens(req, res, r.tokens, src.viaCookie); return; }
     if (r.status === 503) { res.status(503).json({ error: 'maintenance', message: r.message }); return; }
     if (src.viaCookie) res.append('Set-Cookie', clearRefreshCookieHeader(req));

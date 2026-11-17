@@ -32,8 +32,17 @@ export async function davAuthMiddleware(
         select: { id: true, email: true, active: true, domainId: true },
       });
       if (user?.active) {
-        // 9.4: the CalDAV/CardDAV switch applies to tokens as well.
-        if (!(await isProtocolAllowed({ id: user.id, domainId: user.domainId }, 'dav'))) {
+        // 9.4: the CalDAV/CardDAV switch applies to tokens as well (unreadable → 503).
+        let allowed: boolean;
+        try {
+          allowed = await isProtocolAllowed({ id: user.id, domainId: user.domainId }, 'dav');
+        } catch (err) {
+          log.error({ err, userId: user.id }, 'CalDAV/CardDAV switch not readable');
+          res.set('Retry-After', '30');
+          res.status(503).send('Service Unavailable');
+          return;
+        }
+        if (!allowed) {
           sendDavDisabled(res);
           return;
         }
