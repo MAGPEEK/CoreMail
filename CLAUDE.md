@@ -82,7 +82,7 @@ coremail/
 │   ├── auth-sso/          # OIDC SSO client (internal, no SAML)
 │   ├── backup-service/    # MBOX/EML/S3 backup (port 3004)
 │   ├── security-filter/   # SPF/DKIM/DMARC/ClamAV/rspamd (port 3002)
-│   ├── activesync/        # ActiveSync EAS 14.1 (port 3005)
+│   ├── activesync/        # ActiveSync EAS 12.1/14.0/14.1 (port 3005)
 │   ├── web-client/        # React OWA webmail (port 80)
 │   └── admin-panel/       # React ECP admin panel (port 80)
 ├── infra/
@@ -319,7 +319,7 @@ All endpoints behind nginx on port 443:
 | `/bcp/` | admin-panel | Coremail admin panel (ECP) |
 | `/Autodiscover/` | autodiscover | Autodiscover v1 |
 | `/autodiscover/` | autodiscover | Autodiscover v2 |
-| `/Microsoft-Server-ActiveSync` | activesync | EAS 14.1 |
+| `/Microsoft-Server-ActiveSync` | activesync | EAS 12.1/14.0/14.1 |
 | `/api/v1/` | api-gateway | REST API |
 | `/auth/` | auth-service | Authentication |
 
@@ -386,10 +386,15 @@ HYGIENE_MANAGEMENT, SERVER_MANAGEMENT, VIEW_ONLY_ORG, ORGANIZATION_MANAGEMENT
 
 ---
 
-## ActiveSync (EAS 14.1)
+## ActiveSync (EAS 12.1 / 14.0 / 14.1)
 
 **Package**: `packages/activesync/` — port 3005
 **Docker image**: `magpeek/coremail-activesync:0.7.0`
+**Versions (9.4)**: 12.1, 14.0, 14.1 negotiated per request (`MS-ASProtocolVersion` header or the
+base64 request line, `src/request.ts`), remembered per device (`ActiveSyncDevice.protocolVersion`);
+an unannounced version is served as 14.1 (warning once per device, `src/device-version.ts`).
+Commands ask `supports(version, feature)` (`src/protocol-version.ts`), never compare numbers;
+`tagsNewerThan()` (wbxml.ts) checks that responses carry only the version's tags. Docs `docs/activesync.md`.
 
 ### WBXML codec
 `src/wbxml.ts` — implements the EAS code pages:
