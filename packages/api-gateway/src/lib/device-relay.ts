@@ -6,14 +6,15 @@
  * `senderDomains`. These rules keep a configuration from turning into an open
  * relay by mistake:
  *  - every network must be a valid IP/CIDR, and not broader than /8 (IPv4) or
- *    /32 (IPv6) — `0.0.0.0/0` would be "the whole internet";
+ *    /32 (IPv6) — `0.0.0.0/0` would be "the whole internet"; an IPv4-mapped
+ *    IPv6 range (`::ffff:0:0/96`) counts as the IPv4 range it denotes
+ *    (@coremail/core cidr.ts, RELAY_NETWORK_MIN_PREFIX — the SMTP server
+ *    applies the same limit when it loads the policy);
  *  - sender domains must be domains hosted by this server;
  *  - the port must not be a submission port (465/587 require SMTP AUTH).
  */
-import { parseCidr } from '@coremail/core';
+import { parseCidr, cidrTooBroad, RELAY_NETWORK_MIN_PREFIX } from '@coremail/core';
 
-export const MIN_IPV4_PREFIX = 8;
-export const MIN_IPV6_PREFIX = 32;
 export const SUBMISSION_PORTS: readonly number[] = [465, 587];
 export const MAX_NETWORKS = 64;
 export const MAX_SENDER_DOMAINS = 64;
@@ -38,7 +39,7 @@ export function normaliseNetworks(list: readonly string[]): { networks: string[]
   for (const entry of list.map((e) => e.trim()).filter(Boolean)) {
     const p = parseCidr(entry);
     if (!p) { invalid.push(entry); continue; }
-    if (p.prefix < (p.family === 4 ? MIN_IPV4_PREFIX : MIN_IPV6_PREFIX)) { tooBroad.push(entry); continue; }
+    if (cidrTooBroad(p, RELAY_NETWORK_MIN_PREFIX)) { tooBroad.push(entry); continue; }
     if (!networks.includes(p.cidr)) networks.push(p.cidr);
   }
   return { networks, invalid, tooBroad };
@@ -59,7 +60,8 @@ export function validateDeviceRelay(input: DeviceRelayInput, hostedDomains: read
   const { networks, invalid, tooBroad } = normaliseNetworks(input.allowedNetworks);
   if (invalid.length > 0) return { ok: false, error: `Ungültige Netze: ${invalid.join(', ')}` };
   if (tooBroad.length > 0) {
-    return { ok: false, error: `Netze zu groß (mindestens /${MIN_IPV4_PREFIX} bzw. /${MIN_IPV6_PREFIX}): ${tooBroad.join(', ')}` };
+    const { v4, v6 } = RELAY_NETWORK_MIN_PREFIX;
+    return { ok: false, error: `Netze zu groß (mindestens /${v4} bzw. /${v6}): ${tooBroad.join(', ')}` };
   }
   const domains = normaliseDomains(input.senderDomains);
   const hosted = new Set(hostedDomains.map((d) => d.toLowerCase()));

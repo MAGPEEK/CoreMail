@@ -153,10 +153,14 @@ const relay = (over: Partial<Parameters<typeof validateDeviceRelay>[0]> = {}) =>
 });
 
 test('validateDeviceRelay: whole-internet and invalid networks are refused', () => {
-  for (const nets of [['0.0.0.0/0'], ['::/0'], ['10.0.0.0/7'], ['2001:db8::/31']]) {
+  // IPv4-mapped IPv6 ranges are the IPv4 ranges they denote: ::ffff:0:0/96 = 0.0.0.0/0
+  for (const nets of [['0.0.0.0/0'], ['::/0'], ['10.0.0.0/7'], ['2001:db8::/31'], ['::ffff:0:0/96'], ['::ffff:0.0.0.0/100'], ['::ffff:a00:0/103']]) {
     const r = validateDeviceRelay(relay({ allowedNetworks: nets }), ['example.com']);
     assert.equal(r.ok, false, nets.join());
   }
+  const mapped = validateDeviceRelay(relay({ allowedNetworks: ['::ffff:c0a8:a00/120'] }), ['example.com']);
+  assert.ok(mapped.ok);
+  assert.deepEqual(mapped.value.allowedNetworks, ['192.168.10.0/24'], 'stored in its IPv4 form');
   const bad = validateDeviceRelay(relay({ allowedNetworks: ['printer.local'] }), ['example.com']);
   assert.ok(!bad.ok && /printer\.local/.test(bad.error));
   assert.deepEqual(normaliseNetworks(['10.0.0.5', ' 10.0.0.5/32 ', '']).networks, ['10.0.0.5/32']);
