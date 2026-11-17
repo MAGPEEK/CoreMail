@@ -211,27 +211,30 @@ for (const [cp, tokens] of Object.entries(CODE_PAGES)) {
 const NAMESPACE_PAGES: Record<string, number> = CP;
 
 // ─── Tokens per protocol version ([MS-ASWBXML]) ──────────────────────────────
-// Everything not listed exists since 12.1, the oldest version this server speaks.
-/** Code pages introduced after 12.1. */
+// First version of each token, from the "Protocol versions" column of the [MS-ASWBXML]
+// 2.1.2.1.x code page tables. Everything not listed exists in 12.1, the oldest version this
+// server speaks (pages 5, 6, 7, 13, 14 have no token newer than 12.1).
+/** Code pages introduced after 12.1: ComposeMail (2.1.2.1.22), Email2 (2.1.2.1.23). */
 const PAGE_SINCE: Record<number, string> = { 21: '14.0', 22: '14.0' };
 /** Single tokens introduced after 12.1 (overrides PAGE_SINCE). */
 const TOKEN_SINCE: Record<number, Record<number, string>> = {
-  0: { 0x27: '14.0', 0x28: '14.0', 0x29: '14.0' }, // ConversationMode, MaxItems, HeartbeatInterval
-  2: { 0x1b: '14.0', 0x1c: '14.0', 0x3f: '14.0' }, // Categories, Category, DisallowNewTimeProposal
-  8: { 0x0e: '14.1', 0x10: '16.0', 0x11: '16.0', 0x12: '16.0' }, // InstanceId, ProposedStart/EndTime, SendResponse
-  10: { // Availability … MergedFreeBusy (14.0), Picture … MaxPictures (14.1)
+  0: { 0x27: '14.0', 0x28: '14.0', 0x29: '14.0' }, // 2.1.2.1.1: ConversationMode, MaxItems, HeartbeatInterval
+  2: { 0x1b: '14.0', 0x1c: '14.0', 0x3f: '14.0' }, // 2.1.2.1.3: Categories, Category, DisallowNewTimeProposal
+  // 2.1.2.1.9: InstanceId (14.1), SendResponse (16.0), ProposedStartTime / ProposedEndTime (16.1)
+  8: { 0x0e: '14.1', 0x10: '16.1', 0x11: '16.1', 0x12: '16.0' },
+  10: { // 2.1.2.1.11: Availability … MergedFreeBusy (14.0), Picture, MaxSize, Data, MaxPictures (14.1)
     0x16: '14.0', 0x17: '14.0', 0x18: '14.0', 0x19: '14.0', 0x1a: '14.1', 0x1b: '14.1', 0x1c: '14.1', 0x1d: '14.1',
   },
-  15: { 0x20: '14.0', 0x21: '14.1', 0x22: '14.1', 0x23: '14.1' }, // ConversationId, Picture, MaxSize, MaxPictures
-  16: { 0x10: '14.1', 0x11: '14.1', 0x12: '14.1' }, // Picture, Status, Data
-  17: { 0x18: '14.0', 0x19: '14.1', 0x1a: '14.1', 0x1b: '14.1' }, // Preview, BodyPartPreference, BodyPart, Status
-  18: { // UserAgent, EnableOutboundSMS, MobileOperator (14.0); Accounts form, RightsManagementInformation (14.1)
-    0x20: '14.0', 0x21: '14.0', 0x22: '14.0',
+  15: { 0x20: '14.0', 0x21: '14.1', 0x22: '14.1', 0x23: '14.1' }, // 2.1.2.1.16: ConversationId, Picture, MaxSize, MaxPictures
+  16: { 0x10: '14.1', 0x11: '14.1', 0x12: '14.1' }, // 2.1.2.1.17: Picture, Status, Data
+  17: { 0x18: '14.0', 0x19: '14.1', 0x1a: '14.1', 0x1b: '14.1' }, // 2.1.2.1.18: Preview, BodyPartPreference, BodyPart, Status
+  18: { // 2.1.2.1.19: EnableOutboundSMS, MobileOperator (14.0; UserAgent 0x20 is 12.1); Accounts form, RightsManagementInformation (14.1)
+    0x21: '14.0', 0x22: '14.0',
     0x23: '14.1', 0x24: '14.1', 0x25: '14.1', 0x26: '14.1', 0x27: '14.1', 0x28: '14.1', 0x29: '14.1', 0x2b: '14.1',
   },
-  20: { 0x16: '14.0', 0x17: '14.0', 0x18: '14.0', 0x19: '14.0' }, // Move, DstFldId, ConversationId, MoveAlways
-  21: { 0x13: '14.1' }, // AccountId
-  22: { 0x11: '14.1', 0x12: '14.1', 0x13: '14.1' }, // AccountId, FirstDayOfWeek, MeetingMessageType
+  20: { 0x16: '14.0', 0x17: '14.0', 0x18: '14.0', 0x19: '14.0' }, // 2.1.2.1.21: Move, DstFldId, ConversationId, MoveAlways
+  21: { 0x13: '14.1' }, // 2.1.2.1.22: AccountId
+  22: { 0x11: '14.1', 0x12: '14.1', 0x13: '14.1' }, // 2.1.2.1.23: AccountId, FirstDayOfWeek, MeetingMessageType
 };
 
 /** A tag of a WBXML document that the protocol version in question does not define. */

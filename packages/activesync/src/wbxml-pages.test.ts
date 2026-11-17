@@ -301,3 +301,13 @@ test('tagsNewerThan: 14.x tokens and pages are flagged for 12.1, 14.1 tokens for
   assert.deepEqual(tagsNewerThan(policy, '12.1'), []);
   assert.deepEqual(tagsNewerThan(encodeWbxml(el('MeetingResponse:SendResponse')), '14.1').map((t) => t.since), ['16.0']);
 });
+
+test('tagsNewerThan follows the [MS-ASWBXML] version column: Settings UserAgent is 12.1, EnableOutboundSMS 14.0; Proposed*Time 16.1', () => {
+  const info = encodeWbxml(el('Settings:DeviceInformation', undefined, [el('Set', undefined, [
+    el('Model', 'm'), el('UserAgent', 'ua'), el('EnableOutboundSMS', '0'), el('MobileOperator', 'op'),
+  ])]));
+  assert.deepEqual(tagsNewerThan(info, '12.1').map((t) => `${t.name}@${t.since}`), ['EnableOutboundSMS@14.0', 'MobileOperator@14.0']);
+  assert.deepEqual(tagsNewerThan(info, '14.0'), []);
+  const proposal = encodeWbxml(el('MeetingResponse:Request', undefined, [el('InstanceId', 'i'), el('ProposedStartTime', 't'), el('ProposedEndTime', 't')]));
+  assert.deepEqual(tagsNewerThan(proposal, '14.0').map((t) => `${t.name}@${t.since}`), ['InstanceId@14.1', 'ProposedStartTime@16.1', 'ProposedEndTime@16.1']);
+});

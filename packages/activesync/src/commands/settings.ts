@@ -5,7 +5,7 @@
  *                           JMAP VacationResponse and the SMTP auto-reply); the Oof
  *                           schema is the same in every supported version
  *  - DeviceInformation Set → ActiveSyncDevice.deviceFriendlyName (other fields accepted;
- *                           UserAgent/MobileOperator/EnableOutboundSMS are 14.0+)
+ *                           EnableOutboundSMS/MobileOperator are 14.0+, UserAgent 12.1+)
  *  - UserInformation Get  → primary address + active aliases (Accounts form 14.1+)
  *  - RightsManagementInformation Get → empty (no IRM templates; 14.1+, ignored before)
  *  - DevicePassword Set   → accepted (no recovery password storage)
