@@ -21,7 +21,7 @@ import {
   syncView, completeWithUpdates, withUpdateLock,
 } from '../session/view.js';
 import { ImapParseError, type Token } from '../server/tokenizer.js';
-import { registerLiveSession, imapLiveSessions } from '../session/live.js';
+import { registerLiveSession, imapLiveSessions, IMAP_DISABLED } from '../session/live.js';
 import { maxConnsPerUser, maxSortMessages } from '../server/limits.js';
 import {
   parseSearch, needsBody, needsRawHeaders, hasModseq, evaluateSearch, formatEsearch, toSequenceSet,
@@ -995,6 +995,11 @@ async function loginUser(
       return;
     case 'error':
       sendNo(session, tag, '[UNAVAILABLE] Temporary authentication failure - try again later');
+      return;
+    case 'protocol_disabled':
+      // 9.4: credentials were correct, IMAP is switched off for the account.
+      log.warn({ userId: result.userId, command, ip: session.socket.remoteAddress }, 'IMAP login refused — IMAP disabled for this account');
+      sendNo(session, tag, IMAP_DISABLED);
       return;
     default:
       // invalid and mfa_app_password_required get the same text (no oracle).

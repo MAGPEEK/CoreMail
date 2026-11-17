@@ -7,6 +7,7 @@
  */
 import { test, beforeEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
+import { noProtocolPolicies } from '@coremail/storage/auth/testing';
 
 type User = {
   id: string; email: string; displayName: string; domainId: string; role: string; active: boolean;
@@ -24,6 +25,7 @@ const pick = (where: Record<string, unknown> | undefined) => (s: { id: string; u
 
 (globalThis as Record<string, unknown>)['__prisma'] = {
   $on: () => undefined,
+  ...noProtocolPolicies(),
   user: {
     findFirst: async ({ where }: { where: { email?: string; id?: string; active?: boolean } }) => {
       lookups++;

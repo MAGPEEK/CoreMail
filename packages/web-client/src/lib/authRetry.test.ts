@@ -16,6 +16,11 @@ test('refresh: logout only on 401 with SESSION_REVOKED / REFRESH_* / TOKEN_*', (
   assert.equal(refreshFailureVerdict(400, undefined), 'fail');
 });
 
+test('9.4 refresh: Webmail switched off (403 PROTOCOL_DISABLED) ends the session', () => {
+  assert.equal(refreshFailureVerdict(403, 'PROTOCOL_DISABLED'), 'logout');
+  assert.equal(refreshFailureVerdict(401, 'PROTOCOL_DISABLED'), 'fail');
+});
+
 test('401 from an API call: refresh only for token/session problems, not for re-auth failures', () => {
   assert.equal(shouldRefreshOn401(undefined), true);
   assert.equal(shouldRefreshOn401(''), true);

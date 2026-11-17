@@ -1,10 +1,13 @@
 /**
- * JMAP feature flag (v5.7.1).
- * `ServerSettings.jmapEnabled` (default true). Off → /jmap/* and
- * /.well-known/jmap return 404. 60s cache, invalidation via Redis
- * CHANNEL_SETTINGS_RELOAD. Fail-open (the schema default is "on").
+ * JMAP service switch (v5.7.1, 9.4).
+ * `ServerSettings.jmapEnabled` (default true) is the server level of the JMAP
+ * protocol switch. The service answers /jmap/* and /.well-known/jmap with 404
+ * only while JMAP is off at the server level AND no domain/user switch turns it
+ * on; otherwise the per-account switch is checked after authentication (403).
+ * 60s cache, invalidation via Redis CHANNEL_SETTINGS_RELOAD (published on every
+ * protocol switch change). Fail-open (the schema default is "on").
  */
-import { prisma } from '@coremail/storage';
+import { protocolEnabledAnywhere } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import type { Request, Response, NextFunction } from 'express';
 
@@ -17,13 +20,9 @@ export async function isJmapEnabled(): Promise<boolean> {
   const now = Date.now();
   if (cached !== null && now < cacheExpiry) return cached;
   try {
-    const s = await prisma.serverSettings.findUnique({
-      where: { id: 'singleton' },
-      select: { jmapEnabled: true },
-    });
-    cached = s?.jmapEnabled ?? true;
+    cached = await protocolEnabledAnywhere('jmap');
   } catch (err) {
-    log.warn({ err }, 'ServerSettings not readable — JMAP stays enabled (schema default)');
+    log.warn({ err }, 'Protocol switches not readable — JMAP stays enabled (schema default)');
     cached = true;
   }
   cacheExpiry = now + CACHE_TTL_MS;

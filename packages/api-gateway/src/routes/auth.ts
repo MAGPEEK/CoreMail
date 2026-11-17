@@ -6,6 +6,7 @@
  *   POST /auth/login          → { accessToken, refreshToken, expiresIn }
  *                               | { mfaRequired: true, challengeToken, method, methods }
  *                               | 401 invalid credentials | 429 ACCOUNT_LOCKED (v8.1, shared lockout)
+ *                               | 403 PROTOCOL_DISABLED (9.4: Webmail off, account without admin role)
  *                               | 503 { error: 'maintenance', message }
  *   POST /auth/refresh        → rotates: { accessToken, refreshToken, expiresIn } (old token invalid)
  *   POST /auth/logout         → { ok: true } — revokes the session of { refreshToken }
@@ -35,6 +36,7 @@ import {
   isSameOriginCookieRequest,
   clearRefreshCookieHeader,
   isWebClient,
+  protocolDisabledBody,
   type TokenPair,
 } from '@coremail/storage/auth';
 import { ldapAuthenticator } from '@coremail/auth-ldap';
@@ -160,6 +162,8 @@ authRouter.post('/refresh', async (req: Request, res: Response) => {
     if (r.ok) { sendTokens(req, res, r.tokens, src.viaCookie); return; }
     if (r.status === 503) { res.status(503).json({ error: 'maintenance', message: r.message }); return; }
     if (src.viaCookie) res.append('Set-Cookie', clearRefreshCookieHeader(req));
+    // 9.4: Webmail switched off for the account
+    if (r.status === 403) { res.status(403).json(protocolDisabledBody('webmail')); return; }
     const error = r.reason === 'expired' ? 'Session expired' : 'Invalid refresh token';
     res.status(401).json({ error, code: `REFRESH_${r.reason.toUpperCase()}` });
   } catch (err) {

@@ -83,6 +83,8 @@ model Domain {
   // v5.6.1: distributionGroups relation removed
   resourceMailboxes  ResourceMailbox[]
   aliases            EmailAlias[]
+  // 9.4: per-protocol access switches of the domain (none = everything inherited)
+  protocolPolicy     ProtocolPolicy?
   createdAt          DateTime             @default(now())
 
   @@map("domains")
@@ -134,12 +136,51 @@ model User {
   categories          Category[]
   aliases             EmailAlias[]        @relation("UserAliases")
   passwordResetTokens PasswordResetToken[]
+  // 9.4: per-protocol access switches of the user (none = everything inherited)
+  protocolPolicy      ProtocolPolicy?
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt
 
   @@index([domainId])
   @@index([externalId])
   @@map("users")
+}
+
+// ─────────────────────────────────────────────
+// Protocol access (9.4)
+// ─────────────────────────────────────────────
+
+// Tri-state switch of one protocol on one level. INHERIT takes the value of the
+// next broader level (user → domain → server); on the server level INHERIT means
+// the built-in default (src/protocol-access.ts).
+enum ProtocolSwitch {
+  INHERIT
+  ON
+  OFF
+}
+
+// Per-protocol access switches. One row per level: id 'global' = the server
+// level (domainId and userId null), otherwise exactly one of domainId / userId.
+// Rows are deleted together with their domain / user. The server level of the
+// JMAP switch is ServerSettings.jmapEnabled — the `jmap` column of the 'global'
+// row is never written.
+model ProtocolPolicy {
+  id         String         @id @default(cuid())
+  domainId   String?        @unique
+  domain     Domain?        @relation(fields: [domainId], references: [id], onDelete: Cascade)
+  userId     String?        @unique
+  user       User?          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  imap       ProtocolSwitch @default(INHERIT)
+  pop3       ProtocolSwitch @default(INHERIT)
+  smtp       ProtocolSwitch @default(INHERIT)
+  activesync ProtocolSwitch @default(INHERIT)
+  jmap       ProtocolSwitch @default(INHERIT)
+  dav        ProtocolSwitch @default(INHERIT)
+  webmail    ProtocolSwitch @default(INHERIT)
+  mapi       ProtocolSwitch @default(INHERIT)
+  updatedAt  DateTime       @updatedAt
+
+  @@map("protocol_policies")
 }
 
 // ─────────────────────────────────────────────
@@ -1535,6 +1576,9 @@ model ServerSettings {
   // v5.7.1: JMAP (RFC 8620/8621 + extensions) on /jmap/* and
   // /.well-known/jmap. Default ON; off → 404. Hot reload via
   // Redis CHANNEL_SETTINGS_RELOAD (no container restart).
+  // 9.4: the server level of the JMAP protocol switch (ProtocolPolicy). Off →
+  // JMAP is refused unless a domain/user switch turns it on; the service answers
+  // 404 only while no switch anywhere turns JMAP on.
   jmapEnabled        Boolean @default(true)
 
   // ── v9.0: mailbox quota defaults (Exchange 2019 ratios 1.9 / 2.0 / 2.3 GB) ──

@@ -4,6 +4,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { noProtocolPolicies } from '@coremail/storage/auth/testing';
 
 process.env['DATABASE_URL'] ??= 'postgresql://test:test@localhost:5432/test';
 process.env['JWT_SECRET'] ??= 'test-secret-test-secret-test-secret-1234';
@@ -18,6 +19,7 @@ const users = [
 ];
 (globalThis as Record<string, unknown>)['__prisma'] = {
   $on: () => undefined,
+  ...noProtocolPolicies(),
   user: {
     findFirst: async ({ where }: { where: { email: string } }) => {
       if (state.dbDown) throw new Error('db down');

@@ -379,7 +379,8 @@ describe('IP helpers', () => {
 describe('production wiring (verifyMailCredentials)', () => {
   test('uses the __prisma / __mailAuthRedis seams and never throws', async () => {
     const { deps } = fixture();
-    (globalThis as Record<string, unknown>)['__prisma'] = { $on: () => undefined, ...(deps.prisma as object) };
+    const { noProtocolPolicies } = await import('./auth/testing.js');
+    (globalThis as Record<string, unknown>)['__prisma'] = { $on: () => undefined, ...noProtocolPolicies(), ...(deps.prisma as object) };
     (globalThis as Record<string, unknown>)['__mailAuthRedis'] = createMemoryAuthRedis();
     const mod = await import('./mail-auth.js');
     mod.configureMailAuth({ verifyPassword: deps.verifyPassword, dummyHash: deps.dummyHash });

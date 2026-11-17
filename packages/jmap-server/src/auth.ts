@@ -13,11 +13,13 @@
  * MFA change, app password created/revoked, deactivation, deletion, role
  * change, session revocation); the 60 s TTL is only the fallback when the
  * event is lost. Bearer tokens are checked against session revocation.
+ * 9.4: after every successful authentication the JMAP protocol switch of the
+ * account applies (403 when off, see @coremail/storage protocol-access.ts).
  */
 import type { Request, Response, NextFunction } from 'express';
 import { verifyAccessToken, createLogger, CredentialCache } from '@coremail/core';
 import {
-  prisma, verifyMailCredentials, clientIpFromRequest,
+  prisma, verifyMailCredentials, clientIpFromRequest, isProtocolAllowed,
 } from '@coremail/storage';
 import { isAccessTokenRevokedShared } from '@coremail/storage/auth';
 import type { JmapUser } from './types.js';
@@ -35,6 +37,19 @@ export class AuthUnavailableError extends Error {
   constructor(readonly reason: 'locked' | 'temporary', readonly retryAfterSec = 30) {
     super(reason === 'locked' ? 'Too many failed login attempts' : 'Temporary authentication failure');
   }
+}
+
+/** 9.4: authenticated, but JMAP is switched off for the account (403). */
+export class JmapDisabledError extends Error {
+  constructor(readonly userId: string) {
+    super('JMAP access is disabled for this account');
+  }
+}
+
+/** 9.4: the JMAP switch, after any successful authentication (Basic — cached or not — and Bearer). */
+async function assertJmapAllowed(user: JmapUser): Promise<JmapUser> {
+  if (!(await isProtocolAllowed({ id: user.userId, domainId: user.domainId }, 'jmap'))) throw new JmapDisabledError(user.userId);
+  return user;
 }
 
 /** Successful Basic logins (exported for tests). */
@@ -87,6 +102,7 @@ export async function authenticateBasic(email: string, password: string, ip?: st
   const result = await verifyMailCredentials(email, password, { ip, protocol: 'jmap' });
   if (result.status === 'error') throw new AuthUnavailableError('temporary');
   if (result.status === 'locked') throw new AuthUnavailableError('locked', result.retryAfterSec);
+  if (result.status === 'protocol_disabled') throw new JmapDisabledError(result.userId);
   if (result.status !== 'ok') return null;
   const user = result.user;
 
@@ -100,8 +116,17 @@ export async function authenticateBasic(email: string, password: string, ip?: st
   return jmapUser;
 }
 
-/** Resolve credentials from the Authorization header or token query. */
+/**
+ * Resolve credentials from the Authorization header or token query.
+ * Throws AuthUnavailableError (lockout / temporary failure) and, 9.4,
+ * JmapDisabledError when the account may not use JMAP.
+ */
 export async function authenticateCredentials(header: string, tokenQuery: string | undefined, ip?: string): Promise<JmapUser | null> {
+  const user = await resolveCredentials(header, tokenQuery, ip);
+  return user ? assertJmapAllowed(user) : null;
+}
+
+async function resolveCredentials(header: string, tokenQuery: string | undefined, ip?: string): Promise<JmapUser | null> {
   if (header.startsWith('Bearer ')) return authenticateBearer(header.slice(7).trim());
   if (header.startsWith('Basic ')) {
     const decoded = Buffer.from(header.slice(6), 'base64').toString('utf8');
@@ -137,6 +162,13 @@ export async function jmapAuthMiddleware(req: Request, res: Response, next: Next
       res.set('Retry-After', String(err.retryAfterSec));
       res.status(status).type('application/problem+json').send(JSON.stringify({
         type: 'about:blank', status, detail: err.message,
+      }));
+      return;
+    }
+    if (err instanceof JmapDisabledError) {
+      log.warn({ userId: err.userId }, 'JMAP request refused — JMAP disabled for this account');
+      res.status(403).type('application/problem+json').send(JSON.stringify({
+        type: 'about:blank', status: 403, detail: err.message,
       }));
       return;
     }

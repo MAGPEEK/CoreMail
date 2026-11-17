@@ -22,6 +22,7 @@
 import { createLogger, hashPassword, verifyPassword } from '@coremail/core';
 import { prisma } from '../prisma/index.js';
 import { maintenanceBlock } from './policy.js';
+import { protocolDisabledBody, webLoginBlocked } from './web-access.js';
 import { issueSession, type ClientInfo, type TokenPair } from './sessions.js';
 import {
   consumeMfaChallenge, createMfaChallenge, getMfaChallenge, isMfaIpBlocked, registerMfaFailure, registerMfaIpFailure,
@@ -153,7 +154,9 @@ export type LoginOutcome =
   | { kind: 'locked'; retryAfterSec: number }
   | { kind: 'maintenance'; message: string }
   | { kind: 'mfa_failed'; exhausted: boolean }
-  | { kind: 'mfa_ip_blocked' };
+  | { kind: 'mfa_ip_blocked' }
+  /** 9.4: correct credentials, but Webmail is off for the account (web-access.ts). */
+  | { kind: 'protocol_disabled' };
 
 /** HTTP mapping shared by every router that exposes the login service. */
 export function loginOutcomeToHttp(o: LoginOutcome): { status: number; body: Record<string, unknown>; headers?: Record<string, string> } {
@@ -171,6 +174,7 @@ export function loginOutcomeToHttp(o: LoginOutcome): { status: number; body: Rec
       ? { status: 401, body: { error: 'Too many failed attempts — please log in again', code: 'MFA_CHALLENGE_EXHAUSTED' } }
       : { status: 401, body: { error: 'MFA verification failed', code: 'MFA_INVALID_CODE' } };
     case 'mfa_ip_blocked': return { status: 429, body: { error: 'Too many failed MFA attempts. Please try again later.' } };
+    case 'protocol_disabled': return { status: 403, body: protocolDisabledBody('webmail') };
   }
 }
 
@@ -195,6 +199,11 @@ export async function login(email: string, password: string, client: ClientInfo)
   if (blocked) {
     log.info({ userId: user.id }, 'Login blocked — maintenance mode active');
     return { kind: 'maintenance', message: blocked };
+  }
+  // 9.4: only after the password was verified (a wrong one stays `invalid`).
+  if (await webLoginBlocked(user)) {
+    log.info({ userId: user.id }, 'Login refused — Webmail is disabled for this account');
+    return { kind: 'protocol_disabled' };
   }
 
   const mfa = await getMfaState(user.id);
@@ -280,6 +289,7 @@ export async function completeMfaLogin(
   if (!user?.active) return { kind: 'invalid' };
   const blocked = await maintenanceBlock(user.role);
   if (blocked) return { kind: 'maintenance', message: blocked };
+  if (await webLoginBlocked(user)) return { kind: 'protocol_disabled' };
 
   const tokens = await issueSession(user, { ...client, mfaVerified: true });
   await lockout.success(lockEmail);

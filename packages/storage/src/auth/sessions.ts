@@ -23,6 +23,7 @@ import { prisma } from '../prisma/index.js';
 import { authRedis } from './redis.js';
 import { publishUserAuthChange } from './invalidation.js';
 import { maintenanceBlock } from './policy.js';
+import { webLoginBlocked } from './web-access.js';
 import { recordLastLogin } from './last-login.js';
 
 const log = createLogger('auth:sessions');
@@ -86,7 +87,9 @@ export async function issueSession(
 export type RefreshResult =
   | { ok: true; tokens: TokenPair }
   | { ok: false; status: 401; reason: 'invalid' | 'expired' | 'reused' | 'inactive' }
-  | { ok: false; status: 503; reason: 'maintenance'; message: string };
+  | { ok: false; status: 503; reason: 'maintenance'; message: string }
+  /** 9.4: Webmail is off for the account (no admin role) — the token is not rotated. */
+  | { ok: false; status: 403; reason: 'protocol_disabled' };
 
 /** Validates and rotates a refresh token. */
 export async function rotateSession(refreshToken: string, client: ClientInfo): Promise<RefreshResult> {
@@ -136,6 +139,7 @@ export async function rotateSession(refreshToken: string, client: ClientInfo): P
 
   const blocked = await maintenanceBlock(user.role);
   if (blocked) return { ok: false, status: 503, reason: 'maintenance', message: blocked };
+  if (await webLoginBlocked(user)) return { ok: false, status: 403, reason: 'protocol_disabled' };
 
   const newRefresh = signRefreshToken(user.id, session.id);
   const swapped = await prisma.session.updateMany({

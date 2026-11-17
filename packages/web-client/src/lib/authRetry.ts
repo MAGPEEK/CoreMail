@@ -5,7 +5,8 @@
 
 /**
  * What a failed POST /auth/refresh means:
- * - `logout`: the session is really over — 401 with SESSION_REVOKED, REFRESH_* or TOKEN_*.
+ * - `logout`: the session is really over — 401 with SESSION_REVOKED, REFRESH_* or TOKEN_*,
+ *             or (9.4) 403 PROTOCOL_DISABLED: Webmail was switched off for the account.
  * - `retry`:  temporary (429 rate limit, 5xx, network error) — keep the session, retry with backoff.
  * - `fail`:   any other answer — keep the session state, report the error, no retry loop.
  */
@@ -14,6 +15,7 @@ export type RefreshVerdict = 'logout' | 'retry' | 'fail';
 export function refreshFailureVerdict(status: number | null, code?: string | null): RefreshVerdict {
   if (status === null || status === 429 || status >= 500) return 'retry';
   if (status === 401 && typeof code === 'string' && /^(SESSION_REVOKED$|REFRESH_|TOKEN_)/.test(code)) return 'logout';
+  if (status === 403 && code === 'PROTOCOL_DISABLED') return 'logout';
   return 'fail';
 }
 

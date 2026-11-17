@@ -1,0 +1,32 @@
+/**
+ * `coremail protocol` helpers (9.4): scope parsing, option → PUT body, table rows.
+ * Run: node --import tsx --test src/commands/protocol.test.ts
+ */
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { buildProtocolPatch, parseScope, protocolRows, PROTOCOLS, type ProtocolView } from './protocol.js';
+
+test('scope: global by default, domain/user, anything else is refused', () => {
+  assert.equal(parseScope(undefined), 'global');
+  assert.equal(parseScope('Domain'), 'domain');
+  assert.equal(parseScope('user'), 'user');
+  assert.throws(() => parseScope('tenant'), /Invalid --scope/);
+});
+
+test('patch: only the given switches, values validated, at least one required', () => {
+  assert.deepEqual(buildProtocolPatch({ imap: 'OFF', webmail: ' inherit ' }), { imap: 'off', webmail: 'inherit' });
+  assert.throws(() => buildProtocolPatch({ imap: 'disabled' }), /--imap: on, off or inherit/);
+  assert.throws(() => buildProtocolPatch({}), /Nothing to set/);
+});
+
+test('rows: inherit shows what it resolves to; the server level calls it default', () => {
+  const all = <T>(v: T) => Object.fromEntries(PROTOCOLS.map((p) => [p, v])) as Record<(typeof PROTOCOLS)[number], T>;
+  const view: ProtocolView = {
+    level: 'domain', settings: { ...all('inherit' as const), pop3: 'off' },
+    inherited: { ...all(true), mapi: false }, effective: { ...all(true), pop3: false, mapi: false },
+  };
+  const rows = protocolRows(view);
+  assert.deepEqual(rows.find((r) => r['protocol'] === 'imap'), { protocol: 'imap', setting: 'inherit (on)', effective: 'on' });
+  assert.deepEqual(rows.find((r) => r['protocol'] === 'pop3'), { protocol: 'pop3', setting: 'off', effective: 'off' });
+  assert.equal(protocolRows({ ...view, level: 'global' }).find((r) => r['protocol'] === 'mapi')?.['setting'], 'default (off)');
+});

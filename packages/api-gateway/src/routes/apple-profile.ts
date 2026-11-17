@@ -19,8 +19,11 @@
  */
 import { Router, type Router as RouterType, type Request, type Response, type NextFunction } from 'express';
 import { createHash } from 'node:crypto';
-import { prisma, hasMfa, getProductName, brandDisplayName, DEFAULT_PRODUCT_NAME } from '@coremail/storage';
-import { requireAuth, requireTicketAuth } from '../middleware/auth.js';
+import {
+  prisma, hasMfa, getProductName, brandDisplayName, effectiveProtocolAccess, DEFAULT_PRODUCT_NAME, type ProtocolAccess,
+} from '@coremail/storage';
+import { protocolDisabledBody } from '@coremail/storage/auth';
+import { protocolSubject, requireAuth, requireTicketAuth } from '../middleware/auth.js';
 import { issueEventTicket } from '../lib/event-tickets.js';
 
 export const appleProfileRouter: RouterType = Router();
@@ -92,12 +95,28 @@ export interface AppleProfileInput {
   useHttps: boolean;
   httpPort: number;
   imap: { host: string; port: number; ssl: boolean };
+  pop3: { host: string; port: number; ssl: boolean };
   smtp: { host: string; port: number; tls: boolean };
   easUrl: string;
   requiresAppPassword: boolean;
+  /**
+   * 9.4: the account's protocol switches — only enabled protocols are set up
+   * (mail via IMAP, else POP3; CalDAV/CardDAV; ActiveSync for the EAS variant).
+   */
+  access: Pick<ProtocolAccess, 'imap' | 'pop3' | 'dav' | 'activesync'>;
 }
 
 export type AppleProfileType = 'imap' | 'eas';
+
+/** 9.4: does a profile of `type` have anything to set up for these protocol switches? */
+export function appleProfileAvailable(access: AppleProfileInput['access'], type: AppleProfileType): boolean {
+  return type === 'eas' ? access.activesync : access.imap || access.pop3 || access.dav;
+}
+
+/** "A", "A and B", "A, B and C". */
+function listParts(parts: string[]): string {
+  return parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : parts[0] ?? '';
+}
 
 /** Reverse-DNS prefix from the public hostname (mail.example.com → com.example.mail). */
 function reverseDns(host: string): string {
@@ -133,6 +152,7 @@ export function buildAppleProfile(p: AppleProfileInput, type: AppleProfileType =
   });
 
   let content: Record<string, PlistValue>[];
+  let description: string;
   if (type === 'eas') {
     let host = p.publicHostname;
     let ssl = davSsl;
@@ -148,16 +168,21 @@ export function buildAppleProfile(p: AppleProfileInput, type: AppleProfileType =
       SSL: ssl,
       MailNumberOfPastDaysToSync: 30,
     })];
+    description = `Sets up ${p.email} with ActiveSync (mail, calendar, contacts). `;
   } else {
+    // 9.4: the payload format requires the outgoing server, so it is part of the
+    // mail payload whenever an incoming protocol is on.
+    const incoming = p.access.imap ? { kind: 'IMAP', type: 'EmailTypeIMAP', ...p.imap }
+      : p.access.pop3 ? { kind: 'POP3', type: 'EmailTypePOP', ...p.pop3 } : null;
     content = [
-      payload('mail', 'com.apple.mail.managed', `${label} Mail`, {
-        EmailAccountType: 'EmailTypeIMAP',
+      ...(incoming ? [payload('mail', 'com.apple.mail.managed', `${label} Mail`, {
+        EmailAccountType: incoming.type,
         EmailAccountDescription: `${label} (${p.email})`,
         EmailAccountName: name,
         EmailAddress: p.email,
-        IncomingMailServerHostName: p.imap.host,
-        IncomingMailServerPortNumber: p.imap.port,
-        IncomingMailServerUseSSL: p.imap.ssl,
+        IncomingMailServerHostName: incoming.host,
+        IncomingMailServerPortNumber: incoming.port,
+        IncomingMailServerUseSSL: incoming.ssl,
         IncomingMailServerAuthentication: 'EmailAuthPassword',
         IncomingMailServerUsername: p.email,
         OutgoingMailServerHostName: p.smtp.host,
@@ -167,24 +192,30 @@ export function buildAppleProfile(p: AppleProfileInput, type: AppleProfileType =
         OutgoingMailServerAuthentication: 'EmailAuthPassword',
         OutgoingMailServerUsername: p.email,
         OutgoingPasswordSameAsIncomingPassword: true,
-      }),
-      payload('caldav', 'com.apple.caldav.account', `${label} Calendar`, {
-        CalDAVAccountDescription: `${label} Calendar`,
-        CalDAVHostName: p.publicHostname,
-        CalDAVPort: davPort,
-        CalDAVUseSSL: davSsl,
-        CalDAVPrincipalURL: `${webBase}/dav/principals/${encodeURIComponent(p.userId)}/`,
-        CalDAVUsername: p.email,
-      }),
-      payload('carddav', 'com.apple.carddav.account', `${label} Contacts`, {
-        CardDAVAccountDescription: `${label} Contacts`,
-        CardDAVHostName: p.publicHostname,
-        CardDAVPort: davPort,
-        CardDAVUseSSL: davSsl,
-        CardDAVPrincipalURL: `${webBase}/dav/principals/${encodeURIComponent(p.userId)}/`,
-        CardDAVUsername: p.email,
-      }),
+      })] : []),
+      ...(p.access.dav ? [
+        payload('caldav', 'com.apple.caldav.account', `${label} Calendar`, {
+          CalDAVAccountDescription: `${label} Calendar`,
+          CalDAVHostName: p.publicHostname,
+          CalDAVPort: davPort,
+          CalDAVUseSSL: davSsl,
+          CalDAVPrincipalURL: `${webBase}/dav/principals/${encodeURIComponent(p.userId)}/`,
+          CalDAVUsername: p.email,
+        }),
+        payload('carddav', 'com.apple.carddav.account', `${label} Contacts`, {
+          CardDAVAccountDescription: `${label} Contacts`,
+          CardDAVHostName: p.publicHostname,
+          CardDAVPort: davPort,
+          CardDAVUseSSL: davSsl,
+          CardDAVPrincipalURL: `${webBase}/dav/principals/${encodeURIComponent(p.userId)}/`,
+          CardDAVUsername: p.email,
+        }),
+      ] : []),
     ];
+    description = `Sets up ${p.email} for ${listParts([
+      ...(incoming ? [`Mail (${incoming.kind}/SMTP)`] : []),
+      ...(p.access.dav ? ['Calendar (CalDAV)', 'Contacts (CardDAV)'] : []),
+    ])}. `;
   }
 
   const profileKind = type === 'eas' ? 'profile-eas' : 'profile';
@@ -194,9 +225,7 @@ export function buildAppleProfile(p: AppleProfileInput, type: AppleProfileType =
     PayloadIdentifier: `${idBase}.${profileKind}`,
     PayloadUUID: stableUuid(p.userId, profileKind),
     PayloadDisplayName: type === 'eas' ? `${label} — ${p.email} (ActiveSync)` : `${label} — ${p.email}`,
-    PayloadDescription: (type === 'eas'
-      ? `Sets up ${p.email} with ActiveSync (mail, calendar, contacts). `
-      : `Sets up ${p.email} for Mail (IMAP/SMTP), Calendar (CalDAV) and Contacts (CardDAV). `) + passwordHint,
+    PayloadDescription: description + passwordHint,
     PayloadOrganization: org,
     PayloadRemovalDisallowed: false,
     PayloadContent: content,
@@ -237,12 +266,20 @@ appleProfileRouter.get('/', (req: Request, res: Response, next: NextFunction) =>
   const userId = req.apiUser!.userId;
   const type: AppleProfileType = req.query['type'] === 'eas' ? 'eas' : 'imap';
 
+  // 9.4: only protocols that are switched on for the account are set up.
+  const access = await effectiveProtocolAccess(protocolSubject(req.apiUser!));
+  if (!appleProfileAvailable(access, type)) {
+    res.status(403).json(protocolDisabledBody(type === 'eas' ? 'activesync' : 'imap'));
+    return;
+  }
+
   const [settings, user, mfa] = await Promise.all([
     prisma.serverSettings.findUnique({
       where: { id: 'singleton' },
       select: {
         publicHostname: true, useHttps: true, httpPort: true, orgName: true, easUrl: true,
         imapHost: true, imapPort: true, imapSsl: true,
+        pop3Host: true, pop3Port: true, pop3Ssl: true,
         smtpHost: true, smtpPort: true, smtpTls: true,
       },
     }),
@@ -270,9 +307,11 @@ appleProfileRouter.get('/', (req: Request, res: Response, next: NextFunction) =>
     useHttps,
     httpPort: settings?.httpPort ?? (useHttps ? 443 : 80),
     imap: { host: settings?.imapHost ?? hostname, port: settings?.imapPort ?? 993, ssl: settings?.imapSsl ?? true },
+    pop3: { host: settings?.pop3Host ?? hostname, port: settings?.pop3Port ?? 995, ssl: settings?.pop3Ssl ?? true },
     smtp: { host: settings?.smtpHost ?? hostname, port: settings?.smtpPort ?? 587, tls: settings?.smtpTls ?? true },
     easUrl: settings?.easUrl ?? `https://${hostname}/Microsoft-Server-ActiveSync`,
     requiresAppPassword,
+    access,
   }, type);
 
   res.set('Cache-Control', 'no-store');

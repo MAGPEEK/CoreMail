@@ -23,7 +23,7 @@ import { createLogger } from '@coremail/core';
 import {
   listPublicProviders, startSso, completeSsoCallback, exchangeSsoCode, SSO_COOKIE, SSO_STATE_TTL, type SsoTarget,
 } from '@coremail/auth-sso';
-import { tokenPairResponse } from '@coremail/storage/auth';
+import { protocolDisabledBody, tokenPairResponse } from '@coremail/storage/auth';
 import { deriveServerUrls } from '../lib/server-urls.js';
 
 const log = createLogger('api:sso');
@@ -107,6 +107,7 @@ ssoRouter.post('/exchange', async (req: Request, res: Response) => {
     if (r.kind === 'invalid') { res.status(401).json({ error: 'SSO login expired or invalid — please try again' }); return; }
     res.setHeader('Set-Cookie', cookieHeader(req, '', 0)); // binding cookie no longer needed
     if (r.kind === 'maintenance') { res.status(503).json({ error: 'maintenance', message: r.message }); return; }
+    if (r.kind === 'protocol_disabled') { res.status(403).json(protocolDisabledBody('webmail')); return; }
     if (r.kind === 'mfa') { res.json({ mfaRequired: true, challengeToken: r.challengeToken, method: r.method, methods: r.methods }); return; }
     // v8.1: like /auth/login — browser clients (X-CoreMail-Client: web, BCP with
     // X-CoreMail-App: bcp) get the refresh token as HttpOnly cookie only.

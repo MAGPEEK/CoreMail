@@ -310,6 +310,7 @@ export async function login(email: string, password: string): Promise<LoginResul
     if (body.code === 'ACCOUNT_LOCKED') {
       throw new Error('Zu viele fehlgeschlagene Anmeldeversuche. Bitte versuchen Sie es später erneut.');
     }
+    if (body.code === 'PROTOCOL_DISABLED') throw apiErrorFromBody(body, res.status); // 9.4: Webmail off
     throw new Error(body.error);
   }
   const data = await res.json() as LoginResult | { accessToken: string; refreshToken?: string };

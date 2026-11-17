@@ -7,7 +7,9 @@
  *  - neutral events (role change, web logout, app password created) and other
  *    users' connections are left alone;
  *  - a running command finishes before the BYE;
- *  - events from other services arrive through the Redis subscriber.
+ *  - events from other services arrive through the Redis subscriber;
+ *  - 9.4: IMAP switched off → open sessions get "* BYE IMAP access has been
+ *    disabled…", new logins NO [AUTHORIZATIONFAILED]; back to inherit → works.
  * Loopback TLS sockets, fake Prisma via globalThis.__prisma, fake Redis.
  * Run: node --import tsx --test src/server/live-sessions.test.ts (in packages/imap-server)
  */
@@ -32,8 +34,12 @@ const appPasswords = [
   { id: 'ap2', userId: 'u1', hash: 'hash:APP-TWO' },
 ];
 let listGate: Promise<void> | null = null;
+/** 9.4: ProtocolPolicy rows (protocol switches). */
+const policies: Array<Record<string, unknown>> = [];
 (globalThis as Record<string, unknown>)['__prisma'] = {
   $on: () => undefined,
+  protocolPolicy: { findMany: async () => policies, count: async () => 0 },
+  serverSettings: { findUnique: async () => null },
   domain: { findFirst: async () => ({ name: 'example.test' }) },
   user: { findFirst: async ({ where }: { where: { email: string } }) => users.find((u) => u.email === where.email) ?? null },
   appPassword: {
@@ -131,13 +137,19 @@ async function port(): Promise<number> {
   return (server.address() as net.AddressInfo).port;
 }
 
-/** Logs in (LOGIN over implicit TLS); `idle` → enters IDLE. */
-async function login(t: TestContext, email: string, password: string, idle = true): Promise<Client> {
+/** Opens an implicit-TLS connection and reads the greeting. */
+async function connect(t: TestContext): Promise<Client> {
   const socket = tls.connect({ port: await port(), host: '127.0.0.1', rejectUnauthorized: false });
   await new Promise<void>((resolve, reject) => { socket.once('secureConnect', resolve); socket.once('error', reject); });
   const client = new Client(socket);
   t.after(() => client.socket.destroy());
   await client.line(); // greeting
+  return client;
+}
+
+/** Logs in (LOGIN over implicit TLS); `idle` → enters IDLE. */
+async function login(t: TestContext, email: string, password: string, idle = true): Promise<Client> {
+  const client = await connect(t);
   assert.equal((await client.cmd('L1', `LOGIN ${email} ${password}`)).status, 'OK');
   if (idle) {
     client.write('I1 IDLE\r\n');
@@ -249,5 +261,30 @@ describe('IMAP live sessions after credential changes', () => {
     await bob.waitClosed();
     for (let i = 0; i < 20 && imapLiveSessions.count('u1') > 0; i++) await new Promise((r) => setTimeout(r, 25));
     assert.equal(imapLiveSessions.count('u1'), 0);
+  });
+});
+
+describe('IMAP protocol switch (9.4)', () => {
+  test('IMAP off: IDLE session gets BYE, login refused after a correct password only; inherit → works again', async (t) => {
+    const bob = await login(t, 'bob@example.test', 'APP-ONE');
+    const carol = await login(t, 'carol@example.test', 'secret');
+    policies.push({ id: 'p-u1', userId: 'u1', domainId: null, imap: 'OFF' });
+    try {
+      // What @coremail/storage updateProtocolSettings() publishes for bob.
+      remotePublish({ userId: 'u1', reason: 'protocol-access-change', disabledProtocols: ['imap', 'mapi'] });
+      assert.equal(await bob.line(), '* BYE IMAP access has been disabled for this account');
+      await bob.waitClosed();
+      await expectAlive(carol);
+
+      const again = await connect(t);
+      const refused = await again.cmd('L2', 'LOGIN bob@example.test secret');
+      assert.equal(refused.line, 'L2 NO [AUTHORIZATIONFAILED] IMAP access is disabled for this account');
+      const wrong = await again.cmd('L3', 'LOGIN bob@example.test wrong');
+      assert.match(wrong.line, /^L3 NO \[AUTHENTICATIONFAILED\]/, 'a wrong password never learns the switch');
+    } finally {
+      policies.length = 0;
+    }
+    remotePublish({ userId: 'u1', reason: 'protocol-access-change', disabledProtocols: ['mapi'] });
+    await expectAlive(await login(t, 'bob@example.test', 'secret'));
   });
 });

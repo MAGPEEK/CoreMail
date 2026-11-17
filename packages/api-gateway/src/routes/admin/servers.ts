@@ -8,7 +8,7 @@
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { prisma, peekStorageHealth } from '@coremail/storage';
+import { prisma, peekStorageHealth, withProtocolAccessChange } from '@coremail/storage';
 import { requireArea } from '../../middleware/auth.js';
 import { createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 import { deriveServerUrls } from '../../lib/server-urls.js';
@@ -45,6 +45,7 @@ const SettingsSchema = z.object({
   // v7.0.0: ewsUrl + the EWS on/off switch were removed with EWS. zod strips
   // unknown keys, so older BCP builds that still send them can save.
   // v5.7.1: JMAP (RFC 8620/8621) on/off — default on
+  // 9.4: = the server level of the JMAP protocol switch (/admin/protocol-access)
   jmapEnabled:      z.boolean().optional(),
 });
 
@@ -108,11 +109,16 @@ adminServersRouter.put('/settings', async (req: Request, res: Response) => {
       ...rest,
       ...(jmapEnabled !== undefined ? { jmapEnabled } : {}),
     };
-    const settings = await prisma.serverSettings.upsert({
+    const save = () => prisma.serverSettings.upsert({
       where:  { id: 'singleton' },
       create: { id: 'singleton', ...data },
       update: data,
     });
+    // 9.4: jmapEnabled is the server level of the JMAP protocol switch — a change
+    // notifies the affected users (their JMAP push connections end).
+    const settings = jmapEnabled !== undefined && jmapEnabled !== current.jmapEnabled
+      ? (await withProtocolAccessChange({ level: 'global' }, save)).result
+      : await save();
     log.info({ hostname: parsed.data.publicHostname, jmapEnabled: settings.jmapEnabled }, 'Server settings updated');
 
     // Notify SMTP / IMAP / POP3 + autodiscover services to pick up new hostname

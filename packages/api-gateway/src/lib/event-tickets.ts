@@ -55,6 +55,7 @@ export async function issueEventTicket(user: ApiUser, purpose: TicketPurpose = '
     mfaVerified: user.mfaVerified === true,
     ...(user.issuedAt !== undefined ? { iat: user.issuedAt } : {}),
     ...(user.issuedAtMs !== undefined ? { iatMs: user.issuedAtMs } : {}),
+    ...(user.domainId !== undefined ? { domainId: user.domainId } : {}),
   };
   await store().setex(keyFor(ticket, purpose), EVENT_TICKET_TTL_SEC, JSON.stringify(claims));
   return { ticket, expiresIn: EVENT_TICKET_TTL_SEC };

@@ -12,10 +12,13 @@
  *  organisation  /settings, /organisation, /branding                        —                     SERVER_MANAGEMENT, VIEW_ONLY_ORG
  *  identity      /ldap, /sso                                                —                     VIEW_ONLY_ORG
  *  servers       /servers, /services, /certificates, /queues, /logs,        SERVER_MANAGEMENT     VIEW_ONLY_ORG
- *                /backups, /connectors, /smtp-config
+ *                /backups, /connectors, /smtp-config,
+ *                /protocol-access, /protocol-access/domains/:id (9.4; the
+ *                domain level is also readable by `domains` readers)
  *  recipients    /mailboxes, /shared-mailboxes, /resources, /mobile,        RECIPIENT_MANAGEMENT  HELP_DESK, VIEW_ONLY_ORG
  *                aliases (/mailboxes/:id/aliases, /aliases, …),
- *                /ems/mailboxes, /ems/mailbox-statistics, /ems/resource-mailboxes
+ *                /ems/mailboxes, /ems/mailbox-statistics, /ems/resource-mailboxes,
+ *                /protocol-access/users/:id (9.4)
  *  domains       /domains, /ems/accepted-domains                            —                     RECIPIENT_MANAGEMENT, SERVER_MANAGEMENT, VIEW_ONLY_ORG
  *  hygiene       /security, /security/attacks, /quarantine,                 HYGIENE_MANAGEMENT    VIEW_ONLY_ORG
  *                /transport-rules, /ems/transport-rules
@@ -25,7 +28,8 @@
  *  - HELP_DESK may additionally PUT /mailboxes/:id with ONLY `password` (and
  *    `active`) — and only for accounts whose role is USER.
  *  - Only ORGANIZATION_MANAGEMENT may assign/change roles, and modify, reset the
- *    password of, or delete another admin account (role ≠ USER).
+ *    password of, or delete another admin account (role ≠ USER) — 9.4: this
+ *    includes the protocol switches of an admin account.
  *
  * The caller's areas are exposed via GET /api/v1/admin/me/permissions
  * (`{ role, areas: { "<area>": "write" | "read" }, mfaVerified }`) and, for

@@ -17,9 +17,13 @@ const mk = (id: string, active: boolean, mfa = false): FakeUser => ({
 });
 const users: Record<string, FakeUser> = { alice: mk('alice', true), gone: mk('gone', false), mfa: mk('mfa', true, true) };
 const state = { dbDown: false };
+/** 9.4: ProtocolPolicy rows (protocol switches). */
+const policies: Array<Record<string, unknown>> = [];
 
 (globalThis as Record<string, unknown>)['__prisma'] = {
   $on: () => undefined,
+  protocolPolicy: { findMany: async () => policies, count: async () => 0 },
+  serverSettings: { findUnique: async () => null },
   user: {
     findUnique: async (args: { where: { id: string } }) => users[args.where.id] ?? null,
     findFirst: async (args: { where: { email: string; active: boolean } }) => {
@@ -59,6 +63,7 @@ async function run(authorization: string | undefined): Promise<Outcome> {
   const outcome: Outcome = { nextCalled: false, status: null, davUser: undefined };
   const res = {
     set: () => res,
+    type: () => res,
     status: (code: number) => { outcome.status = code; return res; },
     send: () => res,
   } as unknown as Parameters<typeof davAuthMiddleware>[1];
@@ -144,4 +149,21 @@ test('Basic auth: a database error is answered with 503, not 401', async () => {
   } finally {
     state.dbDown = false;
   }
+});
+
+test('9.4: CalDAV/CardDAV switched off → 403 for Basic and Bearer, a wrong password stays 401', async () => {
+  policies.push({ id: 'p-alice', userId: 'alice', domainId: null, dav: 'OFF' });
+  storage.invalidateProtocolAccessCache();
+  try {
+    assert.equal((await run(basic('alice@example.com', 'pw'))).status, 403);
+    assert.equal((await run(basic('alice@example.com', 'APP-PW'))).status, 403);
+    assert.equal((await run(basic('alice@example.com', 'wrong'))).status, 401);
+    const bearer = await run(`Bearer ${accessFor('alice')}`);
+    assert.equal(bearer.status, 403);
+    assert.equal(bearer.nextCalled, false);
+  } finally {
+    policies.length = 0;
+    storage.invalidateProtocolAccessCache();
+  }
+  assert.equal((await run(basic('alice@example.com', 'pw'))).nextCalled, true);
 });

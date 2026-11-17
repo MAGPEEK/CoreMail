@@ -35,6 +35,8 @@ export async function verifySmtpCredentials(
       return { failure: 'locked', retryAfterSec: result.retryAfterSec };
     case 'error':
       return { failure: 'temporary' };
+    case 'protocol_disabled':
+      return { failure: 'protocol_disabled' };
     case 'mfa_app_password_required':
     case 'invalid':
     default:

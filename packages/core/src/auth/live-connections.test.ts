@@ -175,3 +175,31 @@ test('event wire format carries the app password fields', () => {
   assert.equal(bad?.appPasswordId, undefined);
   assert.equal(bad?.appPasswordsRevoked, undefined);
 });
+
+test('9.4 protocol-access-change ends only connections on a disabled protocol, any credential', () => {
+  const e = ev('protocol-access-change', { disabledProtocols: ['imap', 'mapi'] });
+  for (const c of ['password', 'app_password', 'external', 'unknown'] as const) {
+    assert.equal(connectionAffected(e, conn(c, { protocol: 'imap' })), true, `${c} on imap`);
+    assert.equal(connectionAffected(e, conn(c, { protocol: 'pop3' })), false, `${c} on pop3`);
+  }
+  assert.equal(connectionAffected(e, conn('token', { protocol: 'imap', sessionId: 's1', issuedAt: 1 })), true);
+  assert.equal(connectionAffected(e, conn('token', { sessionId: 's1', issuedAt: 1 })), false, 'no protocol → exempt');
+  assert.equal(connectionAffected(ev('protocol-access-change'), conn('password', { protocol: 'imap' })), false, 'nothing disabled');
+  assert.equal(connectionAffected({ ...e, userId: 'u2' }, conn('password', { protocol: 'imap' })), false);
+});
+
+test('registry: a protocol switch terminates the IMAP session, POP3 stays', () => {
+  const reg = new LiveConnectionRegistry('t');
+  const ended: string[] = [];
+  reg.register({ ...conn('app_password', { protocol: 'imap' }), terminate: (e) => ended.push(`imap:${e.reason}`) });
+  reg.register({ ...conn('app_password', { protocol: 'pop3' }), terminate: () => ended.push('pop3') });
+  assert.equal(reg.terminateAffected(ev('protocol-access-change', { disabledProtocols: ['imap'] })), 1);
+  assert.deepEqual(ended, ['imap:protocol-access-change']);
+  assert.equal(reg.count('u1'), 1);
+});
+
+test('event wire format carries the disabled protocols (9.4)', () => {
+  const e = parseAuthInvalidationEvent(JSON.stringify({ userId: 'u', reason: 'protocol-access-change', disabledProtocols: ['imap', '', 7, 'jmap'] }));
+  assert.deepEqual(e?.disabledProtocols, ['imap', 'jmap']);
+  assert.equal(parseAuthInvalidationEvent(JSON.stringify({ userId: 'u', reason: 'x', disabledProtocols: 'imap' }))?.disabledProtocols, undefined);
+});

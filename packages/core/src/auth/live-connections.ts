@@ -11,7 +11,7 @@
  * connectionAffected() decides which connections are terminated; terminate()
  * is protocol specific (IMAP BYE, POP3 -ERR, SMTP 421, EAS 401, WS close).
  */
-import { issuedBeforeMark, onAuthInvalidation, type AuthInvalidationEvent } from './invalidation.js';
+import { issuedBeforeMark, onAuthInvalidation, PROTOCOL_ACCESS_CHANGE, type AuthInvalidationEvent } from './invalidation.js';
 import { createLogger } from '../logger/index.js';
 
 const log = createLogger('auth:live');
@@ -36,6 +36,11 @@ export interface LiveConnection {
   issuedAt?: number;
   /** `iatMs` (milliseconds) of that access token, when the token carries it (8.0.0). */
   issuedAtMs?: number;
+  /**
+   * 9.4: the access protocol the connection uses (imap, pop3, smtp, activesync,
+   * jmap, webmail …). Without it the connection is exempt from protocol switches.
+   */
+  protocol?: string;
   /** Ends the connection (protocol specific). Called at most once. */
   terminate(event: AuthInvalidationEvent): void;
 }
@@ -67,12 +72,18 @@ const ACCOUNT_REASONS = new Set(['deactivated', 'deleted']);
  * - single web-session revocations, role changes, app password creation and
  *   reactivation do not affect protocol connections;
  * - every other "revoke all sessions" reason (deactivation, deletion, LDAP
- *   sync, admin revoke, unknown reasons) ends every connection of the user.
+ *   sync, admin revoke, unknown reasons) ends every connection of the user;
+ * - 9.4 protocol-access-change ends exactly the connections whose protocol is
+ *   listed in `disabledProtocols`, whatever credential they used.
  */
 export function connectionAffected(event: AuthInvalidationEvent, conn: LiveConnection): boolean {
   if (event.userId !== conn.userId) return false;
   const reason = String(event.reason);
   const credential = conn.credential ?? 'unknown';
+
+  if (reason === PROTOCOL_ACCESS_CHANGE) {
+    return conn.protocol !== undefined && (event.disabledProtocols ?? []).includes(conn.protocol);
+  }
 
   if (credential === 'token') {
     if (conn.sessionId && event.sessionIds?.includes(conn.sessionId)) return true;

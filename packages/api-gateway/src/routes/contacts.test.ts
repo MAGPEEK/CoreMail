@@ -8,6 +8,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
+import { noProtocolPolicies } from '@coremail/storage/auth/testing';
 
 process.env['DATABASE_URL'] ??= 'postgresql://test:test@localhost:5432/test';
 process.env['JWT_SECRET'] ??= 'test-secret-test-secret-test-secret-1234';
@@ -21,6 +22,7 @@ const COLUMNS = { email: '', email2: '', phone: '', mobile: '', company: '', dep
 
 (globalThis as Record<string, unknown>)['__prisma'] = {
   $on: () => undefined,
+  ...noProtocolPolicies(),
   contact: {
     findFirst: async (a: { where: Row }) => contacts.find((c) => matches(c, a.where)) ?? null,
     findMany: async (a: { where: Row }) => contacts.filter((c) => c['userId'] === a.where['userId']),

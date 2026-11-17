@@ -3,6 +3,8 @@
  * or session revocation ends the stream (same rules as JMAP Bearer push);
  * unrelated events and other users leave it open; a closed stream is
  * unregistered. requireAuth carries the token's iat + check start time.
+ * 9.4: the Webmail switch — requireAuth answers 403 PROTOCOL_DISABLED on the
+ * webmail API, admin accounts keep the admin surface and their stream.
  * Run: node --import tsx --test --test-force-exit src/lib/live-sse.test.ts
  */
 import { test } from 'node:test';
@@ -11,7 +13,7 @@ import { EventEmitter } from 'node:events';
 import { installFakePrisma, setTestEnv } from '../test-support/fake-prisma.js';
 
 setTestEnv();
-installFakePrisma({});
+const fakeDb = installFakePrisma({});
 
 const { createSseHandler } = await import('../sse.js');
 const { sseLiveConnections, registerSseConnection } = await import('./live-sse.js');
@@ -102,7 +104,7 @@ test('an event between the token check and the stream registration still ends it
 });
 
 test('requireAuth exposes iat and the check start for live-connection registration', async () => {
-  const token = signAccessToken({ sub: 'u7', email: 'u7@ex.test', role: 'USER', sessionId: 'sess-7' } as Parameters<typeof signAccessToken>[0]);
+  const token = signAccessToken({ sub: 'u7', email: 'u7@ex.test', role: 'USER', domainId: 'd1', sessionId: 'sess-7' } as Parameters<typeof signAccessToken>[0]);
   const req = { get: (h: string) => (h === 'Authorization' ? `Bearer ${token}` : undefined), query: {} } as unknown as Request;
   const before = Date.now();
   await new Promise<void>((resolve) => requireAuth(req, {} as Response, () => resolve()));
@@ -111,4 +113,41 @@ test('requireAuth exposes iat and the check start for live-connection registrati
   assert.equal(typeof req.apiUser?.issuedAtMs, 'number');
   assert.ok((req.apiUser?.issuedAtMs ?? Infinity) <= before);
   assert.ok((req.apiUser?.authStartedAt ?? 0) >= before);
+});
+
+test('9.4: Webmail switched off ends the stream of a user, an admin keeps it (BCP)', () => {
+  const mwa = open(user('u8', 's1'));
+  const bcp = open({ ...user('u9', 's1'), role: 'SERVER_MANAGEMENT' });
+  for (const userId of ['u8', 'u9']) {
+    sseLiveConnections.terminateAffected({ userId, reason: 'protocol-access-change', disabledProtocols: ['webmail', 'mapi'] });
+  }
+  assert.equal(mwa.res.ended, true);
+  assert.equal(bcp.res.ended, false);
+  (bcp.req as unknown as EventEmitter).emit('close');
+});
+
+test('9.4: requireAuth applies the Webmail switch; admins keep the admin surface', async () => {
+  const policies: Array<Record<string, unknown>> = [{ id: 'global', webmail: 'OFF' }];
+  fakeDb.models['protocolPolicy'] = { findMany: () => policies };
+  const { invalidateProtocolAccessCache } = await import('@coremail/storage');
+  invalidateProtocolAccessCache();
+  const call = (role: string, originalUrl: string) => new Promise<number>((resolve) => {
+    const token = signAccessToken({ sub: `x-${role}`, email: 'x@ex.test', role, domainId: 'd1', sessionId: 's', mfaVerified: false } as Parameters<typeof signAccessToken>[0]);
+    const req = { get: (h: string) => (h === 'Authorization' ? `Bearer ${token}` : undefined), query: {}, originalUrl } as unknown as Request;
+    const res = { status: (code: number) => ({ json: () => resolve(code) }) } as unknown as Response;
+    requireAuth(req, res, () => resolve(200));
+  });
+  try {
+    assert.equal(await call('USER', '/api/v1/mail/folders'), 403);
+    assert.equal(await call('USER', '/api/v1/events'), 403);
+    assert.equal(await call('ORGANIZATION_MANAGEMENT', '/api/v1/mail/folders'), 403, 'no webmail API for admins either');
+    assert.equal(await call('ORGANIZATION_MANAGEMENT', '/api/v1/admin/mailboxes?x=1'), 200);
+    assert.equal(await call('HELP_DESK', '/api/v1/events'), 200);
+    policies.length = 0;
+    invalidateProtocolAccessCache();
+    assert.equal(await call('USER', '/api/v1/mail/folders'), 200);
+  } finally {
+    delete fakeDb.models['protocolPolicy'];
+    invalidateProtocolAccessCache();
+  }
 });

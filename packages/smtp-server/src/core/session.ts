@@ -17,7 +17,7 @@
 import net from 'node:net';
 import tls from 'node:tls';
 import crypto from 'node:crypto';
-import { createLogger } from '@coremail/core';
+import { createLogger, PROTOCOL_ACCESS_CHANGE, type AuthInvalidationEvent } from '@coremail/core';
 import { logTlsSocketError } from '@coremail/core/tls-errors';
 import type { SmtpState, AuthMechanism, AuthUser, Transaction, SmtpSessionConfig, MessageMeta, EsmtpExtensions } from './types.js';
 import { DEFAULT_ESMTP_EXTENSIONS } from './types.js';
@@ -28,6 +28,11 @@ import {
 import { hasDsnRequest } from './dsn-params.js';
 
 const log = createLogger('smtp:session');
+
+/** 9.4: AUTH with correct credentials while submission is switched off for the account. */
+export const SUBMISSION_DISABLED_REPLY = '535 5.7.1 Mail submission is disabled for this account';
+const SUBMISSION_DISABLED_NOTICE = 'Mail submission has been disabled for this account';
+const CREDENTIALS_CHANGED_NOTICE = 'Credentials changed, please authenticate again';
 
 // RFC 5321 §4.5.3.2 timeouts (milliseconds)
 /** Default idle timeout for the greeting reply / next command (config.commandTimeoutMs overrides). */
@@ -263,6 +268,8 @@ export class SmtpSession {
    */
   private terminating = false;
   private terminateAfterData = false;
+  /** Text of the closing 421 (9.4: differs when submission was switched off). */
+  private terminationNotice = CREDENTIALS_CHANGED_NOTICE;
   private unregisterLive: (() => void) | null = null;
 
   constructor(socket: net.Socket | tls.TLSSocket, config: SmtpSessionConfig) {
@@ -992,7 +999,11 @@ export class SmtpSession {
     const authStartedAt = Date.now();
     try {
       const result = await this.config.verifyCredentials(username.toLowerCase().trim(), password, this.ip);
-      if (result && 'failure' in result) {
+      if (result && 'failure' in result && result.failure === 'protocol_disabled') {
+        // 9.4: correct credentials, submission switched off for the account.
+        this.send(SUBMISSION_DISABLED_REPLY);
+        log.warn({ id: this.id, ip: this.ip, username }, 'SMTP auth refused — submission disabled for this account');
+      } else if (result && 'failure' in result) {
         // Lockout or temporary failure (database down …) — RFC 4954 §6: 454 4.7.0.
         this.send(result.failure === 'locked'
           ? '454 4.7.0 Too many failed authentication attempts, try again later'
@@ -1026,21 +1037,24 @@ export class SmtpSession {
     this.unregisterLive = smtpLiveSessions.register({
       userId: user.id,
       credential: user.credential ?? 'unknown',
+      protocol: 'smtp',
       ...(user.appPasswordId ? { appPasswordId: user.appPasswordId } : {}),
-      terminate: () => this.terminateForCredentialChange(),
+      terminate: (event) => this.terminateForCredentialChange(event),
     }, authStartedAt);
   }
 
   /**
-   * Credential change: the command in progress (e.g. delivery of a complete
-   * message) finishes, queued commands are dropped, then 421 4.7.0 and close.
-   * During a DATA transfer the body is consumed to its terminator first and
-   * the message is rejected — the connection never closes mid-body.
+   * Credential change (9.4: or submission switched off): the command in
+   * progress (e.g. delivery of a complete message) finishes, queued commands
+   * are dropped, then 421 4.7.0 and close. During a DATA transfer the body is
+   * consumed to its terminator first and the message is rejected — the
+   * connection never closes mid-body.
    */
-  private terminateForCredentialChange(): void {
+  private terminateForCredentialChange(event: AuthInvalidationEvent): void {
     this.unregisterLive = null;
     if (this.state === 'QUIT' || this.closing || this.terminating) return;
     this.terminating = true;
+    if (event.reason === PROTOCOL_ACCESS_CHANGE) this.terminationNotice = SUBMISSION_DISABLED_NOTICE;
     this.cmdQueue = this.cmdQueue.then(() => {
       if (this.state === 'QUIT' || this.closing) return;
       if (this.inData || this.bdat) { this.terminateAfterData = true; return; }
@@ -1059,9 +1073,9 @@ export class SmtpSession {
     this.authUser = null;
     this.state = 'QUIT';
     this.clearTimer();
-    this.send(`421 4.7.0 ${this.config.hostname} Credentials changed, please authenticate again - closing connection`);
+    this.send(`421 4.7.0 ${this.config.hostname} ${this.terminationNotice} - closing connection`);
     this.socket.end();
-    log.info({ id: this.id, ip: this.ip }, 'SMTP session closed after a credential change');
+    log.info({ id: this.id, ip: this.ip, notice: this.terminationNotice }, 'SMTP session closed after a credential change');
   }
 
   /** Closes the AUTH loop: after N failed attempts → 421 and disconnect. */

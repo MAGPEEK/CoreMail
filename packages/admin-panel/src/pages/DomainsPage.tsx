@@ -8,6 +8,7 @@ import { Toggle } from '../components/Toggle.js';
 import { copyToClipboard } from '../utils/clipboard.js';
 import { useT } from '../i18n/useT.js';
 import { Can } from '../components/Can.js';
+import { ProtocolAccessEditor } from '../components/ProtocolAccessEditor.js';
 import { DataTable, type Column } from '../components/DataTable.js';
 import { clientSetupRows, clientSetupSummary, srvParts, srvZoneLine, type SrvParts } from '../lib/dnsClientSetup.js';
 
@@ -528,6 +529,11 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
                 <ClientSetupDnsSection dnsCheck={dnsCheck} />
               </div>
             )}
+          </div>
+
+          {/* ── 9.4: protocol access (domain level; write = servers area) ───── */}
+          <div className="pt-3 border-t border-line">
+            <ProtocolAccessEditor path={`/admin/protocol-access/domains/${domain.id}`} area="servers" />
           </div>
         </div>
 

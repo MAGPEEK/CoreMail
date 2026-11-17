@@ -7,7 +7,7 @@ import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { createLogger } from '@coremail/core';
 import { clientIpFromRequest } from '@coremail/storage';
-import { authenticateCredentials } from '../auth.js';
+import { authenticateCredentials, JmapDisabledError } from '../auth.js';
 import { isWsOriginAllowed } from '../cors.js';
 import { resolveAccounts } from '../accounts.js';
 import { parseRequest, processRequest } from '../dispatcher.js';
@@ -17,7 +17,7 @@ import { isJmapEnabled } from '../feature-flag.js';
 import { LIMITS } from '../settings.js';
 import { apiRequestGate, limitError } from '../request-limits.js';
 import { accountsOf, buildStateChange, changeBus } from './bus.js';
-import { registerPushConnection, WS_CLOSE_CREDENTIALS_CHANGED, WS_CLOSE_REASON } from './live.js';
+import { registerPushConnection, WS_CLOSE_CREDENTIALS_CHANGED, wsCloseReason } from './live.js';
 import type { JmapUser, JsonObject } from '../types.js';
 
 const log = createLogger('jmap:ws');
@@ -47,10 +47,18 @@ export function attachWebSocket(
         socket.destroy();
         return;
       }
-      const user = await authenticateCredentials(
-        authorization ?? '', token,
-        clientIpFromRequest(req.socket.remoteAddress, req.headers['x-forwarded-for']),
-      );
+      let user: JmapUser | null;
+      try {
+        user = await authenticateCredentials(
+          authorization ?? '', token,
+          clientIpFromRequest(req.socket.remoteAddress, req.headers['x-forwarded-for']),
+        );
+      } catch (err) {
+        if (!(err instanceof JmapDisabledError)) throw err;
+        socket.write('HTTP/1.1 403 Forbidden\r\n\r\n'); // 9.4: JMAP switched off for the account
+        socket.destroy();
+        return;
+      }
       if (!user) {
         socket.write('HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm="CoreMail JMAP", Bearer realm="CoreMail JMAP"\r\n\r\n');
         socket.destroy();
@@ -90,10 +98,10 @@ function handleConnection(ws: WebSocket, user: JmapUser): void {
 
   // v7.1.0: the connection ends when its credentials become invalid.
   let revoked = false;
-  const unregister = registerPushConnection(user, () => {
+  const unregister = registerPushConnection(user, (event) => {
     revoked = true;
     pushEnabled = false;
-    ws.close(WS_CLOSE_CREDENTIALS_CHANGED, WS_CLOSE_REASON);
+    ws.close(WS_CLOSE_CREDENTIALS_CHANGED, wsCloseReason(event));
     // A peer that does not answer the close handshake is cut off.
     setTimeout(() => ws.terminate(), 5000).unref();
   });

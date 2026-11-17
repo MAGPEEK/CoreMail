@@ -3,6 +3,7 @@
  * own-address only (no disclosure of other accounts), AcceptableResponseSchema
  * (outlook / mobilesync / unsupported → 601), unauthenticated requests cause no
  * database writes, database errors never serve the built-in mail.local defaults.
+ * 9.4: only protocols switched on are announced (v1: per account, v2: per domain).
  * Express app on an ephemeral loopback port, fake Prisma via globalThis.__prisma.
  * Run: node --import tsx --test src/v1-response.test.ts (in packages/autodiscover)
  */
@@ -27,18 +28,26 @@ const user = (id: string, email: string, displayName: string) => ({
 });
 const users = [user('cuidA', 'alice@example.com', 'Alice <A&B>'), user('cuidSECRETB', 'ceo@example.com', 'Chief Exec')];
 const aliases = [{ id: 'al1', address: 'info@example.com', targetUserId: 'cuidA' }, { id: 'al2', address: 'boss@example.com', targetUserId: 'cuidSECRETB' }];
+/** 9.4: ProtocolPolicy rows (protocol switches). */
+const policies: Array<Record<string, unknown>> = [];
 
 (globalThis as Record<string, unknown>)['__prisma'] = {
   $on: () => undefined,
   user: { findFirst: async ({ where }: { where: { email: string } }) => users.find((u) => u.email === where.email) ?? null },
   appPassword: { findMany: async () => [], update: async () => ({}) },
-  domain: { findFirst: async () => ({ name: 'example.com' }) },
+  domain: {
+    findFirst: async () => ({ name: 'example.com' }),
+    findUnique: async ({ where }: { where: { name: string } }) => (where.name === 'example.com' ? { id: 'd1' } : null),
+  },
+  protocolPolicy: { findMany: async () => policies },
   emailAlias: {
     findFirst: async ({ where }: { where: { address: string; targetUserId: string } }) =>
       aliases.find((a) => a.address === where.address && a.targetUserId === where.targetUserId) ?? null,
   },
   serverSettings: {
-    findUnique: async () => {
+    findUnique: async (args?: { select?: { jmapEnabled?: boolean } }) => {
+      // The protocol switch read (JMAP server level) is not part of the settings outage simulated here.
+      if (args?.select?.jmapEnabled) return null;
       state.settingsReads++;
       if (state.settingsDown) throw new Error('db down');
       return state.settings;
@@ -227,4 +236,49 @@ test('v2: the query-string form is routed; a repeated Protocol is a 404, not a c
   state.settingsDown = true;
   const down = await fetch(`${base}/autodiscover/autodiscover.json?Email=alice%40example.com&Protocol=IMAP`);
   assert.equal(down.status, 503);
+});
+
+test('9.4 v1: only protocols switched on for the account are announced (IMAP off → POP3, nothing → Error 500)', async () => {
+  policies.push({ id: 'p-a', userId: 'cuidA', domainId: null, imap: 'OFF', activesync: 'OFF' });
+  storage.invalidateProtocolAccessCache();
+  try {
+    const r = await post(requestXml('alice@example.com'));
+    assert.doesNotMatch(r.text, /<Type>IMAP<\/Type>/);
+    assert.match(r.text, /<Type>POP3<\/Type>\s*<Server>[^<]+<\/Server>\s*<Port>995<\/Port>/);
+    assert.match(r.text, /<Type>SMTP<\/Type>/);
+    const eas = await post(requestXml('alice@example.com', NS_MOBILESYNC));
+    assert.match(eas.text, /<ErrorCode>500<\/ErrorCode>\s*<Message>No client protocol is enabled for this account\.<\/Message>/);
+    policies[0]!['pop3'] = 'OFF';
+    policies[0]!['smtp'] = 'OFF';
+    storage.invalidateProtocolAccessCache();
+    const none = await post(requestXml('alice@example.com'));
+    assert.match(none.text, /<ErrorCode>500<\/ErrorCode>/);
+    assert.doesNotMatch(none.text, /<Protocol>/);
+  } finally {
+    policies.length = 0;
+    storage.invalidateProtocolAccessCache();
+  }
+});
+
+test('9.4 v2 (anonymous): per mail domain — a protocol switched off for the domain is NoSuchProtocol', async () => {
+  policies.push({ id: 'p-d1', domainId: 'd1', userId: null, activesync: 'OFF' });
+  storage.invalidateProtocolAccessCache();
+  try {
+    const eas = await fetch(`${base}/autodiscover/autodiscover.json/v1.0/alice%40example.com?Protocol=ActiveSync`);
+    assert.equal(eas.status, 404);
+    assert.equal(((await eas.json()) as { ErrorCode: string }).ErrorCode, 'NoSuchProtocol');
+    assert.equal((await fetch(`${base}/autodiscover/autodiscover.json/v1.0/alice%40example.com?Protocol=IMAP`)).status, 200);
+    const foreign = await fetch(`${base}/autodiscover/autodiscover.json/v1.0/x%40other.test?Protocol=ActiveSync`);
+    assert.equal(foreign.status, 200, 'another domain: server level');
+  } finally {
+    policies.length = 0;
+    storage.invalidateProtocolAccessCache();
+  }
+});
+
+test('9.4: outlookProtocols — IMAP before POP3, SMTP, the MAPI switch announces nothing yet', async () => {
+  const { outlookProtocols } = await import('./v1.js');
+  assert.deepEqual(outlookProtocols({ imap: true, pop3: true, smtp: true, mapi: true }), ['IMAP', 'SMTP']);
+  assert.deepEqual(outlookProtocols({ imap: false, pop3: true, smtp: false, mapi: false }), ['POP3']);
+  assert.deepEqual(outlookProtocols({ imap: false, pop3: false, smtp: false, mapi: true }), []);
 });

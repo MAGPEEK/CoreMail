@@ -9,6 +9,7 @@ import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { noProtocolPolicies } from '@coremail/storage/auth/testing';
 
 process.env['LOG_LEVEL'] ??= 'error';
 
@@ -18,6 +19,7 @@ const user = {
 };
 (globalThis as Record<string, unknown>)['__prisma'] = {
   $on: () => undefined,
+  ...noProtocolPolicies(),
   user: { findFirst: async () => user },
   appPassword: { findMany: async () => [], update: async () => ({}) },
   domain: { findFirst: async () => ({ name: 'example.com' }) },

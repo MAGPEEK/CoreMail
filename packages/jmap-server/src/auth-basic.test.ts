@@ -16,8 +16,12 @@ const users = [
     mfa: { totpEnabled: true, webAuthnCredentials: [] } },
   { ...base, id: 'u3', email: 'ldap@example.com', displayName: 'Ldap', passwordHash: null, authSource: 'LDAP', mfa: null },
 ];
+/** 9.4: ProtocolPolicy rows (protocol switches). */
+const policies: Array<Record<string, unknown>> = [];
 (globalThis as Record<string, unknown>)['__prisma'] = {
   $on: () => undefined,
+  protocolPolicy: { findMany: async () => policies, count: async () => 0 },
+  serverSettings: { findUnique: async () => null },
   user: {
     findFirst: async ({ where }: { where: { email: string } }) => {
       if (state.dbDown) throw new Error('db down');
@@ -44,7 +48,7 @@ storage.registerExternalPasswordVerifier('ldap', async (user, password) => {
   directoryCalls.push(user.email);
   return user.authSource === 'LDAP' && password === 'dir-pw';
 });
-const { authenticateBasic, AuthUnavailableError } = await import('./auth.js');
+const { authenticateBasic, authenticateCredentials, AuthUnavailableError, JmapDisabledError } = await import('./auth.js');
 
 test('primary password works without MFA', async () => {
   assert.equal((await authenticateBasic('bob@example.com', 'pw', '203.0.113.1'))?.userId, 'u1');
@@ -69,6 +73,22 @@ test('database error → AuthUnavailableError(temporary)', async () => {
   } finally {
     state.dbDown = false;
   }
+});
+
+test('9.4: JMAP switched off → JmapDisabledError after correct credentials only (also from the cache)', async () => {
+  const basic = (pw: string) => `Basic ${Buffer.from(`bob@example.com:${pw}`).toString('base64')}`;
+  assert.equal((await authenticateCredentials(basic('pw'), undefined, '203.0.113.3'))?.userId, 'u1', 'cached now');
+  policies.push({ id: 'p-u1', userId: 'u1', domainId: null, jmap: 'OFF' });
+  storage.invalidateProtocolAccessCache();
+  try {
+    await assert.rejects(authenticateCredentials(basic('pw'), undefined, '203.0.113.3'),
+      (e: unknown) => e instanceof JmapDisabledError && e.userId === 'u1');
+    assert.equal(await authenticateCredentials(basic('wrong'), undefined, '203.0.113.3'), null);
+  } finally {
+    policies.length = 0;
+    storage.invalidateProtocolAccessCache();
+  }
+  assert.equal((await authenticateCredentials(basic('pw'), undefined, '203.0.113.3'))?.userId, 'u1');
 });
 
 test('shared lockout → AuthUnavailableError(locked)', async () => {

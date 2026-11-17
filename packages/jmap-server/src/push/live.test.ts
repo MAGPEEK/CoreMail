@@ -5,7 +5,9 @@
  *  - Basic + app password: only connections with THAT app password end;
  *  - Bearer: follows the web session (session revoked / revoke-all mark), the
  *    session that changed the password keeps its connection;
- *  - other users and neutral events are left alone.
+ *  - other users and neutral events are left alone;
+ *  - 9.4: JMAP switched off → WebSockets (Basic and Bearer) close with 1008
+ *    "JMAP access has been disabled…", new upgrades/requests get 403.
  * Loopback HTTP server, fake Prisma, no Redis.
  * Run: node --import tsx --import ./src/test-env.ts --test src/push/live.test.ts
  */
@@ -21,8 +23,11 @@ const user = (id: string, email: string) => ({
   passwordHash: 'hash:secret', authSource: 'LOCAL', mailbox: null, mfa: null,
 });
 const users = [user('u1', 'bob@example.com'), user('u2', 'carol@example.com')];
+/** 9.4: ProtocolPolicy rows (protocol switches). */
+const policies: Array<Record<string, unknown>> = [];
 (globalThis as Record<string, unknown>)['__prisma'] = {
   $on: () => undefined,
+  protocolPolicy: { findMany: async () => policies, count: async () => 0 },
   user: {
     findFirst: async ({ where }: { where: { email?: string; id?: string } }) =>
       users.find((u) => (where.email ? u.email === where.email : u.id === where.id)) ?? null,
@@ -175,5 +180,36 @@ describe('JMAP EventSource after credential changes', () => {
     await one.ended;
     assert.equal(await pendingFor(two.ended), true);
     two.abort();
+  });
+});
+
+describe('JMAP protocol switch (9.4)', () => {
+  // carol (u2): bob's web sessions were revoked by the tests above.
+  test('JMAP off: Basic and Bearer WebSockets close, new upgrades and requests get 403; inherit → works', async () => {
+    const pw = await openWs(basic('carol@example.com', 'secret'));
+    const web = await openWs(bearer('u2', 'c1'));
+    const bob = await openWs(basic('bob@example.com', 'APP-TWO'));
+    policies.push({ id: 'p-u2', userId: 'u2', domainId: null, jmap: 'OFF' });
+    try {
+      // What @coremail/storage updateProtocolSettings() publishes for carol.
+      await publish({ userId: 'u2', reason: 'protocol-access-change', disabledProtocols: ['jmap', 'mapi'] });
+      for (const c of [pw, web]) {
+        const { code, reason } = await c.closed;
+        assert.equal(code, WS_CLOSE_CREDENTIALS_CHANGED);
+        assert.equal(reason, 'JMAP access has been disabled for this account');
+      }
+      assert.equal(await stillOpen(bob), true);
+      await assert.rejects(openWs(basic('carol@example.com', 'secret')), /Unexpected server response: 403/);
+      const es = await fetch(`http://127.0.0.1:${port}/jmap/eventsource?types=*&closeafter=no&ping=0`, { headers: { authorization: bearer('u2', 'c1') } });
+      assert.equal(es.status, 403);
+      const wrong = await fetch(`http://127.0.0.1:${port}/jmap/eventsource`, { headers: { authorization: basic('carol@example.com', 'nope') } });
+      assert.equal(wrong.status, 401, 'a wrong password never learns the switch');
+    } finally {
+      policies.length = 0;
+      bob.ws.close();
+    }
+    await publish({ userId: 'u2', reason: 'protocol-access-change', disabledProtocols: ['mapi'] });
+    const again = await openWs(basic('carol@example.com', 'secret'));
+    again.ws.close();
   });
 });
