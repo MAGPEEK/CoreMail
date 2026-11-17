@@ -132,7 +132,8 @@ export async function run(state) {
 
   await check('tls: private keys are stored encrypted (enc:v1) and never returned by the API', async () => {
     const pg = process.env.E2E_PG_CONTAINER ?? 'coremail-e2e-postgres';
-    const sql = `SELECT count(*) FILTER (WHERE "keyPem" NOT LIKE 'enc:v1:%'), count(*) FROM certificates WHERE "keyPem" IS NOT NULL;`
+    const sql = `SELECT count(*) FILTER (WHERE "keyPem" NOT LIKE 'enc:v1:%' OR "acmeAccount" NOT LIKE 'enc:v1:%'), count(*)`
+      + ` FROM certificates WHERE "keyPem" IS NOT NULL OR "acmeAccount" IS NOT NULL;`
       + ` SELECT coalesce("tlsKey" LIKE 'enc:v1:%', true) FROM server_settings WHERE id = 'singleton';`;
     const out = execFileSync('docker', ['exec', pg, 'sh', '-c', `psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAq -c "${sql.replace(/"/g, '\\"')}"`],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim().split('\n');

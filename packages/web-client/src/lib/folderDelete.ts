@@ -7,8 +7,9 @@
  * from the folder list the webmail already holds (real parentId links only — the
  * folder pane's virtual "below INBOX" placement does not count).
  * `recursive` is sent only when the user saw subfolders; if one appeared since
- * (another client), the server answers 409 FOLDER_HAS_SUBFOLDERS and the user
- * confirms again with the refreshed list.
+ * (another client), the own mailbox keeps it (it moves up to the deleted folder's
+ * parent) and a shared/delegated mailbox answers 409 FOLDER_HAS_SUBFOLDERS — the
+ * user then confirms again with the refreshed list.
  */
 
 export interface FolderNodeLike {
