@@ -4,7 +4,7 @@
  * junk / flag / read / undo run through the same handlers as the keyboard shortcuts
  * (MessageList + layout register them), so undo toasts, "open the next mail" and the
  * read-only checks behave identically for mouse and keyboard.
- * Enablement and labels: lib/mailCommands.ts.
+ * Enablement and labels: lib/mailCommands.ts; texts: i18n (useT).
  */
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
@@ -29,32 +29,35 @@ import type { ShortcutAction } from '../lib/shortcuts.js';
 import { CommandBar, type CommandGroup, type CommandItem } from './CommandBar.js';
 import type { ContextMenuItem } from './ContextMenu.js';
 import { AnimatedCounter } from './AnimatedCounter.js';
+import { useT } from '../i18n/useT.js';
+import type { TranslationKey } from '../i18n/translations.js';
 
-const READING_PANE: { value: ReadingPane; label: string }[] = [
-  { value: 'right', label: 'Lesebereich rechts' },
-  { value: 'bottom', label: 'Lesebereich unten' },
-  { value: 'off', label: 'Lesebereich aus' },
+const READING_PANE: { value: ReadingPane; labelKey: TranslationKey }[] = [
+  { value: 'right', labelKey: 'mail_view_pane_right' },
+  { value: 'bottom', labelKey: 'mail_view_pane_bottom' },
+  { value: 'off', labelKey: 'mail_view_pane_off' },
 ];
-const DENSITY: { value: Density; label: string }[] = [
-  { value: 'compact', label: 'Dichte: Kompakt' },
-  { value: 'normal', label: 'Dichte: Normal' },
-  { value: 'comfortable', label: 'Dichte: Komfortabel' },
+const DENSITY: { value: Density; labelKey: TranslationKey }[] = [
+  { value: 'compact', labelKey: 'mail_view_density_compact' },
+  { value: 'normal', labelKey: 'mail_view_density_normal' },
+  { value: 'comfortable', labelKey: 'mail_view_density_comfortable' },
 ];
 
 const checkIcon = (on: boolean) => (on ? <Check size={14} /> : undefined);
 
 /** Selected-messages counter + "clear selection" (outside the toolbar's roving focus). */
 function SelectionInfo({ count, onClear }: { count: number; onClear: () => void }) {
+  const t = useT();
   return (
     <div className="flex items-center gap-1 pl-2 shrink-0">
       <span role="status" className="text-xs font-semibold text-accent-fg whitespace-nowrap">
-        <AnimatedCounter value={count} /> ausgewählt
+        <AnimatedCounter value={count} /> {t('mail_selected')}
       </span>
       <button
         type="button"
         onClick={onClear}
-        aria-label="Auswahl aufheben"
-        title="Auswahl aufheben"
+        aria-label={t('mail_clear_selection')}
+        title={t('mail_clear_selection')}
         className="p-1 rounded text-fg-subtle hover:bg-surface-2 hover:text-fg transition-colors"
       >
         <X size={14} aria-hidden="true" />
@@ -64,6 +67,7 @@ function SelectionInfo({ count, onClear }: { count: number; onClear: () => void 
 }
 
 export function MailCommandBar() {
+  const t = useT();
   const navigate = useNavigate();
   const { selectedIds, selectedMessageId, selectedFolderId, clearSelection, setSelectedMessage, openCompose } = useUiStore();
   const { readingPane, setReadingPane, density, setDensity, groupByConversation, setGroupByConversation } = useUiPrefs();
@@ -87,7 +91,7 @@ export function MailCommandBar() {
 
   const isJunkFolder = folders.find((f) => f.id === selectedFolderId)?.name === 'Junk';
   const selection = summarizeSelection(targets.length, known);
-  const states = mailCommandStates({ selection, readOnly: mailbox.readOnly, foreign: mailbox.foreign, isJunkFolder });
+  const states = mailCommandStates({ selection, readOnly: mailbox.readOnly, foreign: mailbox.foreign, isJunkFolder }, t);
 
   const leaveTargets = () => {
     if (selectedMessageId && targets.includes(selectedMessageId)) setSelectedMessage(null);
@@ -108,26 +112,26 @@ export function MailCommandBar() {
         icon: all
           ? <Check size={14} style={{ color: c.color }} />
           : <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: c.color }} />,
-        ...(all ? { title: 'Zugewiesen – erneut wählen zum Entfernen' } : {}),
+        ...(all ? { title: t('mail_cmd_category_assigned') } : {}),
         onClick: () => applyCategory(c.id, all),
       };
     }),
     ...(categories.length ? [{ type: 'divider' as const }] : []),
-    { label: 'Kategorien verwalten …', icon: <Tag size={14} />, onClick: () => navigate('/settings#categories') },
+    { label: t('mail_cmd_categories_manage'), icon: <Tag size={14} />, onClick: () => navigate('/settings#categories') },
   ];
 
   const viewMenu = (): ContextMenuItem[] => [
-    ...READING_PANE.map(({ value, label }) => ({ label, icon: checkIcon(readingPane === value), onClick: () => setReadingPane(value) })),
+    ...READING_PANE.map(({ value, labelKey }) => ({ label: t(labelKey), icon: checkIcon(readingPane === value), onClick: () => setReadingPane(value) })),
     { type: 'divider' },
-    ...DENSITY.map(({ value, label }) => ({ label, icon: checkIcon(density === value), onClick: () => setDensity(value) })),
+    ...DENSITY.map(({ value, labelKey }) => ({ label: t(labelKey), icon: checkIcon(density === value), onClick: () => setDensity(value) })),
     { type: 'divider' },
-    { label: 'Nach Unterhaltung gruppieren', icon: checkIcon(groupByConversation), onClick: () => setGroupByConversation(!groupByConversation) },
+    { label: t('mail_view_conversations'), icon: checkIcon(groupByConversation), onClick: () => setGroupByConversation(!groupByConversation) },
   ];
 
   const newMenu = (): ContextMenuItem[] => [
-    { label: 'E-Mail', icon: <Mail size={14} />, onClick: () => openCompose() },
+    { label: t('mail_cmd_new_mail'), icon: <Mail size={14} />, onClick: () => openCompose() },
     ...(mailbox.foreign
-      ? [{ label: 'E-Mail aus dem eigenen Postfach', icon: <Mail size={14} />, onClick: () => openCompose({ mailbox: OWN_MAILBOX }) }]
+      ? [{ label: t('mail_cmd_new_mail_own'), icon: <Mail size={14} />, onClick: () => openCompose({ mailbox: OWN_MAILBOX }) }]
       : []),
   ];
 
@@ -142,13 +146,13 @@ export function MailCommandBar() {
   });
 
   const groups: CommandGroup[] = [
-    { id: 'new', title: 'Neu', items: [
+    { id: 'new', title: t('mail_group_new'), items: [
       cmd('new', <SquarePen size={16} />, {
         tone: 'primary', placement: 'pinned', keyshortcuts: ariaKeys('compose.new'),
         onClick: () => openCompose(), menu: newMenu,
       }),
     ] },
-    { id: 'organize', title: 'Organisieren', items: [
+    { id: 'organize', title: t('mail_group_organize'), items: [
       cmd('delete', <Trash2 size={16} />, viaShortcut('mail.delete')),
       cmd('archive', <Archive size={16} />, viaShortcut('mail.archive')),
       cmd('move', <FolderInput size={16} />, viaShortcut('mail.move')),
@@ -156,7 +160,7 @@ export function MailCommandBar() {
         ? cmd('junk', <ShieldOff size={16} />, { onClick: () => { void setState('notSpam', targets).then(leaveTargets); } })
         : cmd('junk', <AlertOctagon size={16} />, viaShortcut('mail.spam')),
     ] },
-    { id: 'mark', title: 'Markieren', items: [
+    { id: 'mark', title: t('mail_group_mark'), items: [
       cmd('flag', selection.allFlagged ? <FlagOff size={16} /> : <Flag size={16} />, viaShortcut('mail.flag')),
       readToggle(selection) === 'read'
         ? cmd('read', <MailOpen size={16} />, viaShortcut('mail.markRead'))
@@ -164,17 +168,17 @@ export function MailCommandBar() {
       cmd('categorize', <Tag size={16} />, { menu: categoryMenu }),
       cmd('pin', <Pin size={16} />, { onClick: () => { void setState(selection.allPinned ? 'unpin' : 'pin', targets); } }),
     ] },
-    { id: 'history', title: 'Rückgängig', items: [
+    { id: 'history', title: t('mail_cmd_undo'), items: [
       cmd('undo', <Undo2 size={16} />, viaShortcut('undo')),
     ] },
-    { id: 'view', title: 'Ansicht', items: [
+    { id: 'view', title: t('mail_cmd_view'), items: [
       cmd('view', <PanelsTopLeft size={16} />, { menu: viewMenu }),
     ] },
   ];
 
   return (
     <CommandBar
-      label="E-Mail-Befehle"
+      label={t('mail_commands_label')}
       groups={groups}
       className="flex-1"
       end={selectedIds.size > 0 ? <SelectionInfo count={selectedIds.size} onClear={clearSelection} /> : null}

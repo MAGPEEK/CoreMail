@@ -22,9 +22,8 @@ import { Avatar } from './Avatar.js';
 import { ContactHoverCard } from './ContactHoverCard.js';
 import { MessageReaderSkeleton } from './Skeleton.js';
 import { Modal } from './Modal.js';
-import { translate } from '../i18n/useT.js';
+import { translate, useT } from '../i18n/useT.js';
 import { useActiveMailbox } from '../hooks/useActiveMailbox.js';
-import { READ_ONLY_HINT } from '../lib/mailboxContext.js';
 import { readerOverflowActions, type ReaderAction, type ReaderActionId } from '../lib/mailCommands.js';
 
 interface Props {
@@ -117,6 +116,7 @@ export function MessageReader({ messageId }: Props) {
 
   const ariaKeys = useAriaKeys();
   const { runWithUndo } = useMailActions();
+  const t = useT();
 
   /** Reply / reply all / forward with the quoted original (toolbar + shortcuts). */
   const doReply = (mode: 'reply' | 'replyAll' | 'forward'): boolean => {
@@ -179,10 +179,10 @@ export function MessageReader({ messageId }: Props) {
     api.post(`/mail/messages/${msg.id}/snooze`, { until: d.toISOString() }).then(invalidate).catch(toastError);
   };
   const snoozeMenu = (): ContextMenuItem[] => [
-    { label: 'In 1 Stunde',     onClick: () => { const d = new Date(); d.setHours(d.getHours() + 1); snoozeUntil(d); } },
-    { label: 'In 3 Stunden',    onClick: () => { const d = new Date(); d.setHours(d.getHours() + 3); snoozeUntil(d); } },
-    { label: 'Morgen 8:00',     onClick: () => { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(8,0,0,0); snoozeUntil(d); } },
-    { label: 'Nächsten Montag', onClick: () => { const d = new Date(); d.setDate(d.getDate() + ((1 - d.getDay() + 7) % 7 || 7)); d.setHours(8,0,0,0); snoozeUntil(d); } },
+    { label: t('reader_snooze_1h'), onClick: () => { const d = new Date(); d.setHours(d.getHours() + 1); snoozeUntil(d); } },
+    { label: t('reader_snooze_3h'), onClick: () => { const d = new Date(); d.setHours(d.getHours() + 3); snoozeUntil(d); } },
+    { label: t('reader_snooze_tomorrow'), onClick: () => { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(8,0,0,0); snoozeUntil(d); } },
+    { label: t('reader_snooze_monday'), onClick: () => { const d = new Date(); d.setDate(d.getDate() + ((1 - d.getDay() + 7) % 7 || 7)); d.setHours(8,0,0,0); snoozeUntil(d); } },
   ];
 
   const showSource = () => {
@@ -215,13 +215,13 @@ export function MessageReader({ messageId }: Props) {
     delete: { onClick: () => withUndo('delete') },
   };
   const actionGroups: CommandGroup[] = [
-    { id: 'respond', title: 'Antworten', items: [
-      { id: 'reply', label: 'Antworten', icon: <Reply size={16} />, placement: 'pinned', keyshortcuts: ariaKeys('mail.reply'), onClick: () => doReply('reply') },
-      { id: 'replyAll', label: 'Allen antworten', icon: <ReplyAll size={16} />, placement: 'pinned', keyshortcuts: ariaKeys('mail.replyAll'), onClick: () => doReply('replyAll') },
-      { id: 'forward', label: 'Weiterleiten', icon: <Forward size={16} />, placement: 'pinned', keyshortcuts: ariaKeys('mail.forward'), onClick: () => doReply('forward') },
+    { id: 'respond', title: t('reader_group_respond'), items: [
+      { id: 'reply', label: t('reply'), icon: <Reply size={16} />, placement: 'pinned', keyshortcuts: ariaKeys('mail.reply'), onClick: () => doReply('reply') },
+      { id: 'replyAll', label: t('reply_all'), icon: <ReplyAll size={16} />, placement: 'pinned', keyshortcuts: ariaKeys('mail.replyAll'), onClick: () => doReply('replyAll') },
+      { id: 'forward', label: t('forward'), icon: <Forward size={16} />, placement: 'pinned', keyshortcuts: ariaKeys('mail.forward'), onClick: () => doReply('forward') },
     ] },
     ...overflowGroups(
-      readerOverflowActions({ readOnly, foreign, isJunkFolder, isRead, isFlagged, isPinned }),
+      readerOverflowActions({ readOnly, foreign, isJunkFolder, isRead, isFlagged, isPinned }, t),
       handlers,
       isJunkFolder ? { ...READER_ICONS, junk: <ShieldOff size={16} /> } : READER_ICONS,
     ),
@@ -229,7 +229,7 @@ export function MessageReader({ messageId }: Props) {
 
   return (
     <div className="flex-1 flex flex-col bg-surface overflow-hidden">
-      <CommandBar label="Nachrichtenaktionen" groups={actionGroups} className="px-3 py-1.5 border-b border-line shrink-0" />
+      <CommandBar label={t('reader_actions_label')} groups={actionGroups} className="px-3 py-1.5 border-b border-line shrink-0" />
 
       {/* Spam banner — Outlook style. Visible when rspamd score ≥ 3.0 OR the mail is in the junk folder */}
       {(() => {
@@ -263,18 +263,18 @@ export function MessageReader({ messageId }: Props) {
                 onClick={() => { bulkMutation.mutate({ ids: [msg.id], action: 'notSpam' }); setSelectedMessage(null); }}
                 disabled={readOnly}
                 className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-surface text-fg border border-line-strong rounded hover:bg-surface-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                title={readOnly ? READ_ONLY_HINT : 'Diese Nachricht ist kein Spam (Bayes-Lernen)'}
+                title={readOnly ? t('mail_hint_read_only') : t('reader_not_spam_tip')}
               >
-                <ShieldCheck size={13} /> Kein Spam
+                <ShieldCheck size={13} /> {t('reader_not_spam')}
               </button>
             ) : (
               <button
                 onClick={() => withUndo('spam')}
                 disabled={readOnly}
                 className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-surface text-fg border border-line-strong rounded hover:bg-surface-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                title={readOnly ? READ_ONLY_HINT : 'In Junk verschieben (Bayes-Lernen)'}
+                title={readOnly ? t('mail_hint_read_only') : t('reader_as_junk_tip')}
               >
-                <AlertOctagon size={13} /> Als Junk
+                <AlertOctagon size={13} /> {t('reader_as_junk')}
               </button>
             )}
           </div>

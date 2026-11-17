@@ -15,6 +15,7 @@ import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { ChevronDown, MoreHorizontal } from 'lucide-react';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu.js';
 import { computeOverflow, nextRovingIndex, type CommandPlacement } from '../lib/toolbarNav.js';
+import { fmt, useT } from '../i18n/useT.js';
 
 export interface CommandItem {
   id: string;
@@ -59,7 +60,6 @@ interface Props {
 interface OpenMenu { key: string; x: number; y: number; items: ContextMenuItem[]; trigger: HTMLElement }
 
 const MORE_KEY = '__more';
-const MORE_LABEL = 'Weitere Befehle';
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 const DISABLED = 'aria-disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:active:scale-100';
@@ -120,6 +120,7 @@ function Label({ item, variant, arrow }: { item: CommandItem; variant: CommandBa
 }
 
 function CommandButton({ item, variant, measure = false, tabStop, openKey, descId, onOpenMenu }: ButtonProps) {
+  const t = useT();
   const split = !!(item.onClick && item.menu);
   const dropdownOnly = !item.onClick && !!item.menu;
   const shape = SHAPE[variant];
@@ -166,7 +167,7 @@ function CommandButton({ item, variant, measure = false, tabStop, openKey, descI
         type="button"
         {...stop(menuKey)}
         {...disabledProps}
-        aria-label={`${item.label}: weitere Optionen`}
+        aria-label={fmt(t('cmdbar_more_options'), { label: item.label })}
         aria-haspopup="menu"
         aria-expanded={openKey === menuKey}
         onClick={measure ? undefined : (e) => openMenu(e.currentTarget)}
@@ -185,12 +186,13 @@ function MoreButton({ variant, measure = false, tabStop, open, onOpen }: {
   open?: boolean;
   onOpen?: (el: HTMLElement) => void;
 }) {
+  const t = useT();
   return (
     <button
       type="button"
       {...(measure ? { tabIndex: -1 } : { tabIndex: tabStop === MORE_KEY ? 0 : -1, 'data-roving-stop': MORE_KEY })}
-      aria-label={MORE_LABEL}
-      title={MORE_LABEL}
+      aria-label={t('cmdbar_more')}
+      title={t('cmdbar_more')}
       aria-haspopup="menu"
       aria-expanded={!!open}
       onClick={measure ? undefined : (e) => onOpen?.(e.currentTarget)}

@@ -22,8 +22,7 @@ import { ContactHoverCard } from './ContactHoverCard.js';
 import { AnimatedCounter } from './AnimatedCounter.js';
 import { MessageListSkeleton, EmptyInbox, EmptySearch, EmptyFilter } from './Skeleton.js';
 import { MoveToFolderDialog } from './MoveToFolderDialog.js';
-import { SearchOperatorsHelp, SearchChips } from './SearchOperatorsHelp.js';
-import { insertSearchToken } from '../lib/searchInput.js';
+import { SearchChips } from './SearchOperatorsHelp.js';
 import { useMailActions } from '../hooks/useMailActions.js';
 import { useShortcutHandlers, useAriaKeys } from '../hooks/useShortcuts.js';
 import type { MessageLocation } from '../lib/undo-stack.js';
@@ -704,7 +703,6 @@ export function MessageList({ folderId }: Props) {
   };
 
   const chips = searching ? (searchQuery.data?.pages[0]?.chips ?? []) : [];
-  const insertOperator = (token: string) => insertSearchToken(searchText, token, setSearchText, () => searchInputRef.current);
   const removeChip = (raw: string) => {
     setSearchText((s) => s.replace(raw, ' ').replace(/\s+/g, ' ').trim());
   };
@@ -760,7 +758,6 @@ export function MessageList({ folderId }: Props) {
             title="Gesamtes Postfach durchsuchen"
           >Alle</button>
         </div>
-        <SearchOperatorsHelp onInsert={insertOperator} />
       </div>
       {chips.length > 0 && (
         <div className="pt-2 border-b border-line">

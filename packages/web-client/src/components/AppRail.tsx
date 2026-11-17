@@ -2,12 +2,14 @@
  * App rail: vertical icon bar on the left (md and up), a bottom bar on narrow
  * screens. Every entry is a link with its label as accessible name; wide screens
  * show the label as a tooltip on hover/focus (Escape hides it), the bottom bar shows
- * it under the icon. Arrow keys move between the entries. Items: lib/appRail.ts.
+ * it under the icon. Arrow keys move between the entries. Items: lib/appRail.ts;
+ * settings are reached through the gear in the header (TopBar), not the rail.
  */
 import { useState, type ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Mail, Calendar, Users, CheckSquare, StickyNote, Settings } from 'lucide-react';
-import { activeAppForPath, railItemsIn, type AppId, type RailItem } from '../lib/appRail.js';
+import { Mail, Calendar, Users, CheckSquare, StickyNote } from 'lucide-react';
+import { activeAppForPath, RAIL_ITEMS, type AppId, type RailItem } from '../lib/appRail.js';
+import { useT } from '../i18n/useT.js';
 import { nextRovingIndex } from '../lib/toolbarNav.js';
 
 const ICONS: Record<AppId, ReactNode> = {
@@ -16,11 +18,11 @@ const ICONS: Record<AppId, ReactNode> = {
   contacts: <Users size={20} />,
   tasks: <CheckSquare size={20} />,
   notes: <StickyNote size={20} />,
-  settings: <Settings size={20} />,
 };
 
-function RailLink({ item, active, tipHidden, onHideTip, onShowTip }: {
+function RailLink({ item, label, active, tipHidden, onHideTip, onShowTip }: {
   item: RailItem;
+  label: string;
   active: boolean;
   tipHidden: boolean;
   onHideTip: () => void;
@@ -30,7 +32,7 @@ function RailLink({ item, active, tipHidden, onHideTip, onShowTip }: {
     <li className="relative flex max-md:flex-1">
       <Link
         to={item.path}
-        aria-label={item.label}
+        aria-label={label}
         aria-current={active ? 'page' : undefined}
         data-rail-item
         onKeyDown={(e) => {
@@ -48,7 +50,7 @@ function RailLink({ item, active, tipHidden, onHideTip, onShowTip }: {
           <span aria-hidden="true" className="absolute bg-accent rounded-full md:left-0 md:top-2 md:bottom-2 md:w-[3px] max-md:top-0 max-md:left-3 max-md:right-3 max-md:h-[3px]" />
         )}
         <span aria-hidden="true">{ICONS[item.id]}</span>
-        <span aria-hidden="true" className="md:hidden max-w-full truncate px-0.5 text-[11px] leading-tight">{item.label}</span>
+        <span aria-hidden="true" className="md:hidden max-w-full truncate px-0.5 text-[11px] leading-tight">{label}</span>
         {/* Tooltip (wide screens): hoverable — no gap between link and bubble */}
         <span
           aria-hidden="true"
@@ -56,7 +58,7 @@ function RailLink({ item, active, tipHidden, onHideTip, onShowTip }: {
             tipHidden ? '' : 'group-hover:visible group-focus-visible:visible'
           }`}
         >
-          <span className="block whitespace-nowrap rounded bg-fg text-surface text-xs font-medium px-2 py-1 shadow-md">{item.label}</span>
+          <span className="block whitespace-nowrap rounded bg-fg text-surface text-xs font-medium px-2 py-1 shadow-md">{label}</span>
         </span>
       </Link>
     </li>
@@ -64,6 +66,7 @@ function RailLink({ item, active, tipHidden, onHideTip, onShowTip }: {
 }
 
 export function AppRail() {
+  const t = useT();
   const { pathname } = useLocation();
   const active = activeAppForPath(pathname);
   const [hiddenTip, setHiddenTip] = useState<AppId | null>(null);
@@ -80,6 +83,7 @@ export function AppRail() {
     <RailLink
       key={item.id}
       item={item}
+      label={t(item.labelKey)}
       active={active === item.id}
       tipHidden={hiddenTip === item.id}
       onHideTip={() => setHiddenTip(item.id)}
@@ -89,13 +93,12 @@ export function AppRail() {
 
   return (
     <nav
-      aria-label="Apps"
+      aria-label={t('rail_nav_label')}
       onKeyDown={onKeyDown}
       onMouseLeave={() => setHiddenTip(null)}
       className="shrink-0 flex md:flex-col bg-surface border-line max-md:border-t md:border-r md:w-16 md:py-2 max-md:px-1"
     >
-      <ul className="flex md:flex-col items-center gap-1 max-md:flex-1">{railItemsIn('main').map(link)}</ul>
-      <ul className="flex md:flex-col items-center gap-1 md:mt-auto max-md:flex-none max-md:w-1/6">{railItemsIn('end').map(link)}</ul>
+      <ul className="flex md:flex-col items-center gap-1 max-md:flex-1">{RAIL_ITEMS.map(link)}</ul>
     </nav>
   );
 }
