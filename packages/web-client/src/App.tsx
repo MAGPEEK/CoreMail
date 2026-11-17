@@ -1,5 +1,5 @@
-import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
-import { useEffect, useState } from 'react';
+import { Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { useEffect, useLayoutEffect, useState } from 'react';
 import { TopBar } from './components/TopBar.js';
 import { ComposeWindow } from './components/ComposeWindow.js';
 import { LoginPage } from './pages/LoginPage.js';
@@ -13,7 +13,6 @@ import { ContactsPage } from './pages/ContactsPage.js';
 import { TasksPage } from './pages/TasksPage.js';
 import { NotesPage } from './pages/NotesPage.js';
 import { SettingsPage } from './pages/SettingsPage.js';
-import { SharedMailboxPage } from './pages/SharedMailboxPage.js';
 import { useAuthStore } from './store/auth.js';
 import { useSessionChecked } from './api/client.js';
 import { useUiStore, useThemeStore, resolveIsDark } from './store/ui.js';
@@ -24,23 +23,30 @@ import { ErrorBoundary } from './components/ErrorBoundary.js';
 import { ShortcutHelpDialog } from './components/ShortcutHelpDialog.js';
 import { useGlobalShortcuts } from './hooks/useGlobalShortcuts.js';
 import { useSendGuard } from './components/DelayedSendToast.js';
-import { accentFgChannels } from './theme/contrast.js';
+import { brandCssVars, headerHex, resolveAccentChannels } from './lib/branding.js';
+import { useBranding, useBrandingSync } from './hooks/useBranding.js';
+import { mailPageUrl, parseMailboxKey } from './lib/mailboxContext.js';
 
 // ── Theme-Applier ─────────────────────────────────────────────────────────────
 function ThemeApplier() {
   const { theme, accentRgb } = useThemeStore();
+  const branding = useBranding();
+  useBrandingSync('mwa');
+  // 9.3 accent rule (lib/branding.ts): brand primary by default, the user's own
+  // choice only while the branding allows it.
+  const accent = resolveAccentChannels(branding, accentRgb);
+  const header = headerHex(branding);
 
-  useEffect(() => {
-    // Set accent color as CSS variable
-    document.documentElement.style.setProperty('--color-accent', accentRgb);
-  }, [accentRgb]);
-
-  useEffect(() => {
+  // layout effect: colours are set before the first paint (no flash of the default accent)
+  useLayoutEffect(() => {
     const apply = () => {
       const isDark = resolveIsDark(theme);
       document.documentElement.classList.toggle('dark', isDark);
-      // Accent text, icons and focus rings: derived per theme so they keep 4.5:1 (theme/contrast.ts)
-      document.documentElement.style.setProperty('--color-accent-fg', accentFgChannels(accentRgb, isDark));
+      // Accent fill (white text >= 4.5:1), accent text/icons/focus rings per theme
+      // (theme/contrast.ts) and the top-bar colours (text >= 4.5:1)
+      for (const [k, v] of Object.entries(brandCssVars(accent, header, isDark))) {
+        document.documentElement.style.setProperty(k, v);
+      }
     };
     apply();
 
@@ -49,7 +55,7 @@ function ThemeApplier() {
     const handler = () => { if (theme === 'system') apply(); };
     mq.addEventListener('change', handler);
     return () => mq.removeEventListener('change', handler);
-  }, [theme, accentRgb]);
+  }, [theme, accent, header]);
 
   return null;
 }
@@ -61,6 +67,13 @@ const APP_MAP: Record<string, 'mail' | 'calendar' | 'contacts' | 'tasks' | 'note
   '/tasks': 'tasks',
   '/notes': 'notes',
 };
+
+// 9.3: shared mailboxes open in the mail view (folder pane → Freigegebene Postfächer);
+// old /shared-mailbox/:id links redirect there.
+function SharedMailboxRedirect() {
+  const { id = '' } = useParams<{ id: string }>();
+  return <Navigate to={mailPageUrl(parseMailboxKey(`shared:${id}`))} replace />;
+}
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const token = useAuthStore((s) => s.accessToken);
@@ -112,6 +125,7 @@ function SetupGuard({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [setupRequired, setSetupRequired] = useState<boolean | null>(null);
+  const { productName } = useBranding();
 
   useEffect(() => {
     fetch('/api/v1/setup/status')
@@ -132,7 +146,7 @@ function SetupGuard({ children }: { children: React.ReactNode }) {
   if (setupRequired === null) {
     return (
       <div className="min-h-screen bg-accent flex items-center justify-center">
-        <div className="text-white text-sm animate-pulse">CoreMail wird geladen…</div>
+        <div className="text-white text-sm animate-pulse">{productName} wird geladen…</div>
       </div>
     );
   }
@@ -159,7 +173,7 @@ export function App() {
             <Layout>
               <Routes>
                 <Route path="/mail" element={<MailPage />} />
-                <Route path="/shared-mailbox/:id" element={<SharedMailboxPage />} />
+                <Route path="/shared-mailbox/:id" element={<SharedMailboxRedirect />} />
                 <Route path="/calendar" element={<CalendarPage />} />
                 <Route path="/contacts" element={<ContactsPage />} />
                 <Route path="/tasks" element={<TasksPage />} />

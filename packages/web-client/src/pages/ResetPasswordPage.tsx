@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useSearchParams, useNavigate, Link } from 'react-router-dom';
 import { Lock, CheckCircle, XCircle, Eye, EyeOff, KeyRound, ArrowLeft } from 'lucide-react';
 import { api } from '../api/client.js';
+import { AuthShell, AuthBrandHeader } from '../components/AuthShell.js';
 
 function PasswordStrengthBar({ password, minLen }: { password: string; minLen: number }) {
   const len = password.length;
@@ -49,14 +50,9 @@ export function ResetPasswordPage() {
   const [error, setError]             = useState('');
   // Strength-bar reference only — the server enforces the real policy minimum
   const minLen = 8;
-  const [orgName, setOrgName]         = useState('CoreMail');
 
   useEffect(() => {
-    // Load settings
-    fetch('/api/v1/admin/settings/public')
-      .then((r) => r.json())
-      .then((d: { orgName?: string }) => { if (d.orgName) setOrgName(d.orgName); })
-      .catch(() => undefined);
+    // The product name comes from the branding (9.3, hooks/useBranding.ts).
 
     // The minimum password length is enforced by the server (POST /auth/reset-password
     // answers with a readable message). /api/v1/admin/settings is admin-only and
@@ -99,18 +95,17 @@ export function ResetPasswordPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-accent to-blue-800">
+    <AuthShell>
       <div className="bg-surface rounded-lg shadow-2xl p-8 w-full max-w-sm">
-        {/* Logo */}
-        <div className="flex items-center justify-center gap-2 mb-6">
-          <div className="w-10 h-10 bg-accent rounded-lg flex items-center justify-center">
-            <KeyRound size={22} className="text-white" />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold text-fg">{orgName}</h1>
-            <p className="text-xs text-fg-subtle">Neues Passwort setzen</p>
-          </div>
-        </div>
+        {/* Logo + product name (branding) */}
+        <AuthBrandHeader
+          subtitle="Neues Passwort setzen"
+          icon={
+            <div className="w-10 h-10 bg-accent rounded-lg flex items-center justify-center">
+              <KeyRound size={22} className="text-white" aria-hidden="true" />
+            </div>
+          }
+        />
 
         {/* Token check loading */}
         {tokenValid === null && (
@@ -215,6 +210,6 @@ export function ResetPasswordPage() {
           </form>
         )}
       </div>
-    </div>
+    </AuthShell>
   );
 }

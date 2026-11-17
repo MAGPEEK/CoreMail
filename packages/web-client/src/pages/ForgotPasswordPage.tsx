@@ -2,21 +2,20 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Mail, ArrowLeft, CheckCircle, KeyRound } from 'lucide-react';
 import { api } from '../api/client.js';
+import { AuthShell, AuthBrandHeader } from '../components/AuthShell.js';
 
 export function ForgotPasswordPage() {
   const [email, setEmail]       = useState('');
   const [loading, setLoading]   = useState(false);
   const [sent, setSent]         = useState(false);
   const [error, setError]       = useState('');
-  const [orgName, setOrgName]   = useState('CoreMail');
   const [allowed, setAllowed]   = useState(true);
 
-  // Load public settings (feature flag + org name)
+  // Load public settings (feature flag); the product name comes from the branding (9.3)
   useEffect(() => {
     fetch('/api/v1/admin/settings/public')
       .then((r) => r.json())
-      .then((d: { orgName?: string; selfServicePasswordReset?: boolean }) => {
-        if (d.orgName) setOrgName(d.orgName);
+      .then((d: { selfServicePasswordReset?: boolean }) => {
         if (d.selfServicePasswordReset === false) setAllowed(false);
       })
       .catch(() => { /* Fallback values remain */ });
@@ -38,18 +37,17 @@ export function ForgotPasswordPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-accent to-blue-800">
+    <AuthShell>
       <div className="bg-surface rounded-lg shadow-2xl p-8 w-full max-w-sm">
-        {/* Logo */}
-        <div className="flex items-center justify-center gap-2 mb-6">
-          <div className="w-10 h-10 bg-accent rounded-lg flex items-center justify-center">
-            <KeyRound size={22} className="text-white" />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold text-fg">{orgName}</h1>
-            <p className="text-xs text-fg-subtle">Passwort zurücksetzen</p>
-          </div>
-        </div>
+        {/* Logo + product name (branding) */}
+        <AuthBrandHeader
+          subtitle="Passwort zurücksetzen"
+          icon={
+            <div className="w-10 h-10 bg-accent rounded-lg flex items-center justify-center">
+              <KeyRound size={22} className="text-white" aria-hidden="true" />
+            </div>
+          }
+        />
 
         {!allowed ? (
           <div className="text-center space-y-4">
@@ -123,6 +121,6 @@ export function ForgotPasswordPage() {
           </form>
         )}
       </div>
-    </div>
+    </AuthShell>
   );
 }

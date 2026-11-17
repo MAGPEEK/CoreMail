@@ -5,7 +5,7 @@ import {
   ShieldAlert, Search,
   ShieldHalf, Archive,
   ClipboardList, Activity, Info, Terminal,
-  Fingerprint, ServerCog, HardDriveDownload,
+  Fingerprint, ServerCog, HardDriveDownload, Palette,
 } from 'lucide-react';
 import { useT } from '../i18n/useT.js';
 import { usePermissions } from '../hooks/usePermissions.js';
@@ -29,6 +29,7 @@ export function Sidebar() {
   const ALL_NAV: (NavItem | NavGroup)[] = [
     { path: '/dashboard',        labelKey: 'nav_overview',         icon: LayoutDashboard },
     { path: '/settings',         labelKey: 'nav_global_settings',  icon: Settings2 },
+    { path: '/branding',         labelKey: 'nav_branding',         icon: Palette },
     {
       groupKey: 'nav_group_recipients',
       items: [

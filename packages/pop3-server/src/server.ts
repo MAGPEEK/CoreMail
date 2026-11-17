@@ -4,7 +4,8 @@ import net from 'node:net';
 import tls from 'node:tls';
 import { createLogger, generateSelfSignedCert, tlsPemToBuffers, applyTlsToListeners, tlsMaterialEquals, installProcessGuards, startAuthInvalidationSubscriber, resolveBindAddress, listenWithRecovery } from '@coremail/core';
 import { getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD, CHANNEL_SETTINGS_RELOAD } from '@coremail/core/redis';
-import { prisma, loadProtocolCert, waitForObjectStorage } from '@coremail/storage';
+import { logTlsSocketError } from '@coremail/core/tls-errors';
+import { prisma, loadProtocolCert, selfSignedFallbackHostname, waitForObjectStorage } from '@coremail/storage';
 import { POP3Session, setPop3Hostname, pop3LiveSessions, TLS_HANDSHAKE_MS } from './session.js';
 import { admitConnection, invalidExemptEntries } from './limits.js';
 
@@ -51,11 +52,12 @@ async function refreshTlsConfig(): Promise<void> {
       return;
     }
 
-    // No matching cert in DB → self-signed fallback with fixed CN=mail.localhost
-    // (only useful on the very first start).  The admin later replaces it in the BCP
-    // with a real cert; a fixed CN prevents re-issuance when publicHostname
-    // is renamed.
-    const SELF_SIGNED_HOSTNAME = 'mail.localhost';
+    // No matching cert in DB → self-signed fallback (only useful on the very
+    // first start). The admin later replaces it in the BCP with a real cert.
+    // 9.3: CN = the public host name (mail.localhost only while none is configured);
+    // the api-gateway's startup reconciliation replaces this with a visible
+    // self-signed default row for the same name.
+    const SELF_SIGNED_HOSTNAME = await selfSignedFallbackHostname();
     log.info({ hostname: SELF_SIGNED_HOSTNAME }, 'No protocol cert in DB — generating self-signed certificate for POP3');
     const { certPem, keyPem } = generateSelfSignedCert(SELF_SIGNED_HOSTNAME);
     _tlsConfig = tlsPemToBuffers(certPem, keyPem);
@@ -134,7 +136,7 @@ function createTrackedPop3Server(cfg: ListenerConfig): TrackedPop3Server {
       starttls: () => (cfg.ssl ? null : _tlsConfig),
     });
     session.start();
-    socket.on('error', (err) => log.warn({ err }, 'POP3 socket error'));
+    socket.on('error', (err) => logTlsSocketError(log, err, { service: 'POP3', ip: socket.remoteAddress }));
   };
 
   // v8.1: per-IP / global connection caps on the raw TCP connection
@@ -146,6 +148,10 @@ function createTrackedPop3Server(cfg: ListenerConfig): TrackedPop3Server {
       onSocket as (s: tls.TLSSocket) => void,
     );
     server.on('connection', (raw: net.Socket) => { admitConnection(raw, true); });
+    // 9.3: handshake failures on 995 (e.g. the client rejects the certificate)
+    server.on('tlsClientError', (err: Error, s: tls.TLSSocket) => {
+      logTlsSocketError(log, err, { service: 'POP3', ip: s.remoteAddress, port: s.localPort });
+    });
   } else {
     if (cfg.ssl) {
       log.warn({ port: cfg.port }, 'POP3 implicit TLS requested but no TLS cert available — falling back to plaintext');

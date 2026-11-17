@@ -15,6 +15,12 @@ import { planUndo, splitDelete, type MessageLocation, type MailUndoableAction } 
 import { showUndoToast } from '../components/UndoToast.js';
 import { translate, fmt } from '../i18n/useT.js';
 import type { TranslationKey } from '../i18n/translations.js';
+import { useUiStore } from '../store/ui.js';
+import {
+  mailApiBase, foldersQueryKey, isReadOnlyMailbox, READ_ONLY_HINT,
+  type AccessibleMailboxEntry, type MailboxRef,
+} from '../lib/mailboxContext.js';
+import { ACCESSIBLE_MAILBOXES_KEY } from './useActiveMailbox.js';
 
 type BulkBody = { ids: string[]; action: string; folderId?: string };
 
@@ -43,19 +49,31 @@ export function useMailActions() {
     void qc.invalidateQueries({ queryKey: ['folders'] });
   }, [qc]);
 
-  const bulk = useCallback((body: BulkBody) => api.post('/mail/messages/bulk', body), []);
+  // 9.3: actions run against the mailbox shown in the mail view (read at call time)
+  const activeRef = (): MailboxRef => useUiStore.getState().activeMailbox;
+  /** Read-only foreign mailbox → explain and refuse (the API answers 403 READ_ONLY too). */
+  const refuseReadOnly = useCallback((ref: MailboxRef): boolean => {
+    if (!isReadOnlyMailbox(ref, qc.getQueryData<AccessibleMailboxEntry[]>(ACCESSIBLE_MAILBOXES_KEY))) return false;
+    toast.error(READ_ONLY_HINT);
+    return true;
+  }, [qc]);
 
-  const folderIdByName = useCallback((name: string): string | null => {
-    const folders = qc.getQueryData<Folder[]>(['folders']) ?? [];
+  const bulk = useCallback((body: BulkBody, ref: MailboxRef = activeRef()) =>
+    api.post(`${mailApiBase(ref)}/messages/bulk`, body), []);
+
+  const folderIdByName = useCallback((name: string, ref: MailboxRef = activeRef()): string | null => {
+    const folders = qc.getQueryData<Folder[]>(foldersQueryKey(ref)) ?? [];
     return folders.find((f) => f.name === name)?.id ?? null;
   }, [qc]);
 
   /** Permanently deletes (confirmation, no undo). Returns false when cancelled. */
   const deletePermanently = useCallback(async (items: MessageLocation[]): Promise<boolean> => {
     if (items.length === 0) return false;
+    const ref = activeRef();
+    if (refuseReadOnly(ref)) return false;
     if (!window.confirm(fmt(translate('confirm_delete_permanent'), { n: items.length }))) return false;
     try {
-      await inBatches(items, 8, (it) => api.delete(`/mail/messages/${it.id}?hard=true`));
+      await inBatches(items, 8, (it) => api.delete(`${mailApiBase(ref)}/messages/${it.id}?hard=true`));
       toast.success(translate('deleted_permanent'), { duration: 2000 });
     } catch (err) {
       toastError(err);
@@ -63,7 +81,7 @@ export function useMailActions() {
       invalidate();
     }
     return true;
-  }, [invalidate]);
+  }, [invalidate, refuseReadOnly]);
 
   /**
    * delete / archive / spam / move with an undo toast. Only messages that
@@ -75,9 +93,12 @@ export function useMailActions() {
     items: MessageLocation[],
     targetFolderId?: string,
   ): Promise<boolean> => {
+    if (items.length === 0) return false;
+    const ref = activeRef();
+    if (refuseReadOnly(ref)) return false;
     let undoable = items;
     if (action === 'delete') {
-      const { toTrash, permanent } = splitDelete(items, folderIdByName('Trash'));
+      const { toTrash, permanent } = splitDelete(items, folderIdByName('Trash', ref));
       if (permanent.length) {
         const done = await deletePermanently(permanent);
         if (!done && toTrash.length === 0) return false;
@@ -87,17 +108,17 @@ export function useMailActions() {
       if (!targetFolderId) return false;
       undoable = items.filter((i) => i.folderId !== targetFolderId);
     } else if (action === 'archive') {
-      const archive = folderIdByName('Archive');
+      const archive = folderIdByName('Archive', ref);
       undoable = items.filter((i) => i.folderId !== archive);
     } else if (action === 'spam') {
-      const junk = folderIdByName('Junk');
+      const junk = folderIdByName('Junk', ref);
       undoable = items.filter((i) => i.folderId !== junk);
     }
     if (undoable.length === 0) return items.length > 0;
 
     const ids = undoable.map((i) => i.id);
     try {
-      await bulk({ ids, action, ...(action === 'move' && targetFolderId ? { folderId: targetFolderId } : {}) });
+      await bulk({ ids, action, ...(action === 'move' && targetFolderId ? { folderId: targetFolderId } : {}) }, ref);
     } catch (err) {
       toastError(err);
       invalidate();
@@ -105,25 +126,27 @@ export function useMailActions() {
     }
     invalidate();
     // Undo is only offered after the server confirmed the action
-    const inboxId = folderIdByName('INBOX');
+    const inboxId = folderIdByName('INBOX', ref);
     showUndoToast({
       message: label(action, ids.length),
       onUndo: async () => {
         try {
-          for (const step of planUndo(action, undoable, inboxId)) await bulk(step);
+          for (const step of planUndo(action, undoable, inboxId)) await bulk(step, ref);
         } finally {
           invalidate();
         }
       },
     });
     return true;
-  }, [bulk, deletePermanently, folderIdByName, invalidate]);
+  }, [bulk, deletePermanently, folderIdByName, invalidate, refuseReadOnly]);
 
   /** read / unread / flag / unflag / pin / unpin (no undo — toggling again reverts). */
   const setState = useCallback(async (action: 'read' | 'unread' | 'flag' | 'unflag' | 'pin' | 'unpin', ids: string[]) => {
     if (ids.length === 0) return;
-    try { await bulk({ ids, action }); } catch (err) { toastError(err); } finally { invalidate(); }
-  }, [bulk, invalidate]);
+    const ref = activeRef();
+    if (refuseReadOnly(ref)) return;
+    try { await bulk({ ids, action }, ref); } catch (err) { toastError(err); } finally { invalidate(); }
+  }, [bulk, invalidate, refuseReadOnly]);
 
   /**
    * Original folders of message ids, looked up in the cached message lists

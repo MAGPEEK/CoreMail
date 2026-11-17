@@ -16,6 +16,7 @@ import { api, fetchEventTicket } from '../api/client.js';
 import { openReconnectingEventSource, eventStreamUrl } from '../lib/reconnectingEventSource.js';
 import { useDashboardStore, WIDGET_CATALOG, type WidgetId } from '../store/dashboard.js';
 import { useT } from '../i18n/useT.js';
+import { ServedCertWarning } from '../components/ServedCert.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface DashboardData {
@@ -638,6 +639,9 @@ export function DashboardPage() {
           {showSettings && <WidgetSettingsPopover onClose={() => setShowSettings(false)} />}
         </div>
       </div>
+
+      {/* 9.3: a mail port serves a self-signed / name-mismatched certificate */}
+      <ServedCertWarning linkToCertificates />
 
       {/* ── KPI cards (row 1) — order according to user `order` ────────────── */}
       {anyKpi && (() => {

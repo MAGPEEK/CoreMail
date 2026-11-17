@@ -11,6 +11,7 @@
  * GET    /api/v1/admin/domains/:id/dkim-record    — DNS TXT record for DKIM
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
+import { isIP } from 'node:net';
 import { z } from 'zod';
 import { promises as dnsPromises } from 'node:dns';
 import { prisma } from '@coremail/storage';
@@ -303,6 +304,33 @@ export function setDnsResolverForTests(r: DnsResolverLike | null): void {
   dnsResolver = r ?? dnsPromises;
 }
 
+// ── MX target validation (9.3) ───────────────────────────────────────────────
+/**
+ * An MX record must name a host with an address record: an IP literal is not a
+ * host name (RFC 5321 §5.1) and a CNAME must not be the target (RFC 2181 §10.3,
+ * RFC 5321 §5.1). Both break delivery from strict senders and TLS name checks.
+ * Returns a readable error with the suggested target, or null.
+ */
+export async function mxTargetProblem(
+  dns: Pick<DnsResolverLike, 'resolveCname'>,
+  records: { priority: number; exchange: string }[],
+  domainName: string,
+): Promise<{ error: string; suggestion: string } | null> {
+  const suggestion = `mail.${domainName}`;
+  for (const r of records) {
+    const target = r.exchange.replace(/\.$/, '');
+    if (isIP(target.replace(/^\[|\]$/g, '')) !== 0) {
+      return { suggestion, error: `MX ${target} is an IP address — an MX record must name a host with an A record. Create an A record ${suggestion} → ${target} and set the MX to ${suggestion}.` };
+    }
+    let cname: string | undefined;
+    try { cname = (await dns.resolveCname(target))[0]; } catch { cname = undefined; }
+    if (cname) {
+      return { suggestion, error: `MX ${target} is a CNAME (→ ${cname.replace(/\.$/, '')}) — MX targets must not be aliases. Point the MX to ${suggestion} with an A record.` };
+    }
+  }
+  return null;
+}
+
 // ── Client auto-setup records (v8.1) ─────────────────────────────────────────
 // RFC 6186 / RFC 8314 SRV records for mail clients, RFC 6764 SRV + TXT for CalDAV/
 // CardDAV, Outlook's _autodiscover._tcp SRV and the Thunderbird autoconfig host.
@@ -462,11 +490,18 @@ adminDomainsRouter.get('/:id/dns-check', async (req: Request, res: Response) => 
   } catch { /* A record not set yet — serverIp stays empty */ }
 
   // ── MX ──────────────────────────────────────────────────────────────────────
-  const mx = await check(async () => {
+  let mxRecords: { priority: number; exchange: string }[] = [];
+  const mxBase = await check(async () => {
     const recs = await dns.resolveMx(domainName);
     if (!recs.length) return null;
+    mxRecords = recs;
     return recs.sort((a, b) => a.priority - b.priority).map(r => `${r.priority} ${r.exchange}`).join(', ');
   });
+  // 9.3: an IP literal or a CNAME as MX target is an error (with the fix)
+  const mxIssue = mxBase.ok ? await mxTargetProblem(dns, mxRecords, domainName) : null;
+  const mx: DnsEntry & { error?: string; suggestion?: string } = mxIssue
+    ? { ...mxBase, ok: false, error: mxIssue.error, suggestion: mxIssue.suggestion }
+    : mxBase;
 
   // ── SPF — with multiple-record detection (RFC 7208 §3.2 violation) ─────────
   const spfRaw = await check(async () => {

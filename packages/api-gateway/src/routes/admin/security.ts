@@ -6,11 +6,14 @@ import { requireArea } from '../../middleware/auth.js';
 import { rspamdControllerHeaders } from '../../lib/rspamd-controller.js';
 import { getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 import { adminClamavRouter } from './security-clamav.js';
+import { adminSecurityCapabilitiesRouter } from './security-capabilities.js';
 
 export const adminSecurityRouter: RouterType = Router();
 adminSecurityRouter.use(requireArea('hygiene'));
 // ClamAV policy, status and EICAR self-test (9.2)
 adminSecurityRouter.use('/clamav', adminClamavRouter);
+// rspamd / ClamAV deployment state for the BCP (9.3)
+adminSecurityRouter.use('/capabilities', adminSecurityCapabilitiesRouter);
 
 const RSPAMD_URL  = process.env['RSPAMD_URL']  ?? 'http://rspamd:11334';
 const CLAMAV_HOST = process.env['CLAMAV_HOST'] ?? 'clamav';

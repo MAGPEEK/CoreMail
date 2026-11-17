@@ -1,6 +1,7 @@
 import net from 'node:net';
 import tls from 'node:tls';
 import { createLogger } from '@coremail/core/logger';
+import { logTlsSocketError } from '@coremail/core/tls-errors';
 import { LiveConnectionRegistry, type LiveCredential } from '@coremail/core/auth';
 import { prisma } from '@coremail/storage/prisma';
 import {
@@ -303,7 +304,7 @@ export class POP3Session {
     });
     secure.on('error', (err) => {
       clearTimeout(handshakeTimer);
-      log.warn({ err }, 'POP3 STLS handshake/socket error');
+      logTlsSocketError(log, err, { service: 'POP3 STLS', ip: raw.remoteAddress });
       secure.destroy();
     });
     secure.once('close', () => clearTimeout(handshakeTimer));
@@ -337,7 +338,7 @@ export class POP3Session {
       }
       if (result.status !== 'ok') {
         // invalid and mfa_app_password_required: identical text (no oracle)
-        log.warn({ user: this.user, status: result.status }, 'POP3 auth failure');
+        log.warn({ user: this.user, status: result.status, ip: this.socket.remoteAddress }, 'POP3 auth failure');
         return this.send('-ERR [AUTH] invalid credentials (accounts with two-factor authentication need an app password)');
       }
 
@@ -361,6 +362,7 @@ export class POP3Session {
       }
       this.state = 'TRANSACTION';
       this.registerLive(result.method, result.appPasswordId, authStartedAt);
+      log.info({ user: result.user.email, method: result.method, ip: this.socket.remoteAddress }, 'POP3 login success');
       this.send(`+OK mailbox has ${this.maildrop.length} messages`);
     } else {
       this.send('-ERR unknown command');

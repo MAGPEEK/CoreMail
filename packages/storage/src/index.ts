@@ -29,3 +29,4 @@ export * from './draft-versions.js';
 export * from './mailbox-access.js';
 export * from './references.js';
 export * from './references-backfill.js';
+export * from './branding.js';

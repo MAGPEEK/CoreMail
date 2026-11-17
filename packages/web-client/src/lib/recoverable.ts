@@ -5,18 +5,21 @@
  *   own mailbox      → /mail/recoverable
  *   shared mailbox   → /user/shared-mailboxes/:id/recoverable   (FULL_ACCESS)
  */
-export type RecoverTarget = { kind: 'own' } | { kind: 'shared'; id: string };
+export type RecoverTarget = { kind: 'own' } | { kind: 'shared' | 'delegated'; id: string };
 
-/** API base path (relative to /api/v1); restore/purge append /restore, /purge. */
+/**
+ * API base path (relative to /api/v1); restore/purge append /restore, /purge.
+ * 9.3: delegated user mailboxes → /mail/delegated-mailboxes/:mailboxId/recoverable.
+ */
 export function recoverableApiBase(target: RecoverTarget = { kind: 'own' }): string {
-  return target.kind === 'shared'
-    ? `/user/shared-mailboxes/${encodeURIComponent(target.id)}/recoverable`
-    : '/mail/recoverable';
+  if (target.kind === 'shared') return `/user/shared-mailboxes/${encodeURIComponent(target.id)}/recoverable`;
+  if (target.kind === 'delegated') return `/mail/delegated-mailboxes/${encodeURIComponent(target.id)}/recoverable`;
+  return '/mail/recoverable';
 }
 
 /** TanStack Query key of the list (separate per mailbox). */
 export function recoverableQueryKey(target: RecoverTarget = { kind: 'own' }): readonly unknown[] {
-  return target.kind === 'shared' ? ['recoverable', 'shared', target.id] : ['recoverable'];
+  return target.kind === 'own' ? ['recoverable'] : ['recoverable', target.kind, target.id];
 }
 
 /** May the user recover items of a shared mailbox? (FULL_ACCESS — the API enforces it too.) */

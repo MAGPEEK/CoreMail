@@ -65,6 +65,11 @@ function rspamd(): RspamdEndpoints {
   return endpoints;
 }
 
+/** The resolved rspamd endpoints (deployment detection, capabilities.ts). */
+export function getRspamdEndpoints(): RspamdEndpoints {
+  return rspamd();
+}
+
 export interface RspamdResult {
   score: number;
   action: 'no action' | 'greylist' | 'add header' | 'rewrite subject' | 'reject';

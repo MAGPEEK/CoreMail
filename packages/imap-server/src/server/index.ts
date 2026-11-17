@@ -1,6 +1,7 @@
 import net from 'net';
 import tls from 'node:tls';
 import { getRedisClient, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
+import { logTlsSocketError } from '@coremail/core/tls-errors';
 import {
   createSession, sendUntagged, refreshCapabilities,
   type ImapSession,
@@ -227,7 +228,7 @@ export function createImapServer(tlsConfig?: ImapTlsConfig, options: ImapServerO
       });
       secure.on('error', (err) => {
         clearTimeout(handshakeTimer);
-        log.warn({ err, id: session.id, ip }, 'IMAP STARTTLS handshake/socket error');
+        logTlsSocketError(log, err, { service: 'IMAP STARTTLS', id: session.id, ip });
         secure.destroy();
       });
       secure.on('close', () => { clearTimeout(handshakeTimer); reader.close(); sessions.delete(session.id); stopIdleTimer(session); unregisterLiveSession(session); });
@@ -244,7 +245,7 @@ export function createImapServer(tlsConfig?: ImapTlsConfig, options: ImapServerO
 
     socket.on('error', (err) => {
       if (isPeerDisconnect(err)) log.debug({ err, id: session.id }, 'IMAP client disconnected abruptly');
-      else log.error({ err, id: session.id }, 'IMAP socket error');
+      else logTlsSocketError(log, err, { service: 'IMAP', id: session.id, ip: socket.remoteAddress });
       sessions.delete(session.id);
       stopIdleTimer(session);
       unregisterLiveSession(session);
@@ -278,6 +279,10 @@ export function createImapServer(tlsConfig?: ImapTlsConfig, options: ImapServerO
       onSocket as (s: tls.TLSSocket) => void,
     );
     server.on('connection', (raw: net.Socket) => { admit(raw); });
+    // 9.3: handshake failures on 993 (e.g. the client rejects the certificate)
+    server.on('tlsClientError', (err: Error, s: tls.TLSSocket) => {
+      logTlsSocketError(log, err, { service: 'IMAP', ip: s.remoteAddress, port: s.localPort });
+    });
   } else {
     server = net.createServer((raw) => { if (admit(raw)) onSocket(raw); });
   }

@@ -1,9 +1,7 @@
 import { useState, useMemo, type ReactNode } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useDroppable, useDraggable } from '@dnd-kit/core';
 import {
-  Inbox, FileText, Send, Trash2, AlertTriangle, Archive, Folder, Plus,
-  Star, ChevronRight, ChevronDown, Pencil, FolderPlus, FolderMinus,
+  Plus, Star, Pencil, FolderPlus, FolderMinus,
   CheckCheck, Eraser, Tag, PaintBucket, RefreshCw, Clock, Check, RotateCcw,
 } from 'lucide-react';
 import { RecoverDeletedItemsDialog } from './RecoverDeletedItems.js';
@@ -14,7 +12,10 @@ import type { Folder as FolderType, RetentionTag } from '../api/types.js';
 import { useUiStore, useUiPrefs } from '../store/ui.js';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu.js';
 import { PromptDialog } from './PromptDialog.js';
-import { AnimatedCounter } from './AnimatedCounter.js';
+import {
+  FolderItem, SectionHeader, SYSTEM_SET, SYSTEM_LABEL_KEY, HIDDEN_FOLDER_NAMES, buildFolderChildren, systemFoldersOf,
+} from './FolderItem.js';
+import { SharedMailboxTree } from './SharedMailboxTree.js';
 import { useT } from '../i18n/useT.js';
 import { useAriaKeys } from '../hooks/useShortcuts.js';
 import { useLanguageStore } from '../store/language.js';
@@ -25,32 +26,6 @@ type DialogState =
   | { kind: 'rename'; folder: FolderType }
   | null;
 
-const SYSTEM_ORDER = ['INBOX', 'Drafts', 'Sent', 'Trash', 'Junk', 'Archive'] as const;
-
-// Folder names that should not be shown as mail folders —
-// Tasks and Notes are standalone pages with their own data models.
-const HIDDEN_FOLDER_NAMES = new Set(['Tasks', 'Notes']);
-
-const ICON_MAP: Record<string, React.ElementType> = {
-  INBOX:   Inbox,
-  Drafts:  FileText,
-  Sent:    Send,
-  Trash:   Trash2,
-  Junk:    AlertTriangle,
-  Archive: Archive,
-};
-
-const SYSTEM_SET = new Set(SYSTEM_ORDER as readonly string[]);
-
-const SYSTEM_LABEL_KEY: Record<string, 'inbox' | 'drafts' | 'sent' | 'trash' | 'junk' | 'archive'> = {
-  INBOX:   'inbox',
-  Drafts:  'drafts',
-  Sent:    'sent',
-  Trash:   'trash',
-  Junk:    'junk',
-  Archive: 'archive',
-};
-
 interface Props { onNewMail: () => void }
 
 interface MenuState {
@@ -59,135 +34,13 @@ interface MenuState {
   items: ContextMenuItem[];
 }
 
-function FolderItem({
-  folder,
-  selected,
-  isSystem,
-  hasChildren,
-  expanded,
-  onToggleExpand,
-  onSelect,
-  onContextMenu,
-  label,
-  indent,
-  isDragDisabled,
-  contextKey = '',
-}: {
-  folder: FolderType;
-  selected: boolean;
-  isSystem: boolean;
-  hasChildren: boolean;
-  expanded: boolean;
-  onToggleExpand: () => void;
-  onSelect: () => void;
-  onContextMenu: (e: React.MouseEvent) => void;
-  label: string;
-  indent: number;
-  isDragDisabled?: boolean;
-  contextKey?: string;
-}) {
-  // dnd-kit requires unique IDs — the context key ensures that favorites
-  // and the main render do not collide
-  const dndId = contextKey ? `${contextKey}|${folder.id}` : folder.id;
-  // Outer = drop target (every folder can be a target)
-  const { isOver, setNodeRef: setDropRef } = useDroppable({
-    id: `folder-drop:${dndId}`,
-    data: { kind: 'folder', folderId: folder.id, folderName: folder.name },
-  });
-
-  // Inner = drag source (custom folders only + not in the favorites mirror)
-  const dragDisabled = isSystem || !!isDragDisabled;
-  const { attributes, listeners, setNodeRef: setDragRef, isDragging } = useDraggable({
-    id: `folder-drag:${dndId}`,
-    data: { kind: 'folder-source', folderId: folder.id, folderName: folder.name },
-    disabled: dragDisabled,
-  });
-
-  const Icon = ICON_MAP[folder.name] ?? Folder;
-
-  return (
-    <div
-      ref={setDropRef}
-      className={`relative rounded-sm transition-all duration-150 ${
-        isOver ? 'ring-2 ring-accent-fg ring-inset bg-accent/15 scale-[1.02] animate-drop-pulse' : ''
-      }`}
-    >
-      {/* Animated accent bar on the left for the active folder */}
-      {selected && (
-        <span className="absolute left-0 top-1 bottom-1 w-[3px] bg-accent rounded-r animate-slide-in-left" aria-hidden />
-      )}
-      <div
-        ref={setDragRef}
-        {...(dragDisabled ? {} : attributes)}
-        {...(dragDisabled ? {} : listeners)}
-        onClick={onSelect}
-        onContextMenu={onContextMenu}
-        style={{ paddingLeft: 6 + indent * 14 }}
-        className={`group w-full flex items-center gap-1.5 pr-3 py-1.5 text-sm rounded-sm transition-all duration-150 ${
-          dragDisabled ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'
-        } ${
-          selected ? 'bg-accent/10 text-accent-fg font-medium' : 'text-fg-muted hover:bg-surface-2 hover:translate-x-0.5'
-        } ${isDragging ? 'opacity-40' : ''}`}
-        role="button"
-        tabIndex={0}
-      >
-        {hasChildren ? (
-          <button aria-label={expanded ? 'Ordner zuklappen' : 'Ordner aufklappen'}
-            onClick={(e) => { e.stopPropagation(); onToggleExpand(); }}
-            onPointerDown={(e) => e.stopPropagation()}
-            className="w-4 h-4 flex items-center justify-center text-fg-subtle hover:text-fg-muted shrink-0"
-          >
-            {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-          </button>
-        ) : (
-          <span className="w-4 h-4 shrink-0" />
-        )}
-        <Icon size={15} className="shrink-0 transition-transform duration-150 group-hover:scale-110" style={folder.color ? { color: folder.color } : undefined} />
-        {folder.color && (
-          <span
-            className="shrink-0 w-1.5 h-1.5 rounded-full"
-            style={{ backgroundColor: folder.color }}
-            aria-hidden
-          />
-        )}
-        <span className="flex-1 text-left truncate">{label}</span>
-        {folder.retentionTag && (
-          <span
-            title={`${folder.retentionTag.name} (${folder.retentionTag.retentionDays}d)`}
-            className="shrink-0 inline-flex items-center text-[10px] text-fg-subtle"
-          >
-            <Clock size={11} />
-          </span>
-        )}
-        {folder.unreadCount > 0 && (
-          <AnimatedCounter value={folder.unreadCount} className="text-xs font-bold text-accent-fg" />
-        )}
-      </div>
-    </div>
-  );
-}
-
-// Module-level (never define components inside components — remounts on every render)
-function SectionHeader({ label, collapsed, onToggle, action }: {
-  label: string; collapsed: boolean; onToggle: () => void; action?: ReactNode;
-}) {
-  return (
-    <div className="flex items-center gap-1 mt-3 mb-1 px-2 text-xs font-semibold text-fg-subtle uppercase tracking-wide">
-      <button onClick={onToggle} aria-expanded={!collapsed} className="flex items-center gap-1 hover:text-fg-muted flex-1">
-        {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-        {label}
-      </button>
-      {action}
-    </div>
-  );
-}
-
 export function FolderTree({ onNewMail }: Props) {
   const ariaKeys = useAriaKeys();
   const qc = useQueryClient();
   const t = useT();
   const lang = useLanguageStore((s) => s.lang);
-  const { selectedFolderId, selectedFolderSource, setSelectedFolder } = useUiStore();
+  const { selectedFolderId, selectedFolderSource, setSelectedFolder, activeMailbox } = useUiStore();
+  const ownActive = activeMailbox.kind === 'own';
   const { favoritesCollapsed, folderTreeCollapsed, toggleFavorites, toggleFolderTree } = useUiPrefs();
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [dialog, setDialog] = useState<DialogState>(null);
@@ -281,38 +134,10 @@ export function FolderTree({ onNewMail }: Props) {
   // ── Build hierarchy ────────────────────────────────────────────────────────
   // Custom folders without parentId are virtually attached under INBOX, so that
   // no separate "My folders" section is needed anymore and old folders stay visible.
-  const childrenOf = useMemo(() => {
-    const byParent = new Map<string, FolderType[]>();
-    const inbox = all.find((f) => f.name === 'INBOX');
-    for (const f of all) {
-      let key: string;
-      if (f.parentId) {
-        key = f.parentId;
-      } else if (!SYSTEM_SET.has(f.name) && inbox) {
-        // Custom folder without parent → virtually under INBOX
-        key = inbox.id;
-      } else {
-        key = '__root__';
-      }
-      const arr = byParent.get(key) ?? [];
-      arr.push(f);
-      byParent.set(key, arr);
-    }
-    // Sort children by sortOrder, then name
-    for (const list of byParent.values()) {
-      list.sort((a, b) => {
-        const so = (a.sortOrder ?? 0) - (b.sortOrder ?? 0);
-        if (so !== 0) return so;
-        return (a.displayName ?? a.name).localeCompare(b.displayName ?? b.name);
-      });
-    }
-    return byParent;
-  }, [all]);
+  const childrenOf = useMemo(() => buildFolderChildren(all), [all]);
 
   const favorites = all.filter((f) => f.isFavorite);
-  const systemFolders = SYSTEM_ORDER
-    .map((name) => all.find((f) => f.name === name))
-    .filter((f): f is FolderType => f !== undefined);
+  const systemFolders = systemFoldersOf(all);
 
   const folderLabel = (folder: FolderType): string => {
     const sysKey = SYSTEM_LABEL_KEY[folder.name];
@@ -475,7 +300,7 @@ export function FolderTree({ onNewMail }: Props) {
           folder={folder}
           // Tree marker only when the selection was made in the tree context.
           // Prevents double highlighting in favorites + main tree.
-          selected={selectedFolderSource !== 'fav' && folder.id === selectedFolderId}
+          selected={ownActive && selectedFolderSource !== 'fav' && folder.id === selectedFolderId}
           isSystem={isSystem}
           hasChildren={hasChildren}
           expanded={expanded}
@@ -535,7 +360,7 @@ export function FolderTree({ onNewMail }: Props) {
                     key={`fav-${f.id}`}
                     folder={f}
                     // selected only when the selection was made IN the favorites section
-                    selected={selectedFolderSource === 'fav' && f.id === selectedFolderId}
+                    selected={ownActive && selectedFolderSource === 'fav' && f.id === selectedFolderId}
                     isSystem={SYSTEM_SET.has(f.name)}
                     hasChildren={false}
                     expanded={false}
@@ -574,6 +399,9 @@ export function FolderTree({ onNewMail }: Props) {
           </div>
         )}
         {/* Public folders completely removed in v3.18.31 */}
+
+        {/* 9.3: shared + delegated mailboxes (OWA "add shared folder") */}
+        <SharedMailboxTree />
       </nav>
 
       {/* v8.1: mailbox usage / quota level */}

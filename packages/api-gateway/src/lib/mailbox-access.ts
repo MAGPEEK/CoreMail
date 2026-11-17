@@ -49,6 +49,28 @@ export async function getWritableSharedMailbox(userId: string, sharedMailboxId: 
 }
 
 /**
+ * 9.3: one foreign mailbox by its webmail reference — `kind` 'shared' with the
+ * SharedMailbox id, or 'delegated' with the Mailbox id (GET /mail/delegated-mailboxes
+ * → mailboxId). Read access (FULL_ACCESS or READ_ONLY); `readOnly` tells callers
+ * whether write operations are allowed. null when the caller has no access.
+ */
+export async function getForeignMailbox(userId: string, kind: 'shared' | 'delegated', id: string): Promise<AccessibleMailbox | null> {
+  if (!id) return null;
+  return (await accessible(userId)).find((a) =>
+    a.kind === kind && (kind === 'shared' ? a.sharedMailboxId === id : a.mailboxId === id)) ?? null;
+}
+
+/** Every foreign mailbox the caller may read (9.3 webmail folder pane). */
+export async function listForeignMailboxes(userId: string): Promise<AccessibleMailbox[]> {
+  return accessible(userId);
+}
+
+/** Webmail reference of a foreign mailbox: "shared:<sharedMailboxId>" | "delegated:<mailboxId>". */
+export function foreignMailboxRef(a: AccessibleMailbox): string {
+  return a.kind === 'shared' ? `shared:${a.sharedMailboxId ?? ''}` : `delegated:${a.mailboxId}`;
+}
+
+/**
  * FULL_ACCESS delegation on a user mailbox (`mailboxId` = Mailbox.id, as listed by
  * GET /mail/delegated-mailboxes). The owner must exist, be active and not be the caller.
  */

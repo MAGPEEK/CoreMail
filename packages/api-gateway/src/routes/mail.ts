@@ -23,6 +23,7 @@ import { createUserRateLimiter, envInt } from '../lib/user-rate-limit.js';
 import { resolveReplyHeaders, prismaReplyLookup, parseClientReferences } from '../lib/reply-headers.js';
 import { rspamdControllerHeaders } from '../lib/rspamd-controller.js';
 import { createImageProxyHandler } from '../lib/image-proxy.js';
+import { deleteFolderKeepingMail } from '../lib/folder-delete.js';
 import {
   parseSearchQuery, buildSearchConditions, resolveFolderScope, searchChips, hasCriteria,
   MAX_QUERY_LENGTH, type FolderRef,
@@ -130,7 +131,7 @@ function parseAddrs(val: unknown): string[] {
   return String(val).split(',').map((s) => s.trim()).filter(Boolean);
 }
 
-const SYSTEM_FOLDER_NAMES = new Set(['INBOX', 'Drafts', 'Sent', 'Trash', 'Junk', 'Archive', 'Outbox']);
+export const SYSTEM_FOLDER_NAMES = new Set(['INBOX', 'Drafts', 'Sent', 'Trash', 'Junk', 'Archive', 'Outbox']);
 
 // GET /api/v1/mail/folders — list all folders
 mailRouter.get('/folders', async (req: Request, res: Response) => {
@@ -279,7 +280,10 @@ mailRouter.delete('/folders/:id', async (req: Request, res: Response) => {
     }
   }
 
-  await prisma.folder.delete({ where: { id } });
+  // 9.3: messages go to Trash through the message store before the folder row is
+  // deleted (the Message→Folder cascade would remove them without tombstone/modSeq).
+  const done = await deleteFolderKeepingMail(folder);
+  if (!done.ok) { res.status(409).json({ error: 'Papierkorb nicht gefunden' }); return; }
   res.json({ ok: true });
 });
 
@@ -624,7 +628,7 @@ mailRouter.get('/messages/:id/raw', async (req: Request, res: Response) => {
 });
 
 /** Parses `?limit=&offset=` for list endpoints: limit 1..200 (default 50), offset ≥ 0. */
-function parsePaging(query: Request['query']): { limit: number; offset: number } {
+export function parsePaging(query: Request['query']): { limit: number; offset: number } {
   const rawLimit = parseInt(String(query['limit'] ?? '50'), 10);
   const rawOffset = parseInt(String(query['offset'] ?? '0'), 10);
   return {
@@ -634,7 +638,7 @@ function parsePaging(query: Request['query']): { limit: number; offset: number }
 }
 
 // Columns returned by the message list and the search endpoint (MessageSummary)
-const MESSAGE_SUMMARY_SELECT = {
+export const MESSAGE_SUMMARY_SELECT = {
   id: true, uid: true, subject: true, fromAddr: true, fromName: true, toAddrs: true,
   date: true, flags: true, rawSize: true, pinnedAt: true, snoozeUntil: true,
   spamScore: true, scheduledAt: true, scheduledStatus: true, folderId: true,

@@ -7,7 +7,7 @@ import {
   startAuthInvalidationSubscriber, onAuthInvalidation, resolveBindAddress, listenWithRecovery,
 } from '@coremail/core';
 import { namespaceConfig } from './commands/namespaces.js';
-import { connectDatabase, waitForObjectStorage, prisma, loadProtocolCert } from '@coremail/storage';
+import { connectDatabase, waitForObjectStorage, prisma, loadProtocolCert, selfSignedFallbackHostname } from '@coremail/storage';
 import { applyAuthInvalidation, createImapServer, setImapHostname, setImapMaxMessageSize, type ImapTlsConfig } from './server/index.js';
 import { imapLiveSessions } from './session/live.js';
 import { invalidExemptEntries } from './server/limits.js';
@@ -56,11 +56,12 @@ async function refreshTlsConfig(): Promise<void> {
       return;
     }
 
-    // No matching cert in DB → self-signed fallback with fixed CN=mail.localhost
-    // (only useful on the very first start).  The admin later replaces it in the BCP
-    // with a real cert; a fixed CN prevents re-issuance when publicHostname
-    // is renamed.
-    const SELF_SIGNED_HOSTNAME = 'mail.localhost';
+    // No matching cert in DB → self-signed fallback (only useful on the very
+    // first start). The admin later replaces it in the BCP with a real cert.
+    // 9.3: CN = the public host name (mail.localhost only while none is configured);
+    // the api-gateway's startup reconciliation replaces this with a visible
+    // self-signed default row for the same name.
+    const SELF_SIGNED_HOSTNAME = await selfSignedFallbackHostname();
     log.info({ hostname: SELF_SIGNED_HOSTNAME }, 'No protocol cert in DB — generating self-signed certificate for IMAP');
     const { certPem, keyPem } = generateSelfSignedCert(SELF_SIGNED_HOSTNAME);
     _tlsConfig = tlsPemToBuffers(certPem, keyPem);

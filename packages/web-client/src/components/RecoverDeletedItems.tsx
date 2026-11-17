@@ -45,15 +45,14 @@ export function RecoverDeletedItemsPanel({ target }: { target?: RecoverTarget } 
   const done = () => {
     setSelected(new Set());
     void qc.invalidateQueries({ queryKey: recoverableQueryKey(target) });
-    if (target?.kind === 'shared') {
-      void qc.invalidateQueries({ queryKey: ['shared-mailbox-folders', target.id] });
-      void qc.invalidateQueries({ queryKey: ['shared-mailbox-messages', target.id] });
-      void qc.invalidateQueries({ queryKey: ['shared-mailbox-quota', target.id] });
-      return;
-    }
+    // 9.3: every mailbox shares the folder/message query keys (['folders', …], ['messages', folderId])
     void qc.invalidateQueries({ queryKey: ['folders'] });
     void qc.invalidateQueries({ queryKey: ['messages'] });
-    void qc.invalidateQueries({ queryKey: ['user-quota'] });
+    if (target?.kind === 'shared') {
+      void qc.invalidateQueries({ queryKey: ['shared-mailbox-quota', target.id] });
+    } else if (!target || target.kind === 'own') {
+      void qc.invalidateQueries({ queryKey: ['user-quota'] });
+    }
   };
   const restore = useMutation({
     mutationFn: (ids: string[]) => api.post<{ restored: unknown[] }>(`${apiBase}/restore`, { ids }),

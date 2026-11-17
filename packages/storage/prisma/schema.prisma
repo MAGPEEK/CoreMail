@@ -705,6 +705,9 @@ model UserSettings {
   oofPeriodId             String    @default("")
   // Personal inactivity timeout (null = use global setting)
   inactivityTimeoutMinutes Int?
+  // 9.3: shared / delegated mailboxes the user hid from the webmail folder pane
+  // ("shared:<sharedMailboxId>" / "delegated:<mailboxId>"; access itself is unchanged)
+  hiddenSharedMailboxes   String[]  @default([])
   updatedAt               DateTime  @updatedAt
 
   @@map("user_settings")
@@ -1567,6 +1570,37 @@ model ServerSettings {
   @@map("server_settings")
 }
 
+// ── Branding (9.3) ─────────────────────────────────────────────────────────────
+// Global singleton (id "singleton"): product name, colours, logos, login page.
+// NULL productName / primaryColor = environment default (BRANDING_NAME /
+// BRANDING_COLOR, else "CoreMail" / #0078d4). Asset keys point to the object
+// store (`branding/<sha256>.<ext>`, content-addressed); the content type is kept
+// next to the key. `version` increments on every change (cache busting of the
+// served index.html and the public GET /api/v1/branding).
+model Branding {
+  id                  String   @id @default("singleton")
+  version             Int      @default(1)
+  productName         String?
+  primaryColor        String?
+  headerColor         String?
+  logoLightKey        String?
+  logoLightType       String?
+  logoDarkKey         String?
+  logoDarkType        String?
+  faviconKey          String?
+  faviconType         String?
+  loginBackgroundKey  String?
+  loginBackgroundType String?
+  loginText           String   @default("")
+  // [{ label, url }] — max 5, https:// or mailto: only
+  footerLinks         Json     @default("[]")
+  allowUserAccent     Boolean  @default(true)
+  showPoweredBy       Boolean  @default(true)
+  updatedAt           DateTime @updatedAt
+
+  @@map("branding")
+}
+
 // ── Service listeners ──────────────────────────────────────────────────────────
 // Configurable listeners per protocol service (SMTP / IMAP / POP3)
 // Shows which addresses + ports a service listens on, whether TLS is active, etc.
@@ -1701,7 +1735,11 @@ model Certificate {
   // Let's Encrypt account key (PEM) — stored per server
   acmeAccount String?                         // ACME Account Key PEM
   acmeEmail   String?                         // e-mail for Let's Encrypt notifications
+  // 9.2.x: Let's Encrypt staging environment (test, untrusted) — kept for retries / renewals
+  acmeStaging Boolean    @default(false)
   lastError   String?
+  // 9.2.x: classified failure (connection, dns, caa, rate-limited, timeout, …) — lib/acme-errors.ts
+  lastErrorCode String?
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
 

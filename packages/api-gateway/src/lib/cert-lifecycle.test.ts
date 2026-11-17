@@ -10,7 +10,7 @@ import forge from 'node-forge';
 import {
   BACKOFF_BASE_MS, BACKOFF_MAX_MS, backoffDelayMs, decideRenewal, deriveCertStatus,
   hostnameUpdateFor, isDefaultHostname, isPemCurrentlyValid, parseCertValidity, planSni,
-  recomputeStatus, resolveSni, selectProxyCerts,
+  recomputeStatus, resolveSni, selectProxyCerts, buildFullChainPem, uncoveredDomains,
   type ProxyCertRow, type RenewalCandidate,
 } from './cert-lifecycle.js';
 
@@ -227,5 +227,42 @@ describe('HTTPS proxy certificate selection', () => {
     const plan = planSni(selectProxyCerts([row('x', ['x.test'], -100, -1)], NOW));
     assert.equal(plan.defaultId, null);
     assert.equal(resolveSni(plan, 'x.test'), null);
+  });
+});
+
+describe('9.2.x: staging ordering, full chain, domain coverage', () => {
+  const row = (id: string, names: string[], from: number, to: number, over: Partial<ProxyCertRow> = {}): ProxyCertRow => ({
+    id, name: id, certPem: makeCert(names, at(from), at(to)), keyPem: KEY_PEM, chainPem: null,
+    domains: names, isActiveHttps: false, createdAt: at(from), ...over,
+  });
+
+  test('a newer Let\'s Encrypt staging certificate never replaces a trusted one in SNI', () => {
+    const rows = [
+      row('trusted', ['mail.example.com'], -20, 70),
+      row('staging-test', ['mail.example.com'], -1, 89, { acmeStaging: true }),
+    ];
+    const selected = selectProxyCerts(rows, NOW);
+    assert.deepEqual(selected.map(c => c.id), ['trusted', 'staging-test']);
+    assert.equal(resolveSni(planSni(selected), 'mail.example.com'), 'trusted');
+    // alone, a staging certificate is still served (explicit test setups)
+    assert.equal(resolveSni(planSni(selectProxyCerts([rows[1]!], NOW)), 'mail.example.com'), 'staging-test');
+  });
+
+  test('buildFullChainPem appends chain certificates that are not part of the leaf PEM yet', () => {
+    const leaf = makeCert(['mail.example.com'], at(-1), at(80));
+    const inter = makeCert(['Intermediate CA'], at(-100), at(800));
+    assert.equal(buildFullChainPem(leaf, null), leaf);
+    const full = buildFullChainPem(leaf, inter);
+    assert.equal((full.match(/BEGIN CERTIFICATE/g) ?? []).length, 2);
+    assert.ok(full.startsWith(leaf.trimEnd()), 'leaf stays first');
+    assert.equal(buildFullChainPem(full, inter), full, 'no duplicate when the chain is already included');
+  });
+
+  test('uncoveredDomains: exact names, one-label wildcards, case-insensitive', () => {
+    const pem = makeCert(['mail.example.com', '*.example.org'], at(-1), at(80));
+    assert.deepEqual(uncoveredDomains(pem, ['MAIL.example.com', 'a.example.org']), []);
+    assert.deepEqual(uncoveredDomains(pem, ['autodiscover.example.com', 'a.b.example.org', 'example.org']),
+      ['autodiscover.example.com', 'a.b.example.org', 'example.org']);
+    assert.deepEqual(uncoveredDomains(pem, ['*.example.org']), []);
   });
 });

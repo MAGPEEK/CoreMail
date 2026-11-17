@@ -28,6 +28,7 @@
 import { createLogger } from '@coremail/core';
 import { prisma } from './prisma/index.js';
 import { notifyMailboxInbox } from './internal-notify.js';
+import { getProductName } from './branding.js';
 
 const log = createLogger('storage:quota');
 
@@ -288,7 +289,7 @@ async function defaultWarningSender(s: QuotaStatus): Promise<void> {
     .catch(() => null);
   const { subject, bodyText } = quotaWarningText(s);
   await notifyMailboxInbox(s.mailboxId, {
-    fromName: 'CoreMail System',
+    fromName: `${await getProductName()} System`, // 9.3: branded product name
     fromAddr: `system@${settings?.publicHostname || 'localhost'}`,
     subject,
     bodyText,

@@ -19,7 +19,7 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { createTransport } from 'nodemailer';
-import { prisma } from '@coremail/storage';
+import { prisma, getProductName, brandDisplayName } from '@coremail/storage';
 import {
   login,
   loginOutcomeToHttp,
@@ -62,7 +62,9 @@ function clientInfo(req: Request): { ip: string; userAgent: string } {
 async function sendResetEmail(to: string, resetUrl: string): Promise<void> {
   const settings = await prisma.serverSettings.findUnique({ where: { id: 'singleton' } });
   const fromAddr = settings?.adminEmail?.trim() || `noreply@${settings?.publicHostname || 'mail.local'}`;
-  const orgName  = settings?.orgName || 'CoreMail';
+  // 9.3: the branded product name (unbranded: the organisation name, as before)
+  const orgName  = brandDisplayName(await getProductName(), settings?.orgName);
+  const orgHtml  = orgName.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   const minutes  = Math.round(RESET_TOKEN_TTL / 60);
 
   const transport = createTransport({
@@ -74,11 +76,11 @@ async function sendResetEmail(to: string, resetUrl: string): Promise<void> {
   });
 
   await transport.sendMail({
-    from: `"${orgName}" <${fromAddr}>`,
+    from: { name: orgName, address: fromAddr },
     to,
     subject: `${orgName} — Passwort zurücksetzen`,
     text: `Guten Tag,\n\njemand (oder Sie selbst) hat eine Passwort-Zurücksetzung für Ihr Konto angefordert.\n\nKlicken Sie auf den folgenden Link, um ein neues Passwort zu setzen (gültig für ${minutes} Minuten):\n\n${resetUrl}\n\nFalls Sie diese Anfrage nicht gestellt haben, können Sie diese E-Mail ignorieren.\nIhr Konto ist weiterhin sicher.\n\n– ${orgName}`,
-    html: `<p>Guten Tag,</p><p>jemand (oder Sie selbst) hat eine Passwort-Zurücksetzung für Ihr Konto angefordert.</p><p><a href="${resetUrl}" style="display:inline-block;padding:10px 20px;background:#4f46e5;color:#fff;border-radius:6px;text-decoration:none;font-weight:bold;">Passwort zurücksetzen</a></p><p style="font-size:12px;color:#6b7280;">Dieser Link ist ${minutes} Minuten gültig. Falls Sie diese Anfrage nicht gestellt haben, können Sie diese E-Mail ignorieren.</p><p>– ${orgName}</p>`,
+    html: `<p>Guten Tag,</p><p>jemand (oder Sie selbst) hat eine Passwort-Zurücksetzung für Ihr Konto angefordert.</p><p><a href="${resetUrl}" style="display:inline-block;padding:10px 20px;background:#4f46e5;color:#fff;border-radius:6px;text-decoration:none;font-weight:bold;">Passwort zurücksetzen</a></p><p style="font-size:12px;color:#6b7280;">Dieser Link ist ${minutes} Minuten gültig. Falls Sie diese Anfrage nicht gestellt haben, können Sie diese E-Mail ignorieren.</p><p>– ${orgHtml}</p>`,
   });
 }
 

@@ -10,7 +10,9 @@ import { invalidRegexConditionMessage } from '../lib/rule-validation.js';
 import { checkPasswordPolicy, revokeAllSessions } from '@coremail/storage/auth';
 import { requireAuth } from '../middleware/auth.js';
 import { allowedAreas, isAdminRole } from '../lib/rbac.js';
-import { getReadableSharedMailbox, getWritableSharedMailbox } from '../lib/mailbox-access.js';
+import { getReadableSharedMailbox, getWritableSharedMailbox, listForeignMailboxes, foreignMailboxRef } from '../lib/mailbox-access.js';
+import { deleteFolderKeepingMail } from '../lib/folder-delete.js';
+import { auditForeignWrite, type ForeignAuditAction } from '../lib/foreign-audit.js';
 
 export const userRouter: RouterType = Router();
 userRouter.use(requireAuth);
@@ -675,6 +677,88 @@ userRouter.get('/shared-mailboxes/:id/quota', async (req: Request, res: Response
   res.json({ usedBytes: status.usedBytes, level: status.level, ...status.limits });
 });
 
+// ── 9.3: shared / delegated mailboxes in the webmail folder pane ─────────────
+// GET   /api/v1/user/accessible-mailboxes          every mailbox the user may read
+//       (listAccessibleMailboxes — FULL_ACCESS / READ_ONLY), with its permissions and
+//       whether the user hid it from the folder pane
+// PATCH /api/v1/user/accessible-mailboxes/:ref  {hidden}   ref = shared:<id> | delegated:<mailboxId>
+// Hiding is a display preference only (UserSettings.hiddenSharedMailboxes); it never
+// changes access. Entries of mailboxes the user lost access to are pruned on write.
+const MAILBOX_REF_RE = /^(shared|delegated):[A-Za-z0-9_-]{1,64}$/;
+const MAX_HIDDEN_MAILBOXES = 500;
+
+async function accessibleMailboxView(userId: string) {
+  const [list, settings] = await Promise.all([
+    listForeignMailboxes(userId),
+    prisma.userSettings.findUnique({ where: { userId }, select: { hiddenSharedMailboxes: true } }),
+  ]);
+  const sharedIds = list.filter((a) => a.kind === 'shared' && a.sharedMailboxId).map((a) => a.sharedMailboxId as string);
+  // Shared mailboxes: every permission row (FULL_ACCESS/READ_ONLY + SEND_AS/SEND_ON_BEHALF)
+  const perms = sharedIds.length
+    ? await prisma.sharedMailboxPerm.findMany({
+      where: { userId, sharedMailboxId: { in: sharedIds } },
+      select: { sharedMailboxId: true, permission: true },
+    })
+    : [];
+  const hidden = new Set(settings?.hiddenSharedMailboxes ?? []);
+  return list.map((a) => {
+    const ref = foreignMailboxRef(a);
+    const permissions = a.kind === 'shared'
+      ? [...new Set(perms.filter((p) => p.sharedMailboxId === a.sharedMailboxId).map((p) => String(p.permission)))].sort()
+      : [a.readOnly ? 'READ_ONLY' : 'FULL_ACCESS'];
+    return {
+      ref,
+      kind: a.kind,
+      id: a.kind === 'shared' ? (a.sharedMailboxId ?? '') : a.mailboxId,
+      email: a.email,
+      displayName: a.displayName,
+      readOnly: a.readOnly,
+      permissions,
+      hidden: hidden.has(ref),
+    };
+  });
+}
+
+userRouter.get('/accessible-mailboxes', async (req: Request, res: Response) => {
+  res.json(await accessibleMailboxView(req.apiUser!.userId));
+});
+
+userRouter.patch('/accessible-mailboxes/:ref', async (req: Request, res: Response) => {
+  const ref = String((req.params as { ref?: string }).ref ?? '');
+  const body = z.object({ hidden: z.boolean() }).safeParse(req.body ?? {});
+  if (!MAILBOX_REF_RE.test(ref) || !body.success) { res.status(400).json({ error: 'Ungültige Eingabe' }); return; }
+  const userId = req.apiUser!.userId;
+  const view = await accessibleMailboxView(userId);
+  const entry = view.find((v) => v.ref === ref);
+  // Hiding needs access (no oracle beyond the user's own list); un-hiding always works.
+  if (!entry && body.data.hidden) { res.status(404).json({ error: 'Postfach nicht gefunden' }); return; }
+
+  // view.hidden only covers accessible mailboxes → stale entries are pruned here
+  const current = view.filter((v) => v.hidden).map((v) => v.ref);
+  const hiddenSharedMailboxes = (body.data.hidden
+    ? [...new Set([...current, ref])]
+    : current.filter((r) => r !== ref)).slice(0, MAX_HIDDEN_MAILBOXES);
+  await prisma.userSettings.upsert({
+    where: { userId },
+    create: { userId, hiddenSharedMailboxes },
+    update: { hiddenSharedMailboxes },
+  });
+  res.json(entry ? { ...entry, hidden: body.data.hidden } : { ref, hidden: false });
+});
+
+// ── Pre-9.3 shared-mailbox content API (compat) ───────────────────────────────
+// /api/v1/user/shared-mailboxes/:id/{folders,messages} keep their 9.2 request /
+// response shapes and status codes (SemVer: no breaking change in a MINOR release).
+// The 9.3 webmail uses /api/v1/mail/shared-mailboxes/:id/… (routes/foreign-mailbox.ts).
+// Deviations from 9.2, both safety fixes: DELETE of a non-empty folder moves its
+// messages to Trash instead of removing them (409 when there is no Trash), and writes
+// are audited (mailbox.foreign.*).
+
+/** Audit a write through the compat routes (targetType sharedMailbox). */
+function auditCompat(req: Request, sharedMailboxId: string, mailboxId: string, action: ForeignAuditAction, changes: Record<string, unknown>): void {
+  auditForeignWrite(req, { kind: 'shared', id: sharedMailboxId, mailboxId }, action, changes);
+}
+
 // GET /api/v1/user/shared-mailboxes/:id/folders
 userRouter.get('/shared-mailboxes/:id/folders', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
@@ -787,6 +871,7 @@ userRouter.post('/shared-mailboxes/:id/folders', async (req: Request, res: Respo
         totalCount: true, unreadCount: true, isFavorite: true, sortOrder: true, color: true,
       },
     });
+    auditCompat(req, id, access.mailboxId, 'mailbox.foreign.folder.create', { folderId: folder.id, name: folder.name, parentId: parentId ?? null });
     res.status(201).json(folder);
   } catch (err) {
     if (String(err).includes('Unique constraint')) {
@@ -861,6 +946,11 @@ userRouter.patch('/shared-mailboxes/:id/folders/:folderId', async (req: Request,
       totalCount: true, unreadCount: true, isFavorite: true, sortOrder: true, color: true,
     },
   });
+  if (displayName !== undefined || parentId !== undefined) {
+    auditCompat(req, id, access.mailboxId, 'mailbox.foreign.folder.update', {
+      folderId, from: { name: folder.name, parentId: folder.parentId }, to: { name: updated.name, parentId: updated.parentId },
+    });
+  }
   res.json(updated);
 });
 
@@ -884,7 +974,13 @@ userRouter.delete('/shared-mailboxes/:id/folders/:folderId', async (req: Request
     return;
   }
 
-  await prisma.folder.delete({ where: { id: folderId } });
+  // 9.3 (A1): the messages go to the mailbox Trash through the message store before
+  // the folder row is deleted — pre-9.3 the Message→Folder cascade removed them
+  // without tombstone. The contract (204) is unchanged; without a Trash folder a
+  // non-empty folder is refused (409) instead of losing its mail.
+  const done = await deleteFolderKeepingMail(folder);
+  if (!done.ok) { res.status(409).json({ error: 'Papierkorb nicht gefunden' }); return; }
+  auditCompat(req, id, access.mailboxId, 'mailbox.foreign.folder.delete', { folderId, name: folder.name, movedToTrash: done.moved, live: done.live });
   res.status(204).end();
 });
 
@@ -895,7 +991,7 @@ userRouter.post('/shared-mailboxes/:id/folders/:folderId/empty', async (req: Req
   if (!access) { res.status(403).json({ error: 'Vollzugriff erforderlich' }); return; }
 
   const folder = await prisma.folder.findFirst({
-    where: { id: folderId, mailboxId: access.mailboxId }, select: { id: true },
+    where: { id: folderId, mailboxId: access.mailboxId }, select: { id: true, name: true },
   });
   if (!folder) { res.status(404).json({ error: 'Ordner nicht gefunden' }); return; }
 
@@ -905,8 +1001,13 @@ userRouter.post('/shared-mailboxes/:id/folders/:folderId/empty', async (req: Req
     if (live.length > 0) await expunge(tx, live.map((m) => m.id), { mailboxId: access.mailboxId, where: { folderId, deletedAt: null } });
     await tx.folder.update({ where: { id: folderId }, data: { totalCount: 0, unreadCount: 0 } });
   });
+  auditCompat(req, id, access.mailboxId, 'mailbox.foreign.folder.empty', { folderId, name: folder.name, expunged: live.length });
   res.json({ deleted: live.length });
 });
+
+// Folder + message operations of the 9.3 webmail (shared + delegated):
+// routes/foreign-mailbox.ts, mounted on /api/v1/mail/shared-mailboxes/:id and
+// /api/v1/mail/delegated-mailboxes/:id in server.ts.
 
 // ── GET /api/v1/user/preferences ─────────────────────────────────────────────
 // Personal user preferences (incl. inactivityTimeoutMinutes)

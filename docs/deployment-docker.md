@@ -118,6 +118,8 @@ PEPPER=$(openssl rand -hex 32)
 
 CoreMail terminates TLS itself on port 443. Port `"443:443"` is already mapped in `docker-compose.yml`. After startup, upload and activate a certificate in the BCP under **Server → SSL/TLS**. Hot reload without restart.
 
+**Mail ports (SMTP/IMAP/POP3):** assigning the services SMTP/IMAP/POP3 to a certificate in BCP → SSL/TLS applies it to 25/465/587/993/143/995/110 immediately (9.3); the SSL/TLS page shows per port which certificate is really served. A Let's Encrypt certificate for the public host name is assigned automatically while the mail ports still use the self-signed default. Details: [certificates.md](certificates.md).
+
 ```env
 # .env — default, can be omitted
 HTTPS_PROXY_ENABLED=true
@@ -367,10 +369,15 @@ docker compose -f infra/docker/docker-compose.yml start
 
 ### Automatic backup (via the CoreMail backup service)
 
-- Configurable via **BCP → Server → Backup**
-- Stores to MinIO (local) or an external S3 bucket
-- Point-in-time recovery with configurable retention (`BACKUP_RETENTION_DAYS`)
-- Trigger manually: `curl -X POST http://localhost:3000/api/v1/admin/backup/trigger -H "Authorization: Bearer $TOKEN"`
+- **Nothing is backed up automatically until a schedule exists**: BCP → Backup & Restore →
+  Zeitpläne → **Empfohlene Sicherung einrichten** creates a nightly system backup (database dump)
+  and a nightly full backup of every mailbox (`BACKUP_SCHEDULE` / `BACKUP_RETENTION_DAYS` are
+  the defaults of that button, they never start a backup by themselves)
+- Encrypted (`BACKUP_ENCRYPTION_KEY`) into MinIO (bundled) or an external S3 bucket
+- Restore of stored archives and uploaded files: BCP → Backup & Restore → Wiederherstellen
+- What is covered and what is not (object store, `.env` secrets), restore procedures:
+  **[backup.md](backup.md)**
+- Trigger manually: `curl -X POST http://localhost:3000/api/v1/admin/backups/full -H "Authorization: Bearer $TOKEN"`
 
 ---
 
@@ -535,6 +542,8 @@ docker exec coremail ss -tlnp
 | `supervisorctl status` shows FATAL | Process crashed | Read the logs: `docker exec coremail supervisorctl tail smtp-server` |
 | SMTP: "Connection refused" on port 25 | Port blocked by the provider | Contact the hosting provider and have port 25 unblocked |
 | Redis connection error | Wrong `REDIS_PASSWORD` | Check `.env`, restart the stack |
+| Outlook / iPhone: "certificate unknown" on IMAP/SMTP | A mail port serves the self-signed default or a certificate for another name | BCP → SSL/TLS → "Tatsächlich ausgeliefert" shows the certificate per port; assign SMTP/IMAP/POP3 to the trusted certificate for the public host name (**Jetzt zuweisen**). The client IP and the hint `client does not trust the served certificate` appear in the IMAP/SMTP/POP3 logs. See [certificates.md](certificates.md) |
+| Let's Encrypt certificate ends in "Error" | DNS, port 80, CAA or a rate limit — the message in BCP → SSL/TLS (expand the row) is what Let's Encrypt reported | BCP → SSL/TLS → Let's Encrypt → **Check prerequisites** (DNS, CAA, local token check and a real validation by the Let's Encrypt staging environment), fix the cause, then **Retry**. Host port 80 must be forwarded to the container's HTTP port (3000). The server does not need to reach its own public address. Use the staging switch for tests — production allows only 5 failed validations per host name and hour |
 
 ---
 

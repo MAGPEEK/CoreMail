@@ -27,6 +27,8 @@ interface DkimRecord { selector: string; dnsName: string; dnsValue: string }
 // ── DNS check types ───────────────────────────────────────────────────────────
 interface DnsRec {
   type: string; name: string; expected: string; ok: boolean; found: string | null; warning?: string; recommended?: boolean;
+  /** 9.3: hard error (e.g. MX is an IP literal or a CNAME) with the suggested fix. */
+  error?: string; suggestion?: string;
   optional?: boolean; srv?: SrvParts;
 }
 interface DnsCheckResult {
@@ -111,7 +113,8 @@ function DnsRow({ label, record, domain, hostOverride, valueOverride, extra }: D
           ? <CheckCircle size={14} className="mt-0.5 shrink-0 text-success-fg" />
           // v8.1: recommended records are yellow when missing, never red; optional ones grey
           : <AlertCircle size={14} className={`mt-0.5 shrink-0 ${
-              record.warning ? 'text-warning-fg'
+              record.error ? 'text-danger-fg'
+              : record.warning ? 'text-warning-fg'
               : record.optional ? 'text-fg-subtle'
               : record.recommended ? 'text-warning-fg' : 'text-danger-fg'}`} />}
         <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0 mt-0.5 leading-none ${
@@ -152,6 +155,9 @@ function DnsRow({ label, record, domain, hostOverride, valueOverride, extra }: D
             <div className="mt-1.5 text-[10px] text-fg-subtle bg-surface-2 rounded px-2 py-0.5 font-mono break-all">
               {t('domain_dns_found_label')}: {record.found.slice(0, 80)}{record.found.length > 80 ? '…' : ''}
             </div>
+          )}
+          {record.error && (
+            <div className="mt-1.5 text-[10px] text-danger-fg bg-danger-bg rounded px-2 py-1 leading-relaxed" role="alert">✖ {record.error}</div>
           )}
           {record.warning && (
             <div className="mt-1.5 text-[10px] text-warning-fg bg-warning-bg rounded px-2 py-1 leading-relaxed">⚠ {record.warning}</div>

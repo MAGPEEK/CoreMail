@@ -4,6 +4,8 @@ import type { MessageFilter } from '../api/types.js';
 import type { ShortcutSetId } from '../lib/shortcuts.js';
 import { DEFAULT_SEND_DELAY_SEC, normalizeSendDelay, type SendDelaySec } from '../lib/send-delay.js';
 import type { DraftAttachmentRef } from '../lib/draft-autosave.js';
+import { migrateThemeState } from '../lib/branding.js';
+import { OWN_MAILBOX, mailboxKey, toggleExpanded, type MailboxRef } from '../lib/mailboxContext.js';
 
 export type ComposeMode = 'new' | 'reply' | 'replyAll' | 'forward';
 /** A local file, or an attachment already stored with the server draft. */
@@ -29,6 +31,8 @@ export interface ComposeContext {
   ccAddrs?: string[];
   bodyHtml?: string;
   bodyText?: string;
+  /** 9.3: mailbox the compose was opened in (reply original, From choice); default: the active one */
+  mailbox?: MailboxRef;
 }
 
 // ── UI state (not persistent) ─────────────────────────────────────────────────
@@ -40,6 +44,8 @@ interface UiState {
   selectedFolderId: string | null;
   selectedFolderSource: FolderSelectionSource;
   selectedMessageId: string | null;
+  /** 9.3: mailbox shown in the mail view (own / shared / delegated) */
+  activeMailbox: MailboxRef;
   composeOpen: boolean;
   composeCtx: ComposeContext | null;
   sidebarCollapsed: boolean;
@@ -52,7 +58,10 @@ interface UiState {
   lastSelectedId: string | null;
   filter: MessageFilter;
 
-  setSelectedFolder: (id: string | null, source?: FolderSelectionSource) => void;
+  /** Selects a folder; `mailbox` = the mailbox it belongs to (default: own). */
+  setSelectedFolder: (id: string | null, source?: FolderSelectionSource, mailbox?: MailboxRef) => void;
+  /** Switches the mail view to another mailbox (its INBOX is selected once loaded). */
+  setActiveMailbox: (ref: MailboxRef) => void;
   setSelectedMessage: (id: string | null) => void;
   openCompose: (ctx?: Partial<ComposeContext>) => void;
   closeCompose: () => void;
@@ -69,6 +78,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   selectedFolderId: null,
   selectedFolderSource: 'tree',
   selectedMessageId: null,
+  activeMailbox: OWN_MAILBOX,
   composeOpen: false,
   composeCtx: null,
   sidebarCollapsed: false,
@@ -78,8 +88,9 @@ export const useUiStore = create<UiState>((set, get) => ({
   lastSelectedId: null,
   filter: 'all',
 
-  setSelectedFolder: (id, source = 'tree') =>
+  setSelectedFolder: (id, source = 'tree', mailbox = OWN_MAILBOX) =>
     set({
+      activeMailbox: mailbox,
       selectedFolderId: id,
       selectedFolderSource: source,
       selectedMessageId: null,
@@ -87,8 +98,20 @@ export const useUiStore = create<UiState>((set, get) => ({
       lastSelectedId: null,
       filter: 'all',
     }),
+  setActiveMailbox: (ref) => {
+    if (mailboxKey(ref) === mailboxKey(get().activeMailbox)) return;
+    set({
+      activeMailbox: ref,
+      selectedFolderId: null,
+      selectedFolderSource: 'tree',
+      selectedMessageId: null,
+      selectedIds: new Set(),
+      lastSelectedId: null,
+      filter: 'all',
+    });
+  },
   setSelectedMessage: (id) => set({ selectedMessageId: id }),
-  openCompose: (ctx) => set({ composeOpen: true, composeCtx: { mode: 'new', ...ctx } }),
+  openCompose: (ctx) => set({ composeOpen: true, composeCtx: { mode: 'new', mailbox: get().activeMailbox, ...ctx } }),
   closeCompose: () => set({ composeOpen: false, composeCtx: null }),
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
 
@@ -129,6 +152,9 @@ interface UiPrefs {
   folderTreeCollapsed: boolean;
   calendarShowWeekNumbers: boolean;
   hiddenCalendarIds: string[];
+  /** 9.3: expanded shared/delegated mailbox roots in the folder pane (mailbox keys) */
+  expandedMailboxes: string[];
+  setMailboxExpanded: (key: string, open?: boolean) => void;
   /** Keyboard shortcuts on/off + set (Settings → View) */
   shortcutsEnabled: boolean;
   shortcutSet: ShortcutSetId;
@@ -157,6 +183,8 @@ export const useUiPrefs = create<UiPrefs>()(
       folderTreeCollapsed: false,
       calendarShowWeekNumbers: true,
       hiddenCalendarIds: [],
+      expandedMailboxes: [],
+      setMailboxExpanded: (key, open) => set((s) => ({ expandedMailboxes: toggleExpanded(s.expandedMailboxes ?? [], key, open) })),
       shortcutsEnabled: true,
       shortcutSet: 'coremail',
       sendDelaySec: DEFAULT_SEND_DELAY_SEC,
@@ -195,20 +223,31 @@ export const ACCENT_COLORS = [
 
 interface ThemeState {
   theme:       ThemeMode;
-  accentRgb:   string;   // e.g. "0 120 212"
+  /**
+   * The user's explicit accent choice ("r g b"), or null = never chose → the
+   * brand primary colour. Only honoured while the branding allows user accents
+   * (lib/branding.ts resolveAccentChannels).
+   */
+  accentRgb:   string | null;
   setTheme:    (theme: ThemeMode) => void;
-  setAccent:   (rgb: string) => void;
+  setAccent:   (rgb: string | null) => void;
 }
 
 export const useThemeStore = create<ThemeState>()(
   persist(
     (set) => ({
       theme:     'system',
-      accentRgb: '0 120 212',
+      accentRgb: null,
       setTheme:  (theme) => set({ theme }),
       setAccent: (rgb)   => set({ accentRgb: rgb }),
     }),
-    { name: 'coremail-theme' },
+    {
+      name: 'coremail-theme',
+      // 9.3: version 0 stored "0 120 212" for everyone who never picked a colour
+      // → migrated to null so those users follow the brand colour.
+      version: 1,
+      migrate: (persisted, version) => migrateThemeState(persisted, version) as unknown as ThemeState,
+    },
   ),
 );
 

@@ -7,8 +7,9 @@
 export interface ScheduleData {
   name: string;
   cron: string;
-  scope: 'full' | 'user';
-  format: 'zip' | 'mbox';
+  /** 9.3: 'system' = database dump + object-store manifest (system-backup.ts). */
+  scope: 'full' | 'user' | 'system';
+  format: 'zip' | 'mbox' | 'pgdump';
   targetUserId: string | null;
   retentionDays: number;
   enabled: boolean;
@@ -39,11 +40,11 @@ export function parseScheduleInput(body: unknown, current?: ScheduleData): Sched
     out.cron = b['cron'].trim();
   }
   if (b['scope'] !== undefined) {
-    if (b['scope'] !== 'full' && b['scope'] !== 'user') return { ok: false, error: 'scope must be full or user' };
+    if (b['scope'] !== 'full' && b['scope'] !== 'user' && b['scope'] !== 'system') return { ok: false, error: 'scope must be full, user or system' };
     out.scope = b['scope'];
   }
   if (b['format'] !== undefined) {
-    if (b['format'] !== 'zip' && b['format'] !== 'mbox') return { ok: false, error: 'format must be zip or mbox' };
+    if (b['format'] !== 'zip' && b['format'] !== 'mbox' && b['format'] !== 'pgdump') return { ok: false, error: 'format must be zip or mbox' };
     out.format = b['format'];
   }
   if (b['targetUserId'] !== undefined) {
@@ -65,8 +66,11 @@ export function parseScheduleInput(body: unknown, current?: ScheduleData): Sched
   const scope = out.scope ?? current?.scope ?? 'full';
   const target = out.targetUserId !== undefined ? out.targetUserId : (current?.targetUserId ?? null);
   if (scope === 'user' && !target) return { ok: false, error: 'targetUserId required for scope user' };
-  if (scope === 'full') {
-    out.format = 'zip';
+  if (scope === 'user' && (out.format ?? current?.format) === 'pgdump') return { ok: false, error: 'format must be zip or mbox' };
+  if (scope === 'full' || scope === 'system') {
+    // full backups are always ZIP, system backups always a database dump; neither has a target
+    const forced = scope === 'full' ? 'zip' : 'pgdump';
+    if (out.scope !== undefined || out.format !== undefined || current?.format !== forced) out.format = forced;
     if (target) out.targetUserId = null;
   }
   if (create) {
@@ -127,4 +131,72 @@ export function fullBackupUserKey(date: Date, runId: string, email: string): str
   const safeRun = runId.replace(/[^A-Za-z0-9_-]/g, '_');
   const safeUser = email.replace('@', '_at_').replace(/[^A-Za-z0-9._+-]/g, '_');
   return `full-backup/${day}/${safeRun}/${safeUser}.zip`;
+}
+
+/**
+ * 9.3: "Empfohlene Sicherung einrichten" (BCP, explicit one click — never
+ * created silently). Returns the schedules to create so that the installation
+ * has (1) a nightly full backup of every mailbox and (2) a nightly system
+ * backup (database dump + object-store manifest). Only what is missing is
+ * returned (an existing enabled schedule of the same scope counts).
+ * BACKUP_SCHEDULE (cron of the full backup, compose default "0 2 * * *") and
+ * BACKUP_RETENTION_DAYS (compose default 30) set the defaults — before 9.3
+ * these variables were documented but never read.
+ */
+export function recommendedSchedules(
+  existing: ReadonlyArray<Pick<ScheduleData, 'scope' | 'enabled'>>,
+  env: Record<string, string | undefined> = process.env,
+  isValidCron: (cron: string) => boolean = (c) => /^\S+(\s+\S+){4}$/.test(c.trim()),
+): ScheduleData[] {
+  const envCron = (env['BACKUP_SCHEDULE'] ?? '').trim();
+  const fullCron = envCron && isValidCron(envCron) ? envCron : '0 2 * * *';
+  const days = Number(env['BACKUP_RETENTION_DAYS']);
+  const retentionDays = Number.isInteger(days) && days >= RETENTION_MIN && days <= RETENTION_MAX ? days : 14;
+  const has = (scope: ScheduleData['scope']): boolean => existing.some((s) => s.enabled && s.scope === scope);
+  const out: ScheduleData[] = [];
+  if (!has('system')) {
+    out.push({
+      name: 'Empfohlen: Tägliche System-Sicherung (Datenbank)', cron: systemCronBefore(fullCron), scope: 'system',
+      format: 'pgdump', targetUserId: null, retentionDays, enabled: true,
+    });
+  }
+  if (!has('full')) {
+    out.push({
+      name: 'Empfohlen: Tägliches Vollbackup aller Postfächer', cron: fullCron, scope: 'full',
+      format: 'zip', targetUserId: null, retentionDays, enabled: true,
+    });
+  }
+  return out;
+}
+
+/** System backup 30 minutes before a simple daily "M H * * *" full backup, else 01:30 UTC. */
+export function systemCronBefore(fullCron: string): string {
+  const m = /^(\d{1,2})\s+(\d{1,2})\s+\*\s+\*\s+\*$/.exec(fullCron.trim());
+  if (!m) return '30 1 * * *';
+  const total = (Number(m[2]) * 60 + Number(m[1]) - 30 + 1440) % 1440;
+  return `${total % 60} ${Math.floor(total / 60)} * * *`;
+}
+
+/** Text of the failure notice to the admins (internal notification into their INBOX). */
+export function failureNotice(
+  schedule: { name: string; scope: string },
+  outcome: { jobId: string; status: string; total: number; failed: number; errorMsg: string | null },
+  hostname: string,
+): { subject: string; bodyText: string } {
+  const what = schedule.scope === 'full' ? 'Vollbackup aller Postfächer'
+    : schedule.scope === 'system' ? 'System-Sicherung (Datenbank)' : 'Postfach-Sicherung';
+  const partial = outcome.status === 'COMPLETED' && outcome.failed > 0;
+  const subject = partial
+    ? `Backup unvollständig: ${schedule.name}`
+    : `Backup fehlgeschlagen: ${schedule.name}`;
+  const lines = [
+    `Die automatische Sicherung „${schedule.name}“ (${what}) auf ${hostname} ist ${partial ? 'nur teilweise gelungen' : 'fehlgeschlagen'}.`,
+    '',
+    ...(schedule.scope === 'full' ? [`Postfächer: ${outcome.total}, davon fehlgeschlagen: ${outcome.failed}`] : []),
+    ...(outcome.errorMsg ? [`Fehler: ${outcome.errorMsg.slice(0, 500)}`] : []),
+    `Job: ${outcome.jobId}`,
+    '',
+    'Details: BCP → Backup & Restore → Jobs. Bitte prüfen Sie den Backup-Speicher (S3/MinIO) und den Schlüssel BACKUP_ENCRYPTION_KEY.',
+  ];
+  return { subject, bodyText: lines.join('\n') };
 }

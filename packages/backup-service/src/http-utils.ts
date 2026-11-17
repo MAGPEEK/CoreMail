@@ -9,13 +9,25 @@ export function parseLimit(raw: unknown, fallback: number, max: number): number 
 
 const WRITE_ROLES = new Set(['ORGANIZATION_MANAGEMENT', 'SERVER_MANAGEMENT']);
 
-/** Routes that expose mailbox CONTENT (per-mailbox backup, downloads, import). */
+/** Routes that expose or write mailbox CONTENT (per-mailbox backup, downloads, import, 9.3 restore). */
 const MAILBOX_DATA_ROUTES: ReadonlyArray<RegExp> = [
   /^\/backup\/admin\/mailbox\/[^/]+\/?$/,
   /^\/backup\/admin\/download\/[^/]+\/?$/,
   /^\/backup\/admin\/archive\/download\/?$/,
   /^\/backup\/admin\/import\/[^/]+\/?$/,
+  /^\/backup\/admin\/restore\/?$/,
 ];
+
+/**
+ * 9.3: system backups (`system/…`: database dump with password hashes, DKIM and
+ * TLS private keys, MFA secrets) are downloadable by ORGANIZATION_MANAGEMENT
+ * only — not by COMPLIANCE_MANAGEMENT, whose mailbox-content right covers
+ * mailbox archives.
+ */
+export function canDownloadBackup(role: string | undefined, key: string, scope?: string | null): boolean {
+  if (key.startsWith('system/') || scope === 'system') return role === 'ORGANIZATION_MANAGEMENT';
+  return role === 'ORGANIZATION_MANAGEMENT' || role === 'COMPLIANCE_MANAGEMENT';
+}
 /** Listings COMPLIANCE_MANAGEMENT needs to pick a mailbox or job. */
 const MAILBOX_DATA_LISTINGS: ReadonlyArray<RegExp> = [
   /^\/backup\/admin\/(users|list|jobs)\/?$/,

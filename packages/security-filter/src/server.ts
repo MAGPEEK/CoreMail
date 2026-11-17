@@ -21,6 +21,7 @@ import { parseContentContext, contentErrorResult } from './content-request.js';
 import { buildPipelineConfig } from './settings.js';
 import { invalidateGreylistOptsCache } from './greylisting/index.js';
 import { registerClamavRoutes } from './clamav/routes.js';
+import { CapabilityMonitor, defaultDetector, applyScannerCapabilities, checkIntervalMs } from './capabilities.js';
 
 const log = createLogger('security-filter:server');
 installProcessGuards(log);
@@ -32,6 +33,15 @@ app.use(express.raw({ type: 'application/octet-stream', limit: '52mb' }));
 // Shared pipeline config (loaded from DB on startup, reloaded via Redis).
 // Mapping + defaults: settings.ts (defaults = schema defaults).
 let pipelineConfig: PipelineConfig = buildPipelineConfig(null, null);
+
+// 9.3: is rspamd / ClamAV deployed at all? (capabilities.ts) — absent scanners
+// are skipped by the pipeline and hidden in the BCP.
+const capabilities = new CapabilityMonitor(defaultDetector());
+
+/** The pipeline config with absent scanners switched off. */
+function effectiveConfig(): PipelineConfig {
+  return applyScannerCapabilities(pipelineConfig, capabilities.get());
+}
 
 /**
  * Loads SecuritySettings + the greylisting switch from SmtpSettings and
@@ -74,7 +84,7 @@ app.post('/check/connection', async (req, res) => {
   }
 
   try {
-    const result = await runConnectionStage(parsed.stage, parsed.ctx, pipelineConfig, {
+    const result = await runConnectionStage(parsed.stage, parsed.ctx, effectiveConfig(), {
       ipChecks: runIpChecks,
       greylist: runGreylistCheck,
     });
@@ -111,7 +121,7 @@ app.post('/check/content', async (req, res) => {
   }
 
   try {
-    const result = await runContentChecks(rawMessage, ctx, pipelineConfig);
+    const result = await runContentChecks(rawMessage, ctx, effectiveConfig());
     res.json(result);
   } catch (err) {
     const fallback = contentErrorResult();
@@ -124,12 +134,14 @@ app.post('/check/content', async (req, res) => {
  * POST /learn/spam — forward message to rspamd for Bayes training
  */
 app.post('/learn/spam', async (req, res) => {
+  if (capabilities.get().rspamd.state === 'absent') { res.json({ ok: true, skipped: 'rspamd not deployed' }); return; }
   const { learnSpam } = await import('./rspamd/index.js');
   await learnSpam(req.body as Buffer);
   res.json({ ok: true });
 });
 
 app.post('/learn/ham', async (req, res) => {
+  if (capabilities.get().rspamd.state === 'absent') { res.json({ ok: true, skipped: 'rspamd not deployed' }); return; }
   const { learnHam } = await import('./rspamd/index.js');
   await learnHam(req.body as Buffer);
   res.json({ ok: true });
@@ -140,7 +152,17 @@ app.get('/health', (_req, res) => {
 });
 
 // ClamAV status + EICAR self-test for the BCP (clamav/routes.ts)
-registerClamavRoutes(app, () => pipelineConfig);
+registerClamavRoutes(app, effectiveConfig);
+
+/**
+ * GET /capabilities — deployment state of rspamd and ClamAV (capabilities.ts),
+ * proxied by the api-gateway as /api/v1/admin/security/capabilities. Re-checked
+ * when the cached state is older than 30 s (the BCP shows a starting ClamAV
+ * as soon as it answers). No host names, URLs or credentials in the reply.
+ */
+app.get('/capabilities', async (_req, res) => {
+  res.json(await capabilities.ensureFresh(30_000));
+});
 
 // ── GET /dns-integrity ────────────────────────────────────────────────────────
 // Runs the DNS-poisoning integrity check (for the admin panel).
@@ -167,6 +189,10 @@ async function main() {
 
   // Load security settings from DB
   await loadSecuritySettings();
+
+  // Scanner deployment detection (bounded: DNS + ping timeouts of 3 s each)
+  await capabilities.refresh().catch((err: unknown) => log.warn({ err }, 'Scanner detection failed'));
+  capabilities.start(checkIntervalMs());
 
   // Subscribe to settings:reload for hot-reload of rspamdEnabled / clamavEnabled
   try {

@@ -7,6 +7,7 @@ import { api } from '../api/client.js';
 import type { UserProfile } from '../api/types.js';
 import { MfaChallengeForm } from '../components/MfaChallengeForm.js';
 import { SsoButtons } from '../components/SsoButtons.js';
+import { AuthShell, AuthBrandHeader } from '../components/AuthShell.js';
 
 export function LoginPage() {
   const navigate = useNavigate();
@@ -90,7 +91,7 @@ export function LoginPage() {
 
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-accent to-blue-800">
+    <AuthShell>
 
       {/* ── Maintenance mode banner (above the login card) ── */}
       {maintenanceMode && (
@@ -107,21 +108,19 @@ export function LoginPage() {
       )}
 
       <div className={`bg-surface rounded-lg shadow-2xl p-8 w-full max-w-sm border border-transparent${maintenanceMode ? ' mt-14' : ''}`}>
-        {/* Logo */}
-        <div className="flex items-center justify-center gap-2 mb-6">
-          <div className="w-10 h-10 bg-accent rounded-lg flex items-center justify-center">
-            {step === 'mfa'
-              ? <ShieldCheck size={22} className="text-white" />
-              : <Mail size={22} className="text-white" />
-            }
-          </div>
-          <div>
-            <h1 className="text-xl font-bold text-fg">CoreMail</h1>
-            <p className="text-xs text-fg-subtle">
-              {step === 'mfa' ? 'Zwei-Faktor-Authentifizierung' : 'Mail Web Access'}
-            </p>
-          </div>
-        </div>
+        {/* Logo, product name, login text (branding) */}
+        <AuthBrandHeader
+          withLoginText={step === 'credentials'}
+          subtitle={step === 'mfa' ? 'Zwei-Faktor-Authentifizierung' : 'Mail Web Access'}
+          icon={
+            <div className="w-10 h-10 bg-accent rounded-lg flex items-center justify-center">
+              {step === 'mfa'
+                ? <ShieldCheck size={22} className="text-white" aria-hidden="true" />
+                : <Mail size={22} className="text-white" aria-hidden="true" />
+              }
+            </div>
+          }
+        />
 
         {/* ── STEP 1: Credentials ── */}
         {step === 'credentials' && (
@@ -193,6 +192,6 @@ export function LoginPage() {
           />
         )}
       </div>
-    </div>
+    </AuthShell>
   );
 }

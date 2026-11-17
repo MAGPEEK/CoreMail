@@ -13,6 +13,7 @@ import { tmpdir }                          from 'node:os';
 import { join }                            from 'node:path';
 
 export * from './listener-reload.js';
+export * from './tls-errors.js';
 
 export interface TlsCertPair {
   /** PEM-encoded certificate */

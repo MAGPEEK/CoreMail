@@ -14,7 +14,7 @@
  * MWA "External clients" page).
  */
 import type { Request, Response } from 'express';
-import { prisma, clientIpFromRequest, isPrivateOrLoopbackIp } from '@coremail/storage';
+import { prisma, clientIpFromRequest, isPrivateOrLoopbackIp, DEFAULT_PRODUCT_NAME } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import { getServerConfig, ServerConfigUnavailableError, type ServerConfig } from './settings.js';
 import { FixedWindowLimiter } from './rate-limit.js';
@@ -152,7 +152,8 @@ export function buildAutoconfigXml(domain: string, cfg: ServerConfig): string {
   const e = xmlEscape;
   const servers = mailServers(cfg);
   const base = webBaseUrl(cfg);
-  const name = cfg.orgName.trim() || domain;
+  // 9.3: the branded product name, else the organisation name (as before), else the domain
+  const name = cfg.productName && cfg.productName !== DEFAULT_PRODUCT_NAME ? cfg.productName : (cfg.orgName.trim() || domain);
   const server = (tag: 'incomingServer' | 'outgoingServer', type: string, s: MailServer): string => [
     `    <${tag} type="${type}">`,
     `      <hostname>${e(s.hostname)}</hostname>`,

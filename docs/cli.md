@@ -180,6 +180,25 @@ Checks a downloaded audit-log export (CSV, JSON or PDF, unchanged) against the
 `INVALID` (exit 1). Exports signed before a key rotation (`AUDIT_EXPORT_SIGNING_KEY`,
 or `JWT_SECRET`/`PEPPER` without it) are reported as invalid.
 
+## Branding (`branding`, v9.3, organisation area)
+
+```bash
+coremail branding show                       # product name, colours, switches, asset URLs, version
+coremail branding set --name "Acme Mail" --color "#0a5bd3" --header-color none \
+  --allow-user-accent false --powered-by true --login-text "Welcome to Acme"
+coremail branding upload logoLight ./logo.svg  # slots: logoLight, logoDark, favicon, loginBackground
+coremail branding remove favicon             # back to the built-in default for that slot
+coremail branding reset --yes                # everything back to the defaults (images deleted)
+```
+
+`set` sends only the options given (`PUT /api/v1/admin/branding`); `--name default` /
+`--color default` return to `BRANDING_NAME` / `BRANDING_COLOR` (else "CoreMail" / `#0078d4`),
+`--header-color none` uses the primary colour. A colour below 3:1 contrast on the light or dark
+surface is saved but printed as a warning with a suggested colour. `upload` takes PNG, WebP or SVG
+(≤ 512 KB; `loginBackground` also JPEG, ≤ 2 MB; favicon square); the content type comes from the
+file extension and the server checks the bytes. Changes need ORGANIZATION_MANAGEMENT; `show` also
+works for SERVER_MANAGEMENT and VIEW_ONLY_ORG. Details: [branding.md](branding.md).
+
 ## Behavior and exit codes
 
 - Destructive commands ask for confirmation unless `--yes` is given; without a terminal (script) `--yes` is mandatory.

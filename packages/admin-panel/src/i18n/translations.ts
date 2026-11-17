@@ -5,6 +5,7 @@ const de = {
   // ── Navigation — Single entries ──────────────────────────────────────────
   nav_overview:           'Übersicht',
   nav_global_settings:    'Global Einstellungen',
+  nav_branding:           'Branding',
   nav_rbac:               'Berechtigungen',
   nav_audit_log:          'Audit-Log',
   nav_logs:               'Protokolle',
@@ -90,7 +91,7 @@ const de = {
   settings_org_title:         'Organisation',
   settings_org_desc:          'Name, Beschreibung und Erscheinungsbild des CoreMail-Servers',
   settings_org_name:          'Servername *',
-  settings_org_name_hint:     'Wird im Browser-Tab, in E-Mail-Headern und im Login-Formular angezeigt',
+  settings_org_name_hint:     'Name der Organisation: Absendername von System-E-Mails und Name in Client-Profilen, solange unter Branding kein eigener Produktname gesetzt ist. Browser-Tab und Anmeldeseiten zeigen den Produktnamen aus Branding.',
   settings_org_admin_email:   'Administrator-E-Mail',
   settings_org_admin_hint:    'Systembenachrichtigungen werden an diese Adresse gesendet',
   settings_org_saved:         'Organisations-Einstellungen gespeichert',
@@ -948,6 +949,7 @@ const en: { [K in keyof DE]: string } = {
   // ── Navigation — Single entries ──────────────────────────────────────────
   nav_overview:           'Overview',
   nav_global_settings:    'Global Settings',
+  nav_branding:           'Branding',
   nav_rbac:               'Permissions',
   nav_audit_log:          'Audit Log',
   nav_logs:               'Logs',
@@ -1033,7 +1035,7 @@ const en: { [K in keyof DE]: string } = {
   settings_org_title:         'Organisation',
   settings_org_desc:          'Name, description and appearance of the CoreMail server',
   settings_org_name:          'Server name *',
-  settings_org_name_hint:     'Shown in the browser tab, email headers and the login form',
+  settings_org_name_hint:     'Organisation name: sender name of system e-mails and name in client profiles while no own product name is set under Branding. The browser tab and the login pages show the product name from Branding.',
   settings_org_admin_email:   'Administrator email',
   settings_org_admin_hint:    'System notifications are sent to this address',
   settings_org_saved:         'Organisation settings saved',

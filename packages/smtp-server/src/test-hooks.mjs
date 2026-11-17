@@ -19,6 +19,7 @@ const STUB_URL = 'coremail-test-stub:all';
 
 const STUB_SOURCE = `
 const g = (globalThis.__coremailTest ??= {});
+export * from '${new URL('../../core/src/tls/tls-errors.ts', import.meta.url).href}';
 const noop = () => {};
 const logger = { debug: noop, info: noop, warn: noop, error: noop, trace: noop, fatal: noop, child: () => logger };
 export const createLogger = () => logger;

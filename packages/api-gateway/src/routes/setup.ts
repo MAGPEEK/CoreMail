@@ -2,8 +2,9 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import {
-  createLogger, hashPassword, generateSelfSignedCert, getRedisClient, CHANNEL_SETTINGS_RELOAD, HttpError,
+  createLogger, hashPassword, getRedisClient, CHANNEL_SETTINGS_RELOAD, HttpError,
 } from '@coremail/core';
+import { createSelfSignedPem, selfSignedHostnameFor } from '../lib/protocol-cert-assign.js';
 import { isSetupRequired, verifySetupToken } from '../lib/setup-token.js';
 import { deriveServerUrls } from '../lib/server-urls.js';
 import { generateDkimPrivateKey } from '../lib/dkim.js';
@@ -155,15 +156,14 @@ setupRouter.post('/complete', async (req: Request, res: Response) => {
     }, { isolationLevel: 'Serializable' });
 
     // ── Auto self-signed cert ────────────────────────────────────────────────
-    // Generates a baseline self-signed cert with CN=mail.localhost.  Admin
-    // activates a real (LE/uploaded) cert later in BCP → SSL/TLS.  Using a
-    // predictable 'mail.localhost' CN avoids accidental re-issuance whenever
-    // the admin renames their public hostname.
+    // Baseline self-signed cert for the public host name (9.3: mail.<domain>
+    // instead of mail.localhost — clients at least see the right name). The
+    // admin assigns a real (LE/uploaded) cert later in BCP → SSL/TLS; a Let's
+    // Encrypt certificate for the public host name takes over automatically.
     try {
-      const SELF_SIGNED_HOSTNAME = 'mail.localhost';
+      const SELF_SIGNED_HOSTNAME = selfSignedHostnameFor(`mail.${domain}`);
 
-      const { certPem, keyPem } = generateSelfSignedCert(SELF_SIGNED_HOSTNAME);
-      const tenYears = new Date(Date.now() + 10 * 365 * 24 * 3600 * 1000);
+      const { certPem, keyPem, expiresAt: tenYears } = await createSelfSignedPem([SELF_SIGNED_HOSTNAME], 3650);
 
       // Remove any existing self-signed cert that may be left over
       await prisma.certificate.deleteMany({ where: { type: 'SELF_SIGNED' } });

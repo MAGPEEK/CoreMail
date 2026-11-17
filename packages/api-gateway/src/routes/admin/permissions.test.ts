@@ -192,6 +192,7 @@ const MOUNT_AREAS: Record<string, { area: AdminArea | null; get: string; write?:
   '/ldap':                 { area: 'identity',     get: '/' },
   '/sso':                  { area: 'identity',     get: '/providers' },
   '/storage':              { area: null,           get: '/' },
+  '/branding':             { area: 'organisation', get: '/', write: ['PUT', '/'] },
   '/ems':                  { area: 'recipients',   get: '/mailboxes' },
 };
 const EXTRA_PROBES: Array<{ area: AdminArea | null; method: string; path: string }> = [

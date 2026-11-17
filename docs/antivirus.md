@@ -68,6 +68,45 @@ API: `GET /api/v1/admin/security/clamav/status`, `POST /api/v1/admin/security/cl
 
 Outbound mail (submission) is not scanned by ClamAV.
 
+## Installations without ClamAV (or rspamd)
+
+The security filter checks at start and then every 5 minutes (`SCANNER_CHECK_INTERVAL_SEC`,
+default 300, at least 30) whether ClamAV and rspamd are part of the installation. Each
+scanner gets one state:
+
+| State | When | Mail | BCP → Protection |
+|---|---|---|---|
+| `absent` (not deployed) | only the explicit environment switch `CLAMAV_ENABLED=false` / `RSPAMD_ENABLED=false` (set by the minimal compose file and by the Helm chart without the bundled scanner) | the scanner is skipped: no `X-CoreMail-Virus-Scan: unscanned` header, no `451` from the failure policy, no rspamd learning calls. One log line at start, not one per message. | the scanner's tab (Rspamd / Antivirus with policy, EICAR test and signature status), its status card and its row in "Aktive Schutzmaßnahmen" are hidden; the overview shows the info line "… ist in dieser Installation nicht bereitgestellt" with a link to this page |
+| `unavailable` | the scanner does not answer its ping (container starting, ClamAV loading its signatures, crashed), the DNS lookup failed, **or** the host name (`CLAMAV_HOST`, the host of `RSPAMD_URL` / `RSPAMD_HOST`) does not exist in DNS — reason `host-not-found` (a stopped container drops out of the compose network, a misspelt host name) | unchanged: the failure policy above applies (`X-CoreMail-Virus-Scan: unscanned` or `451` with "block on failure"; rspamd: delivered without spam check) | settings stay, a warning with the reason is shown; for `host-not-found`: "Host nicht gefunden: CLAMAV_HOST/RSPAMD_URL prüfen oder den Scanner mit CLAMAV_ENABLED=false bzw. RSPAMD_ENABLED=false als nicht bereitgestellt kennzeichnen" |
+| `available` | the scanner answered (`PING` → `PONG`, rspamd `/ping`) | normal scanning | normal |
+
+Only the environment switch makes a scanner `absent`. A host name that does not resolve
+(`ENOTFOUND`, `ENODATA`, `EAI_NONAME` — a stopped or removed container, a typo in
+`CLAMAV_HOST`) is `unavailable` with reason `host-not-found`, so stopping the ClamAV
+container never switches virus scanning off silently: the failure policy and the
+`X-CoreMail-Virus-Scan` header apply. The env switches are read once at start; a running
+security filter never moves a scanner into `absent`. A transition from `available` to
+`unavailable` is logged at warn level. A scanner that answers again is picked up by the
+next check (at the latest after 5 minutes, at once when an admin opens the Protection page
+and the last check is older than 30 s) — no restart needed. An installation without ClamAV
+or rspamd must set `CLAMAV_ENABLED=false` / `RSPAMD_ENABLED=false` (the minimal compose
+file and the Helm chart do).
+
+The settings of an absent scanner are still saved when written through the API
+(`PUT /api/v1/admin/security/settings`, `PUT /api/v1/admin/security/clamav`), so they are in
+place when the container is added.
+
+State API (hygiene role, read is enough; no host names or URLs in the reply):
+
+```
+GET /api/v1/admin/security/capabilities
+{ "rspamd": { "state": "absent", "reason": "disabled-by-config", "checkedAt": "…" },
+  "clamav": { "state": "unavailable", "reason": "connect-failed", "detail": "ECONNREFUSED", "checkedAt": "…" } }
+```
+
+`reason`: `disabled-by-config`, `host-not-found`, `dns-error`, `connect-failed`, `timeout`,
+`bad-response`, `ok`, `not-checked`; `detail` is an error code only.
+
 ## Engine limits (clamav container)
 
 The official image `clamav/clamav` uses the compiled clamd defaults (it only sets the

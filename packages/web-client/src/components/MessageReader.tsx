@@ -20,6 +20,8 @@ import { ContactHoverCard } from './ContactHoverCard.js';
 import { MessageReaderSkeleton } from './Skeleton.js';
 import { Modal } from './Modal.js';
 import { translate } from '../i18n/useT.js';
+import { useActiveMailbox } from '../hooks/useActiveMailbox.js';
+import { READ_ONLY_HINT } from '../lib/mailboxContext.js';
 
 interface Props {
   messageId: string;
@@ -28,6 +30,9 @@ interface Props {
 export function MessageReader({ messageId }: Props) {
   const qc = useQueryClient();
   const { openCompose, setSelectedMessage, selectedFolderId } = useUiStore();
+  // 9.3: own, shared or delegated mailbox — same API shapes, different base
+  const mailbox = useActiveMailbox();
+  const { base, readOnly, foreign } = mailbox;
   const [moreMenu, setMoreMenu] = useState<{ x: number; y: number } | null>(null);
   const [showAvatarCard, setShowAvatarCard] = useState(false);
   const [showRawSource, setShowRawSource] = useState(false);
@@ -37,12 +42,12 @@ export function MessageReader({ messageId }: Props) {
 
   const { data: msg, isLoading, isError, error, refetch, isFetching } = useQuery({
     queryKey: ['message', messageId],
-    queryFn: () => api.get<Message>(`/mail/messages/${messageId}`),
+    queryFn: () => api.get<Message>(`${base}/messages/${messageId}`),
   });
 
   const { data: folders = [] } = useQuery({
-    queryKey: ['folders'],
-    queryFn: () => api.get<Folder[]>('/mail/folders'),
+    queryKey: mailbox.foldersKey,
+    queryFn: () => api.get<Folder[]>(`${base}/folders`),
   });
 
   const invalidate = () => {
@@ -54,12 +59,12 @@ export function MessageReader({ messageId }: Props) {
   // Errors are reported by the global MutationCache handler (main.tsx)
   const bulkMutation = useMutation({
     mutationFn: (body: { ids: string[]; action: string; folderId?: string }) =>
-      api.post('/mail/messages/bulk', body),
+      api.post(`${base}/messages/bulk`, body),
     onSettled: invalidate,
   });
 
   const patchMutation = useMutation({
-    mutationFn: (body: Record<string, unknown>) => api.patch(`/mail/messages/${messageId}`, body),
+    mutationFn: (body: Record<string, unknown>) => api.patch(`${base}/messages/${messageId}`, body),
     onSettled: invalidate,
   });
 
@@ -75,12 +80,12 @@ export function MessageReader({ messageId }: Props) {
   const doReply = (mode: 'reply' | 'replyAll' | 'forward'): boolean => {
     if (!msg) return false;
     const quoted = msg.bodyHtml || textToQuotedHtml(msg.bodyText ?? '');
-    if (mode !== 'forward' && !msg.flags.includes('\\Answered')) {
+    if (mode !== 'forward' && !readOnly && !msg.flags.includes('\\Answered')) {
       // Set \Answered flag when Reply/Reply all is used
       patchMutation.mutate({ flags: [...msg.flags, '\\Answered'] });
     }
     openCompose({
-      mode, id: msg.id, subject: msg.subject, fromAddr: msg.fromAddr, bodyHtml: quoted,
+      mode, id: msg.id, subject: msg.subject, fromAddr: msg.fromAddr, bodyHtml: quoted, mailbox: mailbox.ref,
       ...(mode === 'replyAll' ? { toAddrs: msg.toAddrs, ccAddrs: msg.ccAddrs } : {}),
     });
     return true;
@@ -135,14 +140,22 @@ export function MessageReader({ messageId }: Props) {
     api.post(`/mail/messages/${msg.id}/snooze`, { until: d.toISOString() }).then(invalidate).catch(toastError);
   };
 
+  // read-only: disabled with tooltip, without a submenu
+  const w = (item: ContextMenuItem): ContextMenuItem => {
+    if (!readOnly) return item;
+    const { children: _submenu, onClick: _onClick, ...rest } = item;
+    return { ...rest, disabled: true, title: READ_ONLY_HINT };
+  };
+  const ownOnly = (item: ContextMenuItem): ContextMenuItem[] => (foreign ? [] : [item]);
+
   const moreItems: ContextMenuItem[] = [
-    { label: isFlagged ? 'Kennzeichnung aufheben' : 'Kennzeichnen',
+    w({ label: isFlagged ? 'Kennzeichnung aufheben' : 'Kennzeichnen',
       icon: isFlagged ? <FlagOff size={14} /> : <Flag size={14} />,
-      onClick: () => patchMutation.mutate({ flagged: !isFlagged }) },
-    { label: isPinned ? 'Lösen' : 'Anheften',
+      onClick: () => patchMutation.mutate({ flagged: !isFlagged }) }),
+    w({ label: isPinned ? 'Lösen' : 'Anheften',
       icon: <Pin size={14} />,
-      onClick: () => bulkMutation.mutate({ ids: [msg.id], action: isPinned ? 'unpin' : 'pin' }) },
-    {
+      onClick: () => bulkMutation.mutate({ ids: [msg.id], action: isPinned ? 'unpin' : 'pin' }) }),
+    ...ownOnly({
       label: 'Schlummern bis …', icon: <Clock size={14} />,
       children: [
         { label: 'In 1 Stunde',     onClick: () => { const d = new Date(); d.setHours(d.getHours() + 1); snoozeUntil(d); } },
@@ -150,9 +163,9 @@ export function MessageReader({ messageId }: Props) {
         { label: 'Morgen 8:00',     onClick: () => { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(8,0,0,0); snoozeUntil(d); } },
         { label: 'Nächsten Montag', onClick: () => { const d = new Date(); d.setDate(d.getDate() + ((1 - d.getDay() + 7) % 7 || 7)); d.setHours(8,0,0,0); snoozeUntil(d); } },
       ],
-    },
+    }),
     { type: 'divider' },
-    { label: 'Verschieben nach …', icon: <FolderInput size={14} />,
+    w({ label: 'Verschieben nach …', icon: <FolderInput size={14} />,
       children: folders.filter((f) => f.id !== selectedFolderId).map((f) => ({
         label: f.displayName ?? f.name,
         onClick: () => {
@@ -160,17 +173,17 @@ export function MessageReader({ messageId }: Props) {
           setSelectedMessage(null);
         },
       })),
-    },
-    isJunkFolder
+    }),
+    w(isJunkFolder
       ? { label: 'Kein Junk (False Positive)', icon: <ShieldOff size={14} />,
           onClick: () => { bulkMutation.mutate({ ids: [msg.id], action: 'notSpam' }); setSelectedMessage(null); } }
       : { label: 'Als Junk markieren', icon: <AlertOctagon size={14} />,
-          onClick: () => withUndo('spam') },
+          onClick: () => withUndo('spam') }),
     { type: 'divider' },
     { label: 'Quelltext anzeigen', icon: <Code size={14} />,
       onClick: () => {
         // Authorization header instead of ?token= (tokens in URLs end up in logs/history)
-        void fetchText(`/mail/messages/${msg.id}/raw`).then(text => {
+        void fetchText(`${base}/messages/${msg.id}/raw`).then(text => {
           setRawSource(text);
           setShowRawSource(true);
         }).catch((err: unknown) => {
@@ -180,7 +193,7 @@ export function MessageReader({ messageId }: Props) {
       } },
     { label: 'Als EML herunterladen', icon: <Download size={14} />,
       onClick: () => {
-        downloadFile(`/mail/messages/${msg.id}/raw`, `${msg.subject || 'message'}.eml`).catch(toastError);
+        downloadFile(`${base}/messages/${msg.id}/raw`, `${msg.subject || 'message'}.eml`).catch(toastError);
       } },
     { label: 'Drucken', icon: <Download size={14} />, onClick: () => window.print() },
   ];
@@ -208,10 +221,12 @@ export function MessageReader({ messageId }: Props) {
           <Forward size={14} /> Weiterleiten
         </button>
         <div className="flex-1" />
-        <button onClick={handleArchive} aria-keyshortcuts={ariaKeys('mail.archive')} className="btn-ghost text-xs">
+        <button onClick={handleArchive} aria-keyshortcuts={ariaKeys('mail.archive')} className="btn-ghost text-xs disabled:opacity-50 disabled:cursor-not-allowed"
+          disabled={readOnly} {...(readOnly ? { title: READ_ONLY_HINT } : {})}>
           <Archive size={14} /> Archivieren
         </button>
-        <button onClick={handleDelete} aria-keyshortcuts={ariaKeys('mail.delete')} className="btn-ghost text-xs text-danger-fg hover:bg-danger-bg">
+        <button onClick={handleDelete} aria-keyshortcuts={ariaKeys('mail.delete')} className="btn-ghost text-xs text-danger-fg hover:bg-danger-bg disabled:opacity-50 disabled:cursor-not-allowed"
+          disabled={readOnly} {...(readOnly ? { title: READ_ONLY_HINT } : {})}>
           <Trash2 size={14} /> Löschen
         </button>
         <button
@@ -255,16 +270,18 @@ export function MessageReader({ messageId }: Props) {
             {isJunkFolder ? (
               <button
                 onClick={() => { bulkMutation.mutate({ ids: [msg.id], action: 'notSpam' }); setSelectedMessage(null); }}
-                className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-surface text-fg border border-line-strong rounded hover:bg-surface-2 transition-colors"
-                title="Diese Nachricht ist kein Spam (Bayes-Lernen)"
+                disabled={readOnly}
+                className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-surface text-fg border border-line-strong rounded hover:bg-surface-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                title={readOnly ? READ_ONLY_HINT : 'Diese Nachricht ist kein Spam (Bayes-Lernen)'}
               >
                 <ShieldCheck size={13} /> Kein Spam
               </button>
             ) : (
               <button
                 onClick={() => withUndo('spam')}
-                className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-surface text-fg border border-line-strong rounded hover:bg-surface-2 transition-colors"
-                title="In Junk verschieben (Bayes-Lernen)"
+                disabled={readOnly}
+                className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-surface text-fg border border-line-strong rounded hover:bg-surface-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                title={readOnly ? READ_ONLY_HINT : 'In Junk verschieben (Bayes-Lernen)'}
               >
                 <AlertOctagon size={13} /> Als Junk
               </button>
@@ -274,7 +291,7 @@ export function MessageReader({ messageId }: Props) {
       })()}
 
       {/* Draft (own Drafts folder): continue editing in compose (server draft) */}
-      {currentFolder?.name === 'Drafts' && !msg.scheduledStatus && (
+      {!foreign && currentFolder?.name === 'Drafts' && !msg.scheduledStatus && (
         <div className="px-4 py-2.5 border-b shrink-0 flex items-center gap-2.5 text-sm bg-warning-bg border-warning-line text-warning-fg">
           <span className="flex-1">{translate('draft_banner')}</span>
           <button
@@ -308,7 +325,7 @@ export function MessageReader({ messageId }: Props) {
               <strong>{new Date(msg.scheduledAt).toLocaleString('de-DE', { dateStyle: 'full', timeStyle: 'short' })}</strong>
             </p>
           </div>
-          {msg.scheduledStatus === 'PENDING' && (
+          {msg.scheduledStatus === 'PENDING' && !foreign && (
             <button
               onClick={() => cancelScheduledMutation.mutate()}
               disabled={cancelScheduledMutation.isPending}
@@ -418,7 +435,7 @@ export function MessageReader({ messageId }: Props) {
               </span>
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => downloadFile(`/mail/messages/${msg.id}/raw`, `${msg.subject || 'message'}.eml`).catch(toastError)}
+                  onClick={() => downloadFile(`${base}/messages/${msg.id}/raw`, `${msg.subject || 'message'}.eml`).catch(toastError)}
                   className="btn-secondary text-xs"
                 >
                   <Download size={12} /> .eml herunterladen

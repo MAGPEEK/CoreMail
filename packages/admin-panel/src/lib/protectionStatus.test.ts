@@ -38,3 +38,13 @@ test('a country filter without countries is reported as without effect', () => {
   const rows = protectionFeatureMatrix({ ...base, geoipMode: 'BLACKLIST' }, { rspamd: true, clamav: true }, []);
   assert.equal(row(rows, 'Länderfilter').ok, false);
 });
+
+test('9.3: rows of scanners not deployed in this installation are left out', () => {
+  const rows = protectionFeatureMatrix(base, { rspamd: false, clamav: false }, [], { rspamd: true, clamav: true });
+  assert.equal(rows.find((r) => r.label === 'Anti-Spam (Rspamd)'), undefined);
+  assert.equal(rows.find((r) => r.label === 'Antivirus (ClamAV)'), undefined);
+  assert.ok(row(rows, 'SPF-Prüfung') && row(rows, 'DNSBL') && row(rows, 'Greylisting'));
+  const onlyClam = protectionFeatureMatrix(base, { rspamd: true, clamav: false }, [], { clamav: true });
+  assert.equal(row(onlyClam, 'Anti-Spam (Rspamd)').ok, true);
+  assert.equal(onlyClam.find((r) => r.label === 'Antivirus (ClamAV)'), undefined);
+});

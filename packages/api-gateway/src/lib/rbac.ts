@@ -9,7 +9,7 @@
  *  Area          Routers (mount under /api/v1/admin)                        write                 read (GET/HEAD)
  *  ───────────── ────────────────────────────────────────────────────────── ───────────────────── ─────────────────────────────────────────────
  *  dashboard     /dashboard                                                 —                     every admin role
- *  organisation  /settings, /organisation                                   —                     SERVER_MANAGEMENT, VIEW_ONLY_ORG
+ *  organisation  /settings, /organisation, /branding                        —                     SERVER_MANAGEMENT, VIEW_ONLY_ORG
  *  identity      /ldap, /sso                                                —                     VIEW_ONLY_ORG
  *  servers       /servers, /services, /certificates, /queues, /logs,        SERVER_MANAGEMENT     VIEW_ONLY_ORG
  *                /backups, /connectors, /smtp-config

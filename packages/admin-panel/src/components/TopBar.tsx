@@ -6,6 +6,8 @@ import { useLanguageStore, type Lang } from '../store/language.js';
 import { getToken, logoutSession } from '../api/client.js';
 import { useT } from '../i18n/useT.js';
 import { usePermissions } from '../hooks/usePermissions.js';
+import { useBranding } from '../hooks/useBranding.js';
+import { BrandLogo } from './BrandLogo.js';
 
 // ── JWT payload without jsonwebtoken (base64 decode only, no verify) ──────────
 function decodeJwtPayload(token: string): { email?: string; role?: string } {
@@ -36,6 +38,7 @@ export function TopBar() {
   const { theme, setTheme } = useThemeStore();
   const { pending, setPending, applyPending } = useLanguageStore();
   const [profileOpen, setProfileOpen] = useState(false);
+  const { productName } = useBranding();
   const profileTriggerRef = useRef<HTMLButtonElement>(null);
   const profilePanelRef = useRef<HTMLDivElement>(null);
   usePopoverDismiss(profileOpen, () => setProfileOpen(false), profileTriggerRef, profilePanelRef);
@@ -70,9 +73,9 @@ export function TopBar() {
   return (
     <header className="h-11 bg-surface border-b border-line flex items-center px-4 gap-3 shrink-0 z-40">
       {/* Brand */}
-      <div className="flex items-center gap-2">
-        <Mail size={17} className="text-accent-fg" />
-        <span className="text-fg font-semibold text-sm">{t('topbar_brand')}</span>
+      <div className="flex items-center gap-2 min-w-0">
+        <BrandLogo className="max-h-7 max-w-[8rem]" fallback={<Mail size={17} className="text-accent-fg" aria-hidden="true" />} />
+        <span className="text-fg font-semibold text-sm truncate max-w-[14rem]">{productName} BCP</span>
         <span className="text-fg-subtle text-xs hidden md:block">{t('topbar_subtitle')}</span>
       </div>
 

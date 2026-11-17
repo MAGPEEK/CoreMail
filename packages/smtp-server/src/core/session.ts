@@ -18,6 +18,7 @@ import net from 'node:net';
 import tls from 'node:tls';
 import crypto from 'node:crypto';
 import { createLogger } from '@coremail/core';
+import { logTlsSocketError } from '@coremail/core/tls-errors';
 import type { SmtpState, AuthMechanism, AuthUser, Transaction, SmtpSessionConfig, MessageMeta, EsmtpExtensions } from './types.js';
 import { DEFAULT_ESMTP_EXTENSIONS } from './types.js';
 import { smtpLiveSessions } from './live-sessions.js';
@@ -281,7 +282,7 @@ export class SmtpSession {
     this.socket.setEncoding('binary'); // handle raw bytes via string; we buffer lines ourselves
     this.socket.on('data', (chunk: string) => this.onData(chunk));
     this.socket.on('error', (err) => {
-      log.debug({ id: this.id, err }, 'Socket error');
+      log.debug({ id: this.id, ip: this.ip, err }, 'Socket error');
     });
     this.socket.on('close', () => {
       this.clearTimer();
@@ -996,21 +997,21 @@ export class SmtpSession {
         this.send(result.failure === 'locked'
           ? '454 4.7.0 Too many failed authentication attempts, try again later'
           : '454 4.7.0 Temporary authentication failure');
-        log.warn({ id: this.id, username, failure: result.failure }, 'SMTP auth not possible');
+        log.warn({ id: this.id, ip: this.ip, username, failure: result.failure }, 'SMTP auth not possible');
         if (result.failure === 'locked') this.countAuthFailure();
       } else if (result && authzid && !sameIdentity(authzid, username, result.email)) {
         this.send('535 5.7.8 Authentication credentials invalid');
-        log.warn({ id: this.id, username, authzid }, 'SMTP auth: authorization identity not allowed');
+        log.warn({ id: this.id, ip: this.ip, username, authzid }, 'SMTP auth: authorization identity not allowed');
         this.countAuthFailure();
       } else if (result) {
         this.authUser = result;
         this.registerLive(result, authStartedAt);
         this.send('235 2.7.0 Authentication successful');
-        log.info({ id: this.id, email: result.email }, 'SMTP auth success');
+        log.info({ id: this.id, ip: this.ip, email: result.email }, 'SMTP auth success');
         return;
       } else {
         this.send('535 5.7.8 Authentication credentials invalid');
-        log.warn({ id: this.id, username }, 'SMTP auth failed');
+        log.warn({ id: this.id, ip: this.ip, username }, 'SMTP auth failed');
         this.countAuthFailure();
       }
     } catch (err) {
@@ -1153,7 +1154,7 @@ export class SmtpSession {
       tlsSocket.setEncoding('binary');
       tlsSocket.on('data', (chunk: string) => this.onData(chunk));
       tlsSocket.on('error', (err) => {
-        log.debug({ id: this.id, err }, 'TLS socket error');
+        log.debug({ id: this.id, ip: this.ip, err }, 'TLS socket error');
       });
 
       this.resetTimer(this.commandTimeout());
@@ -1161,7 +1162,7 @@ export class SmtpSession {
     });
 
     tlsSocket.once('error', (err) => {
-      log.warn({ id: this.id, err }, 'STARTTLS handshake error');
+      logTlsSocketError(log, err, { service: 'SMTP STARTTLS', id: this.id, ip: this.ip });
       this.socket.destroy();
     });
   }

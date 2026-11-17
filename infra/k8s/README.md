@@ -1,6 +1,6 @@
 # CoreMail Helm chart
 
-Deploys CoreMail (default: 9.2.0) on Kubernetes the same way as the reference
+Deploys CoreMail (default: 9.3.0) on Kubernetes the same way as the reference
 Docker Compose setup (`infra/docker/docker-compose.yml`): **one app pod**
 running `magpeek/coremail-app` (all services under supervisord), plus
 PostgreSQL, Redis (with authentication), MinIO (`pgsty/minio`, pinned by digest),
@@ -9,8 +9,8 @@ with a PVC) or an external endpoint.
 
 | | |
 |---|---|
-| Chart version | `2.0.2` (independent SemVer of the chart; 2.0.x = 9.x values, see "Upgrading to chart 2.0") |
-| App version | `9.2.0` → image `magpeek/coremail-app:9.2.0` |
+| Chart version | `2.1.0` (independent SemVer of the chart; 2.x = 9.x values, see "Upgrading to chart 2.0") |
+| App version | `9.3.0` → image `magpeek/coremail-app:9.3.0` |
 | Kubernetes | ≥ 1.25 |
 | Chart dependencies | none (installs without access to third-party chart repositories) |
 
@@ -106,6 +106,7 @@ All values are documented in [`values.yaml`](values.yaml). The important ones:
 | `app.strategy.type` | `Recreate` | never two pods with schedulers during upgrades |
 | `app.trustProxy` | `auto` | see [TRUST_PROXY](#trust_proxy) |
 | `app.publicUrl` | `""` | `COREMAIL_PUBLIC_URL` (SSO redirect URIs) |
+| `app.branding.name`, `app.branding.color` | `""` ("CoreMail" / `#0078d4`) | `BRANDING_NAME`, `BRANDING_COLOR` — defaults until BCP → Organisation → Branding sets values (CoreMail >= 9.3, `docs/branding.md`) |
 | `app.webauthn.*`, `app.vapid.*`, `app.jmapCorsOrigins`, `app.ldapAllowInsecure` | | map to `WEBAUTHN_*`, `VAPID_*`, `JMAP_CORS_ORIGINS`, `LDAP_ALLOW_INSECURE` |
 | `app.mailAuth.*` | app defaults | `MAIL_AUTH_*` brute-force limits; `exemptCidrs` → `MAIL_AUTH_EXEMPT_CIDRS`/`MAIL_CONN_EXEMPT_CIDRS` (`limitPrivateIps` was removed in chart 2.0) |
 | `app.deletedItemRetentionDays`, `app.quotaFullPermanent`, `app.httpRedirectHttps` | `""` (app defaults) | `DELETED_ITEM_RETENTION_DAYS`, `QUOTA_FULL_PERMANENT`, `HTTP_REDIRECT_HTTPS` (CoreMail >= 9.0) |

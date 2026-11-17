@@ -26,6 +26,8 @@ import { SearchOperatorsHelp, SearchChips } from './SearchOperatorsHelp.js';
 import { useMailActions } from '../hooks/useMailActions.js';
 import { useShortcutHandlers, useAriaKeys } from '../hooks/useShortcuts.js';
 import type { MessageLocation } from '../lib/undo-stack.js';
+import { useActiveMailbox } from '../hooks/useActiveMailbox.js';
+import { READ_ONLY_HINT } from '../lib/mailboxContext.js';
 
 import { useT } from '../i18n/useT.js';
 
@@ -62,6 +64,7 @@ function MessageRow({
   onQuickAction,
   density,
   folders,
+  readOnly = false,
 }: {
   msg: MessageSummary;
   selected: boolean;
@@ -72,11 +75,15 @@ function MessageRow({
   onQuickAction: (action: 'archive' | 'delete' | 'read' | 'flag') => void;
   density: 'compact' | 'normal' | 'comfortable';
   folders: Folder[];
+  /** 9.3: read-only foreign mailbox — no drag, write quick actions disabled */
+  readOnly?: boolean;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: `msg:${msg.id}`,
     data: { kind: 'message', messageId: msg.id, folderId: msg.id /* fallback */ },
+    disabled: readOnly,
   });
+  const roTitle = (t: string) => (readOnly ? READ_ONLY_HINT : t);
 
   const avatarRef = useRef<HTMLDivElement>(null);
   const [showCard, setShowCard] = useState(false);
@@ -138,7 +145,9 @@ function MessageRow({
         {/* Flag icon (always visible; clickable) */}
         <button
           onClick={(e) => { e.stopPropagation(); onQuickAction('flag'); }}
-          className="shrink-0 transition-transform duration-150 hover:scale-125 active:scale-95"
+          disabled={readOnly}
+          title={roTitle('Kennzeichnen')}
+          className="shrink-0 transition-transform duration-150 hover:scale-125 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
           aria-label="Kennzeichnen"
         >
           {isFlagged
@@ -212,23 +221,26 @@ function MessageRow({
           <button aria-label="Archivieren"
             aria-keyshortcuts={ariaKeys('mail.archive')}
             onClick={(e) => { e.stopPropagation(); onQuickAction('archive'); }}
-            className="p-1.5 hover:bg-surface-2 text-fg-muted transition-colors active:scale-90"
-            title="Archivieren"
+            disabled={readOnly}
+            className="p-1.5 hover:bg-surface-2 text-fg-muted transition-colors active:scale-90 disabled:opacity-50 disabled:cursor-not-allowed"
+            title={roTitle('Archivieren')}
           >
             <Archive size={13} />
           </button>
           <button aria-label="Löschen"
             aria-keyshortcuts={ariaKeys('mail.delete')}
             onClick={(e) => { e.stopPropagation(); onQuickAction('delete'); }}
-            className="p-1.5 hover:bg-danger-bg text-fg-muted hover:text-danger-fg transition-colors active:scale-90"
-            title="Löschen"
+            disabled={readOnly}
+            className="p-1.5 hover:bg-danger-bg text-fg-muted hover:text-danger-fg transition-colors active:scale-90 disabled:opacity-50 disabled:cursor-not-allowed"
+            title={roTitle('Löschen')}
           >
             <Trash2 size={13} />
           </button>
           <button aria-label={isUnread ? 'Als gelesen markieren' : 'Als ungelesen markieren'}
             onClick={(e) => { e.stopPropagation(); onQuickAction('read'); }}
-            className="p-1.5 hover:bg-surface-2 text-fg-muted transition-colors active:scale-90"
-            title={isUnread ? 'Als gelesen markieren' : 'Als ungelesen markieren'}
+            disabled={readOnly}
+            className="p-1.5 hover:bg-surface-2 text-fg-muted transition-colors active:scale-90 disabled:opacity-50 disabled:cursor-not-allowed"
+            title={roTitle(isUnread ? 'Als gelesen markieren' : 'Als ungelesen markieren')}
           >
             {isUnread ? <MailOpen size={13} /> : <Mail size={13} />}
           </button>
@@ -277,6 +289,9 @@ export function MessageList({ folderId }: Props) {
   const { density } = useUiPrefs();
   const t = useT();
   const { runWithUndo, deletePermanently, setState } = useMailActions();
+  // 9.3: own, shared or delegated mailbox — same API shapes, different base
+  const mailbox = useActiveMailbox();
+  const { base, readOnly, foreign } = mailbox;
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [moveTargets, setMoveTargets] = useState<MessageLocation[] | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -308,7 +323,7 @@ export function MessageList({ folderId }: Props) {
   const listQuery = useInfiniteQuery({
     queryKey: ['messages', folderId],
     queryFn: ({ pageParam }) =>
-      api.get<MessagesResponse>(`/mail/folders/${folderId}/messages?${pageQuery(pageParam)}`),
+      api.get<MessagesResponse>(`${base}/folders/${folderId}/messages?${pageQuery(pageParam)}`),
     initialPageParam: 0,
     getNextPageParam: nextPageOffset,
     enabled: !!folderId,
@@ -317,11 +332,11 @@ export function MessageList({ folderId }: Props) {
   // Server search — scope "folder" passes folderId, scope "all" searches the whole mailbox.
   // Results are shown as returned by the server (no client-side re-filtering).
   const searchQuery = useInfiniteQuery({
-    queryKey: ['messages', 'search', searchScope, searchScope === 'folder' ? folderId : null, debouncedSearch],
+    queryKey: ['messages', 'search', mailbox.key, searchScope, searchScope === 'folder' ? folderId : null, debouncedSearch],
     queryFn: ({ pageParam }) => {
       const params = new URLSearchParams({ q: debouncedSearch });
       if (searchScope === 'folder') params.set('folderId', folderId);
-      return api.get<MessagesResponse>(`/mail/search?${params.toString()}&${pageQuery(pageParam)}`);
+      return api.get<MessagesResponse>(`${base}/search?${params.toString()}&${pageQuery(pageParam)}`);
     },
     initialPageParam: 0,
     getNextPageParam: nextPageOffset,
@@ -335,13 +350,15 @@ export function MessageList({ folderId }: Props) {
   const totalCount = activeQuery.data?.pages[0]?.total ?? 0;
 
   const { data: folders = [] } = useQuery({
-    queryKey: ['folders'],
-    queryFn: () => api.get<Folder[]>('/mail/folders'),
+    queryKey: mailbox.foldersKey,
+    queryFn: () => api.get<Folder[]>(`${base}/folders`),
   });
 
+  // Categories are personal — only offered in the own mailbox
   const { data: categories = [] } = useQuery({
     queryKey: ['categories'],
     queryFn: () => api.get<Category[]>('/categories'),
+    enabled: !foreign,
   });
 
   const currentFolder = folders.find((f) => f.id === folderId);
@@ -391,13 +408,13 @@ export function MessageList({ folderId }: Props) {
   // Errors are reported by the global MutationCache handler (main.tsx)
   const bulkMutation = useMutation({
     mutationFn: (body: { ids: string[]; action: string; folderId?: string }) =>
-      api.post('/mail/messages/bulk', body),
+      api.post(`${base}/messages/bulk`, body),
     onSettled: invalidate,
   });
 
   const patchMutation = useMutation({
     mutationFn: ({ id, body }: { id: string; body: Record<string, unknown> }) =>
-      api.patch(`/mail/messages/${id}`, body),
+      api.patch(`${base}/messages/${id}`, body),
     onSettled: invalidate,
   });
 
@@ -529,6 +546,8 @@ export function MessageList({ folderId }: Props) {
       void runWithUndo(action, [loc]).then((done) => {
         if (done && msg.id === selectedMessageId) setSelectedMessage(null);
       });
+    } else if (readOnly) {
+      return; // buttons are disabled; shortcuts/clicks never write
     } else if (action === 'read') {
       patchMutation.mutate({ id: msg.id, body: { read: isUnread } });
     } else if (action === 'flag') {
@@ -571,6 +590,13 @@ export function MessageList({ folderId }: Props) {
       ];
     };
 
+    // read-only: disabled with tooltip, without a submenu
+    const w = (item: ContextMenuItem): ContextMenuItem => {
+      if (!readOnly) return item;
+      const { children: _submenu, onClick: _onClick, ...rest } = item;
+      return { ...rest, disabled: true, title: READ_ONLY_HINT };
+    };
+    const ownOnly = (item: ContextMenuItem): ContextMenuItem[] => (foreign ? [] : [item]);
     return [
       { label: 'Öffnen',           icon: <Mail size={14} />,    onClick: () => setSelectedMessage(msg.id) },
       { type: 'divider' },
@@ -578,17 +604,17 @@ export function MessageList({ folderId }: Props) {
       { label: 'Allen antworten',  icon: <ReplyAll size={14} />,onClick: () => openCompose({ mode: 'replyAll', id: msg.id, subject: msg.subject, fromAddr: msg.fromAddr, toAddrs: msg.toAddrs }) },
       { label: 'Weiterleiten',     icon: <Forward size={14} />, onClick: () => openCompose({ mode: 'forward', id: msg.id, subject: msg.subject }) },
       { type: 'divider' },
-      { label: isUnread ? 'Als gelesen markieren' : 'Als ungelesen markieren',
+      w({ label: isUnread ? 'Als gelesen markieren' : 'Als ungelesen markieren',
         icon: isUnread ? <MailOpen size={14} /> : <Mail size={14} />,
-        onClick: () => patchMutation.mutate({ id: msg.id, body: { read: isUnread } }) },
-      { label: isFlagged ? 'Kennzeichnung aufheben' : 'Kennzeichnen',
+        onClick: () => patchMutation.mutate({ id: msg.id, body: { read: isUnread } }) }),
+      w({ label: isFlagged ? 'Kennzeichnung aufheben' : 'Kennzeichnen',
         icon: isFlagged ? <FlagOff size={14} /> : <Flag size={14} />,
-        onClick: () => patchMutation.mutate({ id: msg.id, body: { flagged: !isFlagged } }) },
-      { label: isPinned ? 'Lösen' : 'Anheften',
+        onClick: () => patchMutation.mutate({ id: msg.id, body: { flagged: !isFlagged } }) }),
+      w({ label: isPinned ? 'Lösen' : 'Anheften',
         icon: <Pin size={14} />,
-        onClick: () => bulkMutation.mutate({ ids: [msg.id], action: isPinned ? 'unpin' : 'pin' }) },
-      // Categories submenu
-      categories.length > 0
+        onClick: () => bulkMutation.mutate({ ids: [msg.id], action: isPinned ? 'unpin' : 'pin' }) }),
+      // Categories submenu (personal — own mailbox only)
+      ...ownOnly(categories.length > 0
         ? {
             label: 'Kategorisieren',
             icon: <Tag size={14} />,
@@ -611,36 +637,36 @@ export function MessageList({ folderId }: Props) {
             label: 'Kategorien anlegen …',
             icon: <Tag size={14} />,
             onClick: () => navigate('/settings#categories'),
-          },
-      { label: isSnoozed ? 'Schlummer aufheben' : 'Schlummern bis …',
+          }),
+      ...ownOnly({ label: isSnoozed ? 'Schlummer aufheben' : 'Schlummern bis …',
         icon: <Clock size={14} />,
         ...(isSnoozed
           ? { onClick: () => api.delete(`/mail/messages/${msg.id}/snooze`).then(invalidate).catch(toastError) }
           : { children: snoozeOptions() }),
-      },
+      }),
       { type: 'divider' },
-      { label: 'Archivieren', icon: <Archive size={14} />, onClick: () => quickAction(msg, 'archive') },
-      { label: 'Verschieben nach …', icon: <FolderInput size={14} />, children: moveTargets },
-      isJunkFolder
+      w({ label: 'Archivieren', icon: <Archive size={14} />, onClick: () => quickAction(msg, 'archive') }),
+      w({ label: 'Verschieben nach …', icon: <FolderInput size={14} />, children: moveTargets }),
+      w(isJunkFolder
         ? { label: 'Kein Junk', icon: <ShieldOff size={14} />, onClick: () => bulkMutation.mutate({ ids: [msg.id], action: 'notSpam' }) }
         : { label: 'Als Junk markieren', icon: <AlertOctagon size={14} />, onClick: () => {
             void runWithUndo('spam', [{ id: msg.id, folderId: msg.folderId ?? folderId }]).then((done) => {
               if (done && msg.id === selectedMessageId) setSelectedMessage(null);
             });
-          } },
-      { label: 'Löschen', icon: <Trash2 size={14} />, danger: true, onClick: () => quickAction(msg, 'delete') },
+          } }),
+      w({ label: 'Löschen', icon: <Trash2 size={14} />, danger: true, onClick: () => quickAction(msg, 'delete') }),
       { type: 'divider' },
-      { label: 'Regeln', icon: <ListFilter size={14} />, children: [
+      ...ownOnly({ label: 'Regeln', icon: <ListFilter size={14} />, children: [
         { label: 'Regel erstellen …', icon: <ListFilter size={14} />,
           onClick: () => setRuleEditor({ open: true, preset: { fromAddr: msg.fromAddr, subject: msg.subject } }) },
         { label: 'Regeln verwalten …', icon: <Settings size={14} />,
           onClick: () => navigate('/settings#rules') },
-      ]},
-      { type: 'divider' },
+      ]}),
+      ...(foreign ? [] : [{ type: 'divider' } as ContextMenuItem]),
       { label: 'Quelltext anzeigen', icon: <Code size={14} />,
         onClick: () => {
           // Authorization header instead of ?token= (tokens in URLs end up in logs/history)
-          void fetchText(`/mail/messages/${msg.id}/raw`).then((text) => {
+          void fetchText(`${base}/messages/${msg.id}/raw`).then((text) => {
             setRawModal({ text, subject: msg.subject || 'message', msgId: msg.id });
           }).catch((err: unknown) => {
             setRawModal({
@@ -652,7 +678,7 @@ export function MessageList({ folderId }: Props) {
         } },
       { label: 'Als EML herunterladen', icon: <Download size={14} />,
         onClick: () => {
-          downloadFile(`/mail/messages/${msg.id}/raw`, `${msg.subject || 'message'}.eml`).catch(toastError);
+          downloadFile(`${base}/messages/${msg.id}/raw`, `${msg.subject || 'message'}.eml`).catch(toastError);
         } },
     ];
   };
@@ -788,6 +814,7 @@ export function MessageList({ folderId }: Props) {
               onQuickAction={(a) => quickAction(msg, a)}
               density={density}
               folders={folders}
+              readOnly={readOnly}
             />
           ))
         )}
@@ -841,7 +868,7 @@ export function MessageList({ folderId }: Props) {
               </span>
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => downloadFile(`/mail/messages/${rawModal.msgId}/raw`, `${rawModal.subject}.eml`).catch(toastError)}
+                  onClick={() => downloadFile(`${base}/messages/${rawModal.msgId}/raw`, `${rawModal.subject}.eml`).catch(toastError)}
                   className="btn-secondary text-xs"
                 >
                   <Download size={12} /> .eml herunterladen

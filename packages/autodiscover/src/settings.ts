@@ -9,7 +9,7 @@
  *    cached because of a database error — Outlook would store those hosts in the
  *    profile.
  */
-import { prisma } from '@coremail/storage';
+import { prisma, getBranding, brandingDefaults } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 
 const log = createLogger('autodiscover:settings');
@@ -32,6 +32,8 @@ export interface ServerConfig {
   useHttps: boolean;
   httpPort: number;
   orgName: string;
+  /** 9.3 branding product name (Thunderbird autoconfig display name once branded). */
+  productName?: string;
 }
 
 /** The settings could not be read and nothing was read before (→ HTTP 503). */
@@ -85,6 +87,7 @@ export function envDefaults(): ServerConfig {
     useHttps:        proto === 'https',
     httpPort:        parseInt(port, 10) || 8080,
     orgName:         'CoreMail',
+    productName:     brandingDefaults().productName,
   };
 }
 
@@ -126,6 +129,7 @@ export async function getServerConfig(now: number = Date.now()): Promise<ServerC
     useHttps:         settings.useHttps ?? false,
     httpPort:         settings.httpPort ?? 8080,
     orgName:          settings.orgName ?? 'CoreMail',
+    productName:      (await getBranding()).productName,
   };
   lastGood = cache;
   cacheExpiry = now + CACHE_TTL_MS;

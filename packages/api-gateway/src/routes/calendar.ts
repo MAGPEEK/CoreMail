@@ -1,7 +1,7 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { patchSchema } from '../lib/zod-compat.js';
-import { prisma } from '@coremail/storage';
+import { prisma, getProductName } from '@coremail/storage';
 import { requireAuth } from '../middleware/auth.js';
 import {
   canAccessCalendar,
@@ -513,6 +513,7 @@ calendarRouter.post('/:id/shares', async (req: Request, res: Response) => {
   if (!wasUpdate) {
     const ownerName = req.apiUser!.email; // displayName could be looked up, KISS here
     const permLabel = parsed.data.permission === 'WRITE' ? 'Lesen und Schreiben' : 'Nur lesen';
+    const productName = await getProductName(); // 9.3: branded product name
     void notifyUserInbox({
       recipientUserId: grantee.id,
       fromName: ownerName,
@@ -522,16 +523,16 @@ calendarRouter.post('/:id/shares', async (req: Request, res: Response) => {
         `Hallo,\n\n` +
         `${ownerName} hat den Kalender „${cal.name}" mit dir geteilt.\n\n` +
         `Berechtigung: ${permLabel}\n\n` +
-        `Du findest den Kalender ab sofort in deinem CoreMail-Kalender unter „Geteilt mit mir".\n\n` +
-        `— CoreMail`,
+        `Du findest den Kalender ab sofort in deinem ${productName}-Kalender unter „Geteilt mit mir".\n\n` +
+        `— ${productName}`,
       bodyHtml:
         `<p>Hallo,</p>` +
         `<p><strong>${escapeHtml(ownerName)}</strong> hat den Kalender ` +
         `<strong>„${escapeHtml(cal.name)}"</strong> mit dir geteilt.</p>` +
         `<p>Berechtigung: <strong>${permLabel}</strong></p>` +
-        `<p>Du findest den Kalender ab sofort in deinem CoreMail-Kalender unter ` +
+        `<p>Du findest den Kalender ab sofort in deinem ${escapeHtml(productName)}-Kalender unter ` +
         `<em>Geteilt mit mir</em>.</p>` +
-        `<p style="color:#888;font-size:12px">— CoreMail</p>`,
+        `<p style="color:#888;font-size:12px">— ${escapeHtml(productName)}</p>`,
     });
   }
 

@@ -1,7 +1,7 @@
 name: coremail
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  CoreMail 9.2.0 — Docker Compose, variant STANDARD (production, single host)
+#  CoreMail 9.3.0 — Docker Compose, variant STANDARD (production, single host)
 #
 #  Variants (docs/docker-compose.md has the comparison table):
 #    docker-compose.minimal.yml   MINIMAL   coremail + postgres + redis (1–50 users)
@@ -57,7 +57,7 @@ services:
   #  REST API, webmail "MWA", admin panel "BCP", admin CLI `coremail`)
   # ───────────────────────────────────────────────────────────────────────────
   coremail:
-    image: magpeek/coremail-app:${COREMAIL_VERSION:-9.2.0}
+    image: magpeek/coremail-app:${COREMAIL_VERSION:-9.3.0}
     # Use your own build instead of the Docker Hub image:
     # build:
     #   context: ../..
@@ -131,7 +131,7 @@ services:
       SMARTHOST_TLS_INSECURE: ${SMARTHOST_TLS_INSECURE:-false}
 
       # ── Schedules (cron, UTC) ────────────────────────────────────────────────
-      BACKUP_SCHEDULE:       ${BACKUP_SCHEDULE:-0 2 * * *}   # daily full backup
+      BACKUP_SCHEDULE:       ${BACKUP_SCHEDULE:-0 2 * * *}   # default of "Empfohlene Sicherung einrichten" (BCP), docs/backup.md
       BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
       RETENTION_SCHEDULE:    ${RETENTION_SCHEDULE:-0 3 * * *} # retention policies
 
@@ -147,6 +147,9 @@ services:
       # off, otherwise clients could spoof their IP via X-Forwarded-For.
       SETUP_TOKEN: ${SETUP_TOKEN:-}
       TRUST_PROXY: ${TRUST_PROXY:-}
+      # Branding defaults (9.3) — BCP → Organisation → Branding wins; docs/branding.md
+      BRANDING_NAME:  ${BRANDING_NAME:-}
+      BRANDING_COLOR: ${BRANDING_COLOR:-}
 
       # ── Optional tuning (9.0) — set in .env; empty = built-in default ────────
       # Every variable is described in .env.example; details in docs/mail-security.md,

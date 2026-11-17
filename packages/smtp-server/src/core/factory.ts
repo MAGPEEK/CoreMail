@@ -5,6 +5,7 @@
 import net from 'node:net';
 import tls from 'node:tls';
 import { createLogger } from '@coremail/core';
+import { logTlsSocketError } from '@coremail/core/tls-errors';
 import { SmtpSession } from './session.js';
 import type { SmtpSessionConfig } from './types.js';
 import {
@@ -114,6 +115,10 @@ export function createSmtpServer(config: SmtpSessionConfig, implicitTls = false)
       },
       onConnection,
     );
+    // 9.3: handshake failures on 465 (e.g. the client rejects the certificate)
+    server.on('tlsClientError', (err: Error, s: tls.TLSSocket) => {
+      logTlsSocketError(log, err, { service: 'SMTP', ip: s.remoteAddress, port: s.localPort });
+    });
   } else {
     server = net.createServer(onConnection);
   }

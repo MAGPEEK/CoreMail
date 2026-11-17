@@ -106,6 +106,17 @@ test('XML escaping of settings values', async () => {
   assert.equal(ac.xmlEscape(`<a href='x'>&\u0001`), '&lt;a href=&apos;x&apos;&gt;&amp;');
 });
 
+test('9.3: a branded product name is the provider display name; unbranded keeps the organisation name', () => {
+  const cfg = {
+    owaUrl: '', easUrl: '', autodiscoverBase: '', imapHost: 'imap.example.com', imapPort: 993, imapSsl: true,
+    smtpHost: 'smtp.example.com', smtpPort: 587, smtpTls: true, pop3Host: 'pop.example.com', pop3Port: 995, pop3Ssl: true,
+    publicHostname: 'mail.example.com', useHttps: true, httpPort: 443, orgName: 'Org GmbH',
+  };
+  assert.match(ac.buildAutoconfigXml('example.com', { ...cfg, productName: 'Acme Mail' }), /<displayName>Acme Mail<\/displayName>\s*<displayShortName>Acme Mail</);
+  assert.match(ac.buildAutoconfigXml('example.com', { ...cfg, productName: 'CoreMail' }), /<displayName>Org GmbH<\/displayName>/);
+  assert.match(ac.buildAutoconfigXml('example.com', { ...cfg, orgName: ' ' }), /<displayName>example.com<\/displayName>/);
+});
+
 test('no user enumeration: every address of a served domain gets the identical answer', async () => {
   const a = await (await get(`${WK}?emailaddress=alice%40example.com`)).text();
   const b = await (await get(`${WK}?emailaddress=no.such.user.${Date.now()}%40example.com`)).text();

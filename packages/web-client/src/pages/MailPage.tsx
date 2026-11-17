@@ -15,6 +15,13 @@ import { api } from '../api/client.js';
 import type { Folder } from '../api/types.js';
 import { useMailActions } from '../hooks/useMailActions.js';
 import { EmptyReader } from '../components/Skeleton.js';
+import { useSearchParams } from 'react-router-dom';
+import { useActiveMailbox, ACCESSIBLE_MAILBOXES_KEY } from '../hooks/useActiveMailbox.js';
+import {
+  mailApiBase, foldersQueryKey, mailboxKey, parseMailboxKey, isForeign, isReadOnlyMailbox, READ_ONLY_HINT,
+  type AccessibleMailboxEntry,
+} from '../lib/mailboxContext.js';
+import { MAIL_VIEW_ROOT_CLASS } from '../lib/mailLayout.js';
 
 // ── Persistent panel widths ───────────────────────────────────────────────────
 const PANEL_STORAGE_KEY = 'coremail:panel-widths';
@@ -85,7 +92,9 @@ interface ActiveDrag {
 
 export function MailPage() {
   const qc = useQueryClient();
-  const { selectedFolderId, selectedMessageId, selectedIds, setSelectedFolder, openCompose, clearSelection } = useUiStore();
+  const { selectedFolderId, selectedMessageId, selectedIds, setSelectedFolder, setActiveMailbox, openCompose, clearSelection } = useUiStore();
+  const mailbox = useActiveMailbox();
+  const setMailboxExpanded = useUiPrefs((s) => s.setMailboxExpanded);
   const { readingPane } = useUiPrefs();
   const [activeDrag, setActiveDrag] = useState<ActiveDrag | null>(null);
 
@@ -110,24 +119,47 @@ export function MailPage() {
     setListW((w) => Math.max(MIN_LIST_W, Math.min(MAX_LIST_W, w + delta)));
   }, []);
 
+  // ── 9.3: mailbox shown (?mailbox=shared:<id> | delegated:<id>; none = own) ──────
+  // The URL is the entry point (links, /shared-mailbox/:id redirect, profile menu);
+  // switching mailboxes in the folder pane writes it back (replace, keeps ?q=).
+  const [searchParams, setSearchParams] = useSearchParams();
+  const mailboxParam = searchParams.get('mailbox');
+  useEffect(() => {
+    const wanted = parseMailboxKey(mailboxParam);
+    if (mailboxKey(wanted) !== mailboxKey(useUiStore.getState().activeMailbox)) setActiveMailbox(wanted);
+    if (isForeign(wanted)) setMailboxExpanded(mailboxKey(wanted), true);
+  }, [mailboxParam, setActiveMailbox, setMailboxExpanded]);
+  useEffect(() => {
+    // reads the store (not the render value): runs right after the effect above
+    const current = useUiStore.getState().activeMailbox;
+    const want = isForeign(current) ? mailboxKey(current) : null;
+    if ((mailboxParam ?? null) === want) return;
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (want) next.set('mailbox', want); else next.delete('mailbox');
+      return next;
+    }, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mailbox.key]);
+
   const { data: folders } = useQuery({
-    queryKey: ['folders'],
-    queryFn: () => api.get<Folder[]>('/mail/folders'),
+    queryKey: mailbox.foldersKey,
+    queryFn: () => api.get<Folder[]>(`${mailbox.base}/folders`),
   });
 
-  // Auto-select INBOX on first load
+  // Auto-select INBOX on first load / after switching the mailbox
   useEffect(() => {
     if (!selectedFolderId && folders?.length) {
       const inbox = folders.find((f) => f.name === 'INBOX');
-      if (inbox) setSelectedFolder(inbox.id);
+      if (inbox) setSelectedFolder(inbox.id, 'tree', useUiStore.getState().activeMailbox);
     }
   }, [folders, selectedFolderId, setSelectedFolder]);
 
   const { runWithUndo, locateIds } = useMailActions();
 
   const reparentFolder = useMutation({
-    mutationFn: ({ id, parentId }: { id: string; parentId: string | null }) =>
-      api.patch(`/mail/folders/${id}`, { parentId }),
+    mutationFn: ({ id, parentId, mailboxKey: key }: { id: string; parentId: string | null; mailboxKey: string }) =>
+      api.patch(`${mailApiBase(parseMailboxKey(key))}/folders/${id}`, { parentId }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['folders'] }),
     onError: (e: Error) => toast.error(e.message || 'Ordner konnte nicht verschoben werden'),
   });
@@ -161,17 +193,28 @@ export function MailPage() {
 
   const handleDragEnd = (e: DragEndEvent) => {
     setActiveDrag(null);
-    const overData = e.over?.data?.current as { kind?: string; folderId?: string } | undefined;
-    const activeData = e.active.data?.current as { kind?: string; messageId?: string; folderId?: string } | undefined;
+    const overData = e.over?.data?.current as { kind?: string; folderId?: string; mailbox?: string } | undefined;
+    const activeData = e.active.data?.current as { kind?: string; messageId?: string; folderId?: string; mailbox?: string } | undefined;
     if (!overData || overData.kind !== 'folder' || !overData.folderId) return;
     if (!activeData) return;
+    // 9.3: messages / folders move only inside their own mailbox, and only with write access
+    const sourceKey = activeData.kind === 'message' ? mailbox.key : (activeData.mailbox ?? 'own');
+    const targetKey = overData.mailbox ?? 'own';
+    if (sourceKey !== targetKey) {
+      toast.error('Verschieben ist nur innerhalb desselben Postfachs möglich');
+      return;
+    }
+    if (isReadOnlyMailbox(parseMailboxKey(targetKey), qc.getQueryData<AccessibleMailboxEntry[]>(ACCESSIBLE_MAILBOXES_KEY))) {
+      toast.error(READ_ONLY_HINT);
+      return;
+    }
 
     // Folder onto folder = reparent
     if (activeData.kind === 'folder-source' && activeData.folderId) {
       const sourceId = activeData.folderId;
       const targetId = overData.folderId;
       if (sourceId === targetId) return;
-      const allFolders = folders ?? [];
+      const allFolders = qc.getQueryData<Folder[]>(foldersQueryKey(parseMailboxKey(targetKey))) ?? [];
       // Current parent unchanged?
       const src = allFolders.find((f) => f.id === sourceId);
       if (src?.parentId === targetId) return;
@@ -179,7 +222,7 @@ export function MailPage() {
         toast.error('Ordner kann nicht in seinen eigenen Unterordner verschoben werden');
         return;
       }
-      reparentFolder.mutate({ id: sourceId, parentId: targetId });
+      reparentFolder.mutate({ id: sourceId, parentId: targetId, mailboxKey: targetKey });
       return;
     }
 
@@ -208,7 +251,7 @@ export function MailPage() {
 
   return (
     <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd} onDragCancel={() => setActiveDrag(null)}>
-      <div className="flex flex-1 overflow-hidden relative">
+      <div className={MAIL_VIEW_ROOT_CLASS}>
 
         {/* ── Folder tree ─────────────────────────────────────────────────── */}
         <div style={{ width: folderW, flexShrink: 0 }} className="h-full">

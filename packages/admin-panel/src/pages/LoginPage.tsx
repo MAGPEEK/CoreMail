@@ -10,6 +10,7 @@ const REASON_TEXT: Record<string, string> = {
   mfa:     'Für diesen Bereich ist eine Anmeldung mit zweitem Faktor erforderlich.',
 };
 import { SsoButtons } from '../components/SsoButtons.js';
+import { AuthShell, AuthBrandHeader } from '../components/AuthShell.js';
 
 export function LoginPage() {
   const navigate = useNavigate();
@@ -52,23 +53,22 @@ export function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-canvas">
+    <AuthShell>
       <div className="bg-surface rounded-lg shadow-2xl p-8 w-full max-w-sm">
-        {/* Logo */}
-        <div className="flex items-center justify-center gap-2 mb-6">
-          <div className="w-10 h-10 bg-accent rounded-lg flex items-center justify-center">
-            {step === 'mfa'
-              ? <ShieldCheck size={22} className="text-white" />
-              : <Shield size={22} className="text-white" />
-            }
-          </div>
-          <div>
-            <h1 className="text-xl font-bold text-fg">CoreMail BCP</h1>
-            <p className="text-xs text-fg-subtle">
-              {step === 'mfa' ? 'Zwei-Faktor-Authentifizierung' : 'Backend Control Panel'}
-            </p>
-          </div>
-        </div>
+        {/* Logo, product name, login text (branding) */}
+        <AuthBrandHeader
+          nameSuffix=" BCP"
+          withLoginText={step === 'credentials'}
+          subtitle={step === 'mfa' ? 'Zwei-Faktor-Authentifizierung' : 'Backend Control Panel'}
+          icon={
+            <div className="w-10 h-10 bg-accent rounded-lg flex items-center justify-center">
+              {step === 'mfa'
+                ? <ShieldCheck size={22} className="text-white" aria-hidden="true" />
+                : <Shield size={22} className="text-white" aria-hidden="true" />
+              }
+            </div>
+          }
+        />
 
         {/* ── STEP 1: Credentials ── */}
         {step === 'credentials' && (
@@ -114,6 +114,6 @@ export function LoginPage() {
           />
         )}
       </div>
-    </div>
+    </AuthShell>
   );
 }

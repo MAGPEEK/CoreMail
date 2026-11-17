@@ -66,11 +66,16 @@ export async function ensureBackupBucket(): Promise<void> {
  * crypto/backup-crypto.ts) under `<s3Key>.enc` and returns the stored key —
  * callers persist that key (BackupJob.downloadUrl). The archive never leaves
  * the container in plaintext.
+ *
+ * 9.3 review: `opts.timeoutMs` aborts an upload that does not finish (hung
+ * connection) so the job fails instead of staying RUNNING; `opts.onProgress`
+ * reports uploaded bytes (job heartbeat progress).
  */
 export async function uploadToS3(
   localPath: string,
   s3Key: string,
-  contentType = 'application/octet-stream'
+  contentType = 'application/octet-stream',
+  opts: { timeoutMs?: number; onProgress?: (loaded: number) => void } = {},
 ): Promise<{ key: string; uri: string }> {
   const client = getClient();
   const keyring = backupKeyring();
@@ -100,24 +105,53 @@ export async function uploadToS3(
 
   upload.on('httpUploadProgress', (progress) => {
     log.debug({ s3Key, loaded: progress.loaded, total: progress.total }, 'Upload progress');
+    if (progress.loaded !== undefined) opts.onProgress?.(progress.loaded);
   });
 
-  await upload.done();
+  if (opts.timeoutMs && opts.timeoutMs > 0) {
+    const limitMs = opts.timeoutMs;
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        void upload.abort().catch(() => undefined);
+        reject(Object.assign(
+          new Error(`Upload nach ${Math.round(limitMs / 60_000) || '<1'} Min. abgebrochen (Zeitlimit BACKUP_UPLOAD_TIMEOUT_MIN)`),
+          { code: 'ETIMEDOUT' },
+        ));
+      }, limitMs);
+      timer.unref();
+    });
+    try {
+      await Promise.race([upload.done(), timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
+  } else {
+    await upload.done();
+  }
 
   const s3Uri = `s3://${BUCKET}/${storedKey}`;
   log.info({ s3Uri }, 'Upload complete');
   return { key: storedKey, uri: s3Uri };
 }
 
+/** Max. objects listed (9.3: pages through ListObjectsV2 — one call returned at most 1000). */
+const LIST_MAX = 10_000;
+
 export async function listBackups(prefix: string): Promise<{ key: string; size: number; lastModified: Date }[]> {
   const client = getClient();
   try {
-    const result = await client.send(new ListObjectsV2Command({ Bucket: BUCKET, Prefix: prefix }));
-    return (result.Contents ?? []).map((obj) => ({
-      key: obj.Key ?? '',
-      size: obj.Size ?? 0,
-      lastModified: obj.LastModified ?? new Date(),
-    }));
+    const out: { key: string; size: number; lastModified: Date }[] = [];
+    let token: string | undefined;
+    do {
+      const result = await client.send(new ListObjectsV2Command({ Bucket: BUCKET, Prefix: prefix, ...(token ? { ContinuationToken: token } : {}) }));
+      for (const obj of result.Contents ?? []) {
+        out.push({ key: obj.Key ?? '', size: obj.Size ?? 0, lastModified: obj.LastModified ?? new Date() });
+      }
+      token = result.IsTruncated ? result.NextContinuationToken : undefined;
+    } while (token && out.length < LIST_MAX);
+    // newest first (the BCP shows the list as it comes)
+    return out.sort((a, b) => b.lastModified.getTime() - a.lastModified.getTime());
   } catch (err) {
     // v3.18.26 bugfix: NoSuchBucket must not crash the service.
     // We try to create the bucket and then return an empty list.

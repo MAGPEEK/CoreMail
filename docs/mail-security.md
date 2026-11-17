@@ -5,6 +5,9 @@ does with the result, and the hardening switches of the SMTP transport.
 
 Set the environment variables below in `.env`; the shipped Compose files pass them through to the `coremail` container (Helm: `app.*` values or `app.extraEnv`).
 
+Transport TLS certificates for SMTP/IMAP/POP3 (assignment, served-certificate check, startup
+repair): see [certificates.md](certificates.md).
+
 ## Sender authentication (SPF, DKIM, DMARC)
 
 The security-filter (`POST /check/content`) evaluates every message received on

@@ -80,8 +80,47 @@ node scripts/e2e/run.mjs imap pop3       # single steps (state is kept in state.
 node --test scripts/e2e/repo-hygiene.test.mjs   # static regression checks (no stack needed)
 ```
 
-Steps: `setup users smtp imap pop3 jmap dav eas eas-body eas-commands rest admin mfa live lockout restart storage schema-upgrade`.
+Steps: `setup users smtp imap pop3 jmap dav eas eas-body eas-commands rest webmail admin tls backup branding mfa live lockout restart storage schema-upgrade`.
 `schema-upgrade` builds a database from the 8.0.0 schema (`E2E_SCHEMA_BASE`, default `d5ad681`) and checks that schema-sync upgrades it, refuses duplicates and fails closed on a dropped column with data (`E2E_PG_CONTAINER` selects the PostgreSQL container).
+`webmail` (9.3): shared / delegated mailboxes in the mail view at API level — A lists the team
+mailbox in `GET /api/v1/user/accessible-mailboxes` (FULL_ACCESS + SEND_AS), hides and shows it
+(persisted; B without access gets 404, an invalid ref 400), lists folders / messages / search and
+creates, renames a folder in it via `/api/v1/mail/shared-mailboxes/:id` (never visible in the own
+mailbox, no reparenting into it); the pre-9.3 `/api/v1/user/shared-mailboxes/:id` routes still answer
+with their 9.2 shapes (folder array, `{ total, messages }`, protected folder 403, create 201,
+delete 204); B gets
+READ_ONLY on the team mailbox and a READ_ONLY delegation on A's mailbox: reads work, every write
+route answers 403 `READ_ONLY`; after the grants are removed B gets 403 `NO_ACCESS`. The test folder
+and grants are removed again.
+`tls` (9.3): generates a test CA + a leaf for `mail.<E2E_DOMAIN>` with openssl inside the app
+container and uploads it WITHOUT services (the mail ports must not change), then assigns
+SMTP/IMAP/POP3 with `PUT /api/v1/admin/certificates/:id` only and expects 993 / 465 / 995 (TLS) and
+143 / 587 (STARTTLS) / 110 (STLS) to serve exactly that certificate (SHA-256 fingerprint, the
+intermediate is sent) and `GET /api/v1/admin/certificates/served` to agree; removing the services
+must bring every port back to the self-signed default for `mail.<E2E_DOMAIN>` (one certificate on
+all ports, visible as the SELF_SIGNED protocol certificate). The uploaded certificate is deleted.
+See [certificates.md](certificates.md).
+`backup` (9.3): B gets a folder `E2E-Backup` with two APPENDed messages (attachment, `\Flagged \Seen`);
+a mailbox backup of B (encrypted ZIP in the bucket) is restored from the STORED archive into A
+(`mode: subfolder`) and A must see `Wiederhergestellt <date>.E2E-Backup` over IMAP with both
+messages byte-exact and their flags; a second restore and an upload of the downloaded ZIP add
+nothing (duplicates); HELP_DESK gets 403; „Empfohlene Sicherung einrichten" creates the full +
+system schedules once, the system schedule's run-now writes a `pg_dump` (`PGDMP`) to `system/…`;
+the created schedules are deleted again. Skipped with `E2E_STORAGE=filesystem` (no MinIO, no
+backup bucket). See [backup.md](backup.md).
+`admin` (9.3) starts with `GET /api/v1/admin/security/capabilities`: on the standard stack (both
+storage modes include rspamd and ClamAV) rspamd must be `available` and ClamAV `available` or
+`unavailable` (still loading its signatures), never `absent`; no host name or URL in the reply.
+ClamAV must not report `host-not-found` there (the container is part of the stack).
+With `E2E_SCANNERS=absent` (a stack without both containers that sets `RSPAMD_ENABLED=false` /
+`CLAMAV_ENABLED=false`, like the minimal compose file) both must be `absent` with reason
+`disabled-by-config` — a missing host name alone is `unavailable`, never `absent`.
+`branding` (9.3): sets product name + colour (a low-contrast header colour must come back as a
+warning), uploads a generated PNG logo and an SVG favicon, checks the public
+`GET /api/v1/branding`, the asset headers (`nosniff`, sandbox CSP, immutable, content hash = file
+name), refuses hostile SVGs (onload, script, external href, DOCTYPE/XXE) with 400 `SVG_UNSAFE`,
+checks the injected `<title>`, colour variable, favicon and `#cm-branding` JSON in `/` and `/bcp/`,
+and ends with `POST /api/v1/admin/branding/reset` (defaults back, old assets 404).
 `live`: B keeps an IMAP IDLE connection, an authenticated SMTP submission session and a
 POP3 session open, changes the password in the web client and expects `* BYE`, `421 4.7.0` and
 `-ERR [AUTH]` right away; A's IDLE connection (app password) stays usable. The new password of B
@@ -98,7 +137,8 @@ Notes:
   `greylistWaitSec` to 60 s through the admin API and retries after 62 s.
 - The `lockout` step clears the `mailauth:*` Redis keys afterwards.
 - Environment overrides: `E2E_HOST`, `E2E_*_PORT`, `E2E_CONTAINER`, `E2E_DOMAIN`
-  (default `e2e.test`), `E2E_ENV_FILE`, `E2E_COMPOSE_PROJECT`, `E2E_STORAGE` (`minio` | `filesystem`).
+  (default `e2e.test`), `E2E_ENV_FILE`, `E2E_COMPOSE_PROJECT`, `E2E_STORAGE` (`minio` | `filesystem`),
+  `E2E_SCANNERS` (`deployed` default | `absent`).
 
 ## 4. Tear down
 

@@ -1,14 +1,19 @@
-import { useId, useRef, useState } from 'react';
+import { useId, useMemo, useRef, useState } from 'react';
 import { Modal } from '../components/Modal.js';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   HardDriveDownload, Play, RefreshCw, Upload, AlertCircle, CheckCircle2,
   Loader2, Clock, Database, X, User as UserIcon, CalendarClock, Plus, Trash2,
-  Pencil, PauseCircle, Archive, ListChecks, KeyRound,
+  Pencil, PauseCircle, Archive, ListChecks, KeyRound, RotateCcw, ShieldCheck, MinusCircle, Info,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { api, downloadFileNamed } from '../api/client.js';
 import { backupFileName, contentDispositionName } from '../lib/backupNames.js';
+import {
+  restoreSources, sourceLabel, restoreFolderPreview, restoreFormError, restoreRequestBody, uploadQuery, restoreSummary,
+  jobScopeLabel, canRestoreJob, canDownloadJob, scheduleStatusLabel, describeCron, needsRecommendedSetup, backupCoverage,
+  archiveKeyInfo, type RestoreSource, type RestoreMode, type CoverageState,
+} from '../lib/backupRestore.js';
 import { useT } from '../i18n/useT.js';
 import { usePermissions } from '../hooks/usePermissions.js';
 import { useAccessStore } from '../store/access.js';
@@ -34,6 +39,13 @@ import { DataTable, type Column } from '../components/DataTable.js';
  * this page too and sees only the mailbox-data parts: jobs list + download,
  * per-mailbox backup, archive list + download, restore. Schedules, the full
  * backup and every delete stay with 'servers' (lib/permissions.ts backupCapabilities).
+ *
+ * 9.3: "Wiederherstellen" restores STORED archives (archive / job row → restore,
+ * encrypted archives decrypted server-side) and uploaded ZIP/MBOX files as a job
+ * (into "Wiederhergestellt <Datum>", the original folders or one folder; duplicates
+ * skipped). "Zeitpläne" shows what the automation covers and offers
+ * "Empfohlene Sicherung einrichten" (nightly system + full backup). Pure logic:
+ * lib/backupRestore.ts.
  */
 
 type JobStatus =
@@ -58,6 +70,8 @@ interface BackupJob {
   messageCount: number | null;
   triggeredBy: string;
   createdAt: string;
+  /** 9.3: restore counts / heartbeat / target folder */
+  progressMeta?: unknown;
 }
 
 interface BackupSchedule {
@@ -120,9 +134,13 @@ export function BackupsPage() {
   const t = useT();
   const { can, canAction } = usePermissions();
   const caps = backupCapabilities(useAccessStore((s) => s.areas), useAccessStore((s) => s.actions));
+  const role = useAccessStore((s) => s.role);
   const qc = useQueryClient();
   const [tab, setTab] = useState<Tab>('jobs');
   const [scheduleEditor, setScheduleEditor] = useState<Partial<BackupSchedule> | null>(null);
+  // 9.3: archive preselected for the restore tab (archive / jobs row → "Wiederherstellen")
+  const [restoreKey, setRestoreKey] = useState<string | null>(null);
+  const openRestore = (key: string) => { setRestoreKey(key); setTab('restore'); };
 
   const { data: jobsData = [], isLoading: jobsLoading, isFetching: jobsFetching, refetch: refetchJobs } = useQuery<BackupJob[]>({
     queryKey: ['admin-backups-jobs'],
@@ -139,7 +157,7 @@ export function BackupsPage() {
     staleTime: 60_000,
   });
 
-  const { data: schedules = [] } = useQuery<BackupSchedule[]>({
+  const { data: schedules = [], isSuccess: schedulesLoaded } = useQuery<BackupSchedule[]>({
     queryKey: ['admin-backups-schedules'],
     queryFn:  () => api.get<BackupSchedule[]>('/admin/backups/schedules'),
     staleTime: 30_000,
@@ -235,6 +253,20 @@ export function BackupsPage() {
     onSuccess: () => { toast.success('Zeitplan getriggert'); void qc.invalidateQueries({ queryKey: ['admin-backups-jobs'] }); setTab('jobs'); },
     onError: (err: Error) => toast.error(err.message),
   });
+  // 9.3: "Empfohlene Sicherung einrichten" — explicit one click, never silently
+  const setupRecommended = useMutation({
+    mutationFn: () => api.post<{ created: BackupSchedule[] }>('/admin/backups/schedules/recommended', {}),
+    onSuccess: (r) => {
+      toast.success(r.created.length ? `${r.created.length} Zeitplan/Zeitpläne angelegt` : 'Automatische Sicherung ist bereits eingerichtet');
+      void qc.invalidateQueries({ queryKey: ['admin-backups-schedules'] });
+      setTab('schedules');
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  // 9.3: restorable mailbox archives (archive objects ∪ completed jobs)
+  const sources = useMemo(() => restoreSources(s3Data, jobsData, users), [s3Data, jobsData, users]);
+  const noAutomation = caps.operations && schedulesLoaded && !schedules.some((s) => s.enabled && s.scope === 'full');
 
   const userEmailById = (id: string | null): string => {
     if (!id) return '—';
@@ -264,7 +296,7 @@ export function BackupsPage() {
       key: 'scope', header: t('bk_col_scope'), sortValue: (j) => `${j.scope} ${j.userId ? userEmailById(j.userId) : ''}`, className: 'text-xs',
       cell: (j) => (
         <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-surface-2 rounded text-fg-muted">
-          {j.scope}{j.userId ? ` · ${userEmailById(j.userId)}` : ''}
+          {jobScopeLabel(j.scope)}{j.userId ? ` · ${userEmailById(j.userId)}` : ''}
         </span>
       ),
     },
@@ -282,6 +314,9 @@ export function BackupsPage() {
                 aria-valuenow={j.progress} aria-valuemin={0} aria-valuemax={100}>
                 <div className="h-full bg-accent transition-all" style={{ width: `${j.progress}%` }} />
               </div>
+            )}
+            {j.scope === 'restore' && restoreSummary(j.progressMeta) && (
+              <div className="text-[10px] text-fg-muted mt-1">{restoreSummary(j.progressMeta)}</div>
             )}
             {j.errorMsg && (
               <div className="text-[10px] text-danger-fg mt-1" title={j.errorMsg}>
@@ -305,8 +340,21 @@ export function BackupsPage() {
       key: 'actions', header: t('mbox_col_actions'), srOnlyHeader: true,
       cell: (j) => (
         <div className="flex items-center justify-end gap-1">
-          {j.status === 'COMPLETED' && j.downloadUrl && (
-            // mailbox content: ORGANIZATION_MANAGEMENT / COMPLIANCE_MANAGEMENT only (action backupMailboxData)
+          {canRestoreJob(j) && (
+            // 9.3: restore this archive (mailbox content: action backupMailboxData)
+            <Can action="backupMailboxData">
+              <button
+                onClick={() => openRestore(j.downloadUrl!)}
+                className="p-1.5 text-fg-subtle hover:text-accent-fg hover:bg-accent/10 rounded"
+                title="Wiederherstellen" aria-label="Backup wiederherstellen"
+              >
+                <RotateCcw size={13} />
+              </button>
+            </Can>
+          )}
+          {j.status === 'COMPLETED' && j.downloadUrl && canDownloadJob(role, j) && (
+            // mailbox content: ORGANIZATION_MANAGEMENT / COMPLIANCE_MANAGEMENT only (action backupMailboxData);
+            // 9.3: system dumps ORGANIZATION_MANAGEMENT only
             <Can action="backupMailboxData">
               <button
                 onClick={() => void downloadJob(j.id, j.downloadUrl ?? undefined)}
@@ -377,6 +425,24 @@ export function BackupsPage() {
         )
       )}
 
+      {/* 9.3: no nightly full backup configured — say so instead of implying one exists */}
+      {noAutomation && (
+        <div role="status" className="flex items-start gap-2 px-3 py-2 rounded border border-warning-line bg-warning-bg text-warning-fg text-xs">
+          <AlertCircle size={14} className="shrink-0 mt-0.5" aria-hidden="true" />
+          <span className="flex-1">
+            Keine automatische Sicherung eingerichtet — es gibt keinen aktiven Zeitplan für ein Vollbackup aller Postfächer.
+          </span>
+          {caps.manage ? (
+            <button onClick={() => setupRecommended.mutate()} disabled={setupRecommended.isPending}
+              className="shrink-0 underline hover:no-underline disabled:opacity-50">
+              Empfohlene Sicherung einrichten
+            </button>
+          ) : (
+            <button onClick={() => setTab('schedules')} className="shrink-0 underline hover:no-underline">Zeitpläne ansehen</button>
+          )}
+        </div>
+      )}
+
       {/* TABS */}
       <div className="border-b border-line">
         <nav className="-mb-px flex gap-1 overflow-x-auto">
@@ -384,7 +450,7 @@ export function BackupsPage() {
           {(caps.manage || caps.mailboxData) && <TabBtn active={tab === 'actions'} onClick={() => setTab('actions')} icon={<Play size={14} />} label="Schnellaktionen" />}
           {caps.operations && <TabBtn active={tab === 'schedules'} onClick={() => setTab('schedules')} icon={<CalendarClock size={14} />} label="Zeitpläne" badge={schedules.length} />}
           <TabBtn active={tab === 'archive'} onClick={() => setTab('archive')} icon={<Archive size={14} />} label="Backup-Archiv" badge={s3Data.length} />
-          {canAction('backupMailboxData') && <TabBtn active={tab === 'restore'} onClick={() => setTab('restore')} icon={<Upload size={14} />} label="Restore (Import)" />}
+          {canAction('backupMailboxData') && <TabBtn active={tab === 'restore'} onClick={() => setTab('restore')} icon={<RotateCcw size={14} />} label="Wiederherstellen" />}
         </nav>
       </div>
 
@@ -449,6 +515,11 @@ export function BackupsPage() {
       {/* TAB: Schedules */}
       {tab === 'schedules' && caps.operations && (
         <div className="space-y-3">
+          <AutomationPanel
+            schedules={schedules}
+            onSetup={() => setupRecommended.mutate()}
+            setupPending={setupRecommended.isPending}
+          />
           <div className="flex justify-end">
             <Can area="servers" access="write">
             <button
@@ -482,15 +553,19 @@ export function BackupsPage() {
                   {schedules.map((s) => (
                     <tr key={s.id} className="hover:bg-surface-2">
                       <td className="px-4 py-2 font-medium text-fg">{s.name}</td>
-                      <td className="px-4 py-2 font-mono text-xs text-fg-muted">{s.cron}</td>
+                      <td className="px-4 py-2 text-xs text-fg-muted">
+                        <div>{describeCron(s.cron)}</div>
+                        <div className="font-mono text-[10px] text-fg-subtle">{s.cron}</div>
+                      </td>
                       <td className="px-4 py-2 text-fg-muted text-xs">
-                        {s.scope === 'full' ? 'Alle Mailboxen' : `Mailbox ${userEmailById(s.targetUserId)}`} · {s.format} · {s.retentionDays} Tage
+                        {s.scope === 'full' ? 'Alle Mailboxen' : s.scope === 'system' ? 'System (Datenbank)' : `Mailbox ${userEmailById(s.targetUserId)}`}
+                        {s.scope !== 'system' ? ` · ${s.format}` : ''} · {s.retentionDays} Tage
                       </td>
                       <td className="px-4 py-2">
                         {s.enabled ? <CheckCircle2 size={14} className="text-success-fg" /> : <PauseCircle size={14} className="text-fg-subtle" />}
                       </td>
                       <td className="px-4 py-2 text-xs text-fg-subtle">{fmtDate(s.lastRunAt)}</td>
-                      <td className="px-4 py-2 text-xs">{s.lastStatus ?? '—'}</td>
+                      <td className={`px-4 py-2 text-xs ${TONE_CLASS[scheduleStatusLabel(s.lastStatus).tone]}`}>{scheduleStatusLabel(s.lastStatus).label}</td>
                       <td className="px-4 py-2">
                         <Can area="servers" access="write" mode="hide">
                         <div className="flex items-center justify-end gap-1">
@@ -549,6 +624,18 @@ export function BackupsPage() {
                       <td className="px-4 py-2 text-fg-muted">{fmtDate(b.lastModified)}</td>
                       <td className="px-4 py-2">
                         <div className="flex items-center justify-end gap-1">
+                          {archiveKeyInfo(b.key).format !== null && (
+                            <Can action="backupMailboxData">
+                              <button aria-label="Backup wiederherstellen"
+                                onClick={() => openRestore(b.key)}
+                                className="p-1.5 text-fg-subtle hover:text-accent-fg hover:bg-accent/10 rounded"
+                                title="Wiederherstellen"
+                              >
+                                <RotateCcw size={13} />
+                              </button>
+                            </Can>
+                          )}
+                          {canDownloadJob(role, { scope: '', downloadUrl: b.key }) && (
                           <Can action="backupMailboxData">
                             <button aria-label="Backup herunterladen"
                               onClick={() => void downloadArchive(b.key)}
@@ -558,6 +645,7 @@ export function BackupsPage() {
                               <HardDriveDownload size={13} />
                             </button>
                           </Can>
+                          )}
                           {/* 9.1: deleting archive objects is 'servers' write only (API: DELETE /archive) */}
                           <Can area="servers" access="write">
                           <button aria-label="Backup löschen"
@@ -585,7 +673,18 @@ export function BackupsPage() {
       )}
 
       {/* TAB: Restore */}
-      {tab === 'restore' && canAction('backupMailboxData') && <RestoreTab users={users} />}
+      {tab === 'restore' && canAction('backupMailboxData') && (
+        <RestoreTab
+          users={users}
+          sources={sources}
+          initialKey={restoreKey}
+          onStarted={() => {
+            setRestoreKey(null);
+            void qc.invalidateQueries({ queryKey: ['admin-backups-jobs'] });
+            setTab('jobs');
+          }}
+        />
+      )}
 
       {/* Schedule-Editor */}
       {scheduleEditor && (
@@ -718,42 +817,180 @@ function ActionsTab(props: {
   );
 }
 
-// ─── Tab: Restore (MBOX import) ─────────────────────────────────────────────
-function RestoreTab(props: { users: UserItem[] }) {
+// ─── Tab: Restore (9.3: stored archives + uploaded files) ────────────────────
+const MODE_OPTIONS: Array<{ value: RestoreMode; label: string }> = [
+  { value: 'subfolder', label: 'In einen neuen Ordner „Wiederhergestellt <Datum>“ (empfohlen — nichts wird vermischt, Ordnerstruktur bleibt erhalten)' },
+  { value: 'original', label: 'In die ursprünglichen Ordner (bereits vorhandene Nachrichten werden übersprungen)' },
+  { value: 'folder', label: 'Alles in einen bestimmten Ordner' },
+];
+
+type FolderItem = { id: string; name: string; displayName: string };
+
+function useUserFolders(userId: string, enabled: boolean) {
+  return useQuery<FolderItem[]>({
+    queryKey: ['admin-backups-user-folders', userId],
+    queryFn: () => api.get(`/admin/backups/users/${encodeURIComponent(userId)}/folders`),
+    enabled: enabled && !!userId,
+  });
+}
+
+/** Restore mode radios + folder picker (shared by both restore forms). */
+function ModePicker(props: {
+  name: string; mode: RestoreMode; onMode: (m: RestoreMode) => void;
+  folderId: string; onFolder: (id: string) => void; folders: FolderItem[]; folderPreview: string | null; disabled?: boolean;
+}) {
+  return (
+    <fieldset className="space-y-1.5">
+      <legend className="block text-xs font-medium text-fg-muted mb-1">Wohin?</legend>
+      {MODE_OPTIONS.map((o) => (
+        <label key={o.value} className="flex items-start gap-2 text-sm text-fg-muted">
+          <input type="radio" name={props.name} value={o.value} checked={props.mode === o.value}
+            onChange={() => props.onMode(o.value)} className="mt-1" />
+          <span>
+            {o.value === 'subfolder' && props.folderPreview ? o.label.replace('„Wiederhergestellt <Datum>“', `„${props.folderPreview}“`) : o.label}
+          </span>
+        </label>
+      ))}
+      {props.mode === 'folder' && (
+        <select value={props.folderId} onChange={(e) => props.onFolder(e.target.value)} disabled={props.disabled}
+          aria-label="Zielordner"
+          className="w-full border border-line-strong rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent-fg disabled:opacity-50">
+          <option value="">— Zielordner wählen —</option>
+          {props.folders.map((f) => <option key={f.id} value={f.id}>{f.displayName || f.name}</option>)}
+        </select>
+      )}
+    </fieldset>
+  );
+}
+
+function RestoreTab(props: { users: UserItem[]; sources: RestoreSource[]; initialKey: string | null; onStarted: () => void }) {
+  return (
+    <div className="space-y-4">
+      <div className="flex items-start gap-2 px-3 py-2 rounded border border-info-line bg-info-bg text-info-fg text-xs">
+        <Info size={14} className="shrink-0 mt-0.5" aria-hidden="true" />
+        <span>
+          Die Wiederherstellung läuft als Job (Fortschritt unter „Jobs“). Bereits vorhandene Nachrichten werden erkannt und
+          übersprungen — eine Wiederherstellung kann gefahrlos wiederholt werden. Ordner und Markierungen werden aus
+          ZIP-Backups übernommen; MBOX-Dateien enthalten keine Ordner. Kontakte und Kalender werden nicht wiederhergestellt.
+        </span>
+      </div>
+      <ArchiveRestoreCard {...props} />
+      <UploadRestoreCard users={props.users} onStarted={props.onStarted} />
+    </div>
+  );
+}
+
+function ArchiveRestoreCard(props: { users: UserItem[]; sources: RestoreSource[]; initialKey: string | null; onStarted: () => void }) {
+  const [key, setKey] = useState(props.initialKey ?? '');
+  const [filter, setFilter] = useState('');
+  const [targetUserId, setTargetUserId] = useState('');
+  const [mode, setMode] = useState<RestoreMode>('subfolder');
+  const [folderId, setFolderId] = useState('');
+  const [busy, setBusy] = useState(false);
+  const source = props.sources.find((s) => s.key === key) ?? null;
+  const effectiveTarget = targetUserId || source?.ownerUserId || '';
+  const { data: folders = [] } = useUserFolders(effectiveTarget, mode === 'folder');
+
+  const q = filter.trim().toLowerCase();
+  const visible = props.sources.filter((s) => !q || (s.ownerEmail ?? '').toLowerCase().includes(q) || s.key.toLowerCase().includes(q)).slice(0, 300);
+  if (source && !visible.includes(source)) visible.unshift(source);
+
+  const start = async () => {
+    const form = { source, targetUserId, mode, folderId };
+    const err = restoreFormError(form);
+    if (err) { toast.error(err); return; }
+    setBusy(true);
+    try {
+      const r = await api.post<{ jobId: string; targetEmail?: string; targetFolder?: string | null }>('/admin/backups/restore', restoreRequestBody(form));
+      toast.success(`Wiederherstellung gestartet${r.targetEmail ? ` nach ${r.targetEmail}` : ''}${r.targetFolder ? ` („${r.targetFolder}“)` : ''}`);
+      props.onStarted();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Wiederherstellung fehlgeschlagen');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="bg-surface border border-line rounded p-5">
+      <div className="flex items-start gap-3 mb-4">
+        <Archive size={20} className="text-accent-fg mt-0.5" />
+        <div>
+          <h3 className="text-sm font-semibold text-fg">Aus dem Backup-Archiv wiederherstellen</h3>
+          <p className="text-xs text-fg-subtle mt-1">
+            Gespeicherte Postfach-Backups (einzelne Postfächer und die Postfach-Teile von Vollbackups) direkt aus dem
+            Backup-Speicher zurückspielen. Verschlüsselte Archive werden mit dem konfigurierten Schlüssel entschlüsselt.
+          </p>
+        </div>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+        <div className="md:col-span-2">
+          <label className="block text-xs font-medium text-fg-muted mb-1" htmlFor="restore-archive">Backup-Archiv</label>
+          <input type="search" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Nach Postfach filtern…"
+            aria-label="Archive filtern"
+            className="w-full border border-line-strong rounded px-3 py-1.5 text-sm mb-1.5 focus:outline-none focus:ring-1 focus:ring-accent-fg" />
+          <select id="restore-archive" value={key} onChange={(e) => { setKey(e.target.value); setFolderId(''); }}
+            className="w-full border border-line-strong rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent-fg">
+            <option value="">— bitte wählen ({props.sources.length} Archive) —</option>
+            {visible.map((s) => <option key={s.key} value={s.key}>{sourceLabel(s, fmtDate)}</option>)}
+          </select>
+          {source && (
+            <p className="text-[11px] text-fg-subtle mt-1 font-mono truncate" title={source.key}>{source.key} · {fmtBytes(source.size)}</p>
+          )}
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-fg-muted mb-1" htmlFor="restore-target">Zielpostfach</label>
+          <select id="restore-target" value={targetUserId} onChange={(e) => { setTargetUserId(e.target.value); setFolderId(''); }}
+            className="w-full border border-line-strong rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent-fg">
+            <option value="">{source?.ownerEmail ? `Ursprüngliches Postfach (${source.ownerEmail})` : 'Ursprüngliches Postfach'}</option>
+            {props.users.map((u) => <option key={u.id} value={u.id}>{u.email}</option>)}
+          </select>
+        </div>
+        <div>
+          <ModePicker name="restore-archive-mode" mode={mode} onMode={setMode} folderId={folderId} onFolder={setFolderId}
+            folders={folders} folderPreview={source ? restoreFolderPreview(source.date) : null} disabled={!effectiveTarget} />
+        </div>
+      </div>
+      <div className="flex justify-end">
+        <button onClick={() => void start()} disabled={busy || !source}
+          className="flex items-center gap-1.5 px-4 py-2 text-sm bg-accent hover:bg-accent/90 text-white rounded disabled:opacity-50">
+          {busy ? <Loader2 size={14} className="animate-spin" /> : <RotateCcw size={14} />}
+          {busy ? 'Wird gestartet…' : 'Wiederherstellung starten'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function UploadRestoreCard(props: { users: UserItem[]; onStarted: () => void }) {
   const [importUserId, setImportUserId] = useState('');
+  const [mode, setMode] = useState<RestoreMode>('subfolder');
   const [importFolderId, setImportFolderId] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
   const [importing, setImporting] = useState(false);
-
-  // v8.1: target folder (the backup-service requires ?folderId=)
-  const { data: folders = [] } = useQuery<Array<{ id: string; name: string; displayName: string }>>({
-    queryKey: ['admin-backups-user-folders', importUserId],
-    queryFn: () => api.get(`/admin/backups/users/${encodeURIComponent(importUserId)}/folders`),
-    enabled: !!importUserId,
-  });
+  const { data: folders = [] } = useUserFolders(importUserId, mode === 'folder');
 
   const handleImport = async () => {
-    if (!importUserId.trim()) { toast.error('User erforderlich'); return; }
-    const folderId = importFolderId || folders.find((f) => f.name === 'INBOX')?.id || '';
-    if (!folderId) { toast.error('Zielordner erforderlich'); return; }
+    if (!importUserId.trim()) { toast.error('Zielpostfach erforderlich'); return; }
+    if (mode === 'folder' && !importFolderId) { toast.error('Zielordner erforderlich'); return; }
     const file = fileRef.current?.files?.[0];
-    if (!file) { toast.error('Bitte MBOX-Datei auswählen'); return; }
+    if (!file) { toast.error('Bitte eine Datei auswählen'); return; }
     if (file.size > 500 * 1024 * 1024) { toast.error('Datei zu groß (max 500 MB)'); return; }
     setImporting(true);
     try {
       // Send the File itself as raw bytes — the browser streams it; file.text()
       // would load up to 500 MB into a JS string and corrupt encrypted (.enc)
       // backups and non-UTF-8 mailboxes.
-      const result = await api.postFile<{ imported?: number; errors?: number; failed?: number; encrypted?: boolean }>(
-        `/admin/backups/import/${encodeURIComponent(importUserId.trim())}?folderId=${encodeURIComponent(folderId)}`,
+      const result = await api.postFile<{ jobId?: string; encrypted?: boolean; format?: string; targetFolder?: string | null }>(
+        `/admin/backups/import/${encodeURIComponent(importUserId.trim())}?${uploadQuery(mode, importFolderId)}`,
         file,
         'application/octet-stream',
       );
-      const failed = result.failed ?? result.errors ?? 0;
-      toast.success(`Import${result.encrypted ? ' (verschlüsseltes Backup)' : ''}: ${result.imported ?? '?'} importiert${failed ? `, ${failed} fehlgeschlagen` : ''}`);
+      toast.success(`Wiederherstellung gestartet (${(result.format ?? 'Datei').toUpperCase()}${result.encrypted ? ', verschlüsselt' : ''})${result.targetFolder ? ` → „${result.targetFolder}“` : ''}`);
       setImportUserId('');
       setImportFolderId('');
       if (fileRef.current) fileRef.current.value = '';
+      props.onStarted();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Import fehlgeschlagen');
     } finally {
@@ -766,49 +1003,89 @@ function RestoreTab(props: { users: UserItem[] }) {
       <div className="flex items-start gap-3 mb-4">
         <Upload size={20} className="text-accent-fg mt-0.5" />
         <div>
-          <h3 className="text-sm font-semibold text-fg">MBOX-Import (Wiederherstellung)</h3>
+          <h3 className="text-sm font-semibold text-fg">Datei hochladen und wiederherstellen</h3>
           <p className="text-xs text-fg-subtle mt-1">
-            Importiert eine MBOX-Datei (z. B. aus altem Mailserver, Thunderbird-Export) in das Postfach eines Users. Max. 500 MB pro Import.
+            Ein heruntergeladenes CoreMail-Backup (ZIP oder MBOX, auch verschlüsselt als .enc) oder eine MBOX-Datei
+            (z. B. Thunderbird-Export, alter Mailserver) in ein Postfach einspielen. Max. 500 MB pro Datei.
           </p>
         </div>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
         <div>
-          <label className="block text-xs font-medium text-fg-muted mb-1">Ziel-User</label>
-          <select
-            value={importUserId}
+          <label className="block text-xs font-medium text-fg-muted mb-1" htmlFor="upload-target">Zielpostfach</label>
+          <select id="upload-target" value={importUserId}
             onChange={(e) => { setImportUserId(e.target.value); setImportFolderId(''); }}
-            className="w-full border border-line-strong rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent-fg"
-          >
+            className="w-full border border-line-strong rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent-fg">
             <option value="">— bitte wählen —</option>
             {props.users.map((u) => <option key={u.id} value={u.id}>{u.email}</option>)}
           </select>
+          <label className="block text-xs font-medium text-fg-muted mb-1 mt-3" htmlFor="upload-file">Datei (.zip, .mbox, .enc)</label>
+          <input id="upload-file" ref={fileRef} type="file" accept=".zip,.mbox,.enc,.txt"
+            className="w-full text-sm text-fg-muted file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-sm file:font-medium file:bg-accent/10 file:text-accent-fg hover:file:bg-accent/20" />
         </div>
         <div>
-          <label className="block text-xs font-medium text-fg-muted mb-1">Zielordner</label>
-          <select
-            value={importFolderId || folders.find((f) => f.name === 'INBOX')?.id || ''}
-            onChange={(e) => setImportFolderId(e.target.value)}
-            disabled={!importUserId}
-            className="w-full border border-line-strong rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-accent-fg disabled:opacity-50"
-          >
-            <option value="">— bitte wählen —</option>
-            {folders.map((f) => <option key={f.id} value={f.id}>{f.displayName || f.name}</option>)}
-          </select>
-        </div>
-        <div className="md:col-span-2">
-          <label className="block text-xs font-medium text-fg-muted mb-1">MBOX-Datei (auch verschlüsseltes CoreMail-Backup .mbox.enc)</label>
-          <input ref={fileRef} type="file" accept=".mbox,.txt,.enc"
-            className="w-full text-sm text-fg-muted file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-sm file:font-medium file:bg-accent/10 file:text-accent-fg hover:file:bg-accent/20" />
+          <ModePicker name="restore-upload-mode" mode={mode} onMode={setMode} folderId={importFolderId} onFolder={setImportFolderId}
+            folders={folders} folderPreview={null} disabled={!importUserId} />
         </div>
       </div>
       <div className="flex justify-end">
         <button onClick={() => void handleImport()} disabled={importing || !importUserId}
           className="flex items-center gap-1.5 px-4 py-2 text-sm bg-accent hover:bg-accent/90 text-white rounded disabled:opacity-50">
           {importing ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
-          {importing ? 'Import läuft…' : 'Import starten'}
+          {importing ? 'Wird hochgeladen…' : 'Hochladen und wiederherstellen'}
         </button>
       </div>
+    </div>
+  );
+}
+
+// ─── Automation overview (9.3) ──────────────────────────────────────────────
+const TONE_CLASS: Record<'ok' | 'warn' | 'error' | 'muted', string> = {
+  ok: 'text-success-fg', warn: 'text-warning-fg', error: 'text-danger-fg', muted: 'text-fg-subtle',
+};
+
+const COVERAGE_UI: Record<CoverageState, { label: string; className: string; icon: React.ReactNode }> = {
+  covered: { label: 'gesichert', className: 'text-success-fg', icon: <CheckCircle2 size={14} aria-hidden="true" /> },
+  partial: { label: 'teilweise', className: 'text-warning-fg', icon: <AlertCircle size={14} aria-hidden="true" /> },
+  missing: { label: 'nicht gesichert', className: 'text-danger-fg', icon: <X size={14} aria-hidden="true" /> },
+  manual: { label: 'separat sichern', className: 'text-fg-subtle', icon: <MinusCircle size={14} aria-hidden="true" /> },
+};
+
+function AutomationPanel(props: { schedules: BackupSchedule[]; onSetup: () => void; setupPending: boolean }) {
+  const coverage = backupCoverage(props.schedules);
+  return (
+    <div className="bg-surface border border-line rounded p-4">
+      <div className="flex items-start justify-between gap-3 flex-wrap mb-3">
+        <div className="flex items-start gap-2">
+          <ShieldCheck size={18} className="text-accent-fg mt-0.5" aria-hidden="true" />
+          <div>
+            <h3 className="text-sm font-semibold text-fg">Was wird automatisch gesichert?</h3>
+            <p className="text-xs text-fg-subtle mt-0.5">
+              Empfohlen: nachts eine System-Sicherung (Datenbank) und ein Vollbackup aller Postfächer, verschlüsselt im Backup-Speicher.
+              Bei einem Fehlschlag erhalten die Administratoren eine Benachrichtigung in ihr Postfach.
+            </p>
+          </div>
+        </div>
+        {needsRecommendedSetup(props.schedules) && (
+          <Can area="servers" access="write" mode="hide">
+            <button onClick={props.onSetup} disabled={props.setupPending}
+              className="text-xs px-3 py-1.5 bg-accent text-white rounded hover:bg-accent/90 flex items-center gap-1.5 disabled:opacity-50">
+              {props.setupPending ? <Loader2 size={12} className="animate-spin" /> : <CalendarClock size={12} />}
+              Empfohlene Sicherung einrichten
+            </button>
+          </Can>
+        )}
+      </div>
+      <ul className="divide-y divide-line text-xs">
+        {coverage.map((c) => (
+          <li key={c.what} className="py-1.5 flex items-start gap-2">
+            <span className={`inline-flex items-center gap-1 shrink-0 w-32 ${COVERAGE_UI[c.state].className}`}>
+              {COVERAGE_UI[c.state].icon}{COVERAGE_UI[c.state].label}
+            </span>
+            <span className="text-fg">{c.what}<span className="block text-fg-subtle">{c.detail}</span></span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -984,15 +1261,18 @@ function ScheduleEditorModal(props: {
                 className="w-full border border-line-strong rounded px-3 py-1.5 text-sm">
                 <option value="full">Alle Mailboxen</option>
                 <option value="user">Einzelne Mailbox</option>
+                <option value="system">System (Datenbank)</option>
               </select>
             </div>
             <div>
               <label className="block text-xs font-medium text-fg-muted mb-1">Format</label>
-              <select value={scope === 'full' ? 'zip' : format} onChange={(e) => setFormat(e.target.value)} disabled={scope === 'full'}
-                title={scope === 'full' ? 'Vollbackups sind immer ZIP-Archive' : undefined}
+              <select value={scope === 'full' ? 'zip' : scope === 'system' ? 'pgdump' : format} onChange={(e) => setFormat(e.target.value)}
+                disabled={scope === 'full' || scope === 'system'}
+                title={scope === 'full' ? 'Vollbackups sind immer ZIP-Archive' : scope === 'system' ? 'System-Sicherungen sind Datenbank-Dumps' : undefined}
                 className="w-full border border-line-strong rounded px-3 py-1.5 text-sm disabled:opacity-60">
                 <option value="zip">ZIP</option>
                 <option value="mbox">MBOX</option>
+                {scope === 'system' && <option value="pgdump">Datenbank-Dump</option>}
               </select>
             </div>
           </div>
@@ -1032,7 +1312,8 @@ function ScheduleEditorModal(props: {
             Abbrechen
           </button>
           <button onClick={() => props.onSave({
-              name: name.trim(), cron: effectiveCron.trim(), scope, format: scope === 'full' ? 'zip' : format,
+              name: name.trim(), cron: effectiveCron.trim(), scope,
+              format: scope === 'full' ? 'zip' : scope === 'system' ? 'pgdump' : format === 'pgdump' ? 'zip' : format,
               ...(scope === 'user' && targetUserId ? { targetUserId } : { targetUserId: null }),
               retentionDays, enabled,
             })}

@@ -36,6 +36,7 @@ import { adminSmtpConfigRouter } from './smtp-config.js';
 import { adminLdapRouter } from './ldap.js';
 import { adminSsoRouter } from './sso.js';
 import { adminStorageRouter } from './storage.js';
+import { adminBrandingRouter } from './branding.js';
 
 export const ADMIN_PREFIX = '/api/v1/admin';
 
@@ -72,6 +73,8 @@ export const ADMIN_MOUNTS: ReadonlyArray<readonly [string, Router]> = [
   ['/sso',                  adminSsoRouter],
   // v7.1: object storage status + migration (ORGANIZATION_MANAGEMENT only)
   ['/storage',              adminStorageRouter],
+  // 9.3: branding (area organisation — write ORGANIZATION_MANAGEMENT, read SERVER_MANAGEMENT / VIEW_ONLY_ORG)
+  ['/branding',             adminBrandingRouter],
 ];
 
 /** Admin endpoints that are intentionally public (no auth). */

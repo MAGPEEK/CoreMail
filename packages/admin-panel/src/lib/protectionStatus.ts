@@ -23,6 +23,8 @@ export function protectionFeatureMatrix(
   s: ProtectionSettingsLike,
   online: { rspamd: boolean | undefined; clamav: boolean | undefined },
   activeDnsblZones: readonly string[] | undefined,
+  /** 9.3: scanners not deployed in this installation — their rows are left out. */
+  absent: { rspamd?: boolean; clamav?: boolean } = {},
 ): FeatureRow[] {
   const off = 'In den Einstellungen deaktiviert';
   const scanner = (enabled: boolean, up: boolean | undefined, onNote: string): Pick<FeatureRow, 'ok' | 'note'> =>
@@ -33,7 +35,7 @@ export function protectionFeatureMatrix(
   const zones = activeDnsblZones ?? [];
   const waitMin = Math.max(1, Math.round(s.greylistWaitSec / 60));
   const countries = s.geoipCountries.length;
-  return [
+  const rows: FeatureRow[] = [
     { label: 'SPF-Prüfung',       ok: true, note: 'Sender Policy Framework' },
     { label: 'DKIM-Validierung',  ok: true, note: 'DomainKeys Identified Mail' },
     { label: 'DMARC-Auswertung',  ok: true, note: 'Domain-based Message Authentication' },
@@ -59,4 +61,5 @@ export function protectionFeatureMatrix(
       note: s.attachmentEnabled ? `${s.attachmentBlockedExt.length} blockierte Dateiendungen` : off,
     },
   ];
+  return rows.filter((r) => !(absent.rspamd && r.label === 'Anti-Spam (Rspamd)') && !(absent.clamav && r.label === 'Antivirus (ClamAV)'));
 }

@@ -24,7 +24,7 @@ services:
   # ── CoreMail main application ───────────────────────────────────────────────
 
   coremail:
-    image: magpeek/coremail-app:9.2.0
+    image: magpeek/coremail-app:9.3.0
     container_name: coremail
     restart: unless-stopped
     environment:
@@ -61,6 +61,9 @@ services:
       # by untrusted clients directly. Setup wizard token: docker logs coremail | grep -i "setup token"
       TRUST_PROXY: ${TRUST_PROXY:-}
       SETUP_TOKEN: ${SETUP_TOKEN:-}
+      # Branding defaults (9.3) — BCP → Organisation → Branding wins; docs/branding.md
+      BRANDING_NAME:  ${BRANDING_NAME:-}
+      BRANDING_COLOR: ${BRANDING_COLOR:-}
 
       # ── Optional tuning (9.0) — set in .env; empty = built-in default ────────
       # Every variable is described in .env.example; details in docs/mail-security.md,

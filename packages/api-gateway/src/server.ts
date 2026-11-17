@@ -12,7 +12,7 @@ import {
   startReferencesBackfill, type BackfillRedis,
 } from '@coremail/storage';
 import {
-  getRedisClient, createLogger, CHANNEL_SETTINGS_RELOAD, startAuthInvalidationSubscriber,
+  getRedisClient, createLogger, startAuthInvalidationSubscriber,
   installAsyncErrorHandling, installProcessGuards, errorMiddleware, parseTrustProxy,
 } from '@coremail/core';
 
@@ -32,6 +32,7 @@ import {
 import { mailRouter } from './routes/mail.js';
 import { recoverableRouter, sharedRecoverableRouter, delegatedRecoverableRouter } from './routes/recoverable.js';
 import { draftsRouter } from './routes/drafts.js';
+import { sharedMailboxContentRouter, delegatedMailboxContentRouter } from './routes/foreign-mailbox.js';
 import { calendarRouter } from './routes/calendar.js';
 import { contactsRouter } from './routes/contacts.js';
 import { tasksRouter } from './routes/tasks.js';
@@ -46,7 +47,8 @@ import { getAcmeChallenge } from './routes/admin/certificates.js';
 import { mountAdminRoutes } from './routes/admin/index.js';
 import { adminMeRouter } from './routes/admin/me.js';
 import { startTlsProxy, setTlsUpgradeHandler, httpsRedirectState } from './tls-proxy.js';
-import { startCertRenewalScheduler } from './lib/cert-renewal.js';
+import { startCertRenewalScheduler, repairStaleAcmeStates, scheduleStaleRepairAfterLockTtl } from './lib/cert-renewal.js';
+import { reconcileProtocolCertStateLocked } from './lib/protocol-cert-assign.js';
 // auto-letsencrypt removed — admin requests LE manually via BCP → SSL/TLS
 // adminExternalContactsRouter completely removed in v3.18.33
 import { pushRouter } from './routes/push.js';
@@ -67,6 +69,8 @@ import { auditMiddleware } from './lib/audit.js';
 import { syncServerUrlsFromHostname } from './lib/server-urls.js';
 import { initSetupToken } from './lib/setup-token.js';
 import { livenessHandler } from './lib/liveness.js';
+import { brandingApiRouter, brandingAssetsRouter } from './routes/branding.js';
+import { brandedIndexHtml, startBrandingSubscriber } from './lib/branding/state.js';
 
 const log = createLogger('api-gateway');
 installProcessGuards(log);
@@ -328,6 +332,12 @@ app.get('/api/v1/maintenance', async (_req, res) => {
   }
 });
 
+// ── Branding (9.3) — public: the login page needs it before auth ─────────────
+// GET /api/v1/branding (public JSON) and GET /branding/assets/<sha256>.<ext>
+// (immutable, nosniff, sandbox CSP). Admin side: routes/admin/branding.ts.
+app.use('/api/v1/branding', brandingApiRouter);
+app.use('/branding/assets', brandingAssetsRouter);
+
 // ── Changelog API ─────────────────────────────────────────────────────────────
 const CHANGELOG_PATH = process.env['CHANGELOG_PATH']
   ?? resolve(process.cwd(), 'CHANGELOG.md');
@@ -355,6 +365,11 @@ app.use('/api/v1/mail/recoverable', recoverableRouter); // v8.1 Recover deleted 
 // 9.1: recover deleted items of shared / delegated mailboxes (FULL_ACCESS)
 app.use('/api/v1/user/shared-mailboxes/:id/recoverable', sharedRecoverableRouter);
 app.use('/api/v1/mail/delegated-mailboxes/:id/recoverable', delegatedRecoverableRouter);
+// 9.3: folders + messages of shared / delegated mailboxes (webmail, same shapes as /mail).
+// The pre-9.3 /api/v1/user/shared-mailboxes/:id/{folders,messages} routes keep their old
+// contract in routes/user.ts (compat) — the new router lives under /api/v1/mail.
+app.use('/api/v1/mail/shared-mailboxes/:id', sharedMailboxContentRouter);
+app.use('/api/v1/mail/delegated-mailboxes/:id', delegatedMailboxContentRouter);
 app.use('/api/v1/mail/drafts',    draftsRouter);
 app.use('/api/v1/mail',           mailRouter);
 app.use('/api/v1/calendar',       calendarRouter);
@@ -390,9 +405,25 @@ app.get('/owa/*', (req, res) => {
   res.redirect(301, stripped);
 });
 
+/**
+ * 9.3: index.html of the webmail / BCP with the branding injected (colour var,
+ * <title>, favicon, #cm-branding JSON); cached per branding version
+ * (lib/branding/state.ts). Never cached by the browser.
+ */
+async function sendBrandedIndex(res: express.Response, file: string): Promise<void> {
+  const html = await brandedIndexHtml(file);
+  if (html === null) { res.status(404).json({ error: 'Not found' }); return; }
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.type('html').send(html);
+}
+
 // BCP keeps the /bcp prefix (admin panel has its own Vite base)
 if (existsSync(bcpDir)) {
+  const bcpIndex = join(bcpDir, 'index.html');
+  // Before express.static so the raw index.html is never served unbranded.
+  app.get(['/bcp', '/bcp/index.html'], (_req, res) => sendBrandedIndex(res, bcpIndex));
   app.use('/bcp', express.static(bcpDir, {
+    index: false,
     maxAge: '1y',
     setHeaders(res, filePath) {
       if (filePath.endsWith('.html')) {
@@ -400,7 +431,7 @@ if (existsSync(bcpDir)) {
       }
     },
   }));
-  app.get('/bcp/*', (_req, res) => res.sendFile(join(bcpDir, 'index.html')));
+  app.get('/bcp/*', (_req, res) => sendBrandedIndex(res, bcpIndex));
   log.info({ dir: bcpDir }, 'Serving BCP static files');
 }
 
@@ -408,6 +439,8 @@ if (existsSync(bcpDir)) {
 // /auth/* /api/* /jmap/* etc. take precedence. Catch-all `app.get('*')` sends
 // all unknown routes back to index.html (SPA routing).
 if (existsSync(owaDir)) {
+  const owaIndex = join(owaDir, 'index.html');
+  app.get('/index.html', (_req, res) => sendBrandedIndex(res, owaIndex));
   app.use(express.static(owaDir, {
     maxAge: '1y',
     index: false, // we serve index.html manually so the catch-all applies
@@ -421,13 +454,13 @@ if (existsSync(owaDir)) {
   // API/proxy route is an OWA route → return index.html.
   const API_PREFIXES = [
     '/api/', '/auth/', '/.well-known/', '/jmap', '/Autodiscover', '/autodiscover',
-    '/Microsoft-Server-ActiveSync', '/dav', '/bcp',
+    '/Microsoft-Server-ActiveSync', '/dav', '/bcp', '/branding/',
   ];
   app.get('*', (req, res, next) => {
     if (API_PREFIXES.some((p) => req.path === p || req.path.startsWith(p))) {
       return next();
     }
-    res.sendFile(join(owaDir, 'index.html'));
+    return sendBrandedIndex(res, owaIndex);
   });
   log.info({ dir: owaDir }, 'Serving OWA static files (root)');
 } else {
@@ -449,6 +482,7 @@ async function start() {
   // backfill of the persistent setup flag for existing installations.
   await initSetupToken(log).catch((err) => log.error({ err }, 'Setup token initialisation failed — setup wizard stays locked'));
   void initRuntimeLogLevel('api-gateway', { aliases: ['api'] }); // BCP per-service log level
+  startBrandingSubscriber(); // 9.3: branding changes of other instances → drop cached index.html
   void startSseHub(); // one Redis subscriber → SSE fan-out + Web Push (lib/sse-hub.ts)
   // v7.1.0: session revocations done by the auth-service / LDAP sync reach
   // requireAuth's in-process revocation check immediately.
@@ -495,10 +529,10 @@ async function start() {
     log.warn({ err }, 'TLS proxy startup failed — HTTPS not available'),
   );
 
-  // ── Startup consistency check: reconcile server_settings.tlsCert with certificates table ──
-  // If server_settings.tlsCert is set but no cert with isActiveProtocol: true
-  // exists in the certificates table (e.g. after manual deletion without the API),
-  // server_settings.tlsCert/tlsKey are set to NULL → self-signed fallback.
+  // ── Startup consistency check (9.3): the certificate holding SMTP/IMAP/POP3
+  // in the certificates table is applied when server_settings.tlsCert /
+  // isActiveProtocol disagree (repairs installs where the BCP showed the mail
+  // services on a Let's Encrypt cert while the ports served mail.localhost).
   void syncProtocolCertState().catch(err =>
     log.warn({ err }, 'Protocol cert state sync failed — check certificates manually'),
   );
@@ -514,29 +548,16 @@ async function start() {
   );
 
   // ── Clean up stale PENDING/RENEWING certificates ──────────────────────────
-  // After a container restart certs can be stuck in PENDING or RENEWING
-  // (the ACME background process was killed by the restart).
-  // All certs in this state for >10 minutes are set to ERROR.
-  void (async () => {
-    try {
-      const staleThreshold = new Date(Date.now() - 10 * 60_000);
-      const cleaned = await prisma.certificate.updateMany({
-        where: {
-          status: { in: ['PENDING', 'RENEWING'] },
-          updatedAt: { lt: staleThreshold },
-        },
-        data: {
-          status:    'ERROR',
-          lastError: 'Prozess durch Server-Neustart unterbrochen — bitte Zertifikat erneut anfordern.',
-        },
-      });
-      if (cleaned.count > 0) {
-        log.warn({ count: cleaned.count }, 'Stale PENDING/RENEWING certificates reset to ERROR on startup');
-      }
-    } catch (err) {
-      log.warn({ err }, 'Failed to cleanup stale pending certificates (non-fatal)');
-    }
-  })();
+  // After a container restart certs can be stuck in PENDING or RENEWING (the
+  // ACME run died with the process). 9.2.x: every run holds a per-certificate
+  // Redis lock, so any in-progress cert WITHOUT a lock holder is reset to
+  // ERROR ("interrupted", retry possible) — the scheduler repeats this hourly.
+  void repairStaleAcmeStates(new Date(), 0)
+    .then((n) => { if (n > 0) log.warn({ count: n }, 'Stale PENDING/RENEWING certificates reset to ERROR on startup'); })
+    .catch((err) => log.warn({ err }, 'Failed to cleanup stale pending certificates (non-fatal)'));
+  // A dead run's lock without heartbeat may still be too young at startup —
+  // repeat once after the lock TTL (no cert stays RENEWING for an hour).
+  scheduleStaleRepairAfterLockTtl();
 
   // No auto-LE issuance — admin requests Let's Encrypt manually via BCP → SSL/TLS.
   // v6: certificate lifecycle — hourly status recomputation (ACTIVE/EXPIRING/
@@ -557,37 +578,26 @@ async function start() {
   startReferencesBackfill(getRedisClient() as unknown as BackfillRedis);
 }
 
+/**
+ * 9.3: startup reconciliation of the protocol TLS state (SMTP/IMAP/POP3) —
+ * idempotent, logged (lib/protocol-cert-assign.ts). The certificate holding
+ * the mail services in the BCP is the one the servers serve; a stale
+ * ServerSettings.tlsCert / isActiveProtocol is repaired, an orphaned or
+ * missing protocol cert falls back to the self-signed default for the public
+ * host name, and a self-signed default for mail.localhost is regenerated for
+ * the real host name. Replaces the pre-9.3 orphan check.
+ */
 async function syncProtocolCertState(): Promise<void> {
   try {
-    const settings = await prisma.serverSettings.findUnique({
-      where:  { id: 'singleton' },
-      select: { tlsCert: true },
-    });
-
-    // No TLS cert in ServerSettings → nothing to do
-    if (!settings?.tlsCert) return;
-
-    // Is there a cert with isActiveProtocol: true?
-    const activeProtocolCert = await prisma.certificate.findFirst({
-      where:  { isActiveProtocol: true },
-      select: { id: true, name: true },
-    });
-
-    if (activeProtocolCert) {
-      // Everything consistent
-      log.debug({ certId: activeProtocolCert.id }, 'Protocol TLS cert state: consistent');
-      return;
-    }
-
-    // Orphaned: server_settings has TLS data but no isActiveProtocol cert → clean up
-    await prisma.serverSettings.update({
-      where: { id: 'singleton' },
-      data:  { tlsCert: null, tlsKey: null },
-    });
-    await getRedisClient().publish(CHANNEL_SETTINGS_RELOAD, '');
-    log.info('Startup sync: orphaned server_settings.tlsCert cleared — SMTP/IMAP/POP3 using self-signed');
+    // Redis-locked (cert:protocol:reconcile:lock): with several api-gateway
+    // instances only one repairs — no duplicate self-signed rows; the others
+    // skip silently (null).
+    const r = await reconcileProtocolCertStateLocked();
+    if (!r) return;
+    if (r.action === 'consistent') log.debug({ certId: r.certId }, 'Protocol TLS cert state: consistent');
+    else log.info({ action: r.action, certId: r.certId, notes: r.notes }, 'Protocol TLS cert state reconciled at startup');
   } catch (err) {
-    log.error({ err }, 'syncProtocolCertState failed');
+    log.error({ err }, 'Protocol TLS reconciliation failed');
   }
 }
 

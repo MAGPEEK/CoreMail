@@ -7,7 +7,7 @@ import {
   generateSelfSignedCert, tlsPemToBuffers, applyTlsToListeners, tlsMaterialEquals, installProcessGuards,
   startAuthInvalidationSubscriber, resolveBindAddress, listenWithRecovery,
 } from '@coremail/core';
-import { connectDatabase, waitForObjectStorage, prisma, loadProtocolCert, invalidateQueueSettingsCache } from '@coremail/storage';
+import { connectDatabase, waitForObjectStorage, prisma, loadProtocolCert, selfSignedFallbackHostname, invalidateQueueSettingsCache } from '@coremail/storage';
 import { createSmtpServer } from './core/factory.js';
 import { smtpLiveSessions } from './core/live-sessions.js';
 import { inboundTarpitMaxDelayMs } from './core/session.js';
@@ -190,11 +190,12 @@ async function refreshTlsConfig(): Promise<void> {
       return;
     }
 
-    // No certificate in the DB → generate a self-signed default cert with a fixed
-    // CN=mail.localhost.  The admin later replaces it in the BCP
-    // with a real cert; a fixed CN prevents the self-signed cert from being
-    // re-issued whenever publicHostname is renamed.
-    const SELF_SIGNED_HOSTNAME = 'mail.localhost';
+    // No certificate in the DB → generate a self-signed default cert. The admin
+    // later replaces it in the BCP with a real cert.
+    // 9.3: CN = the public host name (mail.localhost only while none is configured);
+    // the api-gateway's startup reconciliation replaces this with a visible
+    // self-signed default row for the same name.
+    const SELF_SIGNED_HOSTNAME = await selfSignedFallbackHostname();
     log.info({ hostname: SELF_SIGNED_HOSTNAME }, 'No TLS cert in DB — generating self-signed certificate');
     const { certPem, keyPem } = generateSelfSignedCert(SELF_SIGNED_HOSTNAME);
     _tlsConfig = tlsPemToBuffers(certPem, keyPem);

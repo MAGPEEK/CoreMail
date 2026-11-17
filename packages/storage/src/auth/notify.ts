@@ -11,6 +11,7 @@ import { randomBytes } from 'node:crypto';
 import { createLogger } from '@coremail/core';
 import { prisma } from '../prisma/index.js';
 import { createMessage } from '../message-store.js';
+import { getProductName } from '../branding.js';
 
 const log = createLogger('auth:notify');
 
@@ -41,12 +42,13 @@ async function deliver(n: SecurityNotice): Promise<void> {
   }
   const settings = await prisma.serverSettings.findUnique({ where: { id: 'singleton' }, select: { publicHostname: true } });
   const host = settings?.publicHostname || 'localhost';
+  const productName = await getProductName(); // 9.3: branded product name
   const bodyHtml = `<pre style="font-family:system-ui,sans-serif;white-space:pre-wrap">${escapeHtml(n.bodyText)}</pre>`;
   await prisma.$transaction((tx) => createMessage(tx, mailbox.id, inbox.id, {
     flags: [],
     subject: n.subject,
     fromAddr: `system@${host}`,
-    fromName: 'CoreMail Security',
+    fromName: `${productName} Security`,
     toAddrs: [],
     ccAddrs: [],
     bccAddrs: [],

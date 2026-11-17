@@ -90,7 +90,8 @@ test('ACME timeout cancels the work: ERROR recorded once, no late success write,
   for (let i = 0; i < 200 && !settled; i++) await new Promise(r => setTimeout(r, 10));
   assert.equal(settled, true, 'onSettled must fire once the cancelled work ended');
 
-  const statuses = updates.map(u => u.data['status']);
-  assert.deepEqual(statuses, ['ERROR'], 'only the timeout ERROR — the cancelled work must not write');
-  assert.match(String(updates[0]!.data['lastError']), /ACME timeout/);
+  const statusWrites = updates.filter(u => 'status' in u.data);
+  assert.deepEqual(statusWrites.map(u => u.data['status']), ['ERROR'], 'only the timeout ERROR — the cancelled work must not write');
+  assert.match(String(statusWrites[0]!.data['lastError']), /ACME timeout/);
+  assert.equal(statusWrites[0]!.data['lastErrorCode'], 'timeout');
 });

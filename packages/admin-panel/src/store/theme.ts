@@ -3,7 +3,8 @@ import { persist } from 'zustand/middleware';
 
 export type ThemeMode = 'light' | 'dark' | 'system';
 
-// ECP accent color is always Microsoft blue — cannot be influenced by the OWA theme
+// 9.3: the BCP accent is the brand primary colour (main.tsx ThemeApplier,
+// lib/branding.ts) — never the webmail user's accent. This is the built-in default.
 export const ECP_ACCENT_RGB = '0 120 212';
 
 interface ThemeState {

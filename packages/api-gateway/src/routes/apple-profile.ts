@@ -19,7 +19,7 @@
  */
 import { Router, type Router as RouterType, type Request, type Response, type NextFunction } from 'express';
 import { createHash } from 'node:crypto';
-import { prisma, hasMfa } from '@coremail/storage';
+import { prisma, hasMfa, getProductName, brandDisplayName, DEFAULT_PRODUCT_NAME } from '@coremail/storage';
 import { requireAuth, requireTicketAuth } from '../middleware/auth.js';
 import { issueEventTicket } from '../lib/event-tickets.js';
 
@@ -86,6 +86,8 @@ export interface AppleProfileInput {
   email: string;
   displayName: string;
   orgName: string;
+  /** 9.3 branding product name (account / profile labels once branded). */
+  productName?: string;
   publicHostname: string;
   useHttps: boolean;
   httpPort: number;
@@ -105,7 +107,11 @@ function reverseDns(host: string): string {
 
 export function buildAppleProfile(p: AppleProfileInput, type: AppleProfileType = 'imap'): string {
   const idBase = `${reverseDns(p.publicHostname)}.coremail.${p.userId.replace(/[^A-Za-z0-9-]/g, '')}`;
-  const org = p.orgName.trim() || 'CoreMail';
+  // 9.3: PayloadOrganization = the organisation; account and profile labels = the
+  // branded product name (unbranded: the organisation name, as before 9.3).
+  const product = p.productName?.trim() || DEFAULT_PRODUCT_NAME;
+  const org = p.orgName.trim() || product;
+  const label = brandDisplayName(product, p.orgName);
   const name = p.displayName.trim() || p.email;
   const davSsl = p.useHttps;
   const davPort = p.httpPort > 0 ? p.httpPort : (davSsl ? 443 : 80);
@@ -135,7 +141,7 @@ export function buildAppleProfile(p: AppleProfileInput, type: AppleProfileType =
       host = u.host;
       ssl = u.protocol === 'https:';
     } catch { /* keep the public hostname */ }
-    content = [payload('eas', 'com.apple.eas.account', `${org} (ActiveSync)`, {
+    content = [payload('eas', 'com.apple.eas.account', `${label} (ActiveSync)`, {
       EmailAddress: p.email,
       UserName: p.email,
       Host: host,
@@ -144,9 +150,9 @@ export function buildAppleProfile(p: AppleProfileInput, type: AppleProfileType =
     })];
   } else {
     content = [
-      payload('mail', 'com.apple.mail.managed', `${org} Mail`, {
+      payload('mail', 'com.apple.mail.managed', `${label} Mail`, {
         EmailAccountType: 'EmailTypeIMAP',
-        EmailAccountDescription: `${org} (${p.email})`,
+        EmailAccountDescription: `${label} (${p.email})`,
         EmailAccountName: name,
         EmailAddress: p.email,
         IncomingMailServerHostName: p.imap.host,
@@ -162,16 +168,16 @@ export function buildAppleProfile(p: AppleProfileInput, type: AppleProfileType =
         OutgoingMailServerUsername: p.email,
         OutgoingPasswordSameAsIncomingPassword: true,
       }),
-      payload('caldav', 'com.apple.caldav.account', `${org} Calendar`, {
-        CalDAVAccountDescription: `${org} Calendar`,
+      payload('caldav', 'com.apple.caldav.account', `${label} Calendar`, {
+        CalDAVAccountDescription: `${label} Calendar`,
         CalDAVHostName: p.publicHostname,
         CalDAVPort: davPort,
         CalDAVUseSSL: davSsl,
         CalDAVPrincipalURL: `${webBase}/dav/principals/${encodeURIComponent(p.userId)}/`,
         CalDAVUsername: p.email,
       }),
-      payload('carddav', 'com.apple.carddav.account', `${org} Contacts`, {
-        CardDAVAccountDescription: `${org} Contacts`,
+      payload('carddav', 'com.apple.carddav.account', `${label} Contacts`, {
+        CardDAVAccountDescription: `${label} Contacts`,
         CardDAVHostName: p.publicHostname,
         CardDAVPort: davPort,
         CardDAVUseSSL: davSsl,
@@ -187,7 +193,7 @@ export function buildAppleProfile(p: AppleProfileInput, type: AppleProfileType =
     PayloadVersion: 1,
     PayloadIdentifier: `${idBase}.${profileKind}`,
     PayloadUUID: stableUuid(p.userId, profileKind),
-    PayloadDisplayName: type === 'eas' ? `${org} — ${p.email} (ActiveSync)` : `${org} — ${p.email}`,
+    PayloadDisplayName: type === 'eas' ? `${label} — ${p.email} (ActiveSync)` : `${label} — ${p.email}`,
     PayloadDescription: (type === 'eas'
       ? `Sets up ${p.email} with ActiveSync (mail, calendar, contacts). `
       : `Sets up ${p.email} for Mail (IMAP/SMTP), Calendar (CalDAV) and Contacts (CardDAV). `) + passwordHint,
@@ -259,6 +265,7 @@ appleProfileRouter.get('/', (req: Request, res: Response, next: NextFunction) =>
     email: user.email,
     displayName: user.displayName,
     orgName: settings?.orgName ?? 'CoreMail',
+    productName: await getProductName(),
     publicHostname: hostname,
     useHttps,
     httpPort: settings?.httpPort ?? (useHttps ? 443 : 80),

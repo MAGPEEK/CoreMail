@@ -9,15 +9,18 @@ import { ContextMenu, type ContextMenuItem } from './ContextMenu.js';
 import { useMailActions } from '../hooks/useMailActions.js';
 import { AnimatedCounter } from './AnimatedCounter.js';
 import type { Folder } from '../api/types.js';
+import { useActiveMailbox } from '../hooks/useActiveMailbox.js';
+import { READ_ONLY_HINT } from '../lib/mailboxContext.js';
 
 // Module-level (never define components inside components — remounts on every render)
-function IconBtn({ icon, onClick, title }: { icon: React.ReactNode; onClick: () => void; title: string }) {
+function IconBtn({ icon, onClick, title, disabled = false }: { icon: React.ReactNode; onClick: () => void; title: string; disabled?: boolean }) {
   return (
     <button
       onClick={onClick}
-      title={title}
+      disabled={disabled}
+      title={disabled ? READ_ONLY_HINT : title}
       aria-label={title}
-      className="p-1.5 rounded-sm text-fg-muted hover:bg-accent/10 hover:text-accent-fg transition-all duration-150 active:scale-90"
+      className="p-1.5 rounded-sm text-fg-muted hover:bg-accent/10 hover:text-accent-fg transition-all duration-150 active:scale-90 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent"
     >
       {icon}
     </button>
@@ -28,10 +31,12 @@ export function BulkToolbar({ currentFolderId }: { currentFolderId: string }) {
   const { selectedIds, clearSelection, setSelectedMessage } = useUiStore();
   const [moveMenu, setMoveMenu] = useState<{ x: number; y: number } | null>(null);
   const { runWithUndo, locateIds } = useMailActions();
+  // 9.3: own, shared or delegated mailbox (read-only → every action disabled)
+  const { base, foldersKey, readOnly } = useActiveMailbox();
 
   const { data: folders = [] } = useQuery({
-    queryKey: ['folders'],
-    queryFn: () => api.get<Folder[]>('/mail/folders'),
+    queryKey: foldersKey,
+    queryFn: () => api.get<Folder[]>(`${base}/folders`),
   });
 
   const count = selectedIds.size;
@@ -45,13 +50,14 @@ export function BulkToolbar({ currentFolderId }: { currentFolderId: string }) {
   // Errors are reported by the global MutationCache handler (main.tsx)
   const bulkMutation = useMutation({
     mutationFn: (body: { ids: string[]; action: string; folderId?: string }) =>
-      api.post('/mail/messages/bulk', body),
+      api.post(`${base}/messages/bulk`, body),
     onSettled: () => { invalidate(); },
   });
 
   if (count === 0) return null;
 
   const run = (action: string) => {
+    if (readOnly) return;
     bulkMutation.mutate({ ids, action });
     setSelectedMessage(null);
     clearSelection();
@@ -103,26 +109,29 @@ export function BulkToolbar({ currentFolderId }: { currentFolderId: string }) {
       <IconBtn
         icon={<Archive size={15} />}
         title="Archivieren"
+        disabled={readOnly}
         onClick={() => runUndoable('archive')}
       />
       <IconBtn
         icon={<Trash2 size={15} />}
         title="Löschen"
+        disabled={readOnly}
         onClick={() => runUndoable('delete')}
       />
       <IconBtn
         icon={<FolderInput size={15} />}
         title="Verschieben"
+        disabled={readOnly}
         onClick={() => {
           /* Open submenu via DOM anchor — trick: dummy button ref */
           setMoveMenu({ x: 0, y: 0 });
         }}
       />
-      <IconBtn icon={<MailOpen size={15} />} title="Als gelesen markieren"   onClick={() => run('read')} />
-      <IconBtn icon={<Mail size={15} />}     title="Als ungelesen markieren" onClick={() => run('unread')} />
-      <IconBtn icon={<Flag size={15} />}     title="Kennzeichnen"            onClick={() => run('flag')} />
-      <IconBtn icon={<Pin size={15} />}      title="Anheften"                onClick={() => run('pin')} />
-      <IconBtn icon={<AlertOctagon size={15} />} title="Als Junk markieren"  onClick={() => runUndoable('spam')} />
+      <IconBtn icon={<MailOpen size={15} />} title="Als gelesen markieren"   disabled={readOnly} onClick={() => run('read')} />
+      <IconBtn icon={<Mail size={15} />}     title="Als ungelesen markieren" disabled={readOnly} onClick={() => run('unread')} />
+      <IconBtn icon={<Flag size={15} />}     title="Kennzeichnen"            disabled={readOnly} onClick={() => run('flag')} />
+      <IconBtn icon={<Pin size={15} />}      title="Anheften"                disabled={readOnly} onClick={() => run('pin')} />
+      <IconBtn icon={<AlertOctagon size={15} />} title="Als Junk markieren"  disabled={readOnly} onClick={() => runUndoable('spam')} />
 
       {/* invisible anchor for the move menu (positioned directly below the bar) */}
       {moveMenu && (

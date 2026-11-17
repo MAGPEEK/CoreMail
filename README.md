@@ -9,7 +9,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-22+-green.svg)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.5-blue.svg)](https://www.typescriptlang.org)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED.svg)](https://www.docker.com)
-[![Version](https://img.shields.io/badge/Version-9.2.0-brightgreen.svg)](https://github.com/MAGPEEK/CoreMail/releases)
+[![Version](https://img.shields.io/badge/Version-9.3.0-brightgreen.svg)](https://github.com/MAGPEEK/CoreMail/releases)
 [![IMAP4rev2](https://img.shields.io/badge/IMAP4-rev2-blue.svg)](https://datatracker.ietf.org/doc/html/rfc9051)
 [![CalDAV](https://img.shields.io/badge/CalDAV%2FCardDAV-supported-blue.svg)](https://datatracker.ietf.org/doc/html/rfc4791)
 
@@ -22,7 +22,7 @@
 
 **🎯 Standard mail protocols.** CoreMail speaks **IMAP4rev2** (RFC 9051) + **JMAP** (RFC 8620/8621, since v5.7.1) + **SMTP submission** + **POP3** + **CalDAV/CardDAV** + **ActiveSync** — standard clients (Apple Mail, Thunderbird, Outlook, K-9 Mail, eM Client, iOS Mail) connect via IMAP/SMTP. **App passwords** for MFA-compatible sign-in. No VPN, no connector, no third-party software.
 
-> **Current version: v9.2.0** — accessible dark mode (WCAG 2.2 AA) in webmail and admin panel, every BCP function reviewed and fixed, ClamAV settings with EICAR self-test ([release notes](docs/releases/v9.2.0.md)). **v9.1.0:** shared and delegated mailboxes in IMAP clients (`Shared/`, `Other Users/`), full RFC 5256 REFERENCES threading, recover deleted items in shared mailboxes, Helm chart tested on a real cluster ([release notes](docs/releases/v9.1.0.md)). **v9.0.0:** OWASP security hardening (shared lockout, HttpOnly refresh cookies, DMARC enforcement, ReDoS/DoS limits, encrypted backups, fail-closed schema sync); Exchange-parity mail logic (DSN, CHUNKING, SMTPUTF8, QRESYNC, SORT/THREAD, quota levels, recover deleted items, server drafts with undo send); Thunderbird/Apple auto setup; Docker Compose variants minimal/standard/full; Helm chart 2.0.0; verified end to end in both storage modes ([docs/e2e.md](docs/e2e.md)). **Breaking — read the [upgrade notes](docs/releases/v9.0.0.md) before upgrading** · admin CLI `coremail` ([docs](docs/cli.md)) · JMAP server ([docs](docs/jmap.md)) · IMAP4rev2 · [Changelog](CHANGELOG.md) · [Releases](https://github.com/MAGPEEK/CoreMail/releases) · [Docker Hub](https://hub.docker.com/r/magpeek/coremail-app)
+> **Current version: v9.3.0** — branding (name, colours, logo, login page), Let's Encrypt that works behind NAT with mail certificates applied instantly, shared and delegated mailboxes in the webmail folder pane, backup restore from stored archives plus a recommended backup schedule ([release notes](docs/releases/v9.3.0.md)). **v9.2.0:** accessible dark mode (WCAG 2.2 AA) in webmail and admin panel, every BCP function reviewed and fixed, ClamAV settings with EICAR self-test ([release notes](docs/releases/v9.2.0.md)). **v9.1.0:** shared and delegated mailboxes in IMAP clients (`Shared/`, `Other Users/`), full RFC 5256 REFERENCES threading, recover deleted items in shared mailboxes, Helm chart tested on a real cluster ([release notes](docs/releases/v9.1.0.md)). **v9.0.0:** OWASP security hardening (shared lockout, HttpOnly refresh cookies, DMARC enforcement, ReDoS/DoS limits, encrypted backups, fail-closed schema sync); Exchange-parity mail logic (DSN, CHUNKING, SMTPUTF8, QRESYNC, SORT/THREAD, quota levels, recover deleted items, server drafts with undo send); Thunderbird/Apple auto setup; Docker Compose variants minimal/standard/full; Helm chart 2.0.0; verified end to end in both storage modes ([docs/e2e.md](docs/e2e.md)). **Breaking — read the [upgrade notes](docs/releases/v9.0.0.md) before upgrading** · admin CLI `coremail` ([docs](docs/cli.md)) · JMAP server ([docs](docs/jmap.md)) · IMAP4rev2 · [Changelog](CHANGELOG.md) · [Releases](https://github.com/MAGPEEK/CoreMail/releases) · [Docker Hub](https://hub.docker.com/r/magpeek/coremail-app)
 >
 > **Note on Outlook**: CoreMail cannot be set up as an Exchange account. Set up Outlook via **"Other email accounts" → IMAP** (with an app password if MFA is enabled), with calendar + contacts via CalDAV/CardDAV (Outlook CalDav Synchronizer plugin; or Apple Calendar, Thunderbird Lightning).
 >
@@ -334,7 +334,7 @@ CoreMail consists of **six containers** (one custom image, five standard images)
 
 | Container | Image | Purpose |
 |-----------|-------|---------|
-| `coremail` | `magpeek/coremail-app:9.2.0` | All mail services + webmail + admin panel + CLI |
+| `coremail` | `magpeek/coremail-app:9.3.0` | All mail services + webmail + admin panel + CLI |
 | `rspamd` | `rspamd/rspamd:4.0.0` | Anti-spam engine (Bayes, DKIM/SPF/DMARC, fuzzy) |
 | `clamav` | `clamav/clamav:stable` | Open-source antivirus (GPL), freshclam updates |
 | `postgres` | `postgres:16-alpine` | Database for mail, users, calendars |
@@ -351,7 +351,7 @@ Since v5.8.0, `infra/docker/docker-compose.yml` is reduced to the essentials and
 # Excerpt — full file in the repository
 services:
   coremail:
-    image: magpeek/coremail-app:${COREMAIL_VERSION:-9.2.0}
+    image: magpeek/coremail-app:${COREMAIL_VERSION:-9.3.0}
     environment:
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET missing in .env  →  openssl rand -hex 32}
       PEPPER:     ${PEPPER:?PEPPER missing in .env  →  openssl rand -hex 32}
@@ -457,7 +457,7 @@ COREMAIL_DB_USER=coremail_app   # least-privilege DB role (fresh databases only;
 COREMAIL_DB_PASSWORD=…          #   unset = superuser "coremail")
 
 # ── Optional (defaults in parentheses) ─────────────────────
-#COREMAIL_VERSION=9.2.0         # image tag
+#COREMAIL_VERSION=9.3.0         # image tag
 #RSPAMD_NET_PREFIX=10.253.253   # /29 of the app <-> rspamd network (change only on a collision)
 #LOG_LEVEL=info                 # error | warn | info | debug
 #TZ=Europe/Berlin
@@ -624,7 +624,7 @@ docker compose -f infra/docker/docker-compose.yml pull
 docker compose -f infra/docker/docker-compose.yml up -d
 
 # Specific version
-docker pull magpeek/coremail-app:9.2.0
+docker pull magpeek/coremail-app:9.3.0
 ```
 
 **Multi-arch:** The image is built for `linux/amd64` and `linux/arm64` (Synology NAS, Raspberry Pi, Apple Silicon).
@@ -637,6 +637,7 @@ docker pull magpeek/coremail-app:9.2.0
 
 | Version | Highlights |
 |---------|-----------|
+| **v9.3.0** | Branding (product name, colours, logos, favicon, login page; SVG sanitiser); Let's Encrypt fixed (no hairpin NAT needed, real error reasons, pre-flight, staging) and mail-protocol certificates applied on assignment with startup repair and per-port served-certificate view; shared/delegated mailboxes in the webmail folder pane; backup restore from stored archives, system backup (pg_dump), recommended schedules; scanner detection hides rspamd/ClamAV settings when not deployed. 2,462 tests; e2e MinIO 166/166, filesystem 153/153. |
 | **v9.2.0** | WCAG 2.2 AA colour tokens for light/dark mode in webmail and BCP (theme-guard test); every BCP function reviewed live and fixed (SMTP connection limits applied, last-admin guard, backup retention, partial settings saves); ClamAV policy settings, status and EICAR self-test; release notes from CHANGELOG.md. 2,176 tests; e2e MinIO 135/135, filesystem 130/130. |
 | **v9.1.0** | Shared Mailboxes and delegated mailboxes over IMAP (`Shared/`, `Other Users/` namespaces, real ACL rights, live revocation); References header stored + full RFC 5256 THREAD=REFERENCES; recover deleted items in shared/delegated mailboxes; shared mailbox quota; Apple profile ticket for iOS; Helm chart 2.0.1 tested on kind (`scripts/k8s-e2e.sh`); backup RBAC hardening. 2,021 tests; e2e MinIO 135/135, filesystem 130/130. |
 | **v9.0.0** | **OWASP hardening + Exchange-parity mail logic** (breaking). Four-area OWASP/ASVS audit and two review rounds, all findings fixed with tests. Shared web/mail lockout, HttpOnly refresh cookies, SSE tickets, DMARC/SPF on the real session with local-domain anti-spoofing, ReDoS-safe rules, pre-auth DoS limits, SSRF guards, HMAC audit exports, encrypted backups, fail-closed schema sync, hardened containers, signed CI images. SMTP DSN/CHUNKING/SMTPUTF8, 48 h retries with delay DSN; IMAP QRESYNC/SORT/THREAD/ACL/COMPRESS; quota levels, recover deleted items (30 d), OOF once per period, server drafts + undo send; webmail shortcuts, undo, search operators; BCP permission map + list pattern; Thunderbird autoconfig + Apple profile; compose variants minimal/full; Helm 2.0.0. 1,894 tests; e2e MinIO 135/135, filesystem 130/130. |
@@ -732,7 +733,7 @@ MIT License — see [LICENSE](LICENSE)
 ---
 
 <div align="center">
-  <b>CoreMail v9.2.0</b> · The open-source mail server for small and medium-sized environments<br>
+  <b>CoreMail v9.3.0</b> · The open-source mail server for small and medium-sized environments<br>
   <sub>IMAP4rev2 + JMAP + SMTP + POP3 + CalDAV + CardDAV + ActiveSync</sub><br>
   <sub>Built with ❤️ · <a href="https://github.com/MAGPEEK/CoreMail">github.com/MAGPEEK/CoreMail</a></sub>
 </div>

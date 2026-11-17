@@ -37,6 +37,12 @@ import {
 import { registerComposeFlush } from '../lib/compose-flush.js';
 import { translate, fmt } from '../i18n/useT.js';
 import { toastError } from '../lib/errors.js';
+import { useAuthStore } from '../store/auth.js';
+import { useAccessibleMailboxes } from '../hooks/useActiveMailbox.js';
+import {
+  OWN_MAILBOX, mailApiBase, findMailboxEntry, senderOptions, senderDraftFields, senderFromDraft, senderKey,
+  type SenderOption,
+} from '../lib/mailboxContext.js';
 
 const attachmentName = (a: ComposeAttachment) => (isDraftAttachment(a) ? a.filename : a.name);
 
@@ -444,6 +450,20 @@ export function ComposeWindow() {
   const loadDraftFromServer = !!initialDraftId && !restore;
   const { sendDelaySec } = useUiPrefs();
 
+  // 9.3: compose opened inside a shared mailbox → "Von" choice (send as / on behalf),
+  // default = the shared identity; the server re-checks the permission on save + send.
+  const composeMailbox = composeCtx?.mailbox ?? OWN_MAILBOX;
+  const ownEmail = useAuthStore((s) => s.email) ?? '';
+  const { data: accessibleMailboxes } = useAccessibleMailboxes();
+  const [draftSender, setDraftSender] = useState<SenderOption | undefined>(undefined);
+  const [fromKey, setFromKey] = useState<string | null>(null);
+  const senderChoices: SenderOption[] = (() => {
+    const list = senderOptions(ownEmail, findMailboxEntry(composeMailbox, accessibleMailboxes));
+    if (draftSender && !list.some((o) => senderKey(o) === senderKey(draftSender))) list.unshift(draftSender);
+    return list;
+  })();
+  const selectedSender = senderChoices.find((o) => senderKey(o) === fromKey) ?? senderChoices[0];
+
   const [minimized, setMinimized] = useState(false);
   const [to, setTo]           = useState(restore ? restore.to : initialTo);
   const [cc, setCc]           = useState(restore ? restore.cc : initialCc);
@@ -469,7 +489,7 @@ export function ComposeWindow() {
   const originalId = (isReplyMode || isForwardMode) ? composeCtx?.id : undefined;
   const originalQuery = useQuery({
     queryKey: ['message', originalId],
-    queryFn: () => api.get<Message>(`/mail/messages/${originalId}`),
+    queryFn: () => api.get<Message>(`${mailApiBase(composeMailbox)}/messages/${originalId}`),
     enabled: !!originalId,
     retry: false,
   });
@@ -602,6 +622,7 @@ export function ComposeWindow() {
       bodyText: editor?.getText() ?? '',
       ...(threading.inReplyTo ? { inReplyTo: threading.inReplyTo } : {}),
       ...(threading.references ? { references: threading.references } : {}),
+      ...senderDraftFields(selectedSender),
       keepAttachmentIds: attachments.filter(isDraftAttachment).map((a) => a.id),
       files: attachments.filter((a): a is File => !isDraftAttachment(a)),
       snapshot: [...attachments],
@@ -660,6 +681,10 @@ export function ComposeWindow() {
         ...(d.inReplyTo ? { inReplyTo: d.inReplyTo } : {}),
         ...(d.references.length ? { references: d.references.join(' ') } : {}),
       };
+      // sender of the reopened draft (own address when it has none)
+      const fromDraft = senderFromDraft(d.sendAs, d.sendOnBehalfOf, ownEmail);
+      setDraftSender(fromDraft);
+      setFromKey(fromDraft ? senderKey(fromDraft) : 'self:');
       editor.commands.setContent(d.bodyHtml || d.bodyText.split('\n').map((l) => `<p>${escapeHtml(l)}</p>`).join(''));
       editor.commands.focus('start');
       setSaveInfo({ status: 'saved', savedAt: d.savedAt });
@@ -882,8 +907,24 @@ export function ComposeWindow() {
         </div>
       </div>
 
-      {/* ── Header fields (To / CC / BCC / Subject) ─────────────────────────── */}
+      {/* ── Header fields (From / To / CC / BCC / Subject) ──────────────────── */}
       <div className="border-b border-line shrink-0">
+        {/* From — only when there is a choice (9.3: shared mailbox with send rights) */}
+        {senderChoices.length > 1 && selectedSender && (
+          <div className="flex items-center border-b border-line px-3 py-1.5 gap-2">
+            <label htmlFor="compose-from" className="text-xs text-fg-subtle w-10 shrink-0">Von:</label>
+            <select
+              id="compose-from"
+              value={senderKey(selectedSender)}
+              onChange={(e) => { setFromKey(e.target.value); saver.touch(); }}
+              className="flex-1 min-w-0 text-sm bg-surface text-fg rounded px-1 py-0.5 border border-transparent hover:border-line-strong focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-fg"
+            >
+              {senderChoices.map((o) => (
+                <option key={senderKey(o)} value={senderKey(o)}>{o.label}</option>
+              ))}
+            </select>
+          </div>
+        )}
         {/* To */}
         <div className="flex items-center border-b border-line px-3 py-1.5 gap-2">
           <span className="text-xs text-fg-subtle w-10 shrink-0">An:</span>

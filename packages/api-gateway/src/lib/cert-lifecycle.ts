@@ -173,6 +173,8 @@ export interface ProxyCertRow {
   domains: string[];
   isActiveHttps: boolean;
   createdAt?: Date;
+  /** Let's Encrypt staging certificate (untrusted) — never preferred over a trusted one. */
+  acmeStaging?: boolean;
 }
 
 export interface SelectedProxyCert extends ProxyCertRow {
@@ -186,7 +188,9 @@ export interface SelectedProxyCert extends ProxyCertRow {
  * Selects every certificate whose PEM is currently valid — regardless of its
  * DB status (EXPIRING / RENEWING / ERROR with a still-valid PEM keep serving).
  * Result is ordered newest first (notBefore, then createdAt) so the newest
- * certificate wins on a hostname conflict.
+ * certificate wins on a hostname conflict — except that Let's Encrypt staging
+ * (test, untrusted) certificates always come after the trusted ones (9.2.x:
+ * a staging test must not replace a working certificate in browsers).
  */
 export function selectProxyCerts(rows: ProxyCertRow[], now: Date = new Date()): SelectedProxyCert[] {
   const out: SelectedProxyCert[] = [];
@@ -199,9 +203,47 @@ export function selectProxyCerts(rows: ProxyCertRow[], now: Date = new Date()): 
     out.push({ ...r, certPem: r.certPem, keyPem: r.keyPem, validFrom: v.validFrom, validTo: v.validTo });
   }
   out.sort((a, b) =>
+    (Number(!!a.acmeStaging) - Number(!!b.acmeStaging)) ||
     (b.validFrom.getTime() - a.validFrom.getTime()) ||
     ((b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0)));
   return out;
+}
+
+const PEM_CERT_RE = /-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g;
+
+/**
+ * Leaf + intermediates as one PEM (what TLS servers must send). Certificates
+ * from `chainPem` that are not already part of `certPem` are appended — an
+ * uploaded certificate with a separate chain used to be served without its
+ * intermediates on SMTP/IMAP/POP3 (and relied on `ca` for HTTPS).
+ */
+export function buildFullChainPem(certPem: string, chainPem: string | null | undefined): string {
+  if (!chainPem) return certPem;
+  const norm = (s: string) => s.replace(/\s+/g, '');
+  const have = new Set((certPem.match(PEM_CERT_RE) ?? []).map(norm));
+  const extra = (chainPem.match(PEM_CERT_RE) ?? []).filter((c) => !have.has(norm(c)));
+  if (extra.length === 0) return certPem;
+  return `${certPem.trimEnd()}\n${extra.join('\n')}\n`;
+}
+
+/** Host name covered by a certificate name (exact, or `*.` wildcard for exactly one label). */
+function nameCovers(certName: string, host: string): boolean {
+  const n = certName.toLowerCase();
+  const h = host.toLowerCase();
+  if (n === h) return true;
+  if (n.startsWith('*.')) {
+    const suffix = n.slice(1);
+    if (!h.endsWith(suffix)) return false;
+    const prefix = h.slice(0, -suffix.length);
+    return prefix.length > 0 && !prefix.includes('.');
+  }
+  return false;
+}
+
+/** Domains the certificate (CN + DNS SANs) does not cover; [] when all are covered. */
+export function uncoveredDomains(certPem: string, domains: string[]): string[] {
+  const names = extractCertHostnames(certPem);
+  return domains.filter((d) => !names.some((n) => nameCovers(n, d) || n === d.toLowerCase()));
 }
 
 /** Extracts DNS names (CN + SAN DNS entries), lowercased, without duplicates. */

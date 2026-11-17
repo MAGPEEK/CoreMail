@@ -1,7 +1,9 @@
 import { useEffect, useState, type FormEvent } from 'react';
+import { useBranding } from '../hooks/useBranding.js';
 
 export function SetupPage() {
   const [step, setStep] = useState<'form' | 'done'>('form');
+  const { productName } = useBranding();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -96,7 +98,7 @@ export function SetupPage() {
             <svg className="w-8 h-8 text-white" viewBox="0 0 24 24" fill="currentColor">
               <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>
             </svg>
-            <span className="text-white text-xl font-semibold">CoreMail</span>
+            <span className="text-white text-xl font-semibold">{productName}</span>
           </div>
           <p className="text-white text-sm">Erstkonfiguration</p>
         </div>
@@ -104,7 +106,7 @@ export function SetupPage() {
         {/* Form */}
         <form onSubmit={handleSubmit} className="px-8 py-6 space-y-4">
           <div>
-            <h2 className="text-lg font-semibold text-fg">Willkommen bei CoreMail</h2>
+            <h2 className="text-lg font-semibold text-fg">Willkommen bei {productName}</h2>
             <p className="text-sm text-fg-subtle mt-1">
               Richte deinen Administrator-Account ein, um loszulegen.
             </p>

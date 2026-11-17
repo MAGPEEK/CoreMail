@@ -24,6 +24,7 @@ installFakePrisma({
     create: (a) => { const d = (a as { data: Row }).data; created.push(d); return { id: `c${created.length}`, ...d }; },
     findMany: () => [],
     updateMany: () => ({ count: 0 }),
+    findUnique: (a) => ((a as { where: { id: string } }).where.id === 'custom1' ? { type: 'CUSTOM' } : null),
   },
 });
 // publishTlsReload swallows Redis errors (no Redis in the test → ECONNREFUSED log lines only)
@@ -70,7 +71,8 @@ test('self-signed: a real certificate for the key, unique serials, normalised do
   assert.equal(pemKeyMismatch(ca!.certPem, ca!.keyPem), null);
   assert.match(xa.subjectAltName ?? '', /DNS:mail\.example\.com/);
   assert.deepEqual(ca!.domains, ['mail.example.com', 'localhost']);
-  assert.deepEqual(ca!.services, ['SMTP']);
+  // 9.3: one protocol certificate serves SMTP, IMAP and POP3 together (deduplicated)
+  assert.deepEqual(ca!.services, ['SMTP', 'IMAP', 'POP3']);
   assert.notEqual(xa.serialNumber, new X509Certificate(cb!.certPem).serialNumber);
   assert.equal('keyPem' in a.json, false, 'private key never returned');
 });
@@ -102,4 +104,65 @@ test('services and domains are validated with a readable error', async () => {
 
 test('deactivating HTTPS on an unknown certificate is a 404', async () => {
   assert.equal((await call('DELETE', '/nope/activate-https')).status, 404);
+});
+
+// ── 9.2.x: Let's Encrypt fixes ───────────────────────────────────────────────
+
+test('upload: a domain the certificate does not name is refused (no name-mismatch on the HTTPS proxy)', async () => {
+  await call('POST', '/self-signed', { name: 'src', domains: ['mail.example.com'] });
+  const { certPem, keyPem } = created[0] as { certPem: string; keyPem: string };
+  created.length = 0;
+  const bad = await call('POST', '/upload', { name: 'x', domains: ['mail.example.com', 'autodiscover.example.com'], certPem, keyPem });
+  assert.equal(bad.status, 400);
+  assert.match(String(bad.json['error']), /does not cover: autodiscover\.example\.com/);
+  assert.equal(created.length, 0);
+});
+
+test('PUT acmeStaging: only for Let\'s Encrypt certificates', async () => {
+  const r = await call('PUT', '/custom1', { acmeStaging: false });
+  assert.equal(r.status, 400);
+  assert.match(String(r.json['error']), /staging/);
+  assert.equal((await call('PUT', '/unknown', { acmeStaging: true })).status, 404);
+});
+
+test('POST /preflight: validates input and returns per-domain checks (fake DNS + serving, no external test)', async () => {
+  assert.equal((await call('POST', '/preflight', { domains: ['*.example.com'] })).status, 400);
+  assert.equal((await call('POST', '/preflight', { domains: [] })).status, 400);
+  const g = globalThis as Record<string, unknown>;
+  const served = new Map<string, string>();
+  g['__acmeResolver'] = {
+    resolve4: async () => ['203.0.113.10'],
+    resolve6: async () => { throw Object.assign(new Error('x'), { code: 'ENODATA' }); },
+    resolveCaa: async () => { throw Object.assign(new Error('x'), { code: 'ENODATA' }); },
+  };
+  g['__acmeChallengeServing'] = {
+    store: async (t: string, k: string) => { served.set(t, k); },
+    remove: async (t: string) => { served.delete(t); },
+    checkLocal: async (_d: string, t: string) => ({ status: 200, body: served.get(t) ?? '' }),
+    checkPublic: async () => { throw Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }); },
+  };
+  try {
+    const r = await call('POST', '/preflight', { domains: ['Mail.Example.com'], external: false });
+    assert.equal(r.status, 200);
+    const report = r.json as { ok: boolean; domains: Array<{ domain: string; checks: Array<{ id: string; status: string }> }>; external: { status: string } };
+    assert.equal(report.ok, true);
+    assert.equal(report.domains[0]!.domain, 'mail.example.com');
+    assert.deepEqual(report.domains[0]!.checks.map(c => `${c.id}:${c.status}`), ['dns:ok', 'caa:ok', 'local:ok', 'public:warn']);
+    assert.equal(report.external.status, 'skip');
+    assert.equal(served.size, 0);
+  } finally {
+    delete g['__acmeResolver'];
+    delete g['__acmeChallengeServing'];
+  }
+});
+
+test('Let\'s Encrypt endpoints accept public names only (no localhost / intranet name / IP)', async () => {
+  for (const d of ['localhost', 'intranet', '10.0.0.1']) {
+    const p = await call('POST', '/preflight', { domains: [d], external: false });
+    assert.equal(p.status, 400, d);
+    assert.match(String(p.json['error']), /public domain names/);
+    const l = await call('POST', '/letsencrypt', { name: 'x', domains: [d], email: 'a@example.com' });
+    assert.equal(l.status, 400, d);
+  }
+  assert.equal(created.length, 0);
 });

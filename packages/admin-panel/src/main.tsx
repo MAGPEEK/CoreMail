@@ -1,4 +1,4 @@
-import { StrictMode, Component, useEffect, useState, type ErrorInfo, type ReactNode } from 'react';
+import { StrictMode, Component, useEffect, useLayoutEffect, useState, type ErrorInfo, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QueryCache, MutationCache, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
@@ -6,7 +6,9 @@ import toast, { Toaster } from 'react-hot-toast';
 import { Lock, Loader2 } from 'lucide-react';
 import { Sidebar } from './components/Sidebar.js';
 import { TopBar } from './components/TopBar.js';
-import { useThemeStore, resolveIsDark, ECP_ACCENT_RGB } from './store/theme.js';
+import { useThemeStore, resolveIsDark } from './store/theme.js';
+import { useBranding, useBrandingSync } from './hooks/useBranding.js';
+import { brandCssVars, headerHex, hexToChannels, DEFAULT_ACCENT_RGB } from './lib/branding.js';
 import { LoginPage } from './pages/LoginPage.js';
 import { MfaRequiredPage } from './pages/MfaRequiredPage.js';
 import { SsoCallbackPage } from './pages/SsoCallbackPage.js';
@@ -36,6 +38,7 @@ import { ComplianceInfoPage } from './pages/ComplianceInfoPage.js';
 import { SmtpConfigPage } from './pages/SmtpConfigPage.js';
 import { LdapPage } from './pages/LdapPage.js';
 import { SsoPage } from './pages/SsoPage.js';
+import { BrandingPage } from './pages/BrandingPage.js';
 import { getToken, useSessionChecked } from './api/client.js';
 import { useAccessStore } from './store/access.js';
 import { firstAllowedPath } from './lib/adminAreas.js';
@@ -72,22 +75,30 @@ const queryClient = new QueryClient({
 // ── ThemeApplier — reacts to store changes (no OWA sync!) ───────────────────
 function ThemeApplier() {
   const { theme } = useThemeStore();
+  const branding = useBranding();
+  useBrandingSync('bcp');
+  // 9.3: the BCP accent is always the brand primary colour (no per-user accent),
+  // fill darkened for white text >= 4.5:1, accent text derived per theme.
+  const accent = hexToChannels(branding.primaryColor) ?? DEFAULT_ACCENT_RGB;
+  const header = headerHex(branding);
 
-  // Apply dark mode to document when the store changes
-  useEffect(() => {
-    document.documentElement.classList.toggle('dark', resolveIsDark(theme));
-    // Accent color in BCP is always Microsoft blue — independent of the OWA theme
-    document.documentElement.style.setProperty('--color-accent', ECP_ACCENT_RGB);
-  }, [theme]);
+  // layout effect: colours are set before the first paint (no flash of the default accent)
+  useLayoutEffect(() => {
+    const apply = (isDark: boolean) => {
+      document.documentElement.classList.toggle('dark', isDark);
+      for (const [k, v] of Object.entries(brandCssVars(accent, header, isDark))) {
+        document.documentElement.style.setProperty(k, v);
+      }
+    };
+    apply(resolveIsDark(theme));
 
-  // Follow the system preference live when theme==='system'
-  useEffect(() => {
+    // Follow the system preference live when theme==='system'
     if (theme !== 'system') return;
     const mq = window.matchMedia('(prefers-color-scheme: dark)');
-    const handler = () => document.documentElement.classList.toggle('dark', mq.matches);
+    const handler = () => apply(mq.matches);
     mq.addEventListener('change', handler);
     return () => mq.removeEventListener('change', handler);
-  }, [theme]);
+  }, [theme, accent, header]);
 
   return null;
 }
@@ -141,6 +152,7 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
 // so we redirect to the MWA path (leaves the /bcp basename entirely).
 function SetupGuard({ children }: { children: React.ReactNode }) {
   const [setupRequired, setSetupRequired] = useState<boolean | null>(null);
+  const { productName } = useBranding();
 
   useEffect(() => {
     fetch('/api/v1/setup/status')
@@ -159,7 +171,7 @@ function SetupGuard({ children }: { children: React.ReactNode }) {
   if (setupRequired === null || setupRequired === true) {
     return (
       <div className="min-h-screen bg-canvas flex items-center justify-center">
-        <div className="text-fg-muted text-sm animate-pulse">CoreMail wird geladen…</div>
+        <div className="text-fg-muted text-sm animate-pulse">{productName} wird geladen…</div>
       </div>
     );
   }
@@ -258,6 +270,7 @@ createRoot(document.getElementById('root')!).render(
                   <Route path="/smtp-config" element={<SmtpConfigPage />} />
                   <Route path="/ldap"        element={<LdapPage />} />
                   <Route path="/sso"         element={<SsoPage />} />
+                  <Route path="/branding"    element={<BrandingPage />} />
                   <Route path="/" element={<HomeRedirect />} />
                 </Routes>
               </AdminLayout>

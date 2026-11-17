@@ -93,8 +93,13 @@ export function normalizeClamavAction(v: unknown): ClamavAction {
  * CLAMAV_ENABLED=false turn a scanner off when its container is not deployed
  * (docker-compose.minimal.yml). Anything else leaves the BCP setting in charge.
  */
+/** An environment switch explicitly set to false/0/no/off (case-insensitive). */
+export function isEnvOff(v: string | undefined): boolean {
+  return v !== undefined && /^(false|0|no|off)$/i.test(v.trim());
+}
+
 export function applyScannerEnvOverrides(cfg: PipelineConfig, env: NodeJS.ProcessEnv = process.env): PipelineConfig {
-  const off = (v: string | undefined) => v !== undefined && /^(false|0|no|off)$/i.test(v.trim());
+  const off = isEnvOff;
   return {
     ...cfg,
     ...(off(env['RSPAMD_ENABLED']) ? { rspamdEnabled: false } : {}),

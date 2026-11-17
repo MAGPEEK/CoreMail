@@ -55,14 +55,25 @@ export function mboxDate(d: Date): string {
 }
 
 /**
+ * Separator-line marker (after the date) of a message whose original octets do
+ * NOT end with a line break: the exporter has to add one, the reader
+ * (restore/mbox-reader.ts) removes exactly that one again — so the round trip
+ * is byte-exact (9.3 review). Other mbox readers ignore text after the date.
+ */
+export const MBOX_NO_EOL_MARKER = 'cm-noeol';
+
+/**
  * One mboxrd entry: "From " separator line, the raw message with every line that
  * matches /^>*From / quoted with one more ">", a line break and an empty line.
+ * "Line" starts are the start of the message and every position after LF or a
+ * lone CR (the reader unquotes at the same positions).
  */
 export function mboxEntry(raw: Buffer, envelopeFrom: string, date: Date): Buffer {
   const sender = (envelopeFrom || 'MAILER-DAEMON').replace(/[\s<>]/g, '') || 'MAILER-DAEMON';
   const quoted = Buffer.from(raw.toString('latin1').replace(/^(>*From )/gm, '>$1'), 'latin1');
-  const parts = [Buffer.from(`From ${sender} ${mboxDate(date)}\r\n`, 'latin1'), quoted];
-  if (quoted.length > 0 && quoted[quoted.length - 1] !== 0x0a) parts.push(Buffer.from('\r\n'));
+  const noEol = quoted.length > 0 && quoted[quoted.length - 1] !== 0x0a;
+  const parts = [Buffer.from(`From ${sender} ${mboxDate(date)}${noEol ? ` ${MBOX_NO_EOL_MARKER}` : ''}\r\n`, 'latin1'), quoted];
+  if (noEol) parts.push(Buffer.from('\r\n'));
   parts.push(Buffer.from('\r\n'));
   return Buffer.concat(parts);
 }
@@ -107,17 +118,38 @@ export async function exportMbox(
   return { messageCount, sizeBytes };
 }
 
+/** File-system safe path segment of a folder name (9.3: the exact name goes into the manifest). */
+export function folderPathSegment(name: string): string {
+  return name.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_') || 'mail';
+}
+
+export interface EmlEntry {
+  filename: string;
+  content: Buffer;
+  /** Exact folder name (9.3: manifest + restore). */
+  folder: string;
+  flags: string[];
+  date: Date;
+}
+
 /**
  * Export individual messages as .eml files (the original raw octets), yielding each one.
+ * 9.3: two folders whose names sanitize to the same path segment get distinct
+ * segments (`name~2`), so no two archive entries share a name.
  */
 export async function* exportEmlStream(
   userId: string,
   folderIds: string[] | null
-): AsyncGenerator<{ filename: string; content: Buffer }> {
+): AsyncGenerator<EmlEntry> {
   const ids = await folderIdsOf(userId, folderIds);
+  const usedSegments = new Set<string>();
   for (const folderId of ids ?? []) {
     const folder = await prisma.folder.findUnique({ where: { id: folderId }, select: { name: true } });
-    const folderName = (folder?.name ?? 'mail').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_') || 'mail';
+    const exactName = folder?.name ?? 'INBOX';
+    const base = folderPathSegment(exactName);
+    let folderName = base;
+    for (let n = 2; usedSegments.has(folderName.toLowerCase()); n++) folderName = `${base}~${n}`;
+    usedSegments.add(folderName.toLowerCase());
     for await (const msg of folderMessages(folderId)) {
       let content: Buffer;
       try {
@@ -126,7 +158,10 @@ export async function* exportEmlStream(
         log.error({ err, messageId: msg.id }, 'EML export: raw message unavailable — skipped');
         continue;
       }
-      yield { filename: `${folderName}/${msg.uid}.eml`, content };
+      yield {
+        filename: `${folderName}/${msg.uid}.eml`, content, folder: exactName,
+        flags: Array.isArray(msg.flags) ? msg.flags : [], date: new Date(msg.date),
+      };
     }
   }
 }

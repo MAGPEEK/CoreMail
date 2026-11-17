@@ -48,6 +48,7 @@ const prismaFake = {
   message: {
     findMany: async ({ skip }: { skip: number }) => (skip === 0 ? rows : []),
     aggregate: async () => ({ _max: { modSeq: null, uid: null } }),
+    findFirst: async () => null, // 9.3: restore dedupe lookup (nothing restored yet)
     create: async ({ data }: { data: Record<string, unknown> }) => {
       const row = { id: `new-${created.length + 1}`, ...data };
       created.push(row);
@@ -111,7 +112,7 @@ test('MBOX + EML export contain the original raw messages (attachments, all head
   // Restore: every message comes back as its original raw object.
   writeFileSync(join(dir, 'in.mbox'), file);
   const res = await importMbox('u1', 'f1', join(dir, 'in.mbox'));
-  assert.deepEqual(res, { imported: 3, errors: 0 });
+  assert.deepEqual(res, { imported: 3, errors: 0, duplicates: 0 });
   assert.deepEqual(objects.get(created[0]!['storagePath'] as string), NESTED_MESSAGE);
   assert.deepEqual(objects.get(created[1]!['storagePath'] as string), WITH_FROM_LINES);
   assert.equal(created[0]!['subject'], 'Quarterly report');

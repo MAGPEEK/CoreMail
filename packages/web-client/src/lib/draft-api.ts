@@ -16,6 +16,9 @@ export interface DraftPayload {
   bodyText: string;
   inReplyTo?: string;
   references?: string;
+  /** 9.3: send as / on behalf of a shared mailbox (server checks the permission) */
+  sendAs?: string;
+  sendOnBehalfOf?: string;
   /** Attachments of the current server version to keep (by id). */
   keepAttachmentIds: string[];
   /** New local files (uploaded with this save). */
@@ -37,6 +40,9 @@ export interface LoadedDraft {
   bodyText: string;
   inReplyTo: string | null;
   references: string[];
+  /** 9.3: sender mode stored in the draft (From/Sender headers) */
+  sendAs?: string | null;
+  sendOnBehalfOf?: string | null;
   attachments: DraftAttachmentRef[];
 }
 

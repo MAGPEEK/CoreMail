@@ -4,8 +4,12 @@ import { errorMessage } from '../lib/errors.js';
 import { WriteGuard } from '../components/Can.js';
 import { protectionFeatureMatrix } from '../lib/protectionStatus.js';
 import {
+  visibleSections, resolveSection, scannerNotice, scannerNotices, absentScanners,
+  type ScannerCapabilities, type ScannerNotice, type ProtectionSection,
+} from '../lib/protectionVisibility.js';
+import {
   LayoutDashboard, Zap, Bug, Database, Clock, Globe, Paperclip,
-  CheckCircle, XCircle, RefreshCw, Plus, Trash2, AlertTriangle,
+  CheckCircle, XCircle, RefreshCw, Plus, Trash2, AlertTriangle, Info,
 } from 'lucide-react';
 import { api } from '../api/client.js';
 import toast from 'react-hot-toast';
@@ -81,7 +85,7 @@ interface ClamavLiveStatus {
 
 // ── Sub-navigation ────────────────────────────────────────────────────────────
 
-type Section = 'overview' | 'rspamd' | 'antivirus' | 'dnsbl' | 'greylisting' | 'geoip' | 'attachments';
+type Section = ProtectionSection;
 
 const SUB_NAV: { id: Section; label: string; icon: React.ElementType }[] = [
   { id: 'overview',    label: 'Übersicht',    icon: LayoutDashboard },
@@ -105,6 +109,29 @@ function OnlineBadge({ online }: { online: boolean }) {
     </span>
   );
 }
+
+// ── Helper: scanner deployment notice (9.3) ────────────────────────────────────
+
+/** Neutral info line (scanner not deployed) or warning (deployed, not reachable). */
+function ScannerNoticeLine({ notice }: { notice: ScannerNotice }) {
+  const warn = notice.tone === 'warning';
+  return (
+    <div role={warn ? 'alert' : 'note'} className={`rounded-lg px-3 py-2 text-xs flex items-start gap-1.5 border ${
+      warn ? 'bg-warning-bg border-warning-line text-warning-fg' : 'bg-surface-2 border-line text-fg-muted'
+    }`}>
+      {warn ? <AlertTriangle size={12} className="shrink-0 mt-0.5" /> : <Info size={12} className="shrink-0 mt-0.5" />}
+      <span>
+        {notice.text}
+        {notice.docsUrl && (
+          <> <a href={notice.docsUrl} target="_blank" rel="noopener noreferrer"
+            className="text-accent-fg underline-offset-2 hover:underline focus-visible:underline">Dokumentation</a></>
+        )}
+      </span>
+    </div>
+  );
+}
+
+const CAPABILITIES_KEY = ['admin', 'security', 'capabilities'] as const;
 
 // ── Helper: section save button ───────────────────────────────────────────────
 
@@ -182,18 +209,22 @@ const COUNTRIES: [string, string][] = [
 // OverviewSection
 // ═════════════════════════════════════════════════════════════════════════════
 
-function OverviewSection({ settings }: { settings: SecuritySettings }) {
+function OverviewSection({ settings, caps }: { settings: SecuritySettings; caps: ScannerCapabilities | undefined }) {
   const qc = useQueryClient();
+  // 9.3: scanners not deployed in this installation get no status card / matrix row
+  const absent = absentScanners(caps);
+  const notices = scannerNotices(caps);
   const { data: status, isLoading, dataUpdatedAt } = useQuery({
     queryKey: ['admin', 'security', 'status'],
     queryFn: () => api.get<ContainerStatus>('/admin/security/status'),
     refetchInterval: 30_000,
+    enabled: !(absent.rspamd && absent.clamav),
   });
   // /status only pings rspamd — the counters come from /rspamd/stat (was never shown)
   const { data: rspamdStat } = useQuery({
     queryKey: ['admin', 'security', 'rspamd', 'stat'],
     queryFn:  () => api.get<RspamdStat>('/admin/security/rspamd/stat'),
-    enabled:  !!status?.rspamd.online,
+    enabled:  !absent.rspamd && !!status?.rspamd.online,
     retry: false,
   });
   const { data: zones } = useQuery({
@@ -207,6 +238,7 @@ function OverviewSection({ settings }: { settings: SecuritySettings }) {
     queryFn:  () => api.get<ClamavLiveStatus>('/admin/security/clamav/status'),
     refetchInterval: 60_000,
     retry: false,
+    enabled: !absent.clamav,
   });
 
   const r = status?.rspamd;
@@ -215,6 +247,7 @@ function OverviewSection({ settings }: { settings: SecuritySettings }) {
     settings,
     { rspamd: status ? !!r?.online : undefined, clamav: c ? c.online : undefined },
     zones?.filter((z) => z.enabled && !z.isWhitelist).map((z) => z.host),
+    absent,
   );
 
   function fmtUptime(sec?: number) {
@@ -225,11 +258,19 @@ function OverviewSection({ settings }: { settings: SecuritySettings }) {
 
   return (
     <div className="space-y-5">
+      {notices.length > 0 && (
+        <div className="space-y-2">
+          {notices.map((n) => <ScannerNoticeLine key={n.scanner} notice={n} />)}
+        </div>
+      )}
+
+      {!(absent.rspamd && absent.clamav) && (<>
       <div className="flex items-center justify-between">
         <h2 className="text-base font-semibold text-fg">Container-Status</h2>
         <button onClick={() => {
           void qc.invalidateQueries({ queryKey: ['admin', 'security', 'status'] });
           void qc.invalidateQueries({ queryKey: ['admin', 'security', 'clamav', 'status'] });
+          void qc.invalidateQueries({ queryKey: CAPABILITIES_KEY });
         }}
           className="btn-ghost text-xs gap-1">
           <RefreshCw size={13} className={isLoading ? 'animate-spin' : ''} />
@@ -245,6 +286,7 @@ function OverviewSection({ settings }: { settings: SecuritySettings }) {
 
       <div className="grid grid-cols-2 gap-4">
         {/* Rspamd card */}
+        {!absent.rspamd && (
         <div className="card p-4 space-y-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -286,8 +328,10 @@ function OverviewSection({ settings }: { settings: SecuritySettings }) {
             </p>
           )}
         </div>
+        )}
 
         {/* ClamAV card */}
+        {!absent.clamav && (
         <div className="card p-4 space-y-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -321,7 +365,9 @@ function OverviewSection({ settings }: { settings: SecuritySettings }) {
             </p>
           )}
         </div>
+        )}
       </div>
+      </>)}
 
       {/* Feature matrix */}
       <div className="card overflow-hidden">
@@ -992,6 +1038,20 @@ export function ProtectionPage() {
     queryFn:  () => api.get<SecuritySettings>('/admin/security/settings'),
   });
 
+  // 9.3: rspamd / ClamAV deployment state — sections of absent scanners are hidden.
+  // A failed request hides nothing (unknown state).
+  const { data: caps } = useQuery({
+    queryKey: CAPABILITIES_KEY,
+    queryFn:  () => api.get<ScannerCapabilities>('/admin/security/capabilities'),
+    refetchInterval: 60_000,
+    retry: false,
+  });
+  const nav = visibleSections(SUB_NAV, caps);
+  const active = resolveSection(section, nav);
+  const sectionNotice = active === 'rspamd' ? scannerNotice('rspamd', caps?.rspamd)
+    : active === 'antivirus' ? scannerNotice('clamav', caps?.clamav)
+    : null;
+
   const saveMut = useMutation({
     mutationFn: (data: Partial<SecuritySettings>) =>
       api.put<SecuritySettings>('/admin/security/settings', data),
@@ -1014,10 +1074,10 @@ export function ProtectionPage() {
           <p className="text-[10px] font-bold uppercase tracking-widest text-fg-subtle">Schutzfilter</p>
         </div>
         <nav className="flex-1 py-2 space-y-0.5">
-          {SUB_NAV.map(({ id, label, icon: Icon }) => (
+          {nav.map(({ id, label, icon: Icon }) => (
             <button key={id} onClick={() => setSection(id)}
               className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left transition-colors ${
-                section === id
+                active === id
                   ? 'bg-surface-3 text-fg border-l-2 border-accent-fg'
                   : 'text-fg-muted hover:bg-surface-3 hover:text-fg'
               }`}>
@@ -1035,16 +1095,18 @@ export function ProtectionPage() {
         )}
         {settings && (
           <SavePendingContext.Provider value={saveMut.isPending}>
-            {section === 'overview'    && <OverviewSection settings={settings} />}
+            {active === 'overview'    && <OverviewSection settings={settings} caps={caps} />}
+            {/* unavailable scanner: settings stay visible, warning with the reason */}
+            {sectionNotice && <div className="mb-4"><ScannerNoticeLine notice={sectionNotice} /></div>}
             {/* Read-only roles (hygiene: read) see the settings disabled — the API answers 403 */}
-            {section !== 'overview' && (
+            {active !== 'overview' && (
               <WriteGuard area="hygiene">
-                {section === 'rspamd'      && <RspamdSection    settings={settings} onSave={handleSave} />}
-                {section === 'antivirus'   && <ClamavSettingsSection />}
-                {section === 'dnsbl'       && <DnsblSection       settings={settings} onSave={handleSave} />}
-                {section === 'greylisting' && <GreylistingSection settings={settings} onSave={handleSave} />}
-                {section === 'geoip'       && <GeoipSection       settings={settings} onSave={handleSave} />}
-                {section === 'attachments' && <AttachmentsSection settings={settings} onSave={handleSave} />}
+                {active === 'rspamd'      && <RspamdSection    settings={settings} onSave={handleSave} />}
+                {active === 'antivirus'   && <ClamavSettingsSection />}
+                {active === 'dnsbl'       && <DnsblSection       settings={settings} onSave={handleSave} />}
+                {active === 'greylisting' && <GreylistingSection settings={settings} onSave={handleSave} />}
+                {active === 'geoip'       && <GeoipSection       settings={settings} onSave={handleSave} />}
+                {active === 'attachments' && <AttachmentsSection settings={settings} onSave={handleSave} />}
               </WriteGuard>
             )}
           </SavePendingContext.Provider>

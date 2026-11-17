@@ -10,7 +10,9 @@
  *   POST /backup/admin/full            — trigger a full backup job
  *   GET  /backup/admin/list?limit=     — list S3 backup objects
  *   GET  /backup/admin/jobs?limit=     — list BackupJob records from the DB
- *   POST /backup/admin/import/:userId?folderId= — import MBOX / encrypted .mbox.enc (raw bytes)
+ *   POST /backup/admin/import/:userId?mode=&folderId= — restore an uploaded file (ZIP/MBOX, also .enc; raw bytes) as a job
+ *   POST /backup/admin/restore         — 9.3: restore a STORED archive (jobId | key) as a job
+ *   POST /backup/admin/schedules/recommended — 9.3: "Empfohlene Sicherung einrichten"
  */
 import { Readable, Transform } from 'node:stream';
 import { Router, type Router as RouterType, type Request, type Response, type NextFunction } from 'express';
@@ -32,7 +34,8 @@ export function isMailboxDataRoute(req: Pick<Request, 'method' | 'path'>): boole
   // 9.1: the router below matches case-sensitively; the lower-cased path is a
   // second guard so no casing variant is ever classified as "not mailbox data".
   const paths = [req.path, req.path.toLowerCase()];
-  if (req.method === 'POST') return paths.some((p) => /^\/(mailbox|import)\/[^/]+\/?$/.test(p));
+  // 9.3: POST /restore writes mailbox content from a stored archive
+  if (req.method === 'POST') return paths.some((p) => /^\/(mailbox|import)\/[^/]+\/?$/.test(p) || /^\/restore\/?$/.test(p));
   if (req.method === 'GET' || req.method === 'HEAD') {
     return paths.some((p) => /^\/download\/[^/]+\/?$/.test(p) || /^\/archive\/download\/?$/.test(p));
   }
@@ -234,6 +237,12 @@ adminBackupsRouter.get('/download/:jobId', async (req: Request, res: Response) =
 adminBackupsRouter.get('/archive/download', async (req: Request, res: Response) => {
   const key = typeof req.query['key'] === 'string' ? req.query['key'] : '';
   if (!key) { res.status(400).json({ error: 'key query param required' }); return; }
+  // 9.3: system backups (database dump: password hashes, DKIM/TLS keys) — ORGANIZATION_MANAGEMENT
+  // only (the backup-service enforces it as well, also for /download/:jobId of system jobs)
+  if (key.startsWith('system/') && req.apiUser!.role !== 'ORGANIZATION_MANAGEMENT') {
+    res.status(403).json({ error: 'System-Sicherungen darf nur die Organisationsverwaltung herunterladen' });
+    return;
+  }
   // The generic audit middleware records the GET (AUDIT_SENSITIVE_GET), but not the key.
   audit({
     actorId: req.apiUser!.userId,
@@ -302,6 +311,60 @@ adminBackupsRouter.delete('/jobs/:id', async (req: Request, res: Response) => {
   await forward(req, res, 'DELETE', `/backup/admin/jobs/${encodeURIComponent(id)}`);
 });
 
+// 9.3: "Empfohlene Sicherung einrichten" — creates the missing nightly system + full backup schedules
+adminBackupsRouter.post('/schedules/recommended', async (req: Request, res: Response) => {
+  audit({
+    actorId: req.apiUser!.userId,
+    actorEmail: req.apiUser!.email,
+    action: 'backup.schedule.recommended',
+    targetType: 'backup_schedule',
+    ...auditContext(req),
+  });
+  await forward(req, res, 'POST', '/backup/admin/schedules/recommended', '{}');
+});
+
+/** 9.3: body of POST /restore that is forwarded (only the known fields). */
+export function restoreBody(body: unknown): Record<string, unknown> {
+  const b = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const k of ['jobId', 'key', 'targetUserId', 'mode', 'folderId']) if (b[k] !== undefined) out[k] = b[k];
+  return out;
+}
+
+// 9.3: restore a stored archive (BCP → Backup-Archiv / Jobs) into a mailbox — runs as a job
+adminBackupsRouter.post('/restore', async (req: Request, res: Response) => {
+  const body = restoreBody(req.body);
+  try {
+    const upstream = await fetch(`${BACKUP_URL}/backup/admin/restore`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(req.get('Authorization') ? { Authorization: req.get('Authorization')! } : {}),
+      },
+      body: JSON.stringify(body),
+    });
+    const text = await upstream.text();
+    let jobId: string | undefined;
+    try { jobId = (JSON.parse(text) as { jobId?: string }).jobId; } catch { /* not JSON */ }
+    audit({
+      actorId: req.apiUser!.userId,
+      actorEmail: req.apiUser!.email,
+      action: 'backup.restore',
+      targetType: 'user',
+      ...(typeof body['targetUserId'] === 'string' ? { targetId: body['targetUserId'] } : {}),
+      changes: { source: 'archive', ...body, status: upstream.status, ...(jobId ? { restoreJobId: jobId } : {}) },
+      success: upstream.ok,
+      ...auditContext(req),
+    });
+    res.status(upstream.status);
+    const ct = upstream.headers.get('content-type');
+    if (ct) res.setHeader('Content-Type', ct);
+    res.send(text);
+  } catch {
+    upstreamUnavailable(res);
+  }
+});
+
 adminBackupsRouter.post('/schedules/:id/run-now', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
   audit({
@@ -328,13 +391,27 @@ class ImportTooLargeError extends Error {}
 // that corrupted encrypted `.mbox.enc` backups and non-UTF-8 mailboxes) with the
 // target folder as `?folderId=` (the backup-service requires it). Size cap:
 // BACKUP_IMPORT_MAX_BYTES (413 when exceeded).
+// 9.3: ?mode=subfolder|original|folder (folderId only for "folder"; a folderId alone =
+// "folder" as before). The backup-service answers 202 { jobId } — the restore runs as a job.
 adminBackupsRouter.post('/import/:userId', async (req: Request, res: Response) => {
   const { userId } = req.params as { userId: string };
   const folderId = typeof req.query['folderId'] === 'string' ? req.query['folderId'] : '';
-  if (!/^[A-Za-z0-9_-]{1,64}$/.test(folderId)) {
+  const mode = typeof req.query['mode'] === 'string' ? req.query['mode'] : (folderId ? 'folder' : '');
+  if (!['subfolder', 'original', 'folder'].includes(mode)) {
+    res.status(400).json({ error: 'mode (subfolder | original | folder) or folderId query parameter required' });
+    return;
+  }
+  if ((mode === 'folder' || folderId) && !/^[A-Za-z0-9_-]{1,64}$/.test(folderId)) {
     res.status(400).json({ error: 'folderId query parameter required' });
     return;
   }
+  // 9.3 review (SemVer MINOR): the pre-9.3 call `?folderId=` without `mode` is
+  // forwarded as such — the backup-service answers it synchronously with the old
+  // response shape (200 { imported, errors, encrypted }) and it keeps its audit action.
+  const legacy = typeof req.query['mode'] !== 'string' || req.query['mode'] === '';
+  const upstreamQuery = legacy
+    ? `folderId=${encodeURIComponent(folderId)}`
+    : `mode=${encodeURIComponent(mode)}${mode === 'folder' ? `&folderId=${encodeURIComponent(folderId)}` : ''}`;
   const max = importMaxBytes();
   const declared = Number(req.get('content-length'));
   if (Number.isFinite(declared) && declared > max) {
@@ -355,7 +432,7 @@ adminBackupsRouter.post('/import/:userId', async (req: Request, res: Response) =
 
   try {
     const upstream = await fetch(
-      `${BACKUP_URL}/backup/admin/import/${encodeURIComponent(userId)}?folderId=${encodeURIComponent(folderId)}`,
+      `${BACKUP_URL}/backup/admin/import/${encodeURIComponent(userId)}?${upstreamQuery}`,
       {
         method: 'POST',
         headers: {
@@ -367,13 +444,18 @@ adminBackupsRouter.post('/import/:userId', async (req: Request, res: Response) =
       } as RequestInit & { duplex: 'half' },
     );
     const text = await upstream.text();
+    let jobId: string | undefined;
+    try { jobId = (JSON.parse(text) as { jobId?: string }).jobId; } catch { /* not JSON */ }
     audit({
       actorId: req.apiUser!.userId,
       actorEmail: req.apiUser!.email,
-      action: 'backup.mbox.import',
+      // 9.3: backup.restore for the new upload restore; the pre-9.3 call keeps backup.mbox.import
+      action: legacy ? 'backup.mbox.import' : 'backup.restore',
       targetType: 'user',
       targetId: userId,
-      changes: { sizeBytes: received, folderId, status: upstream.status },
+      changes: legacy
+        ? { sizeBytes: received, folderId, status: upstream.status, ...(jobId ? { restoreJobId: jobId } : {}) }
+        : { source: 'upload', sizeBytes: received, mode, ...(mode === 'folder' ? { folderId } : {}), status: upstream.status, ...(jobId ? { restoreJobId: jobId } : {}) },
       success: upstream.ok,
       ...auditContext(req),
     });

@@ -975,7 +975,7 @@ async function loginUser(
     case 'ok':
       // v8.1: concurrent sessions per user (Exchange-style per-protocol cap).
       if (maxConnsPerUser() > 0 && imapLiveSessions.count(result.user.id) >= maxConnsPerUser()) {
-        log.warn({ email: result.user.email, limit: maxConnsPerUser(), command }, 'IMAP login refused — too many sessions for this user');
+        log.warn({ email: result.user.email, limit: maxConnsPerUser(), command, ip: session.socket.remoteAddress }, 'IMAP login refused — too many sessions for this user');
         sendNo(session, tag, '[LIMIT] Too many concurrent IMAP sessions for this account');
         return;
       }
@@ -987,7 +987,7 @@ async function loginUser(
       // v7.1.0: the connection ends when these credentials become invalid.
       registerLiveSession(session, result.method, result.appPasswordId, authStartedAt);
       refreshCapabilities(session);
-      log.info({ email: result.user.email, method: result.method, command }, 'IMAP login success');
+      log.info({ email: result.user.email, method: result.method, command, ip: session.socket.remoteAddress }, 'IMAP login success');
       sendOk(session, tag, `[CAPABILITY ${session.capabilities.join(' ')}] ${command} completed`);
       return;
     case 'locked':
@@ -998,7 +998,7 @@ async function loginUser(
       return;
     default:
       // invalid and mfa_app_password_required get the same text (no oracle).
-      log.warn({ login: username, status: result.status, command }, 'IMAP login failed');
+      log.warn({ login: username, status: result.status, command, ip: session.socket.remoteAddress }, 'IMAP login failed');
       sendNo(session, tag, '[AUTHENTICATIONFAILED] Invalid credentials (accounts with two-factor authentication need an app password)');
   }
 }

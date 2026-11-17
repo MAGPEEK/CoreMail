@@ -34,6 +34,7 @@ const storageUrl = (p) => new URL(`../../storage/src/${p}`, import.meta.url).hre
 
 const STUB_SOURCE = `
 export * from '${MESSAGE_STORE_URL}';
+export * from '${new URL('../../core/src/tls/tls-errors.ts', import.meta.url).href}';
 import { createMailCredentialVerifier, createMemoryAuthRedis } from '${MAIL_AUTH_CORE_URL}';
 export { createMemoryAuthRedis, normalizeIp, isPrivateOrLoopbackIp } from '${MAIL_AUTH_CORE_URL}';
 export * from '${storageUrl('mime/tree.ts')}';

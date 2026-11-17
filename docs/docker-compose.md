@@ -116,11 +116,20 @@ The minimal stack has no rspamd and no ClamAV containers. The checks that run in
 `coremail` container stay active: SPF, DKIM, DMARC, ARC, DNSBL, greylisting, the attachment
 filter (blocked extensions, size) and the black lists.
 
+The security filter treats both scanners as not deployed because of the environment switches
+below (only these switches do that — a missing `rspamd` / `clamav` host name in the compose
+network counts as "unavailable / host not found", and the failure policy applies) and skips
+them without tagging mail as unscanned. BCP → Protection hides the Rspamd and Antivirus tabs and shows the line
+"… ist in dieser Installation nicht bereitgestellt" instead
+([antivirus.md](antivirus.md#installations-without-clamav-or-rspamd)).
+
 The minimal compose file sets `RSPAMD_ENABLED=false` and `CLAMAV_ENABLED=false`. These
 environment switches override the BCP → Protection settings (which default to on), so
 nothing has to be done after the setup wizard. `true` never forces a scanner on — then the
-BCP setting decides. Without the env switches (e.g. a custom compose file) switch both off
-in BCP → **Protection**, or via the admin API:
+BCP setting decides. A custom compose file without the scanner containers must set the env
+switches too — otherwise the BCP shows "Host nicht gefunden" and ClamAV's failure policy
+(unscanned header, or `451` with "block on failure") applies to every message. Alternatively
+switch both off in BCP → **Protection**, or via the admin API:
 
   ```bash
   TOKEN=$(curl -s -X POST http://localhost:3000/auth/login -H 'Content-Type: application/json' \
@@ -433,6 +442,8 @@ Without CoreMail: download the object and run
 `BACKUP_ENCRYPTION_KEY=<64 hex> node scripts/decrypt-backup.mjs in.zip.enc out.zip`
 ([deployment-security.md §4](deployment-security.md#4-encrypted-backups)). The minimal variant
 has no bucket — set the `S3_*` variables or rely on the dump + `coremail-data` backup.
+Schedules („Empfohlene Sicherung einrichten"), the database backup scope, restoring stored
+archives and what the built-in backups do not cover: [backup.md](backup.md).
 
 **Pre-migration dumps:** before a destructive schema update (only with
 `COREMAIL_ALLOW_SCHEMA_DATA_LOSS=true`) CoreMail writes
@@ -481,6 +492,8 @@ docker compose -f infra/docker/docker-compose.full.yml --profile backup up -d
 The full stack does not set `RSPAMD_ENABLED`/`CLAMAV_ENABLED`, so the BCP → Protection
 settings apply again (on by default; turn them on if you had switched them off there).
 ClamAV needs a few minutes for its first signature download; mail is accepted meanwhile.
+The Rspamd and Antivirus tabs in BCP → Protection come back by themselves (the deployment check
+runs every 5 minutes); while ClamAV loads its signatures the Antivirus tab shows a warning.
 
 **Standard → full:** `.env` needs `OBJECT_STORAGE` (setup.sh tells you) and
 `RSPAMD_CONTROLLER_PASSWORD`. If your mail is in MinIO (`OBJECT_STORAGE` unset or `minio`)

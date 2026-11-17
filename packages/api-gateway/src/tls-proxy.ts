@@ -27,7 +27,7 @@ import tls from 'node:tls';
 import type { Application } from 'express';
 import { createLogger, getRedisClient, stripForwardedHeaders } from '@coremail/core';
 import { prisma } from '@coremail/storage';
-import { selectProxyCerts, planSni, type SelectedProxyCert } from './lib/cert-lifecycle.js';
+import { selectProxyCerts, planSni, buildFullChainPem, type SelectedProxyCert } from './lib/cert-lifecycle.js';
 
 const log  = createLogger('tls-proxy');
 const PORT = parseInt(process.env['HTTPS_PORT'] ?? '443', 10);
@@ -80,7 +80,7 @@ async function loadCerts(): Promise<LoadedCert[]> {
     where: { certPem: { not: null }, keyPem: { not: null } },
     select: {
       id: true, name: true, certPem: true, keyPem: true, chainPem: true,
-      domains: true, isActiveHttps: true, createdAt: true,
+      domains: true, isActiveHttps: true, createdAt: true, acmeStaging: true,
     },
     orderBy: { createdAt: 'desc' },
   });
@@ -96,10 +96,11 @@ function buildSniMaps(certs: LoadedCert[]): LoadedCert[] {
   const usable: LoadedCert[] = [];
   for (const cert of certs) {
     try {
+      // Leaf + intermediates in `cert` (9.2.x: the chain used to go to `ca`,
+      // which is the trust store, not the chain sent to clients).
       contexts.set(cert.id, tls.createSecureContext({
-        cert: cert.certPem,
+        cert: buildFullChainPem(cert.certPem, cert.chainPem),
         key:  cert.keyPem,
-        ...(cert.chainPem ? { ca: cert.chainPem } : {}),
       }));
       usable.push(cert);
     } catch (err) {
@@ -219,9 +220,8 @@ async function reloadServer(app: Application): Promise<void> {
   const fallbackCert = certs.find((c) => c.isActiveHttps) ?? certs[0]!;
   const server = https.createServer(
     {
-      cert: fallbackCert.certPem,
+      cert: buildFullChainPem(fallbackCert.certPem, fallbackCert.chainPem),
       key:  fallbackCert.keyPem,
-      ...(fallbackCert.chainPem ? { ca: fallbackCert.chainPem } : {}),
       SNICallback: sniCallback,
     },
     // v6: TLS clients connect directly — any X-Forwarded-*/Forwarded header

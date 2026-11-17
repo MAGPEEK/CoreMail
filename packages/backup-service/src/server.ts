@@ -6,14 +6,29 @@ import {
   getRedisClient, createLogger, verifyAccessToken,
   installProcessGuards, installAsyncErrorHandling, errorMiddleware, requireInternal, resolveBindHost,
 } from '@coremail/core';
-import { parseLimit, isBackupAdmin, isSafeArchiveKey } from './http-utils.js';
-import { runUserBackup, runFullBackup, runSingleMailboxBackup, startBackupScheduler, runRetentionLocked } from './scheduler/index.js';
-import { listRestorableMessages, restoreMessage, importMbox } from './restore/index.js';
-import { listBackups, ensureBackupBucket, openBackupDownload, deleteObject, backupKeyring } from './upload/s3.js';
-import { BackupDecryptError, BackupKeyConfigError } from './crypto/backup-crypto.js';
-import { prepareImportFile } from './restore/import-file.js';
-import { parseScheduleInput, type ScheduleData } from './scheduler/schedule-input.js';
+import { parseLimit, isBackupAdmin, isSafeArchiveKey, canDownloadBackup } from './http-utils.js';
+import {
+  runUserBackup, runFullBackup, runSingleMailboxBackup, startBackupScheduler, runRetentionLocked,
+  startScheduleBackup, finishScheduleRun, jobObjectKeys,
+} from './scheduler/index.js';
+import { listRestorableMessages, restoreMessage } from './restore/index.js';
+import { listBackups, ensureBackupBucket, openBackupDownload, deleteObject, backupKeyring, streamObject } from './upload/s3.js';
+import { BackupDecryptError, BackupKeyConfigError, openDecryptedStream } from './crypto/backup-crypto.js';
+import { prepareUploadedFile } from './restore/import-file.js';
+import { parseScheduleInput, recommendedSchedules, type ScheduleData } from './scheduler/schedule-input.js';
+import { withLock, LOCK_KEYS, type LockRedis } from './scheduler/locks.js';
+import { RUNNING_STATUSES, isStale, isStalled, stallTimeoutMs, isOrphanAtStartup, currentHost } from './scheduler/job-progress.js';
+import { parseRestoreRequest, parseUploadQuery, restoreFolderName } from './restore/source.js';
+import {
+  RestoreHttpError, RestoreTooLargeError, restoreConfig, resolveArchive, resolveTarget, createRestoreJob,
+  executeRestoreJob, restoreTempDir, writeCapped, writeUploadCapped, detectFormat, decryptErrorMessage, restoreRootDate,
+  isLegacyImportQuery, legacyImportResult, legacyImportTimeoutMs, waitWithTimeout,
+  type PreparedRestore,
+} from './restore/job.js';
 import { pipeline } from 'node:stream/promises';
+import { join } from 'node:path';
+import { rm } from 'node:fs/promises';
+import type { Readable } from 'node:stream';
 import { prisma } from '@coremail/storage';
 
 const log = createLogger('backup-service');
@@ -239,28 +254,38 @@ app.delete('/backup/admin/schedules/:id', requireAdmin, async (req, res) => {
 });
 
 // POST /backup/admin/schedules/:id/run-now — trigger a schedule manually
+// 9.3: scope "system" too; lastRunAt / lastStatus / retention follow the finished job
 app.post('/backup/admin/schedules/:id/run-now', requireAdmin, async (req, res) => {
   const { id } = req.params as { id: string };
   const schedule = await prisma.backupSchedule.findUnique({ where: { id } });
   if (!schedule) { res.status(404).json({ error: 'Schedule not found' }); return; }
   try {
-    if (schedule.scope === 'full') {
-      const { jobId } = await runFullBackup({ triggeredBy: 'MANUAL', scheduleId: id });
-      res.json({ message: 'Triggered', jobId });
-    } else if (schedule.scope === 'user' && schedule.targetUserId) {
-      const { jobId } = await runSingleMailboxBackup({
-        userId: schedule.targetUserId,
-        format: schedule.format === 'mbox' ? 'mbox' : 'zip',
-        triggeredBy: 'MANUAL',
-        scheduleId: id,
-      });
-      res.json({ message: 'Triggered', jobId });
-    } else {
-      res.status(400).json({ error: 'Schedule has invalid scope/targetUserId combination' });
-    }
+    const row = schedule as unknown as ScheduleData & { id: string };
+    const started = await startScheduleBackup(row, 'MANUAL');
+    if (!started) { res.status(400).json({ error: 'Schedule has invalid scope/targetUserId combination' }); return; }
+    await prisma.backupSchedule.update({ where: { id }, data: { lastJobId: started.jobId, lastStatus: 'RUNNING' } }).catch(() => undefined);
+    void started.done.then((o) => finishScheduleRun(row, o, 'MANUAL'));
+    res.json({ message: 'Triggered', jobId: started.jobId });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to trigger' });
   }
+});
+
+// 9.3 — POST /backup/admin/schedules/recommended — "Empfohlene Sicherung einrichten":
+// creates the missing nightly system + full backup schedules (explicit admin action)
+app.post('/backup/admin/schedules/recommended', requireAdmin, async (req, res) => {
+  const { CronJob } = await import('cron');
+  const cronOk = (c: string): boolean => {
+    try { new CronJob(c, () => undefined, null, false, 'UTC'); return true; } catch { return false; }
+  };
+  const existing = await prisma.backupSchedule.findMany({ select: { scope: true, enabled: true } });
+  const plan = recommendedSchedules(existing as Array<Pick<ScheduleData, 'scope' | 'enabled'>>, process.env, cronOk);
+  const actorId = (req as AuthedRequest).userId;
+  const created = [];
+  for (const s of plan) {
+    created.push(await prisma.backupSchedule.create({ data: { ...s, createdBy: actorId } }));
+  }
+  res.status(created.length ? 201 : 200).json({ created, alreadyConfigured: created.length === 0 });
 });
 
 // v3.18.28 — download a backup job as a stream (uses S3-internal GetObject)
@@ -268,6 +293,10 @@ app.get('/backup/admin/download/:jobId', requireAdmin, async (req, res) => {
   const { jobId } = req.params as { jobId: string };
   const job = await prisma.backupJob.findUnique({ where: { id: jobId } });
   if (!job?.downloadUrl) { res.status(404).json({ error: 'Backup nicht gefunden' }); return; }
+  if (!canDownloadBackup((req as AuthedRequest).role, job.downloadUrl, job.scope)) {
+    res.status(403).json({ error: 'System-Sicherungen darf nur die Organisationsverwaltung herunterladen' });
+    return;
+  }
   await sendBackup(res, job.downloadUrl, { jobId });
 });
 
@@ -304,6 +333,10 @@ app.get('/backup/admin/archive/download', requireAdmin, async (req, res) => {
   const key = typeof req.query['key'] === 'string' ? req.query['key'] : '';
   if (!key) { res.status(400).json({ error: 'key query param required' }); return; }
   if (!isSafeArchiveKey(key)) { res.status(400).json({ error: 'Invalid archive key' }); return; }
+  if (!canDownloadBackup((req as AuthedRequest).role, key)) {
+    res.status(403).json({ error: 'System-Sicherungen darf nur die Organisationsverwaltung herunterladen' });
+    return;
+  }
   await sendBackup(res, key, { key });
 });
 
@@ -334,10 +367,10 @@ app.delete('/backup/admin/jobs/:id', requireAdmin, async (req, res) => {
   const { id } = req.params as { id: string };
   const job = await prisma.backupJob.findUnique({ where: { id } });
   if (!job) { res.status(404).json({ error: 'Job nicht gefunden' }); return; }
-  // Delete the S3 object if present (best-effort, no throw on errors)
-  if (job.downloadUrl) {
-    try { await deleteObject(job.downloadUrl); }
-    catch (err) { log.warn({ err, jobId: id, s3Key: job.downloadUrl }, 'S3 delete failed — continuing with DB delete'); }
+  // Delete the S3 object(s) if present (best-effort, no throw on errors; 9.3: + companion objects)
+  for (const key of jobObjectKeys(job)) {
+    try { await deleteObject(key); }
+    catch (err) { log.warn({ err, jobId: id, s3Key: key }, 'S3 delete failed — continuing with DB delete'); }
   }
   await prisma.backupJob.delete({ where: { id } });
   log.info({ jobId: id }, 'Backup job deleted');
@@ -389,40 +422,167 @@ app.post('/internal/retention/run', requireInternal(), async (_req, res) => {
   }
 });
 
-// POST /backup/admin/import/:userId — import MBOX for a specific user (admin)
-// The body is read as raw bytes (application/mbox or application/octet-stream)
-// and may be a legacy plaintext MBOX or an encrypted CoreMail backup (.mbox.enc,
-// decrypted + authenticated before anything is imported). The target folder is
-// given as ?folderId= (the old text body could never carry it).
-app.post('/backup/admin/import/:userId', requireAdmin, express.raw({ type: ['application/mbox', 'application/octet-stream'], limit: '500mb' }), async (req, res) => {
-  const { userId } = req.params as { userId: string };
-  const folderId = typeof req.query['folderId'] === 'string' ? req.query['folderId'] : '';
+// ─── Restore (9.3) ───────────────────────────────────────────────────────────
 
-  if (!folderId || !Buffer.isBuffer(req.body) || req.body.length === 0) {
-    res.status(400).json({ error: 'folderId (query) and MBOX body required' });
-    return;
+function lockRedis(): LockRedis {
+  return getRedisClient() as unknown as LockRedis;
+}
+
+/** Restore lock TTL (renewed while the restore runs). */
+const RESTORE_LOCK_TTL_MS = 10 * 60_000;
+const RESTORE_BUSY = 'Für dieses Postfach läuft bereits eine Wiederherstellung — bitte warten, bis sie beendet ist';
+
+function sendRestoreError(res: express.Response, err: unknown): boolean {
+  if (res.headersSent) return true;
+  if (err instanceof RestoreHttpError) { res.status(err.status).json({ error: err.message }); return true; }
+  if (err instanceof RestoreTooLargeError) { res.status(413).json({ error: err.message }); return true; }
+  if (err instanceof BackupDecryptError || err instanceof BackupKeyConfigError) {
+    res.status(422).json({ error: decryptErrorMessage(err) });
+    return true;
   }
+  return false;
+}
 
-  const { mkdtemp, rm } = await import('node:fs/promises');
-  const { tmpdir } = await import('node:os');
-  const { join } = await import('node:path');
+async function checkTargetFolder(mailboxId: string, folderId: string | null): Promise<void> {
+  if (!folderId) return;
+  const f = await prisma.folder.findFirst({ where: { id: folderId, mailboxId }, select: { id: true } });
+  if (!f) throw new RestoreHttpError(404, 'Zielordner nicht im Zielpostfach gefunden');
+}
 
-  const tmpDir = await mkdtemp(join(tmpdir(), 'coremail-import-'));
+/**
+ * POST /backup/admin/restore — restore a STORED archive (job id or object key)
+ * into the owner's mailbox (default) or another one. Body: { jobId | key,
+ * targetUserId?, mode: subfolder | original | folder, folderId? }. 202 { jobId }
+ * once the archive opened and (when encrypted) the key matched; the restore
+ * runs as a job (BCP → Jobs).
+ */
+app.post('/backup/admin/restore', requireAdmin, async (req, res) => {
+  const parsed = parseRestoreRequest(req.body);
+  if (!parsed.ok) { res.status(400).json({ error: parsed.error }); return; }
+  const r = parsed.value;
+  const cfg = restoreConfig();
   try {
-    let prepared: Awaited<ReturnType<typeof prepareImportFile>>;
-    try {
-      prepared = await prepareImportFile(req.body, tmpDir, backupKeyring);
-    } catch (err) {
-      if (err instanceof BackupDecryptError || err instanceof BackupKeyConfigError) {
-        res.status(422).json({ error: 'Encrypted backup could not be decrypted', detail: err.message });
-        return;
+    const archive = await resolveArchive(r, isSafeArchiveKey);
+    const targetUserId = r.targetUserId ?? archive.ownerUserId;
+    if (!targetUserId) throw new RestoreHttpError(400, 'Das ursprüngliche Postfach dieses Archivs ist unbekannt — bitte ein Zielpostfach wählen');
+    const target = await resolveTarget(targetUserId);
+    await checkTargetFolder(target.mailboxId, r.folderId);
+
+    const out = await withLock(lockRedis(), LOCK_KEYS.restore(target.mailboxId), async (lockSignal) => {
+      let stream: Readable;
+      try {
+        stream = (await streamObject(archive.key)).stream;
+      } catch (err) {
+        const status = (err as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode;
+        if (status === 404 || (err as { name?: string })?.name === 'NoSuchKey') throw new RestoreHttpError(404, 'Archiv nicht im Backup-Speicher gefunden');
+        throw err;
       }
-      throw err;
-    }
-    const result = await importMbox(userId, folderId, prepared.path);
-    res.json({ ...result, encrypted: prepared.encrypted });
-  } finally {
-    await rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
+      // Encrypted: the header (format + key id) is checked BEFORE a job exists.
+      if (archive.key.endsWith('.enc')) {
+        const raw = stream;
+        try { stream = await openDecryptedStream(raw, backupKeyring()); } catch (err) { raw.destroy(); throw err; }
+      }
+
+      const dir = await restoreTempDir();
+      // 9.3 review: provisional name (job / key date); executeRestoreJob resolves
+      // the final one after the download with the same rule as an upload
+      // (manifest creation time first — restoreRootDate).
+      const rootName = restoreFolderName(archive.date);
+      const prepared: PreparedRestore = {
+        path: join(dir, `archive.${archive.format}`), dir, format: archive.format, sizeBytes: 0,
+        targetUserId: target.userId, mailboxId: target.mailboxId, mode: r.mode, folderId: r.folderId, rootName,
+        source: { kind: 'archive', key: archive.key, jobId: archive.jobId, ownerUserId: archive.ownerUserId },
+        rootDateFallback: archive.date,
+      };
+      let jobId: string;
+      try {
+        jobId = await createRestoreJob(prepared, (req as AuthedRequest).userId);
+      } catch (err) {
+        stream.destroy();
+        await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+        throw err;
+      }
+      res.status(202).json({
+        jobId, targetUserId: target.userId, targetEmail: target.email, mode: r.mode,
+        targetFolder: r.mode === 'subfolder' ? rootName : null, format: archive.format, encrypted: archive.key.endsWith('.enc'),
+      });
+      await executeRestoreJob(jobId, prepared, cfg, () => writeCapped(stream, prepared.path, cfg.maxArchiveBytes), lockSignal);
+    }, { ttlMs: RESTORE_LOCK_TTL_MS, onRenewError: (err) => log.warn({ err }, 'Restore lock renewal failed') });
+    if (!out.ran) res.status(409).json({ error: RESTORE_BUSY });
+  } catch (err) {
+    if (sendRestoreError(res, err)) return;
+    throw err;
+  }
+});
+
+// POST /backup/admin/import/:userId?mode=subfolder|original|folder&folderId= — restore an UPLOADED file
+// 9.3: CoreMail ZIP backups (the default format — the old import turned them into ONE
+// garbage message and reported success), MBOX files and encrypted CoreMail backups
+// (.zip.enc / .mbox.enc). The body is streamed to a temp file (no 500 MB in memory),
+// the restore runs as a job (202 { jobId }) — large imports used to run inside the
+// request and hit the gateway's upstream timeout. A folderId alone = mode "folder".
+app.post('/backup/admin/import/:userId', requireAdmin, async (req, res) => {
+  const { userId } = req.params as { userId: string };
+  const q = parseUploadQuery(req.query as Record<string, unknown>);
+  if (!q.ok) { req.resume(); res.status(400).json({ error: q.error }); return; }
+  // 9.3 review (SemVer MINOR): the pre-9.3 call `?folderId=` without `mode` keeps
+  // its contract — synchronous 200 { imported, errors, encrypted } (+ duplicates,
+  // jobId); only when it runs longer than BACKUP_IMPORT_SYNC_TIMEOUT_MS: 202 { jobId }.
+  const legacy = isLegacyImportQuery(req.query as Record<string, unknown>);
+  const cfg = restoreConfig();
+  try {
+    const target = await resolveTarget(userId);
+    await checkTargetFolder(target.mailboxId, q.folderId);
+    const out = await withLock(lockRedis(), LOCK_KEYS.restore(target.mailboxId), async (lockSignal) => {
+      const dir = await restoreTempDir();
+      let handedOff = false;
+      try {
+        const upload = join(dir, 'upload.bin');
+        const size = await writeUploadCapped(req, upload, cfg.maxUploadBytes);
+        if (size === 0) throw new RestoreHttpError(400, 'Leere Datei');
+        const plain = await prepareUploadedFile(upload, dir, backupKeyring);
+        const format = await detectFormat(plain.path);
+        if (format !== 'zip' && format !== 'mbox') {
+          throw new RestoreHttpError(400, 'Unbekanntes Dateiformat — erwartet wird ein CoreMail-Backup (ZIP/MBOX, auch verschlüsselt) oder eine MBOX-Datei');
+        }
+        const prepared: PreparedRestore = {
+          path: plain.path, dir, format, sizeBytes: size,
+          targetUserId: target.userId, mailboxId: target.mailboxId, mode: q.mode, folderId: q.folderId,
+          // 9.3 review: same date rule as an archive restore (manifest first; an upload has no job)
+          rootName: restoreFolderName(await restoreRootDate(plain.path, format, null)),
+          source: { kind: 'upload', encrypted: plain.encrypted },
+        };
+        const jobId = await createRestoreJob(prepared, (req as AuthedRequest).userId);
+        const accepted = {
+          jobId, targetUserId: target.userId, targetEmail: target.email, mode: q.mode,
+          targetFolder: q.mode === 'subfolder' ? prepared.rootName : null, format, encrypted: plain.encrypted,
+        };
+        handedOff = true;
+        const run = executeRestoreJob(jobId, prepared, cfg, undefined, lockSignal); // removes `dir`
+        if (!legacy) {
+          res.status(202).json(accepted);
+          await run;
+          return;
+        }
+        const waited = await waitWithTimeout(run, legacyImportTimeoutMs());
+        if (!waited.done) {
+          res.status(202).json(accepted); // documented fallback: still running → poll the job
+        } else {
+          const errorMsg = waited.value ? null
+            : (await prisma.backupJob.findUnique({ where: { id: jobId }, select: { errorMsg: true } }).catch(() => null))?.errorMsg ?? null;
+          const r = legacyImportResult(waited.value, plain.encrypted, jobId, errorMsg);
+          res.status(r.status).json(r.body);
+        }
+        await run;
+      } finally {
+        if (!handedOff) await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+      }
+    }, { ttlMs: RESTORE_LOCK_TTL_MS, onRenewError: (err) => log.warn({ err }, 'Restore lock renewal failed') });
+    if (!out.ran) { req.resume(); res.status(409).json({ error: RESTORE_BUSY }); }
+  } catch (err) {
+    if (!req.complete) req.resume();
+    if (sendRestoreError(res, err)) return;
+    throw err;
   }
 });
 
@@ -450,54 +610,51 @@ async function start() {
   }
 
   // v3.18.34: orphan cleanup. If the container is restarted during a backup,
-  // the master job stays stuck in the DB with status RUNNING/PENDING/RETRYING/
-  // PROCESSING and the frontend shows "running forever". On
-  // start we check whether such jobs are older than 60s (safe: no job that
-  // just started gets marked by accident) and mark them as
-  // FAILED with a clear error text.
-  try {
-    const cutoff = new Date(Date.now() - 60 * 1000);
-    const orphans = await prisma.backupJob.updateMany({
-      where: {
-        status: { in: ['RUNNING', 'PENDING', 'RETRYING', 'PROCESSING', 'SCHEDULED'] },
-        startedAt: { lt: cutoff },
-      },
-      data: {
-        status: 'FAILED',
-        completedAt: new Date(),
-        errorClass: 'STORAGE',
-        errorMsg: 'Container wurde während Backup neugestartet — Job abgebrochen.',
-      },
+  // the job stays stuck in the DB with status RUNNING/… and the frontend shows
+  // "running forever". 9.3: jobs of THIS host (progressMeta.host) cannot be
+  // running any more; jobs of other hosts only when their heartbeat stopped.
+  const failJobs = async (ids: string[], errorClass: string, errorMsg: string): Promise<number> => {
+    if (!ids.length) return 0;
+    const r = await prisma.backupJob.updateMany({
+      where: { id: { in: ids }, status: { in: [...RUNNING_STATUSES] } },
+      data: { status: 'FAILED', completedAt: new Date(), errorClass, errorMsg },
     });
-    if (orphans.count > 0) {
-      log.warn({ count: orphans.count }, 'Orphan backup jobs marked as FAILED (container restart cleanup)');
-    }
+    return r.count;
+  };
+  const runningJobs = () => prisma.backupJob.findMany({
+    where: { status: { in: [...RUNNING_STATUSES] } },
+    select: { id: true, startedAt: true, createdAt: true, progressMeta: true },
+    take: 1000,
+  });
+  try {
+    const now = Date.now();
+    const thisHost = currentHost();
+    const orphans = (await runningJobs()).filter((j) => isOrphanAtStartup(j, thisHost, now, 3 * 60_000));
+    const count = await failJobs(orphans.map((j) => j.id), 'STORAGE', 'Container wurde während des Jobs neu gestartet — Job abgebrochen.');
+    if (count > 0) log.warn({ count }, 'Orphan backup jobs marked as FAILED (container restart cleanup)');
   } catch (err) {
     log.error({ err }, 'Orphan-cleanup failed (non-fatal)');
   }
 
-  // v3.18.34: watchdog. If a running job does not finish within 30 min,
-  // it is most likely a deadlock — auto-FAIL.
+  // v3.18.34 watchdog, 9.3: a job is stuck when its heartbeat (written every
+  // minute while it works) stopped for 15 minutes — no longer simply 30 minutes
+  // after its start, which failed every large full backup / restore still running.
   const WATCHDOG_INTERVAL_MS = 5 * 60 * 1000;   // check every 5 minutes
-  const STUCK_AFTER_MS       = 30 * 60 * 1000;  // 30 minutes = stuck
+  const STALE_AFTER_MS       = 15 * 60 * 1000;  // no heartbeat for 15 minutes = stuck
   setInterval(async () => {
     try {
-      const cutoff = new Date(Date.now() - STUCK_AFTER_MS);
-      const stuck = await prisma.backupJob.updateMany({
-        where: {
-          status: { in: ['RUNNING', 'PROCESSING', 'RETRYING'] },
-          startedAt: { lt: cutoff },
-        },
-        data: {
-          status: 'FAILED',
-          completedAt: new Date(),
-          errorClass: 'UNKNOWN',
-          errorMsg: 'Watchdog: Job > 30 Min. ohne Fortschritt — abgebrochen.',
-        },
-      });
-      if (stuck.count > 0) {
-        log.warn({ count: stuck.count }, 'Stuck backup jobs auto-FAILED by watchdog');
-      }
+      const now = Date.now();
+      const jobs = await runningJobs();
+      const stuck = jobs.filter((j) => isStale(j, now, STALE_AFTER_MS));
+      const count = await failJobs(stuck.map((j) => j.id), 'UNKNOWN', 'Watchdog: Job seit 15 Min. ohne Lebenszeichen — abgebrochen.');
+      if (count > 0) log.warn({ count }, 'Stuck backup jobs auto-FAILED by watchdog');
+      // 9.3 review: alive (heartbeat) but no progress for the stall window
+      // (hung pg_dump / upload / store call) → FAILED with the reason.
+      const stallMs = stallTimeoutMs();
+      const stalled = jobs.filter((j) => !stuck.includes(j) && isStalled(j, now, stallMs));
+      const stalledCount = await failJobs(stalled.map((j) => j.id), 'UNKNOWN',
+        `Watchdog: seit ${Math.round(stallMs / 60_000)} Min. kein Fortschritt (Job hängt) — abgebrochen.`);
+      if (stalledCount > 0) log.warn({ count: stalledCount }, 'Stalled backup jobs (no progress) auto-FAILED by watchdog');
     } catch (err) {
       log.error({ err }, 'Watchdog tick failed');
     }

@@ -12,6 +12,8 @@ export interface ContextMenuItem {
   /** Visually a destructive action (red) */
   danger?: boolean;
   disabled?: boolean;
+  /** Tooltip (e.g. why the item is disabled) */
+  title?: string;
   /** Full divider row or special render */
   type?: 'divider' | 'color-grid';
   /** Only for type='color-grid': colors array + pick handler + optionally the current selection */
@@ -109,6 +111,7 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
             <button
               type="button"
               disabled={item.disabled}
+              {...(item.title ? { title: item.title } : {})}
               onMouseEnter={(e) => {
                 if (hasChildren) {
                   setSubmenuFor({ index: i, rect: (e.currentTarget as HTMLElement).getBoundingClientRect() });

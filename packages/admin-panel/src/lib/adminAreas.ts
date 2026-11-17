@@ -16,6 +16,7 @@ export const PATH_AREA: Record<string, AdminArea | null> = {
   'dashboard':        'dashboard',
   'reports':          'dashboard',
   'settings':         'organisation',
+  'branding':         'organisation',
   'rbac':             'organisation',
   'ldap':             'identity',
   'sso':              'identity',

@@ -12,6 +12,7 @@
  *   border-line          decorative separators   border-line-strong  control borders (>= 3:1)
  *   bg-scrim/50          modal backdrop
  *   bg-accent            solid accent fill (white text)   text-accent-fg / ring-accent-fg  accent text, icons, focus
+ *   bg-header text-header-fg  bg-header-overlay/NN   webmail top bar (branding colour, text >= 4.5:1)
  *   bg-danger|success|warning|info          solid fill (white text)
  *   text-*-fg  bg-*-bg  border-*-line       status text, tint, border
  */
@@ -31,6 +32,7 @@ export const themeColors = {
     light: 'rgb(var(--color-accent) / 0.08)',
     fg: 'rgb(var(--color-accent-fg) / <alpha-value>)',
   },
+  header: { DEFAULT: v('header'), fg: v('header-fg'), overlay: v('header-overlay') },
   danger: status('danger'),
   success: status('success'),
   warning: status('warning'),

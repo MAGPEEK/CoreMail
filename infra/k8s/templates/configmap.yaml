@@ -99,6 +99,16 @@ data:
   MAIL_CONN_EXEMPT_CIDRS: {{ . | quote }}
   {{- end }}
 
+  # Branding defaults (CoreMail >= 9.3; BCP → Organisation → Branding wins)
+  {{- with $a.branding }}
+  {{- with .name }}
+  BRANDING_NAME: {{ . | quote }}
+  {{- end }}
+  {{- with .color }}
+  BRANDING_COLOR: {{ . | quote }}
+  {{- end }}
+  {{- end }}
+
   # Tuning and escape hatches (CoreMail >= 9.0; unset = app default)
   {{- with $a.deletedItemRetentionDays | toString }}
   DELETED_ITEM_RETENTION_DAYS: {{ . | quote }}

@@ -2,14 +2,23 @@ import { CronJob } from 'cron';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { unlink, stat } from 'node:fs/promises';
-import { prisma } from '@coremail/storage';
+import { prisma, notifyUserInbox } from '@coremail/storage';
 import { runRetentionPolicies, type RetentionRunResult } from '../retention/worker.js';
 import { createLogger, getRedisClient } from '@coremail/core';
 import { exportZip } from '../export/zip.js';
 import { exportMbox } from '../export/mbox.js';
 import { uploadToS3, getSignedDownloadUrl, deleteObject } from '../upload/s3.js';
-import { scheduleSignature, retentionCutoff, retentionWindow, newestArchivePerMailbox, fullBackupUserKey, type ScheduleData } from './schedule-input.js';
+import {
+  scheduleSignature, retentionCutoff, retentionWindow, newestArchivePerMailbox, fullBackupUserKey, failureNotice,
+  type ScheduleData,
+} from './schedule-input.js';
 import { claimSlot, withLock, LOCK_KEYS, type LockRedis, type LockResult } from './locks.js';
+import { runInBackground, classifyError, type JobOutcome } from './run-helpers.js';
+import { runSystemBackup } from './system-backup.js';
+import { JobHeartbeat } from './job-progress.js';
+
+export { classifyError, type JobOutcome } from './run-helpers.js';
+export { runSystemBackup } from './system-backup.js';
 
 const log = createLogger('backup:scheduler');
 
@@ -44,7 +53,7 @@ export async function retentionTick(
 export async function scheduleTick(
   r: LockRedis,
   scheduleId: string,
-  start: () => Promise<{ done: Promise<void> } | null>,
+  start: () => Promise<{ done: Promise<unknown> } | null>,
 ): Promise<'ran' | 'slot-taken' | 'busy'> {
   if (!(await claimSlot(r, LOCK_KEYS.scheduleSlot(scheduleId)))) return 'slot-taken';
   const out = await withLock(r, LOCK_KEYS.scheduleRun(scheduleId), async () => {
@@ -60,17 +69,18 @@ const activeJobs = new Map<string, CronJob>();
 let scheduleReloader: CronJob | null = null;
 
 /**
- * v3.18.26: the scheduler now reads from the DB table `BackupSchedule` instead of
- * only the env variable. Env BACKUP_SCHEDULE remains as a fallback for bootstrapping
- * (if no schedules exist in the DB yet). The reloader checks every 60s
- * whether schedules changed and adjusts active CronJobs.
+ * v3.18.26: the scheduler reads the DB table `BackupSchedule`. (The env
+ * variables BACKUP_SCHEDULE / BACKUP_RETENTION_DAYS never started a backup by
+ * themselves; since 9.3 they are the defaults of "Empfohlene Sicherung
+ * einrichten" in the BCP.) The reloader checks every 60s whether schedules
+ * changed and adjusts active CronJobs.
  */
 export function startBackupScheduler() {
   const retentionSchedule = process.env['RETENTION_SCHEDULE'] ?? '0 3 * * *';
   log.info({ retentionSchedule }, 'Starting backup scheduler — loading from DB');
 
   // Initial load
-  void reloadSchedules();
+  void reloadSchedules().then(() => warnWithoutSchedules());
 
   // Reloader: re-read the DB every 60s, synchronize schedules
   scheduleReloader = new CronJob('* * * * *', () => { void reloadSchedules(); }, null, true, 'UTC');
@@ -94,6 +104,16 @@ export function startBackupScheduler() {
   return { scheduleReloader, retentionJob };
 }
 
+/** 9.3: a clear start-up warning when no automatic mailbox backup is configured. */
+async function warnWithoutSchedules(): Promise<void> {
+  try {
+    const n = await prisma.backupSchedule.count({ where: { enabled: true, scope: 'full' } });
+    if (n === 0) {
+      log.warn('No automatic full backup is configured — BCP → Backup & Restore → Zeitpläne → "Empfohlene Sicherung einrichten"');
+    }
+  } catch { /* informational only */ }
+}
+
 /** Signature each registered CronJob was created with (9.1.x: scope/format/target changes re-register). */
 const activeSignatures = new Map<string, string>();
 
@@ -111,6 +131,16 @@ async function retentionEnforcedSince(now: Date): Promise<Date> {
   const raw = await redis.get(RETENTION_SINCE_KEY);
   const since = raw ? new Date(raw) : now;
   return Number.isNaN(since.getTime()) ? now : since;
+}
+
+/** Every stored object of a job: the archive plus companions (9.3: system backup manifest). */
+export function jobObjectKeys(job: { downloadUrl: string | null; progressMeta?: unknown }): string[] {
+  const keys = job.downloadUrl ? [job.downloadUrl] : [];
+  const meta = job.progressMeta && typeof job.progressMeta === 'object' ? job.progressMeta as { extraKeys?: unknown } : {};
+  if (Array.isArray(meta.extraKeys)) {
+    for (const k of meta.extraKeys) if (typeof k === 'string' && k && !keys.includes(k)) keys.push(k);
+  }
+  return keys;
 }
 
 /**
@@ -132,20 +162,104 @@ export async function purgeExpiredScheduleBackups(scheduleId: string, retentionD
   const keep = newestArchivePerMailbox(completed);
   const expired = (await prisma.backupJob.findMany({
     where: { scheduleId, status: { in: ['COMPLETED', 'FAILED', 'EXPIRED'] }, createdAt: window },
-    select: { id: true, downloadUrl: true },
+    select: { id: true, downloadUrl: true, progressMeta: true },
     take: 500,
   })).filter((j) => !keep.has(j.id));
   let removed = 0;
   for (const j of expired) {
-    if (j.downloadUrl) {
-      try { await deleteObject(j.downloadUrl); }
-      catch (err) { log.warn({ err, jobId: j.id }, 'Expired backup object could not be deleted — kept'); continue; }
+    let ok = true;
+    for (const key of jobObjectKeys(j)) {
+      try { await deleteObject(key); }
+      catch (err) { log.warn({ err, jobId: j.id, key }, 'Expired backup object could not be deleted — kept'); ok = false; break; }
     }
+    if (!ok) continue;
     await prisma.backupJob.delete({ where: { id: j.id } }).catch(() => undefined);
     removed++;
   }
   if (removed > 0) log.info({ scheduleId, removed, retentionDays }, 'Expired scheduled backups removed');
   return removed;
+}
+
+type ScheduleRow = ScheduleData & { id: string };
+
+/** Starts the backup of a schedule (scope full / user / system); null for an invalid row. */
+export async function startScheduleBackup(schedule: ScheduleRow, triggeredBy: 'CRON' | 'MANUAL'): Promise<{ jobId: string; done: Promise<JobOutcome> } | null> {
+  if (schedule.scope === 'full') return runFullBackup({ triggeredBy, scheduleId: schedule.id });
+  if (schedule.scope === 'system') return runSystemBackup({ triggeredBy, scheduleId: schedule.id });
+  if (schedule.scope === 'user' && schedule.targetUserId) {
+    return runSingleMailboxBackup({
+      userId: schedule.targetUserId,
+      format: schedule.format === 'mbox' ? 'mbox' : 'zip',
+      triggeredBy,
+      scheduleId: schedule.id,
+    });
+  }
+  return null;
+}
+
+/** lastStatus of a schedule for a finished run: COMPLETED, PARTIAL (some mailboxes failed) or FAILED. */
+export function scheduleStatusOf(o: Pick<JobOutcome, 'status' | 'failed'>): 'COMPLETED' | 'PARTIAL' | 'FAILED' {
+  if (o.status === 'FAILED') return 'FAILED';
+  return o.failed > 0 ? 'PARTIAL' : 'COMPLETED';
+}
+
+/**
+ * After a schedule run finished: record lastRunAt / lastStatus / lastJobId (9.3:
+ * the status of the FINISHED job — it used to be set to COMPLETED as soon as
+ * the job was queued), expire old backups of the schedule and notify the
+ * admins when a scheduled (cron) run failed.
+ */
+export async function finishScheduleRun(schedule: ScheduleRow, outcome: JobOutcome, triggeredBy: 'CRON' | 'MANUAL'): Promise<void> {
+  const status = scheduleStatusOf(outcome);
+  await prisma.backupSchedule.update({
+    where: { id: schedule.id },
+    data: { lastRunAt: new Date(), lastStatus: status, lastJobId: outcome.jobId },
+  }).catch((err: unknown) => log.warn({ err, scheduleId: schedule.id }, 'Schedule status update failed'));
+  if (status !== 'FAILED') {
+    try {
+      const cur = await prisma.backupSchedule.findUnique({ where: { id: schedule.id }, select: { retentionDays: true } });
+      if (cur) await purgeExpiredScheduleBackups(schedule.id, cur.retentionDays);
+    } catch (err) {
+      log.warn({ err, scheduleId: schedule.id }, 'Backup retention cleanup failed');
+    }
+  }
+  if (status !== 'COMPLETED' && triggeredBy === 'CRON') await notifyBackupFailure(schedule, outcome);
+}
+
+const NOTIFY_THROTTLE_SEC = 6 * 3600;
+
+/**
+ * 9.3: failure notice into the INBOX of every active ORGANIZATION_MANAGEMENT /
+ * SERVER_MANAGEMENT admin (internal notification, no SMTP), at most once per
+ * schedule every 6 hours.
+ */
+export async function notifyBackupFailure(schedule: Pick<ScheduleRow, 'id' | 'name' | 'scope'>, outcome: JobOutcome): Promise<number> {
+  try {
+    const redis = getRedisClient() as unknown as { set(k: string, v: string, ex: 'EX', s: number, nx: 'NX'): Promise<string | null> };
+    if ((await redis.set(`backup:notify:${schedule.id}`, '1', 'EX', NOTIFY_THROTTLE_SEC, 'NX')) !== 'OK') return 0;
+    const admins = await prisma.user.findMany({
+      where: { active: true, role: { in: ['ORGANIZATION_MANAGEMENT', 'SERVER_MANAGEMENT'] } },
+      select: { id: true },
+      take: 20,
+    });
+    const settings = await prisma.serverSettings.findUnique({ where: { id: 'singleton' }, select: { publicHostname: true } }).catch(() => null);
+    const host = settings?.publicHostname ?? 'CoreMail';
+    const notice = failureNotice(schedule, outcome, host);
+    for (const a of admins) {
+      await notifyUserInbox({
+        recipientUserId: a.id,
+        fromName: 'CoreMail Backup',
+        fromAddr: `postmaster@${host}`,
+        subject: notice.subject,
+        bodyText: notice.bodyText,
+      });
+    }
+    log.warn({ scheduleId: schedule.id, admins: admins.length, status: outcome.status }, 'Backup failure notice sent to admins');
+    return admins.length;
+  } catch (err) {
+    log.error({ err, scheduleId: schedule.id }, 'Backup failure notice could not be sent');
+    return 0;
+  }
 }
 
 /**
@@ -186,29 +300,14 @@ async function reloadSchedules(): Promise<void> {
               // v7.1.0: only one instance runs this fire; no overlap with a still-running run
               const outcome = await scheduleTick(lockRedis(), schedule.id, async () => {
                 log.info({ scheduleId: schedule.id, name: schedule.name }, 'Schedule-triggered backup starting');
-                let started: { done: Promise<void> } | null = null;
-                if (schedule.scope === 'full') {
-                  started = await runFullBackup({ triggeredBy: 'CRON', scheduleId: schedule.id });
-                } else if (schedule.scope === 'user' && schedule.targetUserId) {
-                  started = await runSingleMailboxBackup({
-                    userId: schedule.targetUserId,
-                    format: (schedule.format === 'mbox' ? 'mbox' : 'zip'),
-                    triggeredBy: 'CRON',
-                    scheduleId: schedule.id,
-                  });
+                const row = schedule as unknown as ScheduleRow;
+                const started = await startScheduleBackup(row, 'CRON');
+                if (!started) {
+                  await prisma.backupSchedule.update({ where: { id: schedule.id }, data: { lastRunAt: new Date(), lastStatus: 'INVALID' } }).catch(() => undefined);
+                  return null;
                 }
-                await prisma.backupSchedule.update({
-                  where: { id: schedule.id },
-                  data: { lastRunAt: new Date(), lastStatus: 'COMPLETED' },
-                });
-                // retentionDays: expire older backups of this schedule once the new one is done
-                void (started?.done ?? Promise.resolve())
-                  .then(async () => {
-                    const cur = await prisma.backupSchedule.findUnique({ where: { id: schedule.id }, select: { retentionDays: true } });
-                    if (cur) await purgeExpiredScheduleBackups(schedule.id, cur.retentionDays);
-                  })
-                  .catch((err: unknown) => log.warn({ err, scheduleId: schedule.id }, 'Backup retention cleanup failed'));
-                return started;
+                await prisma.backupSchedule.update({ where: { id: schedule.id }, data: { lastJobId: started.jobId, lastStatus: 'RUNNING' } }).catch(() => undefined);
+                return { done: started.done.then((o) => finishScheduleRun(row, o, 'CRON')) };
               });
               if (outcome !== 'ran') {
                 log.info({ scheduleId: schedule.id, outcome }, 'Scheduled backup skipped (handled by another instance or still running)');
@@ -219,6 +318,9 @@ async function reloadSchedules(): Promise<void> {
                 where: { id: schedule.id },
                 data: { lastRunAt: new Date(), lastStatus: 'FAILED' },
               }).catch(() => undefined);
+              await notifyBackupFailure(schedule as unknown as ScheduleRow, {
+                jobId: '—', status: 'FAILED', total: 1, failed: 1, errorMsg: err instanceof Error ? err.message : String(err),
+              });
             }
           },
           null,
@@ -247,11 +349,19 @@ interface RunOpts {
   scheduleId?: string;
 }
 
+/** Status of a full backup: all mailboxes failed → FAILED; some failed → COMPLETED with an error text. */
+export function fullBackupOutcome(jobId: string, total: number, failed: number): JobOutcome {
+  if (total > 0 && failed === total) {
+    return { jobId, status: 'FAILED', total, failed, errorMsg: `Alle ${total} Postfach-Sicherungen fehlgeschlagen` };
+  }
+  return { jobId, status: 'COMPLETED', total, failed, errorMsg: failed > 0 ? `${failed} von ${total} Postfach-Sicherungen fehlgeschlagen` : null };
+}
+
 /**
  * v3.18.26 fix: writes ONE master job upfront with status=RUNNING, then
  * child jobs per user. The frontend immediately sees a RUNNING job.
  */
-export async function runFullBackup(opts: RunOpts = {}): Promise<{ jobId: string; done: Promise<void> }> {
+export async function runFullBackup(opts: RunOpts = {}): Promise<{ jobId: string; done: Promise<JobOutcome> }> {
   const startedAt = new Date();
   const masterJob = await prisma.backupJob.create({
     data: {
@@ -264,30 +374,32 @@ export async function runFullBackup(opts: RunOpts = {}): Promise<{ jobId: string
     },
   });
 
-  const work = async (): Promise<void> => {
+  const work = async (): Promise<JobOutcome> => {
+    const hb = new JobHeartbeat(async (meta, progress) => {
+      await prisma.backupJob.update({ where: { id: masterJob.id }, data: { progressMeta: meta as never, ...(progress !== undefined ? { progress } : {}) } });
+    }, { phase: 'user-export' }).start();
     try {
       const users = await prisma.user.findMany({
         where: { active: true },
         select: { id: true, email: true },
       });
       let total = 0;
+      let failed = 0;
       let totalSize = 0n;
       let totalMessages = 0;
 
       for (let i = 0; i < users.length; i++) {
         const user = users[i]!;
         // Progress update on the master job
-        await prisma.backupJob.update({
-          where: { id: masterJob.id },
-          data: {
-            progress: Math.round(((i + 1) / users.length) * 100),
-            progressMeta: { phase: 'user-export', current: i + 1, total: users.length, currentUser: user.email },
-          },
-        }).catch(() => undefined);
+        await hb.update(
+          { phase: 'user-export', current: i + 1, total: users.length, currentUser: user.email },
+          Math.round((i / Math.max(1, users.length)) * 100),
+        );
 
+        const childStarted = new Date();
         try {
           const outPath = join(tmpdir(), `coremail-backup-${user.id}-${Date.now()}.zip`);
-          const { fileCount } = await exportZip(user.id, null, outPath);
+          const { messageCount } = await exportZip(user.id, null, outPath);
           const s3Key = fullBackupUserKey(startedAt, masterJob.id, user.email);
           const fileSize = (await stat(outPath).catch(() => null))?.size ?? 0;
           // Stored encrypted under <s3Key>.enc; the plaintext temp file is removed even on failure
@@ -300,19 +412,21 @@ export async function runFullBackup(opts: RunOpts = {}): Promise<{ jobId: string
               format: 'zip',
               status: 'COMPLETED',
               downloadUrl: stored.key,
-              startedAt,
+              startedAt: childStarted,
               completedAt: new Date(),
-              durationMs: Date.now() - startedAt.getTime(),
+              durationMs: Date.now() - childStarted.getTime(),
               sizeBytes: BigInt(fileSize),
-              messageCount: fileCount,
+              messageCount,
               triggeredBy: opts.triggeredBy ?? 'MANUAL',
+              progressMeta: { phase: 'done', parentJobId: masterJob.id } as never,
               ...(opts.scheduleId ? { scheduleId: opts.scheduleId } : {}),
             },
           });
           total++;
           totalSize += BigInt(fileSize);
-          totalMessages += fileCount;
+          totalMessages += messageCount;
         } catch (err) {
+          failed++;
           log.error({ err, userId: user.id }, 'User backup failed');
           const errorClass = classifyError(err);
           await prisma.backupJob.create({
@@ -323,40 +437,49 @@ export async function runFullBackup(opts: RunOpts = {}): Promise<{ jobId: string
               status: 'FAILED',
               errorMsg: err instanceof Error ? err.message : String(err),
               errorClass,
-              startedAt,
+              startedAt: childStarted,
               completedAt: new Date(),
               triggeredBy: opts.triggeredBy ?? 'MANUAL',
+              progressMeta: { phase: 'failed', parentJobId: masterJob.id } as never,
               ...(opts.scheduleId ? { scheduleId: opts.scheduleId } : {}),
             },
           });
         }
       }
 
+      const outcome = fullBackupOutcome(masterJob.id, users.length, failed);
       const finishedAt = new Date();
+      const meta = hb.stop();
       await prisma.backupJob.update({
         where: { id: masterJob.id },
         data: {
-          status: 'COMPLETED',
+          status: outcome.status,
           progress: 100,
           completedAt: finishedAt,
           durationMs: finishedAt.getTime() - startedAt.getTime(),
           sizeBytes: totalSize,
           messageCount: totalMessages,
-          progressMeta: { phase: 'done', current: total, total: users.length },
+          errorMsg: outcome.errorMsg,
+          ...(failed > 0 ? { errorClass: outcome.status === 'FAILED' ? 'UNKNOWN' : 'PARTIAL' } : {}),
+          progressMeta: { ...meta, phase: 'done', current: total, total: users.length, failed } as never,
         },
       });
-      log.info({ userCount: total, masterJobId: masterJob.id }, 'Full backup complete');
+      log.info({ userCount: total, failed, masterJobId: masterJob.id }, 'Full backup complete');
+      return outcome;
     } catch (err) {
+      hb.stop();
       log.error({ err, masterJobId: masterJob.id }, 'Full backup failed');
+      const errorMsg = err instanceof Error ? err.message : String(err);
       await prisma.backupJob.update({
         where: { id: masterJob.id },
         data: {
           status: 'FAILED',
-          errorMsg: err instanceof Error ? err.message : String(err),
+          errorMsg,
           errorClass: classifyError(err),
           completedAt: new Date(),
         },
       }).catch(() => undefined);
+      return { jobId: masterJob.id, status: 'FAILED', total: 0, failed: 0, errorMsg };
     }
   };
   // v7.1.0: done settles when the backup has finished (scheduler run lock)
@@ -374,7 +497,7 @@ export async function runSingleMailboxBackup(opts: {
   folderIds?: string[] | null;
   triggeredBy?: string;
   scheduleId?: string;
-}): Promise<{ jobId: string; done: Promise<void> }> {
+}): Promise<{ jobId: string; done: Promise<JobOutcome> }> {
   const startedAt = new Date();
   const job = await prisma.backupJob.create({
     data: {
@@ -388,27 +511,31 @@ export async function runSingleMailboxBackup(opts: {
     },
   });
 
-  const work = async (): Promise<void> => {
+  const work = async (): Promise<JobOutcome> => {
+    const hb = new JobHeartbeat(async (meta) => {
+      await prisma.backupJob.update({ where: { id: job.id }, data: { progressMeta: meta as never } });
+    }, { phase: 'export' }).start();
     try {
       const outPath = join(tmpdir(), `coremail-mbox-${opts.userId}-${Date.now()}.${opts.format === 'mbox' ? 'mbox' : 'zip'}`);
       const folderIds = opts.folderIds ?? null;
-      let fileCount = 0;
+      let messageCount = 0;
 
       if (opts.format === 'mbox') {
-        await exportMbox(opts.userId, folderIds, outPath);
+        messageCount = (await exportMbox(opts.userId, folderIds, outPath)).messageCount;
       } else {
-        const r = await exportZip(opts.userId, folderIds, outPath);
-        fileCount = r.fileCount;
+        messageCount = (await exportZip(opts.userId, folderIds, outPath)).messageCount;
       }
 
       const s3Key = `mailbox/${opts.userId}/${Date.now()}.${opts.format === 'mbox' ? 'mbox' : 'zip'}`;
       const contentType = opts.format === 'mbox' ? 'application/mbox' : 'application/zip';
       const fileSize = (await stat(outPath).catch(() => null))?.size ?? 0;
+      await hb.update({ phase: 'upload' });
       // Stored encrypted under <s3Key>.enc; the plaintext temp file is removed even on failure
       const stored = await uploadToS3(outPath, s3Key, contentType).finally(() => unlink(outPath).catch(() => undefined));
       const downloadUrl = await getSignedDownloadUrl(stored.key);
 
       const finishedAt = new Date();
+      const meta = hb.stop();
       await prisma.backupJob.update({
         where: { id: job.id },
         data: {
@@ -418,46 +545,29 @@ export async function runSingleMailboxBackup(opts: {
           completedAt: finishedAt,
           durationMs: finishedAt.getTime() - startedAt.getTime(),
           sizeBytes: BigInt(fileSize),
-          messageCount: fileCount,
-          expiresAt: new Date(Date.now() + 3600 * 1000),
+          messageCount,
+          progressMeta: { ...meta, phase: 'done' } as never,
         },
       });
+      return { jobId: job.id, status: 'COMPLETED', total: 1, failed: 0, errorMsg: null };
     } catch (err) {
+      hb.stop();
       log.error({ err, jobId: job.id }, 'Single-mailbox backup failed');
+      const errorMsg = err instanceof Error ? err.message : String(err);
       await prisma.backupJob.update({
         where: { id: job.id },
         data: {
           status: 'FAILED',
-          errorMsg: err instanceof Error ? err.message : String(err),
+          errorMsg,
           errorClass: classifyError(err),
           completedAt: new Date(),
         },
       }).catch(() => undefined);
+      return { jobId: job.id, status: 'FAILED', total: 1, failed: 1, errorMsg };
     }
   };
   const done = runInBackground(work, job.id);
   return { jobId: job.id, done };
-}
-
-/** Runs the job body after the response (setImmediate); never rejects. */
-function runInBackground(work: () => Promise<void>, jobId: string): Promise<void> {
-  return new Promise<void>((resolve) => {
-    setImmediate(() => {
-      work().catch((err: unknown) => log.error({ err, jobId }, 'Backup job crashed')).finally(resolve);
-    });
-  });
-}
-
-/**
- * Classifies errors by typical backup failure modes for RTO reporting.
- */
-function classifyError(err: unknown): string {
-  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
-  if (msg.includes('econn') || msg.includes('etimedout') || msg.includes('network')) return 'NETWORK';
-  if (msg.includes('nosuchbucket') || msg.includes('s3') || msg.includes('storage') || msg.includes('enospc')) return 'STORAGE';
-  if (msg.includes('access denied') || msg.includes('permission') || msg.includes('eacces')) return 'PERMISSION';
-  if (msg.includes('parse') || msg.includes('corrupt') || msg.includes('invalid')) return 'CORRUPT';
-  return 'UNKNOWN';
 }
 
 /**

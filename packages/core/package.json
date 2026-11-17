@@ -1,6 +1,6 @@
 {
   "name": "@coremail/core",
-  "version": "9.2.0",
+  "version": "9.3.0",
   "private": true,
   "type": "module",
   "exports": {
@@ -14,7 +14,8 @@
     "./vcard": "./dist/calendar/vcard.js",
     "./recurrence": "./dist/calendar/recurrence.js",
     "./http": "./dist/http/index.js",
-    "./ssrf": "./dist/net/ssrf.js"
+    "./ssrf": "./dist/net/ssrf.js",
+    "./tls-errors": "./dist/tls/tls-errors.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

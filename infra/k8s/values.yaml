@@ -87,6 +87,12 @@ app:
   # Any other string is passed through verbatim ("", "1", "10.0.0.0/8", …).
   trustProxy: auto
 
+  # Branding defaults (CoreMail >= 9.3; empty = "CoreMail" / #0078d4). Used while
+  # nothing is set in BCP → Organisation → Branding; the BCP values win.
+  branding:
+    name: ""              # BRANDING_NAME  — product name, 1–40 characters
+    color: ""             # BRANDING_COLOR — primary colour #rrggbb
+
   # COREMAIL_PUBLIC_URL — public base URL (SSO redirect URIs). Empty = derived
   # from the server settings (BCP). Typically https://<ingress.host>
   publicUrl: ""

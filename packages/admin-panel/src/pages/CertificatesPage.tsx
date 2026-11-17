@@ -7,7 +7,7 @@
  * - Generating a self-signed certificate
  * - Renewing / deleting certificates
  */
-import { useId, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { Modal as AccessibleModal } from '../components/Modal.js';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
@@ -15,17 +15,24 @@ import {
   ShieldCheck, Plus, RefreshCw, Trash2, Upload,
   ChevronDown, ChevronUp, X, Loader2, AlertCircle,
   Lock, LockOpen, Server, Pencil,
+  CheckCircle2, AlertTriangle, XCircle, ListChecks,
 } from 'lucide-react';
 import { api } from '../api/client.js';
 import { useT } from '../i18n/useT.js';
 import { usePermissions } from '../hooks/usePermissions.js';
 import { Can } from '../components/Can.js';
 import { DataTable, type Column } from '../components/DataTable.js';
+import {
+  acmeActionLabel, acmeErrorHint, canStartAcme, CHECK_LABELS, parseDomainList,
+  type CertStatus, type CheckStatus, type PreflightReport,
+} from '../lib/certStatus.js';
+import { SERVED_CERT_QUERY_KEY, ServedCertTable, ServedCertWarning } from '../components/ServedCert.js';
+import { Toggle } from '../components/Toggle.js';
+import { hasMailProtocols, mailProtocolHolder, mailServicesFor, MAIL_PROTOCOLS_LABEL } from '../lib/mailProtocols.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 type CertType   = 'LETSENCRYPT' | 'CUSTOM' | 'SELF_SIGNED';
-type CertStatus = 'PENDING' | 'ACTIVE' | 'EXPIRING' | 'EXPIRED' | 'ERROR' | 'RENEWING';
 
 interface Certificate {
   id:               string;
@@ -40,8 +47,13 @@ interface Certificate {
   isActiveHttps:    boolean;
   isActiveProtocol: boolean;
   acmeEmail:        string | null;
+  /** Let's Encrypt staging environment (test certificate, not trusted by browsers) */
+  acmeStaging?:     boolean;
   lastError:        string | null;
+  /** Classified failure (connection, dns, caa, rate-limited, timeout, …) */
+  lastErrorCode?:   string | null;
   createdAt:        string;
+  updatedAt?:       string;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -74,16 +86,17 @@ function StatusBadge({ status, expiresAt }: { status: CertStatus; expiresAt: str
   return <span className={`${base} bg-surface-2 text-fg-muted`}>{status}</span>;
 }
 
-function TypeBadge({ type }: { type: CertType }) {
+function TypeBadge({ type, staging }: { type: CertType; staging?: boolean | undefined }) {
   const base = 'px-2 py-0.5 rounded text-xs font-medium';
+  if (type === 'LETSENCRYPT' && staging) {
+    return <span className={`${base} bg-warning-bg text-warning-fg`} title="Test-Zertifikat der Let's Encrypt Staging-Umgebung — von Browsern nicht vertraut">Let's Encrypt · Staging</span>;
+  }
   if (type === 'LETSENCRYPT') return <span className={`${base} bg-info-bg text-info-fg`}>Let's Encrypt</span>;
   if (type === 'CUSTOM')      return <span className={`${base} bg-info-bg text-info-fg`}>Eigenes</span>;
   return <span className={`${base} bg-surface-2 text-fg-muted`}>Self-Signed</span>;
 }
 
 // Mail protocols only — HTTPS is activated via the lock icon, not via services
-const ALL_SERVICES = ['SMTP', 'IMAP', 'POP3'];
-
 const SERVICE_COLORS: Record<string, string> = {
   SMTP: 'bg-success-bg text-success-fg',
   IMAP: 'bg-success-bg text-success-fg',
@@ -91,72 +104,30 @@ const SERVICE_COLORS: Record<string, string> = {
 };
 
 /**
- * Service selection with exclusivity display.
- * Each service can only be assigned to one certificate at a time.
- * Services already claimed by another cert are marked orange.
+ * 9.3: SMTP, IMAP and POP3 always share one certificate — one switch
+ * (lib/mailProtocols.ts). Shows which certificate currently holds the mail
+ * protocols and loses them when the switch is saved as on.
  */
-function ServiceSelector({
-  selected, onChange, allCerts, currentCertId,
+function MailProtocolSwitch({
+  on, onChange, allCerts, currentCertId,
 }: {
-  selected:       string[];
-  onChange:       (s: string[]) => void;
+  on:             boolean;
+  onChange:       (on: boolean) => void;
   allCerts?:      Certificate[];
   currentCertId?: string; // undefined = new cert
 }) {
-  // Determine which services are already claimed by other certs
-  const takenBy: Record<string, string> = {};
-  if (allCerts) {
-    for (const cert of allCerts) {
-      if (cert.id === currentCertId) continue;
-      for (const svc of cert.services) {
-        takenBy[svc] = cert.name;
-      }
-    }
-  }
-
-  // Services that are currently selected AND will be taken over from another cert
-  const beingTransferred = ALL_SERVICES.filter(s => selected.includes(s) && takenBy[s]);
-
-  function toggle(svc: string) {
-    onChange(selected.includes(svc) ? selected.filter(s => s !== svc) : [...selected, svc]);
-  }
-
+  const holder = mailProtocolHolder(allCerts, currentCertId);
   return (
     <div>
-      <div className="flex flex-wrap gap-1.5">
-        {ALL_SERVICES.map(svc => {
-          const isSelected  = selected.includes(svc);
-          const takenByName = !isSelected ? takenBy[svc] : undefined;
-          return (
-            <button
-              key={svc}
-              type="button"
-              onClick={() => toggle(svc)}
-              title={takenByName
-                ? `Aktuell bei „${takenByName}" — wird übernommen wenn gespeichert`
-                : undefined}
-              className={`px-2 py-1 rounded text-xs font-medium border transition-colors ${
-                isSelected
-                  ? 'bg-accent border-info-line text-white'
-                  : takenByName
-                  ? 'bg-warning-bg border-warning-line text-warning-fg hover:border-info-line'
-                  : 'bg-surface border-line-strong text-fg-muted hover:border-info-line'
-              }`}>
-              {svc}
-              {takenByName && !isSelected && <span className="ml-1 text-warning-fg" aria-hidden="true">⚠</span>}
-            </button>
-          );
-        })}
+      <div className="flex items-center gap-3">
+        <Toggle active={on} onToggle={() => onChange(!on)} label={MAIL_PROTOCOLS_LABEL} />
+        <span className="text-sm font-medium text-fg-muted" aria-hidden="true">{MAIL_PROTOCOLS_LABEL}</span>
       </div>
-      {/* Notice when services are taken over from other certs */}
-      {beingTransferred.length > 0 && (
+      {on && holder && (
         <p className="mt-2 text-xs text-warning-fg bg-warning-bg border border-warning-line rounded px-2 py-1">
-          ⚠️ {beingTransferred.map(s => `${s} (von „${takenBy[s]}")`).join(', ')} {beingTransferred.length === 1 ? 'wird' : 'werden'} diesem Zertifikat übertragen und beim anderen entfernt.
+          Aktuell bei „{holder}" — SMTP, IMAP und POP3 werden beim Speichern diesem Zertifikat übertragen und beim anderen entfernt.
         </p>
       )}
-      <p className="mt-2 text-xs text-fg-subtle">
-        Jeder Service kann nur einem Zertifikat gleichzeitig zugeordnet sein.
-      </p>
     </div>
   );
 }
@@ -197,7 +168,7 @@ export function CertificatesPage() {
 
   const renewMutation = useMutation({
     mutationFn: (id: string) => api.post(`/admin/certificates/${id}/renew`),
-    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['admin-certificates'] }); toast.success('Erneuerung gestartet'); },
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['admin-certificates'] }); toast.success('Let\'s Encrypt-Vorgang gestartet'); },
     onError: (err: unknown) => toast.error((err as { message?: string })?.message ?? 'Erneuerung fehlgeschlagen'),
   });
 
@@ -223,7 +194,8 @@ export function CertificatesPage() {
     mutationFn: (id: string) => api.post(`/admin/certificates/${id}/activate-protocol`),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['admin-certificates'] });
-      toast.success('Protokoll-TLS aktiviert — SMTP/IMAP/POP3 laden neu');
+      setTimeout(() => void qc.invalidateQueries({ queryKey: SERVED_CERT_QUERY_KEY }), 2_000);
+      toast.success('Zertifikat wird jetzt für SMTP/IMAP/POP3 verwendet');
     },
     onError: (err: unknown) => {
       const msg = (err as { message?: string })?.message ?? 'Aktivierung fehlgeschlagen';
@@ -267,7 +239,7 @@ export function CertificatesPage() {
         </div>
       ),
     },
-    { key: 'type', header: t('cert_col_type'), sortValue: (c) => c.type, cell: (cert) => <TypeBadge type={cert.type} /> },
+    { key: 'type', header: t('cert_col_type'), sortValue: (c) => c.type, cell: (cert) => <TypeBadge type={cert.type} staging={cert.acmeStaging} /> },
     { key: 'status', header: t('cert_col_status'), sortValue: (c) => c.status, cell: (cert) => <StatusBadge status={cert.status} expiresAt={cert.expiresAt} /> },
     {
       key: 'expires', header: t('cert_col_expires'), sortValue: (c) => (c.expiresAt ? new Date(c.expiresAt) : null),
@@ -316,40 +288,33 @@ export function CertificatesPage() {
                             <Server size={14} />
                           </span>
                         ) : isCertUsable(cert.status, cert.expiresAt) ? (
-                          <button aria-label="Protokoll-TLS aktivieren (SMTP/IMAP/POP3)"
+                          <button aria-label="Sofort für SMTP/IMAP/POP3 verwenden"
                             onClick={() => activateProtocolMutation.mutate(cert.id)}
-                            disabled={activateProtocolMutation.isPending}
-                            title="Protokoll-TLS aktivieren (SMTP/IMAP/POP3)"
+                            disabled={activateProtocolMutation.isPending || (cert.type === 'LETSENCRYPT' && !!cert.acmeStaging)}
+                            title={cert.type === 'LETSENCRYPT' && cert.acmeStaging ? 'Staging-Zertifikate werden nie für SMTP/IMAP/POP3 verwendet' : 'Sofort für SMTP/IMAP/POP3 verwenden'}
                             className="p-1.5 text-fg-subtle hover:text-info-fg hover:bg-info-bg rounded transition-colors disabled:opacity-40">
                             <Server size={14} />
                           </button>
                         ) : null}
-                        {cert.type === 'LETSENCRYPT' && (
-                          <button aria-label={
-                              cert.status === 'PENDING'   ? 'ACME-Prozess läuft noch — bitte warten' :
-                              cert.status === 'RENEWING'  ? 'Erneuerung läuft…' :
-                              cert.status === 'EXPIRED'   ? 'Abgelaufen — jetzt erneuern' :
-                              cert.status === 'EXPIRING'  ? `Läuft in ${daysUntil(cert.expiresAt) ?? '?'} Tagen ab — jetzt erneuern${cert.autoRenew ? ' (Auto-Renew aktiv)' : ''}` :
-                              cert.status === 'ERROR'     ? 'Letzte Erneuerung fehlgeschlagen — erneut versuchen' :
-                              'Jetzt erneuern'
-                            }
-                            onClick={() => renewMutation.mutate(cert.id)}
-                            disabled={cert.status === 'RENEWING' || cert.status === 'PENDING'}
-                            title={
-                              cert.status === 'PENDING'   ? 'ACME-Prozess läuft noch — bitte warten' :
-                              cert.status === 'RENEWING'  ? 'Erneuerung läuft…' :
-                              cert.status === 'EXPIRED'   ? 'Abgelaufen — jetzt erneuern' :
-                              cert.status === 'EXPIRING'  ? `Läuft in ${daysUntil(cert.expiresAt) ?? '?'} Tagen ab — jetzt erneuern${cert.autoRenew ? ' (Auto-Renew aktiv)' : ''}` :
-                              cert.status === 'ERROR'     ? 'Letzte Erneuerung fehlgeschlagen — erneut versuchen' :
-                              'Jetzt erneuern'
-                            }
-                            className={`p-1.5 rounded transition-colors disabled:opacity-40 hover:text-info-fg hover:bg-info-bg ${
-                              cert.status === 'EXPIRED' || cert.status === 'ERROR' ? 'text-danger-fg'
-                              : cert.status === 'EXPIRING' ? 'text-warning-fg'
-                              : 'text-fg-subtle'}`}>
-                            <RefreshCw size={14} className={(cert.status === 'RENEWING' || cert.status === 'PENDING') ? 'animate-spin' : ''} />
-                          </button>
-                        )}
+                        {cert.type === 'LETSENCRYPT' && (() => {
+                          // 9.2.x: a retry is possible after every failure and for runs left
+                          // over by a server restart; never while a live run is in progress.
+                          const label = acmeActionLabel(cert);
+                          const startable = canStartAcme(cert);
+                          const running = (cert.status === 'RENEWING' || cert.status === 'PENDING') && !startable;
+                          return (
+                            <button aria-label={label}
+                              onClick={() => renewMutation.mutate(cert.id)}
+                              disabled={!startable || renewMutation.isPending}
+                              title={label}
+                              className={`p-1.5 rounded transition-colors disabled:opacity-40 hover:text-info-fg hover:bg-info-bg ${
+                                cert.status === 'EXPIRED' || cert.status === 'ERROR' || (startable && (cert.status === 'PENDING' || cert.status === 'RENEWING')) ? 'text-danger-fg'
+                                : cert.status === 'EXPIRING' ? 'text-warning-fg'
+                                : 'text-fg-subtle'}`}>
+                              <RefreshCw size={14} className={running ? 'animate-spin' : ''} />
+                            </button>
+                          );
+                        })()}
                         <button
                           onClick={() => setEditingCert(cert)}
                           title="Bearbeiten (Name, Services, Auto-Renew)" aria-label={`${t('tb_edit')}: ${cert.name}`}
@@ -396,20 +361,34 @@ export function CertificatesPage() {
         </div>
       )}
 
+      {/* 9.3: what the mail ports really serve */}
+      <ServedCertWarning />
+      <ServedCertTable />
+
       {/* Status banners */}
-      {certs.some(c => c.status === 'PENDING' || c.status === 'RENEWING') && (
+      {certs.some(c => (c.status === 'PENDING' || c.status === 'RENEWING') && !canStartAcme(c)) && (
         <div className="mb-3 px-4 py-3 bg-info-bg border border-info-line rounded-xl flex items-center gap-2 text-sm text-info-fg" role="status">
           <Loader2 size={14} className="animate-spin shrink-0" aria-hidden="true" />
-          <span>ACME-Prozess läuft… Let's Encrypt verifiziert die Domain über <strong>Port 80</strong> (<code className="font-mono text-xs bg-info-bg px-1 rounded">/.well-known/acme-challenge/</code>). Das dauert 1–3 Minuten.</span>
+          <span>ACME-Prozess läuft… Let's Encrypt verifiziert die Domain über <strong>Port 80</strong> (<code className="font-mono text-xs bg-info-bg px-1 rounded">/.well-known/acme-challenge/</code>). Das dauert meist unter einer Minute, höchstens 5 Minuten.</span>
         </div>
       )}
       {certs.some(c => c.status === 'ERROR') && (
         <div className="mb-3 px-4 py-3 bg-danger-bg border border-danger-line rounded-xl flex items-start gap-2 text-sm text-danger-fg" role="alert">
           <AlertCircle size={14} className="shrink-0 mt-0.5" aria-hidden="true" />
-          <span>
-            <strong>Zertifikat fehlgeschlagen.</strong> Häufigste Ursache: <strong>Port 80</strong> muss öffentlich erreichbar sein (ACME HTTP-01 Challenge).
-            {' '}Details: Zeile aufklappen (<ChevronDown size={12} className="inline mb-0.5" aria-hidden="true" />).
-          </span>
+          <div className="space-y-1">
+            <p>
+              <strong>Zertifikat fehlgeschlagen.</strong>{' '}
+              Vollständige Meldung von Let's Encrypt: Zeile aufklappen (<ChevronDown size={12} className="inline mb-0.5" aria-hidden="true" />).
+            </p>
+            <ul className="list-disc pl-4">
+              {certs.filter(c => c.status === 'ERROR').map(c => (
+                <li key={c.id}>
+                  <span className="font-medium">{c.name}</span>
+                  {acmeErrorHint(c.lastErrorCode) ? <>: {acmeErrorHint(c.lastErrorCode)}</> : null}
+                </li>
+              ))}
+            </ul>
+          </div>
         </div>
       )}
 
@@ -469,7 +448,7 @@ export function CertificatesPage() {
                               <p className="text-xs text-fg-subtle">Protokoll-TLS (SMTP/IMAP/POP3)</p>
                               <p className="flex items-center gap-1 text-fg-muted">
                                 {cert.isActiveProtocol
-                                  ? <><Server size={12} className="text-success-fg" /> <span className="text-success-fg font-medium">Aktiv (465 / 993 / 995)</span></>
+                                  ? <><Server size={12} className="text-success-fg" /> <span className="text-success-fg font-medium">Aktiv — SMTP/IMAP/POP3 verwenden dieses Zertifikat</span></>
                                   : <><Server size={12} className="text-fg-subtle" /> <span className="text-fg-subtle">Inaktiv</span></>
                                 }
                               </p>
@@ -480,13 +459,32 @@ export function CertificatesPage() {
                                 <p className="text-fg-muted">{cert.acmeEmail}</p>
                               </div>
                             )}
+                            {cert.type === 'LETSENCRYPT' && (
+                              <div>
+                                <p className="text-xs text-fg-subtle">Let's Encrypt-Umgebung</p>
+                                <p className={cert.acmeStaging ? 'text-warning-fg' : 'text-fg-muted'}>
+                                  {cert.acmeStaging ? 'Staging (Test, nicht vertrauenswürdig)' : 'Produktion'}
+                                </p>
+                              </div>
+                            )}
                           </div>
                           {cert.lastError && (
                             <div className="col-span-2 p-3 bg-danger-bg border border-danger-line rounded">
                               <p className="text-xs font-semibold text-danger-fg mb-1 flex items-center gap-1">
                                 <AlertCircle size={12} /> Fehlermeldung
                               </p>
+                              {acmeErrorHint(cert.lastErrorCode) && (
+                                <p className="text-sm text-danger-fg mb-2">{acmeErrorHint(cert.lastErrorCode)}</p>
+                              )}
                               <pre className="text-xs text-danger-fg whitespace-pre-wrap break-words font-mono leading-relaxed">{cert.lastError}</pre>
+                              {cert.type === 'LETSENCRYPT' && canStartAcme(cert) && (
+                                <Can area="servers" access="write">
+                                  <button type="button" onClick={() => renewMutation.mutate(cert.id)} disabled={renewMutation.isPending}
+                                    className="btn-secondary mt-2 flex items-center gap-1.5 text-xs disabled:opacity-40">
+                                    <RefreshCw size={13} aria-hidden="true" /> Erneut versuchen
+                                  </button>
+                                </Can>
+                              )}
                             </div>
                           )}
                         </div>
@@ -544,21 +542,52 @@ export function CertificatesPage() {
 
 // ── Let's Encrypt Modal ───────────────────────────────────────────────────────
 
+interface AcmeSuggestions {
+  publicHostname: string | null;
+  domain: string | null;
+  sans: Array<{ name: string; resolvesHere: boolean; message: string }>;
+  preselectServices: string[];
+}
+
 function LetsEncryptModal({ onClose, allCerts }: { onClose: () => void; allCerts: Certificate[] }) {
   const qc = useQueryClient();
   const [name, setName]         = useState('');
   const [domains, setDomains]   = useState('');
   const [email, setEmail]       = useState('');
-  const [services, setServices] = useState<string[]>([]);
+  const [mail, setMail]         = useState(false);
   const [autoRenew, setAutoRenew] = useState(true);
   const [staging, setStaging]   = useState(false);
+  // 9.3: defaults for the public host name — mail services preselected,
+  // autodiscover./autoconfig. offered as additional names (on when DNS points here)
+  const [extraSans, setExtraSans] = useState<Record<string, boolean>>({});
+  const [prefilled, setPrefilled] = useState(false);
+  const { data: suggest } = useQuery<AcmeSuggestions>({
+    queryKey: ['admin-certificates-acme-suggestions'],
+    queryFn: () => api.get<AcmeSuggestions>('/admin/certificates/acme-suggestions'),
+    staleTime: 60_000,
+  });
+  useEffect(() => {
+    if (prefilled || !suggest?.publicHostname) return;
+    setPrefilled(true);
+    setExtraSans(Object.fromEntries(suggest.sans.map(x => [x.name, x.resolvesHere])));
+    if (!domains.trim()) {
+      setDomains(suggest.publicHostname);
+      if (!name.trim()) setName(suggest.publicHostname);
+      setMail(hasMailProtocols(suggest.preselectServices));
+    }
+  }, [suggest, prefilled, domains, name]);
+  const baseDomains = parseDomainList(domains);
+  const forPublicHost = !!suggest?.publicHostname && baseDomains.includes(suggest.publicHostname);
+  const sanOptions = forPublicHost ? (suggest?.sans ?? []).filter(x => !baseDomains.includes(x.name)) : [];
+  const allDomains = [...new Set([...baseDomains, ...sanOptions.filter(x => extraSans[x.name]).map(x => x.name)])];
 
   const mutation = useMutation({
     mutationFn: () => api.post('/admin/certificates/letsencrypt', {
       name,
-      domains: domains.split('\n').map(d => d.trim()).filter(Boolean),
+      domains: allDomains,
       email,
-      services,
+      // staging certificates never serve SMTP/IMAP/POP3 (refused by the server)
+      services: mailServicesFor(mail && !staging),
       autoRenew,
       staging,
     }),
@@ -568,6 +597,16 @@ function LetsEncryptModal({ onClose, allCerts }: { onClose: () => void; allCerts
       onClose();
     },
     onError: (err: Error) => toast.error(err.message || 'Anfrage fehlgeschlagen'),
+  });
+
+  // 9.2.x: pre-flight — DNS, CAA, local token serving, public fetch and a real
+  // validation by the Let's Encrypt staging environment (no certificate issued).
+  const preflight = useMutation({
+    mutationFn: () => api.post<PreflightReport>('/admin/certificates/preflight', {
+      domains: allDomains,
+      external: true,
+    }),
+    onError: (err: Error) => toast.error(err.message || 'Prüfung fehlgeschlagen'),
   });
 
   return (
@@ -581,14 +620,34 @@ function LetsEncryptModal({ onClose, allCerts }: { onClose: () => void; allCerts
           <textarea value={domains} onChange={e => setDomains(e.target.value)}
             rows={3} className="input font-mono text-sm"
             placeholder={"mail.company.com\nautodiscover.company.com"} />
+          {sanOptions.length > 0 && (
+            <fieldset className="mt-2 space-y-1">
+              <legend className="text-xs text-fg-subtle mb-1">Zusätzliche Namen für Outlook/Thunderbird (Autodiscover/Autoconfig)</legend>
+              {sanOptions.map(x => (
+                <label key={x.name} className="flex items-start gap-2 text-sm cursor-pointer select-none">
+                  <input type="checkbox" className="rounded mt-0.5" checked={!!extraSans[x.name]}
+                    onChange={e => setExtraSans(prev => ({ ...prev, [x.name]: e.target.checked }))} />
+                  <span>
+                    <span className="font-mono">{x.name}</span>
+                    <span className={`block text-xs ${x.resolvesHere ? 'text-fg-subtle' : 'text-warning-fg'}`}>{x.message}</span>
+                  </span>
+                </label>
+              ))}
+            </fieldset>
+          )}
         </Field>
         <Field label="E-Mail (für ACME-Konto)">
           <input type="email" value={email} onChange={e => setEmail(e.target.value)}
             className="input" placeholder="admin@company.com" />
         </Field>
-        <Field label="Services">
-          <ServiceSelector selected={services} onChange={setServices} allCerts={allCerts} />
-        </Field>
+        <div>
+          <MailProtocolSwitch on={mail} onChange={setMail} allCerts={allCerts} />
+          {staging && mail ? (
+            <p className="mt-2 text-xs text-warning-fg">Staging-Zertifikate werden nie für SMTP/IMAP/POP3 verwendet — die Dienste werden nicht zugewiesen.</p>
+          ) : mail ? (
+            <p className="mt-2 text-xs text-fg-subtle">Wird nach der Ausstellung automatisch für SMTP/IMAP/POP3 verwendet.</p>
+          ) : null}
+        </div>
         <div className="flex gap-6">
           <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
             <input type="checkbox" checked={autoRenew} onChange={e => setAutoRenew(e.target.checked)}
@@ -602,10 +661,17 @@ function LetsEncryptModal({ onClose, allCerts }: { onClose: () => void; allCerts
           </label>
         </div>
         <p className="text-xs text-fg-subtle bg-info-bg border border-info-line rounded p-2">
-          <strong>Voraussetzung:</strong> Port 80 muss öffentlich erreichbar sein, damit Let's Encrypt den ACME HTTP-01 Challenge verifizieren kann.
+          <strong>Voraussetzung:</strong> Jede Domain zeigt per DNS auf diesen Server und Port 80 ist aus dem Internet erreichbar, damit Let's Encrypt die Domain prüfen kann.
+          {' '}„Voraussetzungen prüfen" testet das vorab (mit einer echten Prüfung durch die Let's Encrypt Staging-Umgebung, ca. 10–60 Sekunden).
         </p>
+        {preflight.data && <PreflightResult report={preflight.data} />}
         <div className="flex justify-end gap-2 pt-2">
           <button onClick={onClose} className="btn-secondary">Abbrechen</button>
+          <button type="button" onClick={() => preflight.mutate()} disabled={preflight.isPending || allDomains.length === 0}
+            className="btn-secondary flex items-center gap-1.5">
+            {preflight.isPending ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <ListChecks size={14} aria-hidden="true" />}
+            Voraussetzungen prüfen
+          </button>
           <button onClick={() => mutation.mutate()} disabled={mutation.isPending || !name || !domains || !email}
             className="btn-primary flex items-center gap-1.5">
             {mutation.isPending && <Loader2 size={14} className="animate-spin" />}
@@ -617,13 +683,61 @@ function LetsEncryptModal({ onClose, allCerts }: { onClose: () => void; allCerts
   );
 }
 
+// ── Pre-flight result ─────────────────────────────────────────────────────────
+
+const CHECK_TONE: Record<CheckStatus, string> = {
+  ok:    'text-success-fg',
+  warn:  'text-warning-fg',
+  error: 'text-danger-fg',
+  skip:  'text-fg-subtle',
+};
+
+function CheckIcon({ status }: { status: CheckStatus }) {
+  if (status === 'ok')    return <CheckCircle2 size={14} className="text-success-fg shrink-0 mt-0.5" aria-label="OK" />;
+  if (status === 'warn')  return <AlertTriangle size={14} className="text-warning-fg shrink-0 mt-0.5" aria-label="Warnung" />;
+  if (status === 'error') return <XCircle size={14} className="text-danger-fg shrink-0 mt-0.5" aria-label="Fehler" />;
+  return <span className="w-3.5 shrink-0 text-center text-fg-subtle" aria-label="Übersprungen">–</span>;
+}
+
+function PreflightResult({ report }: { report: PreflightReport }) {
+  return (
+    <div className="border border-line rounded-lg p-3 space-y-3 text-sm" role="status">
+      <p className={`font-semibold ${report.ok ? 'text-success-fg' : 'text-danger-fg'}`}>
+        {report.ok ? 'Voraussetzungen erfüllt' : 'Voraussetzungen nicht erfüllt'}
+      </p>
+      {report.domains.map(d => (
+        <div key={d.domain}>
+          <p className="font-mono text-xs text-fg mb-1">{d.domain}</p>
+          <ul className="space-y-1">
+            {d.checks.map(c => (
+              <li key={c.id} className="flex items-start gap-2 text-xs">
+                <CheckIcon status={c.status} />
+                <span className={CHECK_TONE[c.status]}>
+                  <span className="font-medium">{CHECK_LABELS[c.id] ?? c.id}:</span> {c.message}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+      <div className="flex items-start gap-2 text-xs border-t border-line pt-2">
+        <CheckIcon status={report.external.status} />
+        <span className={CHECK_TONE[report.external.status]}>
+          <span className="font-medium">Externe Prüfung (Let's Encrypt Staging):</span> {report.external.message}
+          {acmeErrorHint(report.external.code) && <span className="block mt-1">{acmeErrorHint(report.external.code)}</span>}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 // ── Upload Modal ──────────────────────────────────────────────────────────────
 
 function UploadModal({ onClose, allCerts }: { onClose: () => void; allCerts: Certificate[] }) {
   const qc = useQueryClient();
   const [name, setName]         = useState('');
   const [domains, setDomains]   = useState('');
-  const [services, setServices] = useState<string[]>([]);
+  const [mail, setMail]         = useState(false);
   const [certPem, setCertPem]   = useState('');
   const [keyPem, setKeyPem]     = useState('');
   const [chainPem, setChainPem] = useState('');
@@ -632,7 +746,7 @@ function UploadModal({ onClose, allCerts }: { onClose: () => void; allCerts: Cer
     mutationFn: () => api.post('/admin/certificates/upload', {
       name,
       domains: domains.split('\n').map(d => d.trim()).filter(Boolean),
-      services,
+      services: mailServicesFor(mail),
       certPem,
       keyPem,
       ...(chainPem.trim() ? { chainPem } : {}),
@@ -656,9 +770,7 @@ function UploadModal({ onClose, allCerts }: { onClose: () => void; allCerts: Cer
           <textarea value={domains} onChange={e => setDomains(e.target.value)}
             rows={2} className="input font-mono text-sm" placeholder="mail.company.com" />
         </Field>
-        <Field label="Services">
-          <ServiceSelector selected={services} onChange={setServices} allCerts={allCerts} />
-        </Field>
+        <MailProtocolSwitch on={mail} onChange={setMail} allCerts={allCerts} />
         <Field label="Zertifikat (PEM)">
           <textarea value={certPem} onChange={e => setCertPem(e.target.value)}
             rows={5} className="input font-mono text-xs"
@@ -693,14 +805,14 @@ function SelfSignedModal({ onClose, allCerts }: { onClose: () => void; allCerts:
   const qc = useQueryClient();
   const [name, setName]         = useState('');
   const [domains, setDomains]   = useState('');
-  const [services, setServices] = useState<string[]>([]);
+  const [mail, setMail]         = useState(false);
   const [days, setDays]         = useState(365);
 
   const mutation = useMutation({
     mutationFn: () => api.post('/admin/certificates/self-signed', {
       name,
       domains: domains.split('\n').map(d => d.trim()).filter(Boolean),
-      services,
+      services: mailServicesFor(mail),
       days,
     }),
     onSuccess: () => {
@@ -725,9 +837,7 @@ function SelfSignedModal({ onClose, allCerts }: { onClose: () => void; allCerts:
           <textarea value={domains} onChange={e => setDomains(e.target.value)}
             rows={2} className="input font-mono text-sm" placeholder="localhost" />
         </Field>
-        <Field label="Services">
-          <ServiceSelector selected={services} onChange={setServices} allCerts={allCerts} />
-        </Field>
+        <MailProtocolSwitch on={mail} onChange={setMail} allCerts={allCerts} />
         <Field label="Gültigkeit (Tage)">
           <input type="number" value={days} onChange={e => setDays(Number(e.target.value))}
             min={1} max={3650} className="input w-32" />
@@ -754,18 +864,23 @@ function EditCertModal({ cert, allCerts, onClose }: {
 }) {
   const qc = useQueryClient();
   const [name, setName]         = useState(cert.name);
-  const [services, setServices] = useState<string[]>(cert.services);
+  const [mail, setMail]         = useState(hasMailProtocols(cert.services));
   const [autoRenew, setAutoRenew] = useState(cert.autoRenew);
+  const [staging, setStaging] = useState(!!cert.acmeStaging);
 
   const mutation = useMutation({
-    mutationFn: () => api.put(`/admin/certificates/${cert.id}`, {
+    mutationFn: () => api.put<{ protocolApplied?: boolean }>(`/admin/certificates/${cert.id}`, {
       name,
-      services,
-      ...(cert.type === 'LETSENCRYPT' ? { autoRenew } : {}),
+      services: mailServicesFor(mail),
+      ...(cert.type === 'LETSENCRYPT' ? { autoRenew, acmeStaging: staging } : {}),
     }),
-    onSuccess: () => {
+    onSuccess: (res) => {
       void qc.invalidateQueries({ queryKey: ['admin-certificates'] });
-      toast.success('Zertifikat aktualisiert');
+      // 9.3: the assignment is applied right away — re-check what the ports serve
+      setTimeout(() => void qc.invalidateQueries({ queryKey: SERVED_CERT_QUERY_KEY }), 2_000);
+      toast.success(res?.protocolApplied
+        ? 'Gespeichert — SMTP/IMAP/POP3 verwenden jetzt dieses Zertifikat'
+        : 'Zertifikat aktualisiert');
       onClose();
     },
     onError: (err: unknown) => {
@@ -779,7 +894,7 @@ function EditCertModal({ cert, allCerts, onClose }: {
       <div className="space-y-4">
         {/* Read-only info: type, status, domains */}
         <div className="flex items-center gap-2 flex-wrap">
-          <TypeBadge type={cert.type} />
+          <TypeBadge type={cert.type} staging={cert.acmeStaging} />
           <StatusBadge status={cert.status} expiresAt={cert.expiresAt} />
         </div>
         <div>
@@ -818,14 +933,10 @@ function EditCertModal({ cert, allCerts, onClose }: {
             placeholder="Zertifikat-Name"
           />
         </Field>
-        <Field label="Services">
-          <ServiceSelector
-            selected={services}
-            onChange={setServices}
-            allCerts={allCerts}
-            currentCertId={cert.id}
-          />
-        </Field>
+        <div>
+          <MailProtocolSwitch on={mail} onChange={setMail} allCerts={allCerts} currentCertId={cert.id} />
+          <EditServicesHint cert={cert} wantsMail={mail} staging={staging} />
+        </div>
         {cert.type === 'LETSENCRYPT' && (
           <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
             <input
@@ -836,6 +947,24 @@ function EditCertModal({ cert, allCerts, onClose }: {
             />
             Auto-Renew (automatisch 30 Tage vor Ablauf erneuern)
           </label>
+        )}
+        {cert.type === 'LETSENCRYPT' && (
+          <div>
+            <label className="flex items-center gap-2 text-sm cursor-pointer select-none text-warning-fg">
+              <input
+                type="checkbox"
+                checked={staging}
+                onChange={e => setStaging(e.target.checked)}
+                className="rounded"
+              />
+              Staging-Umgebung (Test)
+            </label>
+            {staging !== !!cert.acmeStaging && (
+              <p className="mt-1 text-xs text-fg-subtle">
+                Gilt ab dem nächsten Let's Encrypt-Vorgang — nach dem Speichern „Erneuern" klicken.
+              </p>
+            )}
+          </div>
         )}
         <div className="flex justify-end gap-2 pt-2">
           <button onClick={onClose} className="btn-secondary">Abbrechen</button>
@@ -850,6 +979,31 @@ function EditCertModal({ cert, allCerts, onClose }: {
       </div>
     </Modal>
   );
+}
+
+/**
+ * 9.3: honest wording — the services ARE the switch for SMTP/IMAP/POP3
+ * (PUT applies the certificate immediately; module level, not inline).
+ */
+function EditServicesHint({ cert, wantsMail, staging }: { cert: Certificate; wantsMail: boolean; staging: boolean }) {
+  const isStaging = cert.type === 'LETSENCRYPT' && staging;
+  let text: string | null = null;
+  let tone = 'text-info-fg bg-info-bg border-info-line';
+  if (wantsMail && isStaging) {
+    text = 'Staging-Zertifikate werden nie für SMTP/IMAP/POP3 verwendet — Speichern wird abgelehnt.';
+    tone = 'text-danger-fg bg-danger-bg border-danger-line';
+  } else if (wantsMail && !cert.isActiveProtocol) {
+    text = isCertUsable(cert.status, cert.expiresAt)
+      ? 'Wird sofort für SMTP/IMAP/POP3 verwendet (Ports 465/587/993/143/995/110) — das bisherige Zertifikat wird abgelöst.'
+      : 'Wird für SMTP/IMAP/POP3 verwendet, sobald das Zertifikat ausgestellt ist.';
+  } else if (!wantsMail && cert.isActiveProtocol) {
+    text = cert.type === 'SELF_SIGNED'
+      ? 'SMTP/IMAP/POP3 brauchen immer ein Zertifikat — bitte die Dienste einem anderen Zertifikat zuweisen.'
+      : 'SMTP/IMAP/POP3 wechseln beim Speichern sofort auf das selbstsignierte Standard-Zertifikat.';
+    tone = 'text-warning-fg bg-warning-bg border-warning-line';
+  }
+  if (!text) return null;
+  return <p className={`mt-2 text-xs border rounded px-2 py-1 ${tone}`} role="status">{text}</p>;
 }
 
 // ── UI-Helpers ────────────────────────────────────────────────────────────────

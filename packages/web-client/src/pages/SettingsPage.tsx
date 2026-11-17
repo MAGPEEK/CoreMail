@@ -29,6 +29,8 @@ import { useAuthStore } from '../store/auth.js';
 import { useLanguageStore } from '../store/language.js';
 import { LANGS } from '../i18n/translations.js';
 import { useT } from '../i18n/useT.js';
+import { useBranding } from '../hooks/useBranding.js';
+import { accentFillChannels, hexToChannels, DEFAULT_ACCENT_RGB } from '../lib/branding.js';
 import { copyToClipboard } from '../api/clipboard.js';
 import toast from 'react-hot-toast';
 
@@ -348,6 +350,11 @@ const THEME_PREVIEW = {
 
 function ThemeSection() {
   const { theme, accentRgb, setTheme, setAccent } = useThemeStore();
+  const { allowUserAccent, primaryColor } = useBranding();
+  // 9.3: the brand colour is the default; a personal choice counts only while the
+  // organisation allows it (lib/branding.ts resolveAccentChannels).
+  const brandFill = accentFillChannels(hexToChannels(primaryColor) ?? DEFAULT_ACCENT_RGB);
+  const followsBrand = !allowUserAccent || accentRgb === null;
 
   return (
     <div className="space-y-6">
@@ -400,31 +407,49 @@ function ThemeSection() {
         </div>
       </div>
 
-      {/* Accent color */}
-      <div className="space-y-3">
-        <p className="text-sm font-medium text-fg-muted">Akzentfarbe</p>
+      {/* Accent color — 9.3: brand default, personal choice only when allowed */}
+      <fieldset className="space-y-3 min-w-0 border-0 p-0 m-0" disabled={!allowUserAccent} aria-describedby="accent-color-hint">
+        <legend className="text-sm font-medium text-fg-muted mb-3">Akzentfarbe</legend>
         <div className="flex flex-wrap gap-3">
+          <button
+            type="button"
+            title="Standard der Organisation"
+            aria-label="Standard der Organisation"
+            aria-pressed={followsBrand}
+            onClick={() => setAccent(null)}
+            className={`w-9 h-9 rounded-full border-2 transition-all flex items-center justify-center disabled:cursor-not-allowed disabled:opacity-60 ${
+              followsBrand ? 'border-line-strong scale-110 shadow-md' : 'border-transparent hover:scale-105'
+            }`}
+            style={{ backgroundColor: `rgb(${brandFill})` }}
+          >
+            {followsBrand && <Check size={14} className="text-white" strokeWidth={3} aria-hidden="true" />}
+          </button>
           {ACCENT_COLORS.map(({ name, hex, rgb }) => {
-            const active = accentRgb === rgb;
+            const active = !followsBrand && accentRgb === rgb;
             return (
               <button
                 key={rgb}
+                type="button"
                 title={name}
+                aria-label={name}
+                aria-pressed={active}
                 onClick={() => setAccent(rgb)}
-                className={`w-9 h-9 rounded-full border-2 transition-all flex items-center justify-center ${
+                className={`w-9 h-9 rounded-full border-2 transition-all flex items-center justify-center disabled:cursor-not-allowed disabled:opacity-60 ${
                   active ? 'border-line-strong scale-110 shadow-md' : 'border-transparent hover:scale-105'
                 }`}
                 style={{ backgroundColor: hex }}
               >
-                {active && <Check size={14} className="text-white" strokeWidth={3} />}
+                {active && <Check size={14} className="text-white" strokeWidth={3} aria-hidden="true" />}
               </button>
             );
           })}
         </div>
-        <p className="text-xs text-fg-subtle">
-          Die Akzentfarbe wird für Schaltflächen, Links und Markierungen verwendet.
+        <p id="accent-color-hint" className="text-xs text-fg-subtle">
+          {allowUserAccent
+            ? 'Die Akzentfarbe wird für Schaltflächen, Links und Markierungen verwendet. Die erste Farbe ist der Standard Ihrer Organisation.'
+            : 'Die Akzentfarbe wird von Ihrer Organisation vorgegeben und kann nicht geändert werden.'}
         </p>
-      </div>
+      </fieldset>
     </div>
   );
 }
@@ -1872,6 +1897,7 @@ function InactivitySection() {
 // ═══════════════════════════════════════════════════════════════════════════════
 function ViewSection() {
   const { density, setDensity, readingPane, setReadingPane, groupByConversation, setGroupByConversation } = useUiPrefs();
+  const { productName } = useBranding();
 
   // Reading pane options
   const paneOptions: { value: ReadingPane; label: string; desc: string; Icon: React.ElementType }[] = [
@@ -1891,7 +1917,7 @@ function ViewSection() {
     <section className="space-y-8">
       <div>
         <h2 className="text-xl font-semibold text-fg mb-1">Ansicht</h2>
-        <p className="text-sm text-fg-muted">Layout und Darstellungsoptionen für CoreMail anpassen.</p>
+        <p className="text-sm text-fg-muted">Layout und Darstellungsoptionen für {productName} anpassen.</p>
       </div>
 
       {/* ── Reading pane ────────────────────────────────────────────────────── */}
@@ -2147,6 +2173,7 @@ function AutoSetupCard({ email, requiresAppPassword }: { email: string; requires
 }
 
 function ExternalClientsSection() {
+  const { productName } = useBranding();
   const { data: cfg, isLoading } = useQuery<ClientConfig>({
     queryKey: ['client-config'],
     queryFn: () => api.get<ClientConfig>('/user/client-config'),
@@ -2191,7 +2218,7 @@ function ExternalClientsSection() {
               </li>
               <li>
                 <strong>OWA im Browser</strong> nutzen — Kalender + Kontakte funktionieren vollständig im
-                CoreMail-Webclient (oben rechts „Kalender"/„Kontakte"-Tab).
+                {productName}-Webclient (oben rechts „Kalender"/„Kontakte"-Tab).
               </li>
               <li>
                 <strong>Alternative Clients</strong> mit nativem CalDAV/CardDAV: Apple Kalender + Kontakte (macOS),
@@ -2343,7 +2370,7 @@ function ExternalClientsSection() {
           <li>
             <strong>Erste Synchronisierung</strong> manuell anstoßen („Synchronize now"). Danach läuft alles
             automatisch im Hintergrund. Termine und Kontakte erscheinen in Outlook und bleiben bidirektional
-            mit CoreMail synchron.
+            mit {productName} synchron.
           </li>
         </ol>
       </div>

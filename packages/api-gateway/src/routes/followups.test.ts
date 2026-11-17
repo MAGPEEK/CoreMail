@@ -46,7 +46,7 @@ installFakePrisma({
   message: {
     findFirst: (a) => {
       lastAttachmentSelect = (a as { include?: { attachments?: unknown } }).include?.attachments ?? null;
-      return { id: 'msg1', subject: 's', attachments: [] };
+      return { id: 'msg1', subject: 's', flags: ['\\Seen'], attachments: [] };
     },
   },
 });
@@ -54,6 +54,7 @@ installFakePrisma({
 const express = (await import('express')).default;
 const core = await import('@coremail/core');
 const { userRouter } = await import('./user.js');
+const { sharedMailboxContentRouter } = await import('./foreign-mailbox.js');
 const { adminTransportRulesRouter } = await import('./admin/transport-rules.js');
 const { adminMessageTraceRouter, matchesTraceFilter } = await import('./admin/message-trace.js');
 const { parseClientReferences, resolveReplyHeaders, MAX_CLIENT_REFERENCES } = await import('../lib/reply-headers.js');
@@ -68,6 +69,8 @@ before(async () => {
   core.installAsyncErrorHandling(express);
   const app = express();
   app.use(express.json());
+  // 9.3: shared-mailbox folders/messages live in routes/foreign-mailbox.ts (same mount as server.ts)
+  app.use('/api/v1/user/shared-mailboxes/:id', sharedMailboxContentRouter);
   app.use('/api/v1/user', userRouter);
   app.use('/api/v1/admin/transport-rules', requireAuth, adminTransportRulesRouter);
   app.use('/api/v1/admin/message-trace', requireAuth, adminMessageTraceRouter);

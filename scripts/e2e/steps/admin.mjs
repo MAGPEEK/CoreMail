@@ -22,6 +22,28 @@ export async function run(state) {
   const A = state.users.a.email, B = state.users.b.email;
   const passA = state.mfaA ? state.appPwA : c.userA;
 
+  // 9.3: scanner deployment state. Standard stack (incl. E2E_STORAGE=filesystem): rspamd and
+  // ClamAV are deployed — rspamd available, ClamAV available or still loading signatures
+  // (unavailable, but never host-not-found), never absent. E2E_SCANNERS=absent: a stack without
+  // both containers that sets RSPAMD_ENABLED=false / CLAMAV_ENABLED=false (minimal compose) — the
+  // env switch is the only way to absent; a missing host name is unavailable/host-not-found.
+  await check('admin: /admin/security/capabilities reports the deployed scanners', async () => {
+    const r = await http('GET', '/api/v1/admin/security/capabilities', { token: admin });
+    assert(r.status === 200, `${r.status} ${r.text.slice(0, 200)}`);
+    const { rspamd, clamav } = r.json ?? {};
+    assert(rspamd?.state && clamav?.state, `shape: ${r.text.slice(0, 200)}`);
+    assert(!/rspamd:|clamav:|https?:\/\//.test(r.text), `host or URL leaked: ${r.text.slice(0, 200)}`);
+    if ((process.env.E2E_SCANNERS ?? 'deployed') === 'absent') {
+      assert(rspamd.state === 'absent' && clamav.state === 'absent', r.text);
+      assert(rspamd.reason === 'disabled-by-config' && clamav.reason === 'disabled-by-config', r.text);
+    } else {
+      assert(rspamd.state === 'available', `rspamd ${JSON.stringify(rspamd)}`);
+      assert(clamav.state === 'available' || clamav.state === 'unavailable', `clamav ${JSON.stringify(clamav)}`);
+      assert(clamav.reason !== 'host-not-found', `clamav container not resolvable: ${JSON.stringify(clamav)}`);
+    }
+    return `rspamd=${rspamd.state} clamav=${clamav.state}${clamav.detail ? ` (${clamav.detail})` : ''}`;
+  });
+
   await check('admin: self-signed certificate present and served on 993', async () => {
     const r = await http('GET', '/api/v1/admin/certificates', { token: admin });
     const list = r.json?.certificates ?? r.json ?? [];
@@ -31,7 +53,8 @@ export async function run(state) {
       const s = tls.connect({ host: HOST, port: PORTS.imaps, rejectUnauthorized: false, servername: `mail.${DOMAIN}` }, () => { res(s.getPeerCertificate()); s.end(); });
       s.on('error', rej);
     });
-    // setup creates a baseline self-signed cert (CN=mail.localhost by design) — 993 must serve exactly that one
+    // setup creates a baseline self-signed cert for the public host name (9.3: mail.<domain>, was
+    // mail.localhost) — 993 must serve exactly that one
     assert((cert.domains ?? []).includes(peer.subject?.CN), `993 presents ${peer.subject?.CN}, DB cert ${cert.domains}`);
     return `${cert.type} ${cert.domains?.join?.(',') ?? cert.commonName ?? ''} status=${cert.status} protocol=${cert.isActiveProtocol}; 993 CN=${peer.subject?.CN}`;
   });

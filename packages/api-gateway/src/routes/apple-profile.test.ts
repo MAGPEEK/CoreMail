@@ -232,6 +232,22 @@ test('WebAuthn-only MFA (Json array) requires an app password — profile and cl
   }
 });
 
+test('9.3 branding: labels use the branded product name, PayloadOrganization stays the organisation', async () => {
+  const { buildAppleProfile } = await import('./apple-profile.js');
+  const input = {
+    userId: 'alice', email: 'alice@example.com', displayName: 'Alice', orgName: 'Acme & Co',
+    publicHostname: 'mail.example.com', useHttps: true, httpPort: 443,
+    imap: { host: 'imap.example.com', port: 993, ssl: true }, smtp: { host: 'smtp.example.com', port: 587, tls: true },
+    easUrl: 'https://mail.example.com/Microsoft-Server-ActiveSync', requiresAppPassword: false,
+  };
+  const branded = parsePlist(buildAppleProfile({ ...input, productName: 'AcmeMail' })) as Record<string, PV>;
+  assert.equal(branded['PayloadOrganization'], 'Acme & Co');
+  assert.equal(branded['PayloadDisplayName'], 'AcmeMail — alice@example.com');
+  assert.equal((branded['PayloadContent'] as Record<string, PV>[])[0]!['PayloadDisplayName'], 'AcmeMail Mail');
+  const plain = parsePlist(buildAppleProfile({ ...input, productName: 'CoreMail' })) as Record<string, PV>;
+  assert.equal(plain['PayloadDisplayName'], 'Acme & Co — alice@example.com', 'unbranded: organisation name as before');
+});
+
 test('plist writer: escaping, empty containers, booleans', () => {
   const xml = toPlist({ a: '<&>', b: [], c: {}, d: false, e: [1, 'x'] });
   assert.deepEqual(parsePlist(xml), { a: '<&>', b: [], c: {}, d: false, e: [1, 'x'] });

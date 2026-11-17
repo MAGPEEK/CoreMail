@@ -134,7 +134,7 @@ export class CoreMailClient {
   ): Promise<T> {
     if (auth) await this.ensureAuth();
     const headers: Record<string, string> = { Accept: 'application/json', ...(raw?.headers ?? {}) };
-    if (raw) headers['Content-Type'] = 'application/octet-stream';
+    if (raw) headers['Content-Type'] ??= 'application/octet-stream';
     else if (body !== undefined) headers['Content-Type'] = 'application/json';
     if (auth && this.token) headers['Authorization'] = `Bearer ${this.token}`;
     let resp: Response;

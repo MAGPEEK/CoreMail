@@ -76,6 +76,12 @@ test('accent presets: white on accent >= 4.5:1, derived accent-fg >= 4.5:1 in bo
   assert.ok(contrastRatio(fg, [255, 255, 255]) >= 4.5);
 });
 
+test('initial accent fill = the brand colour injected by the gateway (--brand-primary), else the default', () => {
+  assert.ok(css.includes('  --color-accent: var(--brand-primary, 0 120 212);'));
+  // the text colour never depends on the raw brand colour (it stays contrast-checked above)
+  assert.ok(css.includes('  --color-accent-fg: 0 95 184;'));
+});
+
 test('theme files are identical in web-client and admin-panel', () => {
   const other = here.includes('web-client') ? here.replace('web-client', 'admin-panel') : here.replace('admin-panel', 'web-client');
   for (const f of ['tokens.css', 'contrast.ts', 'tailwind-colors.ts', 'theme.test.ts', 'theme-guard.test.ts']) {
