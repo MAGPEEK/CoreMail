@@ -67,6 +67,12 @@ Never list the Docker network, the cluster/node network or a proxy address as a 
 every connection through that path could relay. Check the source addresses in the message flow
 (`ip`) after enabling the relay, and prefer host routes (`/32`) for single devices.
 
+The BCP warns (the API returns `warnings`) when an allowed network overlaps a typical
+container/cluster NAT range — the Docker default bridge `172.17.0.0/16` and pool `172.16.0.0/12`,
+the Kubernetes pod/service default `10.0.0.0/8`, `100.64.0.0/10` and the IPv6 ULA range `fd00::/8`.
+The configuration is still saved (these ranges are also ordinary LANs); behind such NAT use host
+networking, `externalTrafficPolicy: Local`, or a proxy that preserves the client address.
+
 ## Logging and audit
 
 * Every relayed message is logged (service log `smtp:device-relay`) and appears in the message
@@ -78,8 +84,9 @@ every connection through that path could relay. Check the source addresses in th
 ## API
 
 * `GET /api/v1/admin/smtp-config/device-relay` → `{ enabled, allowedNetworks, senderDomains, port,
-  maxMessagesPerMinute, listenerActive }`
-* `PUT /api/v1/admin/smtp-config/device-relay` (same fields without `listenerActive`) — area
+  maxMessagesPerMinute, listenerActive, warnings }` — `warnings`: German texts, e.g. allowed
+  networks inside container/cluster NAT ranges (empty when none)
+* `PUT /api/v1/admin/smtp-config/device-relay` (same fields without `listenerActive` / `warnings`; answers like `GET`) — area
   `servers`, write roles only; invalid input → `400` with a German message.
 
 The legacy `SmtpSettings.relaying*` fields are never evaluated: stale values from old installs

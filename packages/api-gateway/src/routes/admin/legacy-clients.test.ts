@@ -61,7 +61,7 @@ const express = (await import('express')).default;
 const core = await import('@coremail/core');
 const { adminServicesRouter, legacyTlsAuditAction } = await import('./services.js');
 const { adminSmtpConfigRouter } = await import('./smtp-config.js');
-const { validateDeviceRelay, normaliseNetworks } = await import('../../lib/device-relay.js');
+const { validateDeviceRelay, normaliseNetworks, containerNatWarnings } = await import('../../lib/device-relay.js');
 
 const tok = (role: string) => core.signAccessToken({ sub: `actor-${role}`, email: `${role}@example.com`, role: role as Parameters<typeof core.signAccessToken>[0]['role'], domainId: 'd1', sessionId: 's', mfaVerified: true });
 
@@ -200,6 +200,42 @@ test('device relay API: default off, save is validated + audited, listener state
 
   const dedicated = await call('PUT', '/api/v1/admin/smtp-config/device-relay', 'SERVER_MANAGEMENT', relay({ port: 2525 }));
   assert.equal(dedicated.json['listenerActive'], false, 'no listener on 2525 yet — the BCP shows a hint');
+});
+
+test('containerNatWarnings: Docker/Kubernetes/CGNAT/ULA ranges warn, ordinary LAN ranges do not', () => {
+  assert.deepEqual(containerNatWarnings(['192.168.10.0/24', '198.51.100.7/32', '2001:db8::/48']), []);
+  assert.deepEqual(containerNatWarnings([]), []);
+  const cases: [string, RegExp][] = [
+    ['172.17.0.0/16', /Docker-Standard-Bridge 172\.17\.0\.0\/16/],
+    ['172.20.5.0/24', /Docker-Netzpool 172\.16\.0\.0\/12/],
+    ['172.0.0.0/8', /Docker-Standard-Bridge/], // contains the bridge → overlaps
+    ['10.0.0.25', /Kubernetes-Pod-\/Service-Netz 10\.0\.0\.0\/8/],
+    ['100.64.1.0/24', /Carrier-Grade-NAT/],
+    ['fd12:3456::/48', /IPv6-ULA/],
+  ];
+  for (const [net, label] of cases) {
+    const w = containerNatWarnings([net]);
+    assert.equal(w.length, 1, net);
+    assert.match(w[0]!, label, net);
+    assert.match(w[0]!, /Gateway-Adresse/);
+    assert.match(w[0]!, /externalTrafficPolicy: Local/);
+    assert.match(w[0]!, /PROXY-Protokoll/);
+    assert.match(w[0]!, /Host-Netzwerk/);
+  }
+  const both = containerNatWarnings(['10.1.0.0/16', '192.168.1.0/24', '172.17.0.2']);
+  assert.equal(both.length, 1, 'one warning naming every affected network');
+  assert.match(both[0]!, /10\.1\.0\.0\/16 .*172\.17\.0\.2\/32/);
+  assert.doesNotMatch(both[0]!, /192\.168/);
+});
+
+test('device relay API: GET and PUT return the NAT warnings (additive field), the save still succeeds', async () => {
+  const saved = await call('PUT', '/api/v1/admin/smtp-config/device-relay', 'SERVER_MANAGEMENT', relay({ allowedNetworks: ['10.0.0.0/24'] }));
+  assert.equal(saved.status, 200);
+  assert.equal((saved.json['warnings'] as string[]).length, 1);
+  const read = await call('GET', '/api/v1/admin/smtp-config/device-relay', 'VIEW_ONLY_ORG');
+  assert.match((read.json['warnings'] as string[])[0]!, /10\.0\.0\.0\/24/);
+  const lan = await call('PUT', '/api/v1/admin/smtp-config/device-relay', 'SERVER_MANAGEMENT', relay());
+  assert.deepEqual(lan.json['warnings'], []);
 });
 
 test('device relay API: read-only roles cannot change it', async () => {

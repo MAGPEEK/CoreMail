@@ -33,3 +33,12 @@ test('device relay payload: validated port/rate, enabling needs both lists', () 
   assert.equal(deviceRelayPayload({ ...form, networks: '' }).ok, false);
   assert.equal(deviceRelayPayload({ ...form, enabled: false, networks: '', senderDomains: '' }).ok, true);
 });
+
+test('device relay section renders the server warnings (container NAT) prominently', async () => {
+  const { readFileSync } = await import('node:fs');
+  const section = readFileSync(new URL('../components/DeviceRelaySection.tsx', import.meta.url), 'utf8');
+  assert.match(section, /warnings\?: string\[\]/, 'additive, optional field (older servers send none)');
+  assert.match(section, /\(data\.warnings \?\? \[\]\)\.map/);
+  assert.match(section, /role="alert"[^>]*bg-warning-bg|bg-warning-bg[^>]*role="alert"/);
+  assert.match(section, /Container-NAT/);
+});

@@ -16,6 +16,8 @@ import {
 interface DeviceRelayView extends DeviceRelayPayload {
   /** An active SMTP inbound listener serves the configured port. */
   listenerActive: boolean;
+  /** Server warnings, e.g. allowed networks inside container/cluster NAT ranges (absent on older servers). */
+  warnings?: string[];
 }
 
 const toForm = (v: DeviceRelayView): DeviceRelayForm => ({
@@ -84,6 +86,15 @@ export function DeviceRelaySection() {
             <textarea id={ids.networks} rows={4} value={form.networks} onChange={(e) => set('networks', e.target.value)}
               placeholder={'192.168.10.0/24\n10.0.0.25'} className={inputCls} />
             <p className="text-[11px] text-fg-subtle mt-1">Nur interne Netze eintragen. Netze größer als /8 (IPv4) bzw. /32 (IPv6) werden abgelehnt.</p>
+            {(data.warnings ?? []).map((w) => (
+              <div key={w} role="alert" className="mt-2 flex items-start gap-2 rounded-lg border border-warning-line bg-warning-bg px-3 py-2.5 text-xs text-warning-fg">
+                <AlertTriangle size={15} className="mt-0.5 shrink-0" aria-hidden="true" />
+                <div>
+                  <p className="font-semibold">Mögliches offenes Relay hinter Container-NAT</p>
+                  <p className="mt-0.5">{w}</p>
+                </div>
+              </div>
+            ))}
           </div>
 
           <div>

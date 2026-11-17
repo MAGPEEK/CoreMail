@@ -5,7 +5,7 @@ import { prisma } from '@coremail/storage';
 import { getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 import { requireArea } from '../../middleware/auth.js';
 import { smarthostTestOptions } from '../../lib/smarthost-test.js';
-import { validateDeviceRelay, type DeviceRelayInput } from '../../lib/device-relay.js';
+import { containerNatWarnings, validateDeviceRelay, type DeviceRelayInput } from '../../lib/device-relay.js';
 import { audit, auditContext } from '../../lib/audit.js';
 
 export const adminSmtpConfigRouter: RouterType = Router();
@@ -17,8 +17,11 @@ const DEVICE_RELAY_DEFAULTS: DeviceRelayInput = {
   enabled: false, allowedNetworks: [], senderDomains: [], port: 25, maxMessagesPerMinute: 30,
 };
 
-/** Stored configuration (defaults without a row) + whether an inbound listener serves its port. */
-async function deviceRelayView(): Promise<DeviceRelayInput & { listenerActive: boolean }> {
+/**
+ * Stored configuration (defaults without a row) + whether an inbound listener
+ * serves its port + warnings (allowed networks inside container/cluster NAT ranges).
+ */
+async function deviceRelayView(): Promise<DeviceRelayInput & { listenerActive: boolean; warnings: string[] }> {
   const row = await prisma.deviceRelaySettings.findUnique({ where: { id: 'singleton' } });
   const cfg: DeviceRelayInput = row
     ? { enabled: row.enabled, allowedNetworks: row.allowedNetworks, senderDomains: row.senderDomains, port: row.port, maxMessagesPerMinute: row.maxMessagesPerMinute }
@@ -26,7 +29,7 @@ async function deviceRelayView(): Promise<DeviceRelayInput & { listenerActive: b
   const listener = await prisma.serviceListener.findFirst({
     where: { service: 'SMTP_RECEIVE', port: cfg.port, active: true }, select: { id: true },
   });
-  return { ...cfg, listenerActive: listener !== null };
+  return { ...cfg, listenerActive: listener !== null, warnings: containerNatWarnings(cfg.allowedNetworks) };
 }
 
 // GET /admin/smtp-config/device-relay

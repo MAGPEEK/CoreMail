@@ -12,8 +12,12 @@
  *    applies the same limit when it loads the policy);
  *  - sender domains must be domains hosted by this server;
  *  - the port must not be a submission port (465/587 require SMTP AUTH).
+ * Networks inside typical container/cluster NAT ranges are accepted but come
+ * with a warning (containerNatWarnings): behind Docker/Kubernetes NAT every
+ * client may appear with the gateway address.
  */
-import { parseCidr, cidrTooBroad, RELAY_NETWORK_MIN_PREFIX } from '@coremail/core';
+import { BlockList } from 'node:net';
+import { parseCidr, cidrTooBroad, RELAY_NETWORK_MIN_PREFIX, type ParsedCidr } from '@coremail/core';
 
 export const SUBMISSION_PORTS: readonly number[] = [465, 587];
 export const MAX_NETWORKS = 64;
@@ -74,4 +78,50 @@ export function validateDeviceRelay(input: DeviceRelayInput, hostedDomains: read
     return { ok: false, error: 'Zum Aktivieren mindestens ein Netz und eine Absender-Domain angeben' };
   }
   return { ok: true, value: { ...input, allowedNetworks: networks, senderDomains: domains } };
+}
+
+/**
+ * Address ranges container runtimes and clusters NAT behind by default — most
+ * specific first, the first overlapping range names a network.
+ */
+export const CONTAINER_NAT_RANGES: readonly { cidr: string; label: string }[] = [
+  { cidr: '172.17.0.0/16', label: 'Docker-Standard-Bridge' },
+  { cidr: '172.16.0.0/12', label: 'Docker-Netzpool' },
+  { cidr: '10.0.0.0/8', label: 'Kubernetes-Pod-/Service-Netz' },
+  { cidr: '100.64.0.0/10', label: 'Carrier-Grade-NAT / Cluster-Overlay' },
+  { cidr: 'fd00::/8', label: 'IPv6-ULA (Container/Cluster)' },
+];
+
+/** Pure: do two networks share an address? (Same family and one contains the other.) */
+export function cidrsOverlap(a: ParsedCidr, b: ParsedCidr): boolean {
+  if (a.family !== b.family) return false;
+  const [wide, narrow] = a.prefix <= b.prefix ? [a, b] : [b, a];
+  const family = wide.family === 4 ? 'ipv4' : 'ipv6';
+  const list = new BlockList();
+  list.addSubnet(wide.address, wide.prefix, family);
+  return list.check(narrow.address, family);
+}
+
+/**
+ * Pure: warning texts (German, shown in the BCP) for allowed networks that
+ * overlap a container/cluster NAT range. Behind such NAT the SMTP server may
+ * see every client with the gateway address — the relay would then be open to
+ * everyone who reaches the host. Empty when no network is affected.
+ */
+export function containerNatWarnings(networks: readonly string[]): string[] {
+  const ranges = CONTAINER_NAT_RANGES.map((r) => ({ ...r, parsed: parseCidr(r.cidr)! }));
+  const hits: string[] = [];
+  for (const entry of networks) {
+    const p = parseCidr(entry);
+    const range = p ? ranges.find((r) => cidrsOverlap(p, r.parsed)) : undefined;
+    if (p && range) hits.push(`${p.cidr} (${range.label} ${range.cidr})`);
+  }
+  if (hits.length === 0) return [];
+  return [
+    `Container-/Cluster-NAT-Bereich in den erlaubten Netzen: ${hits.join(', ')}. ` +
+    'Läuft CoreMail hinter Docker- oder Kubernetes-NAT, können alle Clients mit der Gateway-Adresse erscheinen — ' +
+    'dann wäre das Relay für jeden offen, der den Host erreicht. Empfehlung: Host-Netzwerk (network_mode: host), ' +
+    'beim Kubernetes-Service externalTrafficPolicy: Local oder PROXY-Protokoll mit vertrauenswürdigen Proxys, ' +
+    'damit die echte Client-Adresse ankommt.',
+  ];
 }
