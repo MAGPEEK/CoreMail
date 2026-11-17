@@ -119,8 +119,8 @@ test('reading pane "…" menu: read-only foreign mailbox', () => {
 });
 
 test('command bar and reading-pane menu use one wording per action', () => {
-  const bar = mailCommandStates(ctx({}, 1));
-  const menu = readerOverflowActions({ readOnly: false, foreign: false, isJunkFolder: false, isRead: false, isFlagged: false, isPinned: false });
+  const bar = mailCommandStates(ctx({}, 1)); // one read, unflagged, unpinned message
+  const menu = readerOverflowActions({ readOnly: false, foreign: false, isJunkFolder: false, isRead: true, isFlagged: false, isPinned: false });
   const label = (id: string) => menu.find((i) => i.id === id)!.label;
   assert.equal(label('archive'), bar.archive.label);
   assert.equal(label('delete'), bar.delete.label);
