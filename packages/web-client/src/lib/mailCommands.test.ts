@@ -117,3 +117,18 @@ test('reading pane "…" menu: read-only foreign mailbox', () => {
   assert.equal(items.find((i) => i.id === 'junk')!.label, 'Kein Junk');
   assert.equal(items.find((i) => i.id === 'flag')!.label, 'Kennzeichnung aufheben');
 });
+
+test('command bar and reading-pane menu use one wording per action', () => {
+  const bar = mailCommandStates(ctx({}, 1));
+  const menu = readerOverflowActions({ readOnly: false, foreign: false, isJunkFolder: false, isRead: false, isFlagged: false, isPinned: false });
+  const label = (id: string) => menu.find((i) => i.id === id)!.label;
+  assert.equal(label('archive'), bar.archive.label);
+  assert.equal(label('delete'), bar.delete.label);
+  assert.equal(label('flag'), bar.flag.label);
+  assert.equal(label('pin'), bar.pin.label);
+  assert.equal(label('junk'), bar.junk.tooltip);
+  assert.equal(label('read'), bar.read.tooltip);
+  const junkFolder = readerOverflowActions({ readOnly: false, foreign: false, isJunkFolder: true, isRead: true, isFlagged: true, isPinned: true });
+  const barJunk = mailCommandStates(ctx({ isJunkFolder: true }, 1));
+  assert.equal(junkFolder.find((i) => i.id === 'junk')!.label, barJunk.junk.label);
+});

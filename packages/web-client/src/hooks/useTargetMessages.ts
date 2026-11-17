@@ -20,6 +20,8 @@ function toTarget(m: MessageSummary): TargetMessage {
 
 /** Targets found in the cached folder pages / search results, else the open message. */
 function lookup(qc: QueryClient, ids: readonly string[]): TargetMessage[] {
+  // Runs on every query-cache event: nothing to act on → no scan of the cached lists
+  if (ids.length === 0) return [];
   const wanted = new Set(ids);
   const found = new Map<string, TargetMessage>();
   for (const [, data] of qc.getQueriesData<InfiniteData<MessagesResponse>>({ queryKey: ['messages'] })) {

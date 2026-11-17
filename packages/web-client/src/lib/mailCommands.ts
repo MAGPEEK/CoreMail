@@ -8,6 +8,20 @@ import { READ_ONLY_HINT, OWN_ONLY_HINT } from './mailboxContext.ts';
 
 export const NO_SELECTION_HINT = 'Keine Nachricht ausgewählt';
 
+/** Texts shared by the command bar and the reading-pane "…" menu (one wording per action). */
+const TEXT = {
+  archive: 'Archivieren',
+  delete: 'Löschen',
+  junk: 'Als Junk markieren',
+  notJunk: 'Kein Junk',
+  flag: 'Kennzeichnen',
+  unflag: 'Kennzeichnung aufheben',
+  markRead: 'Als gelesen markieren',
+  markUnread: 'Als ungelesen markieren',
+  pin: 'Anheften',
+  unpin: 'Lösen',
+} as const;
+
 /** Command bar order = overflow priority (the tail goes to "…" first). */
 export const MAIL_COMMAND_ORDER = [
   'new', 'delete', 'archive', 'move', 'junk', 'flag', 'read', 'categorize', 'pin', 'undo', 'view',
@@ -83,22 +97,22 @@ export function mailCommandStates(ctx: MailCommandContext): Record<MailCommandId
   const personal = foreign ? OWN_ONLY_HINT : selection.count === 0 ? NO_SELECTION_HINT : null;
   return {
     new: state('Neue E-Mail', 'Neue E-Mail verfassen', null),
-    delete: state('Löschen', 'In den Papierkorb verschieben', write),
-    archive: state('Archivieren', 'In das Archiv verschieben', write),
+    delete: state(TEXT.delete, 'In den Papierkorb verschieben', write),
+    archive: state(TEXT.archive, 'In das Archiv verschieben', write),
     move: state('Verschieben', 'In einen Ordner verschieben …', write),
     junk: isJunkFolder
-      ? state('Kein Junk', 'Kein Junk – zurück in den Posteingang', write)
-      : state('Junk', 'Als Junk markieren', write),
+      ? state(TEXT.notJunk, `${TEXT.notJunk} – zurück in den Posteingang`, write)
+      : state('Junk', TEXT.junk, write),
     flag: selection.allFlagged
-      ? state('Kennzeichnung aufheben', 'Kennzeichnung aufheben', write)
-      : state('Kennzeichnen', 'Zur Nachverfolgung kennzeichnen', write),
+      ? state(TEXT.unflag, TEXT.unflag, write)
+      : state(TEXT.flag, 'Zur Nachverfolgung kennzeichnen', write),
     read: readToggle(selection) === 'read'
-      ? state('Gelesen', 'Als gelesen markieren', write)
-      : state('Ungelesen', 'Als ungelesen markieren', write),
+      ? state('Gelesen', TEXT.markRead, write)
+      : state('Ungelesen', TEXT.markUnread, write),
     categorize: state('Kategorisieren', 'Kategorie zuweisen', personal),
     pin: selection.allPinned
-      ? state('Lösen', 'Anheften aufheben', write)
-      : state('Anheften', 'Oben in der Liste anheften', write),
+      ? state(TEXT.unpin, 'Anheften aufheben', write)
+      : state(TEXT.pin, 'Oben in der Liste anheften', write),
     undo: state('Rückgängig', 'Letzte Aktion rückgängig machen', null),
     view: state('Ansicht', 'Lesebereich, Dichte und Unterhaltungen', null),
   };
@@ -158,15 +172,13 @@ export function readerOverflowActions(ctx: ReaderActionContext): ReaderAction[] 
     { id: 'source', label: 'Quelltext anzeigen', enabled: true },
     { id: 'eml', label: 'Als EML herunterladen', enabled: true },
     ...own({ id: 'rule', label: 'Regel erstellen …', enabled: true }),
-    w({ id: 'read', label: ctx.isRead ? 'Als ungelesen markieren' : 'Als gelesen markieren', enabled: true, groupStart: true }),
-    w({ id: 'flag', label: ctx.isFlagged ? 'Kennzeichnung aufheben' : 'Kennzeichnen', enabled: true }),
-    w({ id: 'pin', label: ctx.isPinned ? 'Lösen' : 'Anheften', enabled: true }),
+    w({ id: 'read', label: ctx.isRead ? TEXT.markUnread : TEXT.markRead, enabled: true, groupStart: true }),
+    w({ id: 'flag', label: ctx.isFlagged ? TEXT.unflag : TEXT.flag, enabled: true }),
+    w({ id: 'pin', label: ctx.isPinned ? TEXT.unpin : TEXT.pin, enabled: true }),
     ...own({ id: 'snooze', label: 'Schlummern bis …', enabled: true }),
     w({ id: 'move', label: 'Verschieben …', enabled: true, groupStart: true }),
-    w({ id: 'archive', label: 'Archivieren', enabled: true }),
-    w(ctx.isJunkFolder
-      ? { id: 'junk', label: 'Kein Junk', enabled: true }
-      : { id: 'junk', label: 'Als Junk markieren', enabled: true }),
-    w({ id: 'delete', label: 'Löschen', enabled: true, danger: true }),
+    w({ id: 'archive', label: TEXT.archive, enabled: true }),
+    w({ id: 'junk', label: ctx.isJunkFolder ? TEXT.notJunk : TEXT.junk, enabled: true }),
+    w({ id: 'delete', label: TEXT.delete, enabled: true, danger: true }),
   ];
 }
