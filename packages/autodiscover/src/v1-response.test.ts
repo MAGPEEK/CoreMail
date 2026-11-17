@@ -250,7 +250,13 @@ test('9.4 v1: only protocols switched on for the account are announced (IMAP off
     const r = await post(requestXml('alice@example.com'));
     assert.doesNotMatch(r.text, /<Type>IMAP<\/Type>/);
     assert.match(r.text, /<Type>POP3<\/Type>\s*<Server>[^<]+<\/Server>\s*<Port>995<\/Port>/);
+    // POP3 block like the IMAP one: explicit Encryption (implicit TLS → SSL)
+    assert.match(r.text, /<Type>POP3<\/Type>[\s\S]*?<SSL>on<\/SSL>\s*<Encryption>SSL<\/Encryption>\s*<AuthRequired>on<\/AuthRequired>/);
     assert.match(r.text, /<Type>SMTP<\/Type>/);
+    // asked for an alias: the filtered answer still describes the primary address
+    const viaAlias = await post(requestXml('info@example.com'));
+    assert.match(viaAlias.text, /<Type>POP3<\/Type>[\s\S]*?<LoginName>alice@example\.com<\/LoginName>/);
+    assert.doesNotMatch(viaAlias.text, /info@example\.com/);
     const eas = await post(requestXml('alice@example.com', NS_MOBILESYNC));
     assert.match(eas.text, /<ErrorCode>500<\/ErrorCode>\s*<Message>No client protocol is enabled for this account\.<\/Message>/);
     policies[0]!['pop3'] = 'OFF';

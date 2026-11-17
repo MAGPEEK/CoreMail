@@ -15,6 +15,7 @@
 import { test, after, beforeEach, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
+import { fakeProtocolPolicies } from '@coremail/storage/auth/testing';
 
 process.env['DATABASE_URL'] ??= 'postgresql://test:test@localhost:5432/test';
 process.env['JWT_SECRET'] ??= 'test-secret-test-secret-test-secret-1234';
@@ -38,10 +39,14 @@ const DEFAULT_LISTENERS: Listener[] = [
   { service: 'POP3', port: 995, ssl: true, active: true },
 ];
 const state = { listeners: DEFAULT_LISTENERS.map((l) => ({ ...l })), listenersDown: false };
+/** 9.4: ProtocolPolicy rows (per-account protocol switches); empty = every protocol at its default. */
+const policies: Array<Record<string, unknown>> = [];
 
 const user = { id: 'cuidAlice', email: 'alice@example.com', displayName: 'Alice', domainId: 'd1', role: 'USER', active: true, passwordHash: 'hash:pw', authSource: 'LOCAL', mfa: null, mailbox: { id: 'mb1' } };
 (globalThis as Record<string, unknown>)['__prisma'] = {
   $on: () => undefined,
+  // 9.4: protocol switch rows (empty → every protocol at its default)
+  ...fakeProtocolPolicies(policies),
   user: { findFirst: async ({ where }: { where: { email: string } }) => (where.email === user.email ? user : null) },
   appPassword: { findMany: async () => [], update: async () => ({}) },
   domain: { findFirst: async () => ({ name: 'example.com' }) },
@@ -75,6 +80,8 @@ beforeEach(() => {
   settings.resetSettingsCacheForTests();
   state.listeners = DEFAULT_LISTENERS.map((l) => ({ ...l }));
   state.listenersDown = false;
+  policies.length = 0;
+  storage.invalidateProtocolAccessCache();
 });
 
 const basic = (login = 'alice@example.com', pw = 'pw') => `Basic ${Buffer.from(`${login}:${pw}`).toString('base64')}`;
@@ -268,6 +275,18 @@ describe('endpoints follow the enabled listeners', () => {
 
     const v2 = await (await fetch(`${base}/autodiscover/autodiscover.json/v1.0/alice@example.com?Protocol=SMTP`)).json();
     assert.deepEqual(v2, { Protocol: 'SMTP', Hostname: 'mail.example.com', Port: 465, SSL: 'SSL' });
+  });
+
+  test('9.4: listeners and protocol switches together — IMAP off, POP3S off → POP3 on 110 with STLS', async () => {
+    for (const l of state.listeners) if (l.service === 'POP3' && l.port === 995) l.active = false;
+    policies.push({ id: 'p-alice', userId: user.id, domainId: null, imap: 'OFF' });
+    storage.invalidateProtocolAccessCache();
+    const r = await send(CLIENTS[3]!, basic());
+    assert.equal(r.status, 200);
+    assert.doesNotMatch(r.text, /<Type>IMAP<\/Type>/);
+    assert.match(r.text, /<Type>POP3<\/Type>\s*<Server>mail\.example\.com<\/Server>\s*<Port>110<\/Port>/);
+    assert.match(r.text, /<Type>POP3<\/Type>[\s\S]*?<SSL>off<\/SSL>\s*<Encryption>TLS<\/Encryption>/);
+    assert.match(r.text, /<Type>SMTP<\/Type>\s*<Server>mail\.example\.com<\/Server>\s*<Port>587<\/Port>/);
   });
 
   test('listener table unreadable: the configured endpoints are announced', async () => {
