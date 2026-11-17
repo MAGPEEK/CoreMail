@@ -1,12 +1,8 @@
 /**
  * TOTP secret encryption at rest (v7.0.0): AES-256-GCM.
  *
- * Key: `MFA_ENCRYPTION_KEY` (64 hex chars or base64 of 32 bytes are used as-is,
- * any other string is stretched with HKDF-SHA256). Without the variable the key
- * is derived via HKDF-SHA256 from `JWT_SECRET` + `PEPPER`, so existing installs
- * keep working without new configuration. Note: rotating JWT_SECRET or PEPPER
- * without MFA_ENCRYPTION_KEY makes stored TOTP secrets unreadable — set
- * MFA_ENCRYPTION_KEY explicitly before rotating those.
+ * Key: `MFA_ENCRYPTION_KEY`, or derived from `JWT_SECRET` + `PEPPER` when it is
+ * not set (../secret-keys.ts — shared with the certificate private keys).
  *
  * Stored format: `v1:<iv>:<tag>:<ciphertext>` (base64url). Values without the
  * `v1:` prefix are the legacy pre-v6 format (plain base64 of the base32 secret);
@@ -14,42 +10,14 @@
  * If MFA_ENCRYPTION_KEY is introduced later, secrets encrypted with the derived
  * fallback key are still readable and are re-encrypted with the new key.
  */
-import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { explicitSecretKey, fallbackSecretKey, primarySecretKey } from '../secret-keys.js';
 
 const PREFIX = 'v1:';
-const SALT = 'coremail-mfa';
-const INFO = 'totp-secret-v1';
-
-function hkdf(ikm: string | Buffer): Buffer {
-  return Buffer.from(hkdfSync('sha256', ikm, SALT, INFO, 32));
-}
-
-function explicitKey(): Buffer | null {
-  const raw = process.env['MFA_ENCRYPTION_KEY']?.trim();
-  if (!raw) return null;
-  if (/^[0-9a-fA-F]{64}$/.test(raw)) return Buffer.from(raw, 'hex');
-  if (/^[A-Za-z0-9+/_-]{43,44}={0,2}$/.test(raw)) {
-    const b = Buffer.from(raw, 'base64');
-    if (b.length === 32) return b;
-  }
-  return hkdf(raw);
-}
-
-function fallbackKey(): Buffer {
-  const secret = process.env['JWT_SECRET'] ?? '';
-  const pepper = process.env['PEPPER'] ?? '';
-  if (!secret || !pepper) throw new Error('MFA key derivation needs JWT_SECRET and PEPPER');
-  return hkdf(`${secret}\0${pepper}`);
-}
-
-/** Primary key used for new encryptions. */
-function primaryKey(): Buffer {
-  return explicitKey() ?? fallbackKey();
-}
 
 export function encryptMfaSecret(plain: string): string {
   const iv = randomBytes(12);
-  const cipher = createCipheriv('aes-256-gcm', primaryKey(), iv);
+  const cipher = createCipheriv('aes-256-gcm', primarySecretKey(), iv);
   const ct = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()]);
   const tag = cipher.getAuthTag();
   return `${PREFIX}${iv.toString('base64url')}:${tag.toString('base64url')}:${ct.toString('base64url')}`;
@@ -84,11 +52,11 @@ export function decryptMfaSecret(stored: string): DecryptedSecret | null {
   const iv = Buffer.from(ivS, 'base64url');
   const tag = Buffer.from(tagS, 'base64url');
   const ct = Buffer.from(ctS, 'base64url');
-  const primary = primaryKey();
+  const primary = primarySecretKey();
   const viaPrimary = tryDecrypt(primary, iv, tag, ct);
   if (viaPrimary !== null) return { secret: viaPrimary, needsReencrypt: false };
-  if (explicitKey()) {
-    const viaFallback = tryDecrypt(fallbackKey(), iv, tag, ct);
+  if (explicitSecretKey()) {
+    const viaFallback = tryDecrypt(fallbackSecretKey(), iv, tag, ct);
     if (viaFallback !== null) return { secret: viaFallback, needsReencrypt: true };
   }
   return null;

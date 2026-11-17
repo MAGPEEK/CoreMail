@@ -1,6 +1,6 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { prisma } from '@coremail/storage';
+import { prisma, encryptPrivateKey } from '@coremail/storage';
 import {
   createLogger, hashPassword, getRedisClient, CHANNEL_SETTINGS_RELOAD, HttpError,
 } from '@coremail/core';
@@ -163,7 +163,8 @@ setupRouter.post('/complete', async (req: Request, res: Response) => {
     try {
       const SELF_SIGNED_HOSTNAME = selfSignedHostnameFor(`mail.${domain}`);
 
-      const { certPem, keyPem, expiresAt: tenYears } = await createSelfSignedPem([SELF_SIGNED_HOSTNAME], 3650);
+      const { certPem, keyPem: plainKeyPem, expiresAt: tenYears } = await createSelfSignedPem([SELF_SIGNED_HOSTNAME], 3650);
+      const keyPem = encryptPrivateKey(plainKeyPem); // stored encrypted at rest
 
       // Remove any existing self-signed cert that may be left over
       await prisma.certificate.deleteMany({ where: { type: 'SELF_SIGNED' } });

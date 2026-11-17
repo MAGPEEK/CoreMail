@@ -7,7 +7,7 @@ import {
   startAuthInvalidationSubscriber, onAuthInvalidation, resolveBindAddress, listenWithRecovery,
 } from '@coremail/core';
 import { namespaceConfig } from './commands/namespaces.js';
-import { connectDatabase, waitForObjectStorage, prisma, loadProtocolCert, selfSignedFallbackHostname } from '@coremail/storage';
+import { connectDatabase, waitForObjectStorage, prisma, loadProtocolCert, selfSignedFallbackHostname, encryptPrivateKey } from '@coremail/storage';
 import { applyAuthInvalidation, createImapServer, setImapHostname, setImapMaxMessageSize, type ImapTlsConfig } from './server/index.js';
 import { imapLiveSessions } from './session/live.js';
 import { invalidExemptEntries } from './server/limits.js';
@@ -69,8 +69,8 @@ async function refreshTlsConfig(): Promise<void> {
     // during initial setup. activate-protocol overrides this later.
     await prisma.serverSettings.upsert({
       where:  { id: 'singleton' },
-      create: { id: 'singleton', publicHostname: SELF_SIGNED_HOSTNAME, tlsCert: certPem, tlsKey: keyPem },
-      update: { tlsCert: certPem, tlsKey: keyPem },
+      create: { id: 'singleton', publicHostname: SELF_SIGNED_HOSTNAME, tlsCert: certPem, tlsKey: encryptPrivateKey(keyPem) },
+      update: { tlsCert: certPem, tlsKey: encryptPrivateKey(keyPem) },
     });
     log.info('Self-signed TLS certificate generated and stored in DB (IMAP)');
   } catch (err) {

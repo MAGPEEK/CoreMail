@@ -1,7 +1,7 @@
 import {
   prisma, createMessage, copyMessages, moveMessages, modifyFlags, expunge, verifyMailCredentials, isMailboxWriteBlocked, OVER_QUOTA_MESSAGE,
   parseRawMessage, storeRawMessage, truncateBodyColumn, parseMimeTree, headerBytes, bodyBytes,
-  attachmentKey, uploadBuffer, loadThreadReferences,
+  attachmentKey, uploadBuffer, loadThreadReferences, deleteFolderMovingMail,
   type RawSourceMessage,
 } from '@coremail/storage';
 import { type Chunk, flagList, isValidFlag, literal, joinChunks, toBuffer } from '../fetch/imap-string.js';
@@ -202,12 +202,18 @@ export async function handleDeleteFolder(
     return;
   }
   if (!folder.target.writable) { sendNo(session, tag, NOPERM); return; }
-  // Soft-delete the messages, then delete the folder
-  await prisma.message.updateMany({
-    where: { folderId: folder.id, deletedAt: null },
-    data:  { deletedAt: new Date() },
-  });
-  await prisma.folder.delete({ where: { id: folder.id } });
+  // Same path as the webmail: the messages go to the mailbox Trash through the
+  // message store (new UID + modSeq, recoverable; expunged first when the folder is
+  // below Trash) — the Message→Folder cascade would remove them for good. Only this
+  // name is deleted: inferior names stay, and folders linked to it by parentId
+  // (created in the webmail) move up to its parent instead of being orphaned.
+  const done = await deleteFolderMovingMail(prisma, { id: folder.id, mailboxId: folder.mailboxId }, 'reparent');
+  if (!done.ok) {
+    if (done.reason === 'not-found') sendNo(session, tag, '[NONEXISTENT] Mailbox does not exist');
+    else sendNo(session, tag, '[CANNOT] Mailbox still holds messages and there is no Trash to move them to');
+    return;
+  }
+  log.info({ mailboxId: folder.mailboxId, folderId: folder.id, movedToTrash: done.moved, reparented: done.reparented }, 'IMAP folder deleted');
   sendOk(session, tag, 'DELETE completed');
 }
 

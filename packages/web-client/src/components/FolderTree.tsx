@@ -16,6 +16,8 @@ import {
   FolderItem, SectionHeader, SYSTEM_SET, SYSTEM_LABEL_KEY, HIDDEN_FOLDER_NAMES, buildFolderChildren, systemFoldersOf,
 } from './FolderItem.js';
 import { SharedMailboxTree } from './SharedMailboxTree.js';
+import { confirmFolderDelete } from './folderDeleteConfirm.js';
+import { isStaleSubfolderRefusal } from '../lib/folderDelete.js';
 import { useT } from '../i18n/useT.js';
 import { useLanguageStore } from '../store/language.js';
 
@@ -89,13 +91,20 @@ export function FolderTree() {
   });
 
   const deleteFolder = useMutation({
-    mutationFn: (id: string) => api.delete(`/mail/folders/${id}?force=true`),
+    mutationFn: ({ id, query }: { id: string; query: string }) => api.delete(`/mail/folders/${id}${query}`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['folders'] });
       qc.invalidateQueries({ queryKey: ['messages'] });
       toast.success(t('folder_deleted'));
     },
-    onError: (e: Error) => toast.error(e.message || 'Ordner konnte nicht gelöscht werden'),
+    onError: (e: Error) => {
+      if (isStaleSubfolderRefusal(e)) {
+        qc.invalidateQueries({ queryKey: ['folders'] });
+        toast.error(t('folder_delete_changed'));
+        return;
+      }
+      toast.error(e.message || 'Ordner konnte nicht gelöscht werden');
+    },
   });
 
   const emptyFolder = useMutation({
@@ -243,12 +252,8 @@ export function FolderTree() {
         icon: <FolderMinus size={14} />,
         danger: true,
         onClick: () => {
-          const total = folder.totalCount ?? 0;
-          const msg = total > 0
-            ? `Ordner „${folderLabel(folder)}" mit ${total} Nachricht(en) wirklich löschen?`
-            : `Ordner „${folderLabel(folder)}" löschen?`;
-          if (!window.confirm(msg)) return;
-          deleteFolder.mutate(folder.id);
+          const query = confirmFolderDelete(t, folderLabel(folder), folder.id, folders ?? []);
+          if (query !== null) deleteFolder.mutate({ id: folder.id, query });
         },
       });
     }

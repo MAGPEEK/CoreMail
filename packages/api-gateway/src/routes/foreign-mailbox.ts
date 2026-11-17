@@ -32,7 +32,8 @@
  * access → 403 `READ_ONLY`. Every folder/message lookup is scoped to the resolved
  * mailbox id, and moves never leave it. Message writes go through the storage
  * message store (moveMessages / setFlags / touchMessages / expunge); deleting a
- * folder moves its messages to Trash first (lib/folder-delete.ts). Expunged
+ * folder (subfolders only with ?recursive=true) moves the messages of the whole
+ * subtree to Trash first (lib/folder-delete.ts). Expunged
  * messages (tombstones) are only reachable through the FULL_ACCESS /recoverable
  * routes. Folder create/rename/delete/empty and message move/delete are audited
  * (lib/foreign-audit.ts, mailbox.foreign.*).
@@ -49,7 +50,7 @@ import { requireAuth } from '../middleware/auth.js';
 import { getForeignMailbox } from '../lib/mailbox-access.js';
 import { checkFolderParent, type FolderLookup } from '../lib/folder-tree.js';
 import { contentDisposition } from '../lib/attachment-download.js';
-import { deleteFolderKeepingMail } from '../lib/folder-delete.js';
+import { deleteFolder, folderDeleteFailure, folderDeleteOptions, folderDeleteRefusal } from '../lib/folder-delete.js';
 import { auditForeignWrite, type ForeignAuditAction } from '../lib/foreign-audit.js';
 import {
   parseSearchQuery, buildSearchConditions, resolveFolderScope, searchChips, hasCriteria,
@@ -245,18 +246,18 @@ export function createForeignMailboxRouter(kind: Kind): RouterType {
     if (SYSTEM_FOLDER_NAMES.has(folder.name)) {
       res.status(400).json({ error: 'Systemordner kann nicht gelöscht werden' }); return;
     }
-    const children = await prisma.folder.count({ where: { parentId: folderId } });
-    if (children > 0) { res.status(409).json({ error: 'Ordner hat Unterordner — bitte erst diese entfernen' }); return; }
-    if (req.query['force'] !== 'true') {
-      const count = await prisma.message.count({ where: { folderId, deletedAt: null } });
-      if (count > 0) { res.status(409).json({ error: 'Ordner nicht leer', count }); return; }
-    }
-    // A1: messages go to Trash through the message store first — the cascade would
-    // otherwise remove them without tombstone / modSeq.
-    const done = await deleteFolderKeepingMail(folder);
-    if (!done.ok) { res.status(409).json({ error: 'Papierkorb nicht gefunden' }); return; }
-    auditWrite(kind, req, access, 'mailbox.foreign.folder.delete', { folderId, name: folder.name, movedToTrash: done.moved, live: done.live });
-    res.json({ ok: true });
+    // Subfolders: 409 FOLDER_HAS_SUBFOLDERS unless ?recursive=true (9.3 contract).
+    const opts = folderDeleteOptions(req.query);
+    const refusal = await folderDeleteRefusal(folder, opts, SYSTEM_FOLDER_NAMES, 'refuse');
+    if (refusal) { res.status(409).json(refusal); return; }
+    // A1: messages of the whole subtree go to Trash through the message store first —
+    // the cascade would otherwise remove them without tombstone / modSeq.
+    const done = await deleteFolder(folder, opts);
+    if (!done.ok) { const f = folderDeleteFailure(done); res.status(f.status).json({ error: f.error }); return; }
+    auditWrite(kind, req, access, 'mailbox.foreign.folder.delete', {
+      folderId, name: folder.name, movedToTrash: done.moved, live: done.live, folders: done.folders,
+    });
+    res.json({ ok: true, folders: done.folders, movedToTrash: done.moved });
   });
 
   r.post('/folders/:folderId/empty', auth, async (req: Request, res: Response) => {

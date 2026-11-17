@@ -5,7 +5,7 @@ import tls from 'node:tls';
 import { createLogger, generateSelfSignedCert, tlsPemToBuffers, applyTlsToListeners, tlsMaterialEquals, installProcessGuards, startAuthInvalidationSubscriber, resolveBindAddress, listenWithRecovery, tlsServerOptions } from '@coremail/core';
 import { getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD, CHANNEL_SETTINGS_RELOAD } from '@coremail/core/redis';
 import { logTlsSocketError } from '@coremail/core/tls-errors';
-import { prisma, loadProtocolCert, selfSignedFallbackHostname, waitForObjectStorage } from '@coremail/storage';
+import { prisma, loadProtocolCert, selfSignedFallbackHostname, encryptPrivateKey, waitForObjectStorage } from '@coremail/storage';
 import { POP3Session, setPop3Hostname, pop3LiveSessions, TLS_HANDSHAKE_MS } from './session.js';
 import { admitConnection, invalidExemptEntries } from './limits.js';
 
@@ -63,8 +63,8 @@ async function refreshTlsConfig(): Promise<void> {
     _tlsConfig = tlsPemToBuffers(certPem, keyPem);
     await prisma.serverSettings.upsert({
       where:  { id: 'singleton' },
-      create: { id: 'singleton', publicHostname: SELF_SIGNED_HOSTNAME, tlsCert: certPem, tlsKey: keyPem },
-      update: { tlsCert: certPem, tlsKey: keyPem },
+      create: { id: 'singleton', publicHostname: SELF_SIGNED_HOSTNAME, tlsCert: certPem, tlsKey: encryptPrivateKey(keyPem) },
+      update: { tlsCert: certPem, tlsKey: encryptPrivateKey(keyPem) },
     });
     log.info('Self-signed TLS certificate generated and stored in DB (POP3)');
   } catch (err) {

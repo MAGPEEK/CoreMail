@@ -29,6 +29,7 @@ import { useAuthStore } from '../store/auth.js';
 import { useLanguageStore } from '../store/language.js';
 import { LANGS } from '../i18n/translations.js';
 import { useT } from '../i18n/useT.js';
+import type { TranslationKey } from '../i18n/translations.js';
 import { useBranding } from '../hooks/useBranding.js';
 import { accentFillChannels, hexToChannels, DEFAULT_ACCENT_RGB } from '../lib/branding.js';
 import { copyToClipboard } from '../api/clipboard.js';
@@ -2378,32 +2379,32 @@ function ExternalClientsSection() {
   );
 }
 
-const NAV: { group: string; items: { id: Section; label: string; icon: React.ElementType }[] }[] = [
+const NAV: { group: TranslationKey; items: { id: Section; label: TranslationKey; icon: React.ElementType }[] }[] = [
   {
-    group: 'Konto',
+    group: 'section_account',
     items: [
-      { id: 'profile',      label: 'E-Mail-Konto',           icon: User       },
-      { id: 'password',     label: 'Passwort',                icon: Lock       },
-      { id: 'appPasswords', label: 'App-Passwörter',          icon: Smartphone },
-      { id: 'externalClients', label: 'Externe Clients', icon: Cable },
-      { id: 'oof',          label: 'Automatische Antworten',  icon: BellOff    },
-      { id: 'rules',        label: 'Regeln',                  icon: ListFilter },
-      { id: 'signature',    label: 'Signaturen',              icon: PenLine    },
-      { id: 'categories',   label: 'Kategorien',              icon: Tag        },
-      { id: 'retention',    label: 'Aufbewahrungsrichtlinien', icon: Clock      },
-      { id: 'storage',      label: 'Speicher',                icon: HardDrive  },
-      { id: 'recover',      label: 'Gelöschte Elemente wiederherstellen', icon: RotateCcw },
+      { id: 'profile',         label: 'section_profile',          icon: User       },
+      { id: 'password',        label: 'section_password',         icon: Lock       },
+      { id: 'appPasswords',    label: 'app_passwords',            icon: Smartphone },
+      { id: 'externalClients', label: 'section_external_clients', icon: Cable      },
+      { id: 'oof',             label: 'section_oof',              icon: BellOff    },
+      { id: 'rules',           label: 'section_rules',            icon: ListFilter },
+      { id: 'signature',       label: 'section_signature',        icon: PenLine    },
+      { id: 'categories',      label: 'categories',               icon: Tag        },
+      { id: 'retention',       label: 'retention_section_title',  icon: Clock      },
+      { id: 'storage',         label: 'section_storage',          icon: HardDrive  },
+      { id: 'recover',         label: 'recover_title',            icon: RotateCcw  },
     ],
   },
   {
-    group: 'Allgemein',
+    group: 'section_general',
     items: [
-      { id: 'view',       label: 'Ansicht',                  icon: Layout       },
-      { id: 'theme',      label: 'Design',                   icon: Palette      },
-      { id: 'language',  label: 'Sprache & Region',          icon: Globe        },
-      { id: 'calendar',  label: 'Kalender',                  icon: CalendarDays },
-      { id: 'inactivity', label: 'Automatischer Logout',     icon: Shield       },
-      { id: 'security',  label: 'Sicherheit',                icon: ShieldCheck  },
+      { id: 'view',       label: 'view_settings',      icon: Layout       },
+      { id: 'theme',      label: 'section_theme',      icon: Palette      },
+      { id: 'language',   label: 'section_language',   icon: Globe        },
+      { id: 'calendar',   label: 'calendar',           icon: CalendarDays },
+      { id: 'inactivity', label: 'section_inactivity', icon: Shield       },
+      { id: 'security',   label: 'section_security',   icon: ShieldCheck  },
     ],
   },
 ];
@@ -2432,6 +2433,7 @@ const SECTION_MAP: Record<Section, React.ComponentType> = {
 // MAIN EXPORT
 // ═══════════════════════════════════════════════════════════════════════════════
 export function SettingsPage() {
+  const t = useT();
   // Deep link via hash (e.g. /settings#rules from the message list context menu)
   const { hash } = useLocation();
   const hashSection = hash.replace(/^#/, '');
@@ -2446,7 +2448,7 @@ export function SettingsPage() {
       <aside className="w-56 shrink-0 border-r border-line pt-4 bg-surface overflow-y-auto">
         {NAV.map(({ group, items }) => (
           <div key={group} className="mb-2">
-            <p className="px-4 py-1 text-xs font-semibold text-fg-subtle uppercase tracking-wide">{group}</p>
+            <p className="px-4 py-1 text-xs font-semibold text-fg-subtle uppercase tracking-wide">{t(group)}</p>
             {items.map(({ id, label, icon: Icon }) => (
               <button key={id} onClick={() => setSection(id)}
                 className={`w-full flex items-center gap-2.5 px-4 py-2 text-sm transition-colors ${
@@ -2455,7 +2457,7 @@ export function SettingsPage() {
                     : 'text-fg-muted hover:bg-surface-2 border-l-2 border-transparent'
                 }`}>
                 <Icon size={14} />
-                {label}
+                {t(label)}
               </button>
             ))}
           </div>

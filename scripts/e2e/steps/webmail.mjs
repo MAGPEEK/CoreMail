@@ -1,5 +1,6 @@
 // Step: webmail — shared / delegated mailboxes in the mail view (9.3), API level:
 // folder-pane list + hide/show persistence (/user/accessible-mailboxes), folder and
+// subfolder deletes (re-parent without ?recursive, subtree with it),
 // message operations on a shared mailbox with FULL_ACCESS, READ_ONLY → every write
 // 403 READ_ONLY (shared + delegated), SEND_AS-free users see nothing. Grants made
 // here are removed again at the end.
@@ -77,6 +78,26 @@ export async function run(state) {
     const d = await http('DELETE', `${OLD}/folders/${cr.json.id}`, { token: A });
     assert(d.status === 204, `old delete → ${d.status}`);
     return 'array folders, {total,messages}, 403 protected, 201 create, 204 delete';
+  });
+
+  await check('webmail: folder with subfolders (depth 3) — without recursive the subfolder moves up, ?recursive=true deletes the subtree', async () => {
+    const stamp = Date.now();
+    const ids = [];
+    for (let depth = 0; depth < 4; depth++) {
+      const cr = await http('POST', '/api/v1/mail/folders', { token: A, body: { name: `E2E-Tree-${stamp}-${depth}`, parentId: ids[depth - 1] ?? null } });
+      assert(cr.status === 200 && cr.json?.id, `create depth ${depth} → ${cr.status} ${cr.text.slice(0, 200)}`);
+      ids.push(cr.json.id);
+    }
+    // 9.3 contract: 200 without ?recursive — only the folder goes, its subfolder moves up to its parent
+    const one = await http('DELETE', `/api/v1/mail/folders/${ids[1]}?force=true`, { token: A });
+    assert(one.status === 200 && one.json?.folders === 1 && one.json?.reparented === 1, `without recursive → ${one.status} ${one.text.slice(0, 200)}`);
+    const mid = ((await http('GET', '/api/v1/mail/folders', { token: A })).json ?? []).find((x) => x.id === ids[2]);
+    assert(mid?.parentId === ids[0], `subfolder parent ${mid?.parentId}, expected ${ids[0]}`);
+    const d = await http('DELETE', `/api/v1/mail/folders/${ids[0]}?recursive=true&force=true`, { token: A });
+    assert(d.status === 200 && d.json?.folders === 3, `recursive → ${d.status} ${d.text.slice(0, 200)}`);
+    const left = ((await http('GET', '/api/v1/mail/folders', { token: A })).json ?? []).filter((x) => ids.includes(x.id));
+    assert(left.length === 0, `left over: ${left.map((x) => x.name).join(', ')}`);
+    return 'non-recursive delete re-parented 1, recursive delete removed 3 folders, no orphans';
   });
 
   await check('webmail: READ_ONLY on the shared mailbox — reads ok, every write 403 READ_ONLY', async () => {

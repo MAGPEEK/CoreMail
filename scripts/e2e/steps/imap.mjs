@@ -157,6 +157,29 @@ export async function run(state) {
       assert(names.some((n) => /\\Sent/.test(n)) && names.some((n) => /\\Trash/.test(n)), names.join(' | '));
       return `${names.length} folders`;
     });
+
+    await check('imap: DELETE of a folder with mail — the messages go to Trash, inferior names stay', async () => {
+      const name = `E2E-Del-${Date.now()}`;
+      for (const n of [name, `${name}.Sub`]) {
+        const cr = await imapCmd(s, `CREATE ${imapQuote(n)}`);
+        assert(cr.status === 'OK', `CREATE ${n}: ${cr.text}`);
+      }
+      const subject = `E2E delete-to-trash ${Date.now()}`;
+      const msg = Buffer.from(`From: ${B}\r\nTo: ${B}\r\nSubject: ${subject}\r\nMessage-ID: <del-${Date.now()}@e2e.test>\r\nDate: ${new Date().toUTCString()}\r\n\r\nbody\r\n`, 'utf8');
+      const ap = await imapCmd(s, `APPEND ${imapQuote(name)}`, { literal: msg });
+      assert(ap.status === 'OK', `APPEND: ${ap.text}`);
+      const del = await imapCmd(s, `DELETE ${imapQuote(name)}`);
+      assert(del.status === 'OK', `DELETE: ${del.text}`);
+      const list = (await imapCmd(s, 'LIST "" "*"')).lines.join('\n');
+      assert(list.includes(`${name}.Sub`), 'inferior name removed');
+      await imapCmd(s, 'EXAMINE Trash');
+      const found = await imapCmd(s, `UID SEARCH SUBJECT ${imapQuote(subject)}`);
+      const uids = (found.lines.find((l) => l.startsWith('* SEARCH')) ?? '').replace('* SEARCH', '').trim();
+      assert(uids.length > 0, `message not in Trash: ${found.lines.join(' | ')}`);
+      await imapCmd(s, 'CLOSE');
+      assert((await imapCmd(s, `DELETE ${imapQuote(`${name}.Sub`)}`)).status === 'OK', 'cleanup');
+      return `Trash UID ${uids}, ${name}.Sub kept`;
+    });
     await imapCmd(s, 'LOGOUT');
   } finally { s.close(); }
 

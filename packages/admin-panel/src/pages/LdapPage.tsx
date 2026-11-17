@@ -9,6 +9,7 @@ import { api } from '../api/client.js';
 import toast from 'react-hot-toast';
 import { Toggle as ToggleSwitch } from '../components/Toggle.js';
 import { Can, WriteGuard } from '../components/Can.js';
+import { useT } from '../i18n/useT.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -623,6 +624,7 @@ function AttributeMapSection({ configs }: { configs: LdapSummary[] }) {
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export function LdapPage() {
+  const t = useT();
   const qc = useQueryClient();
   const [section, setSection] = useState<Section>('list');
   const [editingDomainId, setEditingDomainId] = useState<string | null>(null);
@@ -673,7 +675,7 @@ export function LdapPage() {
             <div className="flex items-center gap-3">
               <Server size={20} className="text-accent-fg" />
               <div>
-                <h1 className="text-xl font-semibold text-fg">LDAP / Active Directory</h1>
+                <h1 className="text-xl font-semibold text-fg">{t('page_ldap')}</h1>
                 <p className="text-xs text-fg-subtle">{SECTIONS.find(s => s.key === section)?.label}</p>
               </div>
             </div>

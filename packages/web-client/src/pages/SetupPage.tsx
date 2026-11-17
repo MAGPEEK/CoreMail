@@ -1,7 +1,9 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { useBranding } from '../hooks/useBranding.js';
+import { useT, fmt } from '../i18n/useT.js';
 
 export function SetupPage() {
+  const t = useT();
   const [step, setStep] = useState<'form' | 'done'>('form');
   const { productName } = useBranding();
   const [loading, setLoading] = useState(false);
@@ -28,15 +30,15 @@ export function SetupPage() {
     setError('');
 
     if (password !== confirm) {
-      setError('Passwörter stimmen nicht überein.');
+      setError(t('setup_err_mismatch'));
       return;
     }
     if (tokenRequired && !setupToken.trim()) {
-      setError('Bitte das Setup-Token eingeben.');
+      setError(t('setup_err_token'));
       return;
     }
     if (password.length < 8) {
-      setError('Passwort muss mindestens 8 Zeichen haben.');
+      setError(t('setup_err_length'));
       return;
     }
 
@@ -52,12 +54,12 @@ export function SetupPage() {
       });
       const data = await res.json() as { error?: string; success?: boolean };
       if (!res.ok) {
-        setError(data.error ?? 'Setup fehlgeschlagen.');
+        setError(data.error ?? t('setup_err_failed'));
         return;
       }
       setStep('done');
     } catch {
-      setError('Netzwerkfehler. Bitte versuche es erneut.');
+      setError(t('setup_err_network'));
     } finally {
       setLoading(false);
     }
@@ -68,9 +70,9 @@ export function SetupPage() {
       <div className="min-h-screen bg-accent flex items-center justify-center p-4">
         <div className="bg-surface rounded-lg shadow-xl p-8 w-full max-w-md text-center">
           <div className="text-5xl mb-4">✅</div>
-          <h2 className="text-2xl font-semibold text-fg mb-2">Setup abgeschlossen!</h2>
+          <h2 className="text-2xl font-semibold text-fg mb-2">{t('setup_done_title')}</h2>
           <p className="text-fg-subtle mb-6">
-            Dein Administrator-Konto wurde erstellt. Du kannst dich jetzt anmelden.
+            {t('setup_done_text')}
           </p>
           <button
             onClick={() => {
@@ -82,7 +84,7 @@ export function SetupPage() {
             }}
             className="w-full bg-accent hover:bg-accent-hover text-white font-medium py-2 px-4 rounded transition-colors"
           >
-            Zur Anmeldung
+            {t('setup_to_login')}
           </button>
         </div>
       </div>
@@ -100,15 +102,15 @@ export function SetupPage() {
             </svg>
             <span className="text-white text-xl font-semibold">{productName}</span>
           </div>
-          <p className="text-white text-sm">Erstkonfiguration</p>
+          <p className="text-white text-sm">{t('setup_subtitle')}</p>
         </div>
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="px-8 py-6 space-y-4">
           <div>
-            <h2 className="text-lg font-semibold text-fg">Willkommen bei {productName}</h2>
+            <h2 className="text-lg font-semibold text-fg">{fmt(t('setup_welcome'), { name: productName })}</h2>
             <p className="text-sm text-fg-subtle mt-1">
-              Richte deinen Administrator-Account ein, um loszulegen.
+              {t('setup_intro')}
             </p>
           </div>
 
@@ -122,7 +124,7 @@ export function SetupPage() {
           {tokenRequired && (
             <div>
               <label htmlFor="setup-token" className="block text-sm font-medium text-fg-muted mb-1">
-                Setup-Token
+                {t('setup_token_label')}
               </label>
               <input
                 id="setup-token"
@@ -130,14 +132,14 @@ export function SetupPage() {
                 required
                 autoComplete="off"
                 spellCheck={false}
-                placeholder="Einmal-Token aus dem Container-Log"
+                placeholder={t('setup_token_placeholder')}
                 value={setupToken}
                 onChange={(e) => setSetupToken(e.target.value)}
                 className="w-full border border-line-strong rounded px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-accent-fg focus:border-transparent"
               />
               <p className="text-xs text-fg-subtle mt-1">
-                Steht im Container-Log: <code className="bg-surface-2 px-1 rounded">docker logs coremail | grep -i "setup token"</code> —
-                oder vorab per Umgebungsvariable <code className="bg-surface-2 px-1 rounded">SETUP_TOKEN</code> setzen.
+                {t('setup_token_hint_log')} <code className="bg-surface-2 px-1 rounded">docker logs coremail | grep -i "setup token"</code> —
+                {' '}{t('setup_token_hint_env')} <code className="bg-surface-2 px-1 rounded">SETUP_TOKEN</code>{t('setup_token_hint_end')}
               </p>
             </div>
           )}
@@ -145,12 +147,12 @@ export function SetupPage() {
           {/* Domain */}
           <div>
             <label className="block text-sm font-medium text-fg-muted mb-1">
-              Mail-Domain
+              {t('setup_domain')}
             </label>
             <input
               type="text"
               required
-              placeholder="z.B. firma.de"
+              placeholder={t('setup_domain_placeholder')}
               value={domain}
               onChange={(e) => {
                 const val = e.target.value.toLowerCase();
@@ -162,14 +164,14 @@ export function SetupPage() {
               className="w-full border border-line-strong rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-fg focus:border-transparent"
             />
             <p className="text-xs text-fg-subtle mt-1">
-              Die Haupt-Domain deines Mailservers (ohne https://)
+              {t('setup_domain_hint')}
             </p>
           </div>
 
           {/* E-Mail */}
           <div>
             <label className="block text-sm font-medium text-fg-muted mb-1">
-              Administrator-E-Mail
+              {t('setup_admin_email')}
             </label>
             <input
               type="email"
@@ -184,12 +186,12 @@ export function SetupPage() {
           {/* Password */}
           <div>
             <label className="block text-sm font-medium text-fg-muted mb-1">
-              Passwort
+              {t('auth_password')}
             </label>
             <input
               type="password"
               required
-              placeholder="Mindestens 8 Zeichen"
+              placeholder={t('setup_password_placeholder')}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="w-full border border-line-strong rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-fg focus:border-transparent"
@@ -199,12 +201,12 @@ export function SetupPage() {
           {/* Confirm password */}
           <div>
             <label className="block text-sm font-medium text-fg-muted mb-1">
-              Passwort bestätigen
+              {t('setup_confirm_password')}
             </label>
             <input
               type="password"
               required
-              placeholder="Passwort wiederholen"
+              placeholder={t('setup_repeat_password')}
               value={confirm}
               onChange={(e) => setConfirm(e.target.value)}
               className="w-full border border-line-strong rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-fg focus:border-transparent"
@@ -216,7 +218,7 @@ export function SetupPage() {
             disabled={loading}
             className="w-full bg-accent hover:bg-accent-hover disabled:opacity-60 text-white font-medium py-2 px-4 rounded transition-colors mt-2"
           >
-            {loading ? 'Wird eingerichtet…' : 'Setup abschließen'}
+            {loading ? t('setup_submitting') : t('setup_submit')}
           </button>
         </form>
       </div>

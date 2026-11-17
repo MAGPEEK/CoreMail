@@ -33,6 +33,9 @@ const express = (await import('express')).default;
 const core = await import('@coremail/core');
 const { requireAuth } = await import('../../middleware/auth.js');
 const { adminCertificatesRouter, pemKeyMismatch } = await import('./certificates.js');
+const { decryptPrivateKey } = await import('@coremail/storage');
+/** The plain PEMs of a created row (keyPem is stored encrypted at rest). */
+const pems = (row: Row | undefined) => ({ certPem: String(row!['certPem']), keyPem: decryptPrivateKey(String(row!['keyPem'])) });
 
 const tok = core.signAccessToken({ sub: 'admin', email: 'admin@example.com', role: 'ORGANIZATION_MANAGEMENT', domainId: 'd1', sessionId: 's', mfaVerified: true });
 let server: Server;
@@ -68,7 +71,8 @@ test('self-signed: a real certificate for the key, unique serials, normalised do
   assert.equal(b.status, 201);
   const [ca, cb] = created as Array<{ certPem: string; keyPem: string; domains: string[]; services: string[] }>;
   const xa = new X509Certificate(ca!.certPem);
-  assert.equal(pemKeyMismatch(ca!.certPem, ca!.keyPem), null);
+  assert.match(ca!.keyPem, /^enc:v1:/, 'private key stored encrypted');
+  assert.equal(pemKeyMismatch(ca!.certPem, decryptPrivateKey(ca!.keyPem)), null);
   assert.match(xa.subjectAltName ?? '', /DNS:mail\.example\.com/);
   assert.deepEqual(ca!.domains, ['mail.example.com', 'localhost']);
   // 9.3: one protocol certificate serves SMTP, IMAP and POP3 together (deduplicated)
@@ -79,7 +83,7 @@ test('self-signed: a real certificate for the key, unique serials, normalised do
 
 test('upload: a key that does not belong to the certificate is refused', async () => {
   await call('POST', '/self-signed', { name: 'src', domains: ['mail.example.com'] });
-  const { certPem, keyPem } = created[0] as { certPem: string; keyPem: string };
+  const { certPem, keyPem } = pems(created[0]);
   created.length = 0;
   const other = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
   const bad = await call('POST', '/upload', { name: 'x', domains: ['mail.example.com'], certPem, keyPem: other });
@@ -88,6 +92,9 @@ test('upload: a key that does not belong to the certificate is refused', async (
   assert.equal(created.length, 0);
   const ok = await call('POST', '/upload', { name: 'x', domains: ['mail.example.com'], certPem, keyPem });
   assert.equal(ok.status, 201);
+  assert.equal(decryptPrivateKey(String(created[0]!['keyPem'])), keyPem, 'uploaded key stored encrypted, round trip');
+  assert.match(String(created[0]!['keyPem']), /^enc:v1:/);
+  assert.equal('keyPem' in ok.json, false, 'private key never returned');
 });
 
 test('services and domains are validated with a readable error', async () => {
@@ -110,7 +117,7 @@ test('deactivating HTTPS on an unknown certificate is a 404', async () => {
 
 test('upload: a domain the certificate does not name is refused (no name-mismatch on the HTTPS proxy)', async () => {
   await call('POST', '/self-signed', { name: 'src', domains: ['mail.example.com'] });
-  const { certPem, keyPem } = created[0] as { certPem: string; keyPem: string };
+  const { certPem, keyPem } = pems(created[0]);
   created.length = 0;
   const bad = await call('POST', '/upload', { name: 'x', domains: ['mail.example.com', 'autodiscover.example.com'], certPem, keyPem });
   assert.equal(bad.status, 400);

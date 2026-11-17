@@ -12,12 +12,17 @@
  *   3. If nothing is found: returns `null`, the caller generates a
  *      self-signed cert (only sensible on the very first start).
  *
+ * The private key is stored encrypted (private-key-crypto.ts) and returned as
+ * plain PEM; an undecryptable key throws PrivateKeyDecryptError (the caller logs
+ * it and does not serve TLS) instead of silently switching certificates.
+ *
  * This architecture replaces the fragile ServerSettings.tlsCert sync that until
  * v5.2.7 was updated by hand in `applyProtocolCert()` and could be
  * overwritten by the smtp-server on every restart.
  */
 
 import { prisma } from './prisma/index.js';
+import { decryptPrivateKey } from './private-key-crypto.js';
 
 const PEM_CERT_RE = /-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g;
 
@@ -88,7 +93,7 @@ export async function loadProtocolCert(service: string): Promise<ProtocolCert | 
       // 9.2.x: leaf + intermediates — an uploaded certificate with a separate
       // chain was served without its intermediates on SMTP/IMAP/POP3.
       certPem:  pemWithChain(cert.certPem, cert.chainPem),
-      keyPem:   cert.keyPem,
+      keyPem:   decryptPrivateKey(cert.keyPem),
       source:   'protocol-cert',
       certId:   cert.id,
       certName: cert.name,
@@ -111,7 +116,7 @@ export async function loadProtocolCert(service: string): Promise<ProtocolCert | 
     if (staging) return null;
     return {
       certPem: settings.tlsCert,
-      keyPem:  settings.tlsKey,
+      keyPem:  decryptPrivateKey(settings.tlsKey),
       source:  'legacy-server-settings',
     };
   }

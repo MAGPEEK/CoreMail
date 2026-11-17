@@ -236,6 +236,11 @@ function install(): Db {
         applyData(target as unknown as Row, data);
         return target;
       },
+      updateMany: async ({ where, data }: { where: Row; data: Row }) => {
+        const targets = db.folders.filter((x) => matches(x as unknown as Row, where));
+        for (const target of targets) applyData(target as unknown as Row, data);
+        return { count: targets.length };
+      },
       delete: async ({ where }: { where: { id: string } }) => { db.folders = db.folders.filter((x) => x.id !== where.id); return {}; },
     },
     message: {

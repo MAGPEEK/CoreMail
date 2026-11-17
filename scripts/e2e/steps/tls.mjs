@@ -8,6 +8,7 @@
 //    host name (CN = mail.<E2E_DOMAIN>, not mail.localhost);
 //  - cleanup: the uploaded certificate is deleted.
 import tls from 'node:tls';
+import { execFileSync } from 'node:child_process';
 import { X509Certificate } from 'node:crypto';
 import { check, assert, creds, http, session, waitFor, dockerExec, LineClient, smtpRead, smtpCmd, HOST, PORTS, DOMAIN } from '../lib.mjs';
 
@@ -127,6 +128,22 @@ export async function run(state) {
     const wrong = tlsPorts.filter((p) => p.certId !== certId || p.problem);
     assert(wrong.length === 0, `mismatch: ${JSON.stringify(wrong.map((p) => [p.port, p.certId, p.problem]))}`);
     return `${tlsPorts.length} ports, problem=${r.json.problem}`;
+  });
+
+  await check('tls: private keys are stored encrypted (enc:v1) and never returned by the API', async () => {
+    const pg = process.env.E2E_PG_CONTAINER ?? 'coremail-e2e-postgres';
+    const sql = `SELECT count(*) FILTER (WHERE "keyPem" NOT LIKE 'enc:v1:%' OR "acmeAccount" NOT LIKE 'enc:v1:%'), count(*)`
+      + ` FROM certificates WHERE "keyPem" IS NOT NULL OR "acmeAccount" IS NOT NULL;`
+      + ` SELECT coalesce("tlsKey" LIKE 'enc:v1:%', true) FROM server_settings WHERE id = 'singleton';`;
+    const out = execFileSync('docker', ['exec', pg, 'sh', '-c', `psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAq -c "${sql.replace(/"/g, '\\"')}"`],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim().split('\n');
+    const [plain, total] = out[0].split('|').map(Number);
+    assert(total > 0 && plain === 0, `certificates with a plain private key: ${plain} of ${total}`);
+    assert(out[1] === 't', `server_settings.tlsKey not encrypted (${out[1]})`);
+    const list = await http('GET', '/api/v1/admin/certificates', { token: admin });
+    const one = await http('GET', `/api/v1/admin/certificates/${certId}`, { token: admin });
+    assert(!/keyPem|PRIVATE KEY|enc:v1:/.test(list.text + one.text), 'private key material in an API response');
+    return `${total} keys encrypted, tlsKey encrypted, none in responses`;
   });
 
   await check('tls: removing the services falls back to the self-signed default for the host name on every port', async () => {

@@ -42,6 +42,8 @@ export let folders: Row[] = [];
 export let messages: Row[] = [];
 export const settings = new Map<string, Row>();
 export const writes: string[] = [];
+/** Ids passed to folder.delete, in call order. */
+export const deletedFolderIds: string[] = [];
 export const summarySelects: Row[] = [];
 export const auditRows: Row[] = [];
 /** Arguments of every prisma.message.findFirst call (include / where checks). */
@@ -68,6 +70,7 @@ export function seed(): void {
   messages = [m('m-sm1', 'f-sm1-inbox'), m('m-sm2', 'f-sm2-inbox'), m('m-erin', 'f-erin-inbox'), m('m-alice', 'f-alice-inbox')];
   settings.clear();
   writes.length = 0;
+  deletedFolderIds.length = 0;
   summarySelects.length = 0;
   auditRows.length = 0;
   messageFindFirstArgs.length = 0;
@@ -186,8 +189,16 @@ installFakePrisma({
       apply(row, q.data);
       return row;
     },
+    updateMany: (a) => {
+      const q = a as { where: Row; data: Row };
+      writes.push('folder.updateMany');
+      const rows = folders.filter((f) => matches(f, q.where));
+      for (const row of rows) apply(row, q.data);
+      return { count: rows.length };
+    },
     delete: (a) => {
       writes.push('folder.delete');
+      deletedFolderIds.push(String((a as { where: Row }).where['id']));
       folders = folders.filter((f) => f['id'] !== (a as { where: Row }).where['id']);
       return {};
     },

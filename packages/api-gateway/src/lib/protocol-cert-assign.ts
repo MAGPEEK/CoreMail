@@ -21,7 +21,7 @@
  */
 import { X509Certificate, generateKeyPair, randomBytes, randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
-import { prisma } from '@coremail/storage';
+import { prisma, encryptPrivateKey } from '@coremail/storage';
 import { createLogger, getRedisClient } from '@coremail/core';
 import { applyProtocolCert, clearProtocolCert, publishTlsReload } from './cert-acme.js';
 import type { RenewRedis } from './cert-renewal.js';
@@ -254,7 +254,7 @@ export async function fallbackToSelfSigned(opts: AssignOptions & { excludeId?: s
       const created = await prisma.certificate.create({
         data: {
           name: hostname, domains: [hostname], services: [], type: 'SELF_SIGNED',
-          status: deriveCertStatus(expiresAt), certPem, keyPem, issuedAt: new Date(), expiresAt, autoRenew: false,
+          status: deriveCertStatus(expiresAt), certPem, keyPem: encryptPrivateKey(keyPem), issuedAt: new Date(), expiresAt, autoRenew: false,
         },
         select: { id: true },
       });
@@ -505,7 +505,7 @@ async function regenerateDefaultSelfSigned(target: CertRow, hostname: string | n
   await prisma.certificate.update({
     where: { id: target.id },
     data: {
-      name: wanted, domains: [wanted], certPem, keyPem, chainPem: null,
+      name: wanted, domains: [wanted], certPem, keyPem: encryptPrivateKey(keyPem), chainPem: null,
       status: deriveCertStatus(expiresAt), issuedAt: new Date(), expiresAt,
     },
   });

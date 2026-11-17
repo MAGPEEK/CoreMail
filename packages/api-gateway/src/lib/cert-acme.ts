@@ -8,7 +8,7 @@
  */
 import dns from 'node:dns';
 import { isIP } from 'node:net';
-import { prisma } from '@coremail/storage';
+import { prisma, encryptPrivateKey, readPrivateKey, PrivateKeyDecryptError } from '@coremail/storage';
 import { decryptMfaSecret, encryptMfaSecret } from '@coremail/storage/auth';
 import { getRedisClient, createLogger, CHANNEL_SETTINGS_RELOAD, isBlockedAddress } from '@coremail/core';
 import { deriveCertStatus, hostnameUpdateFor, parseCertValidity } from './cert-lifecycle.js';
@@ -147,9 +147,36 @@ export async function createAcmeClient(directoryUrl: string, accountKeyPem: stri
 
 export async function createAccountKeyPem(): Promise<string> {
   const factory = (globalThis as { __acmeClientFactory?: AcmeClientFactory }).__acmeClientFactory;
-  if (factory) return '-----BEGIN TEST ACCOUNT KEY-----';
+  if (factory) return '-----BEGIN PRIVATE KEY-----\nTEST ACCOUNT KEY\n-----END PRIVATE KEY-----\n';
   const acme = await import('acme-client');
   return (await acme.crypto.createPrivateKey(2048)).toString();
+}
+
+/**
+ * The ACME account key of a certificate (`Certificate.acmeAccount`, encrypted at
+ * rest like the certificate keys). A key stored as plain PEM before 9.4 is
+ * encrypted on use (compare-and-set; the startup migration does the same for
+ * all rows). A key that can no longer be decrypted (MFA_ENCRYPTION_KEY or
+ * JWT_SECRET/PEPPER changed) is replaced by a new one, i.e. a new ACME account
+ * — the old account only identified this server at the CA.
+ */
+async function acmeAccountKey(certId: string, stored: string | null, signal: AbortSignal): Promise<string> {
+  if (stored) {
+    try {
+      const { pem, needsReencrypt } = readPrivateKey(stored);
+      if (needsReencrypt) {
+        await prisma.certificate.updateMany({ where: { id: certId, acmeAccount: stored }, data: { acmeAccount: encryptPrivateKey(pem) } });
+      }
+      return pem;
+    } catch (err) {
+      if (!(err instanceof PrivateKeyDecryptError)) throw err;
+      log.warn({ certId, error: err.message }, 'ACME account key unreadable with the configured key — registering a new ACME account');
+    }
+  }
+  const pem = await createAccountKeyPem();
+  throwIfAborted(signal);
+  await prisma.certificate.update({ where: { id: certId }, data: { acmeAccount: encryptPrivateKey(pem) } });
+  return pem;
 }
 
 async function createCsrPem(domains: string[]): Promise<{ keyPem: string; csr: Buffer }> {
@@ -184,7 +211,8 @@ export async function probeAcmeDirectory(directoryUrl: string): Promise<string> 
 //   • Deletion: active cert deleted → tlsCert/tlsKey = NULL → self-signed.
 
 /**
- * Writes certPem/keyPem to ServerSettings.tlsCert/tlsKey, marks this cert as
+ * Writes certPem/keyPem to ServerSettings.tlsCert/tlsKey (key encrypted at rest;
+ * `keyPem` may be plain PEM or an already encrypted stored value), marks this cert as
  * the only isActiveProtocol cert and publishes CHANNEL_SETTINGS_RELOAD
  * (SMTP/IMAP/POP3 swap their TLS context) plus the TLS proxy reload.
  *
@@ -206,8 +234,8 @@ export async function applyProtocolCert(
 
   await prisma.serverSettings.upsert({
     where:  { id: 'singleton' },
-    create: { id: 'singleton', tlsCert: certPem, tlsKey: keyPem, ...(newHostname ? { publicHostname: newHostname } : {}) },
-    update: { tlsCert: certPem, tlsKey: keyPem, ...(newHostname ? { publicHostname: newHostname } : {}) },
+    create: { id: 'singleton', tlsCert: certPem, tlsKey: encryptPrivateKey(keyPem), ...(newHostname ? { publicHostname: newHostname } : {}) },
+    update: { tlsCert: certPem, tlsKey: encryptPrivateKey(keyPem), ...(newHostname ? { publicHostname: newHostname } : {}) },
   });
   await prisma.$transaction([
     prisma.certificate.updateMany({ where: { id: { not: certId } }, data: { isActiveProtocol: false } }),
@@ -375,12 +403,7 @@ async function runAcmeIssuanceCore(
 
     // The account key is stored before the first CA call: every retry reuses
     // the same account (new registrations are rate limited, too).
-    let accountKeyPem = existing.acmeAccount ?? null;
-    if (!accountKeyPem) {
-      accountKeyPem = await createAccountKeyPem();
-      throwIfAborted(signal);
-      await prisma.certificate.update({ where: { id: certId }, data: { acmeAccount: accountKeyPem } });
-    }
+    const accountKeyPem = await acmeAccountKey(certId, existing.acmeAccount ?? null, signal);
 
     const directoryUrl = acmeDirectoryUrl(staging);
     const client = await createAcmeClient(directoryUrl, accountKeyPem);
@@ -401,7 +424,7 @@ async function runAcmeIssuanceCore(
       data: {
         status:        deriveCertStatus(expiresAt),
         certPem,
-        keyPem:        certKeyPem,
+        keyPem:        encryptPrivateKey(certKeyPem),
         chainPem:      null, // certPem is the full chain
         issuedAt:      new Date(),
         expiresAt,

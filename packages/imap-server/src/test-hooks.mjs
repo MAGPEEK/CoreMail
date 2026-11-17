@@ -43,6 +43,7 @@ export * from '${storageUrl('mime/index.ts')}';
 export * from '${storageUrl('raw-message.ts')}';
 export * from '${storageUrl('mailbox-access.ts')}';
 export * from '${storageUrl('references.ts')}';
+export * from '${storageUrl('folder-delete.ts')}';
 import { splitReferences } from '${storageUrl('references.ts')}';
 // v9.1 THREAD=REFERENCES: the stored column of the (fake) message rows; no backfill here.
 export const loadThreadReferences = async (folderId, ids) => {

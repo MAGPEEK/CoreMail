@@ -7,7 +7,7 @@ import {
   generateSelfSignedCert, tlsPemToBuffers, applyTlsToListeners, tlsMaterialEquals, installProcessGuards,
   startAuthInvalidationSubscriber, resolveBindAddress, listenWithRecovery,
 } from '@coremail/core';
-import { connectDatabase, waitForObjectStorage, prisma, loadProtocolCert, selfSignedFallbackHostname, invalidateQueueSettingsCache } from '@coremail/storage';
+import { connectDatabase, waitForObjectStorage, prisma, loadProtocolCert, selfSignedFallbackHostname, encryptPrivateKey, invalidateQueueSettingsCache } from '@coremail/storage';
 import { createSmtpServer } from './core/factory.js';
 import { smtpLiveSessions } from './core/live-sessions.js';
 import { inboundTarpitMaxDelayMs } from './core/session.js';
@@ -204,8 +204,8 @@ async function refreshTlsConfig(): Promise<void> {
     // Store in DB so that all other mail protocols use the same certificate
     await prisma.serverSettings.upsert({
       where:  { id: 'singleton' },
-      create: { id: 'singleton', publicHostname: _hostname, tlsCert: certPem, tlsKey: keyPem },
-      update: { tlsCert: certPem, tlsKey: keyPem },
+      create: { id: 'singleton', publicHostname: _hostname, tlsCert: certPem, tlsKey: encryptPrivateKey(keyPem) },
+      update: { tlsCert: certPem, tlsKey: encryptPrivateKey(keyPem) },
     });
     log.info('Self-signed TLS certificate generated and stored in DB');
   } catch (err) {

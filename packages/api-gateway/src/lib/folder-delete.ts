@@ -1,69 +1,105 @@
 /**
- * Deleting a folder without losing mail (9.3 review A1).
+ * REST folder delete rules (9.3 review A1; subfolders: 9.4). The delete itself —
+ * mail of the deleted folder(s) to Trash through the message store, no orphaned
+ * subfolders — is `deleteFolderMovingMail()` in @coremail/storage (also used by
+ * IMAP DELETE).
  *
- * `Message.folder` is `onDelete: Cascade`: a plain `prisma.folder.delete()` on a
- * folder that still holds messages removes them for good — no tombstone, no
- * modSeq, invisible to IMAP CONDSTORE/QRESYNC, JMAP /changes and ActiveSync, and
- * not recoverable. Before the folder row goes, every message in it (live ones
- * AND tombstones of recoverable items) is moved into the mailbox's Trash through
- * the message store, so the cascade has nothing left to delete:
- *  - folder outside Trash: live messages become live messages in Trash;
- *  - folder inside Trash (a subfolder of it): live messages are expunged first
- *    (tombstone, recoverable for DELETED_ITEM_RETENTION_DAYS), then moved;
- *  - tombstones keep `deletedAt`, so they stay recoverable.
- * Subfolders are not deleted by the callers (the foreign router answers 409, the
- * own-mailbox route keeps them: the FolderTree relation sets their parentId to
- * null), so only the folder's own messages are affected.
- * Everything runs in one transaction; without a Trash folder nothing is changed.
+ * The routes decide first (`folderDeleteRefusal()`):
+ *  - without `?recursive=true` only the folder itself is deleted. Its direct
+ *    subfolders move up to its parent (`subfolders: 'reparent'`: own mailbox and
+ *    the pre-9.3 compat route, as in 9.3 where they stayed, but no longer at the
+ *    top level) or the delete is refused with 409 FOLDER_HAS_SUBFOLDERS
+ *    (`subfolders: 'refuse'`: the 9.3 shared/delegated routes);
+ *  - with `?recursive=true` the folder and all its subfolders are deleted; a
+ *    system folder inside the subtree is never deleted (409 PROTECTED_SUBFOLDER);
+ *  - live mail in what is deleted needs `?force=true` (409 FOLDER_NOT_EMPTY;
+ *    the compat route implies it, as before).
  */
-import { prisma, moveMessages, expunge, type MessageStoreTx } from '@coremail/storage';
+import { prisma, folderSubtree, deleteFolderMovingMail, type FolderDeleteResult } from '@coremail/storage';
 
-export interface FolderDeleteResult {
-  ok: boolean;
-  /** Messages moved into Trash (live + tombstones). */
-  moved: number;
-  /** Live messages expunged (tombstoned) first because the folder was inside Trash. */
-  expunged: number;
-  /** Live messages that were in the folder (what the user saw). */
-  live: number;
+export interface FolderRef { id: string; mailboxId: string }
+
+export interface FolderTreeSummary {
+  /** Number of subfolders at any depth. */
+  subfolders: number;
+  /** Live messages in the folder and all its subfolders. */
+  count: number;
+  /** Live messages in the folder itself. */
+  ownCount: number;
+  /** Name of a protected folder inside the subtree (excluding the folder itself), if any. */
+  protectedInside: string | null;
 }
 
-async function isInsideFolder(tx: MessageStoreTx, folderParentId: string | null, ancestorId: string): Promise<boolean> {
-  const seen = new Set<string>();
-  let cursor = folderParentId;
-  while (cursor && !seen.has(cursor)) {
-    if (cursor === ancestorId) return true;
-    seen.add(cursor);
-    const next: { parentId: string | null } | null = await tx.folder.findUnique({ where: { id: cursor }, select: { parentId: true } });
-    cursor = next?.parentId ?? null;
-  }
-  return false;
+export interface FolderDeleteOptions {
+  /** Delete subfolders too (`?recursive=true`). */
+  recursive: boolean;
+  /** Delete although live mail would move to Trash (`?force=true`). */
+  force: boolean;
 }
 
-/**
- * Moves the folder's messages to the mailbox Trash (message store), then deletes
- * the now empty folder. `ok: false` (nothing changed) when the folder still holds
- * messages and the mailbox has no Trash folder.
- */
-export async function deleteFolderKeepingMail(folder: { id: string; mailboxId: string; parentId: string | null }): Promise<FolderDeleteResult> {
-  return prisma.$transaction(async (tx) => {
-    const rows = await tx.message.findMany({ where: { folderId: folder.id }, select: { id: true, deletedAt: true } });
-    const liveIds = rows.filter((m) => m.deletedAt === null).map((m) => m.id);
-    if (rows.length === 0) {
-      await tx.folder.delete({ where: { id: folder.id } });
-      return { ok: true, moved: 0, expunged: 0, live: 0 };
-    }
-    const trash = await tx.folder.findFirst({ where: { mailboxId: folder.mailboxId, name: 'Trash' }, select: { id: true } });
-    if (!trash || trash.id === folder.id) return { ok: false, moved: 0, expunged: 0, live: liveIds.length };
+/** What a route does with subfolders when `recursive` is not set. */
+export type SubfolderPolicy = 'reparent' | 'refuse';
 
-    const insideTrash = await isInsideFolder(tx, folder.parentId, trash.id);
-    if (insideTrash && liveIds.length > 0) {
-      await expunge(tx, liveIds, { mailboxId: folder.mailboxId, where: { folderId: folder.id, deletedAt: null } });
-    }
-    await moveMessages(tx, rows.map((m) => m.id), trash.id, {
-      targetMailboxId: folder.mailboxId, sourceMailboxId: folder.mailboxId,
-    });
-    await tx.folder.delete({ where: { id: folder.id } });
-    return { ok: true, moved: rows.length, expunged: insideTrash ? liveIds.length : 0, live: liveIds.length };
+export type FolderDeleteRefusalCode = 'FOLDER_HAS_SUBFOLDERS' | 'PROTECTED_SUBFOLDER' | 'FOLDER_NOT_EMPTY';
+export interface FolderDeleteRefusal {
+  error: string;
+  code: FolderDeleteRefusalCode;
+  subfolders: number;
+  count: number;
+}
+
+/** Counts shown to the user before a delete (and in the 409 answers). */
+export async function summarizeFolderTree(folder: FolderRef, protectedNames: ReadonlySet<string>): Promise<FolderTreeSummary> {
+  const tree = await folderSubtree(prisma, folder);
+  if (tree.length === 0) return { subfolders: 0, count: 0, ownCount: 0, protectedInside: null };
+  const ownCount = await prisma.message.count({ where: { folderId: folder.id, deletedAt: null } });
+  const count = tree.length === 1 ? ownCount : await prisma.message.count({
+    where: { folderId: { in: tree.map((f) => f.id) }, deletedAt: null },
   });
+  const protectedNode = tree.find((f) => f.depth > 0 && protectedNames.has(f.name));
+  return { subfolders: tree.length - 1, count, ownCount, protectedInside: protectedNode?.name ?? null };
+}
+
+/** Pure decision: why a delete must not run yet (null = go ahead). */
+export function decideFolderDelete(
+  summary: FolderTreeSummary, opts: FolderDeleteOptions, subfolders: SubfolderPolicy,
+): FolderDeleteRefusal | null {
+  const counts = { subfolders: summary.subfolders, count: summary.count };
+  if (opts.recursive) {
+    if (summary.protectedInside) {
+      return { error: `Unterordner „${summary.protectedInside}" ist ein Systemordner und kann nicht gelöscht werden`, code: 'PROTECTED_SUBFOLDER', ...counts };
+    }
+    if (summary.count > 0 && !opts.force) return { error: 'Ordner nicht leer', code: 'FOLDER_NOT_EMPTY', ...counts };
+    return null;
+  }
+  if (summary.subfolders > 0 && subfolders === 'refuse') {
+    return { error: 'Ordner hat Unterordner', code: 'FOLDER_HAS_SUBFOLDERS', ...counts };
+  }
+  if (summary.ownCount > 0 && !opts.force) {
+    return { error: 'Ordner nicht leer', code: 'FOLDER_NOT_EMPTY', subfolders: summary.subfolders, count: summary.ownCount };
+  }
+  return null;
+}
+
+/** Reads `?recursive=true` / `?force=true` from a request query. */
+export function folderDeleteOptions(query: Record<string, unknown>): FolderDeleteOptions {
+  return { recursive: query['recursive'] === 'true', force: query['force'] === 'true' };
+}
+
+export async function folderDeleteRefusal(
+  folder: FolderRef, opts: FolderDeleteOptions, protectedNames: ReadonlySet<string>, subfolders: SubfolderPolicy,
+): Promise<FolderDeleteRefusal | null> {
+  return decideFolderDelete(await summarizeFolderTree(folder, protectedNames), opts, subfolders);
+}
+
+/** Runs the delete the routes decided on (see @coremail/storage folder-delete.ts). */
+export function deleteFolder(folder: FolderRef, opts: FolderDeleteOptions): Promise<FolderDeleteResult> {
+  return deleteFolderMovingMail(prisma, folder, opts.recursive ? 'recursive' : 'reparent');
+}
+
+/** HTTP answer for a delete that changed nothing (`ok: false`). */
+export function folderDeleteFailure(done: FolderDeleteResult): { status: number; error: string } {
+  return done.reason === 'not-found'
+    ? { status: 404, error: 'Ordner nicht gefunden' }
+    : { status: 409, error: 'Papierkorb nicht gefunden' };
 }

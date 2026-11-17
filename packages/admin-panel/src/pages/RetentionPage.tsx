@@ -10,6 +10,7 @@ import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
 import { errorMessage } from '../lib/errors.js';
 import { parseRetentionDays, policyBody, tagChangePlan } from '../lib/retention.js';
+import { useT } from '../i18n/useT.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -732,6 +733,7 @@ function PolicyModal({ policy, allTags, onClose }: { policy: RetentionPolicy | n
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export function RetentionPage() {
+  const t = useT();
   const qc = useQueryClient();
   const [tab, setTab] = useState<'policies' | 'tags'>('policies');
   const [policyModal, setPolicyModal] = useState<'create' | RetentionPolicy | null>(null);
@@ -799,7 +801,7 @@ export function RetentionPage() {
         <div className="flex items-center gap-3">
           <Archive size={22} className="text-accent-fg" />
           <div>
-            <h1 className="text-xl font-semibold text-fg">Aufbewahrungsrichtlinien</h1>
+            <h1 className="text-xl font-semibold text-fg">{t('page_retention')}</h1>
             <p className="text-sm text-fg-subtle">
               Definiere, wann E-Mails automatisch archiviert oder gelöscht werden — per Vorlage oder eigener Regel.
             </p>

@@ -315,7 +315,8 @@ rspamd configuration to `/volume1/docker/coremail/config/`.
   **except `JWT_SECRET`**: a publicly known JWT secret lets anyone forge login
   tokens, so it is rotated right away. Two keys were derived from it, and both
   are pinned first with the same bytes: the 2FA (TOTP) encryption key as
-  `MFA_ENCRYPTION_KEY` (existing 2FA keeps working) and the backup encryption
+  `MFA_ENCRYPTION_KEY` (existing 2FA and the certificate private keys keep
+  working) and the backup encryption
   key as `BACKUP_ENCRYPTION_KEY` (HKDF-SHA256 of `JWT_SECRET\0PEPPER`, salt
   `coremail-backup-key`, info `coremail backup encryption key v1`, as in
   `backup-crypto.ts` — existing encrypted backups stay restorable). Every user

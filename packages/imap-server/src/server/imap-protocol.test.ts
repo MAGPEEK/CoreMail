@@ -58,7 +58,7 @@ interface FakeMessage {
   references?: string | null;
 }
 
-interface FakeFolder { id: string; mailboxId: string; name: string; displayName: string }
+interface FakeFolder { id: string; mailboxId: string; name: string; displayName: string; parentId?: string | null }
 interface FakeMailbox { id: string; uidNext: number; uidValidity: number; highestModSeq: bigint }
 
 interface FakeDb {
@@ -227,6 +227,11 @@ function installFakes(): { db: FakeDb; redis: RedisFake } {
         const target = db.folders.find((f) => f.id === where.id);
         if (target) applyData(asRow(target), data);
         return target;
+      },
+      updateMany: async ({ where, data }: { where: Row; data: Row }) => {
+        const targets = db.folders.filter((f) => matches(asRow(f), where));
+        for (const target of targets) applyData(asRow(target), data);
+        return { count: targets.length };
       },
       delete: async ({ where }: { where: { id: string } }) => {
         db.folders = db.folders.filter((f) => f.id !== where.id);
@@ -926,13 +931,64 @@ describe('CREATE, DELETE and RENAME (RFC 9051 §6.3.4–6)', () => {
     assert.equal(response.status, 'NO');
   });
 
-  test('DELETE removes a mailbox', async (t) => {
+  test('DELETE removes a mailbox; its messages go to Trash through the message store (new UID + modSeq, still live)', async (t) => {
     const { client, db } = await login(t);
+    db.folders.push({ id: 'f-trash', mailboxId: 'mb1', name: 'Trash', displayName: 'Trash' });
+    const workIds = db.messages.filter((m) => m.folderId === 'f-work').map((m) => m.id);
+    const before = db.mailbox.highestModSeq;
 
     const response = await client.cmd('DELETE Work');
 
     assert.equal(response.status, 'OK');
     assert.ok(!db.folders.some((f) => f.name === 'Work'));
+    assert.equal(workIds.length, 2);
+    for (const id of workIds) {
+      const m = db.messages.find((x) => x.id === id);
+      assert.ok(m, 'message kept (no cascade)');
+      assert.equal(m.folderId, 'f-trash');
+      assert.equal(m.deletedAt, null);
+      assert.equal(m.modSeq, before + 1n, 'one new modSeq for the move');
+      assert.ok(m.uid >= 13, 'new UID from the mailbox counter');
+    }
+  });
+
+  test('DELETE of a mailbox with messages and no Trash fails with NO [CANNOT] and changes nothing', async (t) => {
+    const { client, db } = await login(t);
+
+    const response = await client.cmd('DELETE Work');
+
+    assert.match(response.tagged, /NO \[CANNOT\]/);
+    assert.ok(db.folders.some((f) => f.name === 'Work'));
+    assert.equal(db.messages.filter((m) => m.folderId === 'f-work' && m.deletedAt === null).length, 2);
+  });
+
+  test('DELETE keeps inferiors: name-based ones stay, parentId-linked ones move up to the parent', async (t) => {
+    const { client, db } = await login(t);
+    db.folders.push(
+      { id: 'f-top', mailboxId: 'mb1', name: 'Top', displayName: 'Top' },
+      { id: 'f-mid', mailboxId: 'mb1', name: 'Mid', displayName: 'Mid', parentId: 'f-top' },
+      { id: 'f-leaf', mailboxId: 'mb1', name: 'Leaf', displayName: 'Leaf', parentId: 'f-mid' },
+    );
+
+    assert.equal((await client.cmd('DELETE Archive')).status, 'OK');
+    assert.ok(db.folders.some((f) => f.name === 'Archive.2025'), 'RFC 9051 §6.3.5: inferior names remain');
+
+    assert.equal((await client.cmd('DELETE Mid')).status, 'OK');
+    assert.ok(!db.folders.some((f) => f.id === 'f-mid'));
+    assert.equal(db.folders.find((f) => f.id === 'f-leaf')?.parentId, 'f-top', 'no orphan at the top level');
+  });
+
+  test('DELETE of a folder below Trash expunges its live messages (recoverable tombstones in Trash)', async (t) => {
+    const { client, db } = await login(t);
+    db.folders.push(
+      { id: 'f-trash', mailboxId: 'mb1', name: 'Trash', displayName: 'Trash' },
+      { id: 'f-old', mailboxId: 'mb1', name: 'Old', displayName: 'Old', parentId: 'f-trash' },
+    );
+    const m = db.deliver('f-old');
+
+    assert.equal((await client.cmd('DELETE Old')).status, 'OK');
+    assert.equal(m.folderId, 'f-trash');
+    assert.ok(m.deletedAt instanceof Date, 'expunged → tombstone');
   });
 
   test('DELETE INBOX fails with NO', async (t) => {

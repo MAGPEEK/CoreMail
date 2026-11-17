@@ -37,10 +37,19 @@ export function createBullMqConnection(): Redis {
   return conn;
 }
 
+/**
+ * Closes the shared client. A client that is not connected (connecting /
+ * reconnecting to an unreachable server) is disconnected immediately — `quit()`
+ * would queue behind the reconnect loop, whose timer keeps the process alive.
+ */
 export async function closeRedis(): Promise<void> {
-  if (_client) {
-    await _client.quit();
-    _client = null;
+  const client = _client;
+  if (!client) return;
+  _client = null;
+  if (client.status === 'ready') {
+    await client.quit().catch(() => client.disconnect());
+  } else {
+    client.disconnect();
   }
 }
 

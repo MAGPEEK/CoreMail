@@ -390,7 +390,7 @@ export function BackupsPage() {
         <div>
           <h1 className="text-2xl font-semibold text-fg flex items-center gap-2">
             <HardDriveDownload size={22} className="text-accent-fg" />
-            Backup &amp; Restore
+            {t('nav_backups')}
           </h1>
           <p className="text-sm text-fg-subtle mt-1">
             Backups verwalten, Zeitpläne konfigurieren, Daten wiederherstellen.

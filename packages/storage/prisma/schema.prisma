@@ -1556,7 +1556,7 @@ model ServerSettings {
   // Generated automatically as a self-signed certificate on first start.
   // Can be replaced with an official Let's Encrypt certificate via the admin panel.
   tlsCert  String?  // PEM-encoded certificate
-  tlsKey   String?  // PEM-encoded private key
+  tlsKey   String?  // PEM private key, encrypted at rest (enc:v1, storage private-key-crypto.ts)
 
   // ── v6: one-time setup wizard ────────────────────────────────────────────────
   // setupCompletedAt is set exactly once (atomic claim in POST /setup/complete)
@@ -1748,7 +1748,7 @@ model Certificate {
   status      CertStatus @default(PENDING)
   // PEM data (stored in plaintext for internal use)
   certPem     String?                         // certificate (public)
-  keyPem      String?                         // private key
+  keyPem      String?                         // PEM private key, encrypted at rest (enc:v1, storage private-key-crypto.ts)
   chainPem    String?                         // CA chain
   // Timestamps
   issuedAt    DateTime?
@@ -1760,7 +1760,7 @@ model Certificate {
   // isActiveProtocol marks which certificate is currently stored there (only one).
   isActiveProtocol Boolean    @default(false)
   // Let's Encrypt account key (PEM) — stored per server
-  acmeAccount String?                         // ACME Account Key PEM
+  acmeAccount String?                         // ACME account key PEM, encrypted at rest (enc:v1, storage private-key-crypto.ts)
   acmeEmail   String?                         // e-mail for Let's Encrypt notifications
   // 9.2.x: Let's Encrypt staging environment (test, untrusted) — kept for retries / renewals
   acmeStaging Boolean    @default(false)
