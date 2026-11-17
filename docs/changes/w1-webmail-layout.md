@@ -21,9 +21,14 @@ SemVer: MINOR (UI only, no API, config or schema change).
 ### Changed
 - Webmail header: logo and product name left, the search centred (with the search-operator help
   next to it, `/` still focuses it), notifications, settings and profile right.
-- Calendar ribbon now uses the shared command bar (same keyboard behaviour and "…" overflow).
+- Webmail: "Neue E-Mail" is no longer a separate button in the folder pane — the command bar's
+  split button (and the `n` / `c` shortcut) starts a new mail.
+- Calendar ribbon now uses the shared command bar (same keyboard behaviour and "…" overflow); its
+  filter popover takes focus, closes with Escape and returns focus to the Filter button.
 - Toolbars follow the toolbar keyboard pattern: one tab stop, ←/→ between commands, Home/End;
-  menus opened from a toolbar take focus and support ↑/↓, → into submenus and ← back.
+  menus opened from a toolbar take focus and support ↑/↓, → into submenus, ← or Escape back out of
+  a submenu, Escape / Tab to close; focus returns to the toolbar button (also after a dialog
+  opened from the menu closes), and keys pressed in a menu no longer trigger mail shortcuts.
 
 ### Fixed
 - Webmail: the task list scrolls when it is longer than the window.
