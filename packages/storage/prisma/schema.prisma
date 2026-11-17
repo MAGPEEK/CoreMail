@@ -1733,7 +1733,7 @@ model Certificate {
   // isActiveProtocol marks which certificate is currently stored there (only one).
   isActiveProtocol Boolean    @default(false)
   // Let's Encrypt account key (PEM) — stored per server
-  acmeAccount String?                         // ACME Account Key PEM
+  acmeAccount String?                         // ACME account key PEM, encrypted at rest (enc:v1, storage private-key-crypto.ts)
   acmeEmail   String?                         // e-mail for Let's Encrypt notifications
   // 9.2.x: Let's Encrypt staging environment (test, untrusted) — kept for retries / renewals
   acmeStaging Boolean    @default(false)

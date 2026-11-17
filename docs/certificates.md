@@ -91,8 +91,9 @@ certificate covering the public host name).
 
 ## Private keys at rest
 
-The private key of every certificate (`Certificate.keyPem`) and the copy the mail servers read
-(`ServerSettings.tlsKey`) are stored encrypted with AES-256-GCM (`enc:v1:…`). The key is derived
+The private key of every certificate (`Certificate.keyPem`), the copy the mail servers read
+(`ServerSettings.tlsKey`) and the Let's Encrypt account key (`Certificate.acmeAccount`) are stored
+encrypted with AES-256-GCM (`enc:v1:…`). The key is derived
 from **`MFA_ENCRYPTION_KEY`** — the same master key that protects the 2FA (TOTP) secrets — or,
 when that variable is not set, from `JWT_SECRET` + `PEPPER`.
 
@@ -112,6 +113,8 @@ The consequences:
   certificate not served on HTTPS`);
 - SMTP, IMAP and POP3 log `Stored certificate private key cannot be decrypted …` and do not
   offer TLS until a usable certificate is assigned;
+- a Let's Encrypt account key that cannot be decrypted is replaced by a new one at the next
+  issuance or renewal (a new account at Let's Encrypt; the certificates are not affected);
 - the startup migration reports them (`… cannot be decrypted with the configured key`) and leaves
   them unchanged.
 

@@ -8,7 +8,7 @@
  */
 import dns from 'node:dns';
 import { isIP } from 'node:net';
-import { prisma, encryptPrivateKey } from '@coremail/storage';
+import { prisma, encryptPrivateKey, readPrivateKey, PrivateKeyDecryptError } from '@coremail/storage';
 import { decryptMfaSecret, encryptMfaSecret } from '@coremail/storage/auth';
 import { getRedisClient, createLogger, CHANNEL_SETTINGS_RELOAD, isBlockedAddress } from '@coremail/core';
 import { deriveCertStatus, hostnameUpdateFor, parseCertValidity } from './cert-lifecycle.js';
@@ -147,9 +147,36 @@ export async function createAcmeClient(directoryUrl: string, accountKeyPem: stri
 
 export async function createAccountKeyPem(): Promise<string> {
   const factory = (globalThis as { __acmeClientFactory?: AcmeClientFactory }).__acmeClientFactory;
-  if (factory) return '-----BEGIN TEST ACCOUNT KEY-----';
+  if (factory) return '-----BEGIN PRIVATE KEY-----\nTEST ACCOUNT KEY\n-----END PRIVATE KEY-----\n';
   const acme = await import('acme-client');
   return (await acme.crypto.createPrivateKey(2048)).toString();
+}
+
+/**
+ * The ACME account key of a certificate (`Certificate.acmeAccount`, encrypted at
+ * rest like the certificate keys). A key stored as plain PEM before 9.4 is
+ * encrypted on use (compare-and-set; the startup migration does the same for
+ * all rows). A key that can no longer be decrypted (MFA_ENCRYPTION_KEY or
+ * JWT_SECRET/PEPPER changed) is replaced by a new one, i.e. a new ACME account
+ * — the old account only identified this server at the CA.
+ */
+async function acmeAccountKey(certId: string, stored: string | null, signal: AbortSignal): Promise<string> {
+  if (stored) {
+    try {
+      const { pem, needsReencrypt } = readPrivateKey(stored);
+      if (needsReencrypt) {
+        await prisma.certificate.updateMany({ where: { id: certId, acmeAccount: stored }, data: { acmeAccount: encryptPrivateKey(pem) } });
+      }
+      return pem;
+    } catch (err) {
+      if (!(err instanceof PrivateKeyDecryptError)) throw err;
+      log.warn({ certId, error: err.message }, 'ACME account key unreadable with the configured key — registering a new ACME account');
+    }
+  }
+  const pem = await createAccountKeyPem();
+  throwIfAborted(signal);
+  await prisma.certificate.update({ where: { id: certId }, data: { acmeAccount: encryptPrivateKey(pem) } });
+  return pem;
 }
 
 async function createCsrPem(domains: string[]): Promise<{ keyPem: string; csr: Buffer }> {
@@ -376,12 +403,7 @@ async function runAcmeIssuanceCore(
 
     // The account key is stored before the first CA call: every retry reuses
     // the same account (new registrations are rate limited, too).
-    let accountKeyPem = existing.acmeAccount ?? null;
-    if (!accountKeyPem) {
-      accountKeyPem = await createAccountKeyPem();
-      throwIfAborted(signal);
-      await prisma.certificate.update({ where: { id: certId }, data: { acmeAccount: accountKeyPem } });
-    }
+    const accountKeyPem = await acmeAccountKey(certId, existing.acmeAccount ?? null, signal);
 
     const directoryUrl = acmeDirectoryUrl(staging);
     const client = await createAcmeClient(directoryUrl, accountKeyPem);

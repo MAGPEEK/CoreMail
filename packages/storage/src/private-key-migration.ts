@@ -1,11 +1,11 @@
 /**
- * One-time encryption of certificate private keys stored before encryption at
- * rest existed (private-key-crypto.ts): every `Certificate.keyPem` and the
- * `ServerSettings.tlsKey` that is still plain PEM — or was encrypted with the
- * fallback key while MFA_ENCRYPTION_KEY is set — is rewritten encrypted with the
- * current key. Idempotent (already current values are skipped) and race-free
- * (compare-and-set on the old value: a concurrent write wins). Values that
- * cannot be decrypted are counted, never overwritten.
+ * One-time encryption of private keys stored before encryption at rest existed
+ * (private-key-crypto.ts): every `Certificate.keyPem`, `Certificate.acmeAccount`
+ * (ACME account key) and the `ServerSettings.tlsKey` that is still plain PEM — or
+ * was encrypted with the fallback key while MFA_ENCRYPTION_KEY is set — is
+ * rewritten encrypted with the current key. Idempotent (already current values
+ * are skipped) and race-free (compare-and-set on the old value: a concurrent
+ * write wins). Values that cannot be decrypted are counted, never overwritten.
  * Runs at api-gateway startup under a cluster-wide Redis lock.
  */
 import { randomUUID } from 'node:crypto';
@@ -32,9 +32,10 @@ export interface PrivateKeyMigrationRedis {
 }
 
 type Outcome = 'encrypted' | 'current' | 'unreadable' | 'changed';
+type CertificateKeyColumn = 'keyPem' | 'acmeAccount';
 
 /** What to write for a stored value: the re-encrypted value, or the reason to leave it. */
-function plan(stored: string): { write: string } | { skip: 'current' | 'unreadable' } {
+function planPrivateKeyReencrypt(stored: string): { write: string } | { skip: 'current' | 'unreadable' } {
   try {
     const { pem, needsReencrypt } = readPrivateKey(stored);
     if (!needsReencrypt) return { skip: 'current' };
@@ -46,26 +47,34 @@ function plan(stored: string): { write: string } | { skip: 'current' | 'unreadab
   }
 }
 
-async function migrateCertificate(id: string, stored: string): Promise<Outcome> {
-  const p = plan(stored);
+async function migrateCertificate(id: string, column: CertificateKeyColumn, stored: string): Promise<Outcome> {
+  const p = planPrivateKeyReencrypt(stored);
   if ('skip' in p) return p.skip;
-  const r = await prisma.certificate.updateMany({ where: { id, keyPem: stored }, data: { keyPem: p.write } });
+  const r = column === 'keyPem'
+    ? await prisma.certificate.updateMany({ where: { id, keyPem: stored }, data: { keyPem: p.write } })
+    : await prisma.certificate.updateMany({ where: { id, acmeAccount: stored }, data: { acmeAccount: p.write } });
   return r.count === 1 ? 'encrypted' : 'changed';
 }
 
 async function migrateServerSettings(stored: string): Promise<Outcome> {
-  const p = plan(stored);
+  const p = planPrivateKeyReencrypt(stored);
   if ('skip' in p) return p.skip;
   const r = await prisma.serverSettings.updateMany({ where: { id: 'singleton', tlsKey: stored }, data: { tlsKey: p.write } });
   return r.count === 1 ? 'encrypted' : 'changed';
 }
 
-/** Encrypts every stored certificate private key that is not yet encrypted with the current key. */
+/** Encrypts every stored private key that is not yet encrypted with the current key. */
 export async function migratePrivateKeysAtRest(): Promise<PrivateKeyMigrationResult> {
   const result: PrivateKeyMigrationResult = { encrypted: 0, current: 0, unreadable: 0 };
   const count = (o: Outcome) => { if (o !== 'changed') result[o]++; };
-  const certs = await prisma.certificate.findMany({ where: { keyPem: { not: null } }, select: { id: true, keyPem: true } });
-  for (const c of certs) if (c.keyPem) count(await migrateCertificate(c.id, c.keyPem));
+  const certs = await prisma.certificate.findMany({
+    where: { OR: [{ keyPem: { not: null } }, { acmeAccount: { not: null } }] },
+    select: { id: true, keyPem: true, acmeAccount: true },
+  });
+  for (const c of certs) {
+    if (c.keyPem) count(await migrateCertificate(c.id, 'keyPem', c.keyPem));
+    if (c.acmeAccount) count(await migrateCertificate(c.id, 'acmeAccount', c.acmeAccount));
+  }
   const settings = await prisma.serverSettings.findUnique({ where: { id: 'singleton' }, select: { tlsKey: true } });
   if (settings?.tlsKey) count(await migrateServerSettings(settings.tlsKey));
   return result;

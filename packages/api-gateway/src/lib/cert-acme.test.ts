@@ -98,8 +98,10 @@ let lastCa: ReturnType<typeof makeFakeCa> | null = null;
 const directories: string[] = [];
 const servingFake = makeFakeServing({ public: 'refused' });
 (globalThis as Record<string, unknown>)['__acmeChallengeServing'] = servingFake.serving;
-(globalThis as Record<string, unknown>)['__acmeClientFactory'] = (dir: string): AcmeClientLike => {
+const accountKeysUsed: string[] = [];
+(globalThis as Record<string, unknown>)['__acmeClientFactory'] = (dir: string, accountKeyPem: string): AcmeClientLike => {
   directories.push(dir);
+  accountKeysUsed.push(accountKeyPem);
   lastCa = makeFakeCa({ served: servingFake.served, ...caOptions });
   return lastCa.client;
 };
@@ -113,6 +115,7 @@ const noData = () => Promise.reject(Object.assign(new Error('no data'), { code: 
 
 const { startRenewal, repairStaleAcmeStates, isRenewLockHeld, INTERRUPTED_MESSAGE } = await import('./cert-renewal.js');
 const { runAcmeIssuance, AcmeTimeoutError, LE_DIRECTORY } = await import('./cert-acme.js');
+const { encryptPrivateKey, decryptPrivateKey, isEncryptedPrivateKey } = await import('@coremail/storage');
 const renewRedis = (globalThis as Record<string, unknown>)['__certRenewRedis'] as Parameters<typeof isRenewLockHeld>[0];
 
 function addCert(id: string, over: Row = {}): Row {
@@ -136,7 +139,7 @@ async function waitFor(pred: () => boolean, ms = 15_000): Promise<void> {
 const settled = (id: string) => () => !['PENDING', 'RENEWING'].includes(String(certs.get(id)?.['status'])) && !redisStore.has(`cert:renew:lock:${id}`);
 
 beforeEach(() => {
-  caOptions = {}; lastCa = null; directories.length = 0; settingsUpserts.length = 0; nxdomain.clear();
+  caOptions = {}; lastCa = null; directories.length = 0; accountKeysUsed.length = 0; settingsUpserts.length = 0; nxdomain.clear();
   failSettingsUpsert = false;
 });
 
@@ -161,6 +164,8 @@ test('first issuance: staging directory, account key stored before the CA call, 
   assert.match(String(row['certPem']), /BEGIN CERTIFICATE/);
   assert.match(String(row['keyPem']), /^enc:v1:/, 'issued private key stored encrypted at rest');
   assert.ok(row['acmeAccount'], 'account key persisted');
+  assert.match(String(row['acmeAccount']), /^enc:v1:/, 'account key stored encrypted at rest');
+  assert.equal(decryptPrivateKey(String(row['acmeAccount'])), accountKeysUsed[0], 'the CA client got the plain key');
   assert.equal(row['lastErrorCode'], null);
   assert.deepEqual(directories, [LE_DIRECTORY.staging]);
   // 9.2.x review: a staging (untrusted) certificate is never auto-activated
@@ -259,4 +264,41 @@ test('timeout: CA never answers → ERROR "timeout" naming the last step; lock h
   assert.equal(row['lastErrorCode'], 'timeout');
   assert.match(String(row['lastError']), /last step: waiting for Let's Encrypt to validate mail\.example\.com over port 80/);
   assert.equal(servingFake.served.size, 0, 'challenge token removed');
+});
+
+const accountPem = (body: string): string => ['-----BEGIN PRIVATE KEY-----', body, '-----END PRIVATE KEY-----', ''].join('\n');
+
+test('ACME account key: a plain PEM stored before 9.4 is reused and encrypted on use', async () => {
+  const legacy = accountPem('LEGACY ACCOUNT');
+  const row = addCert('c-acct-legacy', { acmeAccount: legacy });
+  await startRenewal('c-acct-legacy', 'issue');
+  await waitFor(settled('c-acct-legacy'));
+  assert.equal(row['status'], 'ACTIVE', String(row['lastError']));
+  assert.deepEqual(accountKeysUsed, [legacy], 'same ACME account');
+  assert.ok(isEncryptedPrivateKey(String(row['acmeAccount'])));
+  assert.equal(decryptPrivateKey(String(row['acmeAccount'])), legacy);
+});
+
+test('ACME account key: an encrypted key is decrypted for the CA client and left as stored', async () => {
+  const pem = accountPem('ENCRYPTED ACCOUNT');
+  const stored = encryptPrivateKey(pem);
+  const row = addCert('c-acct-enc', { acmeAccount: stored });
+  await startRenewal('c-acct-enc', 'issue');
+  await waitFor(settled('c-acct-enc'));
+  assert.equal(row['status'], 'ACTIVE', String(row['lastError']));
+  assert.deepEqual(accountKeysUsed, [pem]);
+  assert.equal(row['acmeAccount'], stored);
+});
+
+test('ACME account key: an unreadable key (key material changed) is replaced by a new account key', async () => {
+  const secret = process.env['JWT_SECRET'];
+  process.env['JWT_SECRET'] = 'old-secret-old-secret-old-secret-123456';
+  const unreadable = encryptPrivateKey(accountPem('LOST'));
+  process.env['JWT_SECRET'] = secret;
+  const row = addCert('c-acct-lost', { acmeAccount: unreadable });
+  await startRenewal('c-acct-lost', 'issue');
+  await waitFor(settled('c-acct-lost'));
+  assert.equal(row['status'], 'ACTIVE', String(row['lastError']));
+  assert.notEqual(row['acmeAccount'], unreadable);
+  assert.equal(decryptPrivateKey(String(row['acmeAccount'])), accountKeysUsed[0]);
 });

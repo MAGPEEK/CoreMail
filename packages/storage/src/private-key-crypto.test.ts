@@ -13,18 +13,22 @@ process.env['PEPPER'] ??= 'test-pepper-test-pepper-test-pepper-1234';
 delete process.env['MFA_ENCRYPTION_KEY'];
 const JWT_SECRET = process.env['JWT_SECRET'];
 
-type Row = { id: string; keyPem: string | null };
+type Row = { id: string; keyPem: string | null; acmeAccount?: string | null };
+type KeyColumn = 'keyPem' | 'acmeAccount';
 let certs: Row[] = [];
 let settings: { tlsKey: string | null } | null = null;
 const casMisses: string[] = [];
 (globalThis as Record<string, unknown>)['__prisma'] = {
   $on: () => undefined,
   certificate: {
-    findMany: async () => certs.filter((c) => c.keyPem !== null).map((c) => ({ ...c })),
-    updateMany: async (a: { where: { id: string; keyPem: string }; data: { keyPem: string } }) => {
-      const row = certs.find((c) => c.id === a.where.id && c.keyPem === a.where.keyPem);
+    findMany: async () => certs.filter((c) => c.keyPem !== null || (c.acmeAccount ?? null) !== null)
+      .map((c) => ({ ...c, acmeAccount: c.acmeAccount ?? null })),
+    // compare-and-set on exactly one key column (keyPem or acmeAccount)
+    updateMany: async (a: { where: { id: string } & Partial<Record<KeyColumn, string>>; data: Partial<Record<KeyColumn, string>> }) => {
+      const column = Object.keys(a.data)[0] as KeyColumn;
+      const row = certs.find((c) => c.id === a.where.id && (c[column] ?? null) === a.where[column]);
       if (!row) { casMisses.push(a.where.id); return { count: 0 }; }
-      row.keyPem = a.data.keyPem;
+      row[column] = a.data[column]!;
       return { count: 1 };
     },
   },
@@ -175,4 +179,48 @@ test('locked migration: runs under the Redis lock, skipped while another instanc
   assert.equal(held, null, 'lock released');
   held = 'other-instance';
   assert.equal(await migratePrivateKeysAtRestLocked(redis), null);
+});
+
+test('secret-keys refactor: TOTP secrets encrypted by the 9.3.0 mfa-crypto still decrypt (all key forms)', () => {
+  // Ciphertexts produced with `git show v9.3.0:packages/storage/src/auth/mfa-crypto.ts`
+  // (pre-refactor key derivation) for the secret JBSWY3DPEHPK3PXP.
+  const pepper = process.env['PEPPER'];
+  process.env['JWT_SECRET'] = 'test-secret-test-secret-test-secret-1234';
+  process.env['PEPPER'] = 'test-pepper-test-pepper-test-pepper-1234';
+  try {
+    const cases: Array<[string | undefined, string]> = [
+      [undefined, 'v1:PaJzhC3qB91OD9i7:jYMQyMsHsYT6FiC0s_OU9g:Gq_EZCaWYkqFGcFsgBTUUw'],
+      ['d'.repeat(64), 'v1:QdtF050fZ6fiZsns:zpKfBCtmDdVeJc5-8bXaWQ:-y8ra9tc5NE4VL4_s7w5Ug'],
+      ['BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=', 'v1:jUC3WC9W5ljPLWTX:3c6x1DvOqavKKVQed9sAMw:pm271BtjZAI_W4xRga7tPA'],
+      ['a passphrase that is not hex or base64', 'v1:mkhZTQ3F9OxP4Nh1:79eG09Tc7N9etDavjxBP7A:EjUdNO38nrheQPpmFMdriQ'],
+    ];
+    for (const [key, stored] of cases) {
+      if (key === undefined) delete process.env['MFA_ENCRYPTION_KEY'];
+      else process.env['MFA_ENCRYPTION_KEY'] = key;
+      assert.deepEqual(decryptMfaSecret(stored), { secret: 'JBSWY3DPEHPK3PXP', needsReencrypt: false }, `key ${key ?? '(fallback)'}`);
+    }
+    // a fallback-key secret stays readable after MFA_ENCRYPTION_KEY is introduced
+    process.env['MFA_ENCRYPTION_KEY'] = 'd'.repeat(64);
+    assert.deepEqual(decryptMfaSecret(cases[0]![1]), { secret: 'JBSWY3DPEHPK3PXP', needsReencrypt: true });
+  } finally {
+    process.env['PEPPER'] = pepper;
+  }
+});
+
+test('startup migration also encrypts the ACME account key (acmeAccount), idempotently', async () => {
+  const current = encryptPrivateKey(PEM);
+  certs = [
+    { id: 'acme-plain', keyPem: null, acmeAccount: RSA_PEM },
+    { id: 'acme-both', keyPem: current, acmeAccount: PEM },
+  ];
+  assert.deepEqual(await migratePrivateKeysAtRest(), { encrypted: 2, current: 1, unreadable: 0 });
+  for (const c of certs) {
+    assert.ok(isEncryptedPrivateKey(c.acmeAccount!), `${c.id}: acmeAccount encrypted`);
+    assert.ok(!c.acmeAccount!.includes('BEGIN'));
+  }
+  assert.equal(decryptPrivateKey(certs[0]!.acmeAccount!), RSA_PEM);
+  assert.equal(certs[1]!.keyPem, current, 'the current keyPem is untouched');
+  const snapshot = JSON.stringify(certs);
+  assert.deepEqual(await migratePrivateKeysAtRest(), { encrypted: 0, current: 3, unreadable: 0 });
+  assert.equal(JSON.stringify(certs), snapshot, 'second run changes nothing');
 });
