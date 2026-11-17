@@ -17,7 +17,7 @@
 import net from 'node:net';
 import tls from 'node:tls';
 import crypto from 'node:crypto';
-import { createLogger } from '@coremail/core';
+import { createLogger, tlsServerOptions } from '@coremail/core';
 import { logTlsSocketError } from '@coremail/core/tls-errors';
 import type { SmtpState, AuthMechanism, AuthUser, Transaction, SmtpSessionConfig, MessageMeta, EsmtpExtensions } from './types.js';
 import { DEFAULT_ESMTP_EXTENSIONS } from './types.js';
@@ -1124,9 +1124,8 @@ export class SmtpSession {
     const plainSocket = this.socket;
     const tlsSocket = new tls.TLSSocket(plainSocket, {
       isServer: true,
-      cert: this.config.tls.cert,
-      key: this.config.tls.key,
-      minVersion: 'TLSv1.2',
+      // TLS 1.2+ unless this listener allows old clients (TLS 1.0/1.1).
+      ...tlsServerOptions(this.config.tls, this.config.allowLegacyTls === true),
     });
 
     // A client that never completes the handshake must not hold the

@@ -36,6 +36,75 @@ export interface ServerConfig {
   productName?: string;
 }
 
+/** One row of the service_listeners table (only the fields used here). */
+export interface ListenerRow {
+  service: string;
+  port: number;
+  ssl: boolean;
+  active: boolean;
+}
+
+/** Submission ports of the SMTP server (465 implicit TLS, 587 STARTTLS). */
+const SUBMISSION_PORTS: readonly number[] = [
+  parseInt(process.env['SMTP_PORT_465'] ?? '465', 10),
+  parseInt(process.env['SMTP_PORT_587'] ?? '587', 10),
+];
+
+/**
+ * Pure: the endpoint to announce for one protocol, given the configured
+ * (public) port and the listener rows of that protocol.
+ *  - No listener row uses the configured port → keep it (a NAT / port mapping
+ *    may translate it; nothing contradicts the configuration).
+ *  - An ACTIVE row uses it → keep the port, take the listener's TLS mode.
+ *  - Only an INACTIVE row uses it (the admin switched that port off) → the
+ *    first active listener, implicit TLS preferred; none → keep the setting.
+ */
+export function endpointForListeners(
+  configured: { port: number; ssl: boolean },
+  rows: readonly ListenerRow[],
+): { port: number; ssl: boolean } {
+  const onPort = rows.filter((r) => r.port === configured.port);
+  if (onPort.length === 0) return configured;
+  const active = onPort.find((r) => r.active);
+  if (active) return { port: active.port, ssl: active.ssl };
+  const candidates = rows.filter((r) => r.active).sort((a, b) => Number(b.ssl) - Number(a.ssl) || a.port - b.port);
+  const pick = candidates[0];
+  return pick ? { port: pick.port, ssl: pick.ssl } : configured;
+}
+
+/**
+ * Pure: aligns the announced IMAP / POP3 / SMTP endpoints with the enabled
+ * listeners (BCP → Dienste), so a client is never sent to a switched-off port
+ * or told the wrong TLS mode. SMTP only considers submission ports.
+ */
+export function alignWithListeners(cfg: ServerConfig, rows: readonly ListenerRow[]): ServerConfig {
+  const of = (service: string) => rows.filter((r) => r.service === service);
+  const imap = endpointForListeners({ port: cfg.imapPort, ssl: cfg.imapSsl }, of('IMAP'));
+  const pop3 = endpointForListeners({ port: cfg.pop3Port, ssl: cfg.pop3Ssl }, of('POP3'));
+  const smtpRows = of('SMTP_RECEIVE').filter((r) => SUBMISSION_PORTS.includes(r.port));
+  const smtp = endpointForListeners({ port: cfg.smtpPort, ssl: cfg.smtpPort === SUBMISSION_PORTS[0] }, smtpRows);
+  return {
+    ...cfg,
+    imapPort: imap.port, imapSsl: imap.ssl,
+    pop3Port: pop3.port, pop3Ssl: pop3.ssl,
+    smtpPort: smtp.port,
+    // a submission listener always requires TLS (implicit on 465, STARTTLS on 587)
+    smtpTls: smtp.port === cfg.smtpPort ? cfg.smtpTls : true,
+  };
+}
+
+async function loadListenerRows(): Promise<ListenerRow[] | null> {
+  try {
+    return await prisma.serviceListener.findMany({
+      where: { service: { in: ['IMAP', 'POP3', 'SMTP_RECEIVE'] } },
+      select: { service: true, port: true, ssl: true, active: true },
+    });
+  } catch (err) {
+    log.warn({ err }, 'Could not read the service listeners — announcing the configured ports');
+    return null;
+  }
+}
+
 /** The settings could not be read and nothing was read before (→ HTTP 503). */
 export class ServerConfigUnavailableError extends Error {
   constructor(cause: unknown) {
@@ -111,7 +180,7 @@ export async function getServerConfig(now: number = Date.now()): Promise<ServerC
     return envDefaults();
   }
 
-  cache = {
+  const fromSettings: ServerConfig = {
     owaUrl:           settings.owaUrl,
     easUrl:           settings.easUrl,
     autodiscoverBase: settings.autodiscoverBase,
@@ -131,6 +200,8 @@ export async function getServerConfig(now: number = Date.now()): Promise<ServerC
     orgName:          settings.orgName ?? 'CoreMail',
     productName:      (await getBranding()).productName,
   };
+  const listeners = await loadListenerRows();
+  cache = listeners ? alignWithListeners(fromSettings, listeners) : fromSettings;
   lastGood = cache;
   cacheExpiry = now + CACHE_TTL_MS;
   return cache;

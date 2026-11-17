@@ -55,6 +55,18 @@ export interface HttpsRedirectOptions {
 
 const EXEMPT = [/^\/\.well-known\/acme-challenge\//, /^\/healthz\/?$/, /^\/livez\/?$/];
 
+/**
+ * Autodiscover "HTTP redirect method" (MS-OXDSCLI §3.1.5.2): a client sends an
+ * unauthenticated GET to http://autodiscover.<domain>/autodiscover/autodiscover.xml
+ * and expects a 302 to the HTTPS endpoint — older Outlook builds do not follow 308.
+ */
+const AUTODISCOVER_XML = /^\/autodiscover\/autodiscover\.xml$/i;
+
+/** Pure: redirect status for a plain-HTTP request path. */
+export function redirectStatusFor(path: string): 302 | 308 {
+  return AUTODISCOVER_XML.test(path) ? 302 : 308;
+}
+
 export function httpRedirectEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return !/^(false|0|no|off)$/i.test((env['HTTP_REDIRECT_HTTPS'] ?? 'true').trim());
 }
@@ -110,7 +122,7 @@ export function createHttpsRedirect(opts: HttpsRedirectOptions) {
       if (!host) { next(); return; }
       const port = publicPort === 443 ? '' : `:${publicPort}`;
       res.setHeader('Cache-Control', 'no-store');
-      res.redirect(308, `https://${host}${port}${req.originalUrl}`);
+      res.redirect(redirectStatusFor(req.path), `https://${host}${port}${req.originalUrl}`);
     };
     if (requested && state.covers(requested)) { finish(requested); return; }
     opts.publicHostname().then((h) => finish(hostOnly(h ?? undefined)), () => next());

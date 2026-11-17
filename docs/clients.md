@@ -91,6 +91,9 @@ same source as Autodiscover and the MWA page **Settings → External clients**.
   (`autodiscover.<domain>` CNAME or the `_autodiscover._tcp` SRV record).
 * Calendar/contacts: Outlook has no CalDAV/CardDAV support — use the free *Outlook CalDav
   Synchronizer* plugin (guide in the MWA External clients page), or OWA.
+  Details: [autodiscover.md](autodiscover.md), [outlook-caldav.md](outlook-caldav.md).
+* Old clients without TLS 1.2: [legacy-tls.md](legacy-tls.md). Scanners/printers that send
+  without authentication: [device-relay.md](device-relay.md).
 
 ### Android
 

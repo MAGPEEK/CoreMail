@@ -80,7 +80,7 @@ node scripts/e2e/run.mjs imap pop3       # single steps (state is kept in state.
 node --test scripts/e2e/repo-hygiene.test.mjs   # static regression checks (no stack needed)
 ```
 
-Steps: `setup users smtp imap pop3 jmap dav eas eas-body eas-commands rest webmail admin tls backup branding mfa live lockout restart storage schema-upgrade`.
+Steps: `setup users smtp imap pop3 jmap dav eas eas-body eas-commands rest webmail admin tls legacy-clients backup branding mfa live lockout restart storage schema-upgrade`.
 `schema-upgrade` builds a database from the 8.0.0 schema (`E2E_SCHEMA_BASE`, default `d5ad681`) and checks that schema-sync upgrades it, refuses duplicates and fails closed on a dropped column with data (`E2E_PG_CONTAINER` selects the PostgreSQL container).
 `webmail` (9.3): shared / delegated mailboxes in the mail view at API level — A lists the team
 mailbox in `GET /api/v1/user/accessible-mailboxes` (FULL_ACCESS + SEND_AS), hides and shows it
@@ -100,6 +100,13 @@ intermediate is sent) and `GET /api/v1/admin/certificates/served` to agree; remo
 must bring every port back to the self-signed default for `mail.<E2E_DOMAIN>` (one certificate on
 all ports, visible as the SELF_SIGNED protocol certificate). The uploaded certificate is deleted.
 See [certificates.md](certificates.md).
+`legacy-clients`: the IMAPS listener refuses a TLS 1.0 client by default, accepts TLS 1.0/1.1 a few
+seconds after „Ältere Clients erlauben" is switched on (no container restart) and refuses it again
+after switching off; Autodiscover answers 401 Basic first, then IMAP/SMTP with an explicit
+`<Encryption>` (mixed-case path); the device relay refuses an external recipient while off, refuses
+`0.0.0.0/0`, then (private networks + `<E2E_DOMAIN>`) accepts the external RCPT for that sender
+domain only and is switched off again. See [legacy-tls.md](legacy-tls.md), [device-relay.md](device-relay.md),
+[autodiscover.md](autodiscover.md).
 `backup` (9.3): B gets a folder `E2E-Backup` with two APPENDed messages (attachment, `\Flagged \Seen`);
 a mailbox backup of B (encrypted ZIP in the bucket) is restored from the STORED archive into A
 (`mode: subfolder`) and A must see `Wiederhergestellt <date>.E2E-Backup` over IMAP with both

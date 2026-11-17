@@ -2,7 +2,7 @@ import { initRuntimeLogLevel } from '@coremail/core';
 import { registerLdapMailVerifier } from '@coremail/auth-ldap';
 import net from 'node:net';
 import tls from 'node:tls';
-import { createLogger, generateSelfSignedCert, tlsPemToBuffers, applyTlsToListeners, tlsMaterialEquals, installProcessGuards, startAuthInvalidationSubscriber, resolveBindAddress, listenWithRecovery } from '@coremail/core';
+import { createLogger, generateSelfSignedCert, tlsPemToBuffers, applyTlsToListeners, tlsMaterialEquals, installProcessGuards, startAuthInvalidationSubscriber, resolveBindAddress, listenWithRecovery, tlsServerOptions } from '@coremail/core';
 import { getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD, CHANNEL_SETTINGS_RELOAD } from '@coremail/core/redis';
 import { logTlsSocketError } from '@coremail/core/tls-errors';
 import { prisma, loadProtocolCert, selfSignedFallbackHostname, waitForObjectStorage } from '@coremail/storage';
@@ -77,6 +77,8 @@ interface TrackedPop3Server {
   server:  net.Server | tls.Server;
   sockets: Set<net.Socket>;
   ssl:     boolean;
+  /** Listener accepts TLS 1.0/1.1 (kept on certificate rotation). */
+  allowLegacyTls: boolean;
 }
 
 const servers = new Map<number, TrackedPop3Server>();
@@ -92,7 +94,7 @@ let _appliedTls: { cert: Buffer; key: Buffer } | null = null;
 function applyTlsToRunningListeners(): void {
   if (!_tlsConfig || tlsMaterialEquals(_tlsConfig, _appliedTls)) return;
   const res = applyTlsToListeners(
-    [...servers].map(([port, t]) => ({ port, ssl: t.ssl, server: t.server })),
+    [...servers].map(([port, t]) => ({ port, ssl: t.ssl, server: t.server, allowLegacyTls: t.allowLegacyTls })),
     _tlsConfig,
   );
   for (const f of res.failed) log.error({ err: f.error, port: f.port }, 'POP3 TLS context update failed — keeping old cert');
@@ -122,7 +124,7 @@ function scheduleReload(): void {
 
 // ── Server lifecycle ──────────────────────────────────────────────────────────
 
-interface ListenerConfig { port: number; ssl: boolean }
+interface ListenerConfig { port: number; ssl: boolean; allowLegacyTls: boolean }
 
 function createTrackedPop3Server(cfg: ListenerConfig): TrackedPop3Server {
   const sockets = new Set<net.Socket>();
@@ -134,6 +136,7 @@ function createTrackedPop3Server(cfg: ListenerConfig): TrackedPop3Server {
     // (read per upgrade → hot rotation); USER/PASS only after TLS.
     const session = new POP3Session(socket as net.Socket | tls.TLSSocket, cfg.ssl, {
       starttls: () => (cfg.ssl ? null : _tlsConfig),
+      allowLegacyTls: cfg.allowLegacyTls,
     });
     session.start();
     socket.on('error', (err) => logTlsSocketError(log, err, { service: 'POP3', ip: socket.remoteAddress }));
@@ -144,7 +147,7 @@ function createTrackedPop3Server(cfg: ListenerConfig): TrackedPop3Server {
   let server: net.Server | tls.Server;
   if (cfg.ssl && _tlsConfig) {
     server = tls.createServer(
-      { cert: _tlsConfig.cert, key: _tlsConfig.key, minVersion: 'TLSv1.2', handshakeTimeout: TLS_HANDSHAKE_MS },
+      { ...tlsServerOptions(_tlsConfig, cfg.allowLegacyTls), handshakeTimeout: TLS_HANDSHAKE_MS },
       onSocket as (s: tls.TLSSocket) => void,
     );
     server.on('connection', (raw: net.Socket) => { admitConnection(raw, true); });
@@ -159,7 +162,7 @@ function createTrackedPop3Server(cfg: ListenerConfig): TrackedPop3Server {
     server = net.createServer((raw) => { if (admitConnection(raw, false)) onSocket(raw); });
   }
 
-  return { server, sockets, ssl: cfg.ssl };
+  return { server, sockets, ssl: cfg.ssl, allowLegacyTls: cfg.allowLegacyTls };
 }
 
 /**
@@ -204,16 +207,17 @@ function bindAddress(address: string | null | undefined): string {
   return resolveBindAddress(address);
 }
 
-/** SSL flag + bind address a running port was started with (9.1.x). */
+/** SSL flag + bind address (9.1.x) + legacy-TLS policy a running port was started with. */
 const appliedListener = new Map<number, string>();
-const listenerSignature = (l: { ssl: boolean; address: string }): string => `${l.ssl ? 'ssl' : 'plain'}|${bindAddress(l.address)}`;
+const listenerSignature = (l: { ssl: boolean; address: string; allowLegacyTls: boolean }): string =>
+  `${l.ssl ? 'ssl' : 'plain'}|${bindAddress(l.address)}|${l.allowLegacyTls ? 'legacy-tls' : 'tls12'}`;
 
 /**
  * 9.1.x: a changed SSL flag / bind address of a RUNNING port used to be ignored
  * until the next restart. Such ports are closed here and started again by a
  * follow-up reload once the socket is released. Returns the closed ports.
  */
-function stopChangedListeners(listeners: Array<{ port: number; ssl: boolean; address: string; active: boolean }>): Set<number> {
+function stopChangedListeners(listeners: Array<{ port: number; ssl: boolean; address: string; active: boolean; allowLegacyTls: boolean }>): Set<number> {
   const wanted = new Map<number, string>();
   for (const l of listeners) if (l.active && !wanted.has(l.port)) wanted.set(l.port, listenerSignature(l));
   const restarted = new Set<number>();
@@ -246,7 +250,7 @@ async function reloadListeners(): Promise<void> {
     for (const l of listeners) {
       if (l.active && !servers.has(l.port) && !restarted.has(l.port)) {
         try {
-          const tracked = createTrackedPop3Server({ port: l.port, ssl: l.ssl });
+          const tracked = createTrackedPop3Server({ port: l.port, ssl: l.ssl, allowLegacyTls: l.allowLegacyTls });
           servers.set(l.port, tracked);
           appliedListener.set(l.port, listenerSignature(l));
           // Bind errors (address not in the container, port still in use after a
@@ -254,7 +258,7 @@ async function reloadListeners(): Promise<void> {
           listenWithRecovery(tracked.server, {
             port: l.port, address: l.address, label: 'POP3', log,
             isCurrent: () => servers.get(l.port) === tracked,
-            onListening: (address) => log.info({ port: l.port, ssl: l.ssl, address }, 'POP3 listener started'),
+            onListening: (address) => log.info({ port: l.port, ssl: l.ssl, address, allowLegacyTls: l.allowLegacyTls }, 'POP3 listener started'),
             onGiveUp: () => {
               if (servers.get(l.port) !== tracked) return;
               servers.delete(l.port);

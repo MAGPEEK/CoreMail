@@ -25,7 +25,7 @@
 import https from 'node:https';
 import tls from 'node:tls';
 import type { Application } from 'express';
-import { createLogger, getRedisClient, stripForwardedHeaders } from '@coremail/core';
+import { createLogger, getRedisClient, stripForwardedHeaders, tlsProtocolOptions, type TlsProtocolOptions } from '@coremail/core';
 import { prisma } from '@coremail/storage';
 import { selectProxyCerts, planSni, buildFullChainPem, type SelectedProxyCert } from './lib/cert-lifecycle.js';
 
@@ -87,7 +87,23 @@ async function loadCerts(): Promise<LoadedCert[]> {
   return selectProxyCerts(rows);
 }
 
-function buildSniMaps(certs: LoadedCert[]): LoadedCert[] {
+/**
+ * BCP → Dienste → HTTPS: "Ältere Clients erlauben (TLS 1.0/1.1)"
+ * (ServerSettings.httpsAllowLegacyTls). Read on every reload; an unreadable
+ * setting keeps the secure default (TLS 1.2+).
+ */
+async function loadHttpsLegacyTls(): Promise<boolean> {
+  try {
+    const s = await prisma.serverSettings.findUnique({ where: { id: 'singleton' }, select: { httpsAllowLegacyTls: true } });
+    return s?.httpsAllowLegacyTls === true;
+  } catch (err) {
+    log.error({ err }, 'HTTPS legacy-TLS setting not readable — TLS 1.2+ only');
+    return false;
+  }
+}
+
+/** The TLS policy is applied to every SNI context and to the server itself. */
+function buildSniMaps(certs: LoadedCert[], policy: TlsProtocolOptions): LoadedCert[] {
   sniContexts = new Map();
   wildcardContexts = [];
   defaultContext = null;
@@ -101,6 +117,7 @@ function buildSniMaps(certs: LoadedCert[]): LoadedCert[] {
       contexts.set(cert.id, tls.createSecureContext({
         cert: buildFullChainPem(cert.certPem, cert.chainPem),
         key:  cert.keyPem,
+        ...policy,
       }));
       usable.push(cert);
     } catch (err) {
@@ -197,7 +214,9 @@ async function reloadServer(app: Application): Promise<void> {
     activeServer = null;
   }
 
-  const certs = buildSniMaps(loaded);
+  const legacyTls = await loadHttpsLegacyTls();
+  const policy = tlsProtocolOptions(legacyTls);
+  const certs = buildSniMaps(loaded, policy);
   if (certs.length === 0) {
     log.info('No certificate with a currently valid PEM — HTTPS server not started');
     return;
@@ -222,6 +241,7 @@ async function reloadServer(app: Application): Promise<void> {
     {
       cert: buildFullChainPem(fallbackCert.certPem, fallbackCert.chainPem),
       key:  fallbackCert.keyPem,
+      ...policy,
       SNICallback: sniCallback,
     },
     // v6: TLS clients connect directly — any X-Forwarded-*/Forwarded header
@@ -259,7 +279,7 @@ async function reloadServer(app: Application): Promise<void> {
     server.listen(PORT, () => {
       server.off('error', onError);
       log.info(
-        { port: PORT, defaultCert: fallbackCert.name, defaultId: fallbackCert.id },
+        { port: PORT, defaultCert: fallbackCert.name, defaultId: fallbackCert.id, allowLegacyTls: legacyTls },
         'HTTPS server started with SNI',
       );
       resolve();

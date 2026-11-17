@@ -1,6 +1,6 @@
 import net from 'net';
 import tls from 'node:tls';
-import { getRedisClient, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
+import { getRedisClient, CHANNEL_MAIL_NEW, createLogger, tlsServerOptions } from '@coremail/core';
 import { logTlsSocketError } from '@coremail/core/tls-errors';
 import {
   createSession, sendUntagged, refreshCapabilities,
@@ -81,6 +81,8 @@ export interface ImapServerOptions {
    * certificate the listener stays plaintext and refuses authentication.
    */
   starttls?: () => ImapTlsConfig | null | undefined;
+  /** Accept TLS 1.0/1.1 on this listener (implicit TLS and STARTTLS). Default TLS 1.2+. */
+  allowLegacyTls?: boolean;
   /** v8.1: connection limiter (default: the process-wide one from limits.ts). */
   limiter?: ConnectionLimiter;
   /** v8.1: timeouts (tests). */
@@ -97,6 +99,7 @@ export function createImapServer(tlsConfig?: ImapTlsConfig, options: ImapServerO
   const limiter = options.limiter ?? imapConnectionLimiter;
   const preAuthIdleMs = options.preAuthIdleMs ?? PRE_AUTH_IDLE_MS;
   const tlsHandshakeMs = options.tlsHandshakeMs ?? TLS_HANDSHAKE_MS;
+  const legacyTls = options.allowLegacyTls === true;
   const onSocket = (socket: net.Socket): void => {
     const starttlsCert = (): ImapTlsConfig | null => (isImplicitTls ? null : options.starttls?.() ?? null);
     const session = createSession(socket, isImplicitTls, !!starttlsCert());
@@ -202,7 +205,7 @@ export function createImapServer(tlsConfig?: ImapTlsConfig, options: ImapServerO
       socket.write(`${tag} OK Begin TLS negotiation now\r\n`);
       const secure = new tls.TLSSocket(socket, {
         isServer: true,
-        secureContext: tls.createSecureContext({ cert: material.cert, key: material.key, minVersion: 'TLSv1.2' }),
+        secureContext: tls.createSecureContext(tlsServerOptions(material, legacyTls)),
       });
       socket.resume();
       // v8.1: a client that never completes the handshake must not hold the
@@ -275,7 +278,7 @@ export function createImapServer(tlsConfig?: ImapTlsConfig, options: ImapServerO
   let server: net.Server | tls.Server;
   if (tlsConfig) {
     server = tls.createServer(
-      { cert: tlsConfig.cert, key: tlsConfig.key, minVersion: 'TLSv1.2', handshakeTimeout: tlsHandshakeMs },
+      { ...tlsServerOptions(tlsConfig, legacyTls), handshakeTimeout: tlsHandshakeMs },
       onSocket as (s: tls.TLSSocket) => void,
     );
     server.on('connection', (raw: net.Socket) => { admit(raw); });

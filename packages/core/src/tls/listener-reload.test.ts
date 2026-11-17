@@ -7,12 +7,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
 import { applyTlsToListeners, tlsMaterialEquals, type TlsMaterial } from './listener-reload.js';
+import { LEGACY_TLS_CIPHERS } from './legacy-tls.js';
 
 const material = (n: string): TlsMaterial => ({ cert: Buffer.from(`cert-${n}`), key: Buffer.from(`key-${n}`) });
 
 function fakeTlsServer() {
-  const calls: Array<{ cert: Buffer; key: Buffer; minVersion?: string }> = [];
-  return { calls, setSecureContext: (o: { cert: Buffer; key: Buffer; minVersion?: string }) => { calls.push(o); } };
+  const calls: Array<{ cert: Buffer | string; key: Buffer | string; minVersion?: string; ciphers?: string }> = [];
+  return { calls, setSecureContext: (o: { cert: Buffer | string; key: Buffer | string; minVersion?: string; ciphers?: string }) => { calls.push(o); } };
 }
 
 test('reload calls setSecureContext on every running implicit-TLS listener', () => {
@@ -33,6 +34,19 @@ test('reload calls setSecureContext on every running implicit-TLS listener', () 
   assert.equal(s465.calls[0]!.key, m.key);
   assert.equal(s465.calls[0]!.minVersion, 'TLSv1.2');
   assert.equal(plain.calls.length, 0);
+});
+
+test('rotation keeps the legacy TLS policy of a listener that allows old clients', () => {
+  const legacy = fakeTlsServer();
+  const modern = fakeTlsServer();
+  applyTlsToListeners([
+    { port: 993, ssl: true, server: legacy, allowLegacyTls: true },
+    { port: 995, ssl: true, server: modern },
+  ], material('rot'));
+  assert.equal(legacy.calls[0]!.minVersion, 'TLSv1');
+  assert.equal(legacy.calls[0]!.ciphers, LEGACY_TLS_CIPHERS);
+  assert.equal(modern.calls[0]!.minVersion, 'TLSv1.2');
+  assert.equal(modern.calls[0]!.ciphers, undefined);
 });
 
 test('ssl listener running as plain net.Server is reported for restart', () => {

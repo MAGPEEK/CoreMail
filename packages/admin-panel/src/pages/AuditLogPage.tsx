@@ -144,6 +144,10 @@ const ACTION_MAP: Record<string, ActionMeta> = {
   'settings.maintenance.put':     { label: 'Wartungsmodus geändert',         tone: 'update' },
   'audit.enabled':                { label: 'Audit-Log AKTIVIERT',            tone: 'critical' },
   'audit.disabled':               { label: 'Audit-Log DEAKTIVIERT',          tone: 'critical' },
+  // Old clients: TLS 1.0/1.1 per listener / HTTPS, device relay
+  'settings.legacy-tls.enabled':  { label: 'TLS 1.0/1.1 für ältere Clients ERLAUBT', tone: 'critical' },
+  'settings.legacy-tls.disabled': { label: 'TLS 1.0/1.1 für ältere Clients gesperrt', tone: 'update' },
+  'settings.device-relay.updated': { label: 'Geräte-Relay geändert',         tone: 'critical' },
   // Mailboxes
   'mailboxes.post':               { label: 'Postfach angelegt',              tone: 'create' },
   'mailboxes.put':                { label: 'Postfach geändert',              tone: 'update' },

@@ -2,6 +2,7 @@ import net from 'node:net';
 import tls from 'node:tls';
 import { createLogger } from '@coremail/core/logger';
 import { logTlsSocketError } from '@coremail/core/tls-errors';
+import { tlsServerOptions } from '@coremail/core/tls-policy';
 import { LiveConnectionRegistry, type LiveCredential } from '@coremail/core/auth';
 import { prisma } from '@coremail/storage/prisma';
 import {
@@ -17,6 +18,8 @@ export interface Pop3SessionOptions {
    * Without a certificate the port stays plaintext and refuses USER/PASS.
    */
   starttls?: () => { cert: Buffer; key: Buffer } | null | undefined;
+  /** Accept TLS 1.0/1.1 for STLS on this listener. Default TLS 1.2+. */
+  allowLegacyTls?: boolean;
   /**
    * Exclusive maildrop lock (RFC 1939 §4); default: {@link acquireMaildropLock}
    * (in-process + Redis). Injectable for tests.
@@ -278,7 +281,7 @@ export class POP3Session {
     this.send('+OK Begin TLS negotiation');
     const secure = new tls.TLSSocket(raw, {
       isServer: true,
-      secureContext: tls.createSecureContext({ cert: material.cert, key: material.key, minVersion: 'TLSv1.2' }),
+      secureContext: tls.createSecureContext(tlsServerOptions(material, this.options.allowLegacyTls === true)),
     });
     // v8.1: the plaintext idle timer no longer sees the traffic once the TLS
     // layer owns the socket — a client that never completes the handshake is

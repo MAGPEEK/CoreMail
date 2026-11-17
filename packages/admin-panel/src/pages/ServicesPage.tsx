@@ -1,12 +1,13 @@
 import { useId, useState } from 'react';
 import { Modal } from '../components/Modal.js';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Pencil, Trash2, Lock, LayoutGrid, Mail, Inbox, Archive, Loader2 } from 'lucide-react';
+import { Plus, Pencil, Trash2, Lock, LayoutGrid, Mail, Inbox, Archive, Loader2, AlertTriangle, Globe } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
 import { Toggle } from '../components/Toggle.js';
 import { Can } from '../components/Can.js';
 import { errorMessage } from '../lib/errors.js';
+import { LEGACY_TLS_LABEL, LEGACY_TLS_WARNING, listenerPayload, type ListenerForm } from '../lib/legacyClients.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type ServiceKey = 'SMTP_RECEIVE' | 'IMAP' | 'POP3';
@@ -14,7 +15,7 @@ type NavView    = 'overview' | ServiceKey;
 
 interface ServiceListener {
   id: string; service: ServiceKey; address: string; port: number;
-  ssl: boolean; active: boolean; createdAt: string;
+  ssl: boolean; active: boolean; allowLegacyTls: boolean; createdAt: string;
 }
 
 interface OverviewEntry { total: number; active: number }
@@ -33,8 +34,27 @@ const SERVICES: { key: ServiceKey; label: string; ports: string; icon: React.Ele
 ];
 
 
+// ── Legacy TLS warning (listener modal, listener table, HTTPS card) ───────────
+function LegacyTlsWarning() {
+  return (
+    <p role="alert" className="mt-2 flex items-start gap-1.5 rounded-lg border border-warning-line bg-warning-bg px-3 py-2 text-[11px] text-warning-fg">
+      <AlertTriangle size={12} className="mt-0.5 shrink-0" aria-hidden="true" />
+      <span>{LEGACY_TLS_WARNING}</span>
+    </p>
+  );
+}
+
+function LegacyTlsBadge() {
+  return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-warning-bg text-warning-fg border border-warning-line"
+      title={LEGACY_TLS_WARNING}>
+      <AlertTriangle size={10} aria-hidden="true" /> TLS 1.0/1.1
+    </span>
+  );
+}
+
 // ── Listener Modal ─────────────────────────────────────────────────────────────
-interface ListenerFormData { address: string; port: string; ssl: boolean; active: boolean }
+type ListenerFormData = ListenerForm;
 
 function ListenerModal({ initial, onSave, onClose, saving }: {
   initial?: Partial<ListenerFormData>;
@@ -47,6 +67,7 @@ function ListenerModal({ initial, onSave, onClose, saving }: {
     port:    initial?.port    ?? '',
     ssl:     initial?.ssl     ?? false,
     active:  initial?.active  ?? true,
+    allowLegacyTls: initial?.allowLegacyTls ?? false,
   });
   const set = (f: keyof ListenerFormData, v: string | boolean) =>
     setForm(prev => ({ ...prev, [f]: v }));
@@ -86,6 +107,14 @@ function ListenerModal({ initial, onSave, onClose, saving }: {
             <span className="text-xs font-medium text-fg-muted">Aktiv</span>
             <Toggle active={form.active} onToggle={() => set('active', !form.active)} />
           </div>
+          <div className="py-1">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-fg-muted">{LEGACY_TLS_LABEL}</span>
+              <Toggle active={form.allowLegacyTls} label={LEGACY_TLS_LABEL}
+                onToggle={() => set('allowLegacyTls', !form.allowLegacyTls)} />
+            </div>
+            {form.allowLegacyTls && <LegacyTlsWarning />}
+          </div>
         </div>
         <div className="flex justify-end gap-2 mt-5">
           <button onClick={onClose}
@@ -124,17 +153,13 @@ function ListenersTable({ svcKey }: { svcKey: ServiceKey }) {
   };
 
   const addMut = useMutation({
-    mutationFn: (d: ListenerFormData) => api.post(`/admin/services/listeners/${slug}`, {
-      address: d.address, port: Number(d.port), ssl: d.ssl, active: d.active,
-    }),
+    mutationFn: (d: ListenerFormData) => api.post(`/admin/services/listeners/${slug}`, listenerPayload(d)),
     onSuccess: () => { invalidate(); setModal(null); toast.success('Listener hinzugefügt'); },
     onError:   (e) => toast.error(`Fehler beim Hinzufügen: ${errorMessage(e)}`),
   });
 
   const editMut = useMutation({
-    mutationFn: ({ id, d }: { id: string; d: ListenerFormData }) => api.put(`/admin/services/listeners/${id}`, {
-      address: d.address, port: Number(d.port), ssl: d.ssl, active: d.active,
-    }),
+    mutationFn: ({ id, d }: { id: string; d: ListenerFormData }) => api.put(`/admin/services/listeners/${id}`, listenerPayload(d)),
     onSuccess: () => { invalidate(); setModal(null); toast.success('Gespeichert'); },
     onError:   (e) => toast.error(`Fehler beim Speichern: ${errorMessage(e)}`),
   });
@@ -204,6 +229,7 @@ function ListenersTable({ svcKey }: { svcKey: ServiceKey }) {
                           <Lock size={10} /> SSL
                         </span>
                       )}
+                      {l.allowLegacyTls && <LegacyTlsBadge />}
                     </div>
                   </td>
                   <td className="px-6 py-4 text-right">
@@ -235,12 +261,47 @@ function ListenersTable({ svcKey }: { svcKey: ServiceKey }) {
       {modal === 'add' && <ListenerModal saving={addMut.isPending} onSave={d => addMut.mutate(d)} onClose={() => setModal(null)} />}
       {modal && modal !== 'add' && editing && (
         <ListenerModal
-          initial={{ address: editing.address, port: String(editing.port), ssl: editing.ssl, active: editing.active }}
+          initial={{ address: editing.address, port: String(editing.port), ssl: editing.ssl, active: editing.active, allowLegacyTls: editing.allowLegacyTls }}
           saving={editMut.isPending}
           onSave={d => editMut.mutate({ id: modal, d })}
           onClose={() => setModal(null)}
         />
       )}
+    </div>
+  );
+}
+
+// ── HTTPS proxy TLS policy ────────────────────────────────────────────────────
+function HttpsTlsCard() {
+  const qc = useQueryClient();
+  const { data } = useQuery<{ allowLegacyTls: boolean }>({
+    queryKey: ['services-https-tls'],
+    queryFn:  () => api.get<{ allowLegacyTls: boolean }>('/admin/services/https-tls'),
+  });
+  const mut = useMutation({
+    mutationFn: (allowLegacyTls: boolean) => api.put('/admin/services/https-tls', { allowLegacyTls }),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['services-https-tls'] }); toast.success('Gespeichert'); },
+    onError:   (e) => toast.error(`Fehler beim Speichern: ${errorMessage(e)}`),
+  });
+  const on = data?.allowLegacyTls === true;
+  return (
+    <div className="mt-6 bg-surface border border-line rounded-xl p-5 max-w-2xl">
+      <div className="flex items-center gap-3 mb-3">
+        <div className="p-2 bg-info-bg rounded-lg"><Globe size={18} className="text-info-fg" aria-hidden="true" /></div>
+        <div>
+          <p className="text-sm font-semibold text-fg">HTTPS (Webmail, Autodiscover, ActiveSync)</p>
+          <p className="text-xs text-fg-subtle">Integrierter HTTPS-Proxy (Port 443)</p>
+        </div>
+        {on && <span className="ml-auto"><LegacyTlsBadge /></span>}
+      </div>
+      <div className="flex items-center justify-between py-1">
+        <span className="text-xs font-medium text-fg-muted">{LEGACY_TLS_LABEL}</span>
+        <Can area="servers" access="write">
+          <Toggle active={on} label={LEGACY_TLS_LABEL} disabled={!data || mut.isPending}
+            onToggle={() => mut.mutate(!on)} />
+        </Can>
+      </div>
+      {on && <LegacyTlsWarning />}
     </div>
   );
 }
@@ -296,11 +357,13 @@ function Overview({ onSelect }: { onSelect: (k: ServiceKey) => void }) {
         </div>
       )}
 
+      <HttpsTlsCard />
+
       <div className="mt-6 bg-info-bg border border-info-line rounded-lg p-4 max-w-2xl">
         <p className="text-xs text-info-fg">
           <strong>Hinweis:</strong> Änderungen (Hinzufügen, Bearbeiten, Löschen, Toggle) werden sofort wirksam —
-          die Dienste laden ihre Listener-Konfiguration dynamisch neu ohne Container-Neustart. Ändert sich SSL/TLS oder
-          die IP-Adresse eines laufenden Ports, wird nur dieser Port kurz neu gestartet (offene Verbindungen werden getrennt).
+          die Dienste laden ihre Listener-Konfiguration dynamisch neu ohne Container-Neustart. Ändert sich SSL/TLS,
+          „Ältere Clients erlauben" oder die IP-Adresse eines laufenden Ports, wird nur dieser Port kurz neu gestartet (offene Verbindungen werden getrennt).
         </p>
       </div>
     </div>
