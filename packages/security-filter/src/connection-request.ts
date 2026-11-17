@@ -3,8 +3,8 @@
  *
  * Stages:
  *  - `connect` — only the client IP is known (TCP connect): DNSBL/DNSWL + GeoIP.
- *  - `rcpt`    — IP + MAIL FROM + RCPT TO known: greylisting.
- *  - `full`    — legacy combined request (greylisting + IP checks).
+ *  - `rcpt`    — IP + MAIL FROM + RCPT TO known: sender lists of the recipient (9.4), greylisting.
+ *  - `full`    — legacy combined request (sender lists + greylisting + IP checks).
  *
  * Before v5.9.x smtp-server sent `{senderIp, mailFrom:'', rcptTo:''}` at
  * connect time, which the old validation rejected with 400 — so DNSBL,
@@ -64,6 +64,7 @@ export function parseConnectionRequest(body: unknown): ParsedConnectionRequest {
 export interface ConnectionStageDeps {
   ipChecks(senderIp: string, config: PipelineConfig): Promise<PipelineResult>;
   greylist(ctx: ConnectionContext, config: PipelineConfig): Promise<PipelineResult>;
+  senderList(ctx: ConnectionContext): Promise<PipelineResult>;
 }
 
 /** Run the checks that belong to the requested stage. */
@@ -77,11 +78,22 @@ export async function runConnectionStage(
     case 'connect':
       return deps.ipChecks(ctx.senderIp, config);
     case 'rcpt':
-      return deps.greylist(ctx, config);
+      return recipientChecks(ctx, config, deps);
     case 'full': {
-      const grey = await deps.greylist(ctx, config);
-      if (grey.action !== 'accept') return grey;
+      const rcpt = await recipientChecks(ctx, config, deps);
+      if (rcpt.action !== 'accept') return rcpt;
       return deps.ipChecks(ctx.senderIp, config);
     }
   }
+}
+
+/** RCPT TO: sender lists of this recipient first (a block is final), then greylisting. */
+async function recipientChecks(
+  ctx: ConnectionContext,
+  config: PipelineConfig,
+  deps: ConnectionStageDeps,
+): Promise<PipelineResult> {
+  const lists = await deps.senderList(ctx);
+  if (lists.action !== 'accept') return lists;
+  return deps.greylist(ctx, config);
 }

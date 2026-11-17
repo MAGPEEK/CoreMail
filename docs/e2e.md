@@ -87,7 +87,11 @@ device gets HTTP 449 without a policy key, provisions, syncs (no Email2 / 14.x t
 response), sends a mail in the 12.1 query-string form (raw MIME, `SaveInSent=T`, empty 200) that
 reaches user A, and runs a FolderSync with a base64-encoded request line; a 14.0 device gets
 Status 142 in WBXML, provisions, syncs (Email2 ConversationId present), reads UserInformation in the
-EmailAddresses form and sends with ComposeMail WBXML. See [activesync.md](activesync.md).
+EmailAddresses form and sends with ComposeMail WBXML (9.4: empty success response). 9.4: the 14.0
+device pings without `X-MS-PolicyKey` (served — Status 5 for the too short heartbeat — while
+FolderSync without key and an unknown device still get 142); with BCP → Settings → Mail set to 1 MB
+(61 s wait for the cached limit) a 2 MB SendMail gets Status 115 (14.0) / HTTP 413 (12.1), then the
+limit is restored to 25 MB. See [activesync.md](activesync.md).
 `schema-upgrade` builds a database from the 8.0.0 schema (`E2E_SCHEMA_BASE`, default `d5ad681`) and checks that schema-sync upgrades it, refuses duplicates and fails closed on a dropped column with data (`E2E_PG_CONTAINER` selects the PostgreSQL container).
 `webmail` (9.3): shared / delegated mailboxes in the mail view at API level — A lists the team
 mailbox in `GET /api/v1/user/accessible-mailboxes` (FULL_ACCESS + SEND_AS), hides and shows it
@@ -130,6 +134,12 @@ ClamAV must not report `host-not-found` there (the container is part of the stac
 With `E2E_SCANNERS=absent` (a stack without both containers that sets `RSPAMD_ENABLED=false` /
 `CLAMAV_ENABLED=false`, like the minimal compose file) both must be `absent` with reason
 `disabled-by-config` — a missing host name alone is `unavailable`, never `absent`.
+At its end (9.4) `admin` checks the hygiene settings: a mailbox-scoped sender block refuses that
+recipient at RCPT TO (550 5.7.1) but not another one and appears in the CSV export; the BCP spoofing
+action `reject` takes effect without a restart (a forged local header From → 550 after DATA; skipped
+when `LOCAL_SPOOF_ACTION` is set); a per-IP API limit of 15 answers `RateLimit-Limit: 15` and 429
+for anonymous requests while the signed-in admin is unaffected (restored to 500, the gateway limits
+are reset afterwards).
 `branding` (9.3): sets product name + colour (a low-contrast header colour must come back as a
 warning), uploads a generated PNG logo and an SVG favicon, checks the public
 `GET /api/v1/branding`, the asset headers (`nosniff`, sandbox CSP, immutable, content hash = file

@@ -30,8 +30,6 @@ export function parseContentContext(header: string): ConnectionContext | null {
   const authUser = str(b['authUser'], 512);
   const rcptCount = typeof b['rcptCount'] === 'number' && Number.isInteger(b['rcptCount']) && b['rcptCount'] >= 0
     ? b['rcptCount'] : undefined;
-  const domainId = str(b['domainId'], 64);
-  const userId = str(b['userId'], 64);
   return {
     senderIp,
     mailFrom: str(b['mailFrom'], 512) ?? '',
@@ -41,8 +39,6 @@ export function parseContentContext(header: string): ConnectionContext | null {
     ...(helo ? { helo } : {}),
     ...(hostname ? { hostname } : {}),
     ...(authUser ? { authUser } : {}),
-    ...(domainId ? { domainId } : {}),
-    ...(userId ? { userId } : {}),
   };
 }
 

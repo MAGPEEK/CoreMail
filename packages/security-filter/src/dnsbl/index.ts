@@ -111,9 +111,10 @@ export async function queryZone(
 /**
  * Checks a sender IP against all active DNSBL zones from the DB.
  * Falls back to DEFAULT_DNSBL_ZONES if the DB is still empty.
- * Writes hits asynchronously to the `dnsbl_hits` table.
+ * Writes hits asynchronously to the `dnsbl_hits` table (unless `logHits` is false — the
+ * content stage repeats the cached lookup for the score and must not count hits twice).
  */
-export async function checkDnsbl(rawIp: string): Promise<DnsblResult> {
+export async function checkDnsbl(rawIp: string, opts: { logHits?: boolean } = {}): Promise<DnsblResult> {
   const empty: DnsblResult = { listed: false, whitelisted: false, hits: [], totalScore: 0, action: null };
   const ip = rawIp ? normalizeSenderIp(rawIp) : '';
   if (!ip || isNonRoutableSender(ip)) return empty;
@@ -172,7 +173,7 @@ export async function checkDnsbl(rawIp: string): Promise<DnsblResult> {
   const hits = results.filter((r) => r.listed).map((r) => ({ zone: r.zone, response: r.response ?? '' }));
 
   // Log hits asynchronously (non-blocking)
-  if (hits.length > 0) {
+  if (hits.length > 0 && opts.logHits !== false) {
     void prisma.dnsblHit.createMany({
       data: hits.map((h) => ({ zoneId: h.zone.id, ip, ...(h.response ? { response: h.response } : {}) })),
     }).catch((err) => log.warn({ err }, 'Failed to log DNSBL hits'));
@@ -188,6 +189,27 @@ export async function checkDnsbl(rawIp: string): Promise<DnsblResult> {
   else if (hits.length > 0) action = 'SCORE_ONLY';
 
   return { listed: hits.length > 0, whitelisted: false, hits, totalScore, action };
+}
+
+/** Spam-score contribution of the SCORE_ONLY zones that list the sender IP. */
+export interface DnsblScore {
+  score: number;
+  zones: string[];
+}
+
+/**
+ * Pure: the SCORE_ONLY hits' weights (9.4). A DNSWL hit contributes nothing; REJECT hits
+ * never reach the content stage; TAG hits are only recorded in the statistics.
+ */
+export function scoreOnlyContribution(result: DnsblResult): DnsblScore {
+  if (result.whitelisted) return { score: 0, zones: [] };
+  const hits = result.hits.filter((h) => h.zone.action === 'SCORE_ONLY' && !h.zone.isWhitelist);
+  return { score: hits.reduce((s, h) => s + h.zone.weight, 0), zones: hits.map((h) => h.zone.host) };
+}
+
+/** Content stage: the SCORE_ONLY contribution for the sender IP (cached lookups, hits not logged again). */
+export async function dnsblScoreFor(ip: string): Promise<DnsblScore> {
+  return scoreOnlyContribution(await checkDnsbl(ip, { logHits: false }));
 }
 
 /**

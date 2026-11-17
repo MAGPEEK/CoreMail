@@ -163,7 +163,12 @@ services:
       QUOTA_FULL_PERMANENT:        ${QUOTA_FULL_PERMANENT:-}
       QUOTA_USAGE_CACHE_SEC:       ${QUOTA_USAGE_CACHE_SEC:-60}   # explicit default: an empty value would mean 0 (no cache)
       OOF_REPLY_MEMORY_DAYS:       ${OOF_REPLY_MEMORY_DAYS:-}
-      # Inbound filtering
+      # Global API rate limit (overrides BCP → Settings → Security when set)
+      API_RATE_LIMIT_ENABLED:      ${API_RATE_LIMIT_ENABLED:-}
+      API_RATE_LIMIT_WINDOW_MIN:   ${API_RATE_LIMIT_WINDOW_MIN:-}
+      API_RATE_LIMIT_PER_USER:     ${API_RATE_LIMIT_PER_USER:-}
+      API_RATE_LIMIT_PER_IP:       ${API_RATE_LIMIT_PER_IP:-}
+      # Inbound filtering (LOCAL_SPOOF_* / ARC_TRUSTED_SEALERS override BCP → Protection → Spoofing when set)
       LOCAL_SPOOF_ACTION:          ${LOCAL_SPOOF_ACTION:-}
       LOCAL_SPOOF_ALLOW:           ${LOCAL_SPOOF_ALLOW:-}
       ARC_TRUSTED_SEALERS:         ${ARC_TRUSTED_SEALERS:-}

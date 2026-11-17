@@ -17,7 +17,7 @@ import { handleFolderSync } from './commands/folder-sync.js';
 import { handleSync, emptySyncResponse } from './commands/sync.js';
 import { deviceAccess, deniedResponse } from './device-policy.js';
 import { readFileSync } from 'node:fs';
-import { handleSendMail, handleLegacySendMail, type ComposeCommand } from './commands/send-mail.js';
+import { handleSendMail, handleLegacySendMail, defaultSendMailDeps, type ComposeCommand } from './commands/send-mail.js';
 import { handlePing } from './commands/ping.js';
 import { handleGetAttachment } from './commands/get-attachment.js';
 import { handleItemOperations, prismaItemOperationsDeps } from './commands/item-operations.js';
@@ -183,13 +183,18 @@ const wbxml = (run: (c: CommandContext) => Promise<Buffer>) => async (c: Command
 /** 12.1 sends compose commands as raw MIME (ComposeMail WBXML is 14.0+). */
 const legacyCompose = (version: EasVersion) => !supports(version, 'composeMailWbxml');
 
-/** SendMail / SmartReply / SmartForward: ComposeMail WBXML (14.0+) or MIME + request line (12.1, no response body). */
+/**
+ * SendMail / SmartReply / SmartForward: ComposeMail WBXML (14.0+; success = empty response,
+ * [MS-ASCMD] 2.2.1.17) or MIME + request line (12.1, no response body).
+ */
 const compose = (command: ComposeCommand) => async (c: CommandContext): Promise<void> => {
   if (!legacyCompose(c.version)) {
-    c.res.status(200).send(await handleSendMail(c.body, c.user.userId, command));
+    const body = await handleSendMail(c.body, c.user.userId, command, defaultSendMailDeps, c.deviceId);
+    if (body.length === 0) sendStatusOnly(c.res, 200);
+    else c.res.status(200).send(body);
     return;
   }
-  sendStatusOnly(c.res, await handleLegacySendMail(c.raw, c.params, c.user.userId, command));
+  sendStatusOnly(c.res, await handleLegacySendMail(c.raw, c.params, c.user.userId, command, defaultSendMailDeps, c.deviceId));
 };
 
 const HANDLERS: Record<string, CommandHandler> = {

@@ -858,8 +858,11 @@ model Blacklist {
   id         String   @id @default(cuid())
   pattern    String
   patternType String  @default("EXACT") // EXACT | WILDCARD | REGEX
-  scope      String   @default("GLOBAL") // GLOBAL | DOMAIN | USER
+  scope      String   @default("GLOBAL") // GLOBAL | DOMAIN | USER (| USER-JUNK: webmail "Junk" action)
   scopeId    String?  // domainId or userId for non-global
+  // 9.4: BLOCK (refused at RCPT TO) | ALLOW (overrides a block, skips the spam verdict
+  // when the sender domain is authenticated) — BCP → Protection → Sender lists
+  listType   String   @default("BLOCK")
   comment    String   @default("")
   active     Boolean  @default(true)
   createdAt  DateTime @default(now())
@@ -1446,6 +1449,12 @@ model SecuritySettings {
   clamavHeuristicsAsVirus    Boolean  @default(true)     // Heuristics.* findings count as a virus
   clamavPuaAsVirus           Boolean  @default(true)     // PUA.* findings count as a virus
   clamavEncryptedAsVirus     Boolean  @default(true)     // Heuristics.Encrypted.* findings count as a virus
+  // Local-domain anti-spoofing (9.4, BCP → Protection → Spoofing). The environment
+  // variables LOCAL_SPOOF_ACTION / LOCAL_SPOOF_ALLOW / ARC_TRUSTED_SEALERS override
+  // these columns when set (docs/mail-security.md).
+  localSpoofAction           String   @default("policy") // policy | junk | reject
+  localSpoofAllow            Json     @default("[]")     // IPs / CIDRs / domains
+  arcTrustedSealers          Json     @default("[]")     // ARC sealer domains
   updatedAt                  DateTime @updatedAt
 
   @@map("security_settings")
@@ -1576,6 +1585,13 @@ model ServerSettings {
   allowSelfRegistration      Boolean @default(false)
   // Allows users to reset their own password via an e-mail link
   selfServicePasswordReset   Boolean @default(true)
+  // 9.4: API rate limit of the api-gateway (fixed window). Signed-in requests count
+  // per user, anonymous ones per client IP; static assets and the live-event stream
+  // are exempt. API_RATE_LIMIT_* environment variables override these columns.
+  apiRateLimitEnabled        Boolean @default(true)
+  apiRateLimitWindowMin      Int     @default(15)
+  apiRateLimitPerIp          Int     @default(500)
+  apiRateLimitPerUser        Int     @default(3000)
 
   // ── Protocols ────────────────────────────────────────────────────────────
   // v5.7.1: JMAP (RFC 8620/8621 + extensions) on /jmap/* and

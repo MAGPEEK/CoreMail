@@ -42,6 +42,9 @@ export async function run(state) {
     });
     const buf = Buffer.from(await r.arrayBuffer());
     assert(r.status === 200, `${cmd} → HTTP ${r.status} ${buf.toString('utf8').slice(0, 120)}`);
+    // 9.4: a successful SendMail / SmartReply / SmartForward answers an empty response
+    // ([MS-ASCMD] 2.2.1.17) — reported as { sent: true }
+    if (buf.length === 0 && /^(SendMail|SmartReply|SmartForward)$/.test(cmd)) return { sent: true };
     assert(buf.length > 0, `${cmd} → empty 200 (stub)`);
     return decodeWbxml(buf);
   };
@@ -195,7 +198,7 @@ export async function run(state) {
     ].join('\r\n');
     const CM = (t, k) => [21, t, k];
     const sent = await post('SendMail', CM(0x05, [CM(0x11, `e2e-mr-${Date.now()}`), CM(0x08), CM(0x10, mime)]));
-    assert(kid(sent, 'Status')?.text === '1', `SendMail REPLY ${JSON.stringify(sent)}`);
+    assert(sent.sent === true, `SendMail REPLY: expected the empty success response, got ${JSON.stringify(sent)}`);
     // the REPLY reaches the organizer and updates the attendee status
     await waitFor(async () => {
       const e = await http('GET', `/api/v1/calendar/events/${ev.json.id}`, { token: tokA });

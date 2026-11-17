@@ -28,7 +28,8 @@ export interface ScannerCapability {
 }
 export interface ScannerCapabilities { rspamd: ScannerCapability; clamav: ScannerCapability }
 
-export type ProtectionSection = 'overview' | 'rspamd' | 'antivirus' | 'dnsbl' | 'greylisting' | 'geoip' | 'attachments';
+export type ProtectionSection =
+  | 'overview' | 'rspamd' | 'antivirus' | 'dnsbl' | 'senderlists' | 'spoofing' | 'greylisting' | 'geoip' | 'attachments';
 
 const DOCS_BASE = 'https://github.com/MAGPEEK/CoreMail/blob/main/docs';
 export const SCANNER_DOCS: Record<ScannerName, string> = {

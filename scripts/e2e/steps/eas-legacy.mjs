@@ -49,6 +49,11 @@ function device(state, version, deviceId) {
     assert(newer.length === 0, `${version} ${cmd}: tags newer than ${version}: ${JSON.stringify(newer)}`);
     return decodeWbxml(buf);
   };
+  /** WBXML command → { status, body } without assertions (empty 14.x compose success, refusals). */
+  dev.postRaw = async (cmd, node, { headers = {} } = {}) => {
+    const r = await http('POST', dev.url(cmd), { raw: true, body: encode(node), headers: dev.headers({ 'Content-Type': 'application/vnd.ms-sync.wbxml', ...headers }) });
+    return { status: r.status, body: Buffer.from(await r.arrayBuffer()) };
+  };
   dev.provision = async () => {
     const p1 = await dev.post('Provision', provisionReq());
     const temp = kid(kid(kid(p1, 'Policies'), 'Policy'), 'PolicyKey')?.text;
@@ -176,9 +181,52 @@ export async function run(state) {
     assert(!kid(get, 'Accounts') && addrs.includes(v14.B.toLowerCase()), `UserInformation ${JSON.stringify(get).slice(0, 200)}`);
     const subject = `E2E EAS 14.0 SendMail ${Date.now()}`;
     const CM = (t, k) => [21, t, k];
-    const sent = await v14.post('SendMail', CM(0x05, [CM(0x11, `e2e-legacy-${Date.now()}`), CM(0x08), CM(0x10, mimeFromB(state, subject).toString('utf8'))]));
-    assert(kid(sent, 'Status')?.text === '1', `SendMail ${JSON.stringify(sent)}`);
+    const sent = await v14.postRaw('SendMail', CM(0x05, [CM(0x11, `e2e-legacy-${Date.now()}`), CM(0x08), CM(0x10, mimeFromB(state, subject).toString('utf8'))]));
+    // 9.4: [MS-ASCMD] 2.2.1.17 — a successful SendMail returns an empty response
+    assert(sent.status === 200 && sent.body.length === 0, `SendMail → HTTP ${sent.status}, ${sent.body.length} B`);
     await deliveredToA(state, subject);
-    return `addresses ${addrs.join(', ')}; mail delivered`;
+    return `addresses ${addrs.join(', ')}; mail delivered (empty response)`;
+  });
+
+  // 9.4: [MS-ASPROV] — Ping is one of the commands a device may send without X-MS-PolicyKey.
+  await check('eas-legacy: Ping without X-MS-PolicyKey is served for a provisioned device, refused for an unknown one', async () => {
+    // HeartbeatInterval 10 s is below the minimum: the command answers at once with Status 5
+    // (heartbeat out of range) — which proves the request passed the device policy check.
+    const inbox = await v14.inbox();
+    const PING = [13, 0x05, [[13, 0x08, '10'], [13, 0x09, [[13, 0x0a, [[13, 0x0b, inbox], [13, 0x0c, 'Email']]]]]]];
+    const key = v14.policyKey;
+    v14.policyKey = undefined; // no header
+    try {
+      const ok = await v14.postRaw('Ping', PING);
+      assert(ok.status === 200 && ok.body.length > 0, `provisioned device: HTTP ${ok.status}`);
+      const status = kid(decodeWbxml(ok.body), 'Status')?.text;
+      assert(status === '5', `provisioned device: Ping Status ${status} (expected 5 — heartbeat out of range)`);
+      const sync = await v14.postRaw('FolderSync', [7, 0x16, [[7, 0x12, '0']]]);
+      assert(kid(decodeWbxml(sync.body), 'Status')?.text === '142', 'other commands still need the policy key');
+      const unknown = device(state, '14.0', `E2ENOKEY${Date.now() % 100000}`);
+      const r = await unknown.postRaw('Ping', PING);
+      assert(kid(decodeWbxml(r.body), 'Status')?.text === '142', `unknown device: HTTP ${r.status}`);
+      return `Ping Status ${status}; FolderSync without key → 142; unknown device → 142`;
+    } finally { v14.policyKey = key; }
+  });
+
+  await check('eas-legacy: SendMail above the maximum message size → Status 115 (14.0) / HTTP 413 (12.1)', async () => {
+    // BCP → Settings → Mail: 1 MB (the services cache the limit for up to 60 s)
+    const admin = await session(state, 'admin', state.adminEmail, creds().admin);
+    const set = (mb) => http('PUT', '/api/v1/admin/settings/mail', { token: admin, body: { maxMessageSizeMb: mb } });
+    assert((await set(1)).status === 200, 'maxMessageSizeMb=1 not saved');
+    try {
+      console.log('  waiting 61 s for the message-size cache…');
+      await new Promise((r) => setTimeout(r, 61_000));
+      const big = Buffer.concat([mimeFromB(state, `E2E EAS too large ${Date.now()}`), Buffer.alloc(2 * 1024 * 1024, 0x61)]);
+      const CM = (t, k) => [21, t, k];
+      const r14 = await v14.postRaw('SendMail', CM(0x05, [CM(0x11, `e2e-big-${Date.now()}`), CM(0x08), CM(0x10, big.toString('latin1'))]));
+      assert(r14.status === 200 && kid(decodeWbxml(r14.body), 'Status')?.text === '115', `14.0 → HTTP ${r14.status} ${r14.body.length} B`);
+      const r12 = await http('POST', legacy.url('SendMail'), { raw: true, body: big, headers: legacy.headers({ 'Content-Type': 'message/rfc822' }) });
+      assert(r12.status === 413, `12.1 → HTTP ${r12.status}`);
+      return '14.0 Status 115, 12.1 HTTP 413 (limit 1 MB, message 2 MB)';
+    } finally {
+      await set(25);
+    }
   });
 }

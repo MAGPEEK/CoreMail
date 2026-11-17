@@ -141,6 +141,9 @@ app:
     # SECURITY_FILTER_FAIL_OPEN: true = accept mail unscanned when the content
     # pipeline fails internally (default false = defer with 451)
     failOpen: false
+  # Since app 9.4 these are BCP settings (Protection → Spoofing); a non-empty value
+  # here overrides the BCP value. API_RATE_LIMIT_* (docs/api-gateway-security.md)
+  # can be set through extraEnv the same way.
   localSpoof:
     # LOCAL_SPOOF_ACTION: unauthenticated mail claiming a local domain —
     # policy (default: follow the domain's DMARC record) | junk | reject

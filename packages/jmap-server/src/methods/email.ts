@@ -14,6 +14,7 @@ import {
 } from '../mail/email-mapper.js';
 import { applyEmailChange, destroyEmail, storeEmailFromRaw } from '../mail/write.js';
 import { resolveBlob } from '../blobs.js';
+import { assertMessageSize } from '../mail/size-limit.js';
 import { LIMITS } from '../settings.js';
 import { applyPatch, assertState, pageFields, paginate, parseGetArgs, parseSetArgs, parseDate } from './common.js';
 import { changedMessageIds, parseMaxChanges } from './email-changes.js';
@@ -261,6 +262,7 @@ export async function runEmailSet(
   for (const [cid, obj] of Object.entries(create)) {
     try {
       const c = await parseCreate(obj, account, ctx);
+      await assertMessageSize(c.raw.length);
       const stored = await storeEmailFromRaw(account, c.folderId, c.raw, c.flags, c.receivedAt);
       ctx.createdIds.set(cid, stored.id);
       r.created[cid] = { id: stored.id, blobId: `m-${stored.id}`, threadId: stored.threadId, size: stored.size };
@@ -359,6 +361,7 @@ registerMethod('Email/import', CAP_MAIL, async (args, ctx) => {
       if (typeof obj['blobId'] !== 'string') throw setError('invalidProperties', 'blobId required', ['blobId']);
       const blob = await resolveBlob(account, obj['blobId']);
       if (!blob) throw setError('blobNotFound');
+      await assertMessageSize(blob.buffer.length);
       const folderId = await singleFolder(obj['mailboxIds'], account.mailboxId, (id) => ctx.resolveId(id));
       const flags = parseKeywords(obj['keywords']);
       try { await parseRawMessage(blob.buffer); } catch { throw setError('invalidEmail'); }

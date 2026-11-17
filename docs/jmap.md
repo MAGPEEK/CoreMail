@@ -87,7 +87,7 @@ immediately visible in IMAP clients and in the MWA, and vice versa.
 | keywords | IMAP flags: `$seen`↔`\Seen`, `$flagged`↔`\Flagged`, `$answered`, `$draft`, `$forwarded`; case-insensitive, custom keywords are stored lower-case (an existing flag keeps its spelling) |
 | Thread | `Message.threadId`: `inReplyTo` → known message → its thread; otherwise an earlier reply's thread; otherwise own id. Set when JMAP creates the message; rows from other writers are derived before any thread read and persisted with a new modSeq (the state changes) |
 | Identity | primary address `u-<userId>`, aliases `al-<id>`, Shared Mailbox with SEND_AS `sm-<id>`; signature from the MWA settings. None in accounts without send permission (read-only shares, mailbox delegates) |
-| EmailSubmission | Redis (7 days); sending via the BullMQ queue `smtp-outbound`; FUTURERELEASE (`HOLDFOR`/`HOLDUNTIL`, max. 30 days) → delayed, `undoStatus: canceled` cancels |
+| EmailSubmission | Redis (7 days); sending via the BullMQ queue `smtp-outbound`; FUTURERELEASE (`HOLDFOR`/`HOLDUNTIL`, max. 30 days) → delayed, `undoStatus: canceled` cancels. 9.4: a message above the configured maximum message size (the stricter of BCP → SMTP and BCP → Settings → Mail, shared with REST and ActiveSync) gets SetError `tooLarge` with `maxSize` (octets) — likewise `Email/import` and `Email/set` create |
 | VacationResponse | `UserSettings.oof*` (out of office) |
 | Quota | `quotaBytes` / `usedBytes` (user or Shared Mailbox), resource `octets` |
 | Principal | active users (`individual`), Shared Mailboxes (`group`) |

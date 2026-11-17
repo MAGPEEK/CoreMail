@@ -9,6 +9,7 @@ import {
 import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
 import { useT } from '../i18n/useT.js';
+import { API_RATE_LIMIT_FORM_DEFAULTS, rateLimitForm, rateLimitEnvNote } from '../lib/apiRateLimit.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface GlobalSettings {
@@ -24,6 +25,12 @@ interface GlobalSettings {
   requireMfaForAdmins:         boolean;
   selfServicePasswordReset:    boolean;
   auditLogEnabled:             boolean;
+  apiRateLimitEnabled:         boolean;
+  apiRateLimitWindowMin:       number;
+  apiRateLimitPerIp:           number;
+  apiRateLimitPerUser:         number;
+  /** Rate-limit fields an API_RATE_LIMIT_* environment variable overrides (read-only). */
+  apiRateLimitEnvOverrides?:   string[];
   // Maintenance
   maintenanceMode:    boolean;
   maintenanceMessage: string;
@@ -146,6 +153,7 @@ export function SettingsPage() {
     requireMfaForAdmins: false,
     selfServicePasswordReset: true,
     auditLogEnabled: true,
+    ...API_RATE_LIMIT_FORM_DEFAULTS,
   });
   const [maint, setMaint] = useState({
     maintenanceMode: false,
@@ -165,7 +173,8 @@ export function SettingsPage() {
              inactivityTimeoutMinutes: cfg.inactivityTimeoutMinutes,
              requireMfaForAdmins: cfg.requireMfaForAdmins,
              selfServicePasswordReset: cfg.selfServicePasswordReset ?? true,
-             auditLogEnabled: cfg.auditLogEnabled ?? true });
+             auditLogEnabled: cfg.auditLogEnabled ?? true,
+             ...rateLimitForm(cfg) });
     setMaint({ maintenanceMode: cfg.maintenanceMode, maintenanceMessage: cfg.maintenanceMessage });
     setOrgDirty(false); setMailDirty(false); setSecDirty(false); setMaintDirty(false);
   }, [cfg]);
@@ -347,6 +356,30 @@ export function SettingsPage() {
                 <strong>Achtung:</strong> Compliance-Anforderungen (DSGVO Art. 32, SOX, HIPAA, TISAX, ISO 27001) verlangen lückenlose Protokollierung administrativer Aktionen.
                 Ein Ausschalten kann zu Audit-Findings führen. Diese Aktion selbst wird ungeachtet des Toggle-Werts protokolliert.
               </div>
+            </div>
+          )}
+        </FieldGroup>
+
+        <FieldGroup
+          label="API-Ratenbegrenzung"
+          hint="Begrenzt Anfragen an Webmail-, Verwaltungs- und Protokoll-Schnittstellen je Zeitfenster: angemeldete Benutzer einzeln, anonyme Anfragen je IP-Adresse. Statische Dateien und der Live-Ereignisstrom zählen nicht."
+        >
+          <Toggle value={sec.apiRateLimitEnabled} onChange={(v) => updSec('apiRateLimitEnabled', v)}
+            label={sec.apiRateLimitEnabled ? 'Aktiviert' : 'Deaktiviert — keine globale Begrenzung (Anmelde-Schutz bleibt aktiv)'} />
+          {sec.apiRateLimitEnabled && (
+            <div className="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-2 mt-2 text-sm text-fg-muted">
+              <span>Zeitfenster</span>
+              <NumberInput value={sec.apiRateLimitWindowMin} onChange={(v) => updSec('apiRateLimitWindowMin', v)} min={1} max={1440} unit={t('unit_minutes')} />
+              <span>Je Benutzer</span>
+              <NumberInput value={sec.apiRateLimitPerUser} onChange={(v) => updSec('apiRateLimitPerUser', v)} min={10} max={1000000} unit="Anfragen" />
+              <span>Je IP-Adresse (anonym)</span>
+              <NumberInput value={sec.apiRateLimitPerIp} onChange={(v) => updSec('apiRateLimitPerIp', v)} min={10} max={1000000} unit="Anfragen" />
+            </div>
+          )}
+          {rateLimitEnvNote(cfg?.apiRateLimitEnvOverrides) && (
+            <div role="note" className="flex items-start gap-2 mt-2 text-xs text-fg-muted bg-surface-2 border border-line rounded px-3 py-2">
+              <Info size={12} className="shrink-0 mt-0.5" />
+              {rateLimitEnvNote(cfg?.apiRateLimitEnvOverrides)}
             </div>
           )}
         </FieldGroup>

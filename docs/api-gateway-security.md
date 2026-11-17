@@ -76,6 +76,39 @@ GET  /api/v1/events?ticket=<ticket>
   (`lib/reconnectingEventSource.ts`, ticket request through the API client, one
   refresh on a 401); neither puts the access token into a URL any more.
 
+## Global API rate limit (9.4)
+
+Before 9.4 every request counted against a fixed 500 requests / 15 min per client
+IP — the users of an office behind one NAT address exhausted it together. Since 9.4:
+
+- **Signed-in requests** (a valid `Authorization: Bearer` access token) count per
+  **user**, anonymous requests per **client IP** (IPv6 per /56; the IP follows
+  `TRUST_PROXY`). Protocol clients with Basic authentication (ActiveSync, CalDAV,
+  JMAP) count per IP as before — their services have their own lockouts.
+- **Exempt**: loopback peers (internal services); static files and SPA pages (GET/HEAD
+  outside `/api/`, `/auth/`, `/jmap`, `/dav`, `/.well-known/`, Autodiscover and
+  ActiveSync); the live-event stream `GET /api/v1/events` (only refused tickets or
+  tokens count against the IP budget, and an address whose budget is used up gets no
+  stream); `POST /api/v1/events/ticket` with a valid token.
+- Fixed window per bucket; over the limit: `429` with `Retry-After` and
+  `RateLimit-Limit` / `RateLimit-Remaining` / `RateLimit-Reset` on every counted response.
+- **Configuration**: BCP → Einstellungen → Sicherheit → API-Ratenbegrenzung
+  (`ServerSettings.apiRateLimit*`, applied at once after a save, otherwise within
+  60 s). Environment variables override the stored values when set — the BCP shows
+  them read-only:
+
+| Variable / BCP field | Default | Range |
+|---|---|---|
+| `API_RATE_LIMIT_ENABLED` | `true` | `false` turns the global limit off (the auth, setup, SSO and admin-mutation limiters below stay) |
+| `API_RATE_LIMIT_WINDOW_MIN` | `15` | 1 – 1440 minutes |
+| `API_RATE_LIMIT_PER_USER` | `3000` | 10 – 1 000 000 requests per window and signed-in user |
+| `API_RATE_LIMIT_PER_IP` | `500` | 10 – 1 000 000 requests per window and client IP (anonymous) |
+
+Sizing: the webmail makes a few requests per user action plus periodic refreshes, so
+a busy user stays well below 3000 per 15 minutes; raise the per-IP value only for
+many anonymous clients behind one address (e.g. a reverse proxy without `TRUST_PROXY`).
+The counters live in the api-gateway process (one instance per installation).
+
 ## Auth rate limits and error codes (v9.0)
 
 - Login, password reset and `/auth/mfa/*` (non-GET) share the strict limiter:

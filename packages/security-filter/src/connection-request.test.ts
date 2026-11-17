@@ -45,12 +45,13 @@ test('unknown stage and non-string fields are rejected', () => {
   assert.equal(parseConnectionRequest({ senderIp: '192.0.2.1', mailFrom: {} }).ok, false);
 });
 
-function deps(ip: 'accept' | 'reject', grey: 'accept' | 'defer'): ConnectionStageDeps & { calls: string[] } {
+function deps(ip: 'accept' | 'reject', grey: 'accept' | 'defer', lists: 'accept' | 'reject' = 'accept'): ConnectionStageDeps & { calls: string[] } {
   const calls: string[] = [];
   return {
     calls,
     ipChecks: async () => { calls.push('ip'); return { action: ip, reason: ip }; },
     greylist: async () => { calls.push('grey'); return { action: grey, reason: grey }; },
+    senderList: async () => { calls.push('lists'); return { action: lists, reason: lists }; },
   };
 }
 
@@ -63,18 +64,24 @@ test('connect stage runs only the IP checks (DNSBL/GeoIP)', async () => {
   assert.deepEqual(d.calls, ['ip']);
 });
 
-test('rcpt stage runs only greylisting', async () => {
+test('rcpt stage: sender lists of the recipient, then greylisting', async () => {
   const d = deps('reject', 'defer');
   const r = await runConnectionStage('rcpt', CTX, {}, d);
   assert.equal(r.action, 'defer');
-  assert.deepEqual(d.calls, ['grey']);
+  assert.deepEqual(d.calls, ['lists', 'grey']);
 });
 
-test('full stage: greylisting first, IP checks only if it passes', async () => {
+test('9.4: rcpt stage — a sender-list block refuses the recipient before greylisting', async () => {
+  const d = deps('accept', 'defer', 'reject');
+  assert.equal((await runConnectionStage('rcpt', CTX, {}, d)).action, 'reject');
+  assert.deepEqual(d.calls, ['lists']);
+});
+
+test('full stage: recipient checks first, IP checks only if they pass', async () => {
   const d1 = deps('reject', 'defer');
   assert.equal((await runConnectionStage('full', CTX, {}, d1)).action, 'defer');
-  assert.deepEqual(d1.calls, ['grey']);
+  assert.deepEqual(d1.calls, ['lists', 'grey']);
   const d2 = deps('reject', 'accept');
   assert.equal((await runConnectionStage('full', CTX, {}, d2)).action, 'reject');
-  assert.deepEqual(d2.calls, ['grey', 'ip']);
+  assert.deepEqual(d2.calls, ['lists', 'grey', 'ip']);
 });

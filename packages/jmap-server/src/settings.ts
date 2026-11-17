@@ -15,7 +15,6 @@ interface PublicSettings {
   publicHostname: string;
   useHttps: boolean;
   httpPort: number;
-  maxMessageSizeMb: number;
 }
 
 let cache: PublicSettings | null = null;
@@ -27,12 +26,12 @@ async function loadSettings(): Promise<PublicSettings> {
   try {
     const s = await prisma.serverSettings.findUnique({
       where: { id: 'singleton' },
-      select: { publicHostname: true, useHttps: true, httpPort: true, maxMessageSizeMb: true },
+      select: { publicHostname: true, useHttps: true, httpPort: true },
     });
-    cache = s ?? { publicHostname: 'mail.local', useHttps: false, httpPort: 8080, maxMessageSizeMb: 25 };
+    cache = s ?? { publicHostname: 'mail.local', useHttps: false, httpPort: 8080 };
   } catch (err) {
     log.warn({ err }, 'ServerSettings not readable — using Host header');
-    cache = { publicHostname: 'mail.local', useHttps: false, httpPort: 8080, maxMessageSizeMb: 25 };
+    cache = { publicHostname: 'mail.local', useHttps: false, httpPort: 8080 };
   }
   cacheExpiry = now + 60_000;
   return cache;
@@ -66,9 +65,4 @@ export async function configuredPublicOrigin(): Promise<string | null> {
   const proto = s.useHttps ? 'https' : 'http';
   const portSuffix = (s.useHttps && s.httpPort === 443) || (!s.useHttps && s.httpPort === 80) ? '' : `:${s.httpPort}`;
   return `${proto}://${s.publicHostname}${portSuffix}`.toLowerCase();
-}
-
-export async function maxMessageSizeBytes(): Promise<number> {
-  const s = await loadSettings();
-  return s.maxMessageSizeMb * 1024 * 1024;
 }

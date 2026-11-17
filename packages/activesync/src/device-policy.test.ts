@@ -45,6 +45,24 @@ test('no device / unprovisioned / missing key → 142, wrong key → 144, Provis
   assert.deepEqual(deviceAccess({ status: 'WIPED', policyKey: '77' }, 'Sync', '77'), { allow: false, status: '140' });
 });
 
+test('9.4: Ping without X-MS-PolicyKey — allowed for a known OK device with a final key, refused otherwise', () => {
+  const ok = { status: 'OK', policyKey: '77' };
+  assert.deepEqual(deviceAccess(ok, 'Ping', undefined), { allow: true }, '[MS-ASPROV]: Ping does not send the policy key');
+  // only Ping, only a missing header: an empty / "0" / wrong key keeps the normal answers
+  assert.deepEqual(deviceAccess(ok, 'Sync', undefined), { allow: false, status: '142' });
+  assert.deepEqual(deviceAccess(ok, 'FolderSync', undefined), { allow: false, status: '142' });
+  assert.deepEqual(deviceAccess(ok, 'Ping', ''), { allow: false, status: '142' });
+  assert.deepEqual(deviceAccess(ok, 'Ping', '0'), { allow: false, status: '142' });
+  assert.deepEqual(deviceAccess(ok, 'Ping', '78'), { allow: false, status: '144' });
+  assert.deepEqual(deviceAccess(ok, 'Ping', '77'), { allow: true });
+  // unknown, unprovisioned (only a temporary phase-1 key), blocked, pending, wiped device
+  assert.deepEqual(deviceAccess(null, 'Ping', undefined), { allow: false, status: '142' });
+  assert.deepEqual(deviceAccess({ status: 'OK', policyKey: '0' }, 'Ping', undefined), { allow: false, status: '142' });
+  assert.deepEqual(deviceAccess({ status: 'BLOCKED', policyKey: '77' }, 'Ping', undefined), { allow: false, status: '129' });
+  assert.deepEqual(deviceAccess({ status: 'PENDING', policyKey: '77' }, 'Ping', undefined), { allow: false, status: '129' });
+  assert.deepEqual(deviceAccess({ status: 'WIPED', policyKey: '77' }, 'Ping', undefined), { allow: false, status: '140' });
+});
+
 test('refusal bytes: global status inside the command element (14.x), HTTP 449/403 otherwise', () => {
   // <Sync><Status>142</Status></Sync> on page 0
   const sync = deniedResponse('Sync', EAS_GLOBAL_STATUS.DEVICE_NOT_PROVISIONED, '14.1', '77');

@@ -5,7 +5,7 @@
  *   1. requestId          — correlation ID for every request (logging, tracing)
  *   2. helmetMiddleware   — complete HTTP security header stack
  *   3. suspiciousInput    — null bytes, CRLF injection, path traversal, header overflow
- *   4. generalRateLimit   — global IP-based throttling (500 req / 15 min)
+ *   4. API rate limit     — per user / per IP, configurable (lib/api-rate-limit.ts, 9.4)
  *   5. authRateLimit      — strict throttling on /auth (20 req / 15 min, brute force)
  *   6. setupRateLimit     — one-time setup endpoint (5 req / h)
  */
@@ -158,22 +158,7 @@ export function suspiciousInputGuard(req: Request, res: Response, next: NextFunc
 
 // ── 4. Rate Limiter ───────────────────────────────────────────────────────────
 
-/**
- * Global throttling — 500 requests per 15 minutes per IP.
- * Loopback addresses (internal services) are exempt.
- */
-export const generalRateLimit = rateLimit({
-  windowMs: 15 * 60 * 1_000,
-  max: 500,
-  standardHeaders: 'draft-7',
-  legacyHeaders: false,
-  skip: isLoopback,
-  message: { error: 'Too many requests. Please try again later.' },
-  handler(req, res, _next, options) {
-    log.warn({ ip: req.ip, path: req.path }, 'General rate limit exceeded');
-    res.status(options.statusCode).json(options.message);
-  },
-});
+// The global API limiter (per user / per IP, configurable) lives in lib/api-rate-limit.ts (9.4).
 
 /**
  * Auth endpoints — max. 20 attempts per 15 minutes per IP.

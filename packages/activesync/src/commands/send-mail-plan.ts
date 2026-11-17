@@ -13,6 +13,11 @@ export const EAS_SEND_STATUS = {
   SERVER_ERROR:      '110',
   /** [MS-ASCMD] common status 113 MailboxQuotaExceeded (v8.1: ProhibitSendQuota). */
   MAILBOX_QUOTA_EXCEEDED: '113',
+  /**
+   * [MS-ASCMD] 2.2.2 common status 115 SendQuotaExceeded ("the request would exceed the
+   * send quota") — 9.4: the message is larger than the configured maximum message size.
+   */
+  MESSAGE_TOO_LARGE: '115',
   MESSAGE_PREVIOUSLY_SENT: '118',
   NO_RECIPIENTS:     '119',
   SUBMISSION_FAILED: '120',
@@ -95,6 +100,13 @@ function splitMessage(raw: Buffer): { headers: string[]; body: Buffer } {
     else headers.push(line);
   }
   return { headers, body: end >= 0 ? raw.subarray(end + sepLen) : Buffer.alloc(0) };
+}
+
+/** Unfolded value of the first header field `name` (case-insensitive), or null. */
+export function headerValue(raw: Buffer, name: string): string | null {
+  const prefix = new RegExp(`^${name}[ \\t]*:`, 'i');
+  const field = splitMessage(raw).headers.find((h) => prefix.test(h));
+  return field === undefined ? null : field.replace(prefix, '').replace(/\r\n[ \t]+/g, ' ').trim();
 }
 
 /**

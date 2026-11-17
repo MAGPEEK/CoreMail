@@ -1,45 +1,22 @@
 /**
  * Limits for POST /api/v1/mail/send (8.0.x).
  *
- *  - request size: at most the configured max. message size (the stricter of
- *    SmtpSettings.maxMessageSizeMb — the SMTP submission limit — and
- *    ServerSettings.maxMessageSizeMb), enforced on Content-Length AND on the
+ *  - request size: at most the configured max. message size (storage
+ *    message-size-limit.ts, shared with JMAP and ActiveSync), enforced on Content-Length AND on the
  *    bytes actually streamed (chunked uploads), so multer's memory storage
  *    never holds more than one message worth of data per request
  *  - recipients: at most MAIL_SEND_MAX_RECIPIENTS (default 500) in to+cc+bcc,
  *    each a syntactically valid address (`a@b.c` or `Name <a@b.c>`), no CR/LF
  */
 import type { Request, Response, NextFunction } from 'express';
-import { prisma } from '@coremail/storage';
+import { maxOutgoingMessageBytes } from '@coremail/storage';
 import { envInt } from './user-rate-limit.js';
 
-export const DEFAULT_MAX_MESSAGE_MB = 25;
 /** Attachments per message (was 20). */
 export const MAX_SEND_FILES = 10;
 
-let cache: { bytes: number; expires: number } | null = null;
-
-export function clearSendLimitCache(): void { cache = null; }
-
-/** Max. size of one outgoing message in bytes (60 s cache). */
-export async function maxMessageBytes(): Promise<number> {
-  if (cache && cache.expires > Date.now()) return cache.bytes;
-  let mb = DEFAULT_MAX_MESSAGE_MB;
-  try {
-    const [smtp, server] = await Promise.all([
-      prisma.smtpSettings.findUnique({ where: { id: 'singleton' }, select: { maxMessageSizeMb: true } }),
-      prisma.serverSettings.findUnique({ where: { id: 'singleton' }, select: { maxMessageSizeMb: true } }),
-    ]);
-    const values = [smtp?.maxMessageSizeMb, server?.maxMessageSizeMb]
-      .filter((v): v is number => typeof v === 'number' && v > 0);
-    if (values.length) mb = Math.min(...values);
-  } catch {
-    /* settings unreadable → default */
-  }
-  const bytes = Math.max(1, mb) * 1024 * 1024;
-  cache = { bytes, expires: Date.now() + 60_000 };
-  return bytes;
-}
+/** Max. size of one outgoing message in bytes — the shared storage helper (9.4, 60 s cache). */
+export const maxMessageBytes = (): Promise<number> => maxOutgoingMessageBytes();
 
 export class BodyTooLargeError extends Error {
   readonly code = 'BODY_TOO_LARGE';

@@ -1,13 +1,15 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { prisma } from '@coremail/storage/prisma';
 import {
   listAllowedSenderAddresses, createMessage, setFlags, loadRawMessage, parseRawMessage, storeRawMessage,
-  truncateBodyColumn, uploadBuffer, attachmentKey, checkSendQuota, type RawSourceMessage,
+  truncateBodyColumn, uploadBuffer, attachmentKey, checkSendQuota, maxOutgoingMessageBytes, type RawSourceMessage,
 } from '@coremail/storage';
 import { createLogger, getRedisClient } from '@coremail/core';
 import { encodeWbxml, el, getChild, getText, type WbxmlElement } from '../wbxml.js';
 import { enqueueRawOutbound, type RawOutboundJob } from '../outbound.js';
-import { EAS_SEND_STATUS, planEasSubmission, appendOriginalMessage, type EasSubmissionPlan } from './send-mail-plan.js';
+import {
+  EAS_SEND_STATUS, planEasSubmission, appendOriginalMessage, headerValue, type EasSubmissionPlan,
+} from './send-mail-plan.js';
 import type { EasCommandParams } from '../request.js';
 
 const log = createLogger('activesync:send-mail');
@@ -16,29 +18,37 @@ export type ComposeCommand = 'SendMail' | 'SmartReply' | 'SmartForward';
 
 /** How long a SendMail ClientId is remembered ([MS-ASCMD] ClientId — retry detection). */
 const CLIENT_ID_TTL_SEC = 3 * 24 * 3600;
+/**
+ * 9.4: a request without ClientId (always for 12.1) is recognised as a retry by its
+ * Message-ID header from the same device within this window — a device that timed out
+ * resends the identical message right away.
+ */
+const MESSAGE_ID_TTL_SEC = 10 * 60;
 
 /** Source message of SmartReply / SmartForward (own mailbox only). */
 export interface SourceMessage { id: string; folderId: string; flags: string[]; mailboxId: string; subject: string; raw: Buffer }
 
 export interface SendMailDeps {
   enqueue: (job: RawOutboundJob) => Promise<unknown>;
-  /** true = first use of this ClientId (claimed), false = already sent. */
-  claimClientId: (userId: string, clientId: string) => Promise<boolean>;
+  /** true = first use of this idempotency key (claimed for ttlSec), false = already sent. */
+  claimClientId: (userId: string, clientId: string, ttlSec: number) => Promise<boolean>;
   releaseClientId: (userId: string, clientId: string) => Promise<void>;
   saveSentCopy: (userId: string, plan: EasSubmissionPlan) => Promise<void>;
   loadSource: (userId: string, ref: { itemId: string; folderId?: string }) => Promise<SourceMessage | null>;
   markSource: (source: SourceMessage, flag: string) => Promise<void>;
   /** v8.1: false = the mailbox is at/over its ProhibitSendQuota. Default: storage checkSendQuota. */
   sendAllowed?: (userId: string) => Promise<boolean>;
+  /** 9.4: maximum message size in octets. Default: storage maxOutgoingMessageBytes. */
+  maxMessageBytes?: () => Promise<number>;
 }
 
 const clientIdKey = (userId: string, clientId: string) => `eas:clientid:${userId}:${clientId}`;
 
 export const defaultSendMailDeps: SendMailDeps = {
   enqueue: enqueueRawOutbound,
-  claimClientId: async (userId, clientId) => {
+  claimClientId: async (userId, clientId, ttlSec) => {
     try {
-      return (await getRedisClient().set(clientIdKey(userId, clientId), '1', 'EX', CLIENT_ID_TTL_SEC, 'NX')) === 'OK';
+      return (await getRedisClient().set(clientIdKey(userId, clientId), '1', 'EX', ttlSec, 'NX')) === 'OK';
     } catch (err) {
       log.warn({ err }, 'ClientId check unavailable (Redis) — sending without duplicate detection');
       return true;
@@ -63,8 +73,27 @@ export const defaultSendMailDeps: SendMailDeps = {
   },
 };
 
-function statusResponse(command: string, status: string): Buffer {
+/**
+ * 14.0+ response body: empty on success — [MS-ASCMD] 2.2.1.17 SendMail "If the message was
+ * sent successfully, the server returns an empty response" (likewise SmartForward 2.2.1.19,
+ * SmartReply 2.2.1.20) — otherwise `<Command><Status>` with the failure code.
+ */
+export function composeResponse(command: string, status: string): Buffer {
+  if (status === EAS_SEND_STATUS.SUCCESS) return Buffer.alloc(0);
   return encodeWbxml(el(command, undefined, [el('Status', status)]));
+}
+
+/**
+ * Idempotency key of a compose request: its ClientId ([MS-ASCMD] 2.2.3.28.1, 14.0+), else
+ * (12.1 has no ClientId) the Message-ID header of the client's MIME together with the device.
+ * null = no retry detection possible (no ClientId, no Message-ID or no device id).
+ */
+export function idempotencyKey(request: ComposeRequest): { id: string; ttlSec: number } | null {
+  if (request.clientId) return { id: request.clientId, ttlSec: CLIENT_ID_TTL_SEC };
+  const messageId = request.mime ? headerValue(request.mime, 'Message-ID') : null;
+  if (!messageId || !request.deviceId) return null;
+  const digest = createHash('sha256').update(`${request.deviceId}\n${messageId}`).digest('hex').slice(0, 32);
+  return { id: `mid:${digest}`, ttlSec: MESSAGE_ID_TTL_SEC };
 }
 
 /** A SendMail / SmartReply / SmartForward request, independent of its encoding. */
@@ -78,6 +107,8 @@ export interface ComposeRequest {
   source: { itemId: string; folderId?: string } | null;
   /** ComposeMail ReplaceMime (14.0+): the client's MIME already contains the original. */
   replaceMime: boolean;
+  /** EAS DeviceId of the request ('' = unknown) — scope of the Message-ID retry detection. */
+  deviceId: string;
 }
 
 function sourceRef(itemId: string, longId: string, folderId: string): ComposeRequest['source'] {
@@ -87,7 +118,7 @@ function sourceRef(itemId: string, longId: string, folderId: string): ComposeReq
 }
 
 /** 14.0+: the ComposeMail WBXML request (`composemail:Mime` as opaque octets). */
-export function composeRequestFromWbxml(body: WbxmlElement): ComposeRequest {
+export function composeRequestFromWbxml(body: WbxmlElement, deviceId = ''): ComposeRequest {
   const src = getChild(body, 'Source');
   return {
     mime: getChild(body, 'Mime')?.bytes,
@@ -95,6 +126,7 @@ export function composeRequestFromWbxml(body: WbxmlElement): ComposeRequest {
     clientId: getText(body, 'ClientId'),
     source: src ? sourceRef(getText(src, 'ItemId'), getText(src, 'LongId'), getText(src, 'FolderId')) : null,
     replaceMime: !!getChild(body, 'ReplaceMime'),
+    deviceId,
   };
 }
 
@@ -104,13 +136,14 @@ export function composeRequestFromWbxml(body: WbxmlElement): ComposeRequest {
  * `ItemId` + `CollectionId` or `LongId` ([MS-ASCMD] SendMail/SmartReply/SmartForward,
  * [MS-ASHTTP] request parameters). There is no ClientId and no ReplaceMime.
  */
-export function composeRequestFromMime(mime: Buffer, params: EasCommandParams): ComposeRequest {
+export function composeRequestFromMime(mime: Buffer, params: EasCommandParams, deviceId = ''): ComposeRequest {
   return {
     mime,
     saveInSent: params.saveInSent,
     clientId: '',
     source: sourceRef(params.itemId ?? '', params.longId ?? '', params.collectionId ?? ''),
     replaceMime: false,
+    deviceId,
   };
 }
 
@@ -133,19 +166,22 @@ export function legacySendHttpStatus(status: string): number {
       return 403;
     case EAS_SEND_STATUS.MAILBOX_QUOTA_EXCEEDED:
       return 507;
+    case EAS_SEND_STATUS.MESSAGE_TOO_LARGE:
+      return 413; // Request Entity Too Large — repeating the same message cannot succeed
     default:
       return 500;
   }
 }
 
-/** 14.0+ SendMail / SmartReply / SmartForward: ComposeMail WBXML in, `<Command><Status>` out. */
+/** 14.0+ SendMail / SmartReply / SmartForward: ComposeMail WBXML in, empty body or `<Command><Status>` out. */
 export async function handleSendMail(
   body: WbxmlElement,
   userId: string,
   command: ComposeCommand = 'SendMail',
   deps: SendMailDeps = defaultSendMailDeps,
+  deviceId = '',
 ): Promise<Buffer> {
-  return statusResponse(command, await submitCompose(composeRequestFromWbxml(body), userId, command, deps));
+  return composeResponse(command, await submitCompose(composeRequestFromWbxml(body, deviceId), userId, command, deps));
 }
 
 /** 12.1 SendMail / SmartReply / SmartForward: raw MIME + request-line parameters in, HTTP status out. */
@@ -155,8 +191,9 @@ export async function handleLegacySendMail(
   userId: string,
   command: ComposeCommand,
   deps: SendMailDeps = defaultSendMailDeps,
+  deviceId = '',
 ): Promise<number> {
-  return legacySendHttpStatus(await submitCompose(composeRequestFromMime(mime, params), userId, command, deps));
+  return legacySendHttpStatus(await submitCompose(composeRequestFromMime(mime, params, deviceId), userId, command, deps));
 }
 
 /**
@@ -174,7 +211,12 @@ export async function handleLegacySendMail(
  * An unknown source → Status 150.
  *
  * `ClientId` is remembered per user: a retried request with the same ClientId (e.g. after
- * a timeout) is answered with Status 118 instead of sending the mail twice.
+ * a timeout) is answered with Status 118 instead of sending the mail twice. Without a
+ * ClientId (12.1) the Message-ID of the client's MIME from the same device is remembered
+ * for a short window instead (`idempotencyKey`).
+ *
+ * 9.4: a message (including the appended original) above the configured maximum message
+ * size is refused with Status 115 (12.1: HTTP 413).
  */
 export async function submitCompose(
   request: ComposeRequest,
@@ -182,9 +224,10 @@ export async function submitCompose(
   command: ComposeCommand,
   deps: SendMailDeps,
 ): Promise<string> {
-  const { mime, saveInSent, clientId } = request;
+  const { mime, saveInSent } = request;
   if (!mime || mime.length === 0) return EAS_SEND_STATUS.SUBMISSION_FAILED;
 
+  const idem = idempotencyKey(request);
   let claimed = false;
   try {
     const user = await prisma.user.findFirst({
@@ -211,6 +254,12 @@ export async function submitCompose(
       }
     }
 
+    const limit = await (deps.maxMessageBytes ?? maxOutgoingMessageBytes)();
+    if (raw.length > limit) {
+      log.info({ userId, command, size: raw.length, limit }, 'EAS send refused: message larger than the maximum message size');
+      return EAS_SEND_STATUS.MESSAGE_TOO_LARGE;
+    }
+
     const result = await planEasSubmission(raw, {
       userEmail:      user.email,
       allowedSenders: await listAllowedSenderAddresses(userId),
@@ -221,10 +270,10 @@ export async function submitCompose(
     }
     const plan = result.plan;
 
-    if (clientId) {
-      claimed = await deps.claimClientId(userId, clientId);
+    if (idem) {
+      claimed = await deps.claimClientId(userId, idem.id, idem.ttlSec);
       if (!claimed) {
-        log.info({ userId, command, clientId }, 'EAS send retried with a used ClientId — not sent again');
+        log.info({ userId, command, key: idem.id }, 'EAS send retried (same ClientId / Message-ID) — not sent again');
         return EAS_SEND_STATUS.MESSAGE_PREVIOUSLY_SENT;
       }
     }
@@ -238,7 +287,7 @@ export async function submitCompose(
       senderUserId: userId,
       rawMessage:   plan.raw.toString('base64'),
     });
-    claimed = false; // sent: the ClientId stays claimed
+    claimed = false; // sent: the key stays claimed
     log.info({ userId, command, jobId, from: plan.envelopeFrom, rcpt: plan.recipients.length }, 'EAS mail enqueued');
 
     void prisma.systemLog.create({
@@ -269,7 +318,7 @@ export async function submitCompose(
     return EAS_SEND_STATUS.SUCCESS;
   } catch (err) {
     log.error({ err, userId, command }, 'EAS send failed');
-    if (claimed && clientId) await deps.releaseClientId(userId, clientId).catch(() => undefined);
+    if (claimed && idem) await deps.releaseClientId(userId, idem.id).catch(() => undefined);
     return EAS_SEND_STATUS.SERVER_ERROR;
   }
 }

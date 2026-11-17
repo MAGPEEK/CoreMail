@@ -1,6 +1,10 @@
-// Step 10: admin flows — certificate, transport-rule quarantine + release, out-of-office.
+// Step 10: admin flows — certificate, transport-rule quarantine + release, out-of-office,
+// sender lists / spoofing settings / API rate limit (9.4).
 import tls from 'node:tls';
-import { check, assert, creds, http, session, buildMime, imapCmd, imapQuote, waitFor, sleep, HOST, PORTS, DOMAIN } from '../lib.mjs';
+import {
+  check, assert, creds, http, session, buildMime, imapCmd, imapQuote, waitFor, sleep, HOST, PORTS, DOMAIN,
+  smtpOpen, smtpCmd, smtpSend, resetGatewayRateLimits,
+} from '../lib.mjs';
 import { imapLogin } from './imap.mjs';
 import { submit } from './pop3.mjs';
 
@@ -117,7 +121,6 @@ export async function run(state) {
   });
   await check('oof: external sender gets the external text via smarthost sink', async () => {
     await http('DELETE', '/messages', { base: `http://${HOST}:${PORTS.sink}` });
-    const { smtpOpen, smtpSend } = await import('../lib.mjs');
     const s = await smtpOpen(PORTS.smtp, { ehlo: 'mx.external-e2e.test' });
     const ext = 'oof-tester@external-e2e.test';
     try {
@@ -134,4 +137,81 @@ export async function run(state) {
     return `sink got reply, MAIL FROM:<>, DKIM=${/DKIM-Signature/i.test(m.raw)}`;
   });
   await http('PUT', '/api/v1/user/oof', { token: tokB, body: { enabled: false } });
+
+  await hygieneChecks(state, admin);
+}
+
+/** One inbound port-25 transaction up to RCPT TO (or DATA when `raw` is given). */
+async function inbound(from, rcpts, raw) {
+  const s = await smtpOpen(PORTS.smtp, { ehlo: 'mx.external-e2e.test' });
+  try {
+    if (raw) return await smtpSend(s, from, rcpts, raw);
+    await smtpCmd(s, `MAIL FROM:<${from}>`);
+    const out = [];
+    for (const r of rcpts) out.push(await smtpCmd(s, `RCPT TO:<${r}>`));
+    return out;
+  } finally { s.close(); }
+}
+
+// 9.4 (BCP review): sender lists, spoofing settings, configurable API rate limit.
+async function hygieneChecks(state, admin) {
+  const A = state.users.a.email, B = state.users.b.email;
+  const BASE = '/api/v1/admin/security';
+
+  await check('hygiene: mailbox-scoped sender block refuses that recipient at RCPT TO, not others; CSV export lists it', async () => {
+    const pest = `pest-${Date.now()}@external-e2e.test`;
+    const c = await http('POST', `${BASE}/sender-lists`, { token: admin, body: { listType: 'BLOCK', scope: 'USER', target: B, patternType: 'EXACT', pattern: pest } });
+    assert(c.status === 201, `create ${c.status} ${c.text.slice(0, 200)}`);
+    try {
+      const [toB, toA] = await inbound(pest, [B, A]);
+      assert(toB.code === 550 && /5\.7\.1/.test(toB.text), `RCPT B: ${toB.text}`);
+      assert(toA.code !== 550, `RCPT A must not be blocked: ${toA.text}`);
+      const csv = await http('GET', `${BASE}/sender-lists/export.csv`, { token: admin });
+      assert(csv.status === 200 && csv.text.includes(pest), 'entry missing in the CSV export');
+      return `B: ${toB.text.trim()}; A: ${toA.code}`;
+    } finally {
+      await http('DELETE', `${BASE}/sender-lists/${c.json.id}`, { token: admin });
+    }
+  });
+
+  await check('hygiene: spoofing action from the BCP takes effect without a restart (reject → 550 for a forged local From)', async () => {
+    const g = await http('GET', `${BASE}/spoofing`, { token: admin });
+    assert(g.status === 200, `GET ${g.status}`);
+    if (g.json.envOverrides.some((o) => o.field === 'localSpoofAction')) return 'skipped: LOCAL_SPOOF_ACTION set in the environment';
+    const p = await http('PUT', `${BASE}/spoofing`, { token: admin, body: { localSpoofAction: 'reject' } });
+    assert(p.status === 200 && p.json.effective.action === 'reject', `PUT ${p.status} ${p.text.slice(0, 200)}`);
+    try {
+      await sleep(2000); // settings reload via Redis
+      // envelope sender of the smtp step (greylisting triple already passed), forged local header From
+      const raw = buildMime({ from: `ceo@${DOMAIN}`, to: B, subject: `E2E forged local ${Date.now()}`, text: 'spoof' });
+      const r = await inbound('sender@external-e2e.test', [B], raw);
+      assert(r.stage === 'DATA' && r.code === 550, `${r.stage}: ${r.text}`);
+      return r.text.trim();
+    } finally {
+      await http('PUT', `${BASE}/spoofing`, { token: admin, body: { localSpoofAction: 'policy' } });
+    }
+  });
+
+  await check('hygiene: API rate limit is configurable (per-IP limit applies at once, RateLimit-Limit header)', async () => {
+    const s = await http('PUT', '/api/v1/admin/settings/security', { token: admin, body: { apiRateLimitPerIp: 15 } });
+    assert(s.status === 200, `PUT ${s.status} ${s.text.slice(0, 200)}`);
+    if ((s.json.apiRateLimitEnvOverrides ?? []).includes('apiRateLimitPerIp')) return 'skipped: API_RATE_LIMIT_PER_IP set in the environment';
+    try {
+      let limited = null;
+      let limitHeader = null;
+      for (let i = 0; i < 20 && !limited; i++) {
+        const r = await http('GET', '/api/v1/branding', { retry429: false });
+        limitHeader ??= r.headers.get('ratelimit-limit');
+        if (r.status === 429) limited = r;
+      }
+      assert(limitHeader === '15', `RateLimit-Limit ${limitHeader}`);
+      assert(limited && limited.headers.get('retry-after'), 'no 429 within 20 anonymous requests');
+      const user = await http('GET', '/api/v1/admin/settings', { token: admin, retry429: false });
+      assert(user.status === 200, `signed-in requests use their own budget: ${user.status}`);
+      return `429 after the per-IP budget; signed-in admin unaffected`;
+    } finally {
+      await http('PUT', '/api/v1/admin/settings/security', { token: admin, body: { apiRateLimitPerIp: 500 } });
+      await resetGatewayRateLimits(); // the exhausted anonymous window would block later logins
+    }
+  });
 }
