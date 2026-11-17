@@ -197,15 +197,23 @@ export interface FakePrisma {
 }
 
 /**
- * 9.4: the models the protocol switch check reads, for hand-written Prisma fakes
- * of tests that do not care about protocol switches (no switch stored = built-in
- * defaults). Spread it first: `{ ...noProtocolPolicies(), user: …, serverSettings: … }`.
+ * 9.4: the models the protocol switch check reads, for hand-written Prisma
+ * fakes. `rows` is the live list of ProtocolPolicy rows (push / clear it in a
+ * test, then call invalidateProtocolAccessCache()); a row's `domain` relation
+ * is the domain `{ name }` for anonymous lookups. No serverSettings row =
+ * JMAP on at the server level. Spread it first:
+ * `{ ...fakeProtocolPolicies(policies), user: …, serverSettings: … }`.
  */
-export function noProtocolPolicies(): Record<string, unknown> {
+export function fakeProtocolPolicies(rows: Row[]): Record<string, unknown> {
   return {
-    protocolPolicy: { findMany: async () => [], count: async () => 0 },
+    protocolPolicy: { findMany: async () => rows, count: async () => 0 },
     serverSettings: { findUnique: async () => null },
   };
+}
+
+/** 9.4: fakeProtocolPolicies() without any switch (built-in defaults), for tests that do not care. */
+export function noProtocolPolicies(): Record<string, unknown> {
+  return fakeProtocolPolicies([]);
 }
 
 /** 9.4: defaults of a ProtocolPolicy row (every switch inherited). */
@@ -251,7 +259,7 @@ export function createFakePrisma(): FakePrisma {
   p.mailbox = new FakeTable(() => ({ uidValidity: 1, uidNext: 1, createdAt: new Date() }), ['id', 'userId', 'sharedBoxId']);
   p.folder = new FakeTable(() => ({ totalCount: 0, unreadCount: 0 }), ['id']);
   p.calendar = new FakeTable(() => ({ color: '#0078D4', isDefault: false, sortOrder: 0, syncToken: '' }));
-  p.protocolPolicy = new FakeTable(protocolPolicyDefaults, ['id', 'domainId', 'userId']);
+  p.protocolPolicy = new FakeTable(protocolPolicyDefaults, ['id', 'domainId', 'userId'], { domain: () => p.domain });
   return p;
 }
 

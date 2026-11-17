@@ -14,12 +14,17 @@ test('scope: global by default, domain/user, anything else is refused', () => {
 });
 
 test('patch: only the given switches, values validated, at least one required', () => {
-  assert.deepEqual(buildProtocolPatch({ imap: 'OFF', webmail: ' inherit ' }), { imap: 'off', webmail: 'inherit' });
-  assert.throws(() => buildProtocolPatch({ imap: 'disabled' }), /--imap: on, off or inherit/);
-  assert.throws(() => buildProtocolPatch({}), /Nothing to set/);
+  assert.deepEqual(buildProtocolPatch({ imap: 'OFF', webmail: ' inherit ' }, 'user'), { imap: 'off', webmail: 'inherit' });
+  assert.throws(() => buildProtocolPatch({ imap: 'disabled' }, 'domain'), /--imap: inherit, on, off on the domain level/);
+  assert.throws(() => buildProtocolPatch({}, 'user'), /Nothing to set/);
 });
 
-test('rows: inherit shows what it resolves to; the server level calls it default', () => {
+test('patch: the server level is two-state (no inherit)', () => {
+  assert.deepEqual(buildProtocolPatch({ mapi: 'on', pop3: 'off' }, 'global'), { mapi: 'on', pop3: 'off' });
+  assert.throws(() => buildProtocolPatch({ imap: 'inherit' }, 'global'), /--imap: on, off on the global level/);
+});
+
+test('rows: inherit shows what it resolves to', () => {
   const all = <T>(v: T) => Object.fromEntries(PROTOCOLS.map((p) => [p, v])) as Record<(typeof PROTOCOLS)[number], T>;
   const view: ProtocolView = {
     level: 'domain', settings: { ...all('inherit' as const), pop3: 'off' },
@@ -28,5 +33,4 @@ test('rows: inherit shows what it resolves to; the server level calls it default
   const rows = protocolRows(view);
   assert.deepEqual(rows.find((r) => r['protocol'] === 'imap'), { protocol: 'imap', setting: 'inherit (on)', effective: 'on' });
   assert.deepEqual(rows.find((r) => r['protocol'] === 'pop3'), { protocol: 'pop3', setting: 'off', effective: 'off' });
-  assert.equal(protocolRows({ ...view, level: 'global' }).find((r) => r['protocol'] === 'mapi')?.['setting'], 'default (off)');
 });

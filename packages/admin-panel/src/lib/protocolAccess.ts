@@ -10,6 +10,11 @@ export type Protocol = typeof PROTOCOLS[number];
 export const PROTOCOL_SETTINGS = ['inherit', 'on', 'off'] as const;
 export type ProtocolSetting = typeof PROTOCOL_SETTINGS[number];
 
+/** The options of a level: the server level is two-state (it has nothing to inherit from). */
+export function settingsForLevel(level: ProtocolLevelView['level']): readonly ProtocolSetting[] {
+  return level === 'global' ? ['on', 'off'] : PROTOCOL_SETTINGS;
+}
+
 export type ProtocolSettings = Record<Protocol, ProtocolSetting>;
 
 /** GET/PUT /admin/protocol-access[/domains/:id|/users/:id]. */
@@ -17,9 +22,9 @@ export interface ProtocolLevelView {
   level: 'global' | 'domain' | 'user';
   id?: string;
   protocols: Protocol[];
-  /** The switches stored on this level. */
+  /** The switches of this level (server level: always on / off). */
   settings: ProtocolSettings;
-  /** What `inherit` resolves to on this level. */
+  /** What `inherit` resolves to on this level (server level: the built-in defaults). */
   inherited: Record<Protocol, boolean>;
   effective: Record<Protocol, boolean>;
   /** PUT only: users whose effective access changed. */

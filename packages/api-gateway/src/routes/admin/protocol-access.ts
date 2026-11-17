@@ -2,10 +2,10 @@
  * Admin API: per-protocol access switches (9.4) — see @coremail/storage
  * protocol-access.ts and docs/protocol-access.md.
  *
- *   GET /api/v1/admin/protocol-access                 server level
- *   PUT /api/v1/admin/protocol-access                 { imap?: 'inherit'|'on'|'off', … }
+ *   GET /api/v1/admin/protocol-access                 server level (two-state)
+ *   PUT /api/v1/admin/protocol-access                 { imap?: 'on'|'off', … }  (no 'inherit' → 400)
  *   GET /api/v1/admin/protocol-access/domains/:id     domain level
- *   PUT /api/v1/admin/protocol-access/domains/:id
+ *   PUT /api/v1/admin/protocol-access/domains/:id     { imap?: 'inherit'|'on'|'off', … }
  *   GET /api/v1/admin/protocol-access/users/:id       user level
  *   PUT /api/v1/admin/protocol-access/users/:id
  *
@@ -22,7 +22,7 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { z } from 'zod';
 import { createLogger } from '@coremail/core';
 import {
-  prisma, readProtocolLevel, updateProtocolSettings, ACCESS_PROTOCOLS, PROTOCOL_SETTINGS,
+  prisma, readProtocolLevel, updateProtocolSettings, ACCESS_PROTOCOLS, PROTOCOL_SETTINGS, SERVER_PROTOCOL_SETTINGS,
   type ProtocolLevelView, type ProtocolScope, type ProtocolSettings,
 } from '@coremail/storage';
 import { requireArea } from '../../middleware/auth.js';
@@ -32,11 +32,17 @@ import { audit, auditContext } from '../../lib/audit.js';
 const log = createLogger('admin:protocol-access');
 export const adminProtocolAccessRouter: RouterType = Router();
 
-const SettingSchema = z.enum(PROTOCOL_SETTINGS);
-/** Partial switches; unknown protocols are refused, at least one switch is required. */
-export const ProtocolPatchSchema = z.object(
-  Object.fromEntries(ACCESS_PROTOCOLS.map((p) => [p, SettingSchema.optional()])) as Record<typeof ACCESS_PROTOCOLS[number], z.ZodOptional<typeof SettingSchema>>,
-).strict().refine((o) => Object.values(o).some((v) => v !== undefined), { message: 'At least one protocol switch is required' });
+/** Partial switches of a level; unknown protocols are refused, at least one switch is required. */
+function patchSchema<S extends readonly [string, ...string[]]>(settings: S) {
+  const setting = z.enum(settings);
+  return z.object(
+    Object.fromEntries(ACCESS_PROTOCOLS.map((p) => [p, setting.optional()])) as Record<typeof ACCESS_PROTOCOLS[number], z.ZodOptional<typeof setting>>,
+  ).strict().refine((o) => Object.values(o).some((v) => v !== undefined), { message: 'At least one protocol switch is required' });
+}
+/** Domain and user level: inherit | on | off. */
+export const ProtocolPatchSchema = patchSchema(PROTOCOL_SETTINGS);
+/** Server level: two-state, on | off (no broader level to inherit from). */
+export const ServerProtocolPatchSchema = patchSchema(SERVER_PROTOCOL_SETTINGS);
 
 const serversArea = requireArea('servers');
 /** Domain level: write = servers; read also for `domains` readers (BCP domain dialog). */
@@ -68,7 +74,8 @@ function diff(before: ProtocolSettings, after: ProtocolSettings): Record<string,
 }
 
 async function update(req: Request, res: Response, scope: ProtocolScope, targetName: string): Promise<void> {
-  const parsed = ProtocolPatchSchema.safeParse(req.body ?? {});
+  const schema = scope.level === 'global' ? ServerProtocolPatchSchema : ProtocolPatchSchema;
+  const parsed = schema.safeParse(req.body ?? {});
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request', details: parsed.error.issues }); return; }
   const patch = Object.fromEntries(Object.entries(parsed.data).filter(([, v]) => v !== undefined)) as Partial<ProtocolSettings>;
   const r = await updateProtocolSettings(scope, patch);

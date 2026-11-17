@@ -35,10 +35,7 @@ const policies: Array<Record<string, unknown>> = [];
   $on: () => undefined,
   user: { findFirst: async ({ where }: { where: { email: string } }) => users.find((u) => u.email === where.email) ?? null },
   appPassword: { findMany: async () => [], update: async () => ({}) },
-  domain: {
-    findFirst: async () => ({ name: 'example.com' }),
-    findUnique: async ({ where }: { where: { name: string } }) => (where.name === 'example.com' ? { id: 'd1' } : null),
-  },
+  domain: { findFirst: async () => ({ name: 'example.com' }) },
   protocolPolicy: { findMany: async () => policies },
   emailAlias: {
     findFirst: async ({ where }: { where: { address: string; targetUserId: string } }) =>
@@ -261,7 +258,7 @@ test('9.4 v1: only protocols switched on for the account are announced (IMAP off
 });
 
 test('9.4 v2 (anonymous): per mail domain — a protocol switched off for the domain is NoSuchProtocol', async () => {
-  policies.push({ id: 'p-d1', domainId: 'd1', userId: null, activesync: 'OFF' });
+  policies.push({ id: 'p-d1', domainId: 'd1', domain: { name: 'example.com' }, userId: null, activesync: 'OFF' });
   storage.invalidateProtocolAccessCache();
   try {
     const eas = await fetch(`${base}/autodiscover/autodiscover.json/v1.0/alice%40example.com?Protocol=ActiveSync`);

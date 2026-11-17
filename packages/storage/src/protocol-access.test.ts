@@ -113,6 +113,27 @@ test('domainProtocolAccess (anonymous) uses server + domain level, never a user 
   assert.equal((await pa.domainProtocolAccess('unknown.test')).activesync, true, 'foreign domain → server level');
 });
 
+test('domainProtocolAccess: anonymous lookups resolve from one cached index, whatever the domain name', async () => {
+  await db.protocolPolicy.create({ data: { domainId: 'd2', pop3: 'OFF' } });
+  const reads = { policies: 0, other: 0 };
+  const policyFindMany = db.protocolPolicy.findMany;
+  const domainFindUnique = db.domain.findUnique;
+  db.protocolPolicy.findMany = async (args) => { reads.policies++; return policyFindMany(args); };
+  db.domain.findUnique = async (args) => { reads.other++; return domainFindUnique(args); };
+  try {
+    for (let i = 0; i < 20; i++) await pa.domainProtocolAccess(`random-${i}.example`);
+    assert.equal((await pa.domainProtocolAccess('TWO.test')).pop3, false);
+    assert.deepEqual(reads, { policies: 1, other: 0 }, 'one index load for every name, no per-name query');
+
+    // A change of the domain level drops the index (other processes: CHANNEL_SETTINGS_RELOAD).
+    await pa.updateProtocolSettings({ level: 'domain', domainId: 'd2' }, { pop3: 'inherit' });
+    assert.equal((await pa.domainProtocolAccess('two.test')).pop3, true);
+  } finally {
+    db.protocolPolicy.findMany = policyFindMany;
+    db.domain.findUnique = domainFindUnique;
+  }
+});
+
 test('protocolEnabledAnywhere: server level, else any domain/user switch', async () => {
   await db.serverSettings.create({ data: { id: 'singleton', jmapEnabled: false } });
   assert.equal(await pa.protocolEnabledAnywhere('jmap'), false);
@@ -160,8 +181,13 @@ test('domain level reaches only the users of that domain whose access changes', 
   assert.equal(await pa.isProtocolAllowed(String(pinned['id']), 'activesync'), true);
 });
 
-test('server level: JMAP is written to ServerSettings.jmapEnabled, inherit = default on', async () => {
+test('server level: two-state, JMAP is written to ServerSettings.jmapEnabled, inherit is refused', async () => {
   const u = await addUser('a@one.test', 'd1');
+  const fresh = await pa.readProtocolLevel({ level: 'global' });
+  assert.deepEqual(fresh?.settings, { imap: 'on', pop3: 'on', smtp: 'on', activesync: 'on', jmap: 'on', dav: 'on', webmail: 'on', mapi: 'off' },
+    'never-written server switches show their built-in default');
+  assert.deepEqual(fresh?.inherited, pa.PROTOCOL_DEFAULTS);
+
   await pa.updateProtocolSettings({ level: 'global' }, { jmap: 'off', mapi: 'on' });
   assert.equal(db.serverSettings.rows[0]?.['jmapEnabled'], false);
   assert.equal(db.protocolPolicy.rows.find((r) => r['id'] === 'global')?.['jmap'], 'INHERIT');
@@ -170,9 +196,14 @@ test('server level: JMAP is written to ServerSettings.jmapEnabled, inherit = def
   assert.equal(view?.settings.mapi, 'on');
   assert.deepEqual(events.map((e) => e.disabledProtocols), [['jmap']]);
   assert.equal(await pa.isProtocolAllowed(String(u['id']), 'jmap'), false);
-  await pa.updateProtocolSettings({ level: 'global' }, { jmap: 'inherit' });
+
+  await assert.rejects(pa.updateProtocolSettings({ level: 'global' }, { jmap: 'inherit' }), RangeError);
+  assert.equal(db.serverSettings.rows[0]?.['jmapEnabled'], false, 'nothing written');
+  await pa.updateProtocolSettings({ level: 'global' }, { jmap: 'on' });
   assert.equal(db.serverSettings.rows[0]?.['jmapEnabled'], true);
   assert.equal((await pa.readProtocolLevel({ level: 'global' }))?.settings.jmap, 'on');
+  assert.deepEqual(pa.settingsForLevel('global'), ['on', 'off']);
+  assert.deepEqual(pa.settingsForLevel('user'), ['inherit', 'on', 'off']);
 });
 
 test('withProtocolAccessChange around a direct jmapEnabled write notifies the affected users', async () => {
@@ -237,4 +268,23 @@ test('web access: Webmail off refuses USER logins and refreshes, admins keep the
     assert.deepEqual(r, { ok: false, status: 403, reason: 'protocol_disabled' });
   }
   assert.equal(await auth.webAccessPermitted({ id: String(user['id']), role: 'USER' }, 'webmail'), false);
+});
+
+test('webAccessRefusal: 403 PROTOCOL_DISABLED, null when allowed, 503 when the switch cannot be read', async () => {
+  const user = await addUser('u@one.test', 'd1');
+  const subject = { id: String(user['id']), role: 'USER', domainId: 'd1' };
+  assert.equal(await auth.webAccessRefusal(subject, 'webmail'), null);
+  await db.protocolPolicy.create({ data: { userId: user['id'], webmail: 'OFF' } });
+  pa.invalidateProtocolAccessCache();
+  assert.deepEqual(await auth.webAccessRefusal(subject, 'webmail'),
+    { status: 403, body: { error: 'webmail access is disabled for this account', code: 'PROTOCOL_DISABLED', protocol: 'webmail' } });
+  assert.equal(await auth.webAccessRefusal({ ...subject, role: 'HELP_DESK' }, 'admin'), null, 'admin surface for admins');
+  const findMany = db.protocolPolicy.findMany;
+  db.protocolPolicy.findMany = async () => { throw new Error('db down'); };
+  pa.invalidateProtocolAccessCache();
+  try {
+    assert.equal((await auth.webAccessRefusal(subject, 'webmail'))?.status, 503, 'fails closed');
+  } finally {
+    db.protocolPolicy.findMany = findMany;
+  }
 });

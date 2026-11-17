@@ -2,7 +2,7 @@ import type { Request, Response, NextFunction } from 'express';
 import { verifyAccessToken, createLogger, onAuthInvalidation } from '@coremail/core';
 import { prisma } from '@coremail/storage';
 import {
-  isAccessTokenRevoked, isAccessTokenRevokedShared, protocolDisabledBody, webAccessPermitted, type WebSurface,
+  isAccessTokenRevoked, isAccessTokenRevokedShared, webAccessRefusal, type WebSurface,
 } from '@coremail/storage/auth';
 import { canAccess, hasAdminAction, isAdminRole, isReadMethod, stricterRole, type AdminAction, type AdminArea, type UserRoleName } from '../lib/rbac.js';
 import { redeemEventTicket, type TicketPurpose } from '../lib/event-tickets.js';
@@ -196,15 +196,12 @@ export function protocolSubject(user: ApiUser): string | { id: string; domainId:
 
 function enforceWebmailSwitch(req: Request, res: Response, next: NextFunction): void {
   const user = req.apiUser!;
-  const subject = { id: user.userId, role: user.role, ...(user.domainId !== undefined ? { domainId: user.domainId } : {}) };
-  webAccessPermitted(subject, webSurfaceOf(req.originalUrl)).then((ok) => {
-    if (ok) { next(); return; }
-    res.status(403).json(protocolDisabledBody('webmail'));
-  }, (err: unknown) => {
-    // Fails closed like the admin guards (database errors → 503).
-    log.error({ err }, 'Webmail switch check failed');
-    if (!res.headersSent) res.status(503).json({ error: 'Authentication temporarily unavailable' });
-  });
+  // Fails closed like the admin guards (database errors → 503, see webAccessRefusal).
+  void webAccessRefusal({ id: user.userId, role: user.role, domainId: user.domainId }, webSurfaceOf(req.originalUrl))
+    .then((refusal) => {
+      if (!refusal) { next(); return; }
+      if (!res.headersSent) res.status(refusal.status).json(refusal.body);
+    });
 }
 
 // ── Admin RBAC (v6) ───────────────────────────────────────────────────────────

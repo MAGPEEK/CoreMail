@@ -8,10 +8,8 @@
  *    needed for the BCP when MFA is mandatory for admins).
  */
 import type { Request, Response } from 'express';
-import { createLogger, verifyAccessToken } from '@coremail/core';
-import { isAccessTokenRevokedShared, protocolDisabledBody, webAccessPermitted } from '@coremail/storage/auth';
-
-const log = createLogger('auth:bearer');
+import { verifyAccessToken } from '@coremail/core';
+import { isAccessTokenRevokedShared, webAccessRefusal } from '@coremail/storage/auth';
 
 /** The authenticated user id, or null after the refusal (401 / 403 / 503) was sent. */
 export async function requireBearerUser(req: Request, res: Response): Promise<string | null> {
@@ -21,14 +19,8 @@ export async function requireBearerUser(req: Request, res: Response): Promise<st
     res.status(401).json({ error: 'Unauthorized' });
     return null;
   }
-  const subject = { id: payload.sub, role: String(payload.role), ...(typeof payload.domainId === 'string' ? { domainId: payload.domainId } : {}) };
-  try {
-    if (await webAccessPermitted(subject, 'admin')) return payload.sub;
-  } catch (err) {
-    log.error({ err }, 'Webmail switch check failed');
-    res.status(503).json({ error: 'Authentication temporarily unavailable' });
-    return null;
-  }
-  res.status(403).json(protocolDisabledBody('webmail'));
+  const refusal = await webAccessRefusal({ id: payload.sub, role: String(payload.role), domainId: payload.domainId }, 'admin');
+  if (!refusal) return payload.sub;
+  res.status(refusal.status).json(refusal.body);
   return null;
 }

@@ -41,7 +41,6 @@ const policies: Array<Record<string, unknown>> = [];
       assert.equal(a.where?.active, true);
       return state.domains;
     },
-    findUnique: async ({ where }: { where: { name: string } }) => (where.name === 'example.com' ? { id: 'd1' } : null),
   },
 };
 const ALL_ON = { imap: true, pop3: true, smtp: true, dav: true, webmail: true };
@@ -124,7 +123,7 @@ test('9.3: a branded product name is the provider display name; unbranded keeps 
 });
 
 test('9.4: protocols switched off for the domain are not listed', async () => {
-  policies.push({ id: 'p-d1', domainId: 'd1', userId: null, pop3: 'OFF', dav: 'OFF', webmail: 'OFF' });
+  policies.push({ id: 'p-d1', domainId: 'd1', domain: { name: 'example.com' }, userId: null, pop3: 'OFF', dav: 'OFF', webmail: 'OFF' });
   const storage = await import('@coremail/storage');
   storage.invalidateProtocolAccessCache();
   try {

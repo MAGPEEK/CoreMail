@@ -8,7 +8,10 @@
  * under /auth) — only the webmail API answers 403 PROTOCOL_DISABLED.
  */
 import { UserRole } from '@prisma/client';
+import { createLogger } from '@coremail/core';
 import { isProtocolAllowed } from '../protocol-access.js';
+
+const log = createLogger('auth:web-access');
 
 /** Where a web/API session is used: the webmail / user API, or the admin surface. */
 export type WebSurface = 'webmail' | 'admin';
@@ -28,10 +31,11 @@ export function webAccessAllowed(webmailOn: boolean, role: string, surface: WebS
   return webmailOn || (surface === 'admin' && hasAdminRole(role));
 }
 
+/** The account of a web/API session (`domainId` from the token saves a lookup). */
 export interface WebAccessUser {
   id: string;
   role: string;
-  domainId?: string;
+  domainId?: string | undefined;
 }
 
 /** May the user use a web/API session on `surface`? Throws on database errors. */
@@ -39,6 +43,27 @@ export async function webAccessPermitted(user: WebAccessUser, surface: WebSurfac
   if (surface === 'admin' && hasAdminRole(user.role)) return true;
   const subject = user.domainId !== undefined ? { id: user.id, domainId: user.domainId } : user.id;
   return webAccessAllowed(await isProtocolAllowed(subject, 'webmail'), user.role, surface);
+}
+
+/** The HTTP answer that refuses a web/API session. */
+export interface WebAccessRefusal {
+  status: 403 | 503;
+  body: Record<string, unknown>;
+}
+
+/**
+ * The shared request check of every web/API session (api-gateway requireAuth,
+ * auth-service account-security routes): null when the session may be used on
+ * `surface`, else the answer — 403 PROTOCOL_DISABLED, or 503 when the switch
+ * cannot be read (fails closed, like the admin guards).
+ */
+export async function webAccessRefusal(user: WebAccessUser, surface: WebSurface): Promise<WebAccessRefusal | null> {
+  try {
+    return (await webAccessPermitted(user, surface)) ? null : { status: 403, body: protocolDisabledBody('webmail') };
+  } catch (err) {
+    log.error({ err, userId: user.id }, 'Webmail switch check failed');
+    return { status: 503, body: { error: 'Authentication temporarily unavailable' } };
+  }
 }
 
 /**

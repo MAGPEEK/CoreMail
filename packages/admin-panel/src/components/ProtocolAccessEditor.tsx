@@ -1,8 +1,8 @@
 /**
  * 9.4: editor of the per-protocol access switches of one level (server,
- * domain or mailbox). Every protocol: Erben/Standard | An | Aus — the
- * "inherit" option shows what it resolves to, the last column the effective
- * value. Saving sends only the changed switches.
+ * domain or mailbox). Domain and mailbox: Erben | An | Aus — the "inherit"
+ * option shows what it resolves to; the server level is An | Aus. The last
+ * column shows the effective value. Saving sends only the changed switches.
  */
 import { useEffect, useId, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -15,7 +15,7 @@ import type { TranslationKey } from '../i18n/translations.js';
 import type { AdminArea } from '../lib/adminAreas.js';
 import { errorMessage } from '../lib/errors.js';
 import {
-  changedSettings, effectiveOf, locksOutWebmail, PROTOCOL_SETTINGS,
+  changedSettings, effectiveOf, locksOutWebmail, settingsForLevel,
   type Protocol, type ProtocolLevelView, type ProtocolSetting, type ProtocolSettings,
 } from '../lib/protocolAccess.js';
 
@@ -59,10 +59,10 @@ export function ProtocolAccessEditor({ path, area }: {
 
   const patch = changedSettings(view.settings, draft);
   const dirty = Object.keys(patch).length > 0;
-  const inheritLabel = view.level === 'global' ? t('proto_setting_default') : t('proto_setting_inherit');
+  const options = settingsForLevel(view.level);
   const state = (on: boolean) => (on ? t('proto_state_on') : t('proto_state_off'));
   const optionLabel = (s: ProtocolSetting, p: Protocol): string =>
-    s === 'inherit' ? `${inheritLabel} (${state(view.inherited[p])})` : s === 'on' ? t('proto_setting_on') : t('proto_setting_off');
+    s === 'inherit' ? `${t('proto_setting_inherit')} (${state(view.inherited[p])})` : s === 'on' ? t('proto_setting_on') : t('proto_setting_off');
 
   return (
     <section aria-labelledby={headingId} className="space-y-3">
@@ -93,7 +93,7 @@ export function ProtocolAccessEditor({ path, area }: {
                       onChange={(e) => setDraft({ ...draft, [p]: e.target.value as ProtocolSetting })}
                       className="input w-auto py-1"
                     >
-                      {PROTOCOL_SETTINGS.map((s) => <option key={s} value={s}>{optionLabel(s, p)}</option>)}
+                      {options.map((s) => <option key={s} value={s}>{optionLabel(s, p)}</option>)}
                     </select>
                   </td>
                   <td className="px-3 py-1.5 text-right">

@@ -10,9 +10,8 @@ process.env['PEPPER'] ??= 'test-pepper-test-pepper-test-pepper-1234';
 (globalThis as Record<string, unknown>)['__prisma'] = {
   $on: () => undefined,
   serverSettings: { findUnique: async () => null, findFirst: async () => null },
-  // 9.4: no protocol switches stored, no hosted domains → built-in defaults
+  // 9.4: no protocol switches stored → built-in defaults
   protocolPolicy: { findMany: async () => [] },
-  domain: { findUnique: async () => null },
 };
 
 const { default: express } = await import('express');

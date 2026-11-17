@@ -54,21 +54,26 @@ async function call(method: string, path: string, as: string, body?: unknown) {
   return { status: r.status, body: await r.json() as Record<string, any> };
 }
 
-test('server level: defaults, MAPI off, JMAP server level = ServerSettings.jmapEnabled', async () => {
+test('server level: two-state with the built-in defaults, MAPI off, JMAP = ServerSettings.jmapEnabled', async () => {
   const r = await call('GET', '', 'srv');
   assert.equal(r.status, 200);
   assert.equal(r.body['level'], 'global');
   assert.deepEqual(r.body['protocols'], ['imap', 'pop3', 'smtp', 'activesync', 'jmap', 'dav', 'webmail', 'mapi']);
-  assert.equal(r.body['settings'].imap, 'inherit');
+  assert.equal(r.body['settings'].imap, 'on', 'a never-written server switch shows its default');
+  assert.equal(r.body['settings'].mapi, 'off');
   assert.equal(r.body['settings'].jmap, 'on');
   assert.equal(r.body['effective'].mapi, false);
-  assert.equal(r.body['inherited'].imap, true);
+  assert.equal(r.body['inherited'].imap, true, 'inherited = built-in defaults on the server level');
 
   const off = await call('PUT', '', 'srv', { jmap: 'off' });
   assert.equal(off.status, 200);
   assert.equal(db.serverSettings.rows[0]?.['jmapEnabled'], false);
+  assert.equal(off.body['settings'].jmap, 'off');
   assert.equal(off.body['effective'].jmap, false);
-  assert.equal((await call('PUT', '', 'srv', { jmap: 'inherit' })).body['settings'].jmap, 'on');
+  const inherit = await call('PUT', '', 'srv', { jmap: 'inherit' });
+  assert.equal(inherit.status, 400, 'no inherit on the server level');
+  assert.equal(db.serverSettings.rows[0]?.['jmapEnabled'], false, 'nothing written');
+  assert.equal((await call('PUT', '', 'srv', { jmap: 'on' })).body['settings'].jmap, 'on');
 });
 
 test('domain level: change events for the domain users, audit with before/after', async () => {

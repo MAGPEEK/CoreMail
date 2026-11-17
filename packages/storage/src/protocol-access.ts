@@ -1,12 +1,14 @@
 /**
  * Per-protocol access switches (9.4) — which client protocols a user may use.
  *
- * Levels: server → domain → user. Every switch is `inherit | on | off`; the
- * effective value is the most specific non-inherit one, else the built-in
- * default (PROTOCOL_DEFAULTS: every protocol on, MAPI off). Storage: one
- * ProtocolPolicy row per level (id 'global', or domainId / userId). The server
- * level of JMAP is ServerSettings.jmapEnabled (the legacy JMAP switch keeps
- * working; the 'global' row's jmap column is never written).
+ * Levels: server → domain → user. Domain and user switches are
+ * `inherit | on | off`; the server level is two-state (`on | off`) — it has no
+ * broader level, a never-written server switch is the built-in default
+ * (PROTOCOL_DEFAULTS: every protocol on, MAPI off). The effective value is the
+ * most specific non-inherit one. Storage: one ProtocolPolicy row per level
+ * (id 'global', or domainId / userId). The server level of JMAP is
+ * ServerSettings.jmapEnabled (the legacy JMAP switch keeps working; the
+ * 'global' row's jmap column is never written).
  *
  * Enforcement happens after a successful authentication, never before (a
  * wrong password always gets the protocol's normal "invalid credentials"):
@@ -19,9 +21,12 @@
  * (caches drop the user, live connections on now-disabled protocols end), then
  * CHANNEL_SETTINGS_RELOAD is published (JMAP service switch, Autodiscover).
  *
- * Cache: effective access per user (30 s) and per domain name (60 s, anonymous
- * Autodiscover); a user's entry is dropped on every auth invalidation event of
- * that user — services call startAuthInvalidationSubscriber() at start.
+ * Cache: effective access per user (30 s); a user's entry is dropped on every
+ * auth invalidation event of that user — services call
+ * startAuthInvalidationSubscriber() at start. Anonymous lookups (Autodiscover
+ * v2, autoconfig) resolve from an in-memory index of the server and domain
+ * switches (60 s, dropped on CHANNEL_SETTINGS_RELOAD via
+ * invalidateProtocolAccessCache()) — a request never costs a database query.
  */
 import type { Prisma } from '@prisma/client';
 import { createLogger, onAuthInvalidation, CHANNEL_SETTINGS_RELOAD, PROTOCOL_ACCESS_CHANGE } from '@coremail/core';
@@ -39,6 +44,14 @@ export type AccessProtocol = typeof ACCESS_PROTOCOLS[number];
 
 export const PROTOCOL_SETTINGS = ['inherit', 'on', 'off'] as const;
 export type ProtocolSetting = typeof PROTOCOL_SETTINGS[number];
+
+/** The server level has no broader level to inherit from: only on / off. */
+export const SERVER_PROTOCOL_SETTINGS = ['on', 'off'] as const;
+
+/** The settings a level accepts (`inherit` only below the server level). */
+export function settingsForLevel(level: ProtocolScope['level']): readonly ProtocolSetting[] {
+  return level === 'global' ? SERVER_PROTOCOL_SETTINGS : PROTOCOL_SETTINGS;
+}
 
 /** The switches of one level. */
 export type ProtocolSettings = Record<AccessProtocol, ProtocolSetting>;
@@ -169,11 +182,27 @@ async function effectiveForUsers(users: ReadonlyArray<{ id: string; domainId: st
 // ─── Effective access (cached) ────────────────────────────────────────────────
 
 const USER_CACHE_TTL_MS = 30_000;
-const DOMAIN_CACHE_TTL_MS = 60_000;
+const DOMAIN_INDEX_TTL_MS = 60_000;
 const MAX_CACHE_ENTRIES = 10_000;
 const userCache = new Map<string, { access: ProtocolAccess; expires: number }>();
 const userInvalidatedAt = new Map<string, number>();
-const domainCache = new Map<string, { access: ProtocolAccess; expires: number }>();
+
+/** Server level + the switches of every domain that has any, by domain name (anonymous lookups). */
+interface DomainIndex {
+  global: ProtocolSettings;
+  byName: Map<string, ProtocolSettings>;
+  expires: number;
+}
+let domainIndex: DomainIndex | null = null;
+let domainIndexLoad: Promise<DomainIndex> | null = null;
+/** Bumped by every invalidation, so a load that started before it is not cached. */
+let domainIndexGeneration = 0;
+
+function dropDomainIndex(): void {
+  domainIndex = null;
+  domainIndexLoad = null;
+  domainIndexGeneration++;
+}
 
 onAuthInvalidation((e) => {
   userCache.delete(e.userId);
@@ -188,7 +217,7 @@ onAuthInvalidation((e) => {
 export function invalidateProtocolAccessCache(): void {
   userCache.clear();
   userInvalidatedAt.clear();
-  domainCache.clear();
+  dropDomainIndex();
 }
 
 const NONE: Readonly<ProtocolAccess> = Object.freeze(mapProtocols(() => false));
@@ -221,23 +250,54 @@ export async function isProtocolAllowed(subject: ProtocolSubject, protocol: Acce
   return (await effectiveProtocolAccess(subject))[protocol];
 }
 
+const normalizeDomainName = (name: string): string => name.trim().toLowerCase();
+
+/** The server row and every domain row (with the domain name) — two queries for all anonymous lookups. */
+async function loadDomainIndex(now: number): Promise<DomainIndex> {
+  const [settings, rows] = await Promise.all([
+    prisma.serverSettings.findUnique({ where: { id: 'singleton' }, select: { jmapEnabled: true } }),
+    prisma.protocolPolicy.findMany({ where: { userId: null }, include: { domain: { select: { name: true } } } }),
+  ]);
+  const policies = rows as Array<PolicyRow & { domain?: { name: string } | null }>;
+  const byName = new Map<string, ProtocolSettings>();
+  for (const r of policies) {
+    if (!r.userId && r.domain?.name) byName.set(normalizeDomainName(r.domain.name), settingsOf(r));
+  }
+  return {
+    global: globalSettingsOf(policies.find((r) => r.id === GLOBAL_POLICY_ID), settings?.jmapEnabled ?? true),
+    byName,
+    expires: now + DOMAIN_INDEX_TTL_MS,
+  };
+}
+
 /**
  * Effective access for an anonymous request about a mail domain (Autodiscover
  * v2, Thunderbird autoconfig): server + domain level, no user level — so the
  * answer never depends on (or reveals anything about) a single account.
- * A domain this server does not host gets the server level.
+ * A domain this server does not host (or without switches) gets the server
+ * level. Resolved from the in-memory index: an anonymous request never causes
+ * a database query of its own, whatever domain name it sends.
  */
 export async function domainProtocolAccess(domainName: string): Promise<ProtocolAccess> {
-  const name = domainName.trim().toLowerCase();
+  const index = await currentDomainIndex();
+  const domainLevel = index.byName.get(normalizeDomainName(domainName)) ?? inherit;
+  return resolveProtocolAccess([index.global, domainLevel]);
+}
+
+/** The cached index; concurrent misses share one load, a load raced by an invalidation is not kept. */
+async function currentDomainIndex(): Promise<DomainIndex> {
   const now = Date.now();
-  const hit = domainCache.get(name);
-  if (hit && hit.expires > now) return hit.access;
-  const domain = await prisma.domain.findUnique({ where: { name }, select: { id: true } });
-  const snap = await loadSnapshot(domain ? [{ id: '', domainId: domain.id }] : []);
-  const access = accessFor(snap, domain?.id ?? null, null);
-  if (domainCache.size >= MAX_CACHE_ENTRIES) domainCache.clear();
-  domainCache.set(name, { access, expires: now + DOMAIN_CACHE_TTL_MS });
-  return access;
+  if (domainIndex && domainIndex.expires > now) return domainIndex;
+  if (!domainIndexLoad) {
+    const generation = domainIndexGeneration;
+    domainIndexLoad = loadDomainIndex(now)
+      .then((index) => {
+        if (generation === domainIndexGeneration) domainIndex = index;
+        return index;
+      })
+      .finally(() => { domainIndexLoad = null; });
+  }
+  return domainIndexLoad;
 }
 
 /** True when the protocol is on at the server level or switched on for any domain or user. */
@@ -251,12 +311,21 @@ export async function protocolEnabledAnywhere(protocol: AccessProtocol): Promise
 // ─── Admin view + changes ─────────────────────────────────────────────────────
 
 export interface ProtocolLevelView {
-  /** The switches stored on this level. */
+  /** The switches of this level (server level: always `on` / `off`). */
   settings: ProtocolSettings;
-  /** What `inherit` resolves to on this level (the broader levels). */
+  /**
+   * What `inherit` resolves to on this level (the broader levels); on the
+   * server level the built-in defaults.
+   */
   inherited: ProtocolAccess;
   /** The effective access of this level (settings over inherited). */
   effective: ProtocolAccess;
+}
+
+/** Server level view: two-state — a never-written switch shows its built-in default. */
+function serverLevelView(global: ProtocolSettings): ProtocolLevelView {
+  const effective = resolveProtocolAccess([global]);
+  return { settings: mapProtocols((p) => (effective[p] ? 'on' : 'off')), inherited: { ...PROTOCOL_DEFAULTS }, effective };
 }
 
 /** The switches of one level plus what they resolve to; null when the domain / user does not exist. */
@@ -274,11 +343,10 @@ export async function readProtocolLevel(scope: ProtocolScope): Promise<ProtocolL
     userId = u.id;
   }
   const snap = await loadSnapshot(userId ? [{ id: userId, domainId }] : domainId ? [{ id: '', domainId }] : []);
+  if (scope.level === 'global') return serverLevelView(snap.global);
   const domainLevel = (domainId && snap.byDomain.get(domainId)) || inherit;
-  const levels = scope.level === 'global' ? [] : scope.level === 'domain' ? [snap.global] : [snap.global, domainLevel];
-  const settings = scope.level === 'global' ? snap.global
-    : scope.level === 'domain' ? domainLevel
-      : (userId && snap.byUser.get(userId)) || inheritAll();
+  const levels = scope.level === 'domain' ? [snap.global] : [snap.global, domainLevel];
+  const settings = scope.level === 'domain' ? domainLevel : (userId && snap.byUser.get(userId)) || inheritAll();
   return {
     settings,
     inherited: resolveProtocolAccess(levels),
@@ -319,7 +387,7 @@ export async function withProtocolAccessChange<T>(
   for (const u of changed) {
     await publishUserAuthChange(u.id, PROTOCOL_ACCESS_CHANGE, { disabledProtocols: disabledProtocols(after.get(u.id)!) });
   }
-  if (scope.level !== 'user') domainCache.clear();
+  if (scope.level !== 'user') dropDomainIndex();
   await publishSettingsReload();
   if (changed.length > 0) log.info({ scope, users: changed.length }, 'Protocol access changed');
   return { result, changedUsers: changed.length };
@@ -330,12 +398,20 @@ function policyKey(scope: ProtocolScope): Prisma.ProtocolPolicyWhereUniqueInput 
   return scope.level === 'domain' ? { domainId: scope.domainId } : { userId: scope.userId };
 }
 
+/** Throws a RangeError for a setting the level does not accept (`inherit` on the server level). */
+export function assertSettingsForLevel(level: ProtocolScope['level'], patch: Partial<ProtocolSettings>): void {
+  const allowed = settingsForLevel(level);
+  for (const [p, s] of Object.entries(patch)) {
+    if (s !== undefined && !allowed.includes(s)) throw new RangeError(`${p}: '${s}' is not a ${level} level setting (${allowed.join(', ')})`);
+  }
+}
+
 async function writeSettings(scope: ProtocolScope, patch: Partial<ProtocolSettings>): Promise<void> {
   const { jmap, ...rest } = patch;
   const rowPatch: Partial<ProtocolSettings> = scope.level === 'global' ? rest : patch;
   if (scope.level === 'global' && jmap !== undefined) {
-    // The server level of JMAP is the legacy switch; `inherit` = the built-in default.
-    const jmapEnabled = jmap === 'inherit' ? PROTOCOL_DEFAULTS.jmap : jmap === 'on';
+    // The server level of JMAP is the legacy switch.
+    const jmapEnabled = jmap === 'on';
     await prisma.serverSettings.upsert({
       where: { id: 'singleton' }, create: { id: 'singleton', jmapEnabled }, update: { jmapEnabled },
     });
@@ -358,12 +434,14 @@ export interface ProtocolUpdateResult {
 
 /**
  * Changes switches of one level (fields missing in `patch` keep their value).
- * Returns null when the domain / user does not exist.
+ * Returns null when the domain / user does not exist; throws a RangeError for
+ * `inherit` on the server level (assertSettingsForLevel).
  */
 export async function updateProtocolSettings(
   scope: ProtocolScope,
   patch: Partial<ProtocolSettings>,
 ): Promise<ProtocolUpdateResult | null> {
+  assertSettingsForLevel(scope.level, patch);
   const current = await readProtocolLevel(scope);
   if (!current) return null;
   const { changedUsers } = await withProtocolAccessChange(scope, () => writeSettings(scope, patch));
