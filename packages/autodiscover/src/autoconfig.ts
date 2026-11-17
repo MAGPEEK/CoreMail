@@ -14,7 +14,9 @@
  * MWA "External clients" page).
  */
 import type { Request, Response } from 'express';
-import { prisma, clientIpFromRequest, isPrivateOrLoopbackIp, DEFAULT_PRODUCT_NAME } from '@coremail/storage';
+import {
+  prisma, clientIpFromRequest, isPrivateOrLoopbackIp, domainProtocolAccess, DEFAULT_PRODUCT_NAME, type ProtocolAccess,
+} from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import { getServerConfig, ServerConfigUnavailableError, type ServerConfig } from './settings.js';
 import { FixedWindowLimiter } from './rate-limit.js';
@@ -147,10 +149,21 @@ export function webBaseUrl(cfg: ServerConfig): string {
 
 // ── Document ─────────────────────────────────────────────────────────────────
 
-/** config-v1.1.xml for one mail domain. Identical for every address of that domain. */
-export function buildAutoconfigXml(domain: string, cfg: ServerConfig): string {
+/** 9.4: the protocol switches the document follows (the mail domain's, never one account's). */
+export type AutoconfigAccess = Pick<ProtocolAccess, 'imap' | 'pop3' | 'smtp' | 'dav' | 'webmail'>;
+
+/**
+ * config-v1.1.xml for one mail domain. Identical for every address of that
+ * domain. 9.4: only protocols switched on for the domain are listed.
+ */
+export function buildAutoconfigXml(domain: string, cfg: ServerConfig, access: AutoconfigAccess): string {
   const e = xmlEscape;
-  const servers = mailServers(cfg);
+  const all = mailServers(cfg);
+  const servers = {
+    imap: access.imap ? all.imap : [],
+    pop3: access.pop3 ? all.pop3 : [],
+    smtp: access.smtp ? all.smtp : [],
+  };
   const base = webBaseUrl(cfg);
   // 9.3: the branded product name, else the organisation name (as before), else the domain
   const name = cfg.productName && cfg.productName !== DEFAULT_PRODUCT_NAME ? cfg.productName : (cfg.orgName.trim() || domain);
@@ -174,26 +187,32 @@ export function buildAutoconfigXml(domain: string, cfg: ServerConfig): string {
     ...servers.imap.map((s) => server('incomingServer', 'imap', s)),
     ...servers.pop3.map((s) => server('incomingServer', 'pop3', s)),
     ...servers.smtp.map((s) => server('outgoingServer', 'smtp', s)),
-    `    <documentation url="${e(`${base}/`)}">`,
-    `      <descr lang="en">Webmail and client setup (Settings → External clients)</descr>`,
-    `    </documentation>`,
+    ...(access.webmail ? [
+      `    <documentation url="${e(`${base}/`)}">`,
+      `      <descr lang="en">Webmail and client setup (Settings → External clients)</descr>`,
+      `    </documentation>`,
+    ] : []),
     `  </emailProvider>`,
     // Thunderbird 102+ reads these (CalDAV/CardDAV accounts next to the mail account).
     // The server URL is the DAV context path; clients find the principal via
     // DAV:current-user-principal (RFC 5397 / RFC 6764).
-    `  <addressBook type="carddav">`,
-    `    <username>%EMAILADDRESS%</username>`,
-    `    <authentication>http-basic</authentication>`,
-    `    <serverURL>${e(`${base}/dav/`)}</serverURL>`,
-    `  </addressBook>`,
-    `  <calendar type="caldav">`,
-    `    <username>%EMAILADDRESS%</username>`,
-    `    <authentication>http-basic</authentication>`,
-    `    <serverURL>${e(`${base}/dav/`)}</serverURL>`,
-    `  </calendar>`,
-    `  <webMail>`,
-    `    <loginPage url="${e(`${base}/`)}"/>`,
-    `  </webMail>`,
+    ...(access.dav ? [
+      `  <addressBook type="carddav">`,
+      `    <username>%EMAILADDRESS%</username>`,
+      `    <authentication>http-basic</authentication>`,
+      `    <serverURL>${e(`${base}/dav/`)}</serverURL>`,
+      `  </addressBook>`,
+      `  <calendar type="caldav">`,
+      `    <username>%EMAILADDRESS%</username>`,
+      `    <authentication>http-basic</authentication>`,
+      `    <serverURL>${e(`${base}/dav/`)}</serverURL>`,
+      `  </calendar>`,
+    ] : []),
+    ...(access.webmail ? [
+      `  <webMail>`,
+      `    <loginPage url="${e(`${base}/`)}"/>`,
+      `  </webMail>`,
+    ] : []),
     '</clientConfig>',
     '',
   ].join('\n');
@@ -240,9 +259,20 @@ export async function handleAutoconfig(req: Request, res: Response): Promise<voi
     return;
   }
 
+  let access: AutoconfigAccess;
+  try {
+    access = await domainProtocolAccess(domain);
+  } catch (err) {
+    log.error({ err }, 'autoconfig: protocol switches not readable');
+    res.set('Retry-After', '30');
+    res.set('Cache-Control', 'no-store');
+    res.status(503).type('text/plain').send('Try again later');
+    return;
+  }
+
   log.debug({ domain }, 'autoconfig served');
   res.set('Cache-Control', `public, max-age=${AUTOCONFIG_MAX_AGE_SEC}`);
   res.set('Vary', 'Host');
   res.set('X-Content-Type-Options', 'nosniff');
-  res.type('application/xml; charset=utf-8').send(buildAutoconfigXml(domain, cfg));
+  res.type('application/xml; charset=utf-8').send(buildAutoconfigXml(domain, cfg, access));
 }

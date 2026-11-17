@@ -6,6 +6,7 @@
  *   POST /auth/login          → { accessToken, refreshToken, expiresIn }
  *                               | { mfaRequired: true, challengeToken, method, methods }
  *                               | 401 invalid credentials | 429 ACCOUNT_LOCKED (v8.1, shared lockout)
+ *                               | 403 PROTOCOL_DISABLED (9.4: Webmail off, account without admin role)
  *                               | 503 { error: 'maintenance', message }
  *   POST /auth/refresh        → rotates: { accessToken, refreshToken, expiresIn } (old token invalid)
  *   POST /auth/logout         → { ok: true } — revokes the session of { refreshToken }
@@ -35,6 +36,8 @@ import {
   isSameOriginCookieRequest,
   clearRefreshCookieHeader,
   isWebClient,
+  protocolDisabledBody,
+  clientInfoOf,
   type TokenPair,
 } from '@coremail/storage/auth';
 import { ldapAuthenticator } from '@coremail/auth-ldap';
@@ -53,10 +56,6 @@ registerAuthenticator(ldapAuthenticator());
 const RESET_RATE_PREFIX  = 'pwreset:rate:';
 const RESET_RATE_LIMIT   = 3;
 const RESET_RATE_WINDOW  = 3600; // 1 hour in seconds
-
-function clientInfo(req: Request): { ip: string; userAgent: string } {
-  return { ip: req.ip ?? 'unknown', userAgent: req.get('user-agent') ?? '' };
-}
 
 /** Sends an email via internal SMTP submission (localhost:587). */
 async function sendResetEmail(to: string, resetUrl: string): Promise<void> {
@@ -128,7 +127,7 @@ authRouter.post('/login', async (req: Request, res: Response) => {
     return;
   }
   try {
-    const outcome = await login(parsed.data.email, parsed.data.password, clientInfo(req));
+    const outcome = await login(parsed.data.email, parsed.data.password, clientInfoOf(req));
     if (outcome.kind === 'tokens') { sendTokens(req, res, outcome.tokens); return; }
     const { status, body, headers } = loginOutcomeToHttp(outcome);
     if (headers) res.set(headers);
@@ -156,10 +155,12 @@ authRouter.post('/refresh', async (req: Request, res: Response) => {
   if (src === 'rejected') return;
   if (!src) { res.status(401).json({ error: 'Invalid refresh token', code: 'REFRESH_MISSING' }); return; }
   try {
-    const r = await rotateSession(src.token, clientInfo(req));
+    const r = await rotateSession(src.token, clientInfoOf(req));
     if (r.ok) { sendTokens(req, res, r.tokens, src.viaCookie); return; }
     if (r.status === 503) { res.status(503).json({ error: 'maintenance', message: r.message }); return; }
     if (src.viaCookie) res.append('Set-Cookie', clearRefreshCookieHeader(req));
+    // 9.4: Webmail switched off for the account
+    if (r.status === 403) { res.status(403).json(protocolDisabledBody('webmail')); return; }
     const error = r.reason === 'expired' ? 'Session expired' : 'Invalid refresh token';
     res.status(401).json({ error, code: `REFRESH_${r.reason.toUpperCase()}` });
   } catch (err) {

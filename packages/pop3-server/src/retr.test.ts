@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import net from 'node:net';
 import tls from 'node:tls';
 import { Readable } from 'node:stream';
+import { noProtocolPolicies } from '@coremail/storage/auth/testing';
 
 process.env['DATABASE_URL'] ??= 'postgresql://test:test@localhost:5432/coremail_test';
 process.env['JWT_SECRET'] ??= 'test-jwt-secret-0123456789abcdef0123456789';
@@ -33,6 +34,7 @@ let passwordHash = '';
 const tick = (): Promise<void> => new Promise((r) => setImmediate(r));
 (globalThis as unknown as { __prisma: unknown }).__prisma = {
   $on: () => undefined,
+  ...noProtocolPolicies(),
   user: {
     findUnique: async () => { await tick(); return { id: 'u1', email: 'bob@x.test', active: true, passwordHash }; },
     // v7 shared mail credential check (verifyMailCredentials) looks the user up with findFirst.

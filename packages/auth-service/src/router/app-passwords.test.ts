@@ -5,6 +5,8 @@
  * v8.1: creating an app password needs re-authentication (currentPassword or
  * mfaCode) and sends a security notice to the user's INBOX; the old admin
  * session-revocation endpoint answers 410.
+ * 9.4: with Webmail switched off, the account-security routes answer 403
+ * PROTOCOL_DISABLED to accounts without an admin role; admins keep them.
  * Run: node --import tsx --test src/router/app-passwords.test.ts  (in packages/auth-service)
  */
 import { test, before, after } from 'node:test';
@@ -122,4 +124,28 @@ test('sessions: the old admin revoke endpoint is gone (410), even for admins', a
   assert.equal(r.body['code'], 'ENDPOINT_REMOVED');
   assert.equal(db.session.rows.filter((s) => s['userId'] === bob['id']).length, sessionsBefore, 'nothing revoked');
   assert.ok(admin['id']);
+});
+
+test('9.4: Webmail off → account-security routes 403 PROTOCOL_DISABLED, admins keep them, login refused for users', async () => {
+  const storage = await import('@coremail/storage');
+  const userLogin = await call('POST', '/auth/login', { email: 'bob@example.com', password: PW });
+  const adminLogin = await call('POST', '/auth/login', { email: 'admin@example.com', password: PW });
+  await db.protocolPolicy.create({ data: { id: 'global', webmail: 'OFF' } });
+  storage.invalidateProtocolAccessCache();
+  try {
+    const refused = await call('GET', '/auth/app-passwords', undefined, String(userLogin.body['accessToken']));
+    assert.equal(refused.status, 403);
+    assert.equal(refused.body['code'], 'PROTOCOL_DISABLED');
+    assert.equal((await call('GET', '/auth/sessions', undefined, String(userLogin.body['accessToken']))).status, 403);
+    assert.equal((await call('GET', '/auth/mfa/status', undefined, String(userLogin.body['accessToken']))).status, 403);
+    assert.equal((await call('GET', '/auth/mfa/status', undefined, String(adminLogin.body['accessToken']))).status, 200);
+    const login = await call('POST', '/auth/login', { email: 'bob@example.com', password: PW });
+    assert.equal(login.status, 403);
+    assert.equal(login.body['code'], 'PROTOCOL_DISABLED');
+    assert.equal((await call('POST', '/auth/refresh', { refreshToken: userLogin.body['refreshToken'] })).status, 403);
+  } finally {
+    db.protocolPolicy.rows = [];
+    storage.invalidateProtocolAccessCache();
+  }
+  assert.equal((await call('GET', '/auth/app-passwords', undefined, String(userLogin.body['accessToken']))).status, 200);
 });

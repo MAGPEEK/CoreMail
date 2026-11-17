@@ -23,7 +23,7 @@ import { createLogger } from '@coremail/core';
 import {
   listPublicProviders, startSso, completeSsoCallback, exchangeSsoCode, SSO_COOKIE, SSO_STATE_TTL, type SsoTarget,
 } from '@coremail/auth-sso';
-import { tokenPairResponse } from '@coremail/storage/auth';
+import { clientInfoOf, protocolDisabledBody, tokenPairResponse } from '@coremail/storage/auth';
 import { deriveServerUrls } from '../lib/server-urls.js';
 
 const log = createLogger('api:sso');
@@ -54,7 +54,6 @@ function cookieHeader(req: Request, value: string, maxAge: number): string {
   return `${SSO_COOKIE}=${value}; Path=/auth/sso; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure}`;
 }
 
-const clientInfo = (req: Request) => ({ ip: req.ip ?? 'unknown', userAgent: req.get('user-agent') ?? '' });
 const loginPath = (t: SsoTarget) => (t === 'bcp' ? '/bcp/login' : '/login');
 const callbackPath = (t: SsoTarget) => (t === 'bcp' ? '/bcp/sso/callback' : '/sso/callback');
 
@@ -89,7 +88,7 @@ ssoRouter.get('/:providerId/callback', async (req: Request, res: Response) => {
   res.set('Cache-Control', 'no-store');
   res.set('Referrer-Policy', 'no-referrer');
   try {
-    const r = await completeSsoCallback(String(req.params['providerId']), params, readCookie(req, SSO_COOKIE), clientInfo(req));
+    const r = await completeSsoCallback(String(req.params['providerId']), params, readCookie(req, SSO_COOKIE), clientInfoOf(req));
     if (!r.ok) { res.redirect(302, `${loginPath(r.target)}?sso_error=${r.error}`); return; }
     res.redirect(302, `${callbackPath(r.target)}?code=${encodeURIComponent(r.code)}`);
   } catch (err) {
@@ -103,10 +102,11 @@ ssoRouter.post('/exchange', async (req: Request, res: Response) => {
   const code = (req.body as { code?: unknown } | undefined)?.code;
   res.set('Cache-Control', 'no-store');
   try {
-    const r = await exchangeSsoCode(typeof code === 'string' ? code : '', readCookie(req, SSO_COOKIE), clientInfo(req));
+    const r = await exchangeSsoCode(typeof code === 'string' ? code : '', readCookie(req, SSO_COOKIE), clientInfoOf(req));
     if (r.kind === 'invalid') { res.status(401).json({ error: 'SSO login expired or invalid — please try again' }); return; }
     res.setHeader('Set-Cookie', cookieHeader(req, '', 0)); // binding cookie no longer needed
     if (r.kind === 'maintenance') { res.status(503).json({ error: 'maintenance', message: r.message }); return; }
+    if (r.kind === 'protocol_disabled') { res.status(403).json(protocolDisabledBody('webmail')); return; }
     if (r.kind === 'mfa') { res.json({ mfaRequired: true, challengeToken: r.challengeToken, method: r.method, methods: r.methods }); return; }
     // v8.1: like /auth/login — browser clients (X-CoreMail-Client: web, BCP with
     // X-CoreMail-App: bcp) get the refresh token as HttpOnly cookie only.

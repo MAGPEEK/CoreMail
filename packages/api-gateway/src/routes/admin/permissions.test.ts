@@ -194,11 +194,16 @@ const MOUNT_AREAS: Record<string, { area: AdminArea | null; get: string; write?:
   '/storage':              { area: null,           get: '/' },
   '/branding':             { area: 'organisation', get: '/', write: ['PUT', '/'] },
   '/ems':                  { area: 'recipients',   get: '/mailboxes' },
+  '/protocol-access':      { area: 'servers',      get: '/', write: ['PUT', '/'] },
 };
 const EXTRA_PROBES: Array<{ area: AdminArea | null; method: string; path: string }> = [
   { area: 'domains', method: 'GET', path: '/ems/accepted-domains' },
   { area: 'hygiene', method: 'GET', path: '/ems/transport-rules' },
   { area: null,      method: 'GET', path: '/ems/organization-config' },
+  // 9.4: domain level write = servers (its GET is servers OR domains read), user level = recipients
+  { area: 'servers',    method: 'PUT', path: '/protocol-access/domains/c0000000000000000000000x1' },
+  { area: 'recipients', method: 'GET', path: '/protocol-access/users/c0000000000000000000000x1' },
+  { area: 'recipients', method: 'PUT', path: '/protocol-access/users/c0000000000000000000000x1' },
 ];
 
 test('every admin mount is in the area table', () => {

@@ -1,5 +1,6 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { fakeProtocolPolicies } from '@coremail/storage/auth/testing';
 
 process.env['DATABASE_URL'] ??= 'postgresql://test:test@localhost:5432/test';
 process.env['JWT_SECRET'] ??= 'test-secret-test-secret-test-secret-1234';
@@ -17,9 +18,12 @@ const mk = (id: string, active: boolean, mfa = false): FakeUser => ({
 });
 const users: Record<string, FakeUser> = { alice: mk('alice', true), gone: mk('gone', false), mfa: mk('mfa', true, true) };
 const state = { dbDown: false };
+/** 9.4: ProtocolPolicy rows (protocol switches). */
+const policies: Array<Record<string, unknown>> = [];
 
-(globalThis as Record<string, unknown>)['__prisma'] = {
+const prisma: Record<string, unknown> = {
   $on: () => undefined,
+  ...fakeProtocolPolicies(policies),
   user: {
     findUnique: async (args: { where: { id: string } }) => users[args.where.id] ?? null,
     findFirst: async (args: { where: { email: string; active: boolean } }) => {
@@ -34,6 +38,7 @@ const state = { dbDown: false };
   },
   domain: { findFirst: async () => ({ name: 'example.com' }) },
 };
+(globalThis as Record<string, unknown>)['__prisma'] = prisma;
 
 // v7.1.0: Bearer checks consult the session revocation markers (fake Redis).
 const { createFakeRedis } = await import('@coremail/storage/auth/testing');
@@ -59,6 +64,7 @@ async function run(authorization: string | undefined): Promise<Outcome> {
   const outcome: Outcome = { nextCalled: false, status: null, davUser: undefined };
   const res = {
     set: () => res,
+    type: () => res,
     status: (code: number) => { outcome.status = code; return res; },
     send: () => res,
   } as unknown as Parameters<typeof davAuthMiddleware>[1];
@@ -143,5 +149,37 @@ test('Basic auth: a database error is answered with 503, not 401', async () => {
     assert.equal((await run(basic('alice@example.com', 'pw'))).status, 503);
   } finally {
     state.dbDown = false;
+  }
+});
+
+test('9.4: CalDAV/CardDAV switched off → 403 for Basic and Bearer, a wrong password stays 401', async () => {
+  policies.push({ id: 'p-alice', userId: 'alice', domainId: null, dav: 'OFF' });
+  storage.invalidateProtocolAccessCache();
+  try {
+    assert.equal((await run(basic('alice@example.com', 'pw'))).status, 403);
+    assert.equal((await run(basic('alice@example.com', 'APP-PW'))).status, 403);
+    assert.equal((await run(basic('alice@example.com', 'wrong'))).status, 401);
+    const bearer = await run(`Bearer ${accessFor('alice')}`);
+    assert.equal(bearer.status, 403);
+    assert.equal(bearer.nextCalled, false);
+  } finally {
+    policies.length = 0;
+    storage.invalidateProtocolAccessCache();
+  }
+  assert.equal((await run(basic('alice@example.com', 'pw'))).nextCalled, true);
+});
+
+test('9.4: an unreadable CalDAV/CardDAV switch answers a Bearer request with 503, not 401', async () => {
+  const policy = prisma['protocolPolicy'] as { findMany: () => Promise<unknown> };
+  const findMany = policy.findMany;
+  policy.findMany = async () => { throw new Error('db down'); };
+  storage.invalidateProtocolAccessCache();
+  try {
+    const r = await run(`Bearer ${accessFor('alice')}`);
+    assert.equal(r.status, 503);
+    assert.equal(r.nextCalled, false);
+  } finally {
+    policy.findMany = findMany;
+    storage.invalidateProtocolAccessCache();
   }
 });

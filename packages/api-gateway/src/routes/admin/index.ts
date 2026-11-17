@@ -37,6 +37,7 @@ import { adminLdapRouter } from './ldap.js';
 import { adminSsoRouter } from './sso.js';
 import { adminStorageRouter } from './storage.js';
 import { adminBrandingRouter } from './branding.js';
+import { adminProtocolAccessRouter } from './protocol-access.js';
 
 export const ADMIN_PREFIX = '/api/v1/admin';
 
@@ -75,6 +76,8 @@ export const ADMIN_MOUNTS: ReadonlyArray<readonly [string, Router]> = [
   ['/storage',              adminStorageRouter],
   // 9.3: branding (area organisation — write ORGANIZATION_MANAGEMENT, read SERVER_MANAGEMENT / VIEW_ONLY_ORG)
   ['/branding',             adminBrandingRouter],
+  // 9.4: per-protocol access switches (server/domain: area servers, user: area recipients)
+  ['/protocol-access',      adminProtocolAccessRouter],
 ];
 
 /** Admin endpoints that are intentionally public (no auth). */

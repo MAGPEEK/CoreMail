@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { setTestEnv } from '../test-support/fake-prisma.js';
+import { noProtocolPolicies } from '@coremail/storage/auth/testing';
 
 setTestEnv();
 
@@ -20,6 +21,7 @@ const COLUMNS = { email: '', email2: '', phone: '', mobile: '', company: '', dep
 
 (globalThis as Record<string, unknown>)['__prisma'] = {
   $on: () => undefined,
+  ...noProtocolPolicies(),
   contact: {
     findFirst: async (a: { where: Row }) => contacts.find((c) => matches(c, a.where)) ?? null,
     findMany: async (a: { where: Row }) => contacts.filter((c) => c['userId'] === a.where['userId']),

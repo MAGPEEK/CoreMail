@@ -81,6 +81,8 @@ export class LiveConnectionRegistry {
   count() { return 0; }
   attachInvalidation() { return () => {}; }
 }
+// 9.4 protocol switches — covered by live-sessions.test.ts, not by this suite.
+export const PROTOCOL_ACCESS_CHANGE = 'protocol-access-change';
 export const prisma = new Proxy({}, {
   get(_target, model) {
     const db = g.prisma;

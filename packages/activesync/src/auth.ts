@@ -1,7 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import { createLogger } from '@coremail/core/logger';
 import { verifyMailCredentials, clientIpFromRequest } from '@coremail/storage';
-import type { EasCredentialInfo } from './live-sessions.js';
+import { sendEasDisabled, type EasCredentialInfo } from './live-sessions.js';
 
 const log = createLogger('activesync:auth');
 
@@ -47,6 +47,11 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   if (result.status === 'error') {
     res.setHeader('Retry-After', '30');
     res.status(503).send('Service Unavailable');
+    return;
+  }
+  if (result.status === 'protocol_disabled') {
+    log.warn({ userId: result.userId }, 'EAS request refused — ActiveSync disabled for this account');
+    sendEasDisabled(res);
     return;
   }
   if (result.status !== 'ok') {

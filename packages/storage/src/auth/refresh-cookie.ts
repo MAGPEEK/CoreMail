@@ -51,8 +51,23 @@ export function isWebClient(h: IncomingHttpHeaders): boolean {
   return header(h, WEB_CLIENT_HEADER)?.trim().toLowerCase() === 'web';
 }
 
+/** The BCP marks its auth requests with `X-CoreMail-App: bcp`. */
+export function isBcpClient(h: IncomingHttpHeaders): boolean {
+  return header(h, WEB_APP_HEADER)?.trim().toLowerCase() === 'bcp';
+}
+
 export function refreshCookieName(h: IncomingHttpHeaders): string {
-  return header(h, WEB_APP_HEADER)?.trim().toLowerCase() === 'bcp' ? REFRESH_COOKIE_BCP : REFRESH_COOKIE;
+  return isBcpClient(h) ? REFRESH_COOKIE_BCP : REFRESH_COOKIE;
+}
+
+/**
+ * 9.4: which surface a login / refresh asks a session for — the webmail
+ * (`X-CoreMail-Client: web` without `X-CoreMail-App: bcp`) or the admin
+ * surface (BCP, admin CLI). Only a hint for the Webmail switch at login: the
+ * API checks every request by its path anyway (api-gateway requireAuth).
+ */
+export function sessionSurfaceOf(h: IncomingHttpHeaders): 'webmail' | 'admin' {
+  return isWebClient(h) && !isBcpClient(h) ? 'webmail' : 'admin';
 }
 
 /** Value of one cookie from the Cookie header (first occurrence), or undefined. */

@@ -3,11 +3,14 @@
  * close), app password revocation only ends sessions that used THAT app
  * password, other users and neutral events are left alone, a running command
  * is not cut and nothing queued after it runs (no UPDATE state → no deletion).
+ * 9.4: POP3 switched off ends the session with "-ERR [AUTH] POP3 access is
+ * disabled…"; a new login gets the same answer after a correct password only.
  * Loopback TLS sockets, fake Prisma via globalThis.__prisma.
  * Run: node --import tsx --test src/live-sessions.test.ts (in packages/pop3-server)
  */
 import { test, describe, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
+import { fakeProtocolPolicies } from '@coremail/storage/auth/testing';
 import net from 'node:net';
 import tls from 'node:tls';
 
@@ -27,8 +30,11 @@ const appPasswords = [
 let dropGate: Promise<void> | null = null;
 let retrGate: Promise<void> | null = null;
 const deleted: string[] = [];
+/** 9.4: ProtocolPolicy rows (protocol switches). */
+const policies: Array<Record<string, unknown>> = [];
 (globalThis as Record<string, unknown>)['__prisma'] = {
   $on: () => undefined,
+  ...fakeProtocolPolicies(policies),
   domain: { findFirst: async () => ({ name: 'example.test' }) },
   user: {
     findFirst: async ({ where }: { where: { email: string } }) => {
@@ -60,7 +66,7 @@ storage.configureMailAuth({
   dummyHash: async () => 'hash:\0dummy',
   limits: { accountMaxFailures: 1000, ipMaxFailures: 1000 },
 });
-const { POP3Session, pop3LiveSessions, CREDENTIALS_CHANGED_ERR } = await import('./session.js');
+const { POP3Session, pop3LiveSessions, CREDENTIALS_CHANGED_ERR, POP3_DISABLED_ERR } = await import('./session.js');
 const { selfSignedTestCert } = await import('./test-cert.js');
 const CERT = selfSignedTestCert();
 pop3LiveSessions.attachInvalidation();
@@ -215,5 +221,28 @@ describe('POP3 live sessions after credential changes', () => {
     await bob.waitClosed();
     for (let i = 0; i < 20 && pop3LiveSessions.count('u1') > 0; i++) await new Promise((r) => setTimeout(r, 25));
     assert.equal(pop3LiveSessions.count('u1'), 0);
+  });
+});
+
+describe('POP3 protocol switch (9.4)', () => {
+  test('POP3 off: the session ends, a new login is refused after a correct password only; inherit → works', async (t) => {
+    const bob = await login(t, 'bob@example.test', 'secret');
+    const carol = await login(t, 'carol@example.test', 'secret');
+    policies.push({ id: 'p-u1', userId: 'u1', domainId: null, pop3: 'OFF' });
+    try {
+      // What @coremail/storage updateProtocolSettings() publishes for bob.
+      await publish({ userId: 'u1', reason: 'protocol-access-change', disabledProtocols: ['pop3', 'mapi'] });
+      assert.equal(await bob.line(), POP3_DISABLED_ERR);
+      await bob.waitClosed();
+      await expectAlive(carol);
+      const refused = await login(t, 'bob@example.test', 'secret', false);
+      assert.equal(await refused.line(), POP3_DISABLED_ERR);
+      const wrong = await login(t, 'bob@example.test', 'wrong', false);
+      assert.match(await wrong.line(), /^-ERR \[AUTH\] invalid credentials/, 'a wrong password never learns the switch');
+    } finally {
+      policies.length = 0;
+    }
+    await publish({ userId: 'u1', reason: 'protocol-access-change', disabledProtocols: ['mapi'] });
+    await expectAlive(await login(t, 'bob@example.test', 'secret'));
   });
 });

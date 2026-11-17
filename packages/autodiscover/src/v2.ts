@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express';
 import { createLogger } from '@coremail/core';
+import { domainProtocolAccess, type AccessProtocol, type ProtocolAccess } from '@coremail/storage';
 import { getServerConfig, ServerConfigUnavailableError, type ServerConfig } from './settings.js';
 
 const log = createLogger('autodiscover:v2');
@@ -19,6 +20,8 @@ function queryString(req: Request, name: string): string | undefined {
 // Protocols: AutodiscoverV1 | IMAP | SMTP | ActiveSync. Anonymous by design: the
 // answer is the same generic server configuration for every address.
 // EWS was removed in v7.0.0: Protocol=EWS answers 404 NoSuchProtocol.
+// 9.4: a protocol switched off for the mail domain answers 404 NoSuchProtocol
+// (domain level only — an anonymous answer never depends on one account).
 export async function handleAutodiscoverV2(req: Request, res: Response): Promise<void> {
   // Express has already percent-decoded the route param / query. A second decode
   // used to throw URIError on input like "%25E0%25A4%25A" and crash the process.
@@ -34,14 +37,22 @@ export async function handleAutodiscoverV2(req: Request, res: Response): Promise
   }
 
   let cfg: ServerConfig;
+  let access: ProtocolAccess;
   try {
     cfg = await getServerConfig();
+    // 9.4: anonymous → the mail domain's switches (server + domain level, never an account's).
+    access = await domainProtocolAccess(email.slice(email.lastIndexOf('@') + 1));
   } catch (err) {
-    if (!(err instanceof ServerConfigUnavailableError)) throw err;
+    if (!(err instanceof ServerConfigUnavailableError)) log.error({ err }, 'Autodiscover v2: protocol switches not readable');
     res.set('Retry-After', '30');
     res.status(503).json({ ErrorCode: 'ServiceUnavailable', ErrorMessage: 'Try again later' });
     return;
   }
+  const disabled = (p: AccessProtocol): boolean => {
+    if (access[p]) return false;
+    res.status(404).json({ ErrorCode: 'NoSuchProtocol', ErrorMessage: `Protocol ${protocolParam ?? ''} is not enabled` });
+    return true;
+  };
 
   // Outlook first asks for AutodiscoverV1 to find the v1 endpoint
   if (protocol === 'autodiscoverv1') {
@@ -59,6 +70,7 @@ export async function handleAutodiscoverV2(req: Request, res: Response): Promise
   }
 
   if (protocol === 'imap') {
+    if (disabled('imap')) return;
     res.json({
       Protocol: 'IMAP',
       Hostname: cfg.imapHost,
@@ -69,6 +81,7 @@ export async function handleAutodiscoverV2(req: Request, res: Response): Promise
   }
 
   if (protocol === 'smtp') {
+    if (disabled('smtp')) return;
     res.json({
       Protocol: 'SMTP',
       Hostname: cfg.smtpHost,
@@ -79,6 +92,7 @@ export async function handleAutodiscoverV2(req: Request, res: Response): Promise
   }
 
   if (protocol === 'activesync') {
+    if (disabled('activesync')) return;
     res.json({
       Protocol: 'ActiveSync',
       Url: cfg.easUrl,

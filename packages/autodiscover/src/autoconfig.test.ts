@@ -1,6 +1,7 @@
 /**
  * Thunderbird autoconfig (v8.1): document content, XML escaping, no user enumeration,
  * foreign domains 404, host-based lookup on autoconfig.<domain>, rate limit, caching.
+ * 9.4: only protocols switched on for the mail domain are listed.
  * Run: node --import tsx --test src/autoconfig.test.ts
  */
 import { test, after, beforeEach } from 'node:test';
@@ -27,9 +28,12 @@ const state = {
   } as Record<string, unknown>,
 };
 
+/** 9.4: ProtocolPolicy rows (protocol switches). */
+const policies: Array<Record<string, unknown>> = [];
 (globalThis as Record<string, unknown>)['__prisma'] = {
   $on: () => undefined,
   serverSettings: { findUnique: async () => state.settings },
+  protocolPolicy: { findMany: async () => policies },
   domain: {
     // only active domains are requested
     findMany: async (a: { where?: { active?: boolean } }) => {
@@ -39,6 +43,7 @@ const state = {
     },
   },
 };
+const ALL_ON = { imap: true, pop3: true, smtp: true, dav: true, webmail: true };
 
 const { createAutodiscoverApp } = await import('./app.js');
 const ac = await import('./autoconfig.js');
@@ -112,9 +117,26 @@ test('9.3: a branded product name is the provider display name; unbranded keeps 
     smtpHost: 'smtp.example.com', smtpPort: 587, smtpTls: true, pop3Host: 'pop.example.com', pop3Port: 995, pop3Ssl: true,
     publicHostname: 'mail.example.com', useHttps: true, httpPort: 443, orgName: 'Org GmbH',
   };
-  assert.match(ac.buildAutoconfigXml('example.com', { ...cfg, productName: 'Acme Mail' }), /<displayName>Acme Mail<\/displayName>\s*<displayShortName>Acme Mail</);
-  assert.match(ac.buildAutoconfigXml('example.com', { ...cfg, productName: 'CoreMail' }), /<displayName>Org GmbH<\/displayName>/);
-  assert.match(ac.buildAutoconfigXml('example.com', { ...cfg, orgName: ' ' }), /<displayName>example.com<\/displayName>/);
+  assert.match(ac.buildAutoconfigXml('example.com', { ...cfg, productName: 'Acme Mail' }, ALL_ON), /<displayName>Acme Mail<\/displayName>\s*<displayShortName>Acme Mail</);
+  assert.match(ac.buildAutoconfigXml('example.com', { ...cfg, productName: 'CoreMail' }, ALL_ON), /<displayName>Org GmbH<\/displayName>/);
+  assert.match(ac.buildAutoconfigXml('example.com', { ...cfg, orgName: ' ' }, ALL_ON), /<displayName>example.com<\/displayName>/);
+});
+
+test('9.4: protocols switched off for the domain are not listed', async () => {
+  policies.push({ id: 'p-d1', domainId: 'd1', domain: { name: 'example.com' }, userId: null, pop3: 'OFF', dav: 'OFF', webmail: 'OFF' });
+  const storage = await import('@coremail/storage');
+  storage.invalidateProtocolAccessCache();
+  try {
+    const xml = await (await get(`${WK}?emailaddress=a%40example.com`)).text();
+    assert.match(xml, /<incomingServer type="imap">/);
+    assert.match(xml, /<outgoingServer type="smtp">/);
+    assert.doesNotMatch(xml, /type="pop3"|carddav|caldav|<webMail>|<documentation/);
+    const other = await (await get(`${WK}?emailaddress=a%40other.org`)).text();
+    assert.match(other, /type="pop3"/, 'another domain keeps the server level');
+  } finally {
+    policies.length = 0;
+    storage.invalidateProtocolAccessCache();
+  }
 });
 
 test('no user enumeration: every address of a served domain gets the identical answer', async () => {

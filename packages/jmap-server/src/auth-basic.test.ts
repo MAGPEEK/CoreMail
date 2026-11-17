@@ -7,6 +7,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { fakeProtocolPolicies } from '@coremail/storage/auth/testing';
 
 const state = { dbDown: false };
 const base = { domainId: 'd1', role: 'USER', mailbox: null, active: true };
@@ -16,13 +17,17 @@ const users = [
     mfa: { totpEnabled: true, webAuthnCredentials: [] } },
   { ...base, id: 'u3', email: 'ldap@example.com', displayName: 'Ldap', passwordHash: null, authSource: 'LDAP', mfa: null },
 ];
-(globalThis as Record<string, unknown>)['__prisma'] = {
+/** 9.4: ProtocolPolicy rows (protocol switches). */
+const policies: Array<Record<string, unknown>> = [];
+const prisma: Record<string, unknown> = {
   $on: () => undefined,
+  ...fakeProtocolPolicies(policies),
   user: {
     findFirst: async ({ where }: { where: { email: string } }) => {
       if (state.dbDown) throw new Error('db down');
       return users.find((u) => u.email === where.email) ?? null;
     },
+    findUnique: async ({ where }: { where: { id: string } }) => users.find((u) => u.id === where.id) ?? null,
   },
   appPassword: {
     findMany: async ({ where }: { where: { userId: string } }) => (where.userId === 'u2' ? [{ id: 'ap', hash: 'hash:APP-PW' }] : []),
@@ -30,6 +35,7 @@ const users = [
   },
   domain: { findFirst: async () => ({ name: 'example.com' }) },
 };
+(globalThis as Record<string, unknown>)['__prisma'] = prisma;
 const storage = await import('@coremail/storage');
 (globalThis as Record<string, unknown>)['__mailAuthRedis'] = storage.createMemoryAuthRedis();
 storage.configureMailAuth({
@@ -44,7 +50,7 @@ storage.registerExternalPasswordVerifier('ldap', async (user, password) => {
   directoryCalls.push(user.email);
   return user.authSource === 'LDAP' && password === 'dir-pw';
 });
-const { authenticateBasic, AuthUnavailableError } = await import('./auth.js');
+const { authenticateBasic, authenticateCredentials, AuthUnavailableError, JmapDisabledError } = await import('./auth.js');
 
 test('primary password works without MFA', async () => {
   assert.equal((await authenticateBasic('bob@example.com', 'pw', '203.0.113.1'))?.userId, 'u1');
@@ -68,6 +74,50 @@ test('database error → AuthUnavailableError(temporary)', async () => {
       (e: unknown) => e instanceof AuthUnavailableError && e.reason === 'temporary');
   } finally {
     state.dbDown = false;
+  }
+});
+
+test('9.4: JMAP switched off → JmapDisabledError after correct credentials only (also from the cache)', async () => {
+  const basic = (pw: string) => `Basic ${Buffer.from(`bob@example.com:${pw}`).toString('base64')}`;
+  assert.equal((await authenticateCredentials(basic('pw'), undefined, '203.0.113.3'))?.userId, 'u1', 'cached now');
+  policies.push({ id: 'p-u1', userId: 'u1', domainId: null, jmap: 'OFF' });
+  storage.invalidateProtocolAccessCache();
+  try {
+    await assert.rejects(authenticateCredentials(basic('pw'), undefined, '203.0.113.3'),
+      (e: unknown) => e instanceof JmapDisabledError && e.userId === 'u1');
+    assert.equal(await authenticateCredentials(basic('wrong'), undefined, '203.0.113.3'), null);
+  } finally {
+    policies.length = 0;
+    storage.invalidateProtocolAccessCache();
+  }
+  assert.equal((await authenticateCredentials(basic('pw'), undefined, '203.0.113.3'))?.userId, 'u1');
+});
+
+test('9.4: an unreadable JMAP switch is a temporary failure (503), never a password prompt', async () => {
+  const basic = `Basic ${Buffer.from('bob@example.com:pw').toString('base64')}`;
+  assert.equal((await authenticateCredentials(basic, undefined, '203.0.113.4'))?.userId, 'u1', 'cached credentials');
+  const policy = prisma['protocolPolicy'] as { findMany: () => Promise<unknown> };
+  const findMany = policy.findMany;
+  policy.findMany = async () => { throw new Error('db down'); };
+  storage.invalidateProtocolAccessCache();
+  try {
+    await assert.rejects(authenticateCredentials(basic, undefined, '203.0.113.4'),
+      (e: unknown) => e instanceof AuthUnavailableError && e.reason === 'temporary');
+  } finally {
+    policy.findMany = findMany;
+    storage.invalidateProtocolAccessCache();
+  }
+});
+
+test('9.4: JMAP push subscriptions are only notified for users with JMAP on', async () => {
+  const { jmapPushRecipients } = await import('./push/bus.js');
+  policies.push({ id: 'p-u2', userId: 'u2', domainId: null, jmap: 'OFF' });
+  storage.invalidateProtocolAccessCache();
+  try {
+    assert.deepEqual(await jmapPushRecipients(['u1', 'u2', 'u3']), ['u1', 'u3']);
+  } finally {
+    policies.length = 0;
+    storage.invalidateProtocolAccessCache();
   }
 });
 

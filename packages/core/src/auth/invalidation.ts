@@ -33,7 +33,17 @@ export type AuthInvalidationReason =
   | 'deactivated' | 'deleted' | 'role-change' | 'sessions-revoked'
   /** 9.1: a shared-mailbox permission or delegation of the user changed (no credential change). */
   | 'permission-change'
+  /** 9.4: the user's effective protocol access changed (see PROTOCOL_ACCESS_CHANGE). */
+  | 'protocol-access-change'
   | (string & {});
+
+/**
+ * 9.4: reason of the event published when a user's effective protocol access
+ * changed (@coremail/storage protocol-access.ts). `disabledProtocols` lists
+ * every protocol that is now off for the user; live connections on those
+ * protocols end, no credential becomes invalid.
+ */
+export const PROTOCOL_ACCESS_CHANGE = 'protocol-access-change';
 
 /**
  * "Revoke all" mark: tokens issued before it are revoked, except those of
@@ -81,6 +91,8 @@ export interface AuthInvalidationEvent {
   appPasswordId?: string;
   /** All app passwords of the user were deleted together with the sessions. */
   appPasswordsRevoked?: boolean;
+  /** protocol-access-change: every protocol that is now off for the user. */
+  disabledProtocols?: string[];
 }
 
 export type AuthInvalidationHandler = (event: AuthInvalidationEvent) => void;
@@ -147,6 +159,9 @@ export function parseAuthInvalidationEvent(message: string): AuthInvalidationEve
   }
   if (typeof r['appPasswordId'] === 'string' && r['appPasswordId']) event.appPasswordId = r['appPasswordId'];
   if (r['appPasswordsRevoked'] === true) event.appPasswordsRevoked = true;
+  if (Array.isArray(r['disabledProtocols'])) {
+    event.disabledProtocols = r['disabledProtocols'].filter((x): x is string => typeof x === 'string' && x.length > 0);
+  }
   return event;
 }
 

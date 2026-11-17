@@ -1,7 +1,8 @@
 import { prisma } from '@coremail/storage/prisma';
 import { encodeWbxml, el, getText, getChild, type WbxmlElement } from '../wbxml.js';
 import type { Response } from 'express';
-import { easLiveRequests, type EasCredentialInfo } from '../live-sessions.js';
+import { PROTOCOL_ACCESS_CHANGE } from '@coremail/core';
+import { easLiveRequests, sendEasDisabled, type EasCredentialInfo } from '../live-sessions.js';
 import { knownItems } from './item-state.js';
 import { mergeSyncKeys } from './sync-keys.js';
 
@@ -165,14 +166,20 @@ export async function handlePing(
   // ── Long poll ───────────────────────────────────────────────────────────────
   const deadline = Date.now() + heartbeat * 1000;
   // v7.1.0: credential change → wake up and answer 401; client gone → stop polling.
-  let revoked = false;
+  // 9.4: ActiveSync switched off → 403.
+  // (asserted: the terminate callback assigns it, control-flow narrowing cannot see that)
+  let revoked = false as false | 'credentials' | 'protocol';
   let aborted = false;
   let wake: (() => void) | null = null;
   const unregister = easLiveRequests.register({
     userId,
     credential: auth.credential ?? 'unknown',
+    protocol: 'activesync',
     ...(auth.appPasswordId ? { appPasswordId: auth.appPasswordId } : {}),
-    terminate: () => { revoked = true; wake?.(); },
+    terminate: (event) => {
+      revoked = event.reason === PROTOCOL_ACCESS_CHANGE ? 'protocol' : 'credentials';
+      wake?.();
+    },
   }, auth.authStartedAt);
   res.once('close', () => { aborted = true; unregister(); wake?.(); });
 
@@ -194,6 +201,10 @@ export async function handlePing(
 
   if (res.writableEnded || aborted) return;
 
+  if (revoked === 'protocol') {
+    sendEasDisabled(res);
+    return;
+  }
   if (revoked) {
     res.removeHeader('Content-Type');
     res.setHeader('WWW-Authenticate', 'Basic realm="CoreMail ActiveSync"');

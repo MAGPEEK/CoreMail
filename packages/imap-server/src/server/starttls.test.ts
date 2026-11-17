@@ -12,6 +12,7 @@ import { test, describe, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
 import tls from 'node:tls';
+import { noProtocolPolicies } from '@coremail/storage/auth/testing';
 
 process.env['DATABASE_URL'] ??= 'postgresql://test:test@localhost:5432/coremail_test';
 process.env['JWT_SECRET'] ??= 'test-jwt-secret-0123456789abcdef0123456789';
@@ -27,6 +28,7 @@ const users = [
 const guard = () => { if (state.dbDown) throw new Error('db down'); };
 (globalThis as Record<string, unknown>)['__prisma'] = {
   $on: () => undefined,
+  ...noProtocolPolicies(),
   domain: { findFirst: async () => { guard(); return { name: 'example.test' }; } },
   user: {
     findFirst: async ({ where }: { where: { email: string } }) => { guard(); return users.find((u) => u.email === where.email) ?? null; },

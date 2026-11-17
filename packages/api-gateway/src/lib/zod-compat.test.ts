@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { setTestEnv } from '../test-support/fake-prisma.js';
+import { noProtocolPolicies } from '@coremail/storage/auth/testing';
 
 setTestEnv();
 
@@ -30,7 +31,9 @@ const model = (name: string) => ({
   },
   create: async (a: { data: Row }) => ({ id: 'new', ...a.data }),
 });
-(globalThis as Record<string, unknown>)['__prisma'] = { $on: () => undefined, task: model('task'), note: model('note') };
+(globalThis as Record<string, unknown>)['__prisma'] = {
+  $on: () => undefined, ...noProtocolPolicies(), task: model('task'), note: model('note'),
+};
 
 const { z } = await import('zod');
 const { patchSchema, isoDateTime } = await import('./zod-compat.js');

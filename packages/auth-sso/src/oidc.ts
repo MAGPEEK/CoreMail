@@ -36,7 +36,7 @@ import { Issuer, custom, generators, type Client, type IdTokenClaims } from 'ope
 import { createLogger } from '@coremail/core';
 import { prisma, ensureMailboxProvisioned } from '@coremail/storage';
 import {
-  authRedis, createMfaChallenge, getMfaState, issueSession, maintenanceBlock,
+  authRedis, createMfaChallenge, getMfaState, issueSession, maintenanceBlock, webLoginBlocked,
   type ClientInfo, type MfaMethod, type TokenPair,
 } from '@coremail/storage/auth';
 
@@ -399,7 +399,9 @@ export type ExchangeResult =
   | { kind: 'tokens'; tokens: TokenPair }
   | { kind: 'mfa'; challengeToken: string; method: string; methods: MfaMethod[] }
   | { kind: 'invalid' }
-  | { kind: 'maintenance'; message: string };
+  | { kind: 'maintenance'; message: string }
+  /** 9.4: Webmail is switched off for the account (no admin role). */
+  | { kind: 'protocol_disabled' };
 
 export async function exchangeSsoCode(code: string, cookie: string | undefined, client: ClientInfo): Promise<ExchangeResult> {
   if (typeof code !== 'string' || code.length < 16 || code.length > 128) return { kind: 'invalid' };
@@ -416,6 +418,7 @@ export async function exchangeSsoCode(code: string, cookie: string | undefined, 
   if (!user?.active) return { kind: 'invalid' };
   const blocked = await maintenanceBlock(user.role);
   if (blocked) return { kind: 'maintenance', message: blocked };
+  if (await webLoginBlocked(user, client.surface)) return { kind: 'protocol_disabled' };
   const tokens = await issueSession(user, { ...client, mfaVerified: o.mfaVerified });
   log.info({ userId: user.id, source: 'oidc' }, 'Login successful (SSO)');
   return { kind: 'tokens', tokens };

@@ -3,7 +3,9 @@ import tls from 'node:tls';
 import { createLogger } from '@coremail/core/logger';
 import { logTlsSocketError } from '@coremail/core/tls-errors';
 import { tlsServerOptions } from '@coremail/core/tls-policy';
-import { LiveConnectionRegistry, type LiveCredential } from '@coremail/core/auth';
+import {
+  LiveConnectionRegistry, PROTOCOL_ACCESS_CHANGE, type AuthInvalidationEvent, type LiveCredential,
+} from '@coremail/core/auth';
 import { prisma } from '@coremail/storage/prisma';
 import {
   expunge, verifyMailCredentials, loadRawMessage, parseMimeTree, headerBytes, type RawSourceMessage,
@@ -50,6 +52,8 @@ type State = 'AUTHORIZATION' | 'TRANSACTION' | 'UPDATE';
 export const pop3LiveSessions = new LiveConnectionRegistry('pop3');
 
 export const CREDENTIALS_CHANGED_ERR = '-ERR [AUTH] Credentials changed, please log in again';
+/** 9.4: POP3 switched off for the account (login refusal and end of open sessions). */
+export const POP3_DISABLED_ERR = '-ERR [AUTH] POP3 access is disabled for this account';
 
 /** RFC 1939 §3: the autologout timer must be at least 10 minutes. */
 const IDLE_TIMEOUT_MS = 10 * 60 * 1000;
@@ -339,6 +343,10 @@ export class POP3Session {
       if (result.status === 'error') {
         return this.send('-ERR [SYS/TEMP] Temporary authentication failure, try again later');
       }
+      if (result.status === 'protocol_disabled') {
+        log.warn({ userId: result.userId, ip: this.socket.remoteAddress }, 'POP3 login refused — POP3 disabled for this account');
+        return this.send(POP3_DISABLED_ERR);
+      }
       if (result.status !== 'ok') {
         // invalid and mfa_app_password_required: identical text (no oracle)
         log.warn({ user: this.user, status: result.status, ip: this.socket.remoteAddress }, 'POP3 auth failure');
@@ -380,23 +388,26 @@ export class POP3Session {
     this.unregisterLive = pop3LiveSessions.register({
       userId: this.userId,
       credential,
+      protocol: 'pop3',
       ...(appPasswordId ? { appPasswordId } : {}),
-      terminate: () => this.terminateForCredentialChange(),
+      terminate: (event) => this.terminateForCredentialChange(event),
     }, authStartedAt);
   }
 
   /**
-   * Ends the session after a credential change: the running command (e.g. a
-   * RETR) completes, queued commands are dropped, then -ERR [AUTH] and close.
+   * Ends the session after a credential change (9.4: or POP3 switched off):
+   * the running command (e.g. a RETR) completes, queued commands are dropped,
+   * then -ERR [AUTH] and close.
    * No UPDATE state — messages marked as deleted are not removed (RFC 1939 §6).
    */
-  private terminateForCredentialChange() {
+  private terminateForCredentialChange(event: AuthInvalidationEvent) {
     this.unregisterLive = null;
     if (this.closed || this.terminating) return;
     this.terminating = true;
+    const message = event.reason === PROTOCOL_ACCESS_CHANGE ? POP3_DISABLED_ERR : CREDENTIALS_CHANGED_ERR;
     this.queue = this.queue.then(() => {
       if (this.closed) return;
-      this.send(CREDENTIALS_CHANGED_ERR);
+      this.send(message);
       this.closed = true;
       this.socket.end();
     });

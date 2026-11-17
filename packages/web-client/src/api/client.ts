@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { useAuthStore, takeLegacyRefreshToken } from '../store/auth.js';
 import toast from 'react-hot-toast';
 import { apiErrorFromBody } from '../lib/errors.js';
-import { refreshFailureVerdict, refreshBackoffMs, shouldRefreshOn401 } from '../lib/authRetry.js';
+import { isWebmailDisabled, refreshFailureVerdict, refreshBackoffMs, shouldRefreshOn401 } from '../lib/authRetry.js';
 
 const BASE = '/api/v1';
 
@@ -193,6 +193,11 @@ export async function apiFetch(path: string, init: RequestInit = {}, contentType
   // API paths are relative to /api/v1; /api/… and /auth/… are used as given
   const url = path.startsWith('/api/') || path.startsWith('/auth/') ? path : `${BASE}${path}`;
   const res = await fetch(url, { ...init, headers: buildHeaders(token) });
+  if (res.status === 403) {
+    // 9.4: Webmail was switched off for the account — the session is over (like a refused refresh)
+    const body = await res.clone().json().catch(() => null) as { code?: string } | null;
+    if (isWebmailDisabled(res.status, body?.code)) sessionExpired();
+  }
   if (res.status !== 401) return res;
 
   // Revoked session (admin/user ended it) → no refresh attempt
@@ -310,6 +315,7 @@ export async function login(email: string, password: string): Promise<LoginResul
     if (body.code === 'ACCOUNT_LOCKED') {
       throw new Error('Zu viele fehlgeschlagene Anmeldeversuche. Bitte versuchen Sie es später erneut.');
     }
+    if (body.code === 'PROTOCOL_DISABLED') throw apiErrorFromBody(body, res.status); // 9.4: Webmail off
     throw new Error(body.error);
   }
   const data = await res.json() as LoginResult | { accessToken: string; refreshToken?: string };

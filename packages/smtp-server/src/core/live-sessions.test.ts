@@ -5,6 +5,8 @@
  * rejected), a delivery already in progress completes first, app password
  * revocation only ends sessions that used THAT app password, other users and
  * neutral events are left alone.
+ * 9.4: submission switched off → open sessions end with "421 … Mail submission
+ * has been disabled", AUTH with correct credentials gets 535 5.7.1.
  * Loopback TLS sockets, in-memory handlers.
  * Run: node --import tsx --test src/core/live-sessions.test.ts (in packages/smtp-server)
  */
@@ -37,6 +39,8 @@ const ACCOUNTS: Record<string, Awaited<ReturnType<NonNullable<Config['verifyCred
   'bob@example.test:APP-ONE': { id: 'u1', email: 'bob@example.test', credential: 'app_password', appPasswordId: 'ap1' },
   'bob@example.test:APP-TWO': { id: 'u1', email: 'bob@example.test', credential: 'app_password', appPasswordId: 'ap2' },
   'carol@example.test:secret': { id: 'u2', email: 'carol@example.test', credential: 'password' },
+  // 9.4: correct credentials, submission switched off (verifySmtpCredentials → protocol_disabled)
+  'dave@example.test:secret': { failure: 'protocol_disabled' },
 };
 
 const config: Config = {
@@ -199,5 +203,31 @@ describe('SMTP submission sessions after credential changes', () => {
     await bob.waitClosed();
     for (let i = 0; i < 20 && smtpLiveSessions.count('u1') > 0; i++) await new Promise((r) => setTimeout(r, 25));
     assert.equal(smtpLiveSessions.count('u1'), 0);
+  });
+});
+
+describe('SMTP submission switch (9.4)', () => {
+  test('submission off: the session ends with 421, other protocols\' events and users are left alone', async (t) => {
+    const bob = await login(t, 'bob@example.test', 'APP-ONE');
+    const carol = await login(t, 'carol@example.test', 'secret');
+    await publish({ userId: 'u1', reason: 'protocol-access-change', disabledProtocols: ['imap', 'mapi'] });
+    await expectAlive(bob);
+    await publish({ userId: 'u1', reason: 'protocol-access-change', disabledProtocols: ['smtp', 'mapi'] });
+    assert.match(await bob.line(), /^421 4\.7\.0 mx\.example\.test Mail submission has been disabled for this account/);
+    await bob.waitClosed();
+    await expectAlive(carol);
+  });
+
+  test('AUTH with correct credentials while submission is off: 535 5.7.1, not counted as a failure', async (t) => {
+    const socket = tls.connect({ port: await port(), host: '127.0.0.1', rejectUnauthorized: false });
+    await new Promise<void>((resolve, reject) => { socket.once('secureConnect', resolve); socket.once('error', reject); });
+    const c = new Client(socket);
+    t.after(() => socket.destroy());
+    await c.reply();
+    assert.match(await c.cmd('EHLO c.example.test'), /^250 /);
+    for (let i = 0; i < 4; i++) {
+      assert.equal(await c.cmd(`AUTH PLAIN ${b64('\0dave@example.test\0secret')}`), '535 5.7.1 Mail submission is disabled for this account');
+    }
+    assert.equal(c.closed, false, 'the AUTH failure limit does not apply');
   });
 });

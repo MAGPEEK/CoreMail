@@ -179,8 +179,11 @@ export interface SmtpSessionConfig {
   maxConnections?: number;
 }
 
-/** Non-credential AUTH outcome: lockout (454) or temporary failure (454). */
+/**
+ * Non-credential AUTH outcome: lockout (454), temporary failure (454) or
+ * (9.4) correct credentials but submission switched off for the account (535 5.7.1).
+ */
 export interface SmtpAuthFailure {
-  failure: 'locked' | 'temporary';
+  failure: 'locked' | 'temporary' | 'protocol_disabled';
   retryAfterSec?: number;
 }

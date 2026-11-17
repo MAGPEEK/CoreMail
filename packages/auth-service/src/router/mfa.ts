@@ -13,9 +13,9 @@
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { verifyAccessToken, createLogger } from '@coremail/core';
+import { createLogger } from '@coremail/core';
 import { prisma } from '@coremail/storage';
-import { verifyReauth, reauthErrorBody, getMfaChallenge, isAccessTokenRevokedShared } from '@coremail/storage/auth';
+import { verifyReauth, reauthErrorBody, getMfaChallenge } from '@coremail/storage/auth';
 import {
   setupTotp,
   confirmTotp,
@@ -25,18 +25,11 @@ import {
   finishWebAuthnRegistration,
   startWebAuthnAuthentication,
 } from '../mfa/index.js';
+import { requireBearerUser } from './bearer.js';
 
 const log = createLogger('auth:mfa-router');
 
 export const mfaRouter: RouterType = Router();
-
-async function getAuthenticatedUserId(req: Request): Promise<string | null> {
-  const header = req.get('Authorization');
-  if (!header?.startsWith('Bearer ')) return null;
-  const payload = verifyAccessToken(header.slice(7));
-  if (!payload || await isAccessTokenRevokedShared(payload.sub, payload.iat, payload.sessionId, payload.iatMs)) return null;
-  return payload.sub;
-}
 
 /** Runs the re-auth check; sends the error response and returns false on failure. */
 async function requireReauth(req: Request, res: Response, userId: string): Promise<boolean> {
@@ -53,8 +46,8 @@ type Handler = (req: Request, res: Response, userId: string) => Promise<void>;
 /** Bearer auth + error handling for the authenticated MFA routes. */
 function authed(fn: Handler) {
   return async (req: Request, res: Response): Promise<void> => {
-    const userId = await getAuthenticatedUserId(req);
-    if (!userId) { res.status(401).json({ error: 'Unauthorized' }); return; }
+    const userId = await requireBearerUser(req, res);
+    if (!userId) return;
     try {
       await fn(req, res, userId);
     } catch (err) {

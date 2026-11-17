@@ -1,32 +1,25 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { createLogger, verifyAccessToken } from '@coremail/core';
-import {
-  isAccessTokenRevokedShared, notifySecurityEvent, reauthErrorBody, verifyReauth,
-} from '@coremail/storage/auth';
+import { createLogger } from '@coremail/core';
+import { notifySecurityEvent, reauthErrorBody, verifyReauth } from '@coremail/storage/auth';
 import {
   createAppPassword,
   listAppPasswords,
   deleteAppPassword,
 } from '../app-passwords/index.js';
+import { requireBearerUser } from './bearer.js';
 
 const log = createLogger('auth:app-passwords:router');
 
 export const appPasswordRouter: RouterType = Router();
 
 // v7: like /auth/mfa and /auth/sessions — the access token of a logged-out or
-// revoked session must not mint (persistent) app passwords until it expires.
-async function getAuthenticatedUserId(req: Request): Promise<string | null> {
-  const header = req.get('Authorization');
-  if (!header?.startsWith('Bearer ')) return null;
-  const payload = verifyAccessToken(header.slice(7));
-  if (!payload || await isAccessTokenRevokedShared(payload.sub, payload.iat, payload.sessionId, payload.iatMs)) return null;
-  return payload.sub;
-}
+// revoked session must not mint (persistent) app passwords until it expires
+// (requireBearerUser, 9.4: also the Webmail switch).
 
 appPasswordRouter.get('/', async (req: Request, res: Response) => {
-  const userId = await getAuthenticatedUserId(req);
-  if (!userId) { res.status(401).json({ error: 'Unauthorized' }); return; }
+  const userId = await requireBearerUser(req, res);
+  if (!userId) return;
   const list = await listAppPasswords(userId);
   res.json(list);
 });
@@ -42,8 +35,8 @@ const CreateSchema = z.object({
 });
 
 appPasswordRouter.post('/', async (req: Request, res: Response) => {
-  const userId = await getAuthenticatedUserId(req);
-  if (!userId) { res.status(401).json({ error: 'Unauthorized' }); return; }
+  const userId = await requireBearerUser(req, res);
+  if (!userId) return;
 
   const parsed = CreateSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Name required' }); return; }
@@ -71,8 +64,8 @@ appPasswordRouter.post('/', async (req: Request, res: Response) => {
 });
 
 appPasswordRouter.delete('/:id', async (req: Request, res: Response) => {
-  const userId = await getAuthenticatedUserId(req);
-  if (!userId) { res.status(401).json({ error: 'Unauthorized' }); return; }
+  const userId = await requireBearerUser(req, res);
+  if (!userId) return;
 
   const ok = await deleteAppPassword(userId, req.params['id'] ?? '');
   if (!ok) { res.status(404).json({ error: 'Not found' }); return; }

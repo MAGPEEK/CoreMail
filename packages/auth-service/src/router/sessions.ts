@@ -1,17 +1,9 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
-import { verifyAccessToken } from '@coremail/core';
 import { prisma } from '@coremail/storage';
-import { isAccessTokenRevokedShared, markSessionsRevoked } from '@coremail/storage/auth';
+import { markSessionsRevoked } from '@coremail/storage/auth';
+import { requireBearerUser } from './bearer.js';
 
 export const sessionRouter: RouterType = Router();
-
-async function getAuthenticatedUserId(req: Request): Promise<string | null> {
-  const header = req.get('Authorization');
-  if (!header?.startsWith('Bearer ')) return null;
-  const payload = verifyAccessToken(header.slice(7));
-  if (!payload || await isAccessTokenRevokedShared(payload.sub, payload.iat, payload.sessionId, payload.iatMs)) return null;
-  return payload.sub;
-}
 
 // v8.1: the admin "revoke all sessions of a user" endpoint (DELETE
 // /auth/sessions/admin/:userId) is gone from the auth-service — it did its own
@@ -27,8 +19,8 @@ sessionRouter.all(['/admin', '/admin/:userId'], (_req: Request, res: Response) =
 });
 
 sessionRouter.get('/', async (req: Request, res: Response) => {
-  const userId = await getAuthenticatedUserId(req);
-  if (!userId) { res.status(401).json({ error: 'Unauthorized' }); return; }
+  const userId = await requireBearerUser(req, res);
+  if (!userId) return;
 
   const sessions = await prisma.session.findMany({
     where: { userId, expiresAt: { gt: new Date() } },
@@ -39,8 +31,8 @@ sessionRouter.get('/', async (req: Request, res: Response) => {
 });
 
 sessionRouter.delete('/:id', async (req: Request, res: Response) => {
-  const userId = await getAuthenticatedUserId(req);
-  if (!userId) { res.status(401).json({ error: 'Unauthorized' }); return; }
+  const userId = await requireBearerUser(req, res);
+  if (!userId) return;
 
   const sessionId = req.params['id'];
   if (!sessionId) { res.status(400).json({ error: 'Missing id' }); return; }

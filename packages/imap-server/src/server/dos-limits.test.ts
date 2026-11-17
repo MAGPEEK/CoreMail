@@ -12,6 +12,7 @@ import { test, describe, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
 import tls from 'node:tls';
+import { noProtocolPolicies } from '@coremail/storage/auth/testing';
 
 process.env['DATABASE_URL'] ??= 'postgresql://test:test@localhost:5432/coremail_test';
 process.env['JWT_SECRET'] ??= 'test-jwt-secret-0123456789abcdef0123456789';
@@ -25,6 +26,7 @@ const users = [
 ];
 (globalThis as Record<string, unknown>)['__prisma'] = {
   $on: () => undefined,
+  ...noProtocolPolicies(),
   domain: { findFirst: async () => ({ name: 'example.test' }) },
   user: { findFirst: async ({ where }: { where: { email: string } }) => users.find((u) => u.email === where.email) ?? null },
   appPassword: { findMany: async () => [], update: async () => ({}) },

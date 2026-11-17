@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import net from 'node:net';
 import tls from 'node:tls';
 import { Readable } from 'node:stream';
+import { noProtocolPolicies } from '@coremail/storage/auth/testing';
 
 process.env['DATABASE_URL'] ??= 'postgresql://test:test@localhost:5432/coremail_test';
 process.env['JWT_SECRET'] ??= 'test-jwt-secret-0123456789abcdef0123456789';
@@ -43,6 +44,7 @@ const matches = (m: Row, w: Where): boolean => (typeof w.id === 'string' ? m.id 
 
 const fakePrisma = {
   $on: () => undefined,
+  ...noProtocolPolicies(),
   $transaction: async <T>(fn: (tx: unknown) => Promise<T>): Promise<T> => fn(fakePrisma),
   user: {
     findFirst: async ({ where }: { where: { email: string } }) => {

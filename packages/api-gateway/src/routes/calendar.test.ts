@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { setTestEnv } from '../test-support/fake-prisma.js';
+import { noProtocolPolicies } from '@coremail/storage/auth/testing';
 
 setTestEnv();
 
@@ -35,6 +36,7 @@ const events: Row[] = [];
 let seq = 0;
 (globalThis as Record<string, unknown>)['__prisma'] = {
   $on: () => undefined,
+  ...noProtocolPolicies(),
   calendar: {
     findUnique: async (a: { where: Row }) => (a.where['id'] === 'cal1' ? { id: 'cal1', userId: 'alice' }
       : a.where['id'] === 'calBob' ? { id: 'calBob', userId: 'bob' } : null),

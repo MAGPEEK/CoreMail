@@ -3,11 +3,14 @@
  * as soon as the credentials of the request become invalid; other users'
  * Pings and Pings with another app password keep running; a Ping whose
  * credentials were checked before the change but registered after it ends too.
+ * 9.4: ActiveSync switched off → the Ping ends with 403, new requests get 403
+ * after correct credentials only; back to inherit → works.
  * Loopback Express app (requireAuth + handlePing), fake Prisma.
  * Run: node --import tsx --test src/commands/ping-auth.test.ts (in packages/activesync)
  */
 import { test, describe, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { fakeProtocolPolicies } from '@coremail/storage/auth/testing';
 import type { AddressInfo } from 'node:net';
 import type { Request, RequestHandler } from 'express';
 
@@ -22,8 +25,11 @@ const user = (id: string, email: string) => ({
 });
 const users = [user('u1', 'bob@example.com'), user('u2', 'carol@example.com')];
 let countGate: Promise<void> | null = null;
+/** 9.4: ProtocolPolicy rows (protocol switches). */
+const policies: Array<Record<string, unknown>> = [];
 (globalThis as Record<string, unknown>)['__prisma'] = {
   $on: () => undefined,
+  ...fakeProtocolPolicies(policies),
   user: { findFirst: async ({ where }: { where: { email: string } }) => users.find((u) => u.email === where.email) ?? null },
   appPassword: {
     findMany: async ({ where }: { where: { userId: string } }) => (where.userId === 'u1'
@@ -136,5 +142,28 @@ describe('ActiveSync Ping after credential changes', () => {
   test('finished Pings leave the registry', async () => {
     await (await ping('bob@example.com', 'pw', 1)).arrayBuffer();
     assert.equal(easLiveRequests.count('u1'), 0);
+  });
+});
+
+describe('ActiveSync protocol switch (9.4)', () => {
+  test('ActiveSync off: the Ping ends with 403, new requests 403 after correct credentials only; inherit → works', async () => {
+    const bob = ping('bob@example.com', 'APP-ONE');
+    const carol = ping('carol@example.com', 'pw', 1);
+    await settle();
+    policies.push({ id: 'p-u1', userId: 'u1', domainId: null, activesync: 'OFF' });
+    try {
+      // What @coremail/storage updateProtocolSettings() publishes for bob.
+      await publish({ userId: 'u1', reason: 'protocol-access-change', disabledProtocols: ['activesync', 'mapi'] });
+      const ended = await bob;
+      assert.equal(ended.status, 403);
+      assert.equal(ended.headers.get('www-authenticate'), null, 'no password prompt');
+      assert.equal((await carol).status, 200);
+      assert.equal((await ping('bob@example.com', 'pw', 1)).status, 403);
+      assert.equal((await ping('bob@example.com', 'wrong', 1)).status, 401, 'a wrong password never learns the switch');
+    } finally {
+      policies.length = 0;
+    }
+    await publish({ userId: 'u1', reason: 'protocol-access-change', disabledProtocols: ['mapi'] });
+    assert.equal((await ping('bob@example.com', 'pw', 1)).status, 200);
   });
 });

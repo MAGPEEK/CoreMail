@@ -59,7 +59,13 @@ export type MailAuthResult =
   | { status: 'invalid' }
   | { status: 'locked'; scope: 'ip' | 'account'; retryAfterSec: number }
   | { status: 'mfa_app_password_required' }
-  | { status: 'error'; error: unknown };
+  | { status: 'error'; error: unknown }
+  /**
+   * 9.4: the credentials were correct, but the protocol is switched off for
+   * the account (protocol-access.ts). Only returned by verifyMailCredentials()
+   * (mail-auth.ts) — never before the credentials were verified.
+   */
+  | { status: 'protocol_disabled'; userId: string; protocol: string };
 
 /** Minimal Redis surface (ioredis compatible). */
 export interface MailAuthRedis {

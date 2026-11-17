@@ -1,7 +1,9 @@
 import type { Request, Response, NextFunction } from 'express';
 import { verifyAccessToken, createLogger, onAuthInvalidation } from '@coremail/core';
 import { prisma } from '@coremail/storage';
-import { isAccessTokenRevoked, isAccessTokenRevokedShared } from '@coremail/storage/auth';
+import {
+  isAccessTokenRevoked, isAccessTokenRevokedShared, webAccessRefusal, type WebSurface,
+} from '@coremail/storage/auth';
 import { canAccess, hasAdminAction, isAdminRole, isReadMethod, stricterRole, type AdminAction, type AdminArea, type UserRoleName } from '../lib/rbac.js';
 import { redeemEventTicket, type TicketPurpose } from '../lib/event-tickets.js';
 
@@ -29,6 +31,8 @@ export interface ApiUser {
   issuedAtMs?: number;
   /** When the token check began (ms) — events since then still end a live connection. */
   authStartedAt?: number;
+  /** Domain of the user (token claim, 9.4 protocol switches — saves a lookup). */
+  domainId?: string;
 }
 
 declare module 'express' {
@@ -46,6 +50,7 @@ export interface AuthClaims {
   mfaVerified?: boolean | undefined;
   iat?: number | undefined;
   iatMs?: number | undefined;
+  domainId?: string | undefined;
 }
 
 /**
@@ -142,9 +147,10 @@ function authenticateClaims(payload: AuthClaims, authStartedAt: number, req: Req
       mfaVerified: payload.mfaVerified === true,
       ...(payload.iat !== undefined ? { issuedAt: payload.iat } : {}),
       ...(typeof payload.iatMs === 'number' ? { issuedAtMs: payload.iatMs } : {}),
+      ...(typeof payload.domainId === 'string' ? { domainId: payload.domainId } : {}),
       authStartedAt,
     };
-    next();
+    enforceWebmailSwitch(req, res, next);
   };
   const reject = (): void => {
     res.status(401).json({ error: 'Session revoked', code: 'SESSION_REVOKED' });
@@ -167,6 +173,36 @@ function authenticateClaims(payload: AuthClaims, authStartedAt: number, req: Req
 }
 
 const SHARED_REVOCATION_TIMEOUT_MS = 1_000;
+
+// ── Webmail protocol switch (9.4) ─────────────────────────────────────────────
+// A session may only be used for the webmail / user API while Webmail is on for
+// the account. Accounts with an admin role keep the admin surface (BCP, admin
+// CLI) even with Webmail off: the admin API (whose guards re-check the role)
+// and the event stream the BCP subscribes to.
+
+/** API paths of the admin surface (BCP / admin CLI). */
+export const ADMIN_SURFACE_PREFIXES: readonly string[] = ['/api/v1/admin', '/api/v1/events'];
+
+/** Which surface a request path belongs to (no path → webmail, the stricter one). */
+export function webSurfaceOf(originalUrl: string | undefined): WebSurface {
+  const path = (originalUrl ?? '').split('?')[0] ?? '';
+  return ADMIN_SURFACE_PREFIXES.some((p) => path === p || path.startsWith(`${p}/`)) ? 'admin' : 'webmail';
+}
+
+/** The user of a request for the protocol switches (domain from the token — saves a lookup). */
+export function protocolSubject(user: ApiUser): string | { id: string; domainId: string } {
+  return user.domainId !== undefined ? { id: user.userId, domainId: user.domainId } : user.userId;
+}
+
+function enforceWebmailSwitch(req: Request, res: Response, next: NextFunction): void {
+  const user = req.apiUser!;
+  // Fails closed like the admin guards (database errors → 503, see webAccessRefusal).
+  void webAccessRefusal({ id: user.userId, role: user.role, domainId: user.domainId }, webSurfaceOf(req.originalUrl))
+    .then((refusal) => {
+      if (!refusal) { next(); return; }
+      if (!res.headersSent) res.status(refusal.status).json(refusal.body);
+    });
+}
 
 // ── Admin RBAC (v6) ───────────────────────────────────────────────────────────
 // Role → area matrix and its documentation: lib/rbac.ts. There is no 'ADMIN'

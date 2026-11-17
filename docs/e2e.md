@@ -80,7 +80,7 @@ node scripts/e2e/run.mjs imap pop3       # single steps (state is kept in state.
 node --test scripts/e2e/repo-hygiene.test.mjs   # static regression checks (no stack needed)
 ```
 
-Steps: `setup users smtp imap pop3 jmap dav eas eas-body eas-commands eas-legacy rest webmail admin tls legacy-clients backup branding mfa live lockout restart storage schema-upgrade`.
+Steps: `setup users smtp imap pop3 jmap dav eas eas-body eas-commands eas-legacy rest webmail admin tls legacy-clients backup branding mfa live protocols lockout restart storage schema-upgrade`.
 `eas-legacy`: OPTIONS announces `12.1,14.0,14.1` and an unannounced version (2.5) is served as 14.1
 (Status 142 in WBXML for the unprovisioned device); a 12.1
 device gets HTTP 449 without a policy key, provisions, syncs (no Email2 / 14.x tags in any
@@ -140,6 +140,14 @@ and ends with `POST /api/v1/admin/branding/reset` (defaults back, old assets 404
 POP3 session open, changes the password in the web client and expects `* BYE`, `421 4.7.0` and
 `-ERR [AUTH]` right away; A's IDLE connection (app password) stays usable. The new password of B
 is written to `credentials.json`.
+`protocols` (9.4): `inherit` on the server level is refused (400, two-state); the admin switches
+IMAP off for B (`PUT /api/v1/admin/protocol-access/users/:id`)
+→ B's IMAP IDLE connection gets `* BYE IMAP access has been disabled for this account` and is
+closed, a new login with the correct password gets `NO [AUTHORIZATIONFAILED]`, a wrong one still
+`NO [AUTHENTICATIONFAILED]`, B's `/api/v1/user/client-config` lists no IMAP server; Webmail off →
+`POST /auth/login` and B's existing session on
+`/api/v1/mail/folders` answer 403 `PROTOCOL_DISABLED`; back to inherit → web login and IMAP work.
+B's switches are reset to inherit at the end. See [protocol-access.md](protocol-access.md).
 `setup` reads the one-time setup token from `docker logs coremail-e2e`. Each run prints
 `[PASS]/[FAIL]` lines and writes `$E2E_STATE_DIR/results-<steps>.json`; the exit code is
 non-zero when a check failed.

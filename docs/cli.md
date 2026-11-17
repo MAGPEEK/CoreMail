@@ -199,6 +199,22 @@ surface is saved but printed as a warning with a suggested colour. `upload` take
 file extension and the server checks the bytes. Changes need ORGANIZATION_MANAGEMENT; `show` also
 works for SERVER_MANAGEMENT and VIEW_ONLY_ORG. Details: [branding.md](branding.md).
 
+## Protocol access (`protocol`, v9.4)
+
+```bash
+coremail protocol show                                         # server level
+coremail protocol show --scope domain example.com              # domain level
+coremail protocol show --scope user alice@example.com          # mailbox level
+coremail protocol set --scope user alice@example.com --imap off --webmail inherit
+```
+
+Switches: `--imap --pop3 --smtp --activesync --jmap --dav --webmail --mapi`, each `on`, `off` or
+`inherit` (the server level is `on` / `off` only); only the given ones change. The table shows the
+setting (`inherit (on)` = what inherit resolves to) and the effective value. Server and domain level need
+SERVER_MANAGEMENT (or ORGANIZATION_MANAGEMENT), the mailbox level RECIPIENT_MANAGEMENT. The server
+level of `--jmap` is the same switch as `connector enable|disable jmap`. Details:
+[protocol-access.md](protocol-access.md).
+
 ## Behavior and exit codes
 
 - Destructive commands ask for confirmation unless `--yes` is given; without a terminal (script) `--yes` is mandatory.

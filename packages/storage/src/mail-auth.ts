@@ -3,7 +3,12 @@
  * (see mail-auth-core.ts for the rules).
  *
  *   const r = await verifyMailCredentials(login, password, { ip, protocol: 'imap' });
- *   switch (r.status) { case 'ok': … case 'invalid': … case 'locked': … case 'mfa_app_password_required': … case 'error': … }
+ *   switch (r.status) { case 'ok': … case 'invalid': … case 'locked': … case 'mfa_app_password_required': … case 'error': …
+ *                       case 'protocol_disabled': … }
+ *
+ * 9.4: after a successful check the protocol switch of the account is applied
+ * (protocol-access.ts): `protocol_disabled` when the protocol is off. A wrong
+ * password never gets that answer — it is `invalid` as before.
  *
  * Environment (optional):
  *   MAIL_AUTH_IP_MAX_FAILURES (50)   MAIL_AUTH_IP_WINDOW_SEC (900)   MAIL_AUTH_IP_LOCK_SEC (900)
@@ -19,10 +24,11 @@ import { randomBytes } from 'node:crypto';
 import { createLogger, getRedisClient, hashPassword, verifyPassword } from '@coremail/core';
 import { prisma } from './prisma/index.js';
 import { recordLastLogin } from './auth/last-login.js';
+import { isProtocolAllowed, type AccessProtocol } from './protocol-access.js';
 import {
   createLoginLockout, createMailCredentialVerifier, createExemptIpMatcher,
   type LoginLockout, type MailAuthContext, type MailAuthDeps, type MailAuthLimits, type MailAuthPrisma,
-  type MailAuthRedis, type MailAuthResult, type MailCredentialVerifier,
+  type MailAuthRedis, type MailAuthResult, type MailCredentialVerifier, type MailProtocol,
 } from './mail-auth-core.js';
 
 export * from './mail-auth-core.js';
@@ -92,6 +98,11 @@ function getVerifier(): MailCredentialVerifier {
   return instance;
 }
 
+/** 9.4: the protocol switch a mail-protocol login is subject to (Autodiscover has none). */
+export const MAIL_PROTOCOL_ACCESS: Readonly<Record<MailProtocol, AccessProtocol | null>> = {
+  smtp: 'smtp', imap: 'imap', pop3: 'pop3', activesync: 'activesync', jmap: 'jmap', caldav: 'dav', autodiscover: null,
+};
+
 /** The shared credential check for all mail protocols. Never throws. */
 export async function verifyMailCredentials(
   login: string,
@@ -100,8 +111,15 @@ export async function verifyMailCredentials(
 ): Promise<MailAuthResult> {
   try {
     const result = await getVerifier().verify(login, password, ctx);
+    if (result.status !== 'ok') return result;
+    // 9.4: only after the credentials were verified (a wrong password stays `invalid`).
+    const protocol = MAIL_PROTOCOL_ACCESS[ctx.protocol];
+    if (protocol && !(await isProtocolAllowed({ id: result.user.id, domainId: result.user.domainId }, protocol))) {
+      log.warn({ userId: result.user.id, protocol, ip: ctx.ip }, 'mail-auth: protocol disabled for this account');
+      return { status: 'protocol_disabled', userId: result.user.id, protocol };
+    }
     // 8.x: User.lastLoginAt (throttled, fire-and-forget)
-    if (result.status === 'ok') void recordLastLogin(result.user.id);
+    void recordLastLogin(result.user.id);
     return result;
   } catch (error) {
     log.error({ err: error, protocol: ctx.protocol }, 'mail-auth: unexpected error');

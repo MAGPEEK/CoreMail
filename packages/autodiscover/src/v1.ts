@@ -1,6 +1,8 @@
 import type { Request, Response } from 'express';
 import { createLogger, PROTO_VERIFIED_HEADER } from '@coremail/core';
-import { prisma, verifyMailCredentials, clientIpFromRequest, type MailAuthUser } from '@coremail/storage';
+import {
+  prisma, verifyMailCredentials, clientIpFromRequest, effectiveProtocolAccess, type MailAuthUser, type ProtocolAccess,
+} from '@coremail/storage';
 import { getServerConfig, ServerConfigUnavailableError, type ServerConfig } from './settings.js';
 import { SMTPS_PORT } from './v2.js';
 import { LogBudget } from './log-budget.js';
@@ -24,6 +26,8 @@ const log = createLogger('autodiscover:v1');
 //  - AcceptableResponseSchema selects the answer: outlook/2006a (default) →
 //    IMAP + SMTP account; mobilesync/2006 → MobileSync server URL; anything else →
 //    Error 601.
+//  - 9.4: only protocols switched on for the account are announced (IMAP, else
+//    POP3; SMTP; MobileSync) — nothing left → Error 500 "No client protocol …".
 //
 // MAPI over HTTP (v6.0.0) and EWS (v7.0.0) were removed: no EXCH/EXPR/EXHTTP
 // blocks — those make Outlook attempt a binary MAPI/RPC connection (v3.18.39).
@@ -38,9 +42,25 @@ const LEGACY_DN_PREFIX = '/o=CoreMail/ou=Exchange Administrative Group (FYDIBOHF
 /** MS-OXDSCLI §2.2.4.2.1 error codes. */
 const ERROR = {
   notFound: { code: 500, message: 'The e-mail address cannot be found.' },
+  // 9.4: every protocol the answer could offer is switched off for the account
+  protocolDisabled: { code: 500, message: 'No client protocol is enabled for this account.' },
   invalidRequest: { code: 600, message: 'Invalid Request' },
   schemaNotSupported: { code: 601, message: 'The requested schema version is not supported' },
 } as const;
+
+export type OutlookProtocol = 'IMAP' | 'POP3' | 'SMTP';
+
+/**
+ * 9.4: the <Protocol> blocks of an Outlook answer for the account's protocol
+ * switches — IMAP (else POP3) for incoming mail, SMTP for submission.
+ * Hook point for MAPI over HTTP (switch `mapi`): the protocol is not
+ * implemented yet, so no block exists; once it is, its block is announced
+ * here, and only when `access.mapi` is on.
+ */
+export function outlookProtocols(access: Pick<ProtocolAccess, 'imap' | 'pop3' | 'smtp' | 'mapi'>): OutlookProtocol[] {
+  const incoming: OutlookProtocol[] = access.imap ? ['IMAP'] : access.pop3 ? ['POP3'] : [];
+  return [...incoming, ...(access.smtp ? ['SMTP' as const] : [])];
+}
 type AutodiscoverError = typeof ERROR[keyof typeof ERROR];
 
 type ResponseSchema = 'outlook' | 'mobilesync';
@@ -123,15 +143,51 @@ function sendError(res: Response, err: AutodiscoverError): void {
 </Autodiscover>`);
 }
 
+/** One <Protocol> block of the Outlook answer (login = the account's primary address). */
+function outlookProtocolBlock(protocol: OutlookProtocol, email: string, cfg: ServerConfig): string {
+  const login = `
+        <LoginName>${escapeXml(email)}</LoginName>
+        <DomainRequired>off</DomainRequired>
+        <SPA>off</SPA>`;
+  if (protocol === 'SMTP') {
+    const smtpEncryption = !cfg.smtpTls ? 'None' : cfg.smtpPort === SMTPS_PORT ? 'SSL' : 'TLS';
+    return `
+      <Protocol>
+        <Type>SMTP</Type>
+        <Server>${escapeXml(cfg.smtpHost)}</Server>
+        <Port>${cfg.smtpPort}</Port>${login}
+        <Encryption>${smtpEncryption}</Encryption>
+        <AuthRequired>on</AuthRequired>
+        <UsePOPAuth>off</UsePOPAuth>
+        <SMTPLast>off</SMTPLast>
+      </Protocol>`;
+  }
+  // IMAP / POP3: explicit <Encryption> — implicit TLS (SSL), else STARTTLS/STLS
+  // (TLS); CoreMail refuses a login before TLS on both protocols.
+  const [host, port, ssl] = protocol === 'IMAP'
+    ? [cfg.imapHost, cfg.imapPort, cfg.imapSsl]
+    : [cfg.pop3Host, cfg.pop3Port, cfg.pop3Ssl];
+  return `
+      <Protocol>
+        <Type>${protocol}</Type>
+        <Server>${escapeXml(host)}</Server>
+        <Port>${port}</Port>${login}
+        <SSL>${ssl ? 'on' : 'off'}</SSL>
+        <Encryption>${imapEncryption({ imapSsl: ssl })}</Encryption>
+        <AuthRequired>on</AuthRequired>
+      </Protocol>`;
+}
+
 /**
  * Outlook schema response. The account is always described by its PRIMARY
  * address — also when the client asked for one of its aliases: the mail
  * protocols log in with the primary address only, and AutoDiscoverSMTPAddress
  * tells Outlook which address the profile belongs to. (No redirectAddr: the
  * caller is already authenticated for this account, a redirect would only cost
- * another round trip and a client prompt.)
+ * another round trip and a client prompt.) 9.4: only `protocols` (the
+ * account's enabled ones, outlookProtocols()) get a <Protocol> block.
  */
-function buildOutlookResponse(user: MailAuthUser, cfg: ServerConfig): string {
+function buildOutlookResponse(user: MailAuthUser, cfg: ServerConfig, protocols: OutlookProtocol[]): string {
   // Outlook LTSC 2019/2021/2024 compatible (v3.18.38): <User><LegacyDN> is mandatory.
   // The LegacyDN carries the caller's own id — the response only ever describes
   // the authenticated account itself.
@@ -139,7 +195,6 @@ function buildOutlookResponse(user: MailAuthUser, cfg: ServerConfig): string {
   const webHost = (() => {
     try { return new URL(cfg.owaUrl).hostname; } catch { return cfg.smtpHost; }
   })();
-  const smtpEncryption = !cfg.smtpTls ? 'None' : cfg.smtpPort === SMTPS_PORT ? 'SSL' : 'TLS';
   return `<?xml version="1.0" encoding="utf-8"?>
 <Autodiscover xmlns="${NS_RESPONSE}">
   <Response xmlns="${NS_OUTLOOK}">
@@ -151,30 +206,7 @@ function buildOutlookResponse(user: MailAuthUser, cfg: ServerConfig): string {
     <Account>
       <AccountType>email</AccountType>
       <Action>settings</Action>
-      <MicrosoftOnline>False</MicrosoftOnline>
-      <Protocol>
-        <Type>IMAP</Type>
-        <Server>${escapeXml(cfg.imapHost)}</Server>
-        <Port>${cfg.imapPort}</Port>
-        <LoginName>${escapeXml(email)}</LoginName>
-        <DomainRequired>off</DomainRequired>
-        <SPA>off</SPA>
-        <SSL>${cfg.imapSsl ? 'on' : 'off'}</SSL>
-        <Encryption>${imapEncryption(cfg)}</Encryption>
-        <AuthRequired>on</AuthRequired>
-      </Protocol>
-      <Protocol>
-        <Type>SMTP</Type>
-        <Server>${escapeXml(cfg.smtpHost)}</Server>
-        <Port>${cfg.smtpPort}</Port>
-        <LoginName>${escapeXml(email)}</LoginName>
-        <DomainRequired>off</DomainRequired>
-        <SPA>off</SPA>
-        <Encryption>${smtpEncryption}</Encryption>
-        <AuthRequired>on</AuthRequired>
-        <UsePOPAuth>off</UsePOPAuth>
-        <SMTPLast>off</SMTPLast>
-      </Protocol>
+      <MicrosoftOnline>False</MicrosoftOnline>${protocols.map((p) => outlookProtocolBlock(p, email, cfg)).join('')}
       <PublicFolderInformation>
         <SmtpAddress>publicfolder@${escapeXml(webHost.replace(/^mail\./, ''))}</SmtpAddress>
       </PublicFolderInformation>
@@ -352,18 +384,27 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
   }
 
   let cfg: ServerConfig;
+  let access: ProtocolAccess;
   try {
     cfg = await getServerConfig();
+    // 9.4: only protocols that are switched on for the account are announced.
+    access = await effectiveProtocolAccess({ id: auth.user.id, domainId: auth.user.domainId });
   } catch (err) {
-    if (!(err instanceof ServerConfigUnavailableError)) throw err;
+    if (!(err instanceof ServerConfigUnavailableError)) log.error({ err }, 'Autodiscover v1: protocol switches not readable');
     res.set('Retry-After', '30');
     res.status(503).send('Service Unavailable');
     return;
   }
 
   log.info({ userId: auth.user.id, schema: parsed.schema, method: req.method }, 'Autodiscover v1 request (authenticated)');
+  if (parsed.schema === 'mobilesync') {
+    if (!access.activesync) return sendError(res, ERROR.protocolDisabled);
+    res.set('Content-Type', 'text/xml; charset=utf-8');
+    res.send(buildMobileSyncResponse(auth.user, cfg));
+    return;
+  }
+  const protocols = outlookProtocols(access);
+  if (protocols.length === 0) return sendError(res, ERROR.protocolDisabled);
   res.set('Content-Type', 'text/xml; charset=utf-8');
-  res.send(parsed.schema === 'mobilesync'
-    ? buildMobileSyncResponse(auth.user, cfg)
-    : buildOutlookResponse(auth.user, cfg));
+  res.send(buildOutlookResponse(auth.user, cfg, protocols));
 }

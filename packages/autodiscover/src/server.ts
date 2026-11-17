@@ -5,7 +5,7 @@ import {
   createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD,
   installProcessGuards, installAsyncErrorHandling, errorMiddleware, resolveBindHost,
 } from '@coremail/core';
-import { connectDatabase } from '@coremail/storage';
+import { connectDatabase, invalidateProtocolAccessCache } from '@coremail/storage';
 import { createAutodiscoverApp } from './app.js';
 import { invalidateSettingsCache } from './settings.js';
 import { invalidateAutoconfigCache } from './autoconfig.js';
@@ -30,6 +30,8 @@ async function main() {
     sub.on('message', () => {
       invalidateSettingsCache();
       invalidateAutoconfigCache();
+      // 9.4: every protocol switch change publishes this signal as well
+      invalidateProtocolAccessCache();
       log.info('Settings cache invalidated (Redis signal)');
     });
   } catch (err) {

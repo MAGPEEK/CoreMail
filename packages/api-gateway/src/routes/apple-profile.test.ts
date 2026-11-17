@@ -25,7 +25,7 @@ const state = {
   mfa: null as null | { totpEnabled: boolean; webAuthnCredentials: unknown },
 };
 
-installFakePrisma({
+const fakeDb = installFakePrisma({
   user: {
     findUnique: (a) => {
       const id = (a as { where: { id: string } }).where.id;
@@ -232,20 +232,77 @@ test('WebAuthn-only MFA (Json array) requires an app password — profile and cl
   }
 });
 
+const PROFILE_INPUT = {
+  userId: 'alice', email: 'alice@example.com', displayName: 'Alice', orgName: 'Acme & Co',
+  publicHostname: 'mail.example.com', useHttps: true, httpPort: 443,
+  imap: { host: 'imap.example.com', port: 993, ssl: true }, pop3: { host: 'pop.example.com', port: 995, ssl: true },
+  smtp: { host: 'smtp.example.com', port: 587, tls: true },
+  easUrl: 'https://mail.example.com/Microsoft-Server-ActiveSync', requiresAppPassword: false,
+  access: { imap: true, pop3: true, dav: true, activesync: true },
+};
+
 test('9.3 branding: labels use the branded product name, PayloadOrganization stays the organisation', async () => {
   const { buildAppleProfile } = await import('./apple-profile.js');
-  const input = {
-    userId: 'alice', email: 'alice@example.com', displayName: 'Alice', orgName: 'Acme & Co',
-    publicHostname: 'mail.example.com', useHttps: true, httpPort: 443,
-    imap: { host: 'imap.example.com', port: 993, ssl: true }, smtp: { host: 'smtp.example.com', port: 587, tls: true },
-    easUrl: 'https://mail.example.com/Microsoft-Server-ActiveSync', requiresAppPassword: false,
-  };
-  const branded = parsePlist(buildAppleProfile({ ...input, productName: 'AcmeMail' })) as Record<string, PV>;
+  const branded = parsePlist(buildAppleProfile({ ...PROFILE_INPUT, productName: 'AcmeMail' })) as Record<string, PV>;
   assert.equal(branded['PayloadOrganization'], 'Acme & Co');
   assert.equal(branded['PayloadDisplayName'], 'AcmeMail — alice@example.com');
   assert.equal((branded['PayloadContent'] as Record<string, PV>[])[0]!['PayloadDisplayName'], 'AcmeMail Mail');
-  const plain = parsePlist(buildAppleProfile({ ...input, productName: 'CoreMail' })) as Record<string, PV>;
+  const plain = parsePlist(buildAppleProfile({ ...PROFILE_INPUT, productName: 'CoreMail' })) as Record<string, PV>;
   assert.equal(plain['PayloadDisplayName'], 'Acme & Co — alice@example.com', 'unbranded: organisation name as before');
+});
+
+test('9.4 protocol switches: only enabled protocols are set up', async () => {
+  const { buildAppleProfile, appleProfileAvailable } = await import('./apple-profile.js');
+  const build = (access: typeof PROFILE_INPUT.access) => parsePlist(buildAppleProfile({ ...PROFILE_INPUT, access })) as Record<string, PV>;
+  const types = (root: Record<string, PV>) => (root['PayloadContent'] as Record<string, PV>[]).map((p) => p['PayloadType']);
+
+  const pop = build({ imap: false, pop3: true, dav: false, activesync: true });
+  assert.deepEqual(types(pop), ['com.apple.mail.managed']);
+  const mail = (pop['PayloadContent'] as Record<string, PV>[])[0]!;
+  assert.equal(mail['EmailAccountType'], 'EmailTypePOP');
+  assert.equal(mail['IncomingMailServerHostName'], 'pop.example.com');
+  assert.match(String(pop['PayloadDescription']), /^Sets up alice@example\.com for Mail \(POP3\/SMTP\)\. /);
+
+  const dav = build({ imap: false, pop3: false, dav: true, activesync: false });
+  assert.deepEqual(types(dav), ['com.apple.caldav.account', 'com.apple.carddav.account']);
+  assert.match(String(dav['PayloadDescription']), /for Calendar \(CalDAV\) and Contacts \(CardDAV\)\. /);
+
+  assert.equal(appleProfileAvailable({ imap: false, pop3: false, dav: false, activesync: true }, 'imap'), false);
+  assert.equal(appleProfileAvailable({ imap: false, pop3: false, dav: false, activesync: true }, 'eas'), true);
+  assert.equal(appleProfileAvailable({ imap: true, pop3: true, dav: true, activesync: false }, 'eas'), false);
+});
+
+test('9.4 client-config (external clients page): only protocols switched on for the account', async () => {
+  type ClientConfig = {
+    protocols: Record<string, boolean>;
+    mail: Record<'imap' | 'pop3' | 'smtp', { host: string } | null>;
+    caldav: { accountUrl: string } | null;
+    carddav: { accountUrl: string } | null;
+  };
+  const get = async () => (await fetch(`${base}/api/v1/user/client-config`, {
+    headers: { authorization: `Bearer ${tok('alice')}` },
+  })).json() as Promise<ClientConfig>;
+  const { invalidateProtocolAccessCache } = await import('@coremail/storage');
+  const all = await get();
+  assert.deepEqual(all.protocols, { imap: true, pop3: true, smtp: true, activesync: true, dav: true });
+  assert.equal(all.mail.imap?.host, 'imap.example.com');
+  assert.ok(all.caldav?.accountUrl && all.carddav?.accountUrl);
+
+  fakeDb.models['protocolPolicy'] = {
+    findMany: () => [{ id: 'p-alice', userId: 'alice', domainId: null, imap: 'OFF', dav: 'OFF', activesync: 'OFF' }],
+  };
+  invalidateProtocolAccessCache();
+  try {
+    const some = await get();
+    assert.deepEqual(some.protocols, { imap: false, pop3: true, smtp: true, activesync: false, dav: false });
+    assert.equal(some.mail.imap, null);
+    assert.ok(some.mail.pop3 && some.mail.smtp);
+    assert.equal(some.caldav, null);
+    assert.equal(some.carddav, null);
+  } finally {
+    delete fakeDb.models['protocolPolicy'];
+    invalidateProtocolAccessCache();
+  }
 });
 
 test('plist writer: escaping, empty containers, booleans', () => {

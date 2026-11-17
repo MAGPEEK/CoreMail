@@ -1,17 +1,20 @@
 import { useId, useState } from 'react';
 import { Modal } from '../components/Modal.js';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Pencil, Trash2, Lock, LayoutGrid, Mail, Inbox, Archive, Loader2, AlertTriangle, Globe } from 'lucide-react';
+import { Plus, Pencil, Trash2, Lock, LayoutGrid, Mail, Inbox, Archive, Loader2, AlertTriangle, Globe, Network } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
 import { Toggle } from '../components/Toggle.js';
 import { Can } from '../components/Can.js';
+import { ProtocolAccessEditor } from '../components/ProtocolAccessEditor.js';
 import { errorMessage } from '../lib/errors.js';
 import { LEGACY_TLS_LABEL, LEGACY_TLS_WARNING, listenerPayload, type ListenerForm } from '../lib/legacyClients.js';
+import { useT } from '../i18n/useT.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type ServiceKey = 'SMTP_RECEIVE' | 'IMAP' | 'POP3';
-type NavView    = 'overview' | ServiceKey;
+/** 9.4: 'protocols' = server level of the per-protocol access switches. */
+type NavView    = 'overview' | 'protocols' | ServiceKey;
 
 interface ServiceListener {
   id: string; service: ServiceKey; address: string; port: number;
@@ -372,6 +375,7 @@ function Overview({ onSelect }: { onSelect: (k: ServiceKey) => void }) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 export function ServicesPage() {
+  const t = useT();
   const [view, setView] = useState<NavView>('overview');
 
   return (
@@ -387,6 +391,7 @@ export function ServicesPage() {
             { key: 'SMTP_RECEIVE' as NavView, label: 'SMTP Inbound', icon: Inbox      },
             { key: 'IMAP'         as NavView, label: 'IMAP',         icon: Mail       },
             { key: 'POP3'         as NavView, label: 'POP3',         icon: Archive    },
+            { key: 'protocols'    as NavView, label: t('proto_title'), icon: Network },
           ] as const).map(({ key, label, icon: Icon }) => (
             <button key={key} onClick={() => setView(key)}
               className={`w-full flex items-center gap-2.5 px-4 py-2.5 text-sm transition-colors text-left ${
@@ -403,7 +408,9 @@ export function ServicesPage() {
       <div className="flex-1 overflow-y-auto">
         {view === 'overview'
           ? <Overview onSelect={k => setView(k)} />
-          : <ListenersTable svcKey={view as ServiceKey} />
+          : view === 'protocols'
+            ? <div className="p-6 max-w-2xl"><ProtocolAccessEditor path="/admin/protocol-access" area="servers" /></div>
+            : <ListenersTable svcKey={view} />
         }
       </div>
     </div>

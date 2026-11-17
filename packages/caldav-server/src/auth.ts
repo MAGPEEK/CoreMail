@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import { verifyAccessToken, createLogger } from '@coremail/core';
-import { prisma, verifyMailCredentials, clientIpFromRequest } from '@coremail/storage';
+import { prisma, verifyMailCredentials, clientIpFromRequest, isProtocolAllowed } from '@coremail/storage';
 import { isAccessTokenRevokedShared } from '@coremail/storage/auth';
 
 const log = createLogger('caldav:auth');
@@ -29,9 +29,23 @@ export async function davAuthMiddleware(
     if (payload && !(await isAccessTokenRevokedShared(payload.sub, payload.iat, payload.sessionId, payload.iatMs))) {
       const user = await prisma.user.findUnique({
         where: { id: payload.sub },
-        select: { id: true, email: true, active: true },
+        select: { id: true, email: true, active: true, domainId: true },
       });
       if (user?.active) {
+        // 9.4: the CalDAV/CardDAV switch applies to tokens as well (unreadable → 503).
+        let allowed: boolean;
+        try {
+          allowed = await isProtocolAllowed({ id: user.id, domainId: user.domainId }, 'dav');
+        } catch (err) {
+          log.error({ err, userId: user.id }, 'CalDAV/CardDAV switch not readable');
+          res.set('Retry-After', '30');
+          res.status(503).send('Service Unavailable');
+          return;
+        }
+        if (!allowed) {
+          sendDavDisabled(res);
+          return;
+        }
         req.davUser = { userId: user.id, email: user.email };
         next();
         return;
@@ -69,9 +83,19 @@ export async function davAuthMiddleware(
         res.status(503).send('Service Unavailable');
         return;
       }
+      if (result.status === 'protocol_disabled') {
+        log.warn({ userId: result.userId }, 'CalDAV/CardDAV request refused — disabled for this account');
+        sendDavDisabled(res);
+        return;
+      }
     }
   }
 
   res.set('WWW-Authenticate', 'Basic realm="CoreMail CalDAV"');
   res.status(401).send('Unauthorized');
+}
+
+/** 9.4: CalDAV/CardDAV switched off for the account — 403, no new password prompt. */
+function sendDavDisabled(res: Response): void {
+  res.status(403).type('text/plain').send('CalDAV/CardDAV access is disabled for this account');
 }

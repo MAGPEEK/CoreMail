@@ -20,12 +20,17 @@ function conn(userId: string, isAdmin = false) {
   return { userId, isAdmin, got, send: (e: string, d: unknown) => { got.push([e, d]); } };
 }
 
-function hub() {
+/** `webmailOff`: users whose Webmail switch is off (9.4); 'broken' → the switch cannot be read. */
+function hub(webmailOff: Set<string> = new Set()) {
   const pushes: string[] = [];
   const claims = new Set<string>();
   const h = new SseHub({
     pushMailNew: async (userId) => { pushes.push(userId); },
     claimPush: async (k) => { if (claims.has(k)) return false; claims.add(k); return true; },
+    webmailAllowed: async (userId) => {
+      if (userId === 'broken') throw new Error('db down');
+      return !webmailOff.has(userId);
+    },
   });
   return { h, pushes };
 }
@@ -77,6 +82,24 @@ test('per-user channel, calendar shares, admin events and removal', async () => 
   await h.dispatch('mail:update', JSON.stringify({ userId: 'alice' }));
   assert.equal(a.got.length, 1);
   assert.equal(h.connectionCount, 2);
+});
+
+test('9.4: Webmail off → no mailbox event and no Web Push for that user; an admin stream keeps admin events', async () => {
+  const { h, pushes } = hub(new Set(['root', 'bob']));
+  const adm = conn('root', true); const b = conn('bob'); const a = conn('alice'); const x = conn('broken');
+  h.add(adm); h.add(b); h.add(a); h.add(x);
+  for (const userId of ['root', 'bob', 'alice', 'broken']) {
+    await h.dispatch('mail:new', mailNew(userId, `m-${userId}`));
+    await h.dispatch('mail:update', JSON.stringify({ userId }));
+    await h.dispatch(`user:${userId}:events`, JSON.stringify({ reminder: 1 }));
+  }
+  await h.dispatch('calendar:shares', JSON.stringify({ affectedUserIds: ['bob', 'alice'] }));
+  await h.dispatch('admin:attack', JSON.stringify({ ip: '1.2.3.4' }));
+  assert.deepEqual(adm.got.map((g) => g[0]), ['security:attack'], 'the BCP stream gets admin events only');
+  assert.equal(b.got.length, 0);
+  assert.equal(x.got.length, 0, 'an unreadable switch withholds the event');
+  assert.deepEqual(a.got.map((g) => g[0]), ['mail:new', 'mail:update', 'notification', 'calendar:shares']);
+  assert.deepEqual(pushes, ['alice']);
 });
 
 test('push subscription validation: https public endpoint + key sizes', async () => {
