@@ -1,7 +1,9 @@
 import { prisma } from '@coremail/storage/prisma';
 import { createLogger } from '@coremail/core/logger';
 import { encodeWbxml, el, getChild, getText, type WbxmlElement } from '../wbxml.js';
-import { EAS_GLOBAL_STATUS, newPolicyKey } from '../device-policy.js';
+import { EAS_GLOBAL_STATUS, httpStatusOf, newPolicyKey } from '../device-policy.js';
+import { HIGHEST_EAS_VERSION, supports, type EasVersion } from '../protocol-version.js';
+import { EasHttpError } from '../http-error.js';
 
 const log = createLogger('activesync:provision');
 
@@ -11,7 +13,10 @@ export const POLICY_TYPE = 'MS-EAS-Provisioning-WBXML';
 export const PROVISION_STATUS = { SUCCESS: '1', PROTOCOL_ERROR: '2', SERVER_ERROR: '3' } as const;
 export const POLICY_STATUS = { SUCCESS: '1', NO_POLICY: '2', UNKNOWN_POLICY_TYPE: '3', WRONG_POLICY_KEY: '5' } as const;
 
-/** The (permissive) EAS provisioning document sent in phase 1. */
+/**
+ * The (permissive) EAS provisioning document sent in phase 1 — the same for 12.1 and 14.x:
+ * every element below exists since 12.1 ([MS-ASPROV]; 12.0-only elements are not used).
+ */
 function provisionDoc(): WbxmlElement {
   return el('EASProvisionDoc', undefined, [
     el('DevicePasswordEnabled', '0'),
@@ -47,25 +52,28 @@ function provisionDoc(): WbxmlElement {
  *    client's acknowledgement (`<RemoteWipe><Status>`) is recorded in `remoteWipeAckAt`.
  *    The device stays WIPED (all other commands refused, later Provisions wipe again)
  *    until an admin sets it back to OK.
- *  - Blocked / not approved device: Status 129.
- *  - settings:DeviceInformation in the request (14.1) → stored friendly name + its Status.
+ *  - Blocked / not approved device: Status 129 (14.0+); HTTP 403 for 12.1, which has no
+ *    global status codes.
+ *  - settings:DeviceInformation in the request (14.1+) → stored friendly name + its Status.
+ *  - A newly registered device remembers the negotiated protocol version.
  */
 export async function handleProvision(
   body: WbxmlElement,
   userId: string,
   deviceId: string,
   deviceType: string,
+  version: EasVersion = HIGHEST_EAS_VERSION,
 ): Promise<Buffer> {
   let device = await prisma.activeSyncDevice.findUnique({
     where: { userId_deviceId: { userId, deviceId } },
   });
   if (!device) {
     device = await prisma.activeSyncDevice.create({
-      data: { userId, deviceId, deviceType, status: 'OK' },
+      data: { userId, deviceId, deviceType, status: 'OK', protocolVersion: version },
     });
   }
 
-  const deviceInfo = getChild(body, 'DeviceInformation');
+  const deviceInfo = supports(version, 'provisionDeviceInformation') ? getChild(body, 'DeviceInformation') : undefined;
   const head: WbxmlElement[] = [];
   if (deviceInfo) {
     const friendly = getText(getChild(deviceInfo, 'Set') ?? deviceInfo, 'FriendlyName');
@@ -94,6 +102,9 @@ export async function handleProvision(
     return respond(PROVISION_STATUS.SUCCESS, [el('RemoteWipe')]);
   }
   if (device.status === 'BLOCKED' || device.status === 'PENDING') {
+    if (!supports(version, 'globalStatus')) {
+      throw new EasHttpError(httpStatusOf(EAS_GLOBAL_STATUS.DEVICE_BLOCKED), 'device blocked');
+    }
     return respond(EAS_GLOBAL_STATUS.DEVICE_BLOCKED);
   }
   if (wipeAck) return respond(PROVISION_STATUS.SUCCESS); // stale acknowledgement, nothing pending

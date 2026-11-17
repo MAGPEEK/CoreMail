@@ -862,6 +862,8 @@ model ActiveSyncDevice {
   // OK | PENDING (awaiting approval — refused) | BLOCKED (refused, Status 129)
   // | WIPED (remote wipe requested: Provision answers RemoteWipe, everything else Status 140)
   status          String   @default("OK")
+  // last negotiated MS-ASProtocolVersion (12.1 | 14.0 | 14.1); fallback for a request without one
+  protocolVersion String?
   lastSyncAt      DateTime?
   remoteWipeAt    DateTime?                // wipe requested by an admin
   remoteWipeAckAt DateTime?                // device acknowledged the wipe (Provision RemoteWipe Status)

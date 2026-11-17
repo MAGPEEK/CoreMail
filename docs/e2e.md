@@ -80,7 +80,14 @@ node scripts/e2e/run.mjs imap pop3       # single steps (state is kept in state.
 node --test scripts/e2e/repo-hygiene.test.mjs   # static regression checks (no stack needed)
 ```
 
-Steps: `setup users smtp imap pop3 jmap dav eas eas-body eas-commands rest webmail admin tls backup branding mfa live lockout restart storage schema-upgrade`.
+Steps: `setup users smtp imap pop3 jmap dav eas eas-body eas-commands eas-legacy rest webmail admin tls backup branding mfa live lockout restart storage schema-upgrade`.
+`eas-legacy`: OPTIONS announces `12.1,14.0,14.1` and an unannounced version (2.5) is served as 14.1
+(Status 142 in WBXML for the unprovisioned device); a 12.1
+device gets HTTP 449 without a policy key, provisions, syncs (no Email2 / 14.x tags in any
+response), sends a mail in the 12.1 query-string form (raw MIME, `SaveInSent=T`, empty 200) that
+reaches user A, and runs a FolderSync with a base64-encoded request line; a 14.0 device gets
+Status 142 in WBXML, provisions, syncs (Email2 ConversationId present), reads UserInformation in the
+EmailAddresses form and sends with ComposeMail WBXML. See [activesync.md](activesync.md).
 `schema-upgrade` builds a database from the 8.0.0 schema (`E2E_SCHEMA_BASE`, default `d5ad681`) and checks that schema-sync upgrades it, refuses duplicates and fails closed on a dropped column with data (`E2E_PG_CONTAINER` selects the PostgreSQL container).
 `webmail` (9.3): shared / delegated mailboxes in the mail view at API level — A lists the team
 mailbox in `GET /api/v1/user/accessible-mailboxes` (FULL_ACCESS + SEND_AS), hides and shows it

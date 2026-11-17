@@ -9,6 +9,7 @@
  * attachment must belong to the authenticated user's mailbox; anything else is
  * reported as "not found" (no existence oracle).
  * The response is always inline WBXML (no multipart, MS-ASAcceptMultiPart ignored).
+ * 12.1 uses the same operations; the fetched item follows the version's schema (body.ts).
  */
 import { prisma } from '@coremail/storage/prisma';
 import { expunge } from '@coremail/storage';
@@ -19,6 +20,7 @@ import {
   type EasMessage, type LoadRaw,
 } from './body.js';
 import { defaultLoadRaw } from './sync.js';
+import { HIGHEST_EAS_VERSION, type EasVersion } from '../protocol-version.js';
 
 // itemoperations:Status ([MS-ASCMD] 2.2.3.177.7)
 export const IO_STATUS = {
@@ -87,7 +89,9 @@ async function fetchAttachment(fetch: WbxmlElement, ref: string, userId: string,
   ]);
 }
 
-async function fetchItem(fetch: WbxmlElement, collectionId: string, serverId: string, userId: string, deps: ItemOperationsDeps): Promise<WbxmlElement> {
+async function fetchItem(
+  fetch: WbxmlElement, collectionId: string, serverId: string, userId: string, deps: ItemOperationsDeps, version: EasVersion,
+): Promise<WbxmlElement> {
   const ids = [pel(CP.AirSync, 'CollectionId', collectionId), pel(CP.AirSync, 'ServerId', serverId)];
   const fail = (status: string) => pel(CP.ItemOperations, 'Fetch', [pel(CP.ItemOperations, 'Status', status), ...ids]);
   const folder = await deps.findFolder(collectionId, userId);
@@ -98,7 +102,7 @@ async function fetchItem(fetch: WbxmlElement, collectionId: string, serverId: st
   const pref = chooseBodyPreference(parseBodyOptions(fetch) ?? { prefs: [{ type: 1, allOrNone: false }], mimeSupport: 0 }, msg);
   let props: WbxmlElement[];
   try {
-    props = await buildEmailProperties(msg, pref, deps.loadRaw);
+    props = await buildEmailProperties(msg, pref, deps.loadRaw, version);
   } catch (err) {
     deps.warn?.('EAS ItemOperations message source not readable', err);
     return fail(IO_STATUS.ServerError);
@@ -123,7 +127,9 @@ async function emptyFolderContents(op: WbxmlElement, userId: string, deps: ItemO
   return out(IO_STATUS.Success);
 }
 
-export async function handleItemOperations(body: WbxmlElement, userId: string, deps: ItemOperationsDeps): Promise<Buffer> {
+export async function handleItemOperations(
+  body: WbxmlElement, userId: string, deps: ItemOperationsDeps, version: EasVersion = HIGHEST_EAS_VERSION,
+): Promise<Buffer> {
   if (body.name !== 'ItemOperations') {
     return encodeWbxml(pel(CP.ItemOperations, 'ItemOperations', [pel(CP.ItemOperations, 'Status', IO_STATUS.ProtocolError)]));
   }
@@ -139,7 +145,7 @@ export async function handleItemOperations(body: WbxmlElement, userId: string, d
       } else if (ref) {
         results.push(await fetchAttachment(op, ref, userId, deps));
       } else if (collectionId && serverId) {
-        results.push(await fetchItem(op, collectionId, serverId, userId, deps));
+        results.push(await fetchItem(op, collectionId, serverId, userId, deps, version));
       } else {
         // LongId (Search results) and document library links are not supported
         results.push(pel(CP.ItemOperations, 'Fetch', [pel(CP.ItemOperations, 'Status', IO_STATUS.ProtocolError)]));

@@ -33,6 +33,18 @@ test('the new 14.1 commands are advertised', () => {
   for (const c of ['Settings', 'Search', 'MoveItems', 'MeetingResponse', 'ResolveRecipients', 'GetItemEstimate', 'ItemOperations']) assert.ok(EAS_COMMANDS.includes(c), c);
 });
 
+test('OPTIONS announces every implemented protocol version (12.1, 14.0, 14.1)', () => {
+  assert.match(server, /res\.setHeader\('MS-ASProtocolVersions', EAS_VERSIONS\.join\(','\)\)/);
+  assert.doesNotMatch(server, /'14\.0,14\.1'/);
+});
+
+test('12.1 compose commands take a MIME body (no WBXML decode), every other command WBXML', () => {
+  for (const c of ['SendMail', 'SmartReply', 'SmartForward']) {
+    assert.match(dispatcher, new RegExp(`^ {2}${c}: \\{ needsBody: true, mimeBody: legacyCompose, run: compose\\('${c}'\\) \\}`, 'm'), c);
+  }
+  assert.equal([...dispatcher.matchAll(/mimeBody:/g)].length, 3);
+});
+
 test('the dispatcher has no empty-200 stub left', () => {
   assert.deepEqual(stubs, []);
   assert.ok(!/Return empty success/.test(dispatcher), 'empty-success stub must not come back');

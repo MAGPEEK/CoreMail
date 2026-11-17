@@ -4,10 +4,12 @@
  * Each <To> (name or address) is looked up in the caller's GAL (users + Shared
  * Mailboxes of the caller's domain, Type 1) and personal contacts (Type 2).
  * Options are answered minimally: Certificates → Status 7 (no certificate
- * returned), Availability → Status 163 (free/busy not provided), Picture ignored.
+ * returned), Availability → Status 163 (free/busy not provided; 14.0+, never sent to
+ * 12.1), Picture ignored.
  */
 import { encodeWbxml, el, getChild, getText, type WbxmlElement } from '../wbxml.js';
 import { searchContacts, searchGal, type DirectoryEntry } from './directory.js';
+import { HIGHEST_EAS_VERSION, supports, type EasVersion } from '../protocol-version.js';
 
 export const RESOLVE_STATUS = {
   SUCCESS: '1',
@@ -55,7 +57,9 @@ function recipient(e: DirectoryEntry, opts: { certificates: boolean; availabilit
   ]);
 }
 
-export async function handleResolveRecipients(body: WbxmlElement, userId: string): Promise<Buffer> {
+export async function handleResolveRecipients(
+  body: WbxmlElement, userId: string, version: EasVersion = HIGHEST_EAS_VERSION,
+): Promise<Buffer> {
   const tos = kids(body).filter((c) => c.name === 'To').map((c) => c.text ?? '').filter((t) => t.trim());
   if (body.name !== 'ResolveRecipients' || tos.length === 0 || tos.length > MAX_TO) {
     return encodeWbxml(el('ResolveRecipients', undefined, [el('Status', RESOLVE_STATUS.PROTOCOL_ERROR)]));
@@ -64,7 +68,7 @@ export async function handleResolveRecipients(body: WbxmlElement, userId: string
   const certRetrieval = options ? getText(options, 'CertificateRetrieval') : '';
   const opts = {
     certificates: certRetrieval === '2' || certRetrieval === '3',
-    availability: !!(options && getChild(options, 'Availability')),
+    availability: supports(version, 'recipientAvailability') && !!(options && getChild(options, 'Availability')),
   };
   const maxAmbiguous = Math.max(0, Math.min(Number(options ? getText(options, 'MaxAmbiguousRecipients') || DEFAULT_MAX_AMBIGUOUS : DEFAULT_MAX_AMBIGUOUS) || 0, 100));
 
