@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { computeOverflow, nextRovingIndex } from './toolbarNav.ts';
+import { computeOverflow, menuKeyIntent, nextRovingIndex } from './toolbarNav.ts';
 
 test('roving focus: arrows wrap, Home/End jump, other keys are ignored', () => {
   assert.equal(nextRovingIndex(0, 'ArrowRight', 4, 'horizontal'), 1);
@@ -43,4 +43,20 @@ test('overflow: pinned commands stay visible, forced ones always go to the menu'
   assert.deepEqual(mixed, [true, true, false, true], '240 − 32 − 100 = 108 → both autos fit, the forced one is not a cut');
   const tight = computeOverflow({ widths: [100, 50, 50, 50], placements: ['pinned', 'auto', 'overflow', 'auto'], available: 200, overflowButtonWidth: 32 });
   assert.deepEqual(tight, [true, true, false, false], '68 left → one auto fits');
+});
+
+test('menu keys: arrows move, → opens a submenu, ← / Escape leave it, Escape / Tab close the menu', () => {
+  const top = { current: 1, count: 3, canOpen: false, isSubmenu: false };
+  const sub = { ...top, isSubmenu: true };
+  assert.deepEqual(menuKeyIntent('ArrowDown', top), { kind: 'move', index: 2 });
+  assert.deepEqual(menuKeyIntent('ArrowUp', { ...top, current: 0 }), { kind: 'move', index: 2 }, 'wraps');
+  assert.deepEqual(menuKeyIntent('End', top), { kind: 'move', index: 2 });
+  assert.deepEqual(menuKeyIntent('ArrowRight', { ...top, canOpen: true }), { kind: 'open' });
+  assert.equal(menuKeyIntent('ArrowRight', top), null, 'no submenu → nothing');
+  assert.equal(menuKeyIntent('ArrowLeft', top), null, 'top level has no parent');
+  assert.deepEqual(menuKeyIntent('ArrowLeft', sub), { kind: 'back' });
+  assert.deepEqual(menuKeyIntent('Escape', sub), { kind: 'back' }, 'Escape in a submenu closes only the submenu');
+  assert.deepEqual(menuKeyIntent('Escape', top), { kind: 'close' });
+  assert.deepEqual(menuKeyIntent('Tab', sub), { kind: 'close' }, 'Tab leaves every level');
+  assert.equal(menuKeyIntent('e', top), null);
 });

@@ -8,7 +8,8 @@
  *   widths come from an invisible, inert copy of the bar.
  * - A command with `menu` opens a dropdown; with `onClick` and `menu` it is a split
  *   button. Menus are ContextMenus with arrow-key navigation; focus returns to the
- *   button when a menu closes without moving focus elsewhere.
+ *   button when a menu closes (before the chosen command runs, so a dialog it opens
+ *   hands focus back to the button too), unless focus already moved elsewhere.
  */
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { ChevronDown, MoreHorizontal } from 'lucide-react';
@@ -301,13 +302,12 @@ export function CommandBar({ label, groups, variant = 'inline', end, className =
   };
   const closeMenu = () => {
     const trigger = menu?.trigger;
-    if (trigger) lastClosed.current = { trigger, at: performance.now() };
     setMenu(null);
-    // Back to the button unless the chosen command moved focus (e.g. into a dialog)
-    requestAnimationFrame(() => {
-      const active = document.activeElement;
-      if (trigger?.isConnected && (!active || active === document.body)) trigger.focus();
-    });
+    if (!trigger) return;
+    lastClosed.current = { trigger, at: performance.now() };
+    const active = document.activeElement;
+    const inMenuOrNowhere = !active || active === document.body || !!active.closest('[data-coremail-contextmenu]');
+    if (trigger.isConnected && inMenuOrNowhere) trigger.focus();
   };
   const openOverflow = (trigger: HTMLElement) => {
     const anchor = () => trigger.getBoundingClientRect();

@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { nextRovingIndex } from '../lib/toolbarNav.js';
+import { menuKeyIntent } from '../lib/toolbarNav.js';
 
 export interface ContextMenuItem {
   label?: string;
@@ -30,7 +30,7 @@ export interface ContextMenuProps {
   onClose: () => void;
   /** Focus the first item when the menu opens (menus opened from a button or by keyboard). */
   autoFocus?: boolean;
-  /** Submenu only: ArrowLeft closes it and returns focus to its parent item. */
+  /** Submenu only: ArrowLeft / Escape close it and return focus to its parent item. */
   onBack?: () => void;
 }
 
@@ -40,6 +40,7 @@ export function ContextMenu({ x, y, items, onClose, autoFocus = false, onBack }:
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ x, y });
   const [submenuFor, setSubmenuFor] = useState<{ index: number; rect: DOMRect; focus: boolean } | null>(null);
+  const isSubmenu = !!onBack;
 
   // Auto-reposition when overflowing the viewport
   useLayoutEffect(() => {
@@ -52,7 +53,11 @@ export function ContextMenu({ x, y, items, onClose, autoFocus = false, onBack }:
     if (nx !== x || ny !== y) setPos({ x: Math.max(8, nx), y: Math.max(8, ny) });
   }, [x, y]);
 
+  // Outside click / Escape while focus is outside the menu (mouse use). Only the
+  // top-level menu listens — a submenu shares its onClose, and keys inside a menu
+  // are handled by onMenuKeyDown.
   useEffect(() => {
+    if (isSubmenu) return;
     const onDown = (e: MouseEvent) => {
       // Do NOT treat clicks INSIDE a ContextMenu (including submenus rendered
       // as their own portal) as outside clicks.
@@ -69,34 +74,40 @@ export function ContextMenu({ x, y, items, onClose, autoFocus = false, onBack }:
       document.removeEventListener('mousedown', onDown);
       document.removeEventListener('keydown', onKey);
     };
-  }, [onClose]);
+  }, [onClose, isSubmenu]);
 
   useEffect(() => {
     if (autoFocus) ref.current?.querySelector<HTMLElement>(ITEM_SELECTOR)?.focus();
   }, [autoFocus]);
 
-  /** Arrow keys move between the items, ArrowRight opens a submenu, ArrowLeft leaves it. */
+  /** Keyboard model: lib/toolbarNav.ts menuKeyIntent. */
   const onMenuKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     // Submenus are portals: their key events also bubble through this menu's React tree
     const menu = ref.current;
     if (!menu || !menu.contains(e.target as Node)) return;
+    // Keys pressed in a menu never reach the page's shortcuts (e.g. "e" = archive)
+    e.stopPropagation();
     const els = Array.from(menu.querySelectorAll<HTMLElement>(ITEM_SELECTOR));
     const focused = document.activeElement as HTMLElement | null;
-    const next = nextRovingIndex(els.indexOf(focused as HTMLElement), e.key, els.length, 'vertical');
-    if (next !== null) {
-      e.preventDefault();
-      setSubmenuFor(null);
-      els[next]?.focus();
-      return;
-    }
     const index = Number(focused?.dataset.menuindex ?? -1);
     const item = items[index];
-    if (e.key === 'ArrowRight' && focused && item?.children?.length && !item.disabled) {
-      e.preventDefault();
+    const intent = menuKeyIntent(e.key, {
+      current: focused ? els.indexOf(focused) : -1,
+      count: els.length,
+      canOpen: !!(item?.children?.length && !item.disabled),
+      isSubmenu,
+    });
+    if (!intent) return;
+    e.preventDefault();
+    if (intent.kind === 'move') {
+      setSubmenuFor(null);
+      els[intent.index]?.focus();
+    } else if (intent.kind === 'open' && focused) {
       setSubmenuFor({ index, rect: focused.getBoundingClientRect(), focus: true });
-    } else if (e.key === 'ArrowLeft' && onBack) {
-      e.preventDefault();
-      onBack();
+    } else if (intent.kind === 'back') {
+      onBack?.();
+    } else if (intent.kind === 'close') {
+      onClose();
     }
   };
 
@@ -169,8 +180,10 @@ export function ContextMenu({ x, y, items, onClose, autoFocus = false, onBack }:
                   setSubmenuFor({ index: i, rect: e.currentTarget.getBoundingClientRect(), focus: e.detail === 0 });
                   return;
                 }
-                item.onClick?.();
+                // Close first: a menu opened from a button gives focus back to it before the
+                // command runs, so a dialog the command opens returns focus there too
                 onClose();
+                item.onClick?.();
               }}
               className={`w-full flex items-center gap-2.5 px-3 py-1.5 text-left transition-colors focus-visible:outline-offset-[-2px] ${
                 item.disabled

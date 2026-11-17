@@ -1,5 +1,5 @@
 /**
- * Keyboard + layout logic of toolbars (command bar, app rail). No imports —
+ * Keyboard + layout logic of toolbars (command bar, app rail) and their menus. No imports —
  * unit-tested with `node --test`.
  *
  * Roving focus follows the WAI-ARIA APG toolbar pattern: one tab stop, the arrow
@@ -70,4 +70,40 @@ export function computeOverflow({ widths, placements, available, overflowButtonW
     cut = true;
     return false;
   });
+}
+
+/** What a key does inside a menu (ContextMenu, the command bar's dropdowns). */
+export type MenuKeyIntent =
+  | { kind: 'move'; index: number }
+  /** ArrowRight on an entry with a submenu: open it and focus its first entry */
+  | { kind: 'open' }
+  /** Submenu: ArrowLeft / Escape close only the submenu, focus goes back to its parent entry */
+  | { kind: 'back' }
+  /** Escape (top level) or Tab (any level): close the whole menu, focus returns to its button */
+  | { kind: 'close' };
+
+export interface MenuKeyContext {
+  /** Index of the focused entry (−1 = none) and the number of entries. */
+  current: number;
+  count: number;
+  /** The focused entry opens a submenu (and is not disabled). */
+  canOpen: boolean;
+  /** This menu is a submenu. */
+  isSubmenu: boolean;
+}
+
+/**
+ * Menu keyboard model (WAI-ARIA APG menu): ↑/↓ wrap, Home/End jump, → opens a
+ * submenu, ← and Escape leave a submenu, Escape closes the top-level menu, Tab closes
+ * every level. null = the key is not a menu key (it must not reach the page's
+ * shortcuts either — the menu swallows it).
+ */
+export function menuKeyIntent(key: string, ctx: MenuKeyContext): MenuKeyIntent | null {
+  const next = nextRovingIndex(ctx.current, key, ctx.count, 'vertical');
+  if (next !== null) return { kind: 'move', index: next };
+  if (key === 'ArrowRight') return ctx.canOpen ? { kind: 'open' } : null;
+  if (key === 'ArrowLeft') return ctx.isSubmenu ? { kind: 'back' } : null;
+  if (key === 'Escape') return ctx.isSubmenu ? { kind: 'back' } : { kind: 'close' };
+  if (key === 'Tab') return { kind: 'close' };
+  return null;
 }
