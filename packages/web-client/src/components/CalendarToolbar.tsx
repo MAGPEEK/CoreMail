@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Plus, Calendar as CalDay, Briefcase, CalendarRange, LayoutGrid,
   Columns3, Filter, Share2, Printer, X,
@@ -41,7 +41,19 @@ interface Props {
 export function CalendarToolbar({
   view, onChangeView, onNewEvent, onPrint, onShare, filters, onFiltersChange,
 }: Props) {
-  const [filterOpen, setFilterOpen] = useState<{ x: number; y: number } | null>(null);
+  const [filterOpen, setFilterOpen] = useState<{ x: number; y: number; trigger: HTMLElement } | null>(null);
+  const filterRef = useRef<HTMLDivElement>(null);
+  const filterIsOpen = filterOpen !== null;
+
+  // The filter popover takes focus when it opens and gives it back to its button
+  useEffect(() => {
+    if (filterIsOpen) filterRef.current?.querySelector<HTMLElement>('button')?.focus();
+  }, [filterIsOpen]);
+  const closeFilter = () => {
+    const trigger = filterOpen?.trigger;
+    setFilterOpen(null);
+    if (trigger?.isConnected) trigger.focus();
+  };
 
   const filterCount = (Object.keys(FILTER_DEFAULT) as FilterKey[])
     .filter((k) => filters[k] !== FILTER_DEFAULT[k]).length;
@@ -79,7 +91,11 @@ export function CalendarToolbar({
       label: filterCount > 0 ? 'Filter angewendet' : 'Filter',
       icon: <Filter size={20} className={filterCount > 0 ? 'text-accent-fg' : ''} />,
       pressed: filterCount > 0,
-      onClick: (r) => setFilterOpen({ x: Math.max(8, r.right - 340), y: r.bottom + 4 }),
+      dialogOpen: filterIsOpen,
+      onClick: (trigger) => {
+        const r = trigger.getBoundingClientRect();
+        setFilterOpen({ x: Math.max(8, r.right - 340), y: r.bottom + 4, trigger });
+      },
     }] },
     { id: 'share', title: 'Teilen', items: [
       { id: 'share', label: 'Kalender teilen', icon: <Share2 size={20} />, ...(onShare ? { onClick: onShare } : { disabled: true }) },
@@ -93,14 +109,18 @@ export function CalendarToolbar({
 
       {filterOpen && (
         <>
-          <div className="fixed inset-0 z-[90]" onClick={() => setFilterOpen(null)} />
+          <div className="fixed inset-0 z-[90]" onClick={closeFilter} />
           <div
+            ref={filterRef}
+            role="dialog"
+            aria-label="Filter"
+            onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeFilter(); } }}
             className="fixed z-[95] w-[340px] bg-surface border border-line rounded-md shadow-xl py-1 animate-fly-in"
             style={{ left: filterOpen.x, top: filterOpen.y }}
             data-coremail-contextmenu
           >
             <button
-              onClick={() => { resetFilters(); setFilterOpen(null); }}
+              onClick={() => { resetFilters(); closeFilter(); }}
               className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-fg-muted hover:bg-surface-2 transition-colors"
             >
               <X size={14} className="text-fg-subtle" />

@@ -20,13 +20,15 @@ export interface CommandItem {
   id: string;
   label: string;
   icon?: ReactNode;
-  /** Main action; gets the button's rect (to anchor an own popover). */
-  onClick?: (anchor: DOMRect) => void;
+  /** Main action; gets the button (to anchor an own popover and give focus back to it). */
+  onClick?: (anchor: HTMLElement) => void;
   /** Dropdown entries, built when opened. Together with onClick → split button. */
   menu?: () => ContextMenuItem[];
   disabled?: boolean;
   /** Tooltip: the full action, or why the command is disabled. */
   tooltip?: string;
+  /** onClick opens a popover dialog of its own: aria-haspopup="dialog" + aria-expanded. */
+  dialogOpen?: boolean;
   /** Toggle state (aria-pressed); undefined = not a toggle. */
   pressed?: boolean;
   keyshortcuts?: string | undefined;
@@ -145,10 +147,11 @@ function CommandButton({ item, variant, measure = false, tabStop, openKey, descI
       {...(item.pressed !== undefined ? { 'aria-pressed': item.pressed } : {})}
       {...(item.keyshortcuts ? { 'aria-keyshortcuts': item.keyshortcuts } : {})}
       {...(dropdownOnly ? { 'aria-haspopup': 'menu' as const, 'aria-expanded': openKey === item.id } : {})}
+      {...(!dropdownOnly && item.dialogOpen !== undefined ? { 'aria-haspopup': 'dialog' as const, 'aria-expanded': item.dialogOpen } : {})}
       onClick={measure ? undefined : (e) => {
         if (item.disabled) return;
         if (dropdownOnly) openMenu(e.currentTarget);
-        else item.onClick?.(e.currentTarget.getBoundingClientRect());
+        else item.onClick?.(e.currentTarget);
       }}
       className={`${shape.main} ${common} ${split ? 'rounded-r-none' : ''}`}
     >
@@ -216,7 +219,7 @@ function GroupBox({ group, variant, first, children }: { group: CommandGroup; va
 }
 
 /** An overflowed command as a "…" menu entry (split buttons: main action first). */
-function toMenuItem(item: CommandItem, anchor: () => DOMRect): ContextMenuItem {
+function toMenuItem(item: CommandItem, anchor: () => HTMLElement): ContextMenuItem {
   const icon = item.icon ? <span className="inline-flex [&>svg]:size-4">{item.icon}</span> : undefined;
   const sub = item.menu?.();
   const children = sub && item.onClick
@@ -310,7 +313,7 @@ export function CommandBar({ label, groups, variant = 'inline', end, className =
     if (trigger.isConnected && inMenuOrNowhere) trigger.focus();
   };
   const openOverflow = (trigger: HTMLElement) => {
-    const anchor = () => trigger.getBoundingClientRect();
+    const anchor = () => trigger;
     const items = overflowGroups.flatMap((g, gi) => [
       ...(gi > 0 ? [{ type: 'divider' as const }] : []),
       ...g.items.map((i) => toMenuItem(i, anchor)),

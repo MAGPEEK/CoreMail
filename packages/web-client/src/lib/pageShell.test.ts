@@ -38,3 +38,11 @@ test('"Neue E-Mail" has one entry: the command bar split button (+ the n / c sho
   assert.match(bar, /keyshortcuts: ariaKeys\('compose\.new'\)/);
   assert.match(bar, /onClick: \(\) => openCompose\(\), menu: newMenu/);
 });
+
+test('calendar filter popover: a labelled dialog that takes focus, closes on Escape, returns focus', () => {
+  const src = read('components/CalendarToolbar.tsx');
+  assert.match(src, /role="dialog"\s+aria-label="Filter"/);
+  assert.match(src, /e\.key === 'Escape'[^\n]*closeFilter\(\)/);
+  assert.match(src, /trigger\.focus\(\)/);
+  assert.match(src, /dialogOpen: filterIsOpen/, 'button exposes aria-haspopup="dialog" + aria-expanded');
+});
