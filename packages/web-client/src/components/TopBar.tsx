@@ -8,6 +8,7 @@ import { logoutWithDraftFlush } from '../lib/compose-flush.js';
 import { Avatar } from './Avatar.js';
 import { OpenSharedMailboxModal } from './OpenSharedMailboxModal.js';
 import { SearchOperatorsHelp } from './SearchOperatorsHelp.js';
+import { insertSearchToken } from '../lib/searchInput.js';
 import { GLOBAL_SEARCH_INPUT_ID } from '../hooks/useGlobalShortcuts.js';
 import { BrandLogo } from './BrandLogo.js';
 import { useBranding } from '../hooks/useBranding.js';
@@ -38,18 +39,7 @@ export function TopBar({ onSearch }: Props) {
     onSearch(search);
   };
 
-  /** Search operators help: append the operator and keep typing in the field. */
-  const insertOperator = (token: string) => {
-    const base = search.trim();
-    setSearch(base ? `${base} ${token}` : token);
-    requestAnimationFrame(() => {
-      const el = inputRef.current;
-      if (!el) return;
-      el.focus();
-      const pos = token === '""' ? el.value.length - 1 : el.value.length;
-      el.setSelectionRange(pos, pos);
-    });
-  };
+  const insertOperator = (token: string) => insertSearchToken(search, token, setSearch, () => inputRef.current);
 
   return (
     // Brand and actions share the free space equally (flex 1 1 0) → the search stays centred;

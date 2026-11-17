@@ -22,13 +22,13 @@ const OPERATORS: { example: string; insert: string; label: TranslationKey }[] = 
   { example: '-newsletter', insert: '-', label: 'search_op_negate' },
 ];
 
-/** "?" button next to the search field with a popover listing the operators. */
 const BUTTON_TONE = {
   surface: 'text-fg-subtle hover:text-accent-fg hover:bg-surface-2',
   /** On the branded header (bg-header) */
   header: 'text-header-fg hover:bg-header-overlay/20 focus-visible:outline-header-fg',
 } as const;
 
+/** "?" button next to the search field with a popover listing the operators. */
 export function SearchOperatorsHelp({ onInsert, tone = 'surface' }: {
   onInsert: (token: string) => void;
   tone?: keyof typeof BUTTON_TONE;
