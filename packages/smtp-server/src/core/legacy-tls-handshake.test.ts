@@ -133,12 +133,26 @@ describe('implicit TLS listener (createSmtpServer)', () => {
     assert.equal((await handshake({ port, host: '127.0.0.1' }, 'TLSv1.3')).protocol, 'TLSv1.3');
   });
 
-  test('legacy: clients offering only RC4 / 3DES / NULL suites are refused', async () => {
+  test('legacy: clients offering only weak suites are refused by the server', async () => {
     const port = await implicitPort(true);
-    for (const weak of ['DES-CBC3-SHA:@SECLEVEL=0', 'RC4-SHA:@SECLEVEL=0', 'NULL-SHA:@SECLEVEL=0', 'EXP-RC4-MD5:@SECLEVEL=0']) {
-      const r = await handshake({ port, host: '127.0.0.1' }, 'TLSv1', weak);
-      assert.equal(r.ok, false, weak);
+    // Only suites the linked OpenSSL can offer prove a server-side refusal
+    // (3DES / RC4 / EXPORT are compiled out of OpenSSL 3 builds — a client
+    // that cannot build the list fails on its own).
+    const offerable = (suite: string): boolean => {
+      try { tls.createSecureContext({ ciphers: `${suite}:@SECLEVEL=0`, minVersion: 'TLSv1' }); return true; } catch { return false; }
+    };
+    const candidates = ['NULL-SHA', 'ADH-AES128-SHA', 'AECDH-AES128-SHA', 'DHE-RSA-AES128-SHA', 'CAMELLIA128-SHA', 'DES-CBC3-SHA', 'RC4-SHA', 'EXP-RC4-MD5'];
+    const weak = candidates.filter(offerable);
+    assert.ok(weak.length >= 3, `at least three weak suites must be offerable to make this test meaningful (got ${weak.join(', ')})`);
+    for (const suite of weak) {
+      for (const v of ['TLSv1', 'TLSv1.2'] as const) {
+        const r = await handshake({ port, host: '127.0.0.1' }, v, `${suite}:@SECLEVEL=0`);
+        assert.equal(r.ok, false, `${suite} over ${v}`);
+      }
     }
+    // a client offering a weak suite first still gets a vetted one
+    const mixed = await handshake({ port, host: '127.0.0.1' }, 'TLSv1', `${weak[0]}:ECDHE-RSA-AES128-SHA:@SECLEVEL=0`);
+    assert.equal(mixed.cipher, 'ECDHE-RSA-AES128-SHA');
     // the plain-RSA AES fallback (no ECDHE) still works for very old stacks
     assert.equal((await handshake({ port, host: '127.0.0.1' }, 'TLSv1', 'AES128-SHA:@SECLEVEL=0')).cipher, 'AES128-SHA');
   });
