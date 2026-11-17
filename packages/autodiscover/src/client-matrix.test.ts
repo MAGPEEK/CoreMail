@@ -63,7 +63,7 @@ storage.configureMailAuth({
   limits: { accountMaxFailures: 1000, ipMaxFailures: 1000 },
 });
 const { createAutodiscoverApp } = await import('./app.js');
-const { NS_OUTLOOK, NS_MOBILESYNC, plainHttpRedirectTarget } = await import('./v1.js');
+const { NS_OUTLOOK, NS_MOBILESYNC, plainHttpRedirectTarget, isPlainHttpProbe } = await import('./v1.js');
 const settings = await import('./settings.js');
 
 const server = createAutodiscoverApp().listen(0, '127.0.0.1');
@@ -212,9 +212,11 @@ describe('authentication never discloses accounts', () => {
 });
 
 describe('HTTP redirect method (plain HTTP probe)', () => {
-  test('unauthenticated GET over plain HTTP → 302 to the HTTPS endpoint, never a Basic challenge', async () => {
+  const OUTLOOK_2010 = 'Microsoft Office/14.0 (Windows NT 6.1; Microsoft Outlook 14.0.7268; Pro)';
+
+  test('unauthenticated GET over verified plain HTTP → 302 to the HTTPS endpoint, never a Basic challenge', async () => {
     const res = await fetch(`${base}/autodiscover/autodiscover.xml`, {
-      headers: { 'X-Forwarded-Proto': 'http', 'User-Agent': 'Microsoft Office/14.0 (Windows NT 6.1; Microsoft Outlook 14.0.7268; Pro)' },
+      headers: { 'X-Forwarded-Proto': 'http', 'X-CoreMail-Proto-Verified': '1', 'User-Agent': OUTLOOK_2010 },
       redirect: 'manual',
     });
     assert.equal(res.status, 302);
@@ -222,12 +224,24 @@ describe('HTTP redirect method (plain HTTP probe)', () => {
     assert.equal(res.headers.get('www-authenticate'), null);
   });
 
+  test('scheme not verified (reverse proxy without TRUST_PROXY): no redirect — it would loop for HTTPS clients', async () => {
+    const res = await fetch(`${base}/autodiscover/autodiscover.xml`, {
+      headers: { 'X-Forwarded-Proto': 'http', 'User-Agent': OUTLOOK_2010 },
+      redirect: 'manual',
+    });
+    assert.equal(res.status, 401);
+  });
+
   test('HTTPS and POST requests are not redirected', async () => {
-    const tlsGet = await fetch(`${base}/autodiscover/autodiscover.xml`, { headers: { 'X-Forwarded-Proto': 'https' }, redirect: 'manual' });
+    const tlsGet = await fetch(`${base}/autodiscover/autodiscover.xml`, { headers: { 'X-Forwarded-Proto': 'https', 'X-CoreMail-Proto-Verified': '1' }, redirect: 'manual' });
     assert.equal(tlsGet.status, 401);
-    assert.equal(plainHttpRedirectTarget({ method: 'POST', forwardedProto: 'http', hasAuthorization: false, autodiscoverBase: 'https://a.example.com' }), null);
-    assert.equal(plainHttpRedirectTarget({ method: 'GET', forwardedProto: 'http', hasAuthorization: false, autodiscoverBase: 'http://a.example.com' }), null, 'no HTTPS endpoint');
-    assert.equal(plainHttpRedirectTarget({ method: 'GET', forwardedProto: 'http', hasAuthorization: false, autodiscoverBase: 'https://a.example.com/' }), 'https://a.example.com/Autodiscover/Autodiscover.xml');
+    const probe = { method: 'GET', forwardedProto: 'http', protoVerified: true, hasAuthorization: false };
+    assert.equal(isPlainHttpProbe(probe), true);
+    assert.equal(isPlainHttpProbe({ ...probe, method: 'POST' }), false);
+    assert.equal(isPlainHttpProbe({ ...probe, hasAuthorization: true }), false);
+    assert.equal(isPlainHttpProbe({ ...probe, protoVerified: false }), false);
+    assert.equal(plainHttpRedirectTarget('http://a.example.com'), null, 'no HTTPS endpoint');
+    assert.equal(plainHttpRedirectTarget('https://a.example.com/'), 'https://a.example.com/Autodiscover/Autodiscover.xml');
   });
 });
 

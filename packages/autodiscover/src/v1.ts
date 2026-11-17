@@ -1,5 +1,5 @@
 import type { Request, Response } from 'express';
-import { createLogger } from '@coremail/core';
+import { createLogger, PROTO_VERIFIED_HEADER } from '@coremail/core';
 import { prisma, verifyMailCredentials, clientIpFromRequest, type MailAuthUser } from '@coremail/storage';
 import { getServerConfig, ServerConfigUnavailableError, type ServerConfig } from './settings.js';
 import { SMTPS_PORT } from './v2.js';
@@ -80,19 +80,27 @@ export function imapEncryption(cfg: Pick<ServerConfig, 'imapSsl'>): 'SSL' | 'TLS
 }
 
 /**
- * MS-OXDSCLI "HTTP redirect method": an unauthenticated GET that reached us over
- * plain HTTP (the gateway sets X-Forwarded-Proto) is answered with a 302 to the
- * HTTPS Autodiscover endpoint — never with a Basic challenge, which would invite
- * the client to send the password in clear text. Returns the target, or null
- * when the request is not such a probe or no HTTPS endpoint is configured.
+ * Pure: an unauthenticated GET/HEAD that verifiably reached us over plain HTTP.
+ * The gateway sets X-Forwarded-Proto and, only when that scheme is known,
+ * X-CoreMail-Proto-Verified: behind a reverse proxy without TRUST_PROXY the
+ * scheme is a guess ("http" also for HTTPS clients) and a redirect would loop.
  */
-export function plainHttpRedirectTarget(r: {
-  method: string; forwardedProto: string | undefined; hasAuthorization: boolean; autodiscoverBase: string;
-}): string | null {
-  if (r.method !== 'GET' && r.method !== 'HEAD') return null;
-  if (r.hasAuthorization || r.forwardedProto?.toLowerCase() !== 'http') return null;
-  if (!/^https:\/\//i.test(r.autodiscoverBase)) return null;
-  return `${r.autodiscoverBase.replace(/\/+$/, '')}/Autodiscover/Autodiscover.xml`;
+export function isPlainHttpProbe(r: {
+  method: string; forwardedProto: string | undefined; protoVerified: boolean; hasAuthorization: boolean;
+}): boolean {
+  return (r.method === 'GET' || r.method === 'HEAD') && !r.hasAuthorization
+    && r.protoVerified && r.forwardedProto?.toLowerCase() === 'http';
+}
+
+/**
+ * MS-OXDSCLI "HTTP redirect method": a plain-HTTP probe (isPlainHttpProbe) is
+ * answered with a 302 to the HTTPS Autodiscover endpoint — never with a Basic
+ * challenge, which would invite the client to send the password in clear
+ * text. Null when no HTTPS endpoint is configured.
+ */
+export function plainHttpRedirectTarget(autodiscoverBase: string): string | null {
+  if (!/^https:\/\//i.test(autodiscoverBase)) return null;
+  return `${autodiscoverBase.replace(/\/+$/, '')}/Autodiscover/Autodiscover.xml`;
 }
 
 function sendChallenge(res: Response): void {
@@ -230,20 +238,21 @@ async function isOwnAddress(user: MailAuthUser, email: string): Promise<boolean>
   return alias !== null;
 }
 
-async function redirectTargetForPlainHttp(req: Request): Promise<string | null> {
-  let cfg: ServerConfig;
+/** HTTPS target for a plain-HTTP probe, or null (not a probe / no HTTPS endpoint / settings unreadable). */
+async function redirectTargetForPlainHttp(req: Request, hasAuthorization: boolean): Promise<string | null> {
+  const probe = isPlainHttpProbe({
+    method: req.method,
+    forwardedProto: req.get('X-Forwarded-Proto'),
+    protoVerified: req.get(PROTO_VERIFIED_HEADER) === '1',
+    hasAuthorization,
+  });
+  if (!probe) return null;
   try {
-    cfg = await getServerConfig();
+    return plainHttpRedirectTarget((await getServerConfig()).autodiscoverBase);
   } catch (err) {
     if (!(err instanceof ServerConfigUnavailableError)) throw err;
     return null;
   }
-  return plainHttpRedirectTarget({
-    method: req.method,
-    forwardedProto: req.get('X-Forwarded-Proto'),
-    hasAuthorization: false,
-    autodiscoverBase: cfg.autodiscoverBase,
-  });
 }
 
 export async function handleAutodiscoverV1(req: Request, res: Response): Promise<void> {
@@ -252,14 +261,12 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
   const authHeader = req.get('Authorization') ?? '';
   // v5.2.15: the scheme is case-insensitive (RFC 7235 §2.1) — some Outlook builds send `basic`.
   const scheme = authHeader.split(' ')[0]?.toLowerCase() ?? '';
-  if (!authHeader && req.get('X-Forwarded-Proto')?.toLowerCase() === 'http' && (req.method === 'GET' || req.method === 'HEAD')) {
-    const target = await redirectTargetForPlainHttp(req);
-    if (target) {
-      log.debug({ method: req.method }, 'Autodiscover v1: plain HTTP probe → 302 to HTTPS');
-      res.set('Cache-Control', 'no-store');
-      res.redirect(302, target);
-      return;
-    }
+  const httpsTarget = await redirectTargetForPlainHttp(req, authHeader !== '');
+  if (httpsTarget) {
+    log.debug({ method: req.method }, 'Autodiscover v1: plain HTTP probe → 302 to HTTPS');
+    res.set('Cache-Control', 'no-store');
+    res.redirect(302, httpsTarget);
+    return;
   }
   if (scheme !== 'basic') {
     // No header, Negotiate/NTLM, Bearer (Outlook Modern Auth tokens we cannot

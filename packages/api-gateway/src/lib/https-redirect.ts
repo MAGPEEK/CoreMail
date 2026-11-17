@@ -29,6 +29,7 @@
  */
 import type { Request, Response, NextFunction } from 'express';
 import { createLogger, isLoopbackAddress } from '@coremail/core';
+import { hasForwardingHeader } from './proxy-headers.js';
 
 const log = createLogger('api:https-redirect');
 
@@ -81,11 +82,6 @@ export function httpsPublicPort(env: NodeJS.ProcessEnv = process.env): number {
 export function trustProxyConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
   const v = (env['TRUST_PROXY'] ?? '').trim();
   return v !== '' && !/^(false|no|off|0)$/i.test(v);
-}
-
-/** Does the request carry a forwarding header (X-Forwarded-*, Forwarded)? */
-export function hasForwardingHeader(req: Request): boolean {
-  return Object.keys(req.headers).some((h) => h === 'forwarded' || h.startsWith('x-forwarded-'));
 }
 
 function hostOnly(hostHeader: string | undefined): string | null {

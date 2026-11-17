@@ -13,11 +13,28 @@
  *    valid value (v8.1, see CLIENT_HEADER_VALUES)
  *  - set from trusted values: X-Forwarded-For (client IP per TRUST_PROXY),
  *    X-Forwarded-Proto (TLS socket or trusted proxy), X-Forwarded-Host (Host;
- *    a forwarded host only from a trusted proxy)
+ *    a forwarded host only from a trusted proxy), X-CoreMail-Proto-Verified
+ *    when that scheme is known (not behind an untrusted reverse proxy)
  */
-import type { IncomingMessage, ClientRequest } from 'node:http';
+import type { IncomingMessage, IncomingHttpHeaders, ClientRequest } from 'node:http';
+import { PROTO_VERIFIED_HEADER } from '@coremail/core';
 
 export type TrustFn = (addr: string, i: number) => boolean;
+
+/** Does the request carry a forwarding header (X-Forwarded-*, Forwarded)? */
+export function hasForwardingHeader(req: { headers: IncomingHttpHeaders }): boolean {
+  return Object.keys(req.headers).some((h) => h === 'forwarded' || h.startsWith('x-forwarded-'));
+}
+
+/**
+ * Is the scheme of upstreamProto() known? Yes for a TLS socket, a trusted
+ * proxy and a direct client; no when an untrusted peer sent forwarding headers
+ * (a reverse proxy without TRUST_PROXY — "http" is only a guess then).
+ */
+export function upstreamProtoVerified(req: IncomingMessage, trust: TrustFn): boolean {
+  if ((req.socket as { encrypted?: boolean } | undefined)?.encrypted) return true;
+  return trust(req.socket?.remoteAddress ?? '', 0) || !hasForwardingHeader(req);
+}
 
 const DROP_EXACT = new Set([
   'forwarded', 'x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'x-forwarded-port',
@@ -95,6 +112,7 @@ export function applyUpstreamHeaders(proxyReq: ClientRequest, req: IncomingMessa
   // compute from the ORIGINAL request headers before anything is removed
   const ip = upstreamClientIp(req, trust);
   const proto = upstreamProto(req, trust);
+  const protoVerified = upstreamProtoVerified(req, trust);
   const host = upstreamHost(req, trust);
   for (const name of proxyReq.getHeaderNames()) {
     if (isUntrustedForwardingHeader(name)) proxyReq.removeHeader(name);
@@ -105,5 +123,6 @@ export function applyUpstreamHeaders(proxyReq: ClientRequest, req: IncomingMessa
   }
   proxyReq.setHeader('X-Forwarded-For', ip);
   proxyReq.setHeader('X-Forwarded-Proto', proto);
+  if (protoVerified) proxyReq.setHeader(PROTO_VERIFIED_HEADER, '1');
   if (host) proxyReq.setHeader('X-Forwarded-Host', host);
 }
