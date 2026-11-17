@@ -189,6 +189,13 @@ installFakePrisma({
       apply(row, q.data);
       return row;
     },
+    updateMany: (a) => {
+      const q = a as { where: Row; data: Row };
+      writes.push('folder.updateMany');
+      const rows = folders.filter((f) => matches(f, q.where));
+      for (const row of rows) apply(row, q.data);
+      return { count: rows.length };
+    },
     delete: (a) => {
       writes.push('folder.delete');
       deletedFolderIds.push(String((a as { where: Row }).where['id']));

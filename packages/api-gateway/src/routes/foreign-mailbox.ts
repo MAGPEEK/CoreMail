@@ -50,7 +50,7 @@ import { requireAuth } from '../middleware/auth.js';
 import { getForeignMailbox } from '../lib/mailbox-access.js';
 import { checkFolderParent, type FolderLookup } from '../lib/folder-tree.js';
 import { contentDisposition } from '../lib/attachment-download.js';
-import { deleteFolderTree, folderDeleteOptions, folderDeleteRefusal } from '../lib/folder-delete.js';
+import { deleteFolder, folderDeleteFailure, folderDeleteOptions, folderDeleteRefusal } from '../lib/folder-delete.js';
 import { auditForeignWrite, type ForeignAuditAction } from '../lib/foreign-audit.js';
 import {
   parseSearchQuery, buildSearchConditions, resolveFolderScope, searchChips, hasCriteria,
@@ -246,12 +246,14 @@ export function createForeignMailboxRouter(kind: Kind): RouterType {
     if (SYSTEM_FOLDER_NAMES.has(folder.name)) {
       res.status(400).json({ error: 'Systemordner kann nicht gelöscht werden' }); return;
     }
-    const refusal = await folderDeleteRefusal(folder, folderDeleteOptions(req.query), SYSTEM_FOLDER_NAMES);
+    // Subfolders: 409 FOLDER_HAS_SUBFOLDERS unless ?recursive=true (9.3 contract).
+    const opts = folderDeleteOptions(req.query);
+    const refusal = await folderDeleteRefusal(folder, opts, SYSTEM_FOLDER_NAMES, 'refuse');
     if (refusal) { res.status(409).json(refusal); return; }
     // A1: messages of the whole subtree go to Trash through the message store first —
     // the cascade would otherwise remove them without tombstone / modSeq.
-    const done = await deleteFolderTree(folder);
-    if (!done.ok) { res.status(409).json({ error: 'Papierkorb nicht gefunden' }); return; }
+    const done = await deleteFolder(folder, opts);
+    if (!done.ok) { const f = folderDeleteFailure(done); res.status(f.status).json({ error: f.error }); return; }
     auditWrite(kind, req, access, 'mailbox.foreign.folder.delete', {
       folderId, name: folder.name, movedToTrash: done.moved, live: done.live, folders: done.folders,
     });

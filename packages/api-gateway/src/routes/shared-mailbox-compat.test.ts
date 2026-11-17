@@ -67,7 +67,9 @@ test('compat folder writes: 9.2 codes and shapes', async () => {
 
   assert.equal((await call('DELETE', `${OLD('sm1')}/folders/f-sm1-inbox`, t)).status, 403, 'protected → 403');
   addFolder('f-sm1-child', 'mb-sm1', 'Kind', 'f-sm1-proj');
-  assert.equal((await call('DELETE', `${OLD('sm1')}/folders/f-sm1-proj`, t)).status, 409, 'children → 409');
+  // 9.4: children are no longer a refusal — they move up to the deleted folder's parent.
+  assert.equal((await call('DELETE', `${OLD('sm1')}/folders/f-sm1-proj`, t)).status, 204, 'children → re-parented');
+  assert.equal(folderById('f-sm1-child')?.['parentId'], null);
 });
 
 test('compat DELETE: non-empty folder without ?force → 204, mail moved to Trash (no cascade), audited', async () => {

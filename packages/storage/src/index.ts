@@ -16,6 +16,7 @@ export * from './private-key-crypto.js';
 export * from './private-key-migration.js';
 export * from './sender-identity.js';
 export * from './message-store.js';
+export * from './folder-delete.js';
 export * from './quarantine.js';
 export * from './mail-auth.js';
 export * from './queue-options.js';

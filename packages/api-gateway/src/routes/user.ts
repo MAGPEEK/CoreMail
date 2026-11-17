@@ -11,7 +11,7 @@ import { checkPasswordPolicy, revokeAllSessions } from '@coremail/storage/auth';
 import { requireAuth } from '../middleware/auth.js';
 import { allowedAreas, isAdminRole } from '../lib/rbac.js';
 import { getReadableSharedMailbox, getWritableSharedMailbox, listForeignMailboxes, foreignMailboxRef } from '../lib/mailbox-access.js';
-import { deleteFolderTree, folderDeleteOptions, folderDeleteRefusal } from '../lib/folder-delete.js';
+import { deleteFolder, folderDeleteFailure, folderDeleteOptions, folderDeleteRefusal } from '../lib/folder-delete.js';
 import { auditForeignWrite, type ForeignAuditAction } from '../lib/foreign-audit.js';
 
 export const userRouter: RouterType = Router();
@@ -968,20 +968,21 @@ userRouter.delete('/shared-mailboxes/:id/folders/:folderId', async (req: Request
     res.status(403).json({ error: `Standard-Ordner „${folder.name}" kann nicht gelöscht werden` });
     return;
   }
-  // Subfolders need ?recursive=true (409 with counts otherwise). A non-empty folder
-  // never needed ?force on this pre-9.3 route, so force stays implied.
-  const { recursive } = folderDeleteOptions(req.query);
-  const refusal = await folderDeleteRefusal(folder, { recursive, force: true }, PROTECTED_FOLDER_NAMES);
+  // Without ?recursive=true the direct subfolders move up to the folder's parent;
+  // with it the whole subtree is deleted. A non-empty folder never needed ?force on
+  // this pre-9.3 route, so force stays implied.
+  const opts = { recursive: folderDeleteOptions(req.query).recursive, force: true };
+  const refusal = await folderDeleteRefusal(folder, opts, PROTECTED_FOLDER_NAMES, 'reparent');
   if (refusal) { res.status(409).json(refusal); return; }
 
   // 9.3 (A1): the messages go to the mailbox Trash through the message store before
   // the folder rows are deleted — pre-9.3 the Message→Folder cascade removed them
   // without tombstone. The contract (204) is unchanged; without a Trash folder a
   // non-empty folder is refused (409) instead of losing its mail.
-  const done = await deleteFolderTree(folder);
-  if (!done.ok) { res.status(409).json({ error: 'Papierkorb nicht gefunden' }); return; }
+  const done = await deleteFolder(folder, opts);
+  if (!done.ok) { const f = folderDeleteFailure(done); res.status(f.status).json({ error: f.error }); return; }
   auditCompat(req, id, access.mailboxId, 'mailbox.foreign.folder.delete', {
-    folderId, name: folder.name, movedToTrash: done.moved, live: done.live, folders: done.folders,
+    folderId, name: folder.name, movedToTrash: done.moved, live: done.live, folders: done.folders, reparented: done.reparented,
   });
   res.status(204).end();
 });
