@@ -29,3 +29,12 @@ test('mail and calendar share one command bar component (no own ribbon/bulk tool
   assert.match(bar, /role="toolbar"/);
   assert.match(bar, /nextRovingIndex/, 'arrow-key roving focus');
 });
+
+test('"Neue E-Mail" has one entry: the command bar split button (+ the n / c shortcut)', () => {
+  const tree = read('components/FolderTree.tsx');
+  assert.doesNotMatch(tree, /new_mail|onNewMail|compose\.new/, 'no second "Neue E-Mail" button in the folder pane');
+  assert.doesNotMatch(read('pages/MailPage.tsx'), /onNewMail/);
+  const bar = read('components/MailCommandBar.tsx');
+  assert.match(bar, /keyshortcuts: ariaKeys\('compose\.new'\)/);
+  assert.match(bar, /onClick: \(\) => openCompose\(\), menu: newMenu/);
+});

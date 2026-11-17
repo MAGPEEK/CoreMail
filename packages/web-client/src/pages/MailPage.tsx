@@ -93,7 +93,7 @@ interface ActiveDrag {
 
 export function MailPage() {
   const qc = useQueryClient();
-  const { selectedFolderId, selectedMessageId, selectedIds, setSelectedFolder, setActiveMailbox, openCompose, clearSelection } = useUiStore();
+  const { selectedFolderId, selectedMessageId, selectedIds, setSelectedFolder, setActiveMailbox, clearSelection } = useUiStore();
   const mailbox = useActiveMailbox();
   const setMailboxExpanded = useUiPrefs((s) => s.setMailboxExpanded);
   const { readingPane } = useUiPrefs();
@@ -257,7 +257,7 @@ export function MailPage() {
 
           {/* ── Folder tree ─────────────────────────────────────────────────── */}
           <div style={{ width: folderW, flexShrink: 0 }} className="h-full">
-            <FolderTree onNewMail={() => openCompose()} />
+            <FolderTree />
           </div>
 
           <ResizeHandle onResize={resizeFolder} />

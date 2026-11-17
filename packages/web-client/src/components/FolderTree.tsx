@@ -17,7 +17,6 @@ import {
 } from './FolderItem.js';
 import { SharedMailboxTree } from './SharedMailboxTree.js';
 import { useT } from '../i18n/useT.js';
-import { useAriaKeys } from '../hooks/useShortcuts.js';
 import { useLanguageStore } from '../store/language.js';
 
 type DialogState =
@@ -26,16 +25,13 @@ type DialogState =
   | { kind: 'rename'; folder: FolderType }
   | null;
 
-interface Props { onNewMail: () => void }
-
 interface MenuState {
   x: number;
   y: number;
   items: ContextMenuItem[];
 }
 
-export function FolderTree({ onNewMail }: Props) {
-  const ariaKeys = useAriaKeys();
+export function FolderTree() {
   const qc = useQueryClient();
   const t = useT();
   const lang = useLanguageStore((s) => s.lang);
@@ -325,15 +321,8 @@ export function FolderTree({ onNewMail }: Props) {
 
   return (
     <aside className="w-full h-full bg-surface-2 border-r border-line flex flex-col overflow-hidden">
+      {/* "Neue E-Mail" lives only in the mail command bar (split button) and on `n`/`c` */}
       <div className="p-3 flex items-center gap-2">
-        <button
-          onClick={onNewMail}
-          aria-keyshortcuts={ariaKeys('compose.new')}
-          className="btn-primary flex-1 justify-center group/newmail animate-halo"
-        >
-          <Plus size={15} className="transition-transform duration-200 group-hover/newmail:rotate-90" />
-          {t('new_mail')}
-        </button>
         <button
           onClick={() => {
             void qc.refetchQueries({ queryKey: ['folders'] });
