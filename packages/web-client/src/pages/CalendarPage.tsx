@@ -26,6 +26,8 @@ import { ShareCalendarDialog } from '../components/ShareCalendarDialog.js';
 import { EventEditDialog } from '../components/EventEditDialog.js';
 import toast from 'react-hot-toast';
 import { readableTextOn } from '../lib/readableText.js';
+import { PageShell } from '../components/PageShell.js';
+import { PAGE_CONTENT_PAD } from '../lib/pageShell.js';
 
 const LOCALE_MAP = { de: deLocale, en: enLocale, es: esLocale, it: itLocale };
 
@@ -196,15 +198,9 @@ export function CalendarPage() {
   ];
 
   return (
-    <div className="flex flex-1 overflow-hidden">
-      <CalendarSidebar
-        calendars={calendars ?? []}
-        selectedDate={selectedDate}
-        onSelectDate={handleSelectDate}
-      />
-
-      {/* Main area: toolbar + FullCalendar */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+    <PageShell
+      title="Kalender"
+      commandBar={
         <CalendarToolbar
           view={view}
           onChangeView={changeView}
@@ -234,27 +230,34 @@ export function CalendarPage() {
           filters={filters}
           onFiltersChange={setFilters}
         />
+      }
+    >
+      <CalendarSidebar
+        calendars={calendars ?? []}
+        selectedDate={selectedDate}
+        onSelectDate={handleSelectDate}
+      />
 
-        <div className="flex-1 overflow-auto p-4">
-          <FullCalendar
-            ref={calendarRef}
-            plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
-            initialView="dayGridMonth"
-            locale={fcLocale}
-            weekNumbers={calendarShowWeekNumbers}
-            weekNumberCalculation="ISO"
-            weekText={t('cw_short')}
-            firstDay={1}
-            hiddenDays={hiddenDays}
-            headerToolbar={{ left: 'prev,next today', center: 'title', right: '' }}
-            events={fcEvents}
-            selectable
-            select={handleDateSelect}
-            datesSet={handleDatesSet}
-            eventClick={handleEventClick}
-            height="100%"
-          />
-        </div>
+      {/* Main area: FullCalendar */}
+      <div className={`flex-1 min-w-0 overflow-auto ${PAGE_CONTENT_PAD}`}>
+        <FullCalendar
+          ref={calendarRef}
+          plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
+          initialView="dayGridMonth"
+          locale={fcLocale}
+          weekNumbers={calendarShowWeekNumbers}
+          weekNumberCalculation="ISO"
+          weekText={t('cw_short')}
+          firstDay={1}
+          hiddenDays={hiddenDays}
+          headerToolbar={{ left: 'prev,next today', center: 'title', right: '' }}
+          events={fcEvents}
+          selectable
+          select={handleDateSelect}
+          datesSet={handleDatesSet}
+          eventClick={handleEventClick}
+          height="100%"
+        />
       </div>
 
       {/* New event dialog */}
@@ -282,6 +285,6 @@ export function CalendarPage() {
           />
         );
       })()}
-    </div>
+    </PageShell>
   );
 }

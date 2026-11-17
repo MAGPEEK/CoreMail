@@ -4,6 +4,8 @@ import { Plus, Trash2, X, Search } from 'lucide-react';
 import { api } from '../api/client.js';
 import toast from 'react-hot-toast';
 import { Modal } from '../components/Modal.js';
+import { PageShell } from '../components/PageShell.js';
+import { PAGE_CONTENT_PAD } from '../lib/pageShell.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -172,26 +174,28 @@ export function NotesPage() {
   });
 
   return (
-    <div className="flex flex-1 flex-col overflow-hidden bg-surface-2">
-      {/* Toolbar */}
-      <div className="bg-surface border-b border-line px-6 py-3 flex items-center gap-3">
-        <h1 className="text-base font-semibold text-fg mr-2">Notizen</h1>
+    <PageShell
+      title="Notizen"
+      bodyClassName="bg-surface-2"
+      actions={
+        <>
+          <div className="flex items-center gap-1.5 bg-surface-2 rounded px-2.5 py-1.5 flex-1 max-w-xs">
+            <Search size={13} className="text-fg-subtle shrink-0" aria-hidden="true" />
+            <input value={search} onChange={e => setSearch(e.target.value)}
+              aria-label="Notizen durchsuchen"
+              className="bg-transparent text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-fg rounded-sm text-fg-muted placeholder-fg-subtle w-full"
+              placeholder="Notizen durchsuchen…" />
+          </div>
 
-        <div className="flex items-center gap-1.5 bg-surface-2 rounded px-2.5 py-1.5 flex-1 max-w-xs">
-          <Search size={13} className="text-fg-subtle shrink-0" />
-          <input value={search} onChange={e => setSearch(e.target.value)}
-            className="bg-transparent text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-fg rounded-sm text-fg-muted placeholder-fg-subtle w-full"
-            placeholder="Notizen durchsuchen…" />
-        </div>
-
-        <button onClick={() => setEditId(null)}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-white bg-accent rounded hover:bg-accent/90 ml-auto">
-          <Plus size={14} /> Neue Notiz
-        </button>
-      </div>
-
+          <button onClick={() => setEditId(null)}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-white bg-accent rounded hover:bg-accent/90 shrink-0">
+            <Plus size={14} /> Neue Notiz
+          </button>
+        </>
+      }
+    >
       {/* Grid */}
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className={`flex-1 overflow-y-auto ${PAGE_CONTENT_PAD}`}>
         {isLoading ? (
           <div className="text-center text-fg-subtle py-16 text-sm">Laden…</div>
         ) : notes.length === 0 ? (
@@ -235,6 +239,6 @@ export function NotesPage() {
       {editId !== undefined && (
         <NoteEditor noteId={editId} onClose={() => setEditId(undefined)} />
       )}
-    </div>
+    </PageShell>
   );
 }

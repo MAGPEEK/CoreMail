@@ -1,18 +1,21 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  Reply, ReplyAll, Forward, Trash2, Archive, Paperclip, Download,
-  AlertOctagon, ShieldOff, MoreHorizontal, Code, Pin, Flag, FlagOff, FolderInput, Clock, X,
+  Reply, ReplyAll, Forward, Trash2, Archive, Paperclip, Download, Printer, ListFilter, Mail,
+  AlertOctagon, ShieldOff, Code, Pin, Flag, FolderInput, Clock, X,
   ShieldAlert, ShieldCheck, CalendarClock, CheckCircle, AlertCircle, RefreshCw,
 } from 'lucide-react';
 import { format } from 'date-fns';
-import { useRef, useState } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import { textToQuotedHtml } from '../lib/mailHtml.js';
 import { api, downloadFile, fetchText } from '../api/client.js';
 import type { Message, Folder } from '../api/types.js';
 import { useUiStore } from '../store/ui.js';
 import { toastError } from '../lib/errors.js';
 import { MailBody } from './MailBody.js';
-import { ContextMenu, type ContextMenuItem } from './ContextMenu.js';
+import type { ContextMenuItem } from './ContextMenu.js';
+import { CommandBar, type CommandGroup, type CommandItem } from './CommandBar.js';
+import { MoveToFolderDialog } from './MoveToFolderDialog.js';
+import { RuleEditorModal } from './RuleEditorModal.js';
 import { useMailActions } from '../hooks/useMailActions.js';
 import { useShortcutHandlers, useAriaKeys } from '../hooks/useShortcuts.js';
 import { Avatar } from './Avatar.js';
@@ -22,9 +25,47 @@ import { Modal } from './Modal.js';
 import { translate } from '../i18n/useT.js';
 import { useActiveMailbox } from '../hooks/useActiveMailbox.js';
 import { READ_ONLY_HINT } from '../lib/mailboxContext.js';
+import { readerOverflowActions, type ReaderAction, type ReaderActionId } from '../lib/mailCommands.js';
 
 interface Props {
   messageId: string;
+}
+
+const READER_ICONS: Record<ReaderActionId, ReactNode> = {
+  print: <Printer size={16} />,
+  source: <Code size={16} />,
+  eml: <Download size={16} />,
+  rule: <ListFilter size={16} />,
+  read: <Mail size={16} />,
+  flag: <Flag size={16} />,
+  pin: <Pin size={16} />,
+  snooze: <Clock size={16} />,
+  move: <FolderInput size={16} />,
+  archive: <Archive size={16} />,
+  junk: <AlertOctagon size={16} />,
+  delete: <Trash2 size={16} />,
+};
+
+/** "…" entries as command-bar groups (a divider before every groupStart). */
+function overflowGroups(
+  actions: ReaderAction[],
+  handlers: Record<ReaderActionId, Pick<CommandItem, 'onClick' | 'menu'>>,
+  icons: Record<ReaderActionId, ReactNode>,
+): CommandGroup[] {
+  const groups: CommandGroup[] = [];
+  for (const a of actions) {
+    if (a.groupStart || groups.length === 0) groups.push({ id: `more-${a.id}`, items: [] });
+    groups[groups.length - 1]!.items.push({
+      id: a.id,
+      label: a.label,
+      icon: icons[a.id],
+      placement: 'overflow',
+      ...(a.enabled ? handlers[a.id] : { disabled: true }),
+      ...(a.tooltip ? { tooltip: a.tooltip } : {}),
+      ...(a.danger ? { tone: 'danger' as const } : {}),
+    });
+  }
+  return groups;
 }
 
 export function MessageReader({ messageId }: Props) {
@@ -33,7 +74,8 @@ export function MessageReader({ messageId }: Props) {
   // 9.3: own, shared or delegated mailbox — same API shapes, different base
   const mailbox = useActiveMailbox();
   const { base, readOnly, foreign } = mailbox;
-  const [moreMenu, setMoreMenu] = useState<{ x: number; y: number } | null>(null);
+  const [moveOpen, setMoveOpen] = useState(false);
+  const [ruleOpen, setRuleOpen] = useState(false);
   const [showAvatarCard, setShowAvatarCard] = useState(false);
   const [showRawSource, setShowRawSource] = useState(false);
   const [rawSource, setRawSource] = useState<string | null>(null);
@@ -133,112 +175,61 @@ export function MessageReader({ messageId }: Props) {
     void runWithUndo(action, [loc], target).then((done) => { if (done) setSelectedMessage(null); });
   };
 
-  const handleDelete = () => withUndo('delete');
-  const handleArchive = () => withUndo('archive');
-
   const snoozeUntil = (d: Date) => {
     api.post(`/mail/messages/${msg.id}/snooze`, { until: d.toISOString() }).then(invalidate).catch(toastError);
   };
+  const snoozeMenu = (): ContextMenuItem[] => [
+    { label: 'In 1 Stunde',     onClick: () => { const d = new Date(); d.setHours(d.getHours() + 1); snoozeUntil(d); } },
+    { label: 'In 3 Stunden',    onClick: () => { const d = new Date(); d.setHours(d.getHours() + 3); snoozeUntil(d); } },
+    { label: 'Morgen 8:00',     onClick: () => { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(8,0,0,0); snoozeUntil(d); } },
+    { label: 'Nächsten Montag', onClick: () => { const d = new Date(); d.setDate(d.getDate() + ((1 - d.getDay() + 7) % 7 || 7)); d.setHours(8,0,0,0); snoozeUntil(d); } },
+  ];
 
-  // read-only: disabled with tooltip, without a submenu
-  const w = (item: ContextMenuItem): ContextMenuItem => {
-    if (!readOnly) return item;
-    const { children: _submenu, onClick: _onClick, ...rest } = item;
-    return { ...rest, disabled: true, title: READ_ONLY_HINT };
+  const showSource = () => {
+    // Authorization header instead of ?token= (tokens in URLs end up in logs/history)
+    void fetchText(`${base}/messages/${msg.id}/raw`).then(text => {
+      setRawSource(text);
+      setShowRawSource(true);
+    }).catch((err: unknown) => {
+      setRawSource(`Fehler beim Laden des Quelltexts: ${err instanceof Error ? err.message : String(err)}`);
+      setShowRawSource(true);
+    });
   };
-  const ownOnly = (item: ContextMenuItem): ContextMenuItem[] => (foreign ? [] : [item]);
 
-  const moreItems: ContextMenuItem[] = [
-    w({ label: isFlagged ? 'Kennzeichnung aufheben' : 'Kennzeichnen',
-      icon: isFlagged ? <FlagOff size={14} /> : <Flag size={14} />,
-      onClick: () => patchMutation.mutate({ flagged: !isFlagged }) }),
-    w({ label: isPinned ? 'Lösen' : 'Anheften',
-      icon: <Pin size={14} />,
-      onClick: () => bulkMutation.mutate({ ids: [msg.id], action: isPinned ? 'unpin' : 'pin' }) }),
-    ...ownOnly({
-      label: 'Schlummern bis …', icon: <Clock size={14} />,
-      children: [
-        { label: 'In 1 Stunde',     onClick: () => { const d = new Date(); d.setHours(d.getHours() + 1); snoozeUntil(d); } },
-        { label: 'In 3 Stunden',    onClick: () => { const d = new Date(); d.setHours(d.getHours() + 3); snoozeUntil(d); } },
-        { label: 'Morgen 8:00',     onClick: () => { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(8,0,0,0); snoozeUntil(d); } },
-        { label: 'Nächsten Montag', onClick: () => { const d = new Date(); d.setDate(d.getDate() + ((1 - d.getDay() + 7) % 7 || 7)); d.setHours(8,0,0,0); snoozeUntil(d); } },
-      ],
-    }),
-    { type: 'divider' },
-    w({ label: 'Verschieben nach …', icon: <FolderInput size={14} />,
-      children: folders.filter((f) => f.id !== selectedFolderId).map((f) => ({
-        label: f.displayName ?? f.name,
-        onClick: () => {
-          withUndo('move', f.id);
-          setSelectedMessage(null);
-        },
-      })),
-    }),
-    w(isJunkFolder
-      ? { label: 'Kein Junk (False Positive)', icon: <ShieldOff size={14} />,
-          onClick: () => { bulkMutation.mutate({ ids: [msg.id], action: 'notSpam' }); setSelectedMessage(null); } }
-      : { label: 'Als Junk markieren', icon: <AlertOctagon size={14} />,
-          onClick: () => withUndo('spam') }),
-    { type: 'divider' },
-    { label: 'Quelltext anzeigen', icon: <Code size={14} />,
-      onClick: () => {
-        // Authorization header instead of ?token= (tokens in URLs end up in logs/history)
-        void fetchText(`${base}/messages/${msg.id}/raw`).then(text => {
-          setRawSource(text);
-          setShowRawSource(true);
-        }).catch((err: unknown) => {
-          setRawSource(`Fehler beim Laden des Quelltexts: ${err instanceof Error ? err.message : String(err)}`);
-          setShowRawSource(true);
-        });
-      } },
-    { label: 'Als EML herunterladen', icon: <Download size={14} />,
-      onClick: () => {
-        downloadFile(`${base}/messages/${msg.id}/raw`, `${msg.subject || 'message'}.eml`).catch(toastError);
-      } },
-    { label: 'Drucken', icon: <Download size={14} />, onClick: () => window.print() },
+  // Header action bar: reply / reply all / forward as buttons, everything else under "…"
+  const isRead = msg.flags.includes('\\Seen');
+  const handlers: Record<ReaderActionId, Pick<CommandItem, 'onClick' | 'menu'>> = {
+    print: { onClick: () => window.print() },
+    source: { onClick: showSource },
+    eml: { onClick: () => { downloadFile(`${base}/messages/${msg.id}/raw`, `${msg.subject || 'message'}.eml`).catch(toastError); } },
+    rule: { onClick: () => setRuleOpen(true) },
+    read: { onClick: () => patchMutation.mutate({ read: !isRead }) },
+    flag: { onClick: () => patchMutation.mutate({ flagged: !isFlagged }) },
+    pin: { onClick: () => bulkMutation.mutate({ ids: [msg.id], action: isPinned ? 'unpin' : 'pin' }) },
+    snooze: { menu: snoozeMenu },
+    move: { onClick: () => setMoveOpen(true) },
+    archive: { onClick: () => withUndo('archive') },
+    junk: isJunkFolder
+      ? { onClick: () => { bulkMutation.mutate({ ids: [msg.id], action: 'notSpam' }); setSelectedMessage(null); } }
+      : { onClick: () => withUndo('spam') },
+    delete: { onClick: () => withUndo('delete') },
+  };
+  const actionGroups: CommandGroup[] = [
+    { id: 'respond', title: 'Antworten', items: [
+      { id: 'reply', label: 'Antworten', icon: <Reply size={16} />, placement: 'pinned', keyshortcuts: ariaKeys('mail.reply'), onClick: () => doReply('reply') },
+      { id: 'replyAll', label: 'Allen antworten', icon: <ReplyAll size={16} />, placement: 'pinned', keyshortcuts: ariaKeys('mail.replyAll'), onClick: () => doReply('replyAll') },
+      { id: 'forward', label: 'Weiterleiten', icon: <Forward size={16} />, placement: 'pinned', keyshortcuts: ariaKeys('mail.forward'), onClick: () => doReply('forward') },
+    ] },
+    ...overflowGroups(
+      readerOverflowActions({ readOnly, foreign, isJunkFolder, isRead, isFlagged, isPinned }),
+      handlers,
+      isJunkFolder ? { ...READER_ICONS, junk: <ShieldOff size={16} /> } : READER_ICONS,
+    ),
   ];
 
   return (
     <div className="flex-1 flex flex-col bg-surface overflow-hidden">
-      {/* Toolbar */}
-      <div className="flex items-center gap-1 px-4 py-2 border-b border-line shrink-0">
-        <button
-          onClick={() => doReply('reply')}
-          aria-keyshortcuts={ariaKeys('mail.reply')}
-          className="btn-secondary text-xs">
-          <Reply size={14} /> Antworten
-        </button>
-        <button
-          onClick={() => doReply('replyAll')}
-          aria-keyshortcuts={ariaKeys('mail.replyAll')}
-          className="btn-secondary text-xs">
-          <ReplyAll size={14} /> Allen antworten
-        </button>
-        <button
-          onClick={() => doReply('forward')}
-          aria-keyshortcuts={ariaKeys('mail.forward')}
-          className="btn-secondary text-xs">
-          <Forward size={14} /> Weiterleiten
-        </button>
-        <div className="flex-1" />
-        <button onClick={handleArchive} aria-keyshortcuts={ariaKeys('mail.archive')} className="btn-ghost text-xs disabled:opacity-50 disabled:cursor-not-allowed"
-          disabled={readOnly} {...(readOnly ? { title: READ_ONLY_HINT } : {})}>
-          <Archive size={14} /> Archivieren
-        </button>
-        <button onClick={handleDelete} aria-keyshortcuts={ariaKeys('mail.delete')} className="btn-ghost text-xs text-danger-fg hover:bg-danger-bg disabled:opacity-50 disabled:cursor-not-allowed"
-          disabled={readOnly} {...(readOnly ? { title: READ_ONLY_HINT } : {})}>
-          <Trash2 size={14} /> Löschen
-        </button>
-        <button
-          onClick={(e) => {
-            const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-            setMoreMenu({ x: r.right - 220, y: r.bottom });
-          }}
-          className="btn-ghost text-xs" title="Mehr Optionen" aria-label="Mehr Optionen"
-          aria-haspopup="menu" aria-expanded={moreMenu !== null}>
-          <MoreHorizontal size={14} aria-hidden="true" />
-        </button>
-      </div>
+      <CommandBar label="Nachrichtenaktionen" groups={actionGroups} className="px-3 py-1.5 border-b border-line shrink-0" />
 
       {/* Spam banner — Outlook style. Visible when rspamd score ≥ 3.0 OR the mail is in the junk folder */}
       {(() => {
@@ -420,7 +411,23 @@ export function MessageReader({ messageId }: Props) {
         );
       })()}
 
-      {moreMenu && <ContextMenu x={moreMenu.x} y={moreMenu.y} items={moreItems} onClose={() => setMoreMenu(null)} />}
+      {moveOpen && (
+        <MoveToFolderDialog
+          folders={folders}
+          excludeFolderId={msg.folderId ?? selectedFolderId}
+          onClose={() => setMoveOpen(false)}
+          onPick={(target) => withUndo('move', target)}
+        />
+      )}
+
+      {ruleOpen && (
+        <RuleEditorModal
+          rule={null}
+          preset={{ fromAddr: msg.fromAddr, subject: msg.subject }}
+          onClose={() => setRuleOpen(false)}
+          onSaved={() => { setRuleOpen(false); void qc.invalidateQueries({ queryKey: ['rules'] }); }}
+        />
+      )}
 
       {/* RFC 822 source modal */}
       {showRawSource && rawSource !== null && (

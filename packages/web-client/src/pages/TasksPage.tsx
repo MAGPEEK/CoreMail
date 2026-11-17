@@ -10,6 +10,8 @@ import type { Task } from '../api/types.js';
 import toast from 'react-hot-toast';
 import { Modal } from '../components/Modal.js';
 import { localInputToIso, isoToLocalInput } from '../lib/datetime.js';
+import { PageShell } from '../components/PageShell.js';
+import { PAGE_CONTENT_PAD } from '../lib/pageShell.js';
 
 const PRIORITY_COLOR: Record<string, string> = {
   LOW:    'text-fg-subtle',
@@ -264,21 +266,21 @@ export function TasksPage() {
   };
 
   return (
-    <div className="flex flex-1 overflow-hidden bg-surface-2">
-      <div className="w-full max-w-2xl mx-auto p-6 flex flex-col gap-4">
-
-        {/* ── Header ─────────────────────────────────────────────────────────── */}
-        <div className="flex items-center justify-between">
-          <h1 className="text-xl font-semibold text-fg">Aufgaben</h1>
-          <div className="flex gap-1 bg-surface border border-line rounded p-0.5">
-            {(['pending', 'all', 'completed'] as const).map((f) => (
-              <button key={f} onClick={() => setFilter(f)}
-                className={`text-xs px-3 py-1 rounded transition-colors ${filter === f ? 'bg-accent text-white' : 'text-fg-muted hover:bg-surface-2'}`}>
-                {f === 'pending' ? 'Offen' : f === 'all' ? 'Alle' : 'Erledigt'}
-              </button>
-            ))}
-          </div>
+    <PageShell
+      title="Aufgaben"
+      bodyClassName="bg-surface-2"
+      actions={
+        <div role="group" aria-label="Filter" className="flex gap-1 bg-surface border border-line rounded p-0.5">
+          {(['pending', 'all', 'completed'] as const).map((f) => (
+            <button key={f} onClick={() => setFilter(f)} aria-pressed={filter === f}
+              className={`text-xs px-3 py-1 rounded transition-colors ${filter === f ? 'bg-accent text-white' : 'text-fg-muted hover:bg-surface-2'}`}>
+              {f === 'pending' ? 'Offen' : f === 'all' ? 'Alle' : 'Erledigt'}
+            </button>
+          ))}
         </div>
+      }
+    >
+      <div className={`w-full max-w-2xl mx-auto ${PAGE_CONTENT_PAD} flex flex-col gap-4 overflow-y-auto`}>
 
         {/* ── New task ────────────────────────────────────────────────────────── */}
         {showForm ? (
@@ -597,6 +599,6 @@ export function TasksPage() {
             </form>
         </Modal>
       )}
-    </div>
+    </PageShell>
   );
 }

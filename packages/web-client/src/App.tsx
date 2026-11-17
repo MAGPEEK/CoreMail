@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useEffect, useLayoutEffect, useState } from 'react';
 import { TopBar } from './components/TopBar.js';
+import { AppRail } from './components/AppRail.js';
 import { ComposeWindow } from './components/ComposeWindow.js';
 import { LoginPage } from './pages/LoginPage.js';
 import { SsoCallbackPage } from './pages/SsoCallbackPage.js';
@@ -60,14 +61,6 @@ function ThemeApplier() {
   return null;
 }
 
-const APP_MAP: Record<string, 'mail' | 'calendar' | 'contacts' | 'tasks' | 'notes'> = {
-  '/mail': 'mail',
-  '/calendar': 'calendar',
-  '/contacts': 'contacts',
-  '/tasks': 'tasks',
-  '/notes': 'notes',
-};
-
 // 9.3: shared mailboxes open in the mail view (folder pane → Freigegebene Postfächer);
 // old /shared-mailbox/:id links redirect there.
 function SharedMailboxRedirect() {
@@ -97,8 +90,6 @@ function Layout({ children }: { children: React.ReactNode }) {
   useGlobalShortcuts();
   useSendGuard();
 
-  const currentApp = APP_MAP[location.pathname] ?? 'mail';
-
   // MessageList picks up ?q= and runs a mailbox-wide server search
   const handleSearch = (q: string) => {
     const trimmed = q.trim();
@@ -107,10 +98,14 @@ function Layout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="h-full flex flex-col">
-      <TopBar onSearch={handleSearch} currentApp={currentApp} />
-      <main key={location.pathname} className="flex-1 flex overflow-hidden animate-page-in">
-        <ErrorBoundary resetKey={location.pathname}>{children}</ErrorBoundary>
-      </main>
+      <TopBar onSearch={handleSearch} />
+      {/* App rail left (md+), bottom bar below md (column-reverse puts it last) */}
+      <div className="flex-1 flex flex-col-reverse md:flex-row min-h-0">
+        <AppRail />
+        <main key={location.pathname} className="flex-1 flex min-h-0 min-w-0 overflow-hidden animate-page-in">
+          <ErrorBoundary resetKey={location.pathname}>{children}</ErrorBoundary>
+        </main>
+      </div>
       {composeOpen && <ComposeWindow />}
       <ShortcutHelpDialog />
     </div>

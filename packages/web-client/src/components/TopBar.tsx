@@ -1,22 +1,30 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Mail, Calendar, Users, CheckSquare, StickyNote, Search, Bell, Settings, LogOut, ChevronDown, Inbox } from 'lucide-react';
+import { Mail, Search, Bell, Settings, LogOut, ChevronDown, Inbox } from 'lucide-react';
 import { useAuthStore } from '../store/auth.js';
 import { useQueryClient } from '@tanstack/react-query';
 import { logoutSession } from '../api/client.js';
 import { logoutWithDraftFlush } from '../lib/compose-flush.js';
 import { Avatar } from './Avatar.js';
 import { OpenSharedMailboxModal } from './OpenSharedMailboxModal.js';
+import { SearchOperatorsHelp } from './SearchOperatorsHelp.js';
+import { insertSearchToken } from '../lib/searchInput.js';
 import { GLOBAL_SEARCH_INPUT_ID } from '../hooks/useGlobalShortcuts.js';
 import { BrandLogo } from './BrandLogo.js';
 import { useBranding } from '../hooks/useBranding.js';
 
 interface Props {
   onSearch: (q: string) => void;
-  currentApp: 'mail' | 'calendar' | 'contacts' | 'tasks' | 'notes';
 }
 
-export function TopBar({ onSearch, currentApp }: Props) {
+const HEADER_BTN = 'p-1.5 rounded text-header-fg focus-visible:outline-header-fg hover:bg-header-overlay/20 transition-all duration-150 active:scale-90';
+
+/**
+ * Header: brand (logo + product name) left, the mail search centred, notifications /
+ * settings / profile right. Colours come from the branding tokens (bg-header,
+ * text-header-fg); app switching lives in the app rail (AppRail.tsx).
+ */
+export function TopBar({ onSearch }: Props) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { displayName, email } = useAuthStore();
@@ -24,52 +32,34 @@ export function TopBar({ onSearch, currentApp }: Props) {
   const [search, setSearch] = useState('');
   const [profileOpen, setProfileOpen] = useState(false);
   const [sharedOpen, setSharedOpen]   = useState(false);
-
-  const apps = [
-    { id: 'mail', label: 'Mail', icon: Mail, path: '/mail' },
-    { id: 'calendar', label: 'Kalender', icon: Calendar, path: '/calendar' },
-    { id: 'contacts', label: 'Kontakte', icon: Users, path: '/contacts' },
-    { id: 'tasks', label: 'Aufgaben', icon: CheckSquare, path: '/tasks' },
-    { id: 'notes', label: 'Notizen', icon: StickyNote, path: '/notes' },
-  ] as const;
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     onSearch(search);
   };
 
+  const insertOperator = (token: string) => insertSearchToken(search, token, setSearch, () => inputRef.current);
+
   return (
-    <header className="h-12 bg-header text-header-fg flex items-center px-3 gap-3 shrink-0 z-50">
-      {/* App launcher / brand */}
-      <div className="flex items-center gap-2 font-semibold text-base mr-2 min-w-0">
+    // Brand and actions share the free space equally (flex 1 1 0) → the search stays centred;
+    // on narrow screens only the search shrinks.
+    <header className="h-12 bg-header text-header-fg flex items-center gap-3 px-3 shrink-0 z-50">
+      {/* Brand */}
+      <div className="flex-1 basis-0 flex items-center gap-2 font-semibold text-base">
         <BrandLogo className="max-h-8 max-w-[10rem]" fallback={<Mail size={18} aria-hidden="true" />} />
-        <span className="truncate max-w-[14rem]">{productName}</span>
+        <span className="truncate min-w-0 max-md:hidden">{productName}</span>
       </div>
 
-      {/* App switcher */}
-      <nav className="flex items-center gap-0.5">
-        {apps.map(({ id, label, icon: Icon, path }) => (
-          <button
-            key={id}
-            onClick={() => navigate(path)}
-            aria-current={currentApp === id ? 'page' : undefined}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-sm text-header-fg focus-visible:outline-header-fg transition-all duration-150 active:scale-95 ${
-              currentApp === id ? 'bg-header-overlay/25 font-semibold shadow-[inset_0_-2px_0_currentColor]' : 'hover:bg-header-overlay/15 hover:translate-y-[-1px]'
-            }`}
-          >
-            <Icon size={15} className={currentApp === id ? '' : 'transition-transform duration-150 hover:scale-110'} />
-            {label}
-          </button>
-        ))}
-      </nav>
-
-      {/* Search */}
-      <form onSubmit={handleSearch} className="flex-1 max-w-xl mx-4">
-        <div className="relative group">
-          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-header-fg group-focus-within:text-fg-subtle transition-colors" />
+      {/* Search (centre) */}
+      <form role="search" onSubmit={handleSearch} className="flex-[0_1_42rem] flex items-center gap-1 min-w-0">
+        <div className="relative group flex-1 min-w-0">
+          <Search size={15} aria-hidden="true" className="absolute left-3 top-1/2 -translate-y-1/2 text-header-fg group-focus-within:text-fg-subtle transition-colors" />
           <input
+            ref={inputRef}
             id={GLOBAL_SEARCH_INPUT_ID}
             type="text"
+            aria-label="Suchen"
             aria-keyshortcuts="/"
             placeholder="Suchen..."
             value={search}
@@ -77,14 +67,15 @@ export function TopBar({ onSearch, currentApp }: Props) {
             className="w-full bg-header-overlay/20 text-header-fg placeholder-header-fg border border-header-fg/40 rounded px-3 py-1 pl-8 text-sm outline-none transition-all duration-150 focus:bg-surface focus:text-fg focus:placeholder-fg-subtle focus:shadow-md focus:border-header-fg"
           />
         </div>
+        <SearchOperatorsHelp onInsert={insertOperator} tone="header" />
       </form>
 
       {/* Right actions */}
-      <div className="ml-auto flex items-center gap-1">
-        <button aria-label="Benachrichtigungen" className="group/bell p-1.5 rounded text-header-fg focus-visible:outline-header-fg hover:bg-header-overlay/20 transition-all duration-150 active:scale-90" title="Benachrichtigungen">
+      <div className="flex-1 basis-0 flex items-center justify-end gap-1">
+        <button aria-label="Benachrichtigungen" className={`group/bell ${HEADER_BTN}`} title="Benachrichtigungen">
           <Bell size={17} className="transition-transform duration-150 group-hover/bell:rotate-12" />
         </button>
-        <button aria-label="Einstellungen" onClick={() => navigate('/settings')} className="group/gear p-1.5 rounded text-header-fg focus-visible:outline-header-fg hover:bg-header-overlay/20 transition-all duration-150 active:scale-90" title="Einstellungen">
+        <button aria-label="Einstellungen" onClick={() => navigate('/settings')} className={`group/gear ${HEADER_BTN}`} title="Einstellungen">
           <Settings size={17} className="transition-transform duration-150 group-hover/gear:rotate-45" />
         </button>
 

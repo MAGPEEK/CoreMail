@@ -36,7 +36,7 @@
   ::-webkit-scrollbar-thumb { background: rgb(var(--line-strong) / 0.6); border-radius: 3px; }
   ::-webkit-scrollbar-thumb:hover { background: rgb(var(--line-strong)); }
 
-  /* SC 2.3.3 / 2.2.2: respect reduced motion (stops the infinite pulse/halo/shimmer) */
+  /* SC 2.3.3 / 2.2.2: respect reduced motion (stops the infinite pulse/shimmer) */
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {
       animation-duration: 0.01ms !important;
@@ -123,15 +123,6 @@
     animation: coremail-page-in 180ms ease-out;
   }
 
-  /* New-Mail-Button: subtler Pulse-Halo (alle 3 s) */
-  @keyframes coremail-halo {
-    0%, 100% { box-shadow: 0 0 0 0 rgb(var(--color-accent) / 0.45); }
-    50%      { box-shadow: 0 0 0 6px rgb(var(--color-accent) / 0); }
-  }
-  .animate-halo {
-    animation: coremail-halo 3s ease-out infinite;
-  }
-
   /* Checkbox Bounce-In (scale 0.5 → 1.15 → 1.0) */
   @keyframes coremail-bounce-in {
     0%   { transform: scale(0.5); opacity: 0.6; }
@@ -151,15 +142,6 @@
   .animate-count-pop {
     animation: coremail-count-pop 380ms ease-out;
     display: inline-block;
-  }
-
-  /* Slide-down (BulkToolbar) */
-  @keyframes coremail-slide-down {
-    from { opacity: 0; transform: translateY(-12px); }
-    to   { opacity: 1; transform: translateY(0);    }
-  }
-  .animate-slide-down {
-    animation: coremail-slide-down 200ms ease-out;
   }
 
   /* Drag-Over-Pulse für Drop-Targets (Folder beim DragOver) */

@@ -23,6 +23,7 @@ import { AnimatedCounter } from './AnimatedCounter.js';
 import { MessageListSkeleton, EmptyInbox, EmptySearch, EmptyFilter } from './Skeleton.js';
 import { MoveToFolderDialog } from './MoveToFolderDialog.js';
 import { SearchOperatorsHelp, SearchChips } from './SearchOperatorsHelp.js';
+import { insertSearchToken } from '../lib/searchInput.js';
 import { useMailActions } from '../hooks/useMailActions.js';
 import { useShortcutHandlers, useAriaKeys } from '../hooks/useShortcuts.js';
 import type { MessageLocation } from '../lib/undo-stack.js';
@@ -703,18 +704,7 @@ export function MessageList({ folderId }: Props) {
   };
 
   const chips = searching ? (searchQuery.data?.pages[0]?.chips ?? []) : [];
-  const insertOperator = (token: string) => {
-    const base = searchText.trim();
-    setSearchText(base ? `${base} ${token}` : token);
-    requestAnimationFrame(() => {
-      const el = searchInputRef.current;
-      if (!el) return;
-      el.focus();
-      // Cursor inside "" for the phrase operator, else at the end
-      const pos = token === '""' ? el.value.length - 1 : el.value.length;
-      el.setSelectionRange(pos, pos);
-    });
-  };
+  const insertOperator = (token: string) => insertSearchToken(searchText, token, setSearchText, () => searchInputRef.current);
   const removeChip = (raw: string) => {
     setSearchText((s) => s.replace(raw, ' ').replace(/\s+/g, ' ').trim());
   };

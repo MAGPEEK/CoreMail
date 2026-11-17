@@ -9,7 +9,8 @@ import toast from 'react-hot-toast';
 import { FolderTree } from '../components/FolderTree.js';
 import { MessageList } from '../components/MessageList.js';
 import { MessageReader } from '../components/MessageReader.js';
-import { BulkToolbar } from '../components/BulkToolbar.js';
+import { MailCommandBar } from '../components/MailCommandBar.js';
+import { PageShell } from '../components/PageShell.js';
 import { useUiStore, useUiPrefs } from '../store/ui.js';
 import { api } from '../api/client.js';
 import type { Folder } from '../api/types.js';
@@ -92,7 +93,7 @@ interface ActiveDrag {
 
 export function MailPage() {
   const qc = useQueryClient();
-  const { selectedFolderId, selectedMessageId, selectedIds, setSelectedFolder, setActiveMailbox, openCompose, clearSelection } = useUiStore();
+  const { selectedFolderId, selectedMessageId, selectedIds, setSelectedFolder, setActiveMailbox, clearSelection } = useUiStore();
   const mailbox = useActiveMailbox();
   const setMailboxExpanded = useUiPrefs((s) => s.setMailboxExpanded);
   const { readingPane } = useUiPrefs();
@@ -251,48 +252,48 @@ export function MailPage() {
 
   return (
     <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd} onDragCancel={() => setActiveDrag(null)}>
-      <div className={MAIL_VIEW_ROOT_CLASS}>
+      <PageShell title="Mail" commandBar={<MailCommandBar />}>
+        <div className={MAIL_VIEW_ROOT_CLASS}>
 
-        {/* ── Folder tree ─────────────────────────────────────────────────── */}
-        <div style={{ width: folderW, flexShrink: 0 }} className="h-full">
-          <FolderTree onNewMail={() => openCompose()} />
-        </div>
-
-        <ResizeHandle onResize={resizeFolder} />
-
-        {/* ── Message list + reader ────────────────────────────────────────── */}
-        {selectedFolderId ? (
-          readingPane === 'bottom' ? (
-            /* Reading pane at the bottom: list on top, reader below */
-            <div className="flex flex-col flex-1 overflow-hidden min-w-0">
-              <div style={{ width: '100%', height: '50%', flexShrink: 0 }} className="overflow-hidden relative">
-                <MessageList folderId={selectedFolderId} />
-                {selectedIds.size > 0 && <BulkToolbar currentFolderId={selectedFolderId} />}
-              </div>
-              <div className="h-px bg-line shrink-0 cursor-row-resize" />
-              {readerPanel}
-            </div>
-          ) : (
-            /* Reading pane on the right (default) or off */
-            <>
-              <div style={{ width: listW, flexShrink: 0 }} className="h-full overflow-hidden relative">
-                <MessageList folderId={selectedFolderId} />
-                {selectedIds.size > 0 && <BulkToolbar currentFolderId={selectedFolderId} />}
-              </div>
-              {readingPane !== 'off' && (
-                <>
-                  <ResizeHandle onResize={resizeList} />
-                  {readerPanel}
-                </>
-              )}
-            </>
-          )
-        ) : (
-          <div className="flex-1 flex items-center justify-center text-fg-subtle text-sm">
-            Ordner auswählen
+          {/* ── Folder tree ─────────────────────────────────────────────────── */}
+          <div style={{ width: folderW, flexShrink: 0 }} className="h-full">
+            <FolderTree />
           </div>
-        )}
-      </div>
+
+          <ResizeHandle onResize={resizeFolder} />
+
+          {/* ── Message list + reader ────────────────────────────────────────── */}
+          {selectedFolderId ? (
+            readingPane === 'bottom' ? (
+              /* Reading pane at the bottom: list on top, reader below */
+              <div className="flex flex-col flex-1 overflow-hidden min-w-0">
+                <div style={{ width: '100%', height: '50%', flexShrink: 0 }} className="overflow-hidden relative">
+                  <MessageList folderId={selectedFolderId} />
+                </div>
+                <div className="h-px bg-line shrink-0 cursor-row-resize" />
+                {readerPanel}
+              </div>
+            ) : (
+              /* Reading pane on the right (default) or off */
+              <>
+                <div style={{ width: listW, flexShrink: 0 }} className="h-full overflow-hidden relative">
+                  <MessageList folderId={selectedFolderId} />
+                </div>
+                {readingPane !== 'off' && (
+                  <>
+                    <ResizeHandle onResize={resizeList} />
+                    {readerPanel}
+                  </>
+                )}
+              </>
+            )
+          ) : (
+            <div className="flex-1 flex items-center justify-center text-fg-subtle text-sm">
+              Ordner auswählen
+            </div>
+          )}
+        </div>
+      </PageShell>
 
       <DragOverlay dropAnimation={{ duration: 180, easing: 'ease-out' }}>
         {activeDrag ? (
