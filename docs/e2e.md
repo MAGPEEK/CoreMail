@@ -81,7 +81,8 @@ node --test scripts/e2e/repo-hygiene.test.mjs   # static regression checks (no s
 ```
 
 Steps: `setup users smtp imap pop3 jmap dav eas eas-body eas-commands eas-legacy rest webmail admin tls backup branding mfa live lockout restart storage schema-upgrade`.
-`eas-legacy`: OPTIONS announces `12.1,14.0,14.1` and an unannounced version is answered 400; a 12.1
+`eas-legacy`: OPTIONS announces `12.1,14.0,14.1` and an unannounced version (2.5) is served as 14.1
+(Status 142 in WBXML for the unprovisioned device); a 12.1
 device gets HTTP 449 without a policy key, provisions, syncs (no Email2 / 14.x tags in any
 response), sends a mail in the 12.1 query-string form (raw MIME, `SaveInSent=T`, empty 200) that
 reaches user A, and runs a FolderSync with a base64-encoded request line; a 14.0 device gets

@@ -173,10 +173,11 @@ export function normalizeAddress(addr: string | null | undefined): string {
  * the server to send the response to the organizer. Up to 14.1 the client always sends it
  * itself (as a SendMail / SmartReply after the MeetingResponse).
  *
- * NOTE: the server announces only EAS 12.1/14.0/14.1 (protocol-version.ts) and refuses any
- * other requested version, so the dispatcher never takes the server-reply path today. It is
- * kept (and tested) as the ready half of EAS 16.x support. 12.1 and 14.x devices send the
- * reply themselves.
+ * NOTE: the server announces only EAS 12.1/14.0/14.1 (protocol-version.ts), so a conforming
+ * client never takes the server-reply path. An unannounced 16.x request is served as 14.1, but
+ * the dispatcher passes the version the client named here (as before 9.4), so such a client
+ * still gets the reply it asked for. The path is the ready half of EAS 16.x support; 12.1 and
+ * 14.x devices send the reply themselves.
  */
 export function serverSendsReply(req: WbxmlElement, protocolVersion: string): boolean {
   const version = Number.parseFloat(protocolVersion);

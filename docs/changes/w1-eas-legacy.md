@@ -21,8 +21,8 @@
   14.0, UserInformation in the Accounts form and RightsManagementInformation only for 14.1,
   `DeviceInformation` in Provision only for 14.1.
 - ActiveSync 12.1: a blocked device gets HTTP 403 for Provision too (12.1 has no in-band
-  global status codes); other refusals stay HTTP 449.
+  global status codes); a pending remote wipe on a request without policy key gets HTTP 403
+  as well, every other refusal HTTP 449 (the HTTP codes the protocol defines instead of the
+  status values).
 - ActiveSync: a request naming a protocol version the server does not announce (e.g. 2.5, 12.0,
-  16.x) is refused with HTTP 400 — before, any value was accepted and served as 14.1.
-  **SemVer note:** behaviour change for non-conforming clients only (conforming clients pick a
-  version from `MS-ASProtocolVersions`); the lead decides whether this counts as breaking.
+  16.x) is still served as 14.1, as before; the service now logs a warning once per device.

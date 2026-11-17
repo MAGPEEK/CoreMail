@@ -8,7 +8,8 @@ import { requireAuth, type EasUser } from './auth.js';
 import { easLiveRequests } from './live-sessions.js';
 import { decodeWbxml, type WbxmlElement } from './wbxml.js';
 import { EAS_COMMANDS } from './commands.js';
-import { EAS_VERSIONS, HIGHEST_EAS_VERSION, negotiateVersion, supports, type EasVersion } from './protocol-version.js';
+import { EAS_VERSIONS, HIGHEST_EAS_VERSION, supports, type EasVersion } from './protocol-version.js';
+import { versionForDevice, warnedDevices, type DeviceVersionDeps } from './device-version.js';
 import { parseRequestLine, type EasCommandParams } from './request.js';
 import { EasHttpError } from './http-error.js';
 import { handleProvision } from './commands/provision.js';
@@ -66,6 +67,12 @@ function sendStatusOnly(res: Response, httpStatus: number): void {
   res.status(httpStatus).end();
 }
 
+const deviceVersionDeps: DeviceVersionDeps = {
+  saveVersion: (id, version) => prisma.activeSyncDevice.update({ where: { id }, data: { protocolVersion: version } }),
+  warn: (fields, message) => log.warn(fields, message),
+  warned: warnedDevices,
+};
+
 // ─── POST — Main command dispatcher ──────────────────────────────────────────
 app.post(
   '/Microsoft-Server-ActiveSync',
@@ -93,17 +100,9 @@ app.post(
         where: { userId_deviceId: { userId: user.userId, deviceId } },
         select: { id: true, status: true, policyKey: true, protocolVersion: true },
       });
-      // Protocol version: the requested one (must be announced), else the device's last one.
-      const negotiated = negotiateVersion(parsed.line.protocolVersion, device?.protocolVersion);
-      if (!negotiated.ok) {
-        log.info({ userId: user.userId, deviceId, command, requested: negotiated.requested }, 'EAS protocol version not supported');
-        res.status(400).send('Unsupported MS-ASProtocolVersion');
-        return;
-      }
-      const version = negotiated.version;
-      if (device && device.protocolVersion !== version) {
-        await prisma.activeSyncDevice.update({ where: { id: device.id }, data: { protocolVersion: version } });
-      }
+      // Protocol version: the requested one (unannounced → highest), else the device's last one.
+      const requestedVersion = parsed.line.protocolVersion;
+      const version = await versionForDevice({ userId: user.userId, deviceId, requested: requestedVersion }, device, deviceVersionDeps);
 
       // Device access: provisioned, current policy key, not blocked / wiped ([MS-ASPROV]).
       const access = deviceAccess(device, command, parsed.line.policyKey);
@@ -137,7 +136,7 @@ app.post(
           return;
         }
       }
-      await handler.run({ req, res, body: body as WbxmlElement, raw, user, deviceId, deviceType, version, params });
+      await handler.run({ req, res, body: body as WbxmlElement, raw, user, deviceId, deviceType, version, requestedVersion, params });
     } catch (err) {
       if (err instanceof EasHttpError) {
         log.info({ userId: user.userId, deviceId, command, httpStatus: err.httpStatus }, `EAS ${err.message}`);
@@ -162,6 +161,11 @@ interface CommandContext {
   deviceType: string;
   /** Negotiated protocol version. */
   version: EasVersion;
+  /**
+   * The version the request names, as sent ('' = none). Only MeetingResponse reads it: an
+   * unannounced 16.x client keeps the server-sent meeting reply it asks for (as before 9.4).
+   */
+  requestedVersion: string;
   /** Command parameters of the request line. */
   params: EasCommandParams;
 }
@@ -218,7 +222,7 @@ const HANDLERS: Record<string, CommandHandler> = {
   Settings: { needsBody: true, run: wbxml((c) => handleSettings(c.body, c.user.userId, c.deviceId, c.version)) },
   Search: { needsBody: true, run: wbxml((c) => handleSearch(c.body, c.user.userId)) },
   MoveItems: { needsBody: true, run: wbxml((c) => handleMoveItems(c.body, c.user.userId, c.deviceId)) },
-  MeetingResponse: { needsBody: true, run: wbxml((c) => handleMeetingResponse(c.body, c.user.userId, undefined, c.version)) },
+  MeetingResponse: { needsBody: true, run: wbxml((c) => handleMeetingResponse(c.body, c.user.userId, undefined, c.requestedVersion || c.version)) },
   ResolveRecipients: { needsBody: true, run: wbxml((c) => handleResolveRecipients(c.body, c.user.userId, c.version)) },
 };
 

@@ -22,10 +22,12 @@ Every request is served with one version (`src/protocol-version.ts`):
 2. without one: the version the device used last (`ActiveSyncDevice.protocolVersion`);
 3. without either: 14.1.
 
-A requested version the server did not announce (2.5, 12.0, 16.x, …) is answered **HTTP 400**.
-The negotiated version is stored on the device whenever it changes (a device that is updated from
-12.1 to 14.1 switches on its next request). Commands never compare numbers: they ask
-`supports(version, feature)` for the protocol element that differs.
+A requested version the server did not announce (2.5, 12.0, 16.x, …) is served as **14.1**, as
+before 9.4 — a conforming client picks from `MS-ASProtocolVersions`, and refusing a
+non-conforming one would lock its device out. The service logs a warning once per device
+(`src/device-version.ts`). The negotiated version is stored on the device whenever it changes (a
+device that is updated from 12.1 to 14.1 switches on its next request). Commands never compare
+numbers: they ask `supports(version, feature)` for the protocol element that differs.
 
 ## Request line
 
@@ -43,7 +45,7 @@ Both encodings of [MS-ASHTTP] are accepted (`src/request.ts`):
 
 | Area | 12.1 | 14.0 | 14.1 |
 |---|---|---|---|
-| Refused request (no device, wrong / missing policy key, wipe pending) | HTTP 449 | Status 142/144/140 in the command's WBXML | same as 14.0 |
+| Refused request (no device, wrong / missing policy key, wipe pending) | HTTP 449; a pending wipe on a request without policy key HTTP 403 ([MS-ASCMD] 2.2.2) | Status 142/144/140 in the command's WBXML | same as 14.0 |
 | Blocked / not approved device | HTTP 403 (also for Provision) | Status 129 | Status 129 |
 | Provision | same policy document (all its elements exist since 12.1), same RemoteWipe flow | same | + `settings:DeviceInformation` in request/response |
 | SendMail / SmartReply / SmartForward | raw MIME body (`message/rfc822`), parameters in the request line, **empty HTTP 200** (errors: 400 / 403 / 507 / 500) | ComposeMail WBXML, `<Status>` response | same as 14.0 |
@@ -54,7 +56,9 @@ Both encodings of [MS-ASHTTP] are accepted (`src/request.ts`):
 | FolderSync, Ping, Search, MoveItems, MeetingResponse, GetAttachment | identical in all three versions | | |
 
 MeetingResponse: in every supported version the device sends the meeting reply itself; the
-server-side reply path exists for 16.x only (not announced).
+server-side reply path (`SendResponse`) exists for 16.x only. 16.x is not announced, but
+MeetingResponse sees the version the client named, so a client that claims 16.x anyway still gets
+the reply it asks for (as before 9.4).
 
 ### 12.1 SendMail failures
 
@@ -67,7 +71,8 @@ no ClientId, so a retried request is not recognised as a duplicate.
 ## WBXML
 
 The code pages follow [MS-ASWBXML] (14.1 token tables). `src/wbxml.ts` also records which pages
-and tokens a version does not define (ComposeMail and Email2 pages, Preview, Availability,
+and tokens a version does not define — taken from the "Protocol versions" column of the
+[MS-ASWBXML] 2.1.2.1.x code page tables (ComposeMail and Email2 pages, Preview, Availability,
 Accounts form, …): `tagsNewerThan(buffer, version)` lists the tags of an encoded response that the
 version does not know. The unit tests and the e2e step assert that every response carries only
 tags of the negotiated version.
@@ -81,11 +86,13 @@ versions.
 
 ## Tests
 
-* `src/protocol-version.test.ts` — negotiation, feature table;
+* `src/protocol-version.test.ts` — negotiation (unannounced versions served as 14.1, warning once
+  per device, version stored on change), feature table;
 * `src/request.test.ts` — plain and base64 request lines (byte fixtures, truncation);
 * `src/version-matrix.test.ts` — every command for 12.1 / 14.0 / 14.1 against the in-memory
   Prisma fake: only the version's tags, version-specific content, byte fixtures for the 12.1
   GetItemEstimate and UserInformation responses and the RemoteWipe answer;
 * `src/commands/send-mail.test.ts` — the 12.1 compose form and its HTTP statuses;
-* `src/device-policy.test.ts` — HTTP 449/403 for 12.1, WBXML status for 14.x;
+* `src/device-policy.test.ts` — HTTP 449/403 for 12.1 (403 also for a pending wipe without policy
+  key), WBXML status for 14.x;
 * e2e step `eas-legacy` (`scripts/e2e/steps/eas-legacy.mjs`, see [e2e.md](e2e.md)).

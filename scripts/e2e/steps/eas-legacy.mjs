@@ -93,14 +93,17 @@ const mimeFromB = (state, subject) => Buffer.from([
 ].join('\r\n'), 'utf8');
 
 export async function run(state) {
-  await check('eas-legacy: OPTIONS announces 12.1, 14.0 and 14.1; an unannounced version → 400', async () => {
-    const dev = device(state, '12.1', 'E2ELEGACY121');
-    const o = await http('OPTIONS', '/Microsoft-Server-ActiveSync', { headers: { Authorization: dev.auth } });
+  await check('eas-legacy: OPTIONS announces 12.1, 14.0 and 14.1; an unannounced version is served as 14.1', async () => {
+    const o = await http('OPTIONS', '/Microsoft-Server-ActiveSync', { headers: { Authorization: device(state, '12.1', 'E2ELEGACY121').auth } });
     const versions = o.headers.get('ms-asprotocolversions') ?? '';
     assert(o.status === 200 && versions === '12.1,14.0,14.1', `${o.status} ${versions}`);
-    const r = await http('POST', dev.url('FolderSync'), { raw: true, body: encode([7, 0x16, [[7, 0x12, '0']]]), headers: { ...dev.headers({ 'MS-ASProtocolVersion': '2.5' }), 'Content-Type': 'application/vnd.ms-sync.wbxml' } });
-    assert(r.status === 400, `version 2.5 → HTTP ${r.status}`);
-    return `versions ${versions}; 2.5 → 400`;
+    // 2.5 is not announced: served as 14.1 (as before 9.4) — not provisioned → Status 142 inside the WBXML response
+    const old = device(state, '2.5', 'E2ELEGACY25');
+    const r = await http('POST', old.url('FolderSync'), { raw: true, body: encode([7, 0x16, [[7, 0x12, '0']]]), headers: { ...old.headers(), 'Content-Type': 'application/vnd.ms-sync.wbxml' } });
+    const buf = Buffer.from(await r.arrayBuffer());
+    assert(r.status === 200 && buf.length > 0, `version 2.5 → HTTP ${r.status}`);
+    assert(kid(decodeWbxml(buf), 'Status')?.text === '142', `version 2.5 → ${JSON.stringify(decodeWbxml(buf)).slice(0, 120)}`);
+    return `versions ${versions}; 2.5 → served as 14.1 (Status 142)`;
   });
 
   const legacy = device(state, '12.1', 'E2ELEGACY121');
