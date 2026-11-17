@@ -8,10 +8,9 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
+import { setTestEnv } from '../test-support/fake-prisma.js';
 
-process.env['DATABASE_URL'] ??= 'postgresql://test:test@localhost:5432/test';
-process.env['JWT_SECRET'] ??= 'test-secret-test-secret-test-secret-1234';
-process.env['PEPPER'] ??= 'test-pepper-test-pepper-test-pepper-1234';
+setTestEnv();
 
 type Row = Record<string, unknown>;
 

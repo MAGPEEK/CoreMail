@@ -4,6 +4,8 @@
  * they need via `models`. `$transaction(fn)` runs fn with the same fake
  * (serialised through a promise chain to mimic row locking).
  */
+import { after } from 'node:test';
+
 type Fn = (...args: unknown[]) => unknown;
 export type ModelOverrides = Record<string, Record<string, Fn>>;
 
@@ -73,4 +75,22 @@ export function setTestEnv(): void {
   }
   // server.ts installs the same BigInt serializer (Prisma quota fields)
   (BigInt.prototype as unknown as { toJSON: () => number }).toJSON = function (this: bigint) { return Number(this); };
+  closeSharedRedisAfterTests();
+}
+
+let redisTeardownRegistered = false;
+/**
+ * Routes publish reloads / rate-limit hits through the lazily created shared
+ * Redis client (`getRedisClient()`). In tests REDIS_URL points at a closed port,
+ * so that client reconnects forever and its retry timer keeps the test process
+ * alive after the last test. Close it once all tests of the file have run.
+ * `@coremail/core` is imported lazily: the environment above must be set first.
+ */
+function closeSharedRedisAfterTests(): void {
+  if (redisTeardownRegistered) return;
+  redisTeardownRegistered = true;
+  after(async () => {
+    const { closeRedis } = await import('@coremail/core');
+    await closeRedis();
+  });
 }
