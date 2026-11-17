@@ -23,7 +23,8 @@ let certRows: Row[] = [];
 installFakePrisma({
   user: { findUnique: () => ({ role: 'ORGANIZATION_MANAGEMENT', active: true }) },
   serviceListener: { findMany: () => listeners },
-  certificate: { findMany: () => certRows },
+  // unreadableInUseCertKeys asks for the protocol / HTTPS certificates only (where.OR)
+  certificate: { findMany: (a: unknown) => ((a as { where?: Row } | undefined)?.where?.['OR'] ? certRows.filter((r) => r['isActiveProtocol'] || r['isActiveHttps']) : certRows) },
   serverSettings: { findUnique: () => ({ publicHostname: 'mail.example.com' }) },
 });
 
@@ -183,7 +184,7 @@ test('GET /served probes the configured listeners, matches the cert row and sugg
     ];
     const trusted = await createSelfSignedPem(['mail.example.com']);
     certRows = [
-      { id: 'self', name: 'mail.localhost', type: 'SELF_SIGNED', status: 'ACTIVE', acmeStaging: false, certPem: other.certPem, keyPem: 'k', isActiveProtocol: true },
+      { id: 'self', name: 'mail.localhost', type: 'SELF_SIGNED', status: 'ACTIVE', acmeStaging: false, certPem: other.certPem, keyPem: 'k', isActiveProtocol: true, isActiveHttps: false, services: ['SMTP', 'IMAP', 'POP3'] },
       { id: 'le', name: 'mail.example.com (LE)', type: 'LETSENCRYPT', status: 'ACTIVE', acmeStaging: false, certPem: trusted.certPem, keyPem: 'k', isActiveProtocol: false },
       { id: 'stg', name: 'staging', type: 'LETSENCRYPT', status: 'ACTIVE', acmeStaging: true, certPem: trusted.certPem, keyPem: 'k', isActiveProtocol: false },
     ];
@@ -191,7 +192,7 @@ test('GET /served probes the configured listeners, matches the cert row and sugg
       headers: { authorization: `Bearer ${tok}` },
     });
     assert.equal(r.status, 200);
-    const body = await r.json() as { hostname: string; problem: boolean; ports: Row[]; suggestedCert: Row | null };
+    const body = await r.json() as { hostname: string; problem: boolean; ports: Row[]; suggestedCert: Row | null; unreadableKeys: Row[] };
     assert.equal(body.hostname, 'mail.example.com');
     assert.equal(body.problem, true);
     assert.equal(body.ports.length, 2);
@@ -200,6 +201,8 @@ test('GET /served probes the configured listeners, matches the cert row and sugg
     assert.equal(imap['certId'], 'self', 'served cert matched to its row by fingerprint');
     assert.equal(imap['problem'], 'self-signed');
     assert.deepEqual(body.suggestedCert, { id: 'le', name: 'mail.example.com (LE)' });
+    // w1: the protocol certificate's stored key ('k') is unreadable → reported by name, no key data
+    assert.deepEqual(body.unreadableKeys, [{ id: 'self', name: 'mail.localhost', services: ['SMTP', 'IMAP', 'POP3'], https: false }]);
   } finally {
     srv.close();
   }

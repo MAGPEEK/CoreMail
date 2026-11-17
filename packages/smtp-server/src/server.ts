@@ -7,7 +7,7 @@ import {
   generateSelfSignedCert, tlsPemToBuffers, applyTlsToListeners, tlsMaterialEquals, installProcessGuards,
   startAuthInvalidationSubscriber, resolveBindAddress, listenWithRecovery,
 } from '@coremail/core';
-import { connectDatabase, waitForObjectStorage, prisma, loadProtocolCert, selfSignedFallbackHostname, encryptPrivateKey, invalidateQueueSettingsCache } from '@coremail/storage';
+import { connectDatabase, waitForObjectStorage, prisma, loadProtocolTls, selfSignedReplacement, selfSignedFallbackHostname, encryptPrivateKey, invalidateQueueSettingsCache } from '@coremail/storage';
 import { createSmtpServer } from './core/factory.js';
 import { smtpLiveSessions } from './core/live-sessions.js';
 import { inboundTarpitMaxDelayMs } from './core/session.js';
@@ -176,9 +176,15 @@ async function refreshTlsConfig(): Promise<void> {
     // v5.2.8: cert directly from the certificates table via the services[] array
     // by service name (here: 'SMTP'). Fallback to legacy
     // ServerSettings.tlsCert for pre-v5.2.8 setups.
-    const found = await loadProtocolCert('SMTP');
+    const found = await loadProtocolTls('SMTP', generateSelfSignedCert);
 
     if (found) {
+      if (found.unreadable) {
+        // w1: an unreadable private key never drops TLS — the self-signed
+        // replacement for the public host name is served until the admin acts.
+        log.error({ certId: found.unreadable.certId, certName: found.unreadable.certName },
+          `Private key of certificate "${found.unreadable.certName}" is unreadable — SMTP serves the self-signed replacement certificate; re-issue or upload the certificate`);
+      }
       const isSelfSigned = isCertSelfSigned(found.certPem);
       _tlsConfig = tlsPemToBuffers(found.certPem, found.keyPem);
       if (isSelfSigned && !certMatchesHostname(found.certPem, _hostname)) {
@@ -209,7 +215,24 @@ async function refreshTlsConfig(): Promise<void> {
     });
     log.info('Self-signed TLS certificate generated and stored in DB');
   } catch (err) {
-    log.error({ err }, 'Failed to load/generate TLS config — implicit TLS ports (465) will be skipped');
+    log.error({ err }, 'Failed to load/generate TLS config — serving the self-signed replacement');
+    await keepTlsOn();
+  }
+}
+
+/**
+ * w1: without a loaded certificate the implicit-TLS port would start in
+ * plaintext — serve the self-signed replacement instead (a previously loaded
+ * certificate stays in use).
+ */
+async function keepTlsOn(): Promise<void> {
+  if (_tlsConfig) return;
+  try {
+    const r = await selfSignedReplacement(generateSelfSignedCert);
+    _tlsConfig = tlsPemToBuffers(r.certPem, r.keyPem);
+    log.warn({ hostname: r.hostname }, 'SMTP TLS: serving the self-signed replacement certificate');
+  } catch (err) {
+    log.error({ err }, 'SMTP TLS: self-signed replacement certificate could not be created');
   }
 }
 

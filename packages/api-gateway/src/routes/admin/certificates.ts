@@ -18,7 +18,7 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { X509Certificate, createPrivateKey } from 'node:crypto';
 import { z } from 'zod';
-import { prisma, encryptPrivateKey } from '@coremail/storage';
+import { prisma, encryptPrivateKey, unreadableInUseCertKeys } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import { requireArea } from '../../middleware/auth.js';
 
@@ -137,6 +137,9 @@ adminCertificatesRouter.get('/tls-proxy-info', async (_req: Request, res: Respon
 // SNI = public host name, STARTTLS/STLS on the plain ports), matched against the
 // certificates table, plus a suggestion which certificate to assign when a port
 // serves a self-signed / name-mismatched / expired certificate.
+// w1: `unreadableKeys` (additive) lists the certificates in use whose stored
+// private key cannot be read — the mail servers then serve the self-signed
+// replacement (and HTTPS skips the certificate) until it is re-issued or uploaded.
 const MAX_PROBE_TARGETS = 16;
 async function servedProbeTargets(): Promise<ProbeTarget[]> {
   const rows = await prisma.serviceListener.findMany({
@@ -181,6 +184,8 @@ adminCertificatesRouter.get('/served', async (_req: Request, res: Response) => {
     return { ...r, problem: servedCertProblem(r), certId: match?.id ?? null, certName: match?.name ?? null };
   });
   const problem = ports.some((p) => p.problem !== null);
+  // The mail servers / HTTPS proxy log the unreadable key; this only reports it.
+  const unreadableKeys = await unreadableInUseCertKeys();
 
   // Suggestion for "Jetzt zuweisen": a usable, trusted (not self-signed, not
   // staging) certificate that covers the public host name — latest expiry first.
@@ -199,6 +204,7 @@ adminCertificatesRouter.get('/served', async (_req: Request, res: Response) => {
     ports,
     problem,
     suggestedCert: suggestion ? { id: suggestion.id, name: suggestion.name } : null,
+    unreadableKeys,
   });
 });
 

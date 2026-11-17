@@ -10,7 +10,7 @@ import forge from 'node-forge';
 import {
   BACKOFF_BASE_MS, BACKOFF_MAX_MS, backoffDelayMs, decideRenewal, deriveCertStatus,
   hostnameUpdateFor, isDefaultHostname, isPemCurrentlyValid, parseCertValidity, planSni,
-  recomputeStatus, resolveSni, selectProxyCerts, buildFullChainPem, uncoveredDomains,
+  recomputeStatus, resolveSni, selectProxyCerts, buildFullChainPem, uncoveredDomains, needsHttpsReplacement, replacementProxyCert,
   type ProxyCertRow, type RenewalCandidate,
 } from './cert-lifecycle.js';
 
@@ -264,5 +264,36 @@ describe('9.2.x: staging ordering, full chain, domain coverage', () => {
     assert.deepEqual(uncoveredDomains(pem, ['autodiscover.example.com', 'a.b.example.org', 'example.org']),
       ['autodiscover.example.com', 'a.b.example.org', 'example.org']);
     assert.deepEqual(uncoveredDomains(pem, ['*.example.org']), []);
+  });
+});
+
+describe('HTTPS proxy: unreadable private keys (w1)', () => {
+  test('the replacement is needed only when unreadable keys left no usable certificate', () => {
+    assert.equal(needsHttpsReplacement(0, 1), true, 'every certificate dropped → 443 would lose TLS');
+    assert.equal(needsHttpsReplacement(1, 1), false, 'another readable certificate stays the default');
+    assert.equal(needsHttpsReplacement(0, 0), false, 'no certificate at all: HTTPS is not started (unchanged)');
+  });
+
+  test('the self-signed replacement becomes the default SNI context, without the HTTPS redirect flag', () => {
+    const pem = makeCert(['mail.example.com'], at(-1), at(3650));
+    const cert = replacementProxyCert({ certPem: pem, keyPem: KEY_PEM, hostname: 'mail.example.com' }, NOW);
+    assert.ok(cert);
+    assert.equal(cert.isActiveHttps, false);
+    assert.deepEqual(cert.domains, ['mail.example.com']);
+    assert.equal(cert.id, 'self-signed-replacement:mail.example.com');
+    const plan = planSni([cert]);
+    assert.equal(plan.defaultId, cert.id, 'connections with any SNI name still get TLS');
+    assert.equal(plan.exact.get('mail.example.com'), cert.id);
+    // the visible self-signed default row keeps its id/name
+    const row = replacementProxyCert({ certPem: pem, keyPem: KEY_PEM, hostname: 'mail.example.com', certId: 'ss1', certName: 'mail.example.com' }, NOW);
+    assert.deepEqual([row?.id, row?.name], ['ss1', 'mail.example.com']);
+    assert.equal(replacementProxyCert({ certPem: 'not a pem', keyPem: KEY_PEM, hostname: 'x.example.com' }, NOW), null);
+  });
+
+  test('tls-proxy wires the replacement after building the SNI map', async () => {
+    const { readFileSync } = await import('node:fs');
+    const proxy = readFileSync(new URL('../tls-proxy.ts', import.meta.url), 'utf8');
+    assert.match(proxy, /if \(needsHttpsReplacement\(certs\.length, loaded\.unreadableKeys\)\) \{\s*certs = buildSniMaps\(await replacementCerts\(\), policy\);/);
+    assert.match(proxy, /selfSignedReplacement\(\)/);
   });
 });

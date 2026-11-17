@@ -209,7 +209,42 @@ export function selectProxyCerts(rows: ProxyCertRow[], now: Date = new Date()): 
   return out;
 }
 
-const PEM_CERT_RE = /-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g;
+/**
+ * HTTPS proxy (w1): unreadable private keys removed certificates from the SNI map
+ * and none is left — port 443 would stop serving TLS. The self-signed replacement
+ * for the public host name is served instead.
+ */
+export function needsHttpsReplacement(usableCount: number, unreadableKeys: number): boolean {
+  return usableCount === 0 && unreadableKeys > 0;
+}
+
+/**
+ * The self-signed replacement (storage selfSignedReplacement) as the only, default
+ * proxy certificate. Not marked isActiveHttps: no HTTP → HTTPS redirect to an
+ * untrusted certificate. Null when its PEM cannot be parsed.
+ */
+export function replacementProxyCert(
+  r: { certPem: string; keyPem: string; hostname: string; certId?: string; certName?: string },
+  now: Date = new Date(),
+): SelectedProxyCert | null {
+  const v = parseCertValidity(r.certPem);
+  if (!v) return null;
+  return {
+    id: r.certId ?? `self-signed-replacement:${r.hostname}`,
+    name: r.certName ?? `${r.hostname} (self-signed replacement)`,
+    certPem: r.certPem,
+    keyPem: r.keyPem,
+    chainPem: null,
+    domains: [r.hostname],
+    isActiveHttps: false,
+    createdAt: now,
+    acmeStaging: false,
+    validFrom: v.validFrom,
+    validTo: v.validTo,
+  };
+}
+
+const PEM_CERT_RE =/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g;
 
 /**
  * Leaf + intermediates as one PEM (what TLS servers must send). Certificates

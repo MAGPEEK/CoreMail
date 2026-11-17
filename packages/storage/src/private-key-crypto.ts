@@ -23,7 +23,7 @@ const SALT = 'coremail-cert-key';
 const INFO = 'private-key-v1';
 
 export class PrivateKeyDecryptError extends Error {
-  constructor(reason: 'wrong-key' | 'malformed') {
+  constructor(readonly reason: 'wrong-key' | 'malformed') {
     super(reason === 'wrong-key'
       ? 'Stored certificate private key cannot be decrypted with the configured key '
         + '(MFA_ENCRYPTION_KEY, or JWT_SECRET/PEPPER without it, changed) — re-upload or re-issue the certificate'

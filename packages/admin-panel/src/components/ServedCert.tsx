@@ -3,7 +3,8 @@
  *
  * ServedCertWarning — banner (SSL/TLS page + dashboard) when a mail port serves
  *   a self-signed, name-mismatched or expired certificate, with "Jetzt zuweisen"
- *   (activates the suggested trusted certificate for SMTP/IMAP/POP3).
+ *   (activates the suggested trusted certificate for SMTP/IMAP/POP3); also when
+ *   the private key of a certificate in use cannot be read (w1).
  * ServedCertTable  — per port: served certificate, issuer, expiry, status.
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -13,7 +14,9 @@ import { AlertTriangle, CheckCircle2, Loader2, RefreshCw, XCircle } from 'lucide
 import { api } from '../api/client.js';
 import { usePermissions } from '../hooks/usePermissions.js';
 import { Can } from './Can.js';
-import { portLabel, problemText, warningSummary, type ServedReport } from '../lib/servedCert.js';
+import {
+  portLabel, problemText, unreadableKeyText, warningSummary, type ServedReport, type UnreadableKeyCert,
+} from '../lib/servedCert.js';
 
 export const SERVED_CERT_QUERY_KEY = ['admin-certificates-served'] as const;
 
@@ -40,12 +43,37 @@ function useAssignSuggested() {
   });
 }
 
-/** Warning banner; renders nothing while every mail port serves a matching, trusted name. */
+/** Certificates in use whose private key cannot be read (mail ports serve the self-signed replacement). */
+function UnreadableKeyWarning({ certs, linkToCertificates }: { certs: UnreadableKeyCert[]; linkToCertificates: boolean }) {
+  return (
+    <div className="mb-4 px-4 py-3 bg-warning-bg border border-warning-line rounded-xl flex items-start gap-3 text-sm text-warning-fg" role="alert">
+      <AlertTriangle size={16} className="shrink-0 mt-0.5" aria-hidden="true" />
+      <ul className="flex-1 space-y-1">
+        {certs.map((c) => <li key={c.id}><strong>{unreadableKeyText(c)}</strong></li>)}
+      </ul>
+      {linkToCertificates && (
+        <Link to="/certificates" className="btn-secondary text-xs text-center shrink-0">SSL/TLS öffnen</Link>
+      )}
+    </div>
+  );
+}
+
+/** Warning banners; render nothing while every mail port serves a matching, trusted name and every key is readable. */
 export function ServedCertWarning({ linkToCertificates = false }: { linkToCertificates?: boolean }) {
   const { can } = usePermissions();
   const { data } = useServedCert(can('servers', 'read'));
+  const unreadable = data?.unreadableKeys ?? [];
+  return (
+    <>
+      {unreadable.length > 0 && <UnreadableKeyWarning certs={unreadable} linkToCertificates={linkToCertificates} />}
+      {data?.problem && <ServedPortsWarning data={data} linkToCertificates={linkToCertificates} />}
+    </>
+  );
+}
+
+/** A mail port serves a self-signed / name-mismatched / expired certificate ("Jetzt zuweisen"). */
+function ServedPortsWarning({ data, linkToCertificates }: { data: ServedReport; linkToCertificates: boolean }) {
   const assign = useAssignSuggested();
-  if (!data?.problem) return null;
   return (
     <div className="mb-4 px-4 py-3 bg-warning-bg border border-warning-line rounded-xl flex items-start gap-3 text-sm text-warning-fg" role="alert">
       <AlertTriangle size={16} className="shrink-0 mt-0.5" aria-hidden="true" />

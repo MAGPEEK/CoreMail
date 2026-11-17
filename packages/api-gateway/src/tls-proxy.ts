@@ -26,8 +26,10 @@ import https from 'node:https';
 import tls from 'node:tls';
 import type { Application } from 'express';
 import { createLogger, getRedisClient, stripForwardedHeaders, tlsProtocolOptions, type TlsProtocolOptions } from '@coremail/core';
-import { prisma, decryptPrivateKey } from '@coremail/storage';
-import { selectProxyCerts, planSni, buildFullChainPem, type SelectedProxyCert } from './lib/cert-lifecycle.js';
+import { prisma, decryptPrivateKey, selfSignedReplacement } from '@coremail/storage';
+import {
+  selectProxyCerts, planSni, buildFullChainPem, needsHttpsReplacement, replacementProxyCert, type SelectedProxyCert,
+} from './lib/cert-lifecycle.js';
 
 const log  = createLogger('tls-proxy');
 const PORT = parseInt(process.env['HTTPS_PORT'] ?? '443', 10);
@@ -75,7 +77,7 @@ type LoadedCert = SelectedProxyCert;
  * Ordered newest first (notBefore, then createdAt) so the newest cert wins
  * per hostname (see selectProxyCerts / planSni in lib/cert-lifecycle.ts).
  */
-async function loadCerts(): Promise<LoadedCert[]> {
+async function loadCerts(): Promise<{ certs: LoadedCert[]; unreadableKeys: number }> {
   const rows = await prisma.certificate.findMany({
     where: { certPem: { not: null }, keyPem: { not: null } },
     select: {
@@ -84,13 +86,15 @@ async function loadCerts(): Promise<LoadedCert[]> {
     },
     orderBy: { createdAt: 'desc' },
   });
-  return selectProxyCerts(rows.map(withPlainKey));
+  const plain = rows.map(withPlainKey);
+  return { certs: selectProxyCerts(plain), unreadableKeys: plain.filter((r) => r.keyPem === null).length };
 }
 
 /**
  * keyPem is stored encrypted (private-key-crypto in @coremail/storage). A key that
  * cannot be decrypted (key material lost) removes only that certificate from the
- * SNI map; the error names the certificate, never the key.
+ * SNI map; the error names the certificate, never the key. When none is left,
+ * reloadServer() serves the self-signed replacement so 443 keeps TLS.
  */
 function withPlainKey<T extends { id: string; name: string; keyPem: string | null }>(row: T): T {
   if (!row.keyPem) return row;
@@ -98,8 +102,20 @@ function withPlainKey<T extends { id: string; name: string; keyPem: string | nul
     return { ...row, keyPem: decryptPrivateKey(row.keyPem) };
   } catch (err) {
     log.error({ certId: row.id, name: row.name, error: err instanceof Error ? err.message : String(err) },
-      'Certificate private key unreadable — certificate not served on HTTPS');
+      `Private key of certificate "${row.name}" is unreadable — certificate not served on HTTPS; re-issue or upload the certificate`);
     return { ...row, keyPem: null };
+  }
+}
+
+/** The self-signed replacement as the only proxy certificate (null when it cannot be created). */
+async function replacementCerts(): Promise<LoadedCert[]> {
+  try {
+    const cert = replacementProxyCert(await selfSignedReplacement());
+    if (cert) log.warn({ certName: cert.name }, 'HTTPS: no readable certificate left — serving the self-signed replacement certificate');
+    return cert ? [cert] : [];
+  } catch (err) {
+    log.error({ err }, 'HTTPS: self-signed replacement certificate could not be created');
+    return [];
   }
 }
 
@@ -232,7 +248,10 @@ async function reloadServer(app: Application): Promise<void> {
 
   const legacyTls = await loadHttpsLegacyTls();
   const policy = tlsProtocolOptions(legacyTls);
-  const certs = buildSniMaps(loaded, policy);
+  let certs = buildSniMaps(loaded.certs, policy);
+  if (needsHttpsReplacement(certs.length, loaded.unreadableKeys)) {
+    certs = buildSniMaps(await replacementCerts(), policy);
+  }
   if (certs.length === 0) {
     log.info('No certificate with a currently valid PEM — HTTPS server not started');
     return;

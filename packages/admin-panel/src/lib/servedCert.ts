@@ -33,11 +33,23 @@ export interface ServedPort {
   certName: string | null;
 }
 
+/** A certificate in use whose stored private key cannot be read (w1). */
+export interface UnreadableKeyCert {
+  id: string;
+  name: string;
+  /** SMTP/IMAP/POP3 it is assigned to. */
+  services: string[];
+  /** It is the active HTTPS certificate. */
+  https: boolean;
+}
+
 export interface ServedReport {
   hostname: string;
   ports: ServedPort[];
   problem: boolean;
   suggestedCert: { id: string; name: string } | null;
+  /** Absent on servers before w1. */
+  unreadableKeys?: UnreadableKeyCert[];
 }
 
 /** "IMAP 993 (TLS)" / "SMTP 587 (STARTTLS)". */
@@ -71,4 +83,16 @@ export function warningSummary(report: ServedReport): string {
     const cn = first.cert?.commonName ? ` (CN=${first.cert.commonName})` : '';
     return `${ports.map(portLabel).join(', ')}: ${problemText(first.problem, report.hostname)}${cn}`;
   }).join(' · ');
+}
+
+/**
+ * Warning line for a certificate whose private key cannot be read: the mail
+ * protocols serve the self-signed replacement, HTTPS skips the certificate.
+ */
+export function unreadableKeyText(c: UnreadableKeyCert): string {
+  const effects = [
+    ...(c.services.length > 0 ? ['Mail-Protokolle nutzen das selbstsignierte Ersatzzertifikat'] : []),
+    ...(c.https ? ['HTTPS liefert es nicht aus'] : []),
+  ];
+  return `Privater Schlüssel von ${c.name} nicht lesbar — ${effects.join(', ') || 'das Zertifikat wird nicht verwendet'}; Zertifikat neu ausstellen oder hochladen`;
 }

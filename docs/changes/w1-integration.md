@@ -19,3 +19,17 @@ SemVer: MINOR (additive API fields, UI changes, fixes; no breaking change).
   appear with the gateway address, which would open the relay to everyone reaching the host. The
   device-relay API (`GET`/`PUT /api/v1/admin/smtp-config/device-relay`) returns the new additive
   field `warnings`; the configuration is still saved.
+
+### Fixed
+- An unreadable certificate private key (wrong or lost `MFA_ENCRYPTION_KEY`) no longer turns TLS
+  off: SMTP, IMAP and POP3 used to stop offering STARTTLS and started the implicit-TLS ports
+  465/993/995 in **plaintext**. They now serve the self-signed replacement for the public host name
+  (the readable self-signed default, else one generated in memory) and log an error naming the
+  certificate; a failure to load any certificate also keeps TLS on. The HTTPS proxy serves the
+  replacement when unreadable keys leave no usable certificate, so port 443 keeps TLS.
+
+### Added (API, additive)
+- `GET /api/v1/admin/certificates/served` returns `unreadableKeys` (certificates in use whose
+  private key cannot be read); BCP → SSL/TLS and the dashboard show „Privater Schlüssel von <Name>
+  nicht lesbar — Mail-Protokolle nutzen das selbstsignierte Ersatzzertifikat; Zertifikat neu
+  ausstellen oder hochladen".

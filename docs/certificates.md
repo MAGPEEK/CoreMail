@@ -109,10 +109,17 @@ when that variable is not set, from `JWT_SECRET` + `PEPPER`.
 `PEPPER` change — the stored private keys can no longer be decrypted (just like the 2FA secrets).
 The consequences:
 
-- the HTTPS proxy leaves the affected certificates out (log `Certificate private key unreadable —
-  certificate not served on HTTPS`);
-- SMTP, IMAP and POP3 log `Stored certificate private key cannot be decrypted …` and do not
-  offer TLS until a usable certificate is assigned;
+- the HTTPS proxy leaves the affected certificates out (log `Private key of certificate "<name>"
+  is unreadable — certificate not served on HTTPS …`); when no readable certificate is left it
+  serves the self-signed replacement (below), so port 443 keeps TLS (no HTTP → HTTPS redirect to it);
+- SMTP, IMAP and POP3 log `Private key of certificate "<name>" is unreadable — … serves the
+  self-signed replacement certificate …` and keep TLS on with the **self-signed replacement** for
+  the public host name: the self-signed default row of the certificates table when its key is
+  readable, else a certificate generated in memory (nothing is written to the database). The
+  implicit-TLS ports 465/993/995 never fall back to plaintext;
+- BCP → SSL/TLS and the dashboard show „Privater Schlüssel von <Name> nicht lesbar — Mail-Protokolle
+  nutzen das selbstsignierte Ersatzzertifikat; Zertifikat neu ausstellen oder hochladen"
+  (`GET /api/v1/admin/certificates/served` → `unreadableKeys: [{ id, name, services, https }]`);
 - a Let's Encrypt account key that cannot be decrypted is replaced by a new one at the next
   issuance or renewal (a new account at Let's Encrypt; the certificates are not affected);
 - the startup migration reports them (`… cannot be decrypted with the configured key`) and leaves

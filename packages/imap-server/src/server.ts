@@ -7,7 +7,7 @@ import {
   startAuthInvalidationSubscriber, onAuthInvalidation, resolveBindAddress, listenWithRecovery,
 } from '@coremail/core';
 import { namespaceConfig } from './commands/namespaces.js';
-import { connectDatabase, waitForObjectStorage, prisma, loadProtocolCert, selfSignedFallbackHostname, encryptPrivateKey } from '@coremail/storage';
+import { connectDatabase, waitForObjectStorage, prisma, loadProtocolTls, selfSignedReplacement, selfSignedFallbackHostname, encryptPrivateKey } from '@coremail/storage';
 import { applyAuthInvalidation, createImapServer, setImapHostname, setImapMaxMessageSize, type ImapTlsConfig } from './server/index.js';
 import { imapLiveSessions } from './session/live.js';
 import { invalidExemptEntries } from './server/limits.js';
@@ -48,9 +48,15 @@ async function refreshHostname(): Promise<void> {
 async function refreshTlsConfig(): Promise<void> {
   try {
     // v5.2.8: cert directly from the certificates table via services[]='IMAP'
-    const found = await loadProtocolCert('IMAP');
+    const found = await loadProtocolTls('IMAP', generateSelfSignedCert);
 
     if (found) {
+      if (found.unreadable) {
+        // w1: an unreadable private key never drops TLS — the self-signed
+        // replacement for the public host name is served until the admin acts.
+        log.error({ certId: found.unreadable.certId, certName: found.unreadable.certName },
+          `Private key of certificate "${found.unreadable.certName}" is unreadable — IMAP serves the self-signed replacement certificate; re-issue or upload the certificate`);
+      }
       _tlsConfig = tlsPemToBuffers(found.certPem, found.keyPem);
       log.info({ source: found.source, certName: found.certName, certId: found.certId }, 'IMAP TLS cert loaded');
       return;
@@ -74,7 +80,24 @@ async function refreshTlsConfig(): Promise<void> {
     });
     log.info('Self-signed TLS certificate generated and stored in DB (IMAP)');
   } catch (err) {
-    log.error({ err }, 'Failed to load/generate IMAP TLS config — port 993 will use plaintext');
+    log.error({ err }, 'Failed to load/generate IMAP TLS config — serving the self-signed replacement');
+    await keepTlsOn();
+  }
+}
+
+/**
+ * w1: without a loaded certificate the implicit-TLS port would start in
+ * plaintext — serve the self-signed replacement instead (a previously loaded
+ * certificate stays in use).
+ */
+async function keepTlsOn(): Promise<void> {
+  if (_tlsConfig) return;
+  try {
+    const r = await selfSignedReplacement(generateSelfSignedCert);
+    _tlsConfig = tlsPemToBuffers(r.certPem, r.keyPem);
+    log.warn({ hostname: r.hostname }, 'IMAP TLS: serving the self-signed replacement certificate');
+  } catch (err) {
+    log.error({ err }, 'IMAP TLS: self-signed replacement certificate could not be created');
   }
 }
 

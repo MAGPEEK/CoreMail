@@ -5,7 +5,7 @@ import tls from 'node:tls';
 import { createLogger, generateSelfSignedCert, tlsPemToBuffers, applyTlsToListeners, tlsMaterialEquals, installProcessGuards, startAuthInvalidationSubscriber, resolveBindAddress, listenWithRecovery, tlsServerOptions } from '@coremail/core';
 import { getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD, CHANNEL_SETTINGS_RELOAD } from '@coremail/core/redis';
 import { logTlsSocketError } from '@coremail/core/tls-errors';
-import { prisma, loadProtocolCert, selfSignedFallbackHostname, encryptPrivateKey, waitForObjectStorage } from '@coremail/storage';
+import { prisma, loadProtocolTls, selfSignedReplacement, selfSignedFallbackHostname, encryptPrivateKey, waitForObjectStorage } from '@coremail/storage';
 import { POP3Session, setPop3Hostname, pop3LiveSessions, TLS_HANDSHAKE_MS } from './session.js';
 import { admitConnection, invalidExemptEntries } from './limits.js';
 
@@ -44,9 +44,15 @@ async function refreshHostname(): Promise<void> {
 async function refreshTlsConfig(): Promise<void> {
   try {
     // v5.2.8: cert directly from the certificates table via services[]='POP3'
-    const found = await loadProtocolCert('POP3');
+    const found = await loadProtocolTls('POP3', generateSelfSignedCert);
 
     if (found) {
+      if (found.unreadable) {
+        // w1: an unreadable private key never drops TLS — the self-signed
+        // replacement for the public host name is served until the admin acts.
+        log.error({ certId: found.unreadable.certId, certName: found.unreadable.certName },
+          `Private key of certificate "${found.unreadable.certName}" is unreadable — POP3 serves the self-signed replacement certificate; re-issue or upload the certificate`);
+      }
       _tlsConfig = tlsPemToBuffers(found.certPem, found.keyPem);
       log.info({ source: found.source, certName: found.certName, certId: found.certId }, 'POP3 TLS cert loaded');
       return;
@@ -68,7 +74,24 @@ async function refreshTlsConfig(): Promise<void> {
     });
     log.info('Self-signed TLS certificate generated and stored in DB (POP3)');
   } catch (err) {
-    log.error({ err }, 'Failed to load/generate POP3 TLS config — port 995 will use plaintext');
+    log.error({ err }, 'Failed to load/generate POP3 TLS config — serving the self-signed replacement');
+    await keepTlsOn();
+  }
+}
+
+/**
+ * w1: without a loaded certificate the implicit-TLS port would start in
+ * plaintext — serve the self-signed replacement instead (a previously loaded
+ * certificate stays in use).
+ */
+async function keepTlsOn(): Promise<void> {
+  if (_tlsConfig) return;
+  try {
+    const r = await selfSignedReplacement(generateSelfSignedCert);
+    _tlsConfig = tlsPemToBuffers(r.certPem, r.keyPem);
+    log.warn({ hostname: r.hostname }, 'POP3 TLS: serving the self-signed replacement certificate');
+  } catch (err) {
+    log.error({ err }, 'POP3 TLS: self-signed replacement certificate could not be created');
   }
 }
 

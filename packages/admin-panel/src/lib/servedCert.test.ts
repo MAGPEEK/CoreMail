@@ -37,3 +37,24 @@ test('warningSummary groups ports with the same problem and CN', () => {
   assert.equal(warningSummary(report), 'IMAP 993 (TLS), SMTP 465 (TLS): selbstsigniert — Outlook/iPhone vertrauen diesem Zertifikat nicht (CN=mail.localhost)');
   assert.deepEqual(problemPorts(null), []);
 });
+
+test('unreadable private key: names the certificate, what the protocols do now and what to do', async () => {
+  const { unreadableKeyText } = await import('./servedCert.ts');
+  assert.equal(
+    unreadableKeyText({ id: 'c1', name: 'Firmenzertifikat', services: ['SMTP', 'IMAP', 'POP3'], https: false }),
+    'Privater Schlüssel von Firmenzertifikat nicht lesbar — Mail-Protokolle nutzen das selbstsignierte Ersatzzertifikat; Zertifikat neu ausstellen oder hochladen',
+  );
+  assert.match(unreadableKeyText({ id: 'c2', name: 'Web', services: [], https: true }), /^Privater Schlüssel von Web nicht lesbar — HTTPS liefert es nicht aus; /);
+  assert.match(unreadableKeyText({ id: 'c3', name: 'Beides', services: ['SMTP'], https: true }), /Ersatzzertifikat, HTTPS liefert es nicht aus/);
+});
+
+test('the served-certificate warning (SSL/TLS page + dashboard) renders unreadable keys', async () => {
+  const { readFileSync } = await import('node:fs');
+  const component = readFileSync(new URL('../components/ServedCert.tsx', import.meta.url), 'utf8');
+  assert.match(component, /data\?\.unreadableKeys \?\? \[\]/, 'older servers send no field');
+  assert.match(component, /<UnreadableKeyWarning certs=\{unreadable\}/);
+  assert.match(component, /unreadableKeyText\(c\)/);
+  for (const page of ['../pages/CertificatesPage.tsx', '../pages/DashboardPage.tsx']) {
+    assert.match(readFileSync(new URL(page, import.meta.url), 'utf8'), /<ServedCertWarning\b/, page);
+  }
+});

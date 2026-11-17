@@ -13,16 +13,20 @@
  *      self-signed cert (only sensible on the very first start).
  *
  * The private key is stored encrypted (private-key-crypto.ts) and returned as
- * plain PEM; an undecryptable key throws PrivateKeyDecryptError (the caller logs
- * it and does not serve TLS) instead of silently switching certificates.
+ * plain PEM; an undecryptable key throws UnreadableCertKeyError (a
+ * PrivateKeyDecryptError naming the certificate). The mail servers use
+ * loadProtocolTls(), which then serves the self-signed replacement for the
+ * public host name — TLS stays on (an implicit-TLS port never falls back to
+ * plaintext) and the condition is visible in the BCP (unreadableInUseCertKeys).
  *
  * This architecture replaces the fragile ServerSettings.tlsCert sync that until
  * v5.2.7 was updated by hand in `applyProtocolCert()` and could be
  * overwritten by the smtp-server on every restart.
  */
 
+import { generateSelfSignedCert } from '@coremail/core';
 import { prisma } from './prisma/index.js';
-import { decryptPrivateKey } from './private-key-crypto.js';
+import { PrivateKeyDecryptError, decryptPrivateKey } from './private-key-crypto.js';
 
 const PEM_CERT_RE = /-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g;
 
@@ -65,8 +69,36 @@ export interface ProtocolCert {
   certName?: string;
 }
 
+/** Identifies a stored certificate in errors and the BCP (never key material). */
+export interface CertIdentity {
+  certId?: string;
+  certName: string;
+}
+
+/** Name used for the legacy ServerSettings.tlsCert/tlsKey pair. */
+export const LEGACY_SERVER_CERT_NAME = 'ServerSettings.tlsCert (legacy)';
+
+/** The private key of an assigned certificate cannot be read (wrong encryption key or malformed). */
+export class UnreadableCertKeyError extends PrivateKeyDecryptError {
+  constructor(readonly cert: CertIdentity, cause: PrivateKeyDecryptError) {
+    super(cause.reason);
+    this.name = 'UnreadableCertKeyError';
+    this.message = `Certificate "${cert.certName}": ${cause.message}`;
+  }
+}
+
+function decryptKeyOf(cert: CertIdentity, stored: string): string {
+  try {
+    return decryptPrivateKey(stored);
+  } catch (err) {
+    if (err instanceof PrivateKeyDecryptError) throw new UnreadableCertKeyError(cert, err);
+    throw err;
+  }
+}
+
 /**
  * @param service 'SMTP' | 'IMAP' | 'POP3' (case-insensitive, uppercase internally)
+ * @throws UnreadableCertKeyError when the assigned certificate's private key cannot be read
  */
 export async function loadProtocolCert(service: string): Promise<ProtocolCert | null> {
   const svc = service.toUpperCase();
@@ -93,7 +125,7 @@ export async function loadProtocolCert(service: string): Promise<ProtocolCert | 
       // 9.2.x: leaf + intermediates — an uploaded certificate with a separate
       // chain was served without its intermediates on SMTP/IMAP/POP3.
       certPem:  pemWithChain(cert.certPem, cert.chainPem),
-      keyPem:   decryptPrivateKey(cert.keyPem),
+      keyPem:   decryptKeyOf({ certId: cert.id, certName: cert.name }, cert.keyPem),
       source:   'protocol-cert',
       certId:   cert.id,
       certName: cert.name,
@@ -116,10 +148,118 @@ export async function loadProtocolCert(service: string): Promise<ProtocolCert | 
     if (staging) return null;
     return {
       certPem: settings.tlsCert,
-      keyPem:  decryptPrivateKey(settings.tlsKey),
+      keyPem:  decryptKeyOf({ certName: LEGACY_SERVER_CERT_NAME }, settings.tlsKey),
       source:  'legacy-server-settings',
     };
   }
 
   return null;
+}
+
+// ── Unreadable private keys: self-signed replacement (w1 integration) ─────────
+
+export interface SelfSignedPem { certPem: string; keyPem: string }
+export type SelfSignedGenerator = (hostname: string) => SelfSignedPem;
+
+export interface SelfSignedReplacement extends SelfSignedPem {
+  hostname: string;
+  /** Set when the visible self-signed default row of the certificates table is used. */
+  certId?: string;
+  certName?: string;
+}
+
+/** Generated replacements, once per process and host name (stable across reloads). */
+const generatedReplacements = new Map<string, SelfSignedPem>();
+
+/**
+ * The self-signed certificate the mail servers (and the HTTPS proxy) fall back to
+ * while an assigned certificate cannot be used: the self-signed default row for
+ * the public host name when its key is readable, else a certificate generated in
+ * memory (once per process and host name — nothing is written to the database,
+ * so the stored certificates stay as they are until the admin replaces them).
+ */
+export async function selfSignedReplacement(generate: SelfSignedGenerator = generateSelfSignedCert): Promise<SelfSignedReplacement> {
+  const hostname = await selfSignedFallbackHostname();
+  const rows = await prisma.certificate.findMany({
+    where:   { type: 'SELF_SIGNED', domains: { has: hostname }, certPem: { not: null }, keyPem: { not: null } },
+    select:  { id: true, name: true, certPem: true, keyPem: true },
+    orderBy: { createdAt: 'desc' },
+  }).catch(() => []);
+  for (const row of rows ?? []) {
+    try {
+      return { hostname, certPem: row.certPem!, keyPem: decryptPrivateKey(row.keyPem!), certId: row.id, certName: row.name };
+    } catch { /* this row's key is unreadable as well — try the next one */ }
+  }
+  let generated = generatedReplacements.get(hostname);
+  if (!generated) {
+    generated = generate(hostname);
+    generatedReplacements.set(hostname, generated);
+  }
+  return { hostname, ...generated };
+}
+
+export interface ProtocolTls {
+  certPem: string;
+  keyPem:  string;
+  source:  ProtocolCert['source'] | 'self-signed-replacement';
+  certId?: string;
+  certName?: string;
+  /** The assigned certificate whose private key is unreadable (the replacement is served instead). */
+  unreadable?: CertIdentity;
+}
+
+/**
+ * loadProtocolCert() for the mail servers: an assigned certificate whose private
+ * key cannot be read is replaced by the self-signed replacement (TLS stays on,
+ * an implicit-TLS port never falls back to plaintext); `unreadable` names it so
+ * the server logs an error. null = nothing configured (first start).
+ */
+export async function loadProtocolTls(service: string, generate?: SelfSignedGenerator): Promise<ProtocolTls | null> {
+  try {
+    return await loadProtocolCert(service);
+  } catch (err) {
+    if (!(err instanceof UnreadableCertKeyError)) throw err;
+    const r = await selfSignedReplacement(generate);
+    return {
+      certPem: r.certPem,
+      keyPem:  r.keyPem,
+      source:  'self-signed-replacement',
+      ...(r.certId ? { certId: r.certId } : {}),
+      ...(r.certName ? { certName: r.certName } : {}),
+      unreadable: err.cert,
+    };
+  }
+}
+
+export interface UnreadableKeyCert {
+  id: string;
+  name: string;
+  /** SMTP/IMAP/POP3 this certificate is assigned to (empty when it is not the protocol certificate). */
+  services: string[];
+  /** The certificate is the active HTTPS certificate. */
+  https: boolean;
+}
+
+const MAIL_SERVICES = new Set(['SMTP', 'IMAP', 'POP3']);
+
+/**
+ * Certificates in use (protocol TLS or HTTPS) whose stored private key cannot be
+ * read — for the BCP warning. Reads keys only to test them; returns no key data.
+ */
+export async function unreadableInUseCertKeys(): Promise<UnreadableKeyCert[]> {
+  const rows = await prisma.certificate.findMany({
+    where:  { status: { not: 'PENDING' }, keyPem: { not: null }, OR: [{ isActiveProtocol: true }, { isActiveHttps: true }] },
+    select: { id: true, name: true, keyPem: true, services: true, isActiveProtocol: true, isActiveHttps: true },
+  });
+  const out: UnreadableKeyCert[] = [];
+  for (const r of rows) {
+    try { decryptPrivateKey(r.keyPem!); continue; } catch { /* unreadable → reported */ }
+    out.push({
+      id: r.id,
+      name: r.name,
+      services: r.isActiveProtocol ? r.services.filter((x) => MAIL_SERVICES.has(x)) : [],
+      https: r.isActiveHttps,
+    });
+  }
+  return out;
 }
