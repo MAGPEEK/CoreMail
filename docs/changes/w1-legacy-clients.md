@@ -17,9 +17,14 @@ Behaviour changes worth noting in the release notes are listed under "Changed".
   from configured networks (CIDR, nothing broader than /8 resp. /32), on a chosen inbound listener
   port (25 or a dedicated port), only for configured hosted sender domains (envelope and
   From:/Sender: header), rate-limited per source IP (fails closed). Default off; never an open relay.
+  Relayed messages pass the attachment filter and ClamAV (configured action, failure and oversize
+  policy; a virus is quarantined or refused, an unreachable filter defers with 451) — no spam
+  scoring. Forged internal headers and own `Authentication-Results` are removed.
   BCP → SMTP-Konfiguration → Geräte-Relay, API `GET/PUT /api/v1/admin/smtp-config/device-relay`,
   audited as `settings.device-relay.updated`, relayed messages in the message flow. Docs
   `docs/device-relay.md`.
+- security-filter: `POST /check/malware` (attachment filter + ClamAV only, same request format and
+  failure policy as `/check/content`).
 - **Autodiscover**: client test matrix (Outlook 2010/2013/2016/2019/2021/Microsoft 365 classic, iOS
   Mail, Android ActiveSync), `docs/autodiscover.md` (DNS incl. `_autodiscover._tcp` SRV, request
   handling, old Outlook profiles), `docs/outlook-caldav.md` (classic Outlook with IMAP/SMTP and
@@ -36,13 +41,18 @@ Behaviour changes worth noting in the release notes are listed under "Changed".
   (implicit TLS preferred); ports without any listener row (NAT mappings) are unchanged.
 - Plain-HTTP Autodiscover probes get `302` to the HTTPS endpoint (gateway redirect for
   `/autodiscover/autodiscover.xml` uses 302 instead of 308; the autodiscover service redirects an
-  unauthenticated plain-HTTP GET when the configured Autodiscover URL is HTTPS) instead of a Basic
-  challenge.
+  unauthenticated plain-HTTP GET when the configured Autodiscover URL is HTTPS and the gateway marks
+  the scheme as known — `X-CoreMail-Proto-Verified`; behind a reverse proxy without `TRUST_PROXY`
+  the probe keeps the Basic challenge, a redirect would loop) instead of a Basic challenge.
 - Autodiscover v1 reads the POST body whatever its Content-Type (max 64 KiB).
 
 ### Security
 - The legacy `SmtpSettings.relaying*` fields stay unevaluated; the device relay uses its own
   settings row, so stale values cannot open a relay on upgrade.
+- Relay allow-lists (`@coremail/core` cidr.ts): IPv4 clients are only matched against IPv4 entries
+  — node's BlockList matched every IPv4 address against IPv6 entries such as `::/32` or
+  `::ffff:0:0/96`; IPv4-mapped entries count as the IPv4 range they denote (`/8` limit), and the
+  SMTP server ignores too broad stored entries as well.
 
 Schema (additive): `ServiceListener.allowLegacyTls` (default false), `ServerSettings.httpsAllowLegacyTls`
 (default false), new model `DeviceRelaySettings` (`device_relay_settings`).

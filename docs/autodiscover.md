@@ -43,7 +43,11 @@ proxy selects the certificate by SNI). With the SRV record Outlook asks the user
    itself while the integrated HTTPS proxy is active (`302` for the Autodiscover XML path, `308`
    elsewhere — older Outlook builds do not follow `308`); behind an external TLS terminator with
    `TRUST_PROXY` the autodiscover service does it from `X-Forwarded-Proto` when the configured
-   Autodiscover URL (BCP → Server) is `https://`.
+   Autodiscover URL (BCP → Server) is `https://`. It only does so when the gateway marks the
+   scheme as known (`X-CoreMail-Proto-Verified`: TLS socket, trusted proxy or a direct client).
+   Behind a reverse proxy **without** `TRUST_PROXY` the gateway cannot tell HTTP from HTTPS
+   clients — a redirect would loop — so the probe gets the `401` challenge as before; set
+   `TRUST_PROXY` to the proxy address to get the redirect.
 2. **Challenge.** Any request without `Authorization: Basic …` (no header, `Negotiate`, `NTLM`,
    `Bearer`) gets `401` with `WWW-Authenticate: Basic realm="CoreMail Autodiscover"`, without any
    database access. The scheme is case-insensitive.

@@ -5,9 +5,11 @@
 //    lowercase path variant, never EXCH/EXPR blocks;
 //  - device relay on port 25: off → external recipient refused; on for the private networks +
 //    the e2e domain → accepted at RCPT for that sender domain only; settings validated (0.0.0.0/0
-//    refused); finally switched off again.
+//    refused, also as the IPv4-mapped ::ffff:0:0/96); a relayed message with a blocked attachment
+//    is refused at DATA (the relay runs the attachment filter + ClamAV, nothing is queued);
+//    finally switched off again.
 import tls from 'node:tls';
-import { check, assert, creds, http, session, waitFor, smtpOpen, smtpCmd, basic, HOST, PORTS, DOMAIN } from '../lib.mjs';
+import { check, assert, creds, http, session, waitFor, smtpOpen, smtpCmd, smtpSend, basic, HOST, PORTS, DOMAIN } from '../lib.mjs';
 
 /** TLS handshake pinned to one protocol version against an implicit-TLS port. */
 function handshake(port, version) {
@@ -40,6 +42,28 @@ async function relayRcpt(from, rcpt) {
     await smtpCmd(c, 'QUIT').catch(() => undefined);
     c.close();
   }
+}
+
+/** A relayed transaction up to the DATA reply (nothing is queued when DATA is refused). */
+async function relayData(from, rcpt, raw) {
+  const c = await smtpOpen(PORTS.smtp, { ehlo: 'scanner.e2e.test' });
+  try {
+    return await smtpSend(c, from, [rcpt], raw);
+  } finally {
+    await smtpCmd(c, 'QUIT').catch(() => undefined);
+    c.close();
+  }
+}
+
+/** Scan-to-mail with an executable attachment — blocked by the default attachment filter (.exe). */
+function mailWithExe(from, to) {
+  const b = 'e2e-relay-boundary';
+  return [
+    `From: Scanner <${from}>`, `To: <${to}>`, 'Subject: e2e device relay attachment', 'MIME-Version: 1.0',
+    `Content-Type: multipart/mixed; boundary="${b}"`, '', `--${b}`, 'Content-Type: text/plain', '', 'scan', `--${b}`,
+    'Content-Type: application/octet-stream; name="scan.exe"', 'Content-Disposition: attachment; filename="scan.exe"',
+    'Content-Transfer-Encoding: base64', '', Buffer.from('MZ e2e').toString('base64'), `--${b}--`, '',
+  ].join('\r\n');
 }
 
 const RELAY_OFF = { enabled: false, allowedNetworks: [], senderDomains: [], port: 25, maxMessagesPerMinute: 30 };
@@ -89,8 +113,10 @@ export async function run(state) {
       const offReply = await relayRcpt(`scanner@${DOMAIN}`, external);
       assert(offReply.code >= 500, `off: external RCPT must be refused, got ${offReply.text}`);
 
-      r = await http('PUT', '/api/v1/admin/smtp-config/device-relay', { token: admin, body: { ...RELAY_OFF, enabled: true, allowedNetworks: ['0.0.0.0/0'], senderDomains: [DOMAIN] } });
-      assert(r.status === 400, `0.0.0.0/0 must be refused, got ${r.status}`);
+      for (const wide of ['0.0.0.0/0', '::ffff:0:0/96']) {
+        r = await http('PUT', '/api/v1/admin/smtp-config/device-relay', { token: admin, body: { ...RELAY_OFF, enabled: true, allowedNetworks: [wide], senderDomains: [DOMAIN] } });
+        assert(r.status === 400, `${wide} must be refused, got ${r.status}`);
+      }
 
       r = await http('PUT', '/api/v1/admin/smtp-config/device-relay', {
         token: admin, body: { ...RELAY_OFF, enabled: true, allowedNetworks: ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '127.0.0.0/8'], senderDomains: [DOMAIN] },
@@ -99,9 +125,11 @@ export async function run(state) {
       await waitFor(async () => (await relayRcpt(`scanner@${DOMAIN}`, external)).code === 250, { what: 'device relay active', timeout: 45000 });
       const foreign = await relayRcpt('ceo@bank.example.org', external);
       assert(foreign.code === 550 && /5\.7\.1/.test(foreign.text), `foreign sender: ${foreign.text}`);
+      const exe = await relayData(`scanner@${DOMAIN}`, external, mailWithExe(`scanner@${DOMAIN}`, external));
+      assert(exe.stage === 'DATA' && exe.code === 550, `blocked attachment must be refused at DATA: ${exe.stage} ${exe.text}`);
     } finally {
       await http('PUT', '/api/v1/admin/smtp-config/device-relay', { token: admin, body: RELAY_OFF });
     }
-    return 'off → refused, on → only configured domains';
+    return 'off → refused, on → only configured domains, attachment filter applies';
   });
 }

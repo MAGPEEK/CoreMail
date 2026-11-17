@@ -119,8 +119,8 @@ export function DeviceRelaySection() {
           <Info size={13} className="shrink-0 mt-0.5" aria-hidden="true" />
           <span>
             Kein offenes Relay: Clients außerhalb der Netze, andere Absender-Domains und andere Ports erhalten für externe Empfänger
-            weiterhin eine Ablehnung. Weitergeleitete Gerätemails werden wie angemeldete Sendungen behandelt (kein Spam-Filter);
-            jede Weiterleitung wird im Nachrichtenfluss protokolliert, jede Änderung hier im Audit-Log.
+            weiterhin eine Ablehnung. Weitergeleitete Gerätemails durchlaufen Anhangfilter und Virenscan (Einstellungen unter
+            Schutzfilter), aber keinen Spam-Filter; jede Weiterleitung wird im Nachrichtenfluss protokolliert, jede Änderung hier im Audit-Log.
           </span>
         </div>
       </div>

@@ -104,8 +104,9 @@ See [certificates.md](certificates.md).
 seconds after „Ältere Clients erlauben" is switched on (no container restart) and refuses it again
 after switching off; Autodiscover answers 401 Basic first, then IMAP/SMTP with an explicit
 `<Encryption>` (mixed-case path); the device relay refuses an external recipient while off, refuses
-`0.0.0.0/0`, then (private networks + `<E2E_DOMAIN>`) accepts the external RCPT for that sender
-domain only and is switched off again. See [legacy-tls.md](legacy-tls.md), [device-relay.md](device-relay.md),
+`0.0.0.0/0` and `::ffff:0:0/96`, then (private networks + `<E2E_DOMAIN>`) accepts the external RCPT for that
+sender domain only, refuses a relayed message with an `.exe` attachment at DATA (attachment filter) and
+is switched off again. See [legacy-tls.md](legacy-tls.md), [device-relay.md](device-relay.md),
 [autodiscover.md](autodiscover.md).
 `backup` (9.3): B gets a folder `E2E-Backup` with two APPENDed messages (attachment, `\Flagged \Seen`);
 a mailbox backup of B (encrypted ZIP in the bucket) is restored from the STORED archive into A
