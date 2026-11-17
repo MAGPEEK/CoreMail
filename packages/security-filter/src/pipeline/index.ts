@@ -511,6 +511,42 @@ async function runContentStages(
     return { action: 'reject', reason: blacklist.reason ?? 'Sender blocked' };
   }
 
+  const malware = await runMalwareStages(rawMessage, ctx, config, deps);
+  if (malware.decision) return malware.decision;
+  const virusNote = malware.note;
+
+  const result = await runSpamStage(rawMessage, ctx, config, deps, auth, hostname);
+  return virusNote && result.action !== 'reject' ? { ...result, virusScan: virusNote } : result;
+}
+
+/**
+ * Malware checks only — attachment filter + ClamAV with the configured policy
+ * (POST /check/malware). For mail the SMTP server accepted from a trusted
+ * source without SMTP AUTH (device relay): no SPF/DKIM/DMARC and no spam
+ * scoring, but a virus or a blocked attachment is never relayed. A message
+ * not scanned clean carries the `virusScan` note like on the full pipeline.
+ */
+export async function runMalwareChecks(
+  rawMessage: Buffer,
+  ctx: ConnectionContext,
+  config: PipelineConfig = {},
+  deps: Pick<PipelineDeps, 'parse' | 'clamav'> = defaultDeps,
+): Promise<PipelineResult> {
+  const { decision, note } = await runMalwareStages(rawMessage, ctx, config, deps);
+  if (decision) return decision;
+  return { action: 'accept', reason: 'Malware checks passed', ...(note ? { virusScan: note } : {}) };
+}
+
+/**
+ * Stages 4a–4c (attachment filter, ClamAV). `decision` stops the pipeline;
+ * `note` travels with a message that was not scanned clean.
+ */
+async function runMalwareStages(
+  rawMessage: Buffer,
+  ctx: ConnectionContext,
+  config: PipelineConfig,
+  deps: Pick<PipelineDeps, 'parse' | 'clamav'>,
+): Promise<{ decision: PipelineResult | null; note?: VirusScanNote }> {
   // ── Stage 4a+b: Attachment filter (SecuritySettings.attachment*) ─────────
   if (config.attachmentEnabled !== false) {
     let parsed;
@@ -518,46 +554,42 @@ async function runContentStages(
       parsed = await deps.parse(rawMessage);
     } catch (err) {
       log.error({ err }, 'MIME parsing failed');
-      return { action: 'reject', reason: 'Invalid message format' };
+      return { decision: { action: 'reject', reason: 'Invalid message format' } };
     }
     const attCheck = checkAttachments(parsed.attachments, {
       ...(config.maxAttachmentBytes !== undefined ? { maxSizeBytes: config.maxAttachmentBytes } : {}),
       ...(config.blockedExtensions !== undefined ? { blockedExtensions: config.blockedExtensions } : {}),
     });
     if (attCheck.blocked) {
-      return { action: 'reject', reason: attCheck.reason ?? 'Attachment not allowed' };
+      return { decision: { action: 'reject', reason: attCheck.reason ?? 'Attachment not allowed' } };
     }
   } else {
     log.debug('Attachment filter skipped (disabled in settings)');
   }
 
   // ── Stage 4c: ClamAV antivirus ───────────────────────────────────────────
-  let virusNote: VirusScanNote | undefined;
-  if (config.clamavEnabled !== false) {
-    const clamav = await scanWithPolicy(rawMessage, config, deps.clamav);
-    const { decision, note } = evaluateClamav(clamav, config);
-    if (decision) {
-      if (clamav.status === 'infected') log.warn({ virusName: clamav.virusName, mailFrom: ctx.mailFrom, action: decision.action }, 'Virus detected');
-      else if (clamav.status === 'oversize') log.warn({ size: rawMessage.length, mailFrom: ctx.mailFrom }, 'Message too large for virus scanning — rejected (clamavOversizeAction=reject)');
-      else log.warn({ err: clamav.error, mailFrom: ctx.mailFrom }, 'ClamAV scan failed — deferring (clamavBlockOnFailure)');
-      return decision;
-    }
-    if (note?.status === 'infected') {
-      log.warn({ virusName: clamav.virusName, mailFrom: ctx.mailFrom }, 'Virus detected — delivered anyway (clamavAction=pass)');
-    } else if (note?.status === 'suspicious') {
-      log.info({ virusName: clamav.virusName, mailFrom: ctx.mailFrom }, 'ClamAV heuristic/PUA/encrypted finding — delivered tagged (category not treated as virus)');
-    } else if (note?.reason === 'too-large') {
-      log.info({ size: rawMessage.length, mailFrom: ctx.mailFrom }, 'Message too large for virus scanning — accepting unscanned');
-    } else if (note?.reason === 'scanner-error') {
-      log.warn({ err: clamav.error }, 'ClamAV scan failed — accepting unscanned (clamavBlockOnFailure=false)');
-    }
-    virusNote = note;
-  } else {
+  if (config.clamavEnabled === false) {
     log.debug('ClamAV scan skipped (disabled in settings)');
+    return { decision: null };
   }
-
-  const result = await runSpamStage(rawMessage, ctx, config, deps, auth, hostname);
-  return virusNote && result.action !== 'reject' ? { ...result, virusScan: virusNote } : result;
+  const clamav = await scanWithPolicy(rawMessage, config, deps.clamav);
+  const { decision, note } = evaluateClamav(clamav, config);
+  if (decision) {
+    if (clamav.status === 'infected') log.warn({ virusName: clamav.virusName, mailFrom: ctx.mailFrom, action: decision.action }, 'Virus detected');
+    else if (clamav.status === 'oversize') log.warn({ size: rawMessage.length, mailFrom: ctx.mailFrom }, 'Message too large for virus scanning — rejected (clamavOversizeAction=reject)');
+    else log.warn({ err: clamav.error, mailFrom: ctx.mailFrom }, 'ClamAV scan failed — deferring (clamavBlockOnFailure)');
+    return { decision };
+  }
+  if (note?.status === 'infected') {
+    log.warn({ virusName: clamav.virusName, mailFrom: ctx.mailFrom }, 'Virus detected — delivered anyway (clamavAction=pass)');
+  } else if (note?.status === 'suspicious') {
+    log.info({ virusName: clamav.virusName, mailFrom: ctx.mailFrom }, 'ClamAV heuristic/PUA/encrypted finding — delivered tagged (category not treated as virus)');
+  } else if (note?.reason === 'too-large') {
+    log.info({ size: rawMessage.length, mailFrom: ctx.mailFrom }, 'Message too large for virus scanning — accepting unscanned');
+  } else if (note?.reason === 'scanner-error') {
+    log.warn({ err: clamav.error }, 'ClamAV scan failed — accepting unscanned (clamavBlockOnFailure=false)');
+  }
+  return note ? { decision: null, note } : { decision: null };
 }
 
 async function runSpamStage(

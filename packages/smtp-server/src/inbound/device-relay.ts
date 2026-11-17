@@ -7,24 +7,38 @@
  *  - the session runs on the configured listener port,
  *  - the client IP lies in one of the configured networks (CIDR),
  *  - the MAIL FROM domain and every From:/Sender: header domain are configured,
- *  - the source IP stays within maxMessagesPerMinute.
+ *  - the source IP stays within maxMessagesPerMinute,
+ *  - the malware checks pass (security-filter /check/malware: attachment
+ *    filter + ClamAV with the configured action and failure policy; a virus is
+ *    quarantined or refused, never relayed).
  * Everything else keeps the normal port-25 behaviour: external recipients are
  * refused (never an open relay). Local recipients are always handled by the
  * wrapped inbound handlers, unless the message is relayed — then the whole
- * transaction is delivered like an authenticated submission of a trusted device.
+ * transaction is delivered like a submission of a trusted device: no SPF/DKIM/
+ * DMARC and no spam scoring, but the malware checks above.
  */
 import crypto from 'node:crypto';
-import { createLogger, createCidrMatcher, getRedisClient, type CidrMatcher } from '@coremail/core';
-import { prisma, addressesOf, parseHeaderFields, findBodyStart } from '@coremail/storage';
+import {
+  createLogger, createCidrMatcher, getRedisClient, RELAY_NETWORK_MIN_PREFIX, type CidrMatcher,
+} from '@coremail/core';
+import {
+  prisma, addressesOf, parseHeaderFields, findBodyStart, stripHeaders, INTERNAL_MAIL_HEADERS,
+} from '@coremail/storage';
 import { BARE_POSTMASTER, type SmtpHandlers, type AuthUser, type MessageMeta } from '../core/types.js';
 import { expandRecipientsWithOrigins, isLocalDomainAddress } from '../handlers/expand.js';
 import { enqueueOutbound } from '../outbound/queue.js';
 import { dsnForRecipients } from '../core/dsn-params.js';
-import { buildReceivedHeader, prependHeader } from '../handlers/trace.js';
+import {
+  buildReceivedHeader, prependHeader, countReceived, stripOwnAuthResults, MAX_RECEIVED_HOPS,
+} from '../handlers/trace.js';
 import { deliverOnce, deliveryKey, redisDeliveryLedger } from '../handlers/delivery.js';
 import { notifyLocalOutcomes } from '../handlers/local-notify.js';
 import { storeInboundMessage } from '../handlers/message.js';
-import { completeSubmissionHeaders, stripSubmittedInternalHeaders } from '../submission/handler.js';
+import { quarantineMessage, type QuarantineInput } from '../handlers/quarantine.js';
+import { completeSubmissionHeaders } from '../submission/handler.js';
+import { callContentFilter, CONTENT_FILTER_MAX_BYTES, type ContentFilterVerdict } from './connection-filter.js';
+import { SECURITY_FILTER_URL, asciiJson, filterContext } from './handler.js';
+import { virusScanHeaderLine } from './virus-scan-header.js';
 
 const log = createLogger('smtp:device-relay');
 
@@ -55,9 +69,13 @@ export function addressDomain(address: string): string | null {
   return a.slice(at + 1).replace(/\.$/, '');
 }
 
-/** Pure: compiles the stored configuration. Missing row / empty lists → inactive. */
+/**
+ * Pure: compiles the stored configuration. Missing row / empty lists → inactive.
+ * Networks broader than RELAY_NETWORK_MIN_PREFIX are ignored here as well —
+ * the API refuses them, a hand-edited row must not open the relay either.
+ */
 export function compileDeviceRelayPolicy(cfg: DeviceRelayConfig | null): DeviceRelayPolicy {
-  const networks = createCidrMatcher(cfg?.allowedNetworks ?? []);
+  const networks = createCidrMatcher(cfg?.allowedNetworks ?? [], { minPrefix: RELAY_NETWORK_MIN_PREFIX });
   const senderDomains = new Set((cfg?.senderDomains ?? [])
     .map((d) => d.trim().toLowerCase().replace(/\.$/, ''))
     .filter(Boolean));
@@ -120,8 +138,9 @@ async function loadDeviceRelayPolicy(): Promise<DeviceRelayPolicy> {
   try {
     const row = await prisma.deviceRelaySettings.findUnique({ where: { id: 'singleton' } });
     const policy = compileDeviceRelayPolicy(row);
-    if (policy.networks.invalid.length > 0) {
-      log.warn({ invalid: policy.networks.invalid }, 'Device relay: invalid network entries ignored');
+    const { invalid, tooBroad } = policy.networks;
+    if (invalid.length > 0 || tooBroad.length > 0) {
+      log.warn({ invalid, tooBroad }, 'Device relay: invalid or too broad network entries ignored');
     }
     cached = { policy, expiresAt: Date.now() + POLICY_TTL_MS };
     return policy;
@@ -142,10 +161,78 @@ async function takeRelaySlot(ip: string, limit: number): Promise<boolean> {
   return count <= limit;
 }
 
+// ── Preparation + malware scan of a relayed message ───────────────────────────
+
+const defaultHostname = (): string => process.env['SMTP_HOSTNAME']?.trim() || 'mail.localhost';
+
+/**
+ * Pure: the relayed message as it is scanned and delivered. A device is an
+ * unauthenticated client: internal CoreMail headers and Authentication-Results
+ * carrying our authserv-id are removed (like on port 25), a missing Date: /
+ * Message-ID: is added (like a submission) and our Received: field is
+ * prepended. Throws a 554 reply for a mail loop.
+ */
+export function prepareRelayedMessage(
+  receivedRaw: Buffer,
+  s: { ip: string; to: readonly string[]; hostname: string; meta?: MessageMeta },
+): Buffer {
+  const stripped = stripOwnAuthResults(stripHeaders(receivedRaw, INTERNAL_MAIL_HEADERS), s.hostname);
+  if (countReceived(stripped) > MAX_RECEIVED_HOPS) throw new Error('554 5.4.6 Too many hops - mail loop detected');
+  return prependHeader(completeSubmissionHeaders(stripped, s.hostname), buildReceivedHeader({
+    ip: s.ip,
+    meta: s.meta ?? { helo: '', protocol: 'ESMTP', hostname: s.hostname, sessionId: crypto.randomUUID().slice(0, 8).toUpperCase() },
+    recipients: [...s.to],
+  }));
+}
+
+/** What happens to a relayed message after the malware checks. */
+export type RelayScanOutcome =
+  | { kind: 'refuse'; reply: string }
+  | { kind: 'deliver' | 'quarantine'; headers: string; virusName?: string };
+
+/**
+ * Pure: maps the /check/malware verdict. An unavailable filter defers (451) —
+ * a relayed message is never delivered unscanned; `defer` is the configured
+ * ClamAV failure policy. `headers` = X-CoreMail-Virus-Scan for a message that
+ * was not scanned clean.
+ */
+export function relayScanOutcome(verdict: ContentFilterVerdict, hostname: string): RelayScanOutcome {
+  if (verdict.kind === 'unavailable') {
+    return { kind: 'refuse', reply: '451 4.7.1 Content filter temporarily unavailable, try again later' };
+  }
+  const r = verdict.result;
+  if (r.action === 'reject') return { kind: 'refuse', reply: `550 5.7.1 ${r.reason ?? 'Message rejected'}` };
+  if (r.action === 'defer') return { kind: 'refuse', reply: `451 4.7.1 ${r.reason ?? 'Temporary content filter failure'}` };
+  const headers = r.virusScan ? virusScanHeaderLine(r.virusScan, hostname) : '';
+  return {
+    kind: r.action === 'quarantine' ? 'quarantine' : 'deliver',
+    headers,
+    ...(r.virusName ? { virusName: r.virusName } : {}),
+  };
+}
+
+export interface RelayScanRequest {
+  ip: string;
+  from: string;
+  to: string[];
+  hostname: string;
+  helo?: string;
+}
+
+/** POST /check/malware (attachment filter + ClamAV) of the security-filter. */
+function scanRelayed(raw: Buffer, s: RelayScanRequest): Promise<ContentFilterVerdict> {
+  return callContentFilter(SECURITY_FILTER_URL, '/check/malware', raw, asciiJson(filterContext({
+    senderIp: s.ip, mailFrom: s.from, rcpts: s.to, hostname: s.hostname, ...(s.helo ? { helo: s.helo } : {}),
+  })));
+}
+
 // ── Delivery of a relayed message ─────────────────────────────────────────────
 
 export interface RelayDelivery {
+  /** Prepared and scanned message, ready for delivery. */
   raw: Buffer;
+  /** The message as received (delivery key: a retry is not delivered twice). */
+  receivedRaw: Buffer;
   from: string;
   to: string[];
   ip: string;
@@ -154,13 +241,8 @@ export interface RelayDelivery {
 
 /** Local recipients → mailbox, external → outbound queue (like a submission). */
 async function deliverRelayed(d: RelayDelivery, isLocal: (a: string) => Promise<boolean>): Promise<void> {
-  const hostname = d.meta?.hostname ?? (process.env['SMTP_HOSTNAME']?.trim() || 'mail.localhost');
-  let raw = completeSubmissionHeaders(stripSubmittedInternalHeaders(d.raw), hostname);
-  raw = prependHeader(raw, buildReceivedHeader({
-    ip: d.ip,
-    meta: d.meta ?? { helo: '', protocol: 'ESMTP', hostname, sessionId: crypto.randomUUID().slice(0, 8).toUpperCase() },
-    recipients: d.to,
-  }));
+  const hostname = d.meta?.hostname ?? defaultHostname();
+  const raw = d.raw;
 
   const local: string[] = [];
   const external: string[] = [];
@@ -172,7 +254,7 @@ async function deliverRelayed(d: RelayDelivery, isLocal: (a: string) => Promise<
     ? await expandRecipientsWithOrigins(local)
     : { targets: [] as string[], origins: new Map<string, string[]>() };
 
-  const txKey = deliveryKey(d.from, d.raw);
+  const txKey = deliveryKey(d.from, d.receivedRaw);
   const dsn = d.meta?.envelope?.dsn;
   const { outcomes } = await deliverOnce(txKey, targets, external, {
     ledger: redisDeliveryLedger,
@@ -226,6 +308,9 @@ export interface DeviceRelayDeps {
   loadPolicy(): Promise<DeviceRelayPolicy>;
   isLocal(address: string): Promise<boolean>;
   takeSlot(ip: string, limit: number): Promise<boolean>;
+  /** Malware checks (attachment filter + ClamAV) of the prepared message. */
+  scan(raw: Buffer, s: RelayScanRequest): Promise<ContentFilterVerdict>;
+  quarantine(input: QuarantineInput): Promise<unknown>;
   deliver(d: RelayDelivery): Promise<void>;
 }
 
@@ -233,6 +318,8 @@ const defaultDeps: DeviceRelayDeps = {
   loadPolicy: loadDeviceRelayPolicy,
   isLocal: isLocalDomainAddress,
   takeSlot: takeRelaySlot,
+  scan: scanRelayed,
+  quarantine: (input) => quarantineMessage(input),
   deliver: (d) => deliverRelayed(d, isLocalDomainAddress),
 };
 
@@ -309,10 +396,8 @@ export function withDeviceRelay(base: SmtpHandlers, listenerPort: number, deps: 
     return null;
   }
 
-  async function onMessage(raw: Buffer, from: string, to: string[], authUser: AuthUser | null, ip: string, meta?: MessageMeta): Promise<void> {
-    if (authUser || !approvals.take(ip, from, to)) return base.onMessage(raw, from, to, authUser, ip, meta);
-
-    // Re-checked here: the configuration may have changed since RCPT TO.
+  /** Policy (re-checked: it may have changed since RCPT TO) + header sender. Throws the reply. */
+  async function assertRelayAllowed(raw: Buffer, from: string, to: string[], ip: string): Promise<DeviceRelayPolicy> {
     const policy = await deps.loadPolicy();
     const decision = relayDecision(policy, { listenerPort, ip, mailFrom: from });
     if (decision !== 'allowed') {
@@ -324,6 +409,11 @@ export function withDeviceRelay(base: SmtpHandlers, listenerPort: number, deps: 
       log.warn({ ip, from, reason: violation }, 'Device relay refused: header sender');
       throw new Error(`550 5.7.1 Relaying denied: ${violation}`);
     }
+    return policy;
+  }
+
+  /** Per-IP rate limit; an unavailable counter defers (fail closed). Throws the reply. */
+  async function assertWithinRate(policy: DeviceRelayPolicy, from: string, ip: string): Promise<void> {
     let withinRate: boolean;
     try {
       withinRate = await deps.takeSlot(ip, policy.maxMessagesPerMinute);
@@ -335,7 +425,39 @@ export function withDeviceRelay(base: SmtpHandlers, listenerPort: number, deps: 
       log.warn({ ip, from, limit: policy.maxMessagesPerMinute }, 'Device relay rate limit exceeded');
       throw new Error('451 4.7.1 Device relay rate limit exceeded, try again later');
     }
-    await deps.deliver({ raw, from, to, ip, ...(meta ? { meta } : {}) });
+  }
+
+  /** Prepares, scans and then quarantines or delivers the relayed message. */
+  async function relay(receivedRaw: Buffer, from: string, to: string[], ip: string, meta?: MessageMeta): Promise<void> {
+    const hostname = meta?.hostname ?? defaultHostname();
+    const prepared = prepareRelayedMessage(receivedRaw, { ip, to, hostname, ...(meta ? { meta } : {}) });
+    // The malware checks cannot inspect larger bodies — never relay unscanned.
+    if (prepared.length > CONTENT_FILTER_MAX_BYTES) throw new Error('552 5.3.4 Message too big for content inspection');
+    const outcome = relayScanOutcome(
+      await deps.scan(prepared, { ip, from, to, hostname, ...(meta?.helo ? { helo: meta.helo } : {}) }),
+      hostname,
+    );
+    if (outcome.kind === 'refuse') {
+      log.warn({ ip, from, to, reply: outcome.reply }, 'Device relay refused by the malware checks');
+      throw new Error(outcome.reply);
+    }
+    const raw = outcome.headers ? prependHeader(prepared, outcome.headers) : prepared;
+    if (outcome.kind === 'quarantine') {
+      await deps.quarantine({
+        raw, from, recipients: to, reason: outcome.virusName ? 'VIRUS' : 'POLICY',
+        details: { source: 'device-relay', ip, ...(outcome.virusName ? { virusName: outcome.virusName } : {}) },
+      });
+      log.warn({ ip, from, virusName: outcome.virusName }, 'Device relay: message quarantined');
+      return;
+    }
+    await deps.deliver({ raw, receivedRaw, from, to, ip, ...(meta ? { meta } : {}) });
+  }
+
+  async function onMessage(raw: Buffer, from: string, to: string[], authUser: AuthUser | null, ip: string, meta?: MessageMeta): Promise<void> {
+    if (authUser || !approvals.take(ip, from, to)) return base.onMessage(raw, from, to, authUser, ip, meta);
+    const policy = await assertRelayAllowed(raw, from, to, ip);
+    await assertWithinRate(policy, from, ip);
+    await relay(raw, from, to, ip, meta);
   }
 
   return { onConnect: base.onConnect, onMailFrom: base.onMailFrom, onRcptTo, onMessage };

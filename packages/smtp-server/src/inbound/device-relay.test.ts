@@ -19,10 +19,13 @@ process.env['LOG_LEVEL'] ??= 'error';
 
 const {
   compileDeviceRelayPolicy, relayDecision, headerSenderViolation, addressDomain, withDeviceRelay,
-  RELAY_SENDER_DENIED, RelayApprovals,
+  RELAY_SENDER_DENIED, RelayApprovals, prepareRelayedMessage, relayScanOutcome,
 } = await import('./device-relay.js');
 type Deps = import('./device-relay.js').DeviceRelayDeps;
+type Verdict = import('./connection-filter.js').ContentFilterVerdict;
 type Handlers = import('../core/types.js').SmtpHandlers;
+
+const ACCEPT: Verdict = { kind: 'ok', result: { action: 'accept' } };
 
 const CONFIG = {
   enabled: true,
@@ -39,8 +42,11 @@ const REMOTE = 'partner@example.net';
 const mail = (from = 'scanner@example.com', extra = ''): Buffer =>
   Buffer.from(`From: Scanner <${from}>\r\n${extra}To: <${REMOTE}>\r\nSubject: Scan\r\n\r\nbody\r\n`);
 
-function harness(over: { config?: typeof CONFIG | null; port?: number; slot?: Deps['takeSlot'] } = {}) {
-  const calls = { baseRcpt: [] as string[], baseMessage: 0, delivered: [] as string[][] };
+function harness(over: { config?: typeof CONFIG | null; port?: number; slot?: Deps['takeSlot']; verdict?: Verdict } = {}) {
+  const calls = {
+    baseRcpt: [] as string[], baseMessage: 0, delivered: [] as string[][], deliveredRaw: [] as string[],
+    scanned: [] as string[], quarantined: [] as Array<{ reason: string; raw: string; recipients: string[] }>,
+  };
   const live = { config: over.config === undefined ? CONFIG : over.config };
   const base: Handlers = {
     onConnect: async () => true,
@@ -54,7 +60,9 @@ function harness(over: { config?: typeof CONFIG | null; port?: number; slot?: De
     loadPolicy: async () => compileDeviceRelayPolicy(live.config),
     isLocal: async (a) => a.toLowerCase().endsWith('@example.com'),
     takeSlot: over.slot ?? (async (_ip, limit) => ++used <= limit),
-    deliver: async (d) => { calls.delivered.push(d.to); },
+    scan: async (raw) => { calls.scanned.push(raw.toString('latin1')); return over.verdict ?? ACCEPT; },
+    quarantine: async (q) => { calls.quarantined.push({ reason: q.reason, raw: q.raw.toString('latin1'), recipients: q.recipients }); },
+    deliver: async (d) => { calls.delivered.push(d.to); calls.deliveredRaw.push(d.raw.toString('latin1')); },
   };
   return { h: withDeviceRelay(base, over.port ?? 25, deps), calls, live };
 }
@@ -77,6 +85,18 @@ describe('pure policy', () => {
     assert.equal(compileDeviceRelayPolicy({ ...CONFIG, allowedNetworks: ['not-an-ip'] }).active, false);
     assert.equal(compileDeviceRelayPolicy({ ...CONFIG, senderDomains: [' '] }).active, false);
     assert.equal(compileDeviceRelayPolicy(CONFIG).active, true);
+  });
+
+  test('a stored row with too broad networks never opens the relay (hand-edited database)', () => {
+    // ::/32 and ::ffff:0:0/96 contain every IPv4 address for node's BlockList
+    for (const nets of [['0.0.0.0/0'], ['::ffff:0:0/96'], ['10.0.0.0/7'], ['::/16']]) {
+      const p = compileDeviceRelayPolicy({ ...CONFIG, allowedNetworks: nets });
+      assert.equal(p.active, false, nets.join());
+      assert.deepEqual(p.networks.tooBroad, nets);
+    }
+    const p = compileDeviceRelayPolicy({ ...CONFIG, allowedNetworks: ['::/32', '192.168.10.0/24'] });
+    assert.equal(relayDecision(p, { listenerPort: 25, ip: EXTERNAL_IP, mailFrom: 'scanner@example.com' }), 'not-device');
+    assert.equal(relayDecision(p, { listenerPort: 25, ip: `::ffff:${EXTERNAL_IP}`, mailFrom: 'scanner@example.com' }), 'not-device');
   });
 
   test('relayDecision: network, port and sender domain must all match', () => {
@@ -203,5 +223,79 @@ describe('configured devices', () => {
     const { h, calls } = harness({ slot: async () => { throw new Error('redis down'); } });
     await assert.rejects(transaction(h, 'scanner@example.com', [REMOTE], DEVICE_IP), /^Error: 451 4\.3\.0/);
     assert.deepEqual(calls.delivered, []);
+  });
+});
+
+describe('malware checks of relayed messages (attachment filter + ClamAV, no spam scoring)', () => {
+  test('every relayed message is scanned before delivery; a clean one is delivered', async () => {
+    const { h, calls } = harness();
+    assert.equal(await transaction(h, 'scanner@example.com', [REMOTE], DEVICE_IP), null);
+    assert.equal(calls.scanned.length, 1);
+    assert.match(calls.scanned[0]!, /^Received: /, 'the scanned message is the prepared one');
+    assert.deepEqual(calls.delivered, [[REMOTE]]);
+  });
+
+  test('blocked attachment / virus with action reject: 550, nothing delivered', async () => {
+    const { h, calls } = harness({ verdict: { kind: 'ok', result: { action: 'reject', reason: 'Blocked attachment: invoice.exe' } } });
+    await assert.rejects(transaction(h, 'scanner@example.com', [REMOTE], DEVICE_IP), /^Error: 550 5\.7\.1 Blocked attachment: invoice\.exe$/);
+    assert.deepEqual(calls.delivered, []);
+    assert.deepEqual(calls.quarantined, []);
+  });
+
+  test('virus with action quarantine: quarantined with the verdict header, never relayed', async () => {
+    const { h, calls } = harness({ verdict: { kind: 'ok', result: {
+      action: 'quarantine', reason: 'Virus detected: Win.Test.EICAR_HDB-1', virusName: 'Win.Test.EICAR_HDB-1',
+      virusScan: { status: 'infected', signature: 'Win.Test.EICAR_HDB-1' },
+    } } });
+    assert.equal(await transaction(h, 'scanner@example.com', [LOCAL, REMOTE], DEVICE_IP), null, '250: the message is held, not lost');
+    assert.deepEqual(calls.delivered, []);
+    assert.equal(calls.quarantined.length, 1);
+    assert.equal(calls.quarantined[0]!.reason, 'VIRUS');
+    assert.deepEqual(calls.quarantined[0]!.recipients, [LOCAL, REMOTE]);
+    assert.match(calls.quarantined[0]!.raw, /^X-CoreMail-Virus-Scan: /m);
+  });
+
+  test('scanner failure: the configured policy decides (defer → 451, accept → delivered tagged)', async () => {
+    const deferring = harness({ verdict: { kind: 'ok', result: { action: 'defer', reason: 'Virus scanner unavailable — please retry later' } } });
+    await assert.rejects(transaction(deferring.h, 'scanner@example.com', [REMOTE], DEVICE_IP), /^Error: 451 4\.7\.1 Virus scanner unavailable/);
+    assert.deepEqual(deferring.calls.delivered, []);
+
+    const open = harness({ verdict: { kind: 'ok', result: { action: 'accept', virusScan: { status: 'unscanned', reason: 'scanner-error' } } } });
+    assert.equal(await transaction(open.h, 'scanner@example.com', [REMOTE], DEVICE_IP), null);
+    assert.match(open.calls.deliveredRaw[0]!, /^X-CoreMail-Virus-Scan: [^\r\n]*unscanned/m);
+  });
+
+  test('security filter unreachable or invalid: 451, never relayed unscanned', async () => {
+    const { h, calls } = harness({ verdict: { kind: 'unavailable', detail: 'Request failed: ECONNREFUSED' } });
+    await assert.rejects(transaction(h, 'scanner@example.com', [REMOTE], DEVICE_IP), /^Error: 451 4\.7\.1 Content filter temporarily unavailable/);
+    assert.deepEqual(calls.delivered, []);
+  });
+
+  test('relayScanOutcome maps every verdict', () => {
+    assert.deepEqual(relayScanOutcome(ACCEPT, 'mx.example.com'), { kind: 'deliver', headers: '' });
+    assert.equal(relayScanOutcome({ kind: 'ok', result: { action: 'reject' } }, 'mx').kind, 'refuse');
+    assert.equal(relayScanOutcome({ kind: 'ok', result: { action: 'quarantine', virusName: 'X' } }, 'mx').kind, 'quarantine');
+  });
+});
+
+describe('prepared message (unauthenticated device)', () => {
+  const META = { helo: 'scanner.lan', protocol: 'ESMTP' as const, hostname: 'mx.example.com', sessionId: 'S1' };
+
+  test('forged internal headers and our Authentication-Results are removed; Date/Message-ID added', () => {
+    const raw = Buffer.from(
+      'X-CoreMail-Virus-Scan: clean\r\nAuthentication-Results: mx.example.com; dmarc=pass header.from=example.com\r\n'
+      + 'From: <scanner@example.com>\r\nSubject: Scan\r\n\r\nbody\r\n',
+    );
+    const out = prepareRelayedMessage(raw, { ip: DEVICE_IP, to: [REMOTE], hostname: 'mx.example.com', meta: META }).toString('latin1');
+    assert.doesNotMatch(out, /X-CoreMail-Virus-Scan/i);
+    assert.doesNotMatch(out, /Authentication-Results: mx\.example\.com/i);
+    assert.match(out, /^Received: from scanner\.lan \(\[192\.168\.10\.40\]\)/);
+    assert.match(out, /^Date: /m);
+    assert.match(out, /^Message-ID: <[^>]+@mx\.example\.com>/m);
+  });
+
+  test('a mail loop is refused (554 5.4.6)', () => {
+    const raw = Buffer.from(`${'Received: from a by b; d\r\n'.repeat(101)}From: <scanner@example.com>\r\n\r\nx\r\n`);
+    assert.throws(() => prepareRelayedMessage(raw, { ip: DEVICE_IP, to: [REMOTE], hostname: 'mx.example.com' }), /554 5\.4\.6/);
   });
 });

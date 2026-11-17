@@ -27,14 +27,15 @@ import {
   connectionAllowed,
   dataStageGreylistReply,
   rcptReplyForDecision,
-  interpretContentFilterResponse,
+  callContentFilter,
   CONTENT_FILTER_MAX_BYTES,
   type ConnectionFilterDecision,
 } from './connection-filter.js';
 
 const log = createLogger('smtp:inbound');
 
-const SECURITY_FILTER_URL =
+/** Base URL of the security-filter (connection and content stages). */
+export const SECURITY_FILTER_URL =
   process.env['SECURITY_FILTER_URL'] ?? 'http://security-filter:3002';
 
 // ── RFC 822 lightweight header extraction (regex, no full parse) ──────────────
@@ -173,29 +174,17 @@ async function onMessage(
   }
 
   // 1. Full content scan (SPF/DKIM/DMARC, blacklist, ClamAV, rspamd)
-  const response = await fetch(`${SECURITY_FILTER_URL}/check/content`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/octet-stream',
-      // The real SMTP session: SPF/DMARC and rspamd evaluate MAIL FROM, HELO and IP.
-      // ASCII-only JSON: an HTTP header value cannot carry raw UTF-8
-      // (SMTPUTF8 addresses) — non-ASCII characters are \u-escaped.
-      'X-Filter-Context': asciiJson(filterContext({
-        senderIp: ip,
-        mailFrom: from,
-        rcpts: to,
-        hostname,
-        ...(meta?.helo ? { helo: meta.helo } : {}),
-        ...(authUser ? { authUser: authUser.email } : {}),
-      })),
-    },
-    body: raw,
-    signal: AbortSignal.timeout(30_000),
-  });
-
-  let body: unknown;
-  try { body = await response.json(); } catch { body = undefined; }
-  const verdict = interpretContentFilterResponse(response.status, body);
+  // The real SMTP session: SPF/DMARC and rspamd evaluate MAIL FROM, HELO and IP.
+  // ASCII-only JSON: an HTTP header value cannot carry raw UTF-8
+  // (SMTPUTF8 addresses) — non-ASCII characters are \u-escaped.
+  const verdict = await callContentFilter(SECURITY_FILTER_URL, '/check/content', raw, asciiJson(filterContext({
+    senderIp: ip,
+    mailFrom: from,
+    rcpts: to,
+    hostname,
+    ...(meta?.helo ? { helo: meta.helo } : {}),
+    ...(authUser ? { authUser: authUser.email } : {}),
+  })));
   if (verdict.kind === 'unavailable') {
     log.error({ from, detail: verdict.detail }, 'Content filter answer invalid — message deferred');
     throw new Error('451 4.7.1 Content filter temporarily unavailable, try again later');
