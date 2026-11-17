@@ -104,7 +104,9 @@ function parseBase64Line(rawQuery: string): ParsedRequestLine {
   try {
     const versionByte = r.byte();
     const commandCode = r.byte();
-    r.bytes(2); // locale (little-endian LCID) — responses are not localised
+    // [MS-ASHTTP] 2.2.1.1.1.1 does not state the byte order of Locale / Policy key; both are
+    // read little-endian. The locale is skipped — responses are not localised.
+    r.bytes(2);
     const deviceId = r.bytes(r.byte());
     const policyKeyLength = r.byte();
     if (policyKeyLength !== 0 && policyKeyLength !== 4) return { ok: false, reason: 'policy key length must be 0 or 4' };

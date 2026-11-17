@@ -10,7 +10,8 @@
  * Status (getitemestimate:Status): 1 ok, 2 invalid/foreign collection,
  * 3 sync state not primed (SyncKey 0), 4 invalid SyncKey.
  * 12.1: FilterType and Class are direct children of the request Collection (14.0+:
- * FilterType inside airsync:Options, no Class); the response echoes the Class.
+ * FilterType inside airsync:Options, no Class); the response echoes the Class — [MS-ASCMD]
+ * 2.2.3.29.1 lists getitemestimate:Class as a child of the response Collection up to 12.1.
  */
 import { prisma } from '@coremail/storage/prisma';
 import { ensureCounterFloor } from '@coremail/storage';
