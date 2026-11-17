@@ -10,6 +10,7 @@ import {
   getObjectStore, getStorageHealth, peekStorageHealth, startObjectStorageCleaner, type CleanerRedis,
   startDeletedItemsPurger, type PurgeRedis,
   startReferencesBackfill, type BackfillRedis,
+  migratePrivateKeysAtRestLocked, type PrivateKeyMigrationRedis,
 } from '@coremail/storage';
 import {
   getRedisClient, createLogger, startAuthInvalidationSubscriber,
@@ -537,6 +538,13 @@ async function start() {
     log.warn({ err }, 'Protocol cert state sync failed — check certificates manually'),
   );
 
+  // Certificate private keys at rest: values stored as plain PEM before
+  // encryption existed are encrypted once (Redis-locked, idempotent; readers
+  // accept both forms meanwhile).
+  void encryptStoredPrivateKeys().catch(err =>
+    log.error({ err }, 'Encrypting stored certificate private keys failed — retried at the next start'),
+  );
+
   // v3.18.35+36: URL synchronization. When the admin changed publicHostname
   // (e.g. from mail.local to mail.<real-domain>), the derived URLs were not
   // migrated along. Outlook Autodiscover then returns stale addresses →
@@ -587,6 +595,16 @@ async function start() {
  * host name, and a self-signed default for mail.localhost is regenerated for
  * the real host name. Replaces the pre-9.3 orphan check.
  */
+async function encryptStoredPrivateKeys(): Promise<void> {
+  const r = await migratePrivateKeysAtRestLocked(getRedisClient() as unknown as PrivateKeyMigrationRedis);
+  if (!r) return; // another instance holds the lock
+  if (r.unreadable > 0) {
+    log.error({ ...r }, 'Certificate private keys that cannot be decrypted with the configured key — re-upload or re-issue those certificates (docs/certificates.md)');
+  } else if (r.encrypted > 0) {
+    log.info({ ...r }, 'Stored certificate private keys encrypted at rest');
+  }
+}
+
 async function syncProtocolCertState(): Promise<void> {
   try {
     // Redis-locked (cert:protocol:reconcile:lock): with several api-gateway

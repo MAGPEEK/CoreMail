@@ -98,6 +98,7 @@ const pca = await import('./protocol-cert-assign.js');
 const express = (await import('express')).default;
 const { requireAuth } = await import('../middleware/auth.js');
 const { adminCertificatesRouter } = await import('../routes/admin/certificates.js');
+const { decryptPrivateKey } = await import('@coremail/storage');
 
 const tok = core.signAccessToken({ sub: 'admin', email: 'admin@example.com', role: 'ORGANIZATION_MANAGEMENT', domainId: 'd1', sessionId: 's', mfaVerified: true });
 let server: Server;
@@ -166,7 +167,8 @@ test('PUT services on a trusted cert applies it: tlsCert switched, reload publis
   assert.equal(r.json['protocolApplied'], true);
   assert.deepEqual(r.json['services'], ['SMTP', 'IMAP', 'POP3'], 'one protocol cert serves all three');
   assert.equal(settings['tlsCert'], PEM_LE);
-  assert.equal(settings['tlsKey'], 'KEY-LE');
+  assert.match(String(settings['tlsKey']), /^enc:v1:/, 'tlsKey stored encrypted');
+  assert.equal(decryptPrivateKey(String(settings['tlsKey'])), 'KEY-LE');
   assert.equal(le['isActiveProtocol'], true);
   assert.equal(self['isActiveProtocol'], false, 'previous cert loses isActiveProtocol');
   assert.deepEqual(self['services'], []);

@@ -26,7 +26,7 @@ import https from 'node:https';
 import tls from 'node:tls';
 import type { Application } from 'express';
 import { createLogger, getRedisClient, stripForwardedHeaders } from '@coremail/core';
-import { prisma } from '@coremail/storage';
+import { prisma, decryptPrivateKey } from '@coremail/storage';
 import { selectProxyCerts, planSni, buildFullChainPem, type SelectedProxyCert } from './lib/cert-lifecycle.js';
 
 const log  = createLogger('tls-proxy');
@@ -84,7 +84,23 @@ async function loadCerts(): Promise<LoadedCert[]> {
     },
     orderBy: { createdAt: 'desc' },
   });
-  return selectProxyCerts(rows);
+  return selectProxyCerts(rows.map(withPlainKey));
+}
+
+/**
+ * keyPem is stored encrypted (private-key-crypto in @coremail/storage). A key that
+ * cannot be decrypted (key material lost) removes only that certificate from the
+ * SNI map; the error names the certificate, never the key.
+ */
+function withPlainKey<T extends { id: string; name: string; keyPem: string | null }>(row: T): T {
+  if (!row.keyPem) return row;
+  try {
+    return { ...row, keyPem: decryptPrivateKey(row.keyPem) };
+  } catch (err) {
+    log.error({ certId: row.id, name: row.name, error: err instanceof Error ? err.message : String(err) },
+      'Certificate private key unreadable — certificate not served on HTTPS');
+    return { ...row, keyPem: null };
+  }
 }
 
 function buildSniMaps(certs: LoadedCert[]): LoadedCert[] {

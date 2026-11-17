@@ -18,7 +18,7 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { X509Certificate, createPrivateKey } from 'node:crypto';
 import { z } from 'zod';
-import { prisma } from '@coremail/storage';
+import { prisma, encryptPrivateKey } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import { requireArea } from '../../middleware/auth.js';
 
@@ -389,7 +389,7 @@ adminCertificatesRouter.post('/upload', async (req: Request, res: Response) => {
       type:      'CUSTOM',
       status:    deriveCertStatus(expiresAt),
       certPem:   parsed.data.certPem,
-      keyPem:    parsed.data.keyPem,
+      keyPem:    encryptPrivateKey(parsed.data.keyPem),
       chainPem:  parsed.data.chainPem ?? null,
       issuedAt:  new Date(),
       expiresAt,
@@ -439,7 +439,7 @@ adminCertificatesRouter.post('/self-signed', async (req: Request, res: Response)
         type:      'SELF_SIGNED',
         status:    deriveCertStatus(expiresAt),
         certPem,
-        keyPem,
+        keyPem:    encryptPrivateKey(keyPem),
         issuedAt:  new Date(),
         expiresAt,
         autoRenew: false,

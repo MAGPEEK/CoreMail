@@ -89,6 +89,38 @@ SSL/TLS page and the dashboard show a warning when a mail port serves a self-sig
 name-mismatched or expired certificate, with **Jetzt zuweisen** (assigns the newest trusted
 certificate covering the public host name).
 
+## Private keys at rest
+
+The private key of every certificate (`Certificate.keyPem`) and the copy the mail servers read
+(`ServerSettings.tlsKey`) are stored encrypted with AES-256-GCM (`enc:v1:…`). The key is derived
+from **`MFA_ENCRYPTION_KEY`** — the same master key that protects the 2FA (TOTP) secrets — or,
+when that variable is not set, from `JWT_SECRET` + `PEPPER`.
+
+- Private keys are never returned by the API (no `keyPem` in any response) and never logged.
+- Upgrades need no action: keys stored as plain PEM by an earlier version are still read, and the
+  api-gateway encrypts them once at startup (Redis lock `cert:private-key-encryption:lock`,
+  idempotent; log line `Stored certificate private keys encrypted at rest`). Every new or renewed
+  certificate is written encrypted.
+- Introducing `MFA_ENCRYPTION_KEY` later is safe: keys encrypted with the `JWT_SECRET` + `PEPPER`
+  fallback stay readable and are re-encrypted with the new key at the next start.
+
+**Key loss.** If `MFA_ENCRYPTION_KEY` changes or is lost — or, without it, `JWT_SECRET` or
+`PEPPER` change — the stored private keys can no longer be decrypted (just like the 2FA secrets).
+The consequences:
+
+- the HTTPS proxy leaves the affected certificates out (log `Certificate private key unreadable —
+  certificate not served on HTTPS`);
+- SMTP, IMAP and POP3 log `Stored certificate private key cannot be decrypted …` and do not
+  offer TLS until a usable certificate is assigned;
+- the startup migration reports them (`… cannot be decrypted with the configured key`) and leaves
+  them unchanged.
+
+Recovery: restore the previous key, or re-issue the Let's Encrypt certificates / upload the
+certificates again (BCP → SSL/TLS) and create a new self-signed default. Keep
+`MFA_ENCRYPTION_KEY` in the same place as your database backups — a database backup restored
+without it contains unusable private keys. Set `MFA_ENCRYPTION_KEY` explicitly before rotating
+`JWT_SECRET` or `PEPPER` (see `docs/deployment-security.md`).
+
 ## Logs
 
 IMAP, POP3 and SMTP log the client IP on login success / failure and on TLS errors. A client that

@@ -159,7 +159,7 @@ test('first issuance: staging directory, account key stored before the CA call, 
   await waitFor(settled('c1'));
   assert.equal(row['status'], 'ACTIVE', String(row['lastError']));
   assert.match(String(row['certPem']), /BEGIN CERTIFICATE/);
-  assert.ok(row['keyPem']);
+  assert.match(String(row['keyPem']), /^enc:v1:/, 'issued private key stored encrypted at rest');
   assert.ok(row['acmeAccount'], 'account key persisted');
   assert.equal(row['lastErrorCode'], null);
   assert.deepEqual(directories, [LE_DIRECTORY.staging]);

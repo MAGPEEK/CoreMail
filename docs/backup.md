@@ -9,7 +9,9 @@ CoreMail has two layers of backup. Use both:
 
 Nothing in the first layer copies the `.env` secrets. Keep `BACKUP_ENCRYPTION_KEY` (and
 `JWT_SECRET`, `PEPPER`, `MFA_ENCRYPTION_KEY`, the database password) **off the server** — without
-`BACKUP_ENCRYPTION_KEY` the encrypted backups cannot be read.
+`BACKUP_ENCRYPTION_KEY` the encrypted backups cannot be read, and without `MFA_ENCRYPTION_KEY` (or
+`JWT_SECRET` + `PEPPER` when it is not set) a restored database has unreadable 2FA secrets and
+certificate private keys ([certificates.md](certificates.md#private-keys-at-rest)).
 
 ## 1. Automation (schedules)
 

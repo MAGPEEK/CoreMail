@@ -11,6 +11,7 @@ process.env['JWT_SECRET'] ??= 'test-secret-test-secret-test-secret-1234';
 process.env['PEPPER'] ??= 'test-pepper-test-pepper-test-pepper-1234';
 const LEAF = '-----BEGIN CERTIFICATE-----\nLEAF\n-----END CERTIFICATE-----\n';
 const INTER = '-----BEGIN CERTIFICATE-----\nINTER\n-----END CERTIFICATE-----\n';
+const KEY = '-----BEGIN PRIVATE KEY-----\nKEY\n-----END PRIVATE KEY-----\n';
 let row: Record<string, unknown> | null = null;
 let settings: Record<string, unknown> | null = null;
 type Where = { NOT?: Record<string, unknown>; type?: unknown; acmeStaging?: unknown; certPem?: unknown };
@@ -27,6 +28,7 @@ function matches(r: Record<string, unknown>, where: Where): boolean {
   serverSettings: { findUnique: async () => settings },
 };
 const { loadProtocolCert, pemWithChain } = await import('./protocol-cert.js');
+const { encryptPrivateKey, PrivateKeyDecryptError } = await import('./private-key-crypto.js');
 
 test('pemWithChain appends missing chain certificates once', () => {
   assert.equal(pemWithChain(LEAF, null), LEAF);
@@ -37,24 +39,39 @@ test('pemWithChain appends missing chain certificates once', () => {
 });
 
 test('loadProtocolCert returns leaf + chain for the active protocol certificate', async () => {
-  row = { id: 'c1', name: 'upload', certPem: LEAF, keyPem: 'KEY', chainPem: INTER };
+  row = { id: 'c1', name: 'upload', certPem: LEAF, keyPem: KEY, chainPem: INTER };
   const cert = await loadProtocolCert('smtp');
   assert.equal(cert?.source, 'protocol-cert');
   assert.match(cert!.certPem, /LEAF[\s\S]*INTER/);
+  assert.equal(cert!.keyPem, KEY, 'legacy plain PEM key accepted');
   row = null;
   assert.equal(await loadProtocolCert('imap'), null);
 });
 
+test('loadProtocolCert decrypts the stored key (certificate row and legacy server settings)', async () => {
+  row = { id: 'c1', name: 'upload', certPem: LEAF, keyPem: encryptPrivateKey(KEY), chainPem: null };
+  assert.equal((await loadProtocolCert('smtp'))?.keyPem, KEY);
+  row = null;
+  settings = { tlsCert: LEAF, tlsKey: encryptPrivateKey(KEY) };
+  const legacy = await loadProtocolCert('pop3');
+  assert.deepEqual([legacy?.source, legacy?.keyPem], ['legacy-server-settings', KEY]);
+  // an undecryptable key is an error, never a silent switch to another certificate
+  settings = null;
+  row = { id: 'c1', name: 'upload', certPem: LEAF, keyPem: 'enc:v1:AAAA:BBBB:CCCC', chainPem: null };
+  await assert.rejects(loadProtocolCert('imap'), PrivateKeyDecryptError);
+  row = null;
+});
+
 test('9.2.x review: a Let\'s Encrypt staging certificate is never served on SMTP/IMAP/POP3', async () => {
-  row = { id: 's1', name: 'staging', type: 'LETSENCRYPT', acmeStaging: true, certPem: LEAF, keyPem: 'KEY', chainPem: null };
+  row = { id: 's1', name: 'staging', type: 'LETSENCRYPT', acmeStaging: true, certPem: LEAF, keyPem: KEY, chainPem: null };
   assert.equal(await loadProtocolCert('smtp'), null, 'active staging cert ignored');
   // legacy ServerSettings copy of the staging PEM is ignored as well
-  settings = { tlsCert: LEAF, tlsKey: 'KEY' };
+  settings = { tlsCert: LEAF, tlsKey: KEY };
   assert.equal(await loadProtocolCert('smtp'), null, 'legacy copy of a staging PEM ignored');
   // a production Let's Encrypt cert is served; a legacy copy of another PEM still works
-  row = { id: 'p1', name: 'prod', type: 'LETSENCRYPT', acmeStaging: false, certPem: LEAF, keyPem: 'KEY', chainPem: null };
+  row = { id: 'p1', name: 'prod', type: 'LETSENCRYPT', acmeStaging: false, certPem: LEAF, keyPem: KEY, chainPem: null };
   assert.equal((await loadProtocolCert('smtp'))?.certId, 'p1');
-  row = { id: 's1', name: 'staging', type: 'LETSENCRYPT', acmeStaging: true, certPem: INTER, keyPem: 'KEY', chainPem: null };
+  row = { id: 's1', name: 'staging', type: 'LETSENCRYPT', acmeStaging: true, certPem: INTER, keyPem: KEY, chainPem: null };
   assert.equal((await loadProtocolCert('imap'))?.source, 'legacy-server-settings');
   row = null; settings = null;
 });

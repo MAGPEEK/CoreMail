@@ -8,7 +8,7 @@
  */
 import dns from 'node:dns';
 import { isIP } from 'node:net';
-import { prisma } from '@coremail/storage';
+import { prisma, encryptPrivateKey } from '@coremail/storage';
 import { decryptMfaSecret, encryptMfaSecret } from '@coremail/storage/auth';
 import { getRedisClient, createLogger, CHANNEL_SETTINGS_RELOAD, isBlockedAddress } from '@coremail/core';
 import { deriveCertStatus, hostnameUpdateFor, parseCertValidity } from './cert-lifecycle.js';
@@ -184,7 +184,8 @@ export async function probeAcmeDirectory(directoryUrl: string): Promise<string> 
 //   • Deletion: active cert deleted → tlsCert/tlsKey = NULL → self-signed.
 
 /**
- * Writes certPem/keyPem to ServerSettings.tlsCert/tlsKey, marks this cert as
+ * Writes certPem/keyPem to ServerSettings.tlsCert/tlsKey (key encrypted at rest;
+ * `keyPem` may be plain PEM or an already encrypted stored value), marks this cert as
  * the only isActiveProtocol cert and publishes CHANNEL_SETTINGS_RELOAD
  * (SMTP/IMAP/POP3 swap their TLS context) plus the TLS proxy reload.
  *
@@ -206,8 +207,8 @@ export async function applyProtocolCert(
 
   await prisma.serverSettings.upsert({
     where:  { id: 'singleton' },
-    create: { id: 'singleton', tlsCert: certPem, tlsKey: keyPem, ...(newHostname ? { publicHostname: newHostname } : {}) },
-    update: { tlsCert: certPem, tlsKey: keyPem, ...(newHostname ? { publicHostname: newHostname } : {}) },
+    create: { id: 'singleton', tlsCert: certPem, tlsKey: encryptPrivateKey(keyPem), ...(newHostname ? { publicHostname: newHostname } : {}) },
+    update: { tlsCert: certPem, tlsKey: encryptPrivateKey(keyPem), ...(newHostname ? { publicHostname: newHostname } : {}) },
   });
   await prisma.$transaction([
     prisma.certificate.updateMany({ where: { id: { not: certId } }, data: { isActiveProtocol: false } }),
@@ -401,7 +402,7 @@ async function runAcmeIssuanceCore(
       data: {
         status:        deriveCertStatus(expiresAt),
         certPem,
-        keyPem:        certKeyPem,
+        keyPem:        encryptPrivateKey(certKeyPem),
         chainPem:      null, // certPem is the full chain
         issuedAt:      new Date(),
         expiresAt,
