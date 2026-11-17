@@ -7,6 +7,7 @@ import {
 import { api } from '../api/client.js';
 import type { Contact } from '../api/types.js';
 import toast from 'react-hot-toast';
+import { PageShell } from '../components/PageShell.js';
 
 type FormFields = {
   displayName: string;
@@ -115,7 +116,7 @@ export function ContactsPage() {
     name.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase();
 
   return (
-    <div className="flex flex-1 overflow-hidden">
+    <PageShell title="Kontakte">
       {/* ── Sidebar (personal contacts only) ──────────────────────────── */}
       <div className="w-80 shrink-0 border-r border-line bg-surface flex flex-col">
         {/* Search bar + add button */}
@@ -416,6 +417,6 @@ export function ContactsPage() {
           </div>
         )}
       </div>
-    </div>
+    </PageShell>
   );
 }

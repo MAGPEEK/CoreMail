@@ -23,7 +23,16 @@ const OPERATORS: { example: string; insert: string; label: TranslationKey }[] = 
 ];
 
 /** "?" button next to the search field with a popover listing the operators. */
-export function SearchOperatorsHelp({ onInsert }: { onInsert: (token: string) => void }) {
+const BUTTON_TONE = {
+  surface: 'text-fg-subtle hover:text-accent-fg hover:bg-surface-2',
+  /** On the branded header (bg-header) */
+  header: 'text-header-fg hover:bg-header-overlay/20 focus-visible:outline-header-fg',
+} as const;
+
+export function SearchOperatorsHelp({ onInsert, tone = 'surface' }: {
+  onInsert: (token: string) => void;
+  tone?: keyof typeof BUTTON_TONE;
+}) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -49,9 +58,9 @@ export function SearchOperatorsHelp({ onInsert }: { onInsert: (token: string) =>
         aria-haspopup="dialog"
         aria-label={t('search_help')}
         title={t('search_help')}
-        className="p-1 rounded text-fg-subtle hover:text-accent-fg hover:bg-surface-2"
+        className={`p-1 rounded ${BUTTON_TONE[tone]}`}
       >
-        <HelpCircle size={14} />
+        <HelpCircle size={tone === 'header' ? 16 : 14} />
       </button>
       {open && (
         <div

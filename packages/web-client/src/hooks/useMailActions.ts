@@ -140,8 +140,11 @@ export function useMailActions() {
     return true;
   }, [bulk, deletePermanently, folderIdByName, invalidate, refuseReadOnly]);
 
-  /** read / unread / flag / unflag / pin / unpin (no undo — toggling again reverts). */
-  const setState = useCallback(async (action: 'read' | 'unread' | 'flag' | 'unflag' | 'pin' | 'unpin', ids: string[]) => {
+  /**
+   * read / unread / flag / unflag / pin / unpin (no undo — toggling again reverts);
+   * notSpam moves out of Junk to the inbox and trains the spam filter.
+   */
+  const setState = useCallback(async (action: 'read' | 'unread' | 'flag' | 'unflag' | 'pin' | 'unpin' | 'notSpam', ids: string[]) => {
     if (ids.length === 0) return;
     const ref = activeRef();
     if (refuseReadOnly(ref)) return;

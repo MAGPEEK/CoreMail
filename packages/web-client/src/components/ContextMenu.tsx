@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { nextRovingIndex } from '../lib/toolbarNav.js';
 
 export interface ContextMenuItem {
   label?: string;
@@ -27,12 +28,18 @@ export interface ContextMenuProps {
   y: number;
   items: ContextMenuItem[];
   onClose: () => void;
+  /** Focus the first item when the menu opens (menus opened from a button or by keyboard). */
+  autoFocus?: boolean;
+  /** Submenu only: ArrowLeft closes it and returns focus to its parent item. */
+  onBack?: () => void;
 }
 
-export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
+const ITEM_SELECTOR = '[data-menuitem]';
+
+export function ContextMenu({ x, y, items, onClose, autoFocus = false, onBack }: ContextMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ x, y });
-  const [submenuFor, setSubmenuFor] = useState<{ index: number; rect: DOMRect } | null>(null);
+  const [submenuFor, setSubmenuFor] = useState<{ index: number; rect: DOMRect; focus: boolean } | null>(null);
 
   // Auto-reposition when overflowing the viewport
   useLayoutEffect(() => {
@@ -64,6 +71,35 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
     };
   }, [onClose]);
 
+  useEffect(() => {
+    if (autoFocus) ref.current?.querySelector<HTMLElement>(ITEM_SELECTOR)?.focus();
+  }, [autoFocus]);
+
+  /** Arrow keys move between the items, ArrowRight opens a submenu, ArrowLeft leaves it. */
+  const onMenuKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    // Submenus are portals: their key events also bubble through this menu's React tree
+    const menu = ref.current;
+    if (!menu || !menu.contains(e.target as Node)) return;
+    const els = Array.from(menu.querySelectorAll<HTMLElement>(ITEM_SELECTOR));
+    const focused = document.activeElement as HTMLElement | null;
+    const next = nextRovingIndex(els.indexOf(focused as HTMLElement), e.key, els.length, 'vertical');
+    if (next !== null) {
+      e.preventDefault();
+      setSubmenuFor(null);
+      els[next]?.focus();
+      return;
+    }
+    const index = Number(focused?.dataset.menuindex ?? -1);
+    const item = items[index];
+    if (e.key === 'ArrowRight' && focused && item?.children?.length && !item.disabled) {
+      e.preventDefault();
+      setSubmenuFor({ index, rect: focused.getBoundingClientRect(), focus: true });
+    } else if (e.key === 'ArrowLeft' && onBack) {
+      e.preventDefault();
+      onBack();
+    }
+  };
+
   return createPortal(
     <div
       ref={ref}
@@ -72,10 +108,11 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
       className="fixed z-[100] min-w-[220px] bg-surface border border-line rounded-md shadow-lg py-1 text-sm select-none animate-fly-in"
       style={{ left: pos.x, top: pos.y }}
       onContextMenu={(e) => e.preventDefault()}
+      onKeyDown={onMenuKeyDown}
     >
       {items.map((item, i) => {
         if (item.type === 'divider') {
-          return <div key={`d-${i}`} className="my-1 border-t border-line" />;
+          return <div key={`d-${i}`} role="separator" className="my-1 border-t border-line" />;
         }
         if (item.type === 'color-grid' && item.colors) {
           return (
@@ -106,39 +143,50 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
         return (
           <div key={i}>
             {item.separator === 'before' && (
-              <div className="my-1 border-t border-line" />
+              <div role="separator" className="my-1 border-t border-line" />
             )}
+            {/* aria-disabled (not disabled): stays reachable by keyboard and its reason is read out */}
             <button
               type="button"
-              disabled={item.disabled}
+              role="menuitem"
+              tabIndex={-1}
+              data-menuitem
+              data-menuindex={i}
+              aria-disabled={item.disabled || undefined}
+              aria-haspopup={hasChildren ? 'menu' : undefined}
+              aria-expanded={hasChildren ? isOpen : undefined}
               {...(item.title ? { title: item.title } : {})}
               onMouseEnter={(e) => {
-                if (hasChildren) {
-                  setSubmenuFor({ index: i, rect: (e.currentTarget as HTMLElement).getBoundingClientRect() });
+                if (hasChildren && !item.disabled) {
+                  setSubmenuFor({ index: i, rect: (e.currentTarget as HTMLElement).getBoundingClientRect(), focus: false });
                 } else {
                   setSubmenuFor(null);
                 }
               }}
-              onClick={() => {
+              onClick={(e) => {
                 if (item.disabled) return;
-                if (hasChildren) return;
+                if (hasChildren) {
+                  setSubmenuFor({ index: i, rect: e.currentTarget.getBoundingClientRect(), focus: e.detail === 0 });
+                  return;
+                }
                 item.onClick?.();
                 onClose();
               }}
-              className={`w-full flex items-center gap-2.5 px-3 py-1.5 text-left transition-colors ${
+              className={`w-full flex items-center gap-2.5 px-3 py-1.5 text-left transition-colors focus-visible:outline-offset-[-2px] ${
                 item.disabled
                   ? 'text-fg-disabled cursor-not-allowed'
                   : item.danger
-                    ? 'text-danger-fg hover:bg-danger-bg'
-                    : 'text-fg-muted hover:bg-surface-2'
+                    ? 'text-danger-fg hover:bg-danger-bg focus:bg-danger-bg'
+                    : 'text-fg-muted hover:bg-surface-2 focus:bg-surface-2'
               }`}
             >
-              <span className="w-4 h-4 flex items-center justify-center shrink-0 text-fg-subtle">{item.icon}</span>
+              <span className="w-4 h-4 flex items-center justify-center shrink-0 text-fg-subtle" aria-hidden="true">{item.icon}</span>
               <span className="flex-1 truncate">{item.label}</span>
-              {hasChildren && <span className="text-fg-subtle">›</span>}
+              {item.disabled && item.title && <span className="sr-only">{`, ${item.title}`}</span>}
+              {hasChildren && <span className="text-fg-subtle" aria-hidden="true">›</span>}
             </button>
             {item.separator === 'after' && (
-              <div className="my-1 border-t border-line" />
+              <div role="separator" className="my-1 border-t border-line" />
             )}
             {hasChildren && isOpen && submenuFor && (
               <ContextMenu
@@ -146,6 +194,11 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
                 y={submenuFor.rect.top}
                 items={item.children!}
                 onClose={onClose}
+                autoFocus={submenuFor.focus}
+                onBack={() => {
+                  setSubmenuFor(null);
+                  ref.current?.querySelector<HTMLElement>(`[data-menuindex="${i}"]`)?.focus();
+                }}
               />
             )}
           </div>

@@ -153,15 +153,6 @@
     display: inline-block;
   }
 
-  /* Slide-down (BulkToolbar) */
-  @keyframes coremail-slide-down {
-    from { opacity: 0; transform: translateY(-12px); }
-    to   { opacity: 1; transform: translateY(0);    }
-  }
-  .animate-slide-down {
-    animation: coremail-slide-down 200ms ease-out;
-  }
-
   /* Drag-Over-Pulse für Drop-Targets (Folder beim DragOver) */
   @keyframes coremail-drop-pulse {
     0%, 100% { box-shadow: 0 0 0 0   rgb(var(--color-accent) / 0.45); }
