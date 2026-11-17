@@ -1,11 +1,12 @@
 /**
- * WBXML codec for Microsoft Exchange ActiveSync (EAS 14.1)
+ * WBXML codec for Microsoft Exchange ActiveSync (EAS 12.1 – 14.1)
  * Implements the subset of WBXML used by ActiveSync.
  */
 
 // ─── EAS Code Pages ──────────────────────────────────────────────────────────
 // Each code page maps token byte → element name. Page numbers and tokens follow
-// [MS-ASWBXML] (EAS 14.1). The same element name exists on several pages
+// [MS-ASWBXML] (EAS 14.1; tokens newer than 12.1 are listed in TOKEN_SINCE below).
+// The same element name exists on several pages
 // (Status, SyncKey, ServerId, Add, Folder, …) — the encoder therefore resolves a
 // name on the PARENT element's page first (see resolveToken / encodeWbxml).
 const CODE_PAGES: Record<number, Record<number, string>> = {
@@ -208,6 +209,48 @@ for (const [cp, tokens] of Object.entries(CODE_PAGES)) {
 
 /** Namespace prefixes for explicitly qualified element names ("GAL:DisplayName"). */
 const NAMESPACE_PAGES: Record<string, number> = CP;
+
+// ─── Tokens per protocol version ([MS-ASWBXML]) ──────────────────────────────
+// Everything not listed exists since 12.1, the oldest version this server speaks.
+/** Code pages introduced after 12.1. */
+const PAGE_SINCE: Record<number, string> = { 21: '14.0', 22: '14.0' };
+/** Single tokens introduced after 12.1 (overrides PAGE_SINCE). */
+const TOKEN_SINCE: Record<number, Record<number, string>> = {
+  0: { 0x27: '14.0', 0x28: '14.0', 0x29: '14.0' }, // ConversationMode, MaxItems, HeartbeatInterval
+  2: { 0x1b: '14.0', 0x1c: '14.0', 0x3f: '14.0' }, // Categories, Category, DisallowNewTimeProposal
+  8: { 0x0e: '14.1', 0x10: '16.0', 0x11: '16.0', 0x12: '16.0' }, // InstanceId, ProposedStart/EndTime, SendResponse
+  10: { // Availability … MergedFreeBusy (14.0), Picture … MaxPictures (14.1)
+    0x16: '14.0', 0x17: '14.0', 0x18: '14.0', 0x19: '14.0', 0x1a: '14.1', 0x1b: '14.1', 0x1c: '14.1', 0x1d: '14.1',
+  },
+  15: { 0x20: '14.0', 0x21: '14.1', 0x22: '14.1', 0x23: '14.1' }, // ConversationId, Picture, MaxSize, MaxPictures
+  16: { 0x10: '14.1', 0x11: '14.1', 0x12: '14.1' }, // Picture, Status, Data
+  17: { 0x18: '14.0', 0x19: '14.1', 0x1a: '14.1', 0x1b: '14.1' }, // Preview, BodyPartPreference, BodyPart, Status
+  18: { // UserAgent, EnableOutboundSMS, MobileOperator (14.0); Accounts form, RightsManagementInformation (14.1)
+    0x20: '14.0', 0x21: '14.0', 0x22: '14.0',
+    0x23: '14.1', 0x24: '14.1', 0x25: '14.1', 0x26: '14.1', 0x27: '14.1', 0x28: '14.1', 0x29: '14.1', 0x2b: '14.1',
+  },
+  20: { 0x16: '14.0', 0x17: '14.0', 0x18: '14.0', 0x19: '14.0' }, // Move, DstFldId, ConversationId, MoveAlways
+  21: { 0x13: '14.1' }, // AccountId
+  22: { 0x11: '14.1', 0x12: '14.1', 0x13: '14.1' }, // AccountId, FirstDayOfWeek, MeetingMessageType
+};
+
+/** A tag of a WBXML document that the protocol version in question does not define. */
+export interface VersionedTag { page: number; token: number; name: string; since: string }
+
+/** Tags in the encoded document `buf` that protocol `version` does not know (empty = all valid). */
+export function tagsNewerThan(buf: Buffer, version: string): VersionedTag[] {
+  const max = Number(version);
+  const out: VersionedTag[] = [];
+  const walk = (e: WbxmlElement) => {
+    const page = e.page ?? 0;
+    const token = PAGE_NAME_TO_TOKEN[page]?.[e.name];
+    const since = token === undefined ? undefined : TOKEN_SINCE[page]?.[token] ?? PAGE_SINCE[page];
+    if (token !== undefined && since !== undefined && Number(since) > max) out.push({ page, token, name: e.name, since });
+    for (const c of e.children ?? []) if (typeof c !== 'string') walk(c);
+  };
+  walk(decodeWbxml(buf));
+  return out;
+}
 
 /** Splits `Namespace:Name` → [page, Name]; [undefined, name] for an unqualified name. */
 function splitQualified(name: string): [number | undefined, string, boolean] {

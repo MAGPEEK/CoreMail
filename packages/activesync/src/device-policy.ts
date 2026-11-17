@@ -8,13 +8,14 @@
  * Provision then answers `<RemoteWipe/>` (see commands/provision.ts).
  *
  * Protocol 14.0+ gets the global status inside the command's WBXML response
- * (`<Sync><Status>142</Status></Sync>`); older protocols (and commands without a
- * WBXML response such as GetAttachment) get HTTP 449 (provision) / 403 (blocked).
+ * (`<Sync><Status>142</Status></Sync>`); 12.1 (no global status codes) and commands
+ * without a WBXML response such as GetAttachment get HTTP 449 (provision) / 403 (blocked).
  *
- * No runtime imports besides the WBXML helpers.
+ * No runtime imports besides the WBXML and version helpers.
  */
 import { randomInt } from 'node:crypto';
 import { encodeWbxml, el } from './wbxml.js';
+import { supports, type EasVersion } from './protocol-version.js';
 
 export const EAS_GLOBAL_STATUS = {
   DEVICE_BLOCKED: '129',
@@ -55,18 +56,15 @@ const RESPONSE_ROOT: Record<string, string> = {
   ResolveRecipients: 'ResolveRecipients',
 };
 
-/** MS-ASProtocolVersion as a number (unparsable → 14.1, the version this server speaks). */
-export function protocolVersionNumber(header: string | undefined): number {
-  const n = Number.parseFloat(header ?? '');
-  return Number.isFinite(n) ? n : 14.1;
+/** HTTP status of a refusal without WBXML body: 403 for a blocked device, else 449 (provision first). */
+export function httpStatusOf(status: EasGlobalStatus): number {
+  return status === EAS_GLOBAL_STATUS.DEVICE_BLOCKED ? 403 : 449;
 }
 
 /** HTTP answer for a refused request. */
-export function deniedResponse(command: string, status: EasGlobalStatus, protocolVersion: string | undefined): { httpStatus: number; body?: Buffer } {
+export function deniedResponse(command: string, status: EasGlobalStatus, version: EasVersion): { httpStatus: number; body?: Buffer } {
   const root = RESPONSE_ROOT[command];
-  if (!root || protocolVersionNumber(protocolVersion) < 14) {
-    return { httpStatus: status === EAS_GLOBAL_STATUS.DEVICE_BLOCKED ? 403 : 449 };
-  }
+  if (!root || !supports(version, 'globalStatus')) return { httpStatus: httpStatusOf(status) };
   return { httpStatus: 200, body: encodeWbxml(el(root, undefined, [el('Status', status)])) };
 }
 

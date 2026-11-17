@@ -8,10 +8,11 @@ import { createLogger, getRedisClient } from '@coremail/core';
 import { encodeWbxml, el, getChild, getText, type WbxmlElement } from '../wbxml.js';
 import { enqueueRawOutbound, type RawOutboundJob } from '../outbound.js';
 import { EAS_SEND_STATUS, planEasSubmission, appendOriginalMessage, type EasSubmissionPlan } from './send-mail-plan.js';
+import type { EasCommandParams } from '../request.js';
 
 const log = createLogger('activesync:send-mail');
 
-type ComposeCommand = 'SendMail' | 'SmartReply' | 'SmartForward';
+export type ComposeCommand = 'SendMail' | 'SmartReply' | 'SmartForward';
 
 /** How long a SendMail ClientId is remembered ([MS-ASCMD] ClientId — retry detection). */
 const CLIENT_ID_TTL_SEC = 3 * 24 * 3600;
@@ -66,14 +67,105 @@ function statusResponse(command: string, status: string): Buffer {
   return encodeWbxml(el(command, undefined, [el('Status', status)]));
 }
 
+/** A SendMail / SmartReply / SmartForward request, independent of its encoding. */
+export interface ComposeRequest {
+  /** The client's RFC 5322 message, byte-exact. */
+  mime: Buffer | undefined;
+  saveInSent: boolean;
+  /** ComposeMail ClientId ('' = none — always for 12.1). */
+  clientId: string;
+  /** Source item of SmartReply / SmartForward (folderId only with ItemId, not LongId). */
+  source: { itemId: string; folderId?: string } | null;
+  /** ComposeMail ReplaceMime (14.0+): the client's MIME already contains the original. */
+  replaceMime: boolean;
+}
+
+function sourceRef(itemId: string, longId: string, folderId: string): ComposeRequest['source'] {
+  const id = itemId || longId;
+  if (!id) return null;
+  return longId || !folderId ? { itemId: id } : { itemId: id, folderId };
+}
+
+/** 14.0+: the ComposeMail WBXML request (`composemail:Mime` as opaque octets). */
+export function composeRequestFromWbxml(body: WbxmlElement): ComposeRequest {
+  const src = getChild(body, 'Source');
+  return {
+    mime: getChild(body, 'Mime')?.bytes,
+    saveInSent: getText(body, 'SaveInSentItems') !== '0',
+    clientId: getText(body, 'ClientId'),
+    source: src ? sourceRef(getText(src, 'ItemId'), getText(src, 'LongId'), getText(src, 'FolderId')) : null,
+    replaceMime: !!getChild(body, 'ReplaceMime'),
+  };
+}
+
 /**
- * SendMail / SmartReply / SmartForward ([MS-ASCMD] ComposeMail).
+ * 12.1: the request body is the raw MIME message (`Content-Type: message/rfc822`), the
+ * rest travels in the request line — `SaveInSent=T`, and for SmartReply / SmartForward
+ * `ItemId` + `CollectionId` or `LongId` ([MS-ASCMD] SendMail/SmartReply/SmartForward,
+ * [MS-ASHTTP] request parameters). There is no ClientId and no ReplaceMime.
+ */
+export function composeRequestFromMime(mime: Buffer, params: EasCommandParams): ComposeRequest {
+  return {
+    mime,
+    saveInSent: params.saveInSent,
+    clientId: '',
+    source: sourceRef(params.itemId ?? '', params.longId ?? '', params.collectionId ?? ''),
+    replaceMime: false,
+  };
+}
+
+/**
+ * HTTP status of a 12.1 compose request — the response has no body ([MS-ASHTTP]): sent →
+ * 200; a request that cannot succeed when repeated → 400 (malformed MIME, no recipient,
+ * unknown source item) / 403 (sender address not allowed) / 507 (send quota); a server
+ * failure → 500, so the device keeps the message and retries.
+ */
+export function legacySendHttpStatus(status: string): number {
+  switch (status) {
+    case EAS_SEND_STATUS.SUCCESS:
+    case EAS_SEND_STATUS.MESSAGE_PREVIOUSLY_SENT:
+      return 200;
+    case EAS_SEND_STATUS.INVALID_MIME:
+    case EAS_SEND_STATUS.NO_RECIPIENTS:
+    case EAS_SEND_STATUS.ITEM_NOT_FOUND:
+      return 400;
+    case EAS_SEND_STATUS.ACCESS_DENIED:
+      return 403;
+    case EAS_SEND_STATUS.MAILBOX_QUOTA_EXCEEDED:
+      return 507;
+    default:
+      return 500;
+  }
+}
+
+/** 14.0+ SendMail / SmartReply / SmartForward: ComposeMail WBXML in, `<Command><Status>` out. */
+export async function handleSendMail(
+  body: WbxmlElement,
+  userId: string,
+  command: ComposeCommand = 'SendMail',
+  deps: SendMailDeps = defaultSendMailDeps,
+): Promise<Buffer> {
+  return statusResponse(command, await submitCompose(composeRequestFromWbxml(body), userId, command, deps));
+}
+
+/** 12.1 SendMail / SmartReply / SmartForward: raw MIME + request-line parameters in, HTTP status out. */
+export async function handleLegacySendMail(
+  mime: Buffer,
+  params: EasCommandParams,
+  userId: string,
+  command: ComposeCommand,
+  deps: SendMailDeps = defaultSendMailDeps,
+): Promise<number> {
+  return legacySendHttpStatus(await submitCompose(composeRequestFromMime(mime, params), userId, command, deps));
+}
+
+/**
+ * SendMail / SmartReply / SmartForward ([MS-ASCMD]) — returns the EAS send status.
  *
- * The MIME (`composemail:Mime`, opaque octets — taken byte-exact, never re-encoded) is
- * handed to the smtp-server outbound worker via the BullMQ queue `smtp-outbound` (local
- * recipients are delivered into their mailbox, external ones relayed and DKIM-signed).
- * The From header must be an address the authenticated user may send as; the envelope
- * sender is that verified address.
+ * The MIME (taken byte-exact, never re-encoded) is handed to the smtp-server outbound
+ * worker via the BullMQ queue `smtp-outbound` (local recipients are delivered into their
+ * mailbox, external ones relayed and DKIM-signed). The From header must be an address the
+ * authenticated user may send as; the envelope sender is that verified address.
  *
  * SmartReply / SmartForward: the Source item (FolderId+ItemId or LongId, own mailbox) is
  * appended to the client's message as an embedded `message/rfc822` part (inline for a
@@ -84,19 +176,14 @@ function statusResponse(command: string, status: string): Buffer {
  * `ClientId` is remembered per user: a retried request with the same ClientId (e.g. after
  * a timeout) is answered with Status 118 instead of sending the mail twice.
  */
-export async function handleSendMail(
-  body: WbxmlElement,
+export async function submitCompose(
+  request: ComposeRequest,
   userId: string,
-  command: ComposeCommand = 'SendMail',
-  deps: SendMailDeps = defaultSendMailDeps,
-): Promise<Buffer> {
-  const mime = getChild(body, 'Mime')?.bytes;
-  const saveInSent = getText(body, 'SaveInSentItems') !== '0';
-  const clientId = getText(body, 'ClientId');
-
-  if (!mime || mime.length === 0) {
-    return statusResponse(command, EAS_SEND_STATUS.SUBMISSION_FAILED);
-  }
+  command: ComposeCommand,
+  deps: SendMailDeps,
+): Promise<string> {
+  const { mime, saveInSent, clientId } = request;
+  if (!mime || mime.length === 0) return EAS_SEND_STATUS.SUBMISSION_FAILED;
 
   let claimed = false;
   try {
@@ -104,28 +191,23 @@ export async function handleSendMail(
       where:  { id: userId, active: true },
       select: { email: true },
     });
-    if (!user) return statusResponse(command, EAS_SEND_STATUS.ACCESS_DENIED);
+    if (!user) return EAS_SEND_STATUS.ACCESS_DENIED;
 
     // v8.1: ProhibitSendQuota (same check as SMTP submission, REST and JMAP)
     const allowed = await (deps.sendAllowed ?? (async (id: string) => (await checkSendQuota(id)).allowed))(userId);
     if (!allowed) {
       log.info({ userId }, 'SendMail refused: mailbox over its send quota');
-      return statusResponse(command, EAS_SEND_STATUS.MAILBOX_QUOTA_EXCEEDED);
+      return EAS_SEND_STATUS.MAILBOX_QUOTA_EXCEEDED;
     }
 
     // SmartReply / SmartForward: the original message.
     let raw: Buffer = Buffer.from(mime);
     let source: SourceMessage | null = null;
-    if (command !== 'SendMail') {
-      const src = getChild(body, 'Source');
-      const itemId = src ? (getText(src, 'ItemId') || getText(src, 'LongId')) : '';
-      if (itemId) {
-        const folderId = src && !getText(src, 'LongId') ? getText(src, 'FolderId') : '';
-        source = await deps.loadSource(userId, { itemId, ...(folderId ? { folderId } : {}) });
-        if (!source) return statusResponse(command, EAS_SEND_STATUS.ITEM_NOT_FOUND);
-        if (!getChild(body, 'ReplaceMime')) {
-          raw = appendOriginalMessage(raw, source.raw, command === 'SmartForward' ? 'forward' : 'reply', source.subject);
-        }
+    if (command !== 'SendMail' && request.source) {
+      source = await deps.loadSource(userId, request.source);
+      if (!source) return EAS_SEND_STATUS.ITEM_NOT_FOUND;
+      if (!request.replaceMime) {
+        raw = appendOriginalMessage(raw, source.raw, command === 'SmartForward' ? 'forward' : 'reply', source.subject);
       }
     }
 
@@ -135,7 +217,7 @@ export async function handleSendMail(
     });
     if (!result.ok) {
       log.warn({ userId, command, status: result.status, reason: result.reason }, 'EAS send rejected');
-      return statusResponse(command, result.status);
+      return result.status;
     }
     const plan = result.plan;
 
@@ -143,7 +225,7 @@ export async function handleSendMail(
       claimed = await deps.claimClientId(userId, clientId);
       if (!claimed) {
         log.info({ userId, command, clientId }, 'EAS send retried with a used ClientId — not sent again');
-        return statusResponse(command, EAS_SEND_STATUS.MESSAGE_PREVIOUSLY_SENT);
+        return EAS_SEND_STATUS.MESSAGE_PREVIOUSLY_SENT;
       }
     }
 
@@ -184,11 +266,11 @@ export async function handleSendMail(
       );
     }
 
-    return statusResponse(command, EAS_SEND_STATUS.SUCCESS);
+    return EAS_SEND_STATUS.SUCCESS;
   } catch (err) {
     log.error({ err, userId, command }, 'EAS send failed');
     if (claimed && clientId) await deps.releaseClientId(userId, clientId).catch(() => undefined);
-    return statusResponse(command, EAS_SEND_STATUS.SERVER_ERROR);
+    return EAS_SEND_STATUS.SERVER_ERROR;
   }
 }
 
@@ -238,14 +320,4 @@ export async function saveSentCopy(userId: string, plan: EasSubmissionPlan): Pro
     where: { id: sentFolder.id },
     data: { totalCount: { increment: 1 } },
   });
-}
-
-/** SmartReply / SmartForward — same submission path with the Source message appended. */
-export async function handleSmartReply(
-  body: WbxmlElement,
-  userId: string,
-  command: 'SmartReply' | 'SmartForward',
-  deps: SendMailDeps = defaultSendMailDeps,
-): Promise<Buffer> {
-  return handleSendMail(body, userId, command, deps);
 }

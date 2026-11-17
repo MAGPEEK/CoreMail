@@ -22,12 +22,13 @@ const db = installFakeDb({
 const { handleSettings } = await import('./settings.js');
 const { decodeWbxml } = await import('../wbxml.js');
 type E = import('../wbxml.js').WbxmlElement;
+type EasVersion = import('../protocol-version.js').EasVersion;
 
 const S = (t: number, k?: WNode[] | string): WNode => [18, t, k];
 const kid = (e: E | undefined, name: string): E | undefined => e?.children?.find((c): c is E => typeof c !== 'string' && c.name === name);
 const all = (e: E | undefined, name: string): E[] => (e?.children ?? []).filter((c): c is E => typeof c !== 'string' && c.name === name);
 
-async function run(req: WNode, version = '14.1'): Promise<E> {
+async function run(req: WNode, version: EasVersion = '14.1'): Promise<E> {
   return decodeWbxml(await handleSettings(decodeWbxml(clientWbxml(req)), 'u1', 'D1', version));
 }
 

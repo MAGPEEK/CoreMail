@@ -63,6 +63,21 @@ test('refusal bytes: global status inside the command element (14.x), HTTP 449/4
   assert.deepEqual(deniedResponse('Sync', EAS_GLOBAL_STATUS.DEVICE_BLOCKED, '12.1'), { httpStatus: 403 });
 });
 
+test('12.1 has no global status codes: every refusal of every command is HTTP 449, a blocked device 403', () => {
+  const commands = ['Sync', 'FolderSync', 'Ping', 'SendMail', 'SmartReply', 'SmartForward', 'ItemOperations', 'GetItemEstimate',
+    'Settings', 'Search', 'MoveItems', 'MeetingResponse', 'ResolveRecipients', 'GetAttachment'];
+  for (const command of commands) {
+    for (const status of Object.values(EAS_GLOBAL_STATUS)) {
+      assert.deepEqual(deniedResponse(command, status, '12.1'), { httpStatus: status === '129' ? 403 : 449 }, `${command} ${status}`);
+    }
+    if (command !== 'GetAttachment') {
+      const wbxml = deniedResponse(command, EAS_GLOBAL_STATUS.DEVICE_NOT_PROVISIONED, '14.0');
+      assert.equal(wbxml.httpStatus, 200, command);
+      assert.equal(kid(decodeWbxml(wbxml.body!), 'Status')?.text, '142', command);
+    }
+  }
+});
+
 test('Provision phase 1 → temporary key (not usable), phase 2 → final key (usable); wrong key → policy Status 5', async () => {
   const p1 = await provision(phase1());
   assert.equal(kid(p1, 'Status')?.text, '1');

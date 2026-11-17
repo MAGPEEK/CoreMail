@@ -1,16 +1,19 @@
 /**
- * Settings command ([MS-ASCMD] 2.2.1.18, EAS 14.0/14.1).
+ * Settings command ([MS-ASCMD] 2.2.1.18, EAS 12.1/14.0/14.1).
  *
  *  - Oof Get/Set          → UserSettings.oof* (same source as MWA /api/v1/user/oof,
- *                           JMAP VacationResponse and the SMTP auto-reply)
- *  - DeviceInformation Set → ActiveSyncDevice.deviceFriendlyName (other fields accepted)
- *  - UserInformation Get  → primary address + active aliases
- *  - RightsManagementInformation Get → empty (no IRM templates)
+ *                           JMAP VacationResponse and the SMTP auto-reply); the Oof
+ *                           schema is the same in every supported version
+ *  - DeviceInformation Set → ActiveSyncDevice.deviceFriendlyName (other fields accepted;
+ *                           UserAgent/MobileOperator/EnableOutboundSMS are 14.0+)
+ *  - UserInformation Get  → primary address + active aliases (Accounts form 14.1+)
+ *  - RightsManagementInformation Get → empty (no IRM templates; 14.1+, ignored before)
  *  - DevicePassword Set   → accepted (no recovery password storage)
  */
 import { prisma } from '@coremail/storage/prisma';
 import { saveOofSettings } from '@coremail/storage';
 import { encodeWbxml, el, getChild, getText, type WbxmlElement } from '../wbxml.js';
+import { HIGHEST_EAS_VERSION, supports, type EasVersion } from '../protocol-version.js';
 
 export const SETTINGS_STATUS = {
   SUCCESS: '1',
@@ -157,11 +160,11 @@ async function handleDeviceInformation(info: WbxmlElement, userId: string, devic
   return el('DeviceInformation', undefined, [el('Status', SETTINGS_STATUS.SUCCESS)]);
 }
 
-/** Pure: UserInformation Get content (14.1: Accounts form, 14.0: EmailAddresses only). */
-export function userInformationGet(user: { email: string; displayName: string }, aliases: string[], protocolVersion: string): WbxmlElement {
+/** Pure: UserInformation Get content (14.1: Accounts form, 12.1/14.0: EmailAddresses only). */
+export function userInformationGet(user: { email: string; displayName: string }, aliases: string[], version: EasVersion): WbxmlElement {
   const primary = user.email.toLowerCase();
   const others = [...new Set(aliases.map((a) => a.toLowerCase()))].filter((a) => a !== primary);
-  if (parseFloat(protocolVersion) >= 14.1) {
+  if (supports(version, 'userInformationAccounts')) {
     return el('Get', undefined, [el('Accounts', undefined, [el('Account', undefined, [
       el('UserDisplayName', user.displayName || user.email),
       el('EmailAddresses', undefined, [
@@ -173,14 +176,14 @@ export function userInformationGet(user: { email: string; displayName: string },
   return el('Get', undefined, [el('EmailAddresses', undefined, [primary, ...others].map((a) => el('SmtpAddress', a)))]);
 }
 
-async function handleUserInformation(info: WbxmlElement, userId: string, protocolVersion: string): Promise<WbxmlElement> {
+async function handleUserInformation(info: WbxmlElement, userId: string, version: EasVersion): Promise<WbxmlElement> {
   if (!getChild(info, 'Get')) return el('UserInformation', undefined, [el('Status', SETTINGS_STATUS.PROTOCOL_ERROR)]);
   const user = await prisma.user.findUnique({ where: { id: userId }, select: { email: true, displayName: true } });
   if (!user) return el('UserInformation', undefined, [el('Status', SETTINGS_STATUS.ACCESS_DENIED)]);
   const aliases = await prisma.emailAlias.findMany({ where: { targetUserId: userId, active: true }, select: { address: true } });
   return el('UserInformation', undefined, [
     el('Status', SETTINGS_STATUS.SUCCESS),
-    userInformationGet(user, aliases.map((a) => a.address), protocolVersion),
+    userInformationGet(user, aliases.map((a) => a.address), version),
   ]);
 }
 
@@ -188,7 +191,7 @@ export async function handleSettings(
   body: WbxmlElement,
   userId: string,
   deviceId: string,
-  protocolVersion = '14.1',
+  version: EasVersion = HIGHEST_EAS_VERSION,
 ): Promise<Buffer> {
   if (body.name !== 'Settings') {
     return encodeWbxml(el('Settings', undefined, [el('Status', SETTINGS_STATUS.PROTOCOL_ERROR)]));
@@ -198,9 +201,11 @@ export async function handleSettings(
     switch (child.name) {
       case 'Oof': out.push(await handleOof(child, userId)); break;
       case 'DeviceInformation': out.push(await handleDeviceInformation(child, userId, deviceId)); break;
-      case 'UserInformation': out.push(await handleUserInformation(child, userId, protocolVersion)); break;
+      case 'UserInformation': out.push(await handleUserInformation(child, userId, version)); break;
       case 'RightsManagementInformation':
-        out.push(el('RightsManagementInformation', undefined, [el('Status', SETTINGS_STATUS.SUCCESS), el('Get')]));
+        if (supports(version, 'rightsManagement')) {
+          out.push(el('RightsManagementInformation', undefined, [el('Status', SETTINGS_STATUS.SUCCESS), el('Get')]));
+        }
         break;
       case 'DevicePassword':
         out.push(el('DevicePassword', undefined, [el('Status', SETTINGS_STATUS.SUCCESS)]));

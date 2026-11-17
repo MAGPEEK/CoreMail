@@ -20,7 +20,9 @@ const db = installFakeDb({
   message: [], attachment: [], systemLog: [],
 });
 
-const { handleSendMail, saveSentCopy } = await import('./send-mail.js');
+const {
+  handleSendMail, handleLegacySendMail, legacySendHttpStatus, composeRequestFromWbxml, composeRequestFromMime, saveSentCopy,
+} = await import('./send-mail.js');
 const { decodeWbxml } = await import('../wbxml.js');
 const storage = await import('@coremail/storage');
 type E = import('../wbxml.js').WbxmlElement;
@@ -152,4 +154,49 @@ test('v8.1: a mailbox over its ProhibitSendQuota gets Status 113 (SendMail/Smart
   const ok = deps({ sendAllowed: async () => true });
   assert.equal(status(await handleSendMail(composeReq('SendMail', MIME), 'u1', 'SendMail', ok.d)), '1');
   assert.equal(ok.jobs.length, 1);
+});
+
+test('12.1 SendMail: raw MIME body queued byte-exact, HTTP 200 without body; SaveInSent from the request line', async () => {
+  const saved = deps();
+  assert.equal(await handleLegacySendMail(MIME, { saveInSent: true }, 'u1', 'SendMail', saved.d), 200);
+  assert.equal(saved.jobs.length, 1);
+  assert.ok(Buffer.from(saved.jobs[0]!.rawMessage, 'base64').equals(MIME), 'rawMessage must be the client octets');
+  assert.equal(saved.sent.length, 1);
+  const notSaved = deps();
+  assert.equal(await handleLegacySendMail(MIME, { saveInSent: false }, 'u1', 'SendMail', notSaved.d), 200);
+  assert.equal(notSaved.sent.length, 0);
+});
+
+test('12.1 SmartReply/SmartForward: source from ItemId + CollectionId or LongId, original appended (no ReplaceMime in 12.1)', async () => {
+  const refs: unknown[] = [];
+  const r = deps({ loadSource: async (_u, ref) => { refs.push(ref); return ref.itemId === 'orig' ? { id: 'orig', folderId: 'inbox', flags: [], mailboxId: 'mb1', subject: 'Report', raw: ORIGINAL } : null; } });
+  assert.equal(await handleLegacySendMail(MIME, { saveInSent: false, itemId: 'orig', collectionId: 'inbox' }, 'u1', 'SmartReply', r.d), 200);
+  assert.equal(await handleLegacySendMail(MIME, { saveInSent: false, longId: 'orig', collectionId: 'inbox' }, 'u1', 'SmartForward', r.d), 200);
+  assert.deepEqual(refs, [{ itemId: 'orig', folderId: 'inbox' }, { itemId: 'orig' }]);
+  assert.ok(r.jobs.every((j) => Buffer.from(j.rawMessage, 'base64').includes(ORIGINAL)), 'original embedded');
+  assert.deepEqual(r.marks, ['\\Answered', '$Forwarded']);
+  assert.equal(await handleLegacySendMail(MIME, { saveInSent: false, itemId: 'nope', collectionId: 'inbox' }, 'u1', 'SmartReply', r.d), 400);
+  assert.equal(r.jobs.length, 2, 'unknown source: nothing sent');
+});
+
+test('12.1 compose failures map to HTTP statuses (no response body exists before 14.0)', async () => {
+  const notAllowed = Buffer.from(MIME.toString('latin1').replace('From: bob@example.com', 'From: mallory@example.com'), 'latin1');
+  assert.equal(await handleLegacySendMail(notAllowed, { saveInSent: false }, 'u1', 'SendMail', deps().d), 403);
+  const noRcpt = Buffer.from('From: bob@example.com\r\nSubject: x\r\n\r\nbody\r\n', 'latin1');
+  assert.equal(await handleLegacySendMail(noRcpt, { saveInSent: false }, 'u1', 'SendMail', deps().d), 400);
+  assert.equal(await handleLegacySendMail(MIME, { saveInSent: false }, 'u1', 'SendMail', deps({ sendAllowed: async () => false }).d), 507);
+  const down = deps({ enqueue: async () => { throw new Error('redis down'); } });
+  assert.equal(await handleLegacySendMail(MIME, { saveInSent: false }, 'u1', 'SendMail', down.d), 500, 'retryable: device keeps the message');
+  assert.deepEqual(
+    ['1', '118', '107', '119', '150', '130', '113', '110', '120'].map(legacySendHttpStatus),
+    [200, 200, 400, 400, 400, 403, 507, 500, 500],
+  );
+});
+
+test('ComposeMail WBXML (14.0+) and the 12.1 request line describe the same request', () => {
+  const fromWbxml = composeRequestFromWbxml(composeReq('SmartReply', MIME, [...clientId('c-9'), ...source('orig')]));
+  assert.ok(fromWbxml.mime?.equals(MIME));
+  assert.deepEqual({ ...fromWbxml, mime: null }, { mime: null, saveInSent: true, clientId: 'c-9', source: { itemId: 'orig', folderId: 'inbox' }, replaceMime: false });
+  const fromLine = composeRequestFromMime(MIME, { saveInSent: true, itemId: 'orig', collectionId: 'inbox' });
+  assert.deepEqual({ ...fromLine, mime: null }, { mime: null, saveInSent: true, clientId: '', source: { itemId: 'orig', folderId: 'inbox' }, replaceMime: false });
 });

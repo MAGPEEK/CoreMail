@@ -12,7 +12,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { encodeWbxml, decodeWbxml, el, pel, CP, type WbxmlElement } from './wbxml.js';
+import { encodeWbxml, decodeWbxml, el, pel, tagsNewerThan, CP, type WbxmlElement } from './wbxml.js';
 import { clientWbxml, find } from './commands/test-fixtures.js';
 import { wbxmlTags } from './test-support/fake-db.js';
 
@@ -282,4 +282,22 @@ test('mixed tree: Search result with qualified GAL names next to pel-pinned AirS
   const back = decodeWbxml(buf);
   assert.equal(find(back, 'DisplayName')?.page, CP.GAL);
   assert.equal(find(back, 'Data', CP.AirSyncBase)?.text, 'd');
+});
+
+test('tagsNewerThan: 14.x tokens and pages are flagged for 12.1, 14.1 tokens for 14.0, nothing for 14.1', () => {
+  const doc = encodeWbxml(el('Sync', undefined, [
+    el('Email:Subject', 's'), // 12.1
+    pel(CP.AirSyncBase, 'Body', [pel(CP.AirSyncBase, 'Type', '1'), pel(CP.AirSyncBase, 'Preview', 'p')]), // Preview: 14.0
+    pel(CP.Email2, 'ConversationIndex', Buffer.from([1, 2, 3, 4, 5]), { opaque: true }), // page 22: 14.0
+    el('Settings:Accounts'), // 14.1
+    el('ComposeMail:SendMail'), // page 21: 14.0
+  ]));
+  const names = (v: string) => tagsNewerThan(doc, v).map((t) => `${t.page}:${t.name}@${t.since}`);
+  assert.deepEqual(names('12.1'), ['17:Preview@14.0', '22:ConversationIndex@14.0', '18:Accounts@14.1', '21:SendMail@14.0']);
+  assert.deepEqual(names('14.0'), ['18:Accounts@14.1']);
+  assert.deepEqual(names('14.1'), []);
+  // Provision policy elements all exist in 12.1; MeetingResponse SendResponse is 16.0
+  const policy = encodeWbxml(el('Provision:EASProvisionDoc', undefined, [el('AllowBrowser', '1'), el('AllowStorageCard', '1')]));
+  assert.deepEqual(tagsNewerThan(policy, '12.1'), []);
+  assert.deepEqual(tagsNewerThan(encodeWbxml(el('MeetingResponse:SendResponse')), '14.1').map((t) => t.since), ['16.0']);
 });

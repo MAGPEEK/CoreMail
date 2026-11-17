@@ -1,17 +1,19 @@
 /**
- * EAS 14.1 message representation: AirSyncBase body selection ([MS-ASAIRS]
+ * EAS 12.1–14.1 message representation: AirSyncBase body selection ([MS-ASAIRS]
  * BodyPreference → Body, Attachments, NativeBodyType) and the Email/Email2
  * ApplicationData properties ([MS-ASEMAIL]). Shared by Sync and ItemOperations.
+ * 12.1 gets neither airsyncbase:Preview nor the Email2 page (both 14.0+).
  *
  * MIME (Type 4) is the original RFC 5322 octets from `loadRawMessage()`
  * (byte-exact, written as an inline WBXML string, or OPAQUE if it contains NUL);
  * it is only delivered when MIMESupport allows it ([MS-ASCMD] MIMESupport:
  * 0 = never, 1 = S/MIME messages only, 2 = always).
  *
- * No runtime imports besides the WBXML helpers: callers inject `loadRaw`.
+ * No runtime imports besides the WBXML and version helpers: callers inject `loadRaw`.
  */
 import { createHash } from 'node:crypto';
 import { getText, pel, CP, type WbxmlElement } from '../wbxml.js';
+import { supports, type EasVersion } from '../protocol-version.js';
 
 export type BodyType = 1 | 2 | 3 | 4; // 1 plain, 2 HTML, 3 RTF, 4 MIME
 
@@ -102,9 +104,15 @@ export function parseBodyOptions(parent: WbxmlElement | undefined): BodyOptions 
   const out: BodyOptions = { prefs, mimeSupport: ms === '2' ? 2 : ms === '1' ? 1 : 0 };
   const mt = intOrUndefined(getText(options, 'MIMETruncation'));
   if (mt !== undefined && mt < MIME_TRUNCATION.length) out.mimeTruncation = MIME_TRUNCATION[mt]!;
-  const ft = intOrUndefined(getText(options, 'FilterType'));
-  if (ft !== undefined && ft >= 1 && ft <= 7) out.filterType = ft;
+  const ft = parseFilterType(getText(options, 'FilterType'));
+  if (ft !== undefined) out.filterType = ft;
   return out;
+}
+
+/** airsync:FilterType text → 1..7; undefined for absent, 0 (no filter) or invalid. */
+export function parseFilterType(text: string): number | undefined {
+  const ft = intOrUndefined(text);
+  return ft !== undefined && ft >= 1 && ft <= 7 ? ft : undefined;
 }
 
 // [MS-ASCMD] FilterType for email: 1 = 1 day, 2 = 3 days, 3 = 1 week, 4 = 2 weeks,
@@ -185,8 +193,8 @@ export function nativeBodyType(msg: Pick<EasMessage, 'bodyHtml'>): 1 | 2 {
   return msg.bodyHtml ? 2 : 1;
 }
 
-/** airsyncbase:Body for `pref` (Type, EstimatedDataSize, Truncated, Data, Preview). */
-export async function buildBody(pref: BodyPreference, msg: EasMessage, loadRaw: LoadRaw): Promise<WbxmlElement> {
+/** airsyncbase:Body for `pref` (Type, EstimatedDataSize, Truncated, Data, Preview — 14.0+). */
+export async function buildBody(pref: BodyPreference, msg: EasMessage, loadRaw: LoadRaw, version: EasVersion): Promise<WbxmlElement> {
   let type: BodyType = pref.type === 3 ? 1 : pref.type;
   let full: Buffer;
   if (type === 4) full = await loadRaw(msg);
@@ -207,7 +215,7 @@ export async function buildBody(pref: BodyPreference, msg: EasMessage, loadRaw: 
     pel(CP.AirSyncBase, 'Truncated', truncated ? '1' : '0'),
   ];
   if (data && data.length > 0) kids.push(pel(CP.AirSyncBase, 'Data', data));
-  if (pref.preview) {
+  if (pref.preview && supports(version, 'bodyPreview')) {
     const p = previewOf(msg, pref.preview);
     if (p) kids.push(pel(CP.AirSyncBase, 'Preview', p));
   }
@@ -262,8 +270,9 @@ export function conversationIndex(date: Date): Buffer {
 /**
  * Email/AirSyncBase/Email2 properties of a message in [MS-ASEMAIL] order — the
  * children of airsync:ApplicationData (Sync) or itemoperations:Properties.
+ * Email2 (conversation properties) only for 14.0+.
  */
-export async function buildEmailProperties(msg: EasMessage, pref: BodyPreference, loadRaw: LoadRaw): Promise<WbxmlElement[]> {
+export async function buildEmailProperties(msg: EasMessage, pref: BodyPreference, loadRaw: LoadRaw, version: EasVersion): Promise<WbxmlElement[]> {
   const E = CP.Email;
   const out: WbxmlElement[] = [];
   if (msg.toAddrs.length) out.push(pel(E, 'To', msg.toAddrs.join(', ')));
@@ -278,13 +287,15 @@ export async function buildEmailProperties(msg: EasMessage, pref: BodyPreference
   out.push(pel(E, 'Read', msg.flags.includes('\\Seen') ? '1' : '0'));
   const atts = buildAttachments(msg.attachments);
   if (atts) out.push(atts);
-  out.push(await buildBody(pref, msg, loadRaw));
+  out.push(await buildBody(pref, msg, loadRaw, version));
   out.push(pel(E, 'MessageClass', messageClass(msg.smimeMeta)));
   out.push(pel(E, 'InternetCPID', '65001'));
   out.push(pel(E, 'ContentClass', 'urn:content-classes:message'));
   out.push(pel(CP.AirSyncBase, 'NativeBodyType', String(nativeBodyType(msg))));
-  out.push(pel(CP.Email2, 'ConversationId', conversationId(msg), { opaque: true }));
-  out.push(pel(CP.Email2, 'ConversationIndex', conversationIndex(msg.date), { opaque: true }));
+  if (supports(version, 'email2')) {
+    out.push(pel(CP.Email2, 'ConversationId', conversationId(msg), { opaque: true }));
+    out.push(pel(CP.Email2, 'ConversationIndex', conversationIndex(msg.date), { opaque: true }));
+  }
   return out;
 }
 

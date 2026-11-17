@@ -9,6 +9,7 @@ import {
 import { createLogger } from '@coremail/core';
 import { ACK_KEY, acknowledgeSyncKey, forgetItems, knownItems, markKnown, recordPending, resetCollection } from './item-state.js';
 import { changedSyncKeys, mergeSyncKeys } from './sync-keys.js';
+import { HIGHEST_EAS_VERSION, type EasVersion } from '../protocol-version.js';
 
 /** [MS-ASCMD] Sync status values used here. */
 export const SYNC_STATUS = {
@@ -55,10 +56,10 @@ const log = createLogger('activesync:sync');
  * it is not recorded as sent).
  */
 export async function addProperties(
-  msg: EasMessage, pref: BodyPreference, loadRaw: LoadRaw, ctx: { userId: string; collectionId: string },
+  msg: EasMessage, pref: BodyPreference, loadRaw: LoadRaw, version: EasVersion, ctx: { userId: string; collectionId: string },
 ): Promise<WbxmlElement[] | null> {
   try {
-    return await buildEmailProperties(msg, pref, loadRaw);
+    return await buildEmailProperties(msg, pref, loadRaw, version);
   } catch (err) {
     log.warn({ err, userId: ctx.userId, collectionId: ctx.collectionId, messageId: msg.id, bodyType: pref.type },
       'EAS Sync: message body not readable — falling back to the stored text/HTML body');
@@ -71,7 +72,7 @@ export async function addProperties(
   };
   const noRaw: LoadRaw = async () => { throw new Error('raw message not readable'); };
   try {
-    return await buildEmailProperties({ ...msg, smimeMeta: null }, fallback, noRaw);
+    return await buildEmailProperties({ ...msg, smimeMeta: null }, fallback, noRaw, version);
   } catch (err) {
     log.error({ err, userId: ctx.userId, collectionId: ctx.collectionId, messageId: msg.id },
       'EAS Sync: message skipped — properties could not be built');
@@ -213,13 +214,15 @@ export async function vanishedItems(deviceRowId: string, collectionId: string): 
  * Server → client: `Add` for items the device does not hold, `Change` (Read state) for
  * items it holds at an older modSeq, `Delete` for items it holds that were expunged or
  * moved out of the collection; items it already holds at their current modSeq (its own
- * changes) are not sent. FilterType limits `Add` to the age window.
+ * changes) are not sent. FilterType limits `Add` to the age window. `version` selects the
+ * item schema (12.1: no Email2 conversation properties, no body Preview).
  */
 export async function handleSync(
   body: WbxmlElement,
   userId: string,
   deviceId: string,
   deps: SyncDeps = {},
+  version: EasVersion = HIGHEST_EAS_VERSION,
 ): Promise<Buffer> {
   const loadRaw = deps.loadRaw ?? defaultLoadRaw;
   const now = deps.now ?? (() => new Date());
@@ -338,7 +341,7 @@ export async function handleSync(
       const { modSeq: _modSeq, ...cols } = row;
       const msg: EasMessage = { ...cols, attachments: attachments.get(row.id) ?? [] };
       const pref = chooseBodyPreference(bodyOptions, msg);
-      const props = await addProperties(msg, pref, loadRaw, { userId, collectionId });
+      const props = await addProperties(msg, pref, loadRaw, version, { userId, collectionId });
       if (!props) { skipped.add(msg.id); continue; }
       serverCommands.push(el('Add', undefined, [
         el('ServerId', msg.id),

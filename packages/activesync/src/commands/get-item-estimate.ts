@@ -9,22 +9,31 @@
  * are not counted. Without a device row: the raw count of the modSeq range (as before).
  * Status (getitemestimate:Status): 1 ok, 2 invalid/foreign collection,
  * 3 sync state not primed (SyncKey 0), 4 invalid SyncKey.
+ * 12.1: FilterType and Class are direct children of the request Collection (14.0+:
+ * FilterType inside airsync:Options, no Class); the response echoes the Class.
  */
 import { prisma } from '@coremail/storage/prisma';
 import { ensureCounterFloor } from '@coremail/storage';
 import { encodeWbxml, getChild, getText, pel, CP, type WbxmlElement } from '../wbxml.js';
 import { estimateSyncWindow, syncRange, type SyncEstimateDb } from './sync-window.js';
-import { filterCutoff, parseBodyOptions } from './body.js';
+import { filterCutoff, parseBodyOptions, parseFilterType } from './body.js';
 import { knownItems } from './item-state.js';
 import { departedItems, storedOptions } from './sync.js';
+import { HIGHEST_EAS_VERSION, supports, type EasVersion } from '../protocol-version.js';
 
 export const GIE_STATUS = { Success: '1', InvalidCollection: '2', NotPrimed: '3', InvalidSyncKey: '4' } as const;
+
+/** FilterType of a request Collection: airsync:Options (14.0+) or the direct child (12.1). */
+export function requestFilterType(collection: WbxmlElement): number | undefined {
+  return parseBodyOptions(collection)?.filterType ?? parseFilterType(getText(collection, 'FilterType'));
+}
 
 export async function handleGetItemEstimate(
   body: WbxmlElement,
   userId: string,
   deviceId?: string,
   now: () => Date = () => new Date(),
+  version: EasVersion = HIGHEST_EAS_VERSION,
 ): Promise<Buffer> {
   const G = CP.GetItemEstimate;
   const collections = getChild(body, 'Collections');
@@ -36,9 +45,11 @@ export async function handleGetItemEstimate(
   for (const col of collections?.children ?? []) {
     if (typeof col === 'string' || col.name !== 'Collection') continue;
     const collectionId = getText(col, 'CollectionId');
+    const cls = supports(version, 'estimateOptions') ? '' : getText(col, 'Class');
     const respond = (status: string, estimate?: number) => responses.push(pel(G, 'Response', [
       pel(G, 'Status', status),
       pel(G, 'Collection', [
+        ...(cls ? [pel(G, 'Class', cls)] : []),
         pel(G, 'CollectionId', collectionId),
         ...(estimate !== undefined ? [pel(G, 'Estimate', String(estimate))] : []),
       ]),
@@ -66,7 +77,7 @@ export async function handleGetItemEstimate(
     if (range.status === 'invalid') { respond(GIE_STATUS.InvalidSyncKey); continue; }
 
     // Same FilterType source as Sync: the request's Options, else the sticky Sync options.
-    const filterType = parseBodyOptions(col)?.filterType ?? storedOptions(syncKeys, folder.id)?.filterType;
+    const filterType = requestFilterType(col) ?? storedOptions(syncKeys, folder.id)?.filterType;
     const cutoff = filterCutoff(filterType, now());
     const rows = await prisma.message.findMany({
       where: { folderId: folder.id, deletedAt: null, modSeq: { gte: range.since, lt: range.upper } },

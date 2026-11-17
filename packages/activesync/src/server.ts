@@ -8,12 +8,15 @@ import { requireAuth, type EasUser } from './auth.js';
 import { easLiveRequests } from './live-sessions.js';
 import { decodeWbxml, type WbxmlElement } from './wbxml.js';
 import { EAS_COMMANDS } from './commands.js';
+import { EAS_VERSIONS, HIGHEST_EAS_VERSION, negotiateVersion, supports, type EasVersion } from './protocol-version.js';
+import { parseRequestLine, type EasCommandParams } from './request.js';
+import { EasHttpError } from './http-error.js';
 import { handleProvision } from './commands/provision.js';
 import { handleFolderSync } from './commands/folder-sync.js';
 import { handleSync, emptySyncResponse } from './commands/sync.js';
 import { deviceAccess, deniedResponse } from './device-policy.js';
 import { readFileSync } from 'node:fs';
-import { handleSendMail, handleSmartReply } from './commands/send-mail.js';
+import { handleSendMail, handleLegacySendMail, type ComposeCommand } from './commands/send-mail.js';
 import { handlePing } from './commands/ping.js';
 import { handleGetAttachment } from './commands/get-attachment.js';
 import { handleItemOperations, prismaItemOperationsDeps } from './commands/item-operations.js';
@@ -45,11 +48,23 @@ app.use('/Microsoft-Server-ActiveSync', express.raw({ type: '*/*', limit: '25mb'
 
 // ─── OPTIONS — Autodiscover capability negotiation ────────────────────────────
 app.options('/Microsoft-Server-ActiveSync', (_req: Request, res: Response) => {
-  res.setHeader('MS-Server-ActiveSync', '14.1');
-  res.setHeader('MS-ASProtocolVersions', '14.0,14.1');
+  res.setHeader('MS-Server-ActiveSync', HIGHEST_EAS_VERSION);
+  res.setHeader('MS-ASProtocolVersions', EAS_VERSIONS.join(','));
   res.setHeader('MS-ASProtocolCommands', EAS_COMMANDS.join(','));
   res.status(200).end();
 });
+
+/** The URL query without `?` (the base64 request line is not a key=value query). */
+function rawQueryOf(req: Request): string {
+  const i = req.originalUrl.indexOf('?');
+  return i < 0 ? '' : req.originalUrl.slice(i + 1);
+}
+
+/** Answers the request with a bare HTTP status (no WBXML body). */
+function sendStatusOnly(res: Response, httpStatus: number): void {
+  res.removeHeader('Content-Type');
+  res.status(httpStatus).end();
+}
 
 // ─── POST — Main command dispatcher ──────────────────────────────────────────
 app.post(
@@ -57,43 +72,46 @@ app.post(
   requireAuth as express.RequestHandler,
   async (req: Request, res: Response): Promise<void> => {
     const user = (req as Request & { easUser: EasUser }).easUser;
-    const command = req.query['Cmd'] as string | undefined;
-    const deviceId = req.query['DeviceId'] as string ?? 'unknown';
-    const deviceType = req.query['DeviceType'] as string ?? 'Unknown';
-    const protocolVersion = req.get('MS-ASProtocolVersion') ?? '14.1';
-
-    res.setHeader('MS-Server-ActiveSync', '14.1');
+    res.setHeader('MS-Server-ActiveSync', HIGHEST_EAS_VERSION);
     res.setHeader('Content-Type', 'application/vnd.ms-sync.wbxml');
 
+    // Plain query + headers, or the base64-encoded request line ([MS-ASHTTP]).
+    const parsed = parseRequestLine(rawQueryOf(req), (name) => req.get(name));
+    if (!parsed.ok) {
+      log.info({ userId: user.userId, reason: parsed.reason }, 'EAS request line refused');
+      res.status(400).send('Invalid request line');
+      return;
+    }
+    const { command, deviceId, deviceType, params } = parsed.line;
     if (!command) {
       res.status(400).send('Missing Cmd');
       return;
     }
 
-    const bodyBuf = req.body as Buffer;
-    let wbxmlBody: WbxmlElement | null = null;
-    if (bodyBuf && bodyBuf.length > 0) {
-      try {
-        wbxmlBody = decodeWbxml(bodyBuf);
-      } catch (err) {
-        log.error({ err, command }, 'WBXML decode error');
-        res.status(400).send('Invalid WBXML');
-        return;
-      }
-    }
-
     try {
-      // Device access: provisioned, current policy key, not blocked / wiped ([MS-ASPROV]).
       const device = await prisma.activeSyncDevice.findUnique({
         where: { userId_deviceId: { userId: user.userId, deviceId } },
-        select: { status: true, policyKey: true },
+        select: { id: true, status: true, policyKey: true, protocolVersion: true },
       });
-      const access = deviceAccess(device, command, req.get('X-MS-PolicyKey'));
+      // Protocol version: the requested one (must be announced), else the device's last one.
+      const negotiated = negotiateVersion(parsed.line.protocolVersion, device?.protocolVersion);
+      if (!negotiated.ok) {
+        log.info({ userId: user.userId, deviceId, command, requested: negotiated.requested }, 'EAS protocol version not supported');
+        res.status(400).send('Unsupported MS-ASProtocolVersion');
+        return;
+      }
+      const version = negotiated.version;
+      if (device && device.protocolVersion !== version) {
+        await prisma.activeSyncDevice.update({ where: { id: device.id }, data: { protocolVersion: version } });
+      }
+
+      // Device access: provisioned, current policy key, not blocked / wiped ([MS-ASPROV]).
+      const access = deviceAccess(device, command, parsed.line.policyKey);
       if (!access.allow) {
-        const denied = deniedResponse(command, access.status, protocolVersion);
-        log.info({ userId: user.userId, deviceId, command, status: access.status }, 'EAS request refused by device policy');
+        const denied = deniedResponse(command, access.status, version);
+        log.info({ userId: user.userId, deviceId, command, version, status: access.status }, 'EAS request refused by device policy');
         if (denied.body) res.status(denied.httpStatus).send(denied.body);
-        else { res.removeHeader('Content-Type'); res.status(denied.httpStatus).end(); }
+        else sendStatusOnly(res, denied.httpStatus);
         return;
       }
 
@@ -103,13 +121,29 @@ app.post(
         res.status(501).send('Not implemented');
         return;
       }
-      if (handler.needsBody && !wbxmlBody) {
+      const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+      if (handler.needsBody && raw.length === 0) {
         if (command === 'Sync') { res.status(200).send(emptySyncResponse()); return; }
         res.status(400).send('Missing body');
         return;
       }
-      await handler.run({ req, res, body: wbxmlBody as WbxmlElement, user, deviceId, deviceType, protocolVersion });
+      let body: WbxmlElement | null = null;
+      if (raw.length > 0 && !handler.mimeBody?.(version)) {
+        try {
+          body = decodeWbxml(raw);
+        } catch (err) {
+          log.error({ err, command }, 'WBXML decode error');
+          res.status(400).send('Invalid WBXML');
+          return;
+        }
+      }
+      await handler.run({ req, res, body: body as WbxmlElement, raw, user, deviceId, deviceType, version, params });
     } catch (err) {
+      if (err instanceof EasHttpError) {
+        log.info({ userId: user.userId, deviceId, command, httpStatus: err.httpStatus }, `EAS ${err.message}`);
+        if (!res.headersSent) sendStatusOnly(res, err.httpStatus);
+        return;
+      }
       log.error({ err, command }, 'EAS command error');
       if (!res.headersSent) res.status(500).send('Internal server error');
     }
@@ -119,30 +153,54 @@ app.post(
 interface CommandContext {
   req: Request;
   res: Response;
-  /** Decoded request (null only for commands with needsBody = false). */
+  /** Decoded WBXML request (null for an empty body, and for a MIME body — see `raw`). */
   body: WbxmlElement;
+  /** The request body octets (the MIME message of a 12.1 SendMail/SmartReply/SmartForward). */
+  raw: Buffer;
   user: EasUser;
   deviceId: string;
   deviceType: string;
-  protocolVersion: string;
+  /** Negotiated protocol version. */
+  version: EasVersion;
+  /** Command parameters of the request line. */
+  params: EasCommandParams;
+}
+
+interface CommandHandler {
+  needsBody: boolean;
+  /** True when, in this version, the body is a MIME message instead of WBXML. */
+  mimeBody?: (version: EasVersion) => boolean;
+  run: (c: CommandContext) => Promise<void>;
 }
 
 /** Reply with a WBXML buffer. */
 const wbxml = (run: (c: CommandContext) => Promise<Buffer>) => async (c: CommandContext) => { c.res.status(200).send(await run(c)); };
 
-const HANDLERS: Record<string, { needsBody: boolean; run: (c: CommandContext) => Promise<void> }> = {
-  Provision: { needsBody: true, run: wbxml((c) => handleProvision(c.body, c.user.userId, c.deviceId, c.deviceType)) },
+/** 12.1 sends compose commands as raw MIME (ComposeMail WBXML is 14.0+). */
+const legacyCompose = (version: EasVersion) => !supports(version, 'composeMailWbxml');
+
+/** SendMail / SmartReply / SmartForward: ComposeMail WBXML (14.0+) or MIME + request line (12.1, no response body). */
+const compose = (command: ComposeCommand) => async (c: CommandContext): Promise<void> => {
+  if (!legacyCompose(c.version)) {
+    c.res.status(200).send(await handleSendMail(c.body, c.user.userId, command));
+    return;
+  }
+  sendStatusOnly(c.res, await handleLegacySendMail(c.raw, c.params, c.user.userId, command));
+};
+
+const HANDLERS: Record<string, CommandHandler> = {
+  Provision: { needsBody: true, run: wbxml((c) => handleProvision(c.body, c.user.userId, c.deviceId, c.deviceType, c.version)) },
   FolderSync: { needsBody: true, run: wbxml((c) => handleFolderSync(c.body, c.user.userId, c.deviceId)) },
-  Sync: { needsBody: true, run: wbxml((c) => handleSync(c.body, c.user.userId, c.deviceId)) },
-  SendMail: { needsBody: true, run: wbxml((c) => handleSendMail(c.body, c.user.userId)) },
-  SmartReply: { needsBody: true, run: wbxml((c) => handleSmartReply(c.body, c.user.userId, 'SmartReply')) },
-  SmartForward: { needsBody: true, run: wbxml((c) => handleSmartReply(c.body, c.user.userId, 'SmartForward')) },
+  Sync: { needsBody: true, run: wbxml((c) => handleSync(c.body, c.user.userId, c.deviceId, {}, c.version)) },
+  SendMail: { needsBody: true, mimeBody: legacyCompose, run: compose('SendMail') },
+  SmartReply: { needsBody: true, mimeBody: legacyCompose, run: compose('SmartReply') },
+  SmartForward: { needsBody: true, mimeBody: legacyCompose, run: compose('SmartForward') },
   // Ping holds the connection; an empty Ping reuses the device's last parameters.
-  Ping: { needsBody: false, run: (c) => handlePing(c.req.body?.length ? c.body : null, c.user.userId, c.res, c.user, { deviceId: c.deviceId }) },
+  Ping: { needsBody: false, run: (c) => handlePing(c.raw.length ? c.body : null, c.user.userId, c.res, c.user, { deviceId: c.deviceId }) },
   GetAttachment: {
     needsBody: false,
-    run: async ({ req, res, user }) => {
-      const attachmentName = req.query['AttachmentName'] as string | undefined;
+    run: async ({ res, user, params }) => {
+      const attachmentName = params.attachmentName;
       if (!attachmentName) { res.status(400).send('Missing AttachmentName'); return; }
       res.removeHeader('Content-Type'); // set by the handler (attachment MIME type)
       await handleGetAttachment(res, user.userId, attachmentName, {
@@ -155,13 +213,13 @@ const HANDLERS: Record<string, { needsBody: boolean; run: (c: CommandContext) =>
       });
     },
   },
-  ItemOperations: { needsBody: true, run: wbxml((c) => handleItemOperations(c.body, c.user.userId, prismaItemOperationsDeps((msg, err) => log.warn({ err }, msg)))) },
-  GetItemEstimate: { needsBody: true, run: wbxml((c) => handleGetItemEstimate(c.body, c.user.userId, c.deviceId)) },
-  Settings: { needsBody: true, run: wbxml((c) => handleSettings(c.body, c.user.userId, c.deviceId, c.protocolVersion)) },
+  ItemOperations: { needsBody: true, run: wbxml((c) => handleItemOperations(c.body, c.user.userId, prismaItemOperationsDeps((msg, err) => log.warn({ err }, msg)), c.version)) },
+  GetItemEstimate: { needsBody: true, run: wbxml((c) => handleGetItemEstimate(c.body, c.user.userId, c.deviceId, undefined, c.version)) },
+  Settings: { needsBody: true, run: wbxml((c) => handleSettings(c.body, c.user.userId, c.deviceId, c.version)) },
   Search: { needsBody: true, run: wbxml((c) => handleSearch(c.body, c.user.userId)) },
   MoveItems: { needsBody: true, run: wbxml((c) => handleMoveItems(c.body, c.user.userId, c.deviceId)) },
-  MeetingResponse: { needsBody: true, run: wbxml((c) => handleMeetingResponse(c.body, c.user.userId, undefined, c.protocolVersion)) },
-  ResolveRecipients: { needsBody: true, run: wbxml((c) => handleResolveRecipients(c.body, c.user.userId)) },
+  MeetingResponse: { needsBody: true, run: wbxml((c) => handleMeetingResponse(c.body, c.user.userId, undefined, c.version)) },
+  ResolveRecipients: { needsBody: true, run: wbxml((c) => handleResolveRecipients(c.body, c.user.userId, c.version)) },
 };
 
 // Health check
