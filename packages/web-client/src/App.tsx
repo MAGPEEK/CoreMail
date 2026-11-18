@@ -18,6 +18,7 @@ import { useAuthStore } from './store/auth.js';
 import { useSessionChecked } from './api/client.js';
 import { useUiStore, useThemeStore, resolveIsDark } from './store/ui.js';
 import { useMailEvents } from './hooks/useMailEvents.js';
+import { usePreferencesSync } from './hooks/usePreferencesSync.js';
 import { useInactivityLogout } from './hooks/useInactivityLogout.js';
 import { useTaskReminders } from './hooks/useTaskReminders.js';
 import { ErrorBoundary } from './components/ErrorBoundary.js';
@@ -68,6 +69,11 @@ function SharedMailboxRedirect() {
   return <Navigate to={mailPageUrl(parseMailboxKey(`shared:${id}`))} replace />;
 }
 
+/** Top-level page of a path — deep links inside a page (/mail/…, /calendar/event/…) do not remount it. */
+function pageKey(pathname: string): string {
+  return `/${pathname.split('/')[1] ?? ''}`;
+}
+
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const token = useAuthStore((s) => s.accessToken);
   // v8.1: the access token is memory-only — after a reload wait for the
@@ -82,6 +88,8 @@ function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
   const navigate = useNavigate();
   const { composeOpen } = useUiStore();
+  // 9.4: roaming preferences (server copy, debounced writes)
+  usePreferencesSync();
   useMailEvents();
   useInactivityLogout();
   // Task reminders fire on every page, not only while /tasks is open
@@ -102,8 +110,8 @@ function Layout({ children }: { children: React.ReactNode }) {
       {/* App rail left (md+), bottom bar below md (column-reverse puts it last) */}
       <div className="flex-1 flex flex-col-reverse md:flex-row min-h-0">
         <AppRail />
-        <main key={location.pathname} className="flex-1 flex min-h-0 min-w-0 overflow-hidden animate-page-in">
-          <ErrorBoundary resetKey={location.pathname}>{children}</ErrorBoundary>
+        <main key={pageKey(location.pathname)} className="flex-1 flex min-h-0 min-w-0 overflow-hidden animate-page-in">
+          <ErrorBoundary resetKey={pageKey(location.pathname)}>{children}</ErrorBoundary>
         </main>
       </div>
       {composeOpen && <ComposeWindow />}
@@ -167,10 +175,10 @@ export function App() {
           <AuthGuard>
             <Layout>
               <Routes>
-                <Route path="/mail" element={<MailPage />} />
+                <Route path="/mail/*" element={<MailPage />} />
                 <Route path="/shared-mailbox/:id" element={<SharedMailboxRedirect />} />
-                <Route path="/calendar" element={<CalendarPage />} />
-                <Route path="/contacts" element={<ContactsPage />} />
+                <Route path="/calendar/*" element={<CalendarPage />} />
+                <Route path="/contacts/*" element={<ContactsPage />} />
                 <Route path="/tasks" element={<TasksPage />} />
                 <Route path="/notes" element={<NotesPage />} />
                 <Route path="/settings" element={<SettingsPage />} />

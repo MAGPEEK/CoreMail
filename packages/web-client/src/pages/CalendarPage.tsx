@@ -1,10 +1,12 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useShortcutHandlers } from '../hooks/useShortcuts.js';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
 import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin from '@fullcalendar/interaction';
+import luxonPlugin from '@fullcalendar/luxon3';
 import deLocale from '@fullcalendar/core/locales/de';
 import enLocale from '@fullcalendar/core/locales/en-gb';
 import esLocale from '@fullcalendar/core/locales/es';
@@ -28,6 +30,10 @@ import toast from 'react-hot-toast';
 import { readableTextOn } from '../lib/readableText.js';
 import { PageShell } from '../components/PageShell.js';
 import { PAGE_CONTENT_PAD } from '../lib/pageShell.js';
+import { usePreferences, useRegional } from '../store/preferences.js';
+import { calendarTimeZone, eventFetchRange, localDay } from '../lib/zonedTime.js';
+import { businessHours, hiddenDaysForWorkWeek, slotDuration } from '../lib/calendarPrefs.js';
+import { calendarEventPath, itemIdFromPath } from '../lib/mailLinks.js';
 
 const LOCALE_MAP = { de: deLocale, en: enLocale, es: esLocale, it: itLocale };
 
@@ -45,6 +51,18 @@ export function CalendarPage() {
   const lang = useLanguageStore((s) => s.lang);
   const { calendarShowWeekNumbers, hiddenCalendarIds } = useUiPrefs();
   const [eventDialog, setEventDialog] = useState<EventDialogState>(null);
+  // 9.4: Settings → Kalender (work week, week start, time grid)
+  const calPrefs = usePreferences((s) => s.prefs.calendar);
+  // 9.4: the grid shows wall-clock times of the chosen zone (Settings → Region)
+  const fcTimeZone = calendarTimeZone(useRegional().timeZone);
+  // 9.4: /calendar/event/<id> opens the event (shareable, back/forward)
+  const location = useLocation();
+  const navigate = useNavigate();
+  const linkedEventId = itemIdFromPath(location.pathname, '/calendar/event/');
+  useEffect(() => {
+    if (linkedEventId) setEventDialog({ mode: 'edit', eventId: linkedEventId });
+    else setEventDialog((d) => (d?.mode === 'edit' ? null : d));
+  }, [linkedEventId]);
   const [shareDialogOpen, setShareDialogOpen] = useState(false);
   const [view, setView] = useState<CalendarView>('dayGridMonth');
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
@@ -54,7 +72,8 @@ export function CalendarPage() {
   // Visible FullCalendar range — the server expands recurring events only inside it
   const [visibleRange, setVisibleRange] = useState<{ start: string; end: string } | null>(null);
   const handleDatesSet = (arg: DatesSetArg) => {
-    const next = { start: arg.start.toISOString(), end: arg.end.toISOString() };
+    // widened: with a named zone FullCalendar hands out UTC-coerced dates
+    const next = eventFetchRange(arg.start, arg.end);
     setVisibleRange((prev) => (prev && prev.start === next.start && prev.end === next.end ? prev : next));
   };
 
@@ -69,7 +88,7 @@ export function CalendarPage() {
 
   const handleSelectDate = (d: Date) => {
     setSelectedDate(d);
-    calendarRef.current?.getApi()?.gotoDate(d);
+    calendarRef.current?.getApi()?.gotoDate(localDay(d));
   };
 
   // Keyboard shortcuts (both sets): c new event, t today, d / w / m views
@@ -86,7 +105,8 @@ export function CalendarPage() {
   });
 
   // Memoize hiddenDays/locale so FullCalendar does not get new props on every re-render
-  const hiddenDays = useMemo(() => (view === 'workWeek' ? [0, 6] : []), [view]);
+  const hiddenDays = useMemo(() => (view === 'workWeek' ? hiddenDaysForWorkWeek(calPrefs.workDays) : []), [view, calPrefs.workDays]);
+  const fcBusinessHours = useMemo(() => businessHours(calPrefs), [calPrefs]);
   const fcLocale = useMemo(() => LOCALE_MAP[lang] ?? deLocale, [lang]);
 
   const { data: calendars } = useQuery({
@@ -140,7 +160,7 @@ export function CalendarPage() {
       toast(`Aufgabe: ${info.event.title.replace(/^[✓📋] /, '')}`, { icon: '📋' });
       return;
     }
-    setEventDialog({ mode: 'edit', eventId: info.event.id });
+    navigate(calendarEventPath(info.event.id));
   };
 
   // v3.18.21: Tasks only when the "Aufgaben" (tasks) filter is active
@@ -242,13 +262,17 @@ export function CalendarPage() {
       <div className={`flex-1 min-w-0 overflow-auto ${PAGE_CONTENT_PAD}`}>
         <FullCalendar
           ref={calendarRef}
-          plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
+          plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin, luxonPlugin]}
+          timeZone={fcTimeZone}
           initialView="dayGridMonth"
           locale={fcLocale}
           weekNumbers={calendarShowWeekNumbers}
           weekNumberCalculation="ISO"
           weekText={t('cw_short')}
-          firstDay={1}
+          firstDay={calPrefs.weekStart}
+          businessHours={fcBusinessHours}
+          slotDuration={slotDuration(calPrefs.slotMinutes)}
+          scrollTime={`${calPrefs.workStart}:00`}
           hiddenDays={hiddenDays}
           headerToolbar={{ left: 'prev,next today', center: 'title', right: '' }}
           events={fcEvents}
@@ -268,7 +292,7 @@ export function CalendarPage() {
           defaults={eventDialog.mode === 'create' ? eventDialog.defaults : undefined}
           calendars={calendars ?? []}
           defaultWritableCalendarId={defaultWritableCalId}
-          onClose={() => setEventDialog(null)}
+          onClose={() => (eventDialog.mode === 'edit' && linkedEventId ? navigate('/calendar') : setEventDialog(null))}
         />
       )}
 

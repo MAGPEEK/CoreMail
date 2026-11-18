@@ -418,6 +418,7 @@ export async function runRuleOnExisting(
       messageId: m.messageId,
       inReplyTo: m.inReplyTo,
       references: [],
+      dispositionNotificationTo: null,
       date:      m.date,
       bodyText:  m.bodyText,
       bodyHtml:  m.bodyHtml,

@@ -11,6 +11,7 @@ import {
 } from '../lib/calendar-access.js';
 import { audit, auditContext } from '../lib/audit.js';
 import { notifyUserInbox } from '../lib/internal-notify.js';
+import { loadPreferences } from '../lib/preferences-store.js';
 import { getRedisClient, CHANNEL_CALENDAR_SHARES, createBullMqConnection } from '@coremail/core';
 import { Queue } from 'bullmq';
 import {
@@ -105,6 +106,12 @@ function getOutboundQueue(): Queue {
  * Fire-and-forget — errors are logged but do not block the main path
  * (the event is already in the DB).
  */
+/** 9.4: time zone of a local organizer (Settings → Region), '' when unknown. */
+async function organizerTimeZone(email: string): Promise<string> {
+  const user = await prisma.user.findFirst({ where: { email: email.toLowerCase() }, select: { id: true } });
+  return user ? (await loadPreferences(user.id)).regional.timeZone : '';
+}
+
 async function sendInvitations(opts: {
   ev: { id: string; uid: string; summary: string; description: string;
         location: string; dtStart: Date; dtEnd: Date; sequence: number;
@@ -132,6 +139,7 @@ async function sendInvitations(opts: {
     select: { publicHostname: true },
   });
   const publicHostname = settings?.publicHostname ?? 'coremail.local';
+  const timeZone = await organizerTimeZone(opts.organizerEmail);
 
   const eventData: EventData = {
     uid: opts.ev.uid.includes('@') ? opts.ev.uid : buildEventUid(opts.ev.id, publicHostname),
@@ -146,6 +154,7 @@ async function sendInvitations(opts: {
     organizer: { email: opts.organizerEmail, cn: opts.organizerName },
     attendees,
     publicHostname,
+    ...(timeZone ? { timeZone } : {}),
   };
 
   try {
@@ -922,6 +931,9 @@ const EventSchema = z.object({
   classification: z.enum(['PUBLIC', 'PRIVATE', 'CONFIDENTIAL']).optional(),
   // v3.18.25 A5: attendees (guest mail addresses) — if non-empty an iMIP REQUEST is sent
   attendees: z.array(AttendeeSchema).max(100).optional(),
+  // 9.4: reminder (VALARM) minutes before the start; null = none; omitted on create =
+  // the user's default reminder (Settings → Kalender). PUT keeps the stored alarms.
+  reminderMinutes: z.number().int().min(0).max(40320).nullable().optional(),
 });
 
 calendarRouter.post('/events', async (req: Request, res: Response) => {
@@ -930,6 +942,9 @@ calendarRouter.post('/events', async (req: Request, res: Response) => {
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request', details: parsed.error.issues }); return; }
 
   const { calendarId, summary, dtStart, dtEnd, description = '', location = '', allDay, recurring, rrule, classification = 'PUBLIC', attendees = [] } = parsed.data;
+  const reminderMinutes = parsed.data.reminderMinutes === undefined
+    ? (await loadPreferences(userId)).calendar.defaultReminderMinutes
+    : parsed.data.reminderMinutes;
 
   const access = await canAccessCalendar(userId, calendarId, 'WRITE');
   if (!access) { res.status(403).json({ error: 'Keine Schreibrechte für diesen Kalender' }); return; }
@@ -970,6 +985,7 @@ calendarRouter.post('/events', async (req: Request, res: Response) => {
     ...(rruleValue ? { rrule: rruleValue } : {}),
     organizer: { email: organizer.email, ...(organizer.displayName ? { cn: organizer.displayName } : {}) },
     attendees: attendeesJson,
+    ...(reminderMinutes !== null ? { alarmMinutes: reminderMinutes } : {}),
   });
 
   const event = await prisma.calendarEvent.create({

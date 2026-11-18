@@ -102,7 +102,12 @@ with their 9.2 shapes (folder array, `{ total, messages }`, protected folder 403
 delete 204); B gets
 READ_ONLY on the team mailbox and a READ_ONLY delegation on A's mailbox: reads work, every write
 route answers 403 `READ_ONLY`; after the grants are removed B gets 403 `NO_ACCESS`. The test folder
-and grants are removed again.
+and grants are removed again. 9.4: A creates a named signature, sets it as default for the own
+address and the team mailbox, the legacy `/user/signature` mirrors it, B cannot edit it, deleting
+it clears the defaults. `rest` (9.4) additionally checks the preferences round trip (partial PATCH,
+400 on invalid values, `migrateFromLocal` ignored once written), `?markRead=false`, `?sort=&dir=`,
+`/auth/sessions` (current marked, ending another session, `revoke-others`) and the read-receipt
+route. See [user-settings.md](user-settings.md).
 `tls` (9.3): generates a test CA + a leaf for `mail.<E2E_DOMAIN>` with openssl inside the app
 container and uploads it WITHOUT services (the mail ports must not change), then assigns
 SMTP/IMAP/POP3 with `PUT /api/v1/admin/certificates/:id` only and expects 993 / 465 / 995 (TLS) and

@@ -38,10 +38,12 @@ import {
   isWebClient,
   protocolDisabledBody,
   clientInfoOf,
+  sessionSurfaceOf,
   type TokenPair,
 } from '@coremail/storage/auth';
+import { emptyTrashAfterLogout } from '../lib/empty-folder.js';
 import { ldapAuthenticator } from '@coremail/auth-ldap';
-import { createLogger, getRedisClient } from '@coremail/core';
+import { createLogger, getRedisClient, verifyRefreshToken } from '@coremail/core';
 
 const log = createLogger('api:auth');
 export const authRouter: RouterType = Router();
@@ -169,6 +171,11 @@ authRouter.post('/refresh', async (req: Request, res: Response) => {
   }
 });
 
+/** User id of a valid refresh token, or null (expired / unsigned tokens only revoke by hash). */
+function refreshTokenOwner(token: string): string | null {
+  try { return verifyRefreshToken(token).sub; } catch { return null; }
+}
+
 // ── POST /auth/logout ─────────────────────────────────────────────────────────
 // Revokes the session of { refreshToken } or (v8.1) of the refresh cookie and
 // always deletes the cookie.
@@ -177,7 +184,10 @@ authRouter.post('/logout', async (req: Request, res: Response) => {
   if (src === 'rejected') return;
   if (src && src.token.length <= 4096) {
     try {
-      await revokeSessionByRefreshToken(src.token);
+      const owner = refreshTokenOwner(src.token);
+      const ended = await revokeSessionByRefreshToken(src.token);
+      // 9.4: "empty Deleted Items on logout" (webmail setting) — never blocks the logout
+      if (ended > 0 && owner && sessionSurfaceOf(req.headers) === 'webmail') void emptyTrashAfterLogout(owner);
     } catch (err) {
       log.error({ err }, 'Logout error');
       res.status(500).json({ error: 'Internal server error' });

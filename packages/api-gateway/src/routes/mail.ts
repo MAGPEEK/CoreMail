@@ -24,6 +24,8 @@ import { resolveReplyHeaders, prismaReplyLookup, parseClientReferences } from '.
 import { rspamdControllerHeaders } from '../lib/rspamd-controller.js';
 import { createImageProxyHandler } from '../lib/image-proxy.js';
 import { deleteFolder, folderDeleteFailure, folderDeleteOptions, folderDeleteRefusal } from '../lib/folder-delete.js';
+import { markReadRequested } from '../lib/mark-read.js';
+import { messageOrderBy } from '../lib/message-sort.js';
 import {
   parseSearchQuery, buildSearchConditions, resolveFolderScope, searchChips, hasCriteria,
   MAX_QUERY_LENGTH, type FolderRef,
@@ -665,7 +667,8 @@ mailRouter.get('/folders/:folderId/messages', async (req: Request, res: Response
   const [messages, total] = await Promise.all([
     prisma.message.findMany({
       where: { folderId, deletedAt: null, ...snoozeFilter },
-      orderBy: [{ pinnedAt: { sort: 'desc', nulls: 'last' } }, { date: 'desc' }],
+      // 9.4: ?sort=&dir= (webmail sort setting); default date, newest first
+      orderBy: messageOrderBy(req.query),
       take: limit,
       skip: offset,
       select: MESSAGE_SUMMARY_SELECT,
@@ -693,8 +696,8 @@ mailRouter.get('/messages/:id', async (req: Request, res: Response) => {
   });
   if (!msg) { res.status(404).json({ error: 'Message not found' }); return; }
 
-  // Mark as read
-  if (!msg.flags.includes('\\Seen')) {
+  // Mark as read (9.4: not with ?markRead=false — the webmail decides itself)
+  if (markReadRequested(req.query) && !msg.flags.includes('\\Seen')) {
     await prisma.$transaction((tx) => setFlags(tx, [{ id, flags: [...msg.flags, '\\Seen'] }]));
     await prisma.folder.update({
       where: { id: msg.folderId },
@@ -818,6 +821,7 @@ mailRouter.post(
     let scheduledAt: Date | null = null;
     let sendAsAddress: string | null = null;     // shared mailbox address as sender (SEND_AS)
     let sendOnBehalfOf: string | null = null;    // shared mailbox address as „on behalf of" (SEND_ON_BEHALF)
+    let requestReceipt = false;                  // 9.4: Disposition-Notification-To
 
     const ct = req.headers['content-type'] ?? '';
     if (ct.startsWith('application/json')) {
@@ -833,6 +837,7 @@ mailRouter.post(
         scheduledAt: isoDateTime().optional(),
         sendAs:        z.string().email().optional(),
         sendOnBehalfOf: z.string().email().optional(),
+        requestReceipt: z.boolean().optional(),
       });
       const parsed = schema.safeParse(req.body);
       if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
@@ -847,6 +852,7 @@ mailRouter.post(
       if (parsed.data.scheduledAt)    scheduledAt    = new Date(parsed.data.scheduledAt);
       if (parsed.data.sendAs)         sendAsAddress  = parsed.data.sendAs.toLowerCase();
       if (parsed.data.sendOnBehalfOf) sendOnBehalfOf = parsed.data.sendOnBehalfOf.toLowerCase();
+      requestReceipt = parsed.data.requestReceipt === true;
     } else {
       // multipart — fields arrive as strings (arrays as comma-separated list)
       to       = parseAddrs(req.body['to'] as unknown);
@@ -863,12 +869,13 @@ mailRouter.post(
       }
       if (req.body['sendAs'])         sendAsAddress  = String(req.body['sendAs']).toLowerCase();
       if (req.body['sendOnBehalfOf']) sendOnBehalfOf = String(req.body['sendOnBehalfOf']).toLowerCase();
+      requestReceipt = String(req.body['requestReceipt'] ?? '') === 'true';
     }
 
     const files = (req.files as Express.Multer.File[] | undefined) ?? [];
     const out = await performSend(req.apiUser!.userId, {
       to, cc, bcc, subject, bodyHtml, bodyText, inReplyTo, referencesRaw, scheduledAt,
-      sendAs: sendAsAddress, sendOnBehalfOf,
+      sendAs: sendAsAddress, sendOnBehalfOf, requestReceipt,
       attachments: files.map((f) => ({ filename: f.originalname, contentType: f.mimetype, size: f.size, buffer: f.buffer })),
     });
     res.status(out.status).json(out.body);
@@ -922,6 +929,8 @@ export interface SendRequest {
   holdMs?: number;
   sendAs?: string | null;
   sendOnBehalfOf?: string | null;
+  /** 9.4: ask for a read receipt (Disposition-Notification-To: the From address). */
+  requestReceipt?: boolean;
   attachments: SendAttachment[];
   /** Message-ID header to use (a draft keeps its own); default: a new one. */
   messageId?: string | null;
@@ -1125,6 +1134,7 @@ export async function performSend(userId: string, input: SendRequest): Promise<S
           // recipient sees the scheduled send time (not the creation time)
           date:      (scheduledAt ?? sendDate).toISOString(),
           ...replyHeaders,
+          ...(input.requestReceipt ? { dispositionNotificationTo: effectiveFromEmail } : {}),
           attachments: queueAttachments,
         },
       }, jobOptions);

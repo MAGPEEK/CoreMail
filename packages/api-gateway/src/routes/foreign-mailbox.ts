@@ -18,7 +18,7 @@
  *   POST   /folders/:folderId/empty                                   write
  *   GET    /folders/:folderId/messages?limit&offset
  *   GET    /search?q&folderId&limit&offset
- *   GET    /messages/:messageId           (marks \Seen only with write access)
+ *   GET    /messages/:messageId[?markRead=false]  (marks \Seen only with write access)
  *   GET    /messages/:messageId/raw
  *   PATCH  /messages/:messageId  {read?, flagged?, flags?, folderId?} write
  *   DELETE /messages/:messageId[?hard=true]                          write
@@ -52,6 +52,8 @@ import { checkFolderParent, type FolderLookup } from '../lib/folder-tree.js';
 import { contentDisposition } from '../lib/attachment-download.js';
 import { deleteFolder, folderDeleteFailure, folderDeleteOptions, folderDeleteRefusal } from '../lib/folder-delete.js';
 import { auditForeignWrite, type ForeignAuditAction } from '../lib/foreign-audit.js';
+import { markReadRequested } from '../lib/mark-read.js';
+import { messageOrderBy } from '../lib/message-sort.js';
 import {
   parseSearchQuery, buildSearchConditions, resolveFolderScope, searchChips, hasCriteria,
   MAX_QUERY_LENGTH, type FolderRef,
@@ -307,7 +309,7 @@ export function createForeignMailboxRouter(kind: Kind): RouterType {
     const [messages, total] = await Promise.all([
       prisma.message.findMany({
         where,
-        orderBy: [{ pinnedAt: { sort: 'desc', nulls: 'last' } }, { date: 'desc' }],
+        orderBy: messageOrderBy(req.query), // 9.4: ?sort=&dir=
         take: limit,
         skip: offset,
         select: FOREIGN_SUMMARY_SELECT,
@@ -363,7 +365,7 @@ export function createForeignMailboxRouter(kind: Kind): RouterType {
     if (!msg) { res.status(404).json({ error: 'Nachricht nicht gefunden' }); return; }
     // Opening marks the mail read for everyone with access — only with write access
     // (READ_ONLY must not change the mailbox).
-    if (!access.readOnly && !msg.flags.includes('\\Seen')) {
+    if (!access.readOnly && markReadRequested(req.query) && !msg.flags.includes('\\Seen')) {
       await prisma.$transaction((tx) => setFlags(tx, [{ id: msg.id, flags: [...msg.flags, '\\Seen'] }], { mailboxId: access.mailboxId }));
       await prisma.folder.update({ where: { id: msg.folderId }, data: { unreadCount: { decrement: 1 } } }).catch(() => undefined);
     }

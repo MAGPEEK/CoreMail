@@ -13,6 +13,11 @@ import { isAccessTokenRevokedShared, webAccessRefusal } from '@coremail/storage/
 
 /** The authenticated user id, or null after the refusal (401 / 403 / 503) was sent. */
 export async function requireBearerUser(req: Request, res: Response): Promise<string | null> {
+  return (await requireBearerSession(req, res))?.userId ?? null;
+}
+
+/** 9.4: user id + the session the access token belongs to (sessions list marks the current one). */
+export async function requireBearerSession(req: Request, res: Response): Promise<{ userId: string; sessionId: string | null } | null> {
   const header = req.get('Authorization');
   const payload = header?.startsWith('Bearer ') ? verifyAccessToken(header.slice(7)) : null;
   if (!payload || await isAccessTokenRevokedShared(payload.sub, payload.iat, payload.sessionId, payload.iatMs)) {
@@ -20,7 +25,7 @@ export async function requireBearerUser(req: Request, res: Response): Promise<st
     return null;
   }
   const refusal = await webAccessRefusal({ id: payload.sub, role: String(payload.role), domainId: payload.domainId }, 'admin');
-  if (!refusal) return payload.sub;
+  if (!refusal) return { userId: payload.sub, sessionId: payload.sessionId ?? null };
   res.status(refusal.status).json(refusal.body);
   return null;
 }

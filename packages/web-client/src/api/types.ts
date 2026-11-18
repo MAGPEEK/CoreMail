@@ -87,6 +87,8 @@ export interface Message extends MessageSummary {
   messageId?: string | null;
   /** In-Reply-To header of this message */
   inReplyTo?: string | null;
+  /** 9.4: read receipt requested by this address (Disposition-Notification-To), null = none */
+  dispositionNotificationTo?: string | null;
 }
 
 export interface MessagesResponse {

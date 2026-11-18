@@ -39,6 +39,8 @@ import { contactsRouter } from './routes/contacts.js';
 import { tasksRouter } from './routes/tasks.js';
 import { notesRouter } from './routes/notes.js';
 import { userRouter } from './routes/user.js';
+import { userSettingsRouter } from './routes/user-settings.js';
+import { readReceiptRouter } from './routes/read-receipts.js';
 import { appleProfileRouter } from './routes/apple-profile.js';
 import { categoriesRouter } from './routes/categories.js';
 // Public Folders completely removed in v3.18.31
@@ -381,11 +383,13 @@ app.use('/api/v1/mail/delegated-mailboxes/:id/recoverable', delegatedRecoverable
 app.use('/api/v1/mail/shared-mailboxes/:id', sharedMailboxContentRouter);
 app.use('/api/v1/mail/delegated-mailboxes/:id', delegatedMailboxContentRouter);
 app.use('/api/v1/mail/drafts',    draftsRouter);
+app.use('/api/v1/mail',           readReceiptRouter); // 9.4: POST /messages/:id/receipt
 app.use('/api/v1/mail',           mailRouter);
 app.use('/api/v1/calendar',       calendarRouter);
 app.use('/api/v1/contacts',       contactsRouter);
 app.use('/api/v1/tasks',          tasksRouter);
 app.use('/api/v1/notes',          notesRouter);
+app.use('/api/v1/user',           userSettingsRouter); // 9.4: preferences, sessions, signatures
 app.use('/api/v1/user',           userRouter);
 app.use('/api/v1/categories',     categoriesRouter);
 app.use('/api/v1/smime',          smimeRouter);

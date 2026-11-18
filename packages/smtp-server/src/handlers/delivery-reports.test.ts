@@ -226,3 +226,18 @@ test('structured attachments with a cid are built as inline parts with a Content
   assert.match(raw, /Content-Disposition: inline; filename=logo\.png/i);
   assert.match(raw, /Content-Disposition: attachment; filename=doc\.pdf/i);
 });
+
+// ── 9.4: read receipt request on structured jobs ─────────────────────────────
+
+test('a structured job with dispositionNotificationTo gets a validated header', async () => {
+  const base = {
+    from: 'alice@corp.test', fromName: '', to: ['bob@ext.test'], cc: [], bcc: [], subject: 'Receipt',
+    html: '', text: 'hi', messageId: '<r@corp.test>', date: new Date(0).toISOString(), attachments: [],
+  };
+  const withReceipt = (await buildRawFromMessage({ ...base, dispositionNotificationTo: 'alice@corp.test' })).toString();
+  assert.match(withReceipt, /^Disposition-Notification-To: alice@corp\.test\r?$/im);
+  const injected = (await buildRawFromMessage({ ...base, dispositionNotificationTo: 'x\r\nBcc: evil@ext.test' })).toString();
+  assert.doesNotMatch(injected, /Disposition-Notification-To|Bcc: evil/i);
+  const none = (await buildRawFromMessage(base)).toString();
+  assert.doesNotMatch(none, /Disposition-Notification-To/i);
+});

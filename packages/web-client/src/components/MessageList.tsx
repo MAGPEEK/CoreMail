@@ -9,7 +9,6 @@ import {
 } from 'lucide-react';
 import { RuleEditorModal } from './RuleEditorModal.js';
 import type { RulePreset } from '../api/rule-types.js';
-import { format, isToday, isYesterday } from 'date-fns';
 import { api, downloadFile, fetchText } from '../api/client.js';
 import type { MessagesResponse, MessageSummary, MessageFilter, Folder, Category } from '../api/types.js';
 import { useUiStore, useUiPrefs } from '../store/ui.js';
@@ -30,11 +29,9 @@ import { useActiveMailbox } from '../hooks/useActiveMailbox.js';
 import { READ_ONLY_HINT } from '../lib/mailboxContext.js';
 
 import { useT } from '../i18n/useT.js';
-
-/** Subject without reply/forward prefixes — groups a conversation for n/p. */
-function conversationKey(subject: string): string {
-  return subject.replace(/^\s*((re|aw|fwd?|wg|tr|rv|r)\s*(\[\d+\])?\s*:\s*)+/i, '').trim().toLowerCase();
-}
+import { usePreferences, useRegional } from '../store/preferences.js';
+import { formatListDate } from '../lib/regionalFormat.js';
+import { conversationKey, orderForDisplay, sortParams } from '../lib/conversationOrder.js';
 
 /** True when the query uses search operators / quotes / negation (typeahead stays for plain words). */
 function hasOperatorSyntax(q: string): boolean {
@@ -45,11 +42,10 @@ interface Props {
   folderId: string;
 }
 
-function formatDate(iso: string): string {
-  const d = new Date(iso);
-  if (isToday(d)) return format(d, 'HH:mm');
-  if (isYesterday(d)) return 'Gestern';
-  return format(d, 'dd.MM.yyyy');
+/** List date in the user's regional settings (today: time, yesterday: "Gestern"). */
+function ListDate({ iso }: { iso: string }) {
+  const regional = useRegional();
+  return <>{formatListDate(new Date(iso), new Date(), regional, 'Gestern')}</>;
 }
 
 interface MenuState { x: number; y: number; items: ContextMenuItem[] }
@@ -192,7 +188,7 @@ function MessageRow({
               )}
               {hasAttachments && <Paperclip size={12} className="text-fg-subtle" />}
               {isSnoozed && <Clock size={12} className="text-warning-fg" />}
-              <span className="text-xs text-fg-subtle transition-opacity duration-150 group-hover:opacity-0">{formatDate(msg.date)}</span>
+              <span className="text-xs text-fg-subtle transition-opacity duration-150 group-hover:opacity-0"><ListDate iso={msg.date} /></span>
             </div>
           </div>
           <p className={`text-sm truncate mt-0.5 transition-colors duration-150 ${
@@ -320,10 +316,12 @@ export function MessageList({ folderId }: Props) {
   const searching = debouncedSearch.length >= 2;
 
   // Folder listing — paged via ?limit=&offset= (infinite scroll)
+  // 9.4: sort order from Settings → Ansicht (server-side, so paging stays correct)
+  const { sortBy, sortDir, groupByConversation, conversationOrder } = usePreferences((s) => s.prefs.view);
   const listQuery = useInfiniteQuery({
-    queryKey: ['messages', folderId],
+    queryKey: ['messages', folderId, sortBy, sortDir],
     queryFn: ({ pageParam }) =>
-      api.get<MessagesResponse>(`${base}/folders/${folderId}/messages?${pageQuery(pageParam)}`),
+      api.get<MessagesResponse>(`${base}/folders/${folderId}/messages?${pageQuery(pageParam)}&${sortParams(sortBy, sortDir)}`),
     initialPageParam: 0,
     getNextPageParam: nextPageOffset,
     enabled: !!folderId,
@@ -369,12 +367,12 @@ export function MessageList({ folderId }: Props) {
 
   // Quick filter tabs (unread/flagged/attachments) apply to the loaded rows
   const displayMessages = useMemo(() => {
-    const list = searching ? searchMessages : listMessages;
+    const list = searching ? searchMessages : orderForDisplay(listMessages, groupByConversation, conversationOrder);
     if (filter === 'unread')       return list.filter((m) => !m.flags.includes('\\Seen'));
     if (filter === 'flagged')      return list.filter((m) => m.flags.includes('\\Flagged'));
     if (filter === 'attachments')  return list.filter((m) => m.attachments.length > 0);
     return list;
-  }, [searching, searchMessages, listMessages, filter]);
+  }, [searching, searchMessages, listMessages, filter, groupByConversation, conversationOrder]);
 
   // Typeahead: quick local hints from the already loaded folder page
   const suggestions = useMemo(() => {

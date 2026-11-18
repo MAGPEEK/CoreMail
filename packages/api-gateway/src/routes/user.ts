@@ -13,6 +13,8 @@ import { allowedAreas, isAdminRole } from '../lib/rbac.js';
 import { getReadableSharedMailbox, getWritableSharedMailbox, listForeignMailboxes, foreignMailboxRef } from '../lib/mailbox-access.js';
 import { deleteFolder, folderDeleteFailure, folderDeleteOptions, folderDeleteRefusal } from '../lib/folder-delete.js';
 import { auditForeignWrite, type ForeignAuditAction } from '../lib/foreign-audit.js';
+import { emptyFolder } from '../lib/empty-folder.js';
+import { MAX_SIGNATURE_HTML, saveLegacySignature } from '../lib/signatures.js';
 
 export const userRouter: RouterType = Router();
 userRouter.use(requireAuth);
@@ -164,30 +166,18 @@ userRouter.get('/signature', async (req: Request, res: Response) => {
   });
 });
 
-// PUT /api/v1/user/signature
+// PUT /api/v1/user/signature — pre-9.4 single signature: edits the primary named
+// signature (lib/signatures.ts); the 9.4 webmail uses /user/signatures.
 userRouter.put('/signature', async (req: Request, res: Response) => {
   const schema = z.object({
-    signature: z.string(),
+    signature: z.string().max(MAX_SIGNATURE_HTML),
     autoNew:   z.boolean().optional(),
     autoReply: z.boolean().optional(),
   });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
 
-  await prisma.userSettings.upsert({
-    where:  { userId: req.apiUser!.userId },
-    update: {
-      signature:          parsed.data.signature,
-      ...(parsed.data.autoNew   !== undefined ? { signatureAutoNew:   parsed.data.autoNew   } : {}),
-      ...(parsed.data.autoReply !== undefined ? { signatureAutoReply: parsed.data.autoReply } : {}),
-    },
-    create: {
-      userId:             req.apiUser!.userId,
-      signature:          parsed.data.signature,
-      signatureAutoNew:   parsed.data.autoNew   ?? true,
-      signatureAutoReply: parsed.data.autoReply ?? false,
-    },
-  });
+  await saveLegacySignature(req.apiUser!.userId, parsed.data.signature, parsed.data.autoNew, parsed.data.autoReply);
   res.json({ ok: true });
 });
 
@@ -337,13 +327,7 @@ userRouter.delete('/folders/:id/empty', async (req: Request, res: Response) => {
   const folder = await prisma.folder.findFirst({ where: { id, mailboxId: mailbox.id } });
   if (!folder) { res.status(404).json({ error: 'Folder not found' }); return; }
 
-  const live = await prisma.message.findMany({ where: { folderId: id, deletedAt: null }, select: { id: true } });
-  if (live.length > 0) {
-    const mailboxId = mailbox.id;
-    await prisma.$transaction((tx) => expunge(tx, live.map((m) => m.id), { mailboxId }));
-  }
-  await prisma.folder.update({ where: { id }, data: { totalCount: 0, unreadCount: 0 } });
-
+  await emptyFolder(mailbox.id, id);
   res.json({ ok: true });
 });
 
@@ -1018,46 +1002,4 @@ userRouter.post('/shared-mailboxes/:id/folders/:folderId/empty', async (req: Req
 // routes/foreign-mailbox.ts, mounted on /api/v1/mail/shared-mailboxes/:id and
 // /api/v1/mail/delegated-mailboxes/:id in server.ts.
 
-// ── GET /api/v1/user/preferences ─────────────────────────────────────────────
-// Personal user preferences (incl. inactivityTimeoutMinutes)
-userRouter.get('/preferences', async (req: Request, res: Response) => {
-  const settings = await prisma.userSettings.findUnique({
-    where: { userId: req.apiUser!.userId },
-    select: { inactivityTimeoutMinutes: true },
-  });
-  // Global fallback from ServerSettings
-  const global = await prisma.serverSettings.findUnique({
-    where: { id: 'singleton' },
-    select: { inactivityTimeoutMinutes: true },
-  });
-  res.json({
-    inactivityTimeoutMinutes:       settings?.inactivityTimeoutMinutes ?? null,
-    inactivityTimeoutMinutesGlobal: global?.inactivityTimeoutMinutes ?? 30,
-  });
-});
-
-// ── PUT /api/v1/user/preferences ─────────────────────────────────────────────
-userRouter.put('/preferences', async (req: Request, res: Response) => {
-  const PreferencesSchema = z.object({
-    // null = use global setting; 0 = disabled; 1-1440 = own value
-    inactivityTimeoutMinutes: z.number().int().min(0).max(1440).nullable().optional(),
-  });
-  const parsed = PreferencesSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: 'Ungültige Eingabe', details: parsed.error.issues });
-    return;
-  }
-
-  const data: { inactivityTimeoutMinutes?: number | null } = {};
-  if ('inactivityTimeoutMinutes' in parsed.data) {
-    data.inactivityTimeoutMinutes = parsed.data.inactivityTimeoutMinutes ?? null;
-  }
-
-  await prisma.userSettings.upsert({
-    where: { userId: req.apiUser!.userId },
-    create: { userId: req.apiUser!.userId, ...data },
-    update: data,
-  });
-
-  res.json({ ok: true });
-});
+// GET/PUT/PATCH /preferences and /signatures: routes/user-settings.ts (9.4).

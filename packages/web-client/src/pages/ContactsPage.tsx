@@ -1,4 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { contactPath, itemIdFromPath } from '../lib/mailLinks.js';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Search, Plus, Mail, Phone, Building2, X, Pencil, Trash2,
@@ -39,6 +41,20 @@ export function ContactsPage() {
   const [selected, setSelected] = useState<Contact | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [formData, setFormData] = useState<FormFields>(emptyForm());
+  // 9.4: /contacts/<id> shows the contact (shareable, back/forward)
+  const location = useLocation();
+  const navigate = useNavigate();
+  const linkedId = itemIdFromPath(location.pathname, '/contacts/');
+  const { data: linkedContact } = useQuery({
+    queryKey: ['contact', linkedId],
+    queryFn: () => api.get<Contact>(`/contacts/${linkedId}`),
+    enabled: !!linkedId,
+    retry: false,
+    meta: { silentError: true }, // a deleted / foreign contact just shows nothing
+  });
+  useEffect(() => {
+    if (linkedContact && linkedContact.id === linkedId) { setSelected(linkedContact); setEditMode(false); }
+  }, [linkedContact, linkedId]);
 
   // Personal contacts
   const { data: contacts } = useQuery({
@@ -140,7 +156,7 @@ export function ContactsPage() {
           {(contacts ?? []).map((c) => (
             <button
               key={c.id}
-              onClick={() => { setSelected(c); setEditMode(false); }}
+              onClick={() => { setSelected(c); setEditMode(false); navigate(contactPath(c.id)); }}
               className={`w-full text-left flex items-center gap-3 px-3 py-2.5 border-b border-line hover:bg-surface-2 transition-colors ${selected?.id === c.id ? 'bg-accent/5' : ''}`}
             >
               <div className="w-9 h-9 rounded-full bg-accent flex items-center justify-center text-white text-xs font-bold shrink-0">

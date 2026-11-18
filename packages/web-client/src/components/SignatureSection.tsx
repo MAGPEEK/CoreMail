@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation } from '@tanstack/react-query';
 import {
   Bold, Italic, Underline as LucideUnderline, Strikethrough,
   AlignLeft, AlignCenter, AlignRight, AlignJustify,
@@ -21,10 +21,11 @@ import { api } from '../api/client.js';
 import { safeLinkUrl } from '../lib/compose.js';
 import { FontSizeExt, InlineImageExt } from './editorExtensions.js';
 
-interface SigData {
-  signature: string;
-  autoNew:   boolean;
-  autoReply: boolean;
+/** One named signature being edited (id null = not saved yet). */
+export interface SignatureDraft {
+  id: string | null;
+  name: string;
+  html: string;
 }
 
 /** Helper: sets or removes font-size on the current TextStyle mark. */
@@ -213,25 +214,19 @@ function FontDropdown({
 // Main component
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function SignatureSection() {
-  const qc = useQueryClient();
-  const { data, isLoading } = useQuery({
-    queryKey: ['user-signature'],
-    queryFn: () => api.get<SigData>('/user/signature'),
-  });
-
-  const [autoNew,   setAutoNew]   = useState(true);
-  const [autoReply, setAutoReply] = useState(false);
+/**
+ * 9.4: editor for one named signature (name + rich text). The list, the
+ * defaults per identity and new/delete live in SignatureSettings.tsx; mount it
+ * with `key={signature.id}` so switching signatures starts a fresh editor.
+ */
+export function SignatureEditor({ signature, onSaved }: { signature: SignatureDraft; onSaved: (id: string) => void }) {
+  const [name, setName] = useState(signature.name);
   const [showPreview, setShowPreview] = useState(false);
   const [showTextColor, setShowTextColor] = useState(false);
   const [showHighlight, setShowHighlight] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const contentInitialized = useRef(false);
-
-  useEffect(() => {
-    if (data) { setAutoNew(data.autoNew); setAutoReply(data.autoReply); }
-  }, [data]);
 
   const editor = useEditor({
     extensions: [
@@ -257,11 +252,11 @@ export function SignatureSection() {
 
   // Set initial content only once (prevents cursor reset)
   useEffect(() => {
-    if (editor && data?.signature && !contentInitialized.current) {
-      editor.commands.setContent(data.signature);
+    if (editor && !contentInitialized.current) {
+      editor.commands.setContent(signature.html);
       contentInitialized.current = true;
     }
-  }, [editor, data?.signature]);
+  }, [editor, signature.html]);
 
   // ── Actions ───────────────────────────────────────────────────────────────
   const insertLink = useCallback(() => {
@@ -334,25 +329,18 @@ export function SignatureSection() {
   };
 
   const mutation = useMutation({
-    mutationFn: () => api.put('/user/signature', {
-      signature: editor?.getHTML() ?? '',
-      autoNew,
-      autoReply,
-    }),
-    onSuccess: () => {
+    mutationFn: () => {
+      const body = { name: name.trim(), html: editor?.getHTML() ?? '' };
+      return signature.id
+        ? api.put<{ id: string }>(`/user/signatures/${signature.id}`, body)
+        : api.post<{ id: string }>('/user/signatures', body);
+    },
+    onSuccess: (saved) => {
       toast.success('Signatur gespeichert');
-      void qc.invalidateQueries({ queryKey: ['user-signature'] });
+      onSaved(saved.id);
     },
     onError: () => toast.error('Fehler beim Speichern'),
   });
-
-  if (isLoading) {
-    return (
-      <div className="flex justify-center py-12 text-fg-subtle">
-        <Loader2 size={18} className="animate-spin" />
-      </div>
-    );
-  }
 
   if (!editor) return null;
 
@@ -363,14 +351,12 @@ export function SignatureSection() {
 
   return (
     <div className="space-y-5">
-      {/* Header */}
-      <div className="flex items-start justify-between">
-        <div>
-          <h2 className="text-lg font-semibold text-fg">Signaturen</h2>
-          <p className="text-sm text-fg-subtle mt-0.5">
-            Wird automatisch an deine E-Mails angehängt. Unterstützt Formatierung, Bilder, Links und Schriftarten.
-          </p>
-        </div>
+      {/* Name + preview toggle */}
+      <div className="flex items-end justify-between gap-3">
+        <label className="flex-1">
+          <span className="block text-sm font-medium text-fg-muted mb-1">Name der Signatur</span>
+          <input className="input w-full" value={name} maxLength={80} onChange={(e) => setName(e.target.value)} />
+        </label>
         <button
           type="button"
           onClick={() => setShowPreview((s) => !s)}
@@ -598,35 +584,12 @@ export function SignatureSection() {
         )}
       </div>
 
-      {/* Auto-insert options */}
-      <div className="space-y-3 py-3 border-t border-line">
-        <p className="text-sm font-medium text-fg-muted">Signatur automatisch einfügen</p>
-        <label className="flex items-center gap-3 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={autoNew}
-            onChange={(e) => setAutoNew(e.target.checked)}
-            className="rounded border-line-strong text-accent-fg focus:ring-accent-fg w-4 h-4"
-          />
-          <span className="text-sm text-fg-muted">Bei neuen E-Mails</span>
-        </label>
-        <label className="flex items-center gap-3 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={autoReply}
-            onChange={(e) => setAutoReply(e.target.checked)}
-            className="rounded border-line-strong text-accent-fg focus:ring-accent-fg w-4 h-4"
-          />
-          <span className="text-sm text-fg-muted">Bei Antworten und Weiterleitungen</span>
-        </label>
-      </div>
-
       {/* Save */}
       <button
         type="button"
         onClick={() => mutation.mutate()}
         className="btn-primary"
-        disabled={mutation.isPending}
+        disabled={mutation.isPending || !name.trim()}
       >
         {mutation.isPending
           ? <><Loader2 size={14} className="animate-spin" /> Speichern…</>

@@ -16,10 +16,10 @@ import { api } from '../api/client.js';
 import type { Folder } from '../api/types.js';
 import { useMailActions } from '../hooks/useMailActions.js';
 import { EmptyReader } from '../components/Skeleton.js';
-import { useSearchParams } from 'react-router-dom';
 import { useActiveMailbox, ACCESSIBLE_MAILBOXES_KEY } from '../hooks/useActiveMailbox.js';
+import { useMailDeepLink } from '../hooks/useMailDeepLink.js';
 import {
-  mailApiBase, foldersQueryKey, mailboxKey, parseMailboxKey, isForeign, isReadOnlyMailbox, READ_ONLY_HINT,
+  mailApiBase, foldersQueryKey, parseMailboxKey, isReadOnlyMailbox, READ_ONLY_HINT,
   type AccessibleMailboxEntry,
 } from '../lib/mailboxContext.js';
 import { MAIL_VIEW_ROOT_CLASS } from '../lib/mailLayout.js';
@@ -93,9 +93,8 @@ interface ActiveDrag {
 
 export function MailPage() {
   const qc = useQueryClient();
-  const { selectedFolderId, selectedMessageId, selectedIds, setSelectedFolder, setActiveMailbox, clearSelection } = useUiStore();
+  const { selectedFolderId, selectedMessageId, selectedIds, setSelectedFolder, clearSelection } = useUiStore();
   const mailbox = useActiveMailbox();
-  const setMailboxExpanded = useUiPrefs((s) => s.setMailboxExpanded);
   const { readingPane } = useUiPrefs();
   const [activeDrag, setActiveDrag] = useState<ActiveDrag | null>(null);
 
@@ -120,37 +119,18 @@ export function MailPage() {
     setListW((w) => Math.max(MIN_LIST_W, Math.min(MAX_LIST_W, w + delta)));
   }, []);
 
-  // ── 9.3: mailbox shown (?mailbox=shared:<id> | delegated:<id>; none = own) ──────
-  // The URL is the entry point (links, /shared-mailbox/:id redirect, profile menu);
-  // switching mailboxes in the folder pane writes it back (replace, keeps ?q=).
-  const [searchParams, setSearchParams] = useSearchParams();
-  const mailboxParam = searchParams.get('mailbox');
-  useEffect(() => {
-    const wanted = parseMailboxKey(mailboxParam);
-    if (mailboxKey(wanted) !== mailboxKey(useUiStore.getState().activeMailbox)) setActiveMailbox(wanted);
-    if (isForeign(wanted)) setMailboxExpanded(mailboxKey(wanted), true);
-  }, [mailboxParam, setActiveMailbox, setMailboxExpanded]);
-  useEffect(() => {
-    // reads the store (not the render value): runs right after the effect above
-    const current = useUiStore.getState().activeMailbox;
-    const want = isForeign(current) ? mailboxKey(current) : null;
-    if ((mailboxParam ?? null) === want) return;
-    setSearchParams((prev) => {
-      const next = new URLSearchParams(prev);
-      if (want) next.set('mailbox', want); else next.delete('mailbox');
-      return next;
-    }, { replace: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mailbox.key]);
+  // 9.4: the URL holds mailbox / folder / message (/mail/<mailbox>/<folderId>/<messageId>)
+  useMailDeepLink();
 
   const { data: folders } = useQuery({
     queryKey: mailbox.foldersKey,
     queryFn: () => api.get<Folder[]>(`${mailbox.base}/folders`),
   });
 
-  // Auto-select INBOX on first load / after switching the mailbox
+  // Auto-select INBOX on first load / after switching the mailbox. Reads the store:
+  // a deep link (useMailDeepLink, same commit) may just have selected a folder.
   useEffect(() => {
-    if (!selectedFolderId && folders?.length) {
+    if (!useUiStore.getState().selectedFolderId && folders?.length) {
       const inbox = folders.find((f) => f.name === 'INBOX');
       if (inbox) setSelectedFolder(inbox.id, 'tree', useUiStore.getState().activeMailbox);
     }

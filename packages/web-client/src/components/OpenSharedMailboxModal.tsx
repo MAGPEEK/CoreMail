@@ -2,7 +2,7 @@
  * "Weiteres Postfach öffnen" (profile menu) / "Postfach hinzufügen" (folder pane).
  * 9.3: lists every shared and delegated mailbox the user may read; opening one shows
  * it again in the folder pane (if it was hidden), expands it and switches the mail
- * view to it (/mail?mailbox=<ref>). Mailboxes with send rights only are not listed —
+ * view to it (/mail/<ref>). Mailboxes with send rights only are not listed —
  * they have no content to open (send as / on behalf is chosen in the compose window).
  */
 import { useQueryClient } from '@tanstack/react-query';
