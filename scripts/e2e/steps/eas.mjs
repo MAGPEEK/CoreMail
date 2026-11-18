@@ -20,7 +20,7 @@ function encode(node) {
     const has = kids !== undefined;
     out.push(t | (has ? 0x40 : 0));
     if (!has) return;
-    if (typeof kids === 'string') { out.push(0x03, ...Buffer.from(kids, 'utf8'), 0x00); } else kids.forEach(walk);
+    if (typeof kids === 'string') { out.push(0x03); for (const b of Buffer.from(kids, 'utf8')) out.push(b); out.push(0x00); } else kids.forEach(walk);
     out.push(0x01);
   };
   walk(node);

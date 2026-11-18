@@ -19,10 +19,10 @@
  * serving the previous certificate (BCP showed SMTP/IMAP/POP3 on a Let's
  * Encrypt certificate, ports 993/465/587 served CN=mail.localhost).
  */
-import { X509Certificate, generateKeyPair, randomBytes, randomUUID } from 'node:crypto';
+import { X509Certificate, generateKeyPair, randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 import { prisma, encryptPrivateKey } from '@coremail/storage';
-import { createLogger, getRedisClient } from '@coremail/core';
+import { createLogger, getRedisClient, randomCertSerialHex } from '@coremail/core';
 import { applyProtocolCert, clearProtocolCert, publishTlsReload } from './cert-acme.js';
 import type { RenewRedis } from './cert-renewal.js';
 import {
@@ -195,20 +195,30 @@ export async function assignProtocolCert(certId: string, opts: AssignOptions): P
   return { applied: true, certId, previousCertIds };
 }
 
+export interface SelfSignedPemOptions {
+  /** Serial as hex (default: a fresh randomCertSerialHex()). */
+  serialHex?: string;
+  /** An existing RSA private key (PEM) to certify instead of generating a new RSA-2048 key. */
+  keyPem?: string;
+}
+
 /** RSA-2048 self-signed certificate (node crypto key, node-forge signature). */
-export async function createSelfSignedPem(domains: string[], days = 3650): Promise<{ certPem: string; keyPem: string; expiresAt: Date }> {
+export async function createSelfSignedPem(
+  domains: string[], days = 3650, opts: SelfSignedPemOptions = {},
+): Promise<{ certPem: string; keyPem: string; expiresAt: Date }> {
   const forge = (await import('node-forge')).default;
-  const { privateKey: keyPem } = await generateKeyPairAsync('rsa', {
+  const keyPem = opts.keyPem ?? (await generateKeyPairAsync('rsa', {
     modulusLength: 2048,
     publicKeyEncoding:  { type: 'spki', format: 'pem' },
     privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
-  });
+  })).privateKey;
   const pki = forge.pki;
   const privateKey = pki.privateKeyFromPem(keyPem) as import('node-forge').pki.rsa.PrivateKey;
   const cert = pki.createCertificate();
   cert.publicKey = pki.setRsaPublicKey(privateKey.n, privateKey.e);
-  // Unique positive serial: browsers reject two certificates with the same issuer + serial.
-  cert.serialNumber = '00' + randomBytes(16).toString('hex');
+  // Unique serial (browsers reject two certificates with the same issuer + serial),
+  // positive and minimally encoded (OpenSSL refuses a padded DER INTEGER).
+  cert.serialNumber = opts.serialHex ?? randomCertSerialHex();
   cert.validity.notBefore = new Date(Date.now() - 60_000);
   cert.validity.notAfter = new Date();
   cert.validity.notAfter.setDate(cert.validity.notAfter.getDate() + days);

@@ -7,6 +7,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
 import forge from 'node-forge';
+import { randomCertSerialHex } from '@coremail/core/cert-serial';
 import {
   BACKOFF_BASE_MS, BACKOFF_MAX_MS, backoffDelayMs, decideRenewal, deriveCertStatus,
   hostnameUpdateFor, isDefaultHostname, isPemCurrentlyValid, parseCertValidity, planSni,
@@ -28,7 +29,7 @@ function makeCert(names: string[], notBefore: Date, notAfter: Date): string {
   const key = forge.pki.privateKeyFromPem(KEY_PEM) as forge.pki.rsa.PrivateKey;
   const cert = forge.pki.createCertificate();
   cert.publicKey = forge.pki.setRsaPublicKey(key.n, key.e);
-  cert.serialNumber = String(Math.floor(Math.random() * 1e9) + 1);
+  cert.serialNumber = randomCertSerialHex();
   cert.validity.notBefore = notBefore;
   cert.validity.notAfter = notAfter;
   const attrs = [{ name: 'commonName', value: names[0]! }];

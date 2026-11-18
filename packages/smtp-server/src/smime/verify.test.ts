@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import forge from 'node-forge';
 import { X509Certificate } from 'node:crypto';
+import { randomCertSerialHex } from '@coremail/core/cert-serial';
 
 process.env['DATABASE_URL'] ??= 'postgresql://test:test@localhost:5432/test';
 process.env['JWT_SECRET'] ??= 'test-secret-test-secret-test-secret-1234';
@@ -19,7 +20,7 @@ const { evaluateTrust } = await import('./cms-verify.js');
 function makeCert(cn: string, email: string, keys: forge.pki.rsa.KeyPair, issuer?: { cert: forge.pki.Certificate; key: forge.pki.rsa.PrivateKey }, ca = false) {
   const cert = forge.pki.createCertificate();
   cert.publicKey = keys.publicKey;
-  cert.serialNumber = '0' + forge.util.bytesToHex(forge.random.getBytesSync(8));
+  cert.serialNumber = randomCertSerialHex();
   cert.validity.notBefore = new Date(Date.now() - 86_400_000);
   cert.validity.notAfter = new Date(Date.now() + 365 * 86_400_000);
   const subject = [{ name: 'commonName', value: cn }, ...(email ? [{ name: 'emailAddress', value: email }] : [])];

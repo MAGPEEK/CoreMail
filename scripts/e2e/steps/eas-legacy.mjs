@@ -6,7 +6,10 @@
 import { check, assert, creds, http, basic, session, waitFor } from '../lib.mjs';
 import { decodeWbxml, tagsNewerThan } from '../../../packages/activesync/src/wbxml.ts';
 
-/** Node: [page, token, children | text | undefined] — encoded like a device does. */
+/**
+ * Node: [page, token, children | text | undefined] — encoded like a device does.
+ * Text is copied byte by byte: spreading a multi-megabyte MIME into push() overflows the stack.
+ */
 function encode(root) {
   const out = [0x03, 0x01, 0x6a, 0x00];
   let page = -1;
@@ -14,7 +17,7 @@ function encode(root) {
     if (p !== page) { out.push(0x00, p); page = p; }
     out.push(t | (kids !== undefined ? 0x40 : 0));
     if (kids === undefined) return;
-    if (typeof kids === 'string') out.push(0x03, ...Buffer.from(kids, 'utf8'), 0x00); else kids.forEach(walk);
+    if (typeof kids === 'string') { out.push(0x03); for (const b of Buffer.from(kids, 'utf8')) out.push(b); out.push(0x00); } else kids.forEach(walk);
     out.push(0x01);
   };
   walk(root);

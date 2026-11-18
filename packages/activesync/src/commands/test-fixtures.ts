@@ -107,8 +107,12 @@ export function clientWbxml(root: ClientNode): Buffer {
     if (p !== page) { out.push(0x00, p); page = p; }
     out.push(t | (kids !== undefined ? 0x40 : 0));
     if (kids === undefined) return;
-    if (typeof kids === 'string') out.push(0x03, ...Buffer.from(kids, 'utf8'), 0x00);
-    else if (Buffer.isBuffer(kids)) out.push(0x03, ...kids, 0x00);
+    // byte by byte: spreading a multi-megabyte body into push() overflows the call stack
+    if (typeof kids === 'string' || Buffer.isBuffer(kids)) {
+      out.push(0x03);
+      for (const b of typeof kids === 'string' ? Buffer.from(kids, 'utf8') : kids) out.push(b);
+      out.push(0x00);
+    }
     else kids.forEach(walk);
     out.push(0x01);
   };

@@ -6,6 +6,7 @@
  */
 import forge from 'node-forge';
 import { generateKeyPairSync } from 'node:crypto';
+import { randomCertSerialHex } from '@coremail/core/cert-serial';
 import type {
   AcmeAuthzLike, AcmeChallengeLike, AcmeClientLike, AcmeOrderLike, ChallengeServing, HttpTextResult,
 } from '../lib/acme-flow.js';
@@ -35,7 +36,7 @@ export function makeTestCertPem(domains: string[], days = 90): string {
   const key = forge.pki.privateKeyFromPem(KEY_PEM) as forge.pki.rsa.PrivateKey;
   const cert = forge.pki.createCertificate();
   cert.publicKey = forge.pki.setRsaPublicKey(key.n, key.e);
-  cert.serialNumber = '01' + Math.floor(Math.random() * 1e9).toString(16);
+  cert.serialNumber = randomCertSerialHex();
   cert.validity.notBefore = new Date(Date.now() - 60_000);
   cert.validity.notAfter = new Date(Date.now() + days * 24 * 3600 * 1000);
   const attrs = [{ name: 'commonName', value: domains[0]! }];

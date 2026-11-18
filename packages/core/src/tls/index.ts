@@ -15,6 +15,7 @@ import { join }                            from 'node:path';
 export * from './listener-reload.js';
 export * from './tls-errors.js';
 export * from './legacy-tls.js';
+export * from './cert-serial.js';
 
 export interface TlsCertPair {
   /** PEM-encoded certificate */

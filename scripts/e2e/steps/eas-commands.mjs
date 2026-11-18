@@ -14,7 +14,7 @@ function encode(root) {
     if (p !== page) { out.push(0x00, p); page = p; }
     out.push(t | (kids !== undefined ? 0x40 : 0));
     if (kids === undefined) return;
-    if (typeof kids === 'string') out.push(0x03, ...Buffer.from(kids, 'utf8'), 0x00); else kids.forEach(walk);
+    if (typeof kids === 'string') { out.push(0x03); for (const b of Buffer.from(kids, 'utf8')) out.push(b); out.push(0x00); } else kids.forEach(walk);
     out.push(0x01);
   };
   walk(root);

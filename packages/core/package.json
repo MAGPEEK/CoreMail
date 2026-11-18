@@ -17,6 +17,7 @@
     "./ssrf": "./dist/net/ssrf.js",
     "./tls-errors": "./dist/tls/tls-errors.js",
     "./tls-policy": "./dist/tls/legacy-tls.js",
+    "./cert-serial": "./dist/tls/cert-serial.js",
     "./realtime": "./dist/realtime/index.js"
   },
   "scripts": {

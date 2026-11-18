@@ -41,11 +41,16 @@ const ORIGINAL = Buffer.from('From: carol@ext.test\r\nTo: bob@example.com\r\nSub
   + 'Content-Type: multipart/mixed; boundary="o"\r\n\r\n--o\r\nContent-Type: text/plain\r\n\r\nsee attached\r\n--o\r\n'
   + 'Content-Type: application/pdf; name="r.pdf"\r\nContent-Disposition: attachment; filename="r.pdf"\r\nContent-Transfer-Encoding: base64\r\n\r\nJVBERi0xLjQK\r\n--o--\r\n', 'latin1');
 
-/** ComposeMail request with Mime as WBXML OPAQUE (how devices send it). */
-function composeReq(cmd: 'SendMail' | 'SmartReply' | 'SmartForward', mime: Buffer, extra: number[] = []): E {
+/**
+ * ComposeMail request with Mime as WBXML OPAQUE (how devices send it), or as an
+ * inline string (`inline`). The MIME is concatenated, never spread: a multi-megabyte
+ * spread into an argument list overflows the call stack.
+ */
+function composeReq(cmd: 'SendMail' | 'SmartReply' | 'SmartForward', mime: Buffer, extra: number[] = [], inline = false): E {
   const tok = { SendMail: 0x05, SmartForward: 0x06, SmartReply: 0x07 }[cmd];
   const mb = (n: number) => { const out = [n & 0x7f]; n >>= 7; while (n > 0) { out.unshift((n & 0x7f) | 0x80); n >>= 7; } return out; };
-  return decodeWbxml(Buffer.from([0x03, 0x01, 0x6a, 0x00, 0x00, 21, tok | 0x40, ...extra, 0x08, 0x50, 0xc3, ...mb(mime.length), ...mime, 0x01, 0x01]));
+  const head = [0x03, 0x01, 0x6a, 0x00, 0x00, 21, tok | 0x40, ...extra, 0x08, 0x50, ...(inline ? [0x03] : [0xc3, ...mb(mime.length)])];
+  return decodeWbxml(Buffer.concat([Buffer.from(head), mime, Buffer.from(inline ? [0x00, 0x01, 0x01] : [0x01, 0x01])]));
 }
 const str = (tok: number, s: string) => [tok | 0x40, 0x03, ...Buffer.from(s), 0x00, 0x01];
 const clientId = (id: string) => str(0x11, id);
@@ -255,6 +260,22 @@ test('9.4: maximum message size — Status 122 AttachmentIsTooLarge (14.x) / HTT
   assert.equal(status(await handleSendMail(composeReq('SmartForward', MIME, source('orig')), 'u1', 'SmartForward', fwd.d)), '122');
   assert.equal(fwd.jobs.length, 1);
   assert.equal(legacySendHttpStatus('122'), 413);
+});
+
+test('maximum message size with a multi-megabyte message: just above → 122 / 413, at the limit → sent (OPAQUE and inline Mime)', async () => {
+  const line = Buffer.from(`${'a'.repeat(76)}\r\n`, 'latin1');
+  const big = Buffer.concat([MIME, ...Array.from({ length: Math.ceil((2 * 1024 * 1024) / line.length) }, () => line)]);
+  for (const inline of [false, true]) {
+    const req = composeReq('SendMail', big, [], inline);
+    const over = deps({ maxMessageBytes: async () => big.length - 1 });
+    assert.equal(status(await handleSendMail(req, 'u1', 'SendMail', over.d)), '122', `inline=${inline}`);
+    assert.equal(over.jobs.length, 0);
+    const at = deps({ maxMessageBytes: async () => big.length });
+    assert.equal(status(await handleSendMail(req, 'u1', 'SendMail', at.d)), SENT, `inline=${inline}`);
+    assert.equal(at.jobs.length, 1);
+  }
+  assert.equal(await handleLegacySendMail(big, { saveInSent: false }, 'u1', 'SendMail', deps({ maxMessageBytes: async () => big.length - 1 }).d), 413);
+  assert.equal(await handleLegacySendMail(big, { saveInSent: false }, 'u1', 'SendMail', deps({ maxMessageBytes: async () => big.length }).d), 200);
 });
 
 test('9.4: 12.1 retry without ClientId — same Message-ID from the same device within the window is not sent twice', async () => {
