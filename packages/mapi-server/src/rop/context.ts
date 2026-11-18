@@ -7,6 +7,7 @@ import type { BufferReader } from '../wire/reader.js';
 import { BufferWriter } from '../wire/writer.js';
 import { Ec, RopError } from './codes.js';
 import { HANDLE_UNUSED } from './handles.js';
+import { sessionFootprint } from '../objects/footprint.js';
 import type { MapiSession } from '../session/session.js';
 import type { MailStore } from '../store/types.js';
 import type { LogonState, ObjectKind, ServerObject } from '../objects/state.js';
@@ -90,4 +91,17 @@ export function logonOf(ctx: RopContext, logonId: number): LogonState {
 /** The mailbox of a logon may be changed (FULL_ACCESS / own). */
 export function assertWritable(logon: LogonState): void {
   if (logon.mailbox.readOnly) throw new RopError(Ec.AccessDenied, 'mailbox is read-only for this account');
+}
+
+/**
+ * Refuses work that would grow the session's server objects past their byte
+ * budget (MapiSession.memoryLimit, objects/footprint.ts) — `code` is the ROP's
+ * failure value (ecMAPIOOM by default, STG_E_MEDIUMFULL for streams).
+ */
+export function assertMemory(ctx: RopContext, extraBytes: number, code: number = Ec.OutOfMemory): void {
+  if (!fitsMemory(ctx, extraBytes)) throw new RopError(code, 'session memory budget exceeded');
+}
+
+export function fitsMemory(ctx: RopContext, extraBytes: number): boolean {
+  return extraBytes <= 0 || sessionFootprint(ctx.session.objects.all()) + extraBytes <= ctx.session.memoryLimit;
 }

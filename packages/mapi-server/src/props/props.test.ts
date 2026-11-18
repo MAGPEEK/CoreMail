@@ -12,8 +12,8 @@ import {
 } from './values.js';
 import { lookupProperty, setProperty, stringProp, tagForUnicodePreference, type PropertyBag } from './bag.js';
 import { readPropertyRow, writePropertyRow, NOT_FOUND } from './row.js';
-import { evaluateRestriction, parseRestriction, RelOp } from './restriction.js';
-import { NamedPropertyMap, NameKind, readPropertyName, writePropertyName } from './named.js';
+import { evaluateRestriction, parseRestriction, RelOp, restrictionNodeCount } from './restriction.js';
+import { NamedPropertyMap, NameKind, PS_INTERNET_HEADERS, PS_MAPI, readPropertyName, writePropertyName } from './named.js';
 
 const hex = (s: string): Buffer => Buffer.from(s.replace(/\s+/g, ''), 'hex');
 const bytes = (fn: (w: BufferWriter) => void): Buffer => { const w = new BufferWriter(); fn(w); return w.toBuffer(); };
@@ -135,11 +135,33 @@ test('PropertyName codec (LID and string names) and the name ↔ id map', () => 
   assert.deepEqual(readPropertyName(r), lid);
   assert.deepEqual(readPropertyName(r), named);
   const map = new NamedPropertyMap();
-  assert.equal(map.idFor(lid, false), undefined);
-  const id = map.idFor(lid, true)!;
-  assert.equal(id, 0x8000);
-  assert.equal(map.idFor({ ...lid }, false), id);
-  assert.equal(map.idFor({ ...named, name: 'X-CUSTOM' }, true), 0x8001);
-  assert.equal(map.idFor({ ...named }, false), 0x8001, 'string names are case-insensitive');
-  assert.deepEqual(map.nameOf(id), lid);
+  assert.equal(map.lookup(lid, false), 'unknown');
+  const id = map.lookup(lid, true);
+  assert.equal(id, 0x8001, 'registered IDs start above 0x8000');
+  assert.equal(map.lookup({ ...lid }, false), id);
+  assert.equal(map.lookup({ ...named, name: 'X-CUSTOM' }, true), 0x8002);
+  assert.equal(map.lookup({ ...named }, false), 'unknown', 'string names match exactly');
+  assert.deepEqual(map.nameOf(0x8001), lid);
+  assert.deepEqual(map.registeredIds(), [0x8001, 0x8002]);
+});
+
+test('named property map: PS_MAPI LIDs are the property ID, internet header names are case-insensitive, IDs run out', () => {
+  const map = new NamedPropertyMap();
+  assert.equal(map.lookup({ kind: NameKind.Lid, guid: PS_MAPI, lid: 0x0037 }, true), 0x0037, 'PS_MAPI: the LID is the ID');
+  assert.deepEqual(map.registeredIds(), [], 'nothing registered for PS_MAPI');
+  assert.deepEqual(map.nameOf(0x0e07), { kind: NameKind.Lid, guid: PS_MAPI, lid: 0x0e07 });
+  assert.equal(map.nameOf(0x9000), undefined);
+  const header = map.lookup({ kind: NameKind.Name, guid: PS_INTERNET_HEADERS, name: 'X-Mailer' }, true);
+  assert.equal(map.lookup({ kind: NameKind.Name, guid: PS_INTERNET_HEADERS, name: 'x-mailer' }, false), header);
+  assert.equal(map.lookup({ kind: NameKind.None, guid: PS_MAPI }, true), 'unknown');
+  for (let i = 0; i < 0xfffe - 0x8001; i++) assert.equal(typeof map.lookup({ kind: NameKind.Lid, guid: PS_INTERNET_HEADERS, lid: i }, true), 'number');
+  assert.equal(map.registeredIds().length, 0xfffe - 0x8000);
+  assert.equal(map.lookup({ kind: NameKind.Lid, guid: PS_INTERNET_HEADERS, lid: 0x7fffffff }, true), 'exhausted');
+  assert.equal(map.lookup({ kind: NameKind.Name, guid: PS_INTERNET_HEADERS, name: 'X-MAILER' }, false), header, 'known names still resolve');
+});
+
+test('restrictionNodeCount counts every node of the tree', () => {
+  const exist = Buffer.from([0x08, 0x03, 0x00, 0x37, 0x00]);
+  const or = Buffer.concat([Buffer.from([0x01, 0x03, 0x00]), exist, exist, Buffer.concat([Buffer.from([0x02]), exist])]);
+  assert.equal(restrictionNodeCount(parseRestriction(new BufferReader(or))), 5);
 });

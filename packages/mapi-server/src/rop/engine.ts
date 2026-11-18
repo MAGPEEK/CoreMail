@@ -9,12 +9,15 @@
  *  3. Output space: each ROP gets the room left after keeping enough space for a
  *     RopBufferTooSmall that carries the unexecuted requests (3.2.4.3). When a
  *     response does not fit, RopBufferTooSmall (SizeNeeded + the unexecuted
- *     request bytes) ends the buffer and the remaining ROPs are not executed.
+ *     request bytes) ends the buffer and the remaining ROPs are not executed —
+ *     unless the response could not fit into any output buffer: then that ROP
+ *     fails with ecBufferTooSmall and the following ROPs still run.
  *  4. The handle table is returned with the new handles at the output indexes.
  */
 import { createLogger } from '@coremail/core';
 import { BufferReader, WireFormatError } from '../wire/reader.js';
 import { BufferWriter } from '../wire/writer.js';
+import { MAX_EXTENDED_PAYLOAD } from '../wire/extended-buffer.js';
 import { Ec, RopError, RopId } from './codes.js';
 import { buildRopOutput, outputOverhead, parseRopInput } from './buffer.js';
 import { failureResponse, NeedsMoreSpace, type RopContext, type RopDef, type RopHead } from './context.js';
@@ -70,6 +73,11 @@ export async function executeRopBuffer(input: Buffer, deps: ExecuteDeps, maxOut:
     out.u8(RopId.BufferTooSmall).u16(sizeNeeded).bytes(pending);
   };
 
+  // A response larger than any output buffer can hold would make the client
+  // resend the ROP forever: it fails with ecBufferTooSmall instead (MS-OXCTABL
+  // Processing RopQueryRows: at least one row or ecBufferTooSmall).
+  const neverFits = (needed: number): boolean => needed > MAX_EXTENDED_PAYLOAD - outputOverhead(handles.length) - TOO_SMALL_HEADER;
+
   for (let i = 0; i < rops.length; i++) {
     const { def, req } = rops[i]!;
     const budget = available - out.length - TOO_SMALL_HEADER - restSize(i + 1);
@@ -78,17 +86,26 @@ export async function executeRopBuffer(input: Buffer, deps: ExecuteDeps, maxOut:
       session: deps.session, store: deps.store, handles, budget, now: deps.now ?? (() => new Date()),
     };
     let response: Buffer | null;
+    let needed = 0;
     try {
       response = await def.execute(ctx, req);
     } catch (err) {
-      if (err instanceof NeedsMoreSpace) { tooSmall(i, err.needed); break; }
-      const code = err instanceof RopError ? err.code : Ec.GeneralFailure;
-      if (!(err instanceof RopError)) log.error({ err, rop: def.name }, 'ROP handler failed');
-      else log.debug({ rop: def.name, code: code.toString(16) }, 'ROP failed');
-      response = failureResponse(def, req, code);
+      if (err instanceof NeedsMoreSpace) {
+        response = null;
+        needed = err.needed;
+      } else {
+        const code = err instanceof RopError ? err.code : Ec.GeneralFailure;
+        if (!(err instanceof RopError)) log.error({ err, rop: def.name }, 'ROP handler failed');
+        else log.debug({ rop: def.name, code: code.toString(16) }, 'ROP failed');
+        response = failureResponse(def, req, code);
+      }
+    }
+    if (response !== null && response.length > budget) needed = response.length;
+    if (needed > 0) {
+      if (!neverFits(needed)) { tooSmall(i, needed); break; }
+      response = failureResponse(def, req, Ec.BufferTooSmall);
     }
     if (response === null) continue;
-    if (response.length > budget) { tooSmall(i, response.length); break; }
     out.bytes(response);
   }
   return buildRopOutput(out.toBuffer(), handles);

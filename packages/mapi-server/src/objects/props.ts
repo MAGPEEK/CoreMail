@@ -46,7 +46,7 @@ export function storeBag(logon: LogonState): PropertyBag {
   bag.set(Tag.StoreSupportMask, STORE_SUPPORT_MASK);
   bag.set(Tag.StoreState, 0);
   bag.set(Tag.OutOfOfficeState, false);
-  bag.set(Tag.MaximumSubmitMessageSize, 25 * 1024);
+  bag.set(Tag.MaximumSubmitMessageSize, Math.floor(logon.maxSubmitBytes / 1024)); // in KB (MS-OXPROPS)
   bag.set(Tag.IpmSubtreeEntryId, fe(SpecialCounter.IpmSubtree));
   bag.set(Tag.IpmOutboxEntryId, fe(SpecialCounter.Outbox));
   bag.set(Tag.CommonViewsEntryId, fe(SpecialCounter.CommonViews));

@@ -19,6 +19,9 @@ export interface SessionAuth {
   authKey: string;
 }
 
+/** Default byte budget of the server objects of one session (objects/footprint.ts). */
+export const DEFAULT_SESSION_MEMORY_BYTES = 64 * 1024 * 1024;
+
 export function newCookieValue(): string {
   return randomBytes(32).toString('base64url');
 }
@@ -40,14 +43,17 @@ export class MapiSession {
   closed = false;
   /** The outstanding NotificationWait (at most one per session; a new one ends it). */
   notificationWait: AbortController | null = null;
+  /** Byte budget of the open server objects (messages, attachments, streams). */
+  readonly memoryLimit: number;
   private draftCounter = DRAFT_COUNTER_BASE;
 
-  constructor(id: string, auth: SessionAuth, sequence: string, now: number) {
+  constructor(id: string, auth: SessionAuth, sequence: string, now: number, memoryLimit = DEFAULT_SESSION_MEMORY_BYTES) {
     this.id = id;
     this.auth = auth;
     this.sequenceDigest = cookieDigest(sequence);
     this.createdAt = now;
     this.lastUsed = now;
+    this.memoryLimit = memoryLimit;
   }
 
   get user(): MapiUser { return this.auth.user; }

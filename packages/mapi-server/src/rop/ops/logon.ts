@@ -69,9 +69,10 @@ export const ropLogon = defineRop<LogonReq>({
     ctx.session.logons.delete(req.logonId);
 
     const view = new MailboxView(await ctx.store.listFolders(mailbox.mailboxId));
+    const { maxMessageBytes } = await ctx.store.submissionLimits();
     const logon: LogonState = {
       logonId: req.logonId, logonFlags: req.logonFlags, mailbox, guids: storeGuids(mailbox.mailboxId), view,
-      named: namedPropertiesOf(mailbox.mailboxId),
+      named: namedPropertiesOf(mailbox.mailboxId), maxSubmitBytes: maxMessageBytes,
     };
     putObject(ctx, req.outputIndex, { kind: 'logon', logon }, req.logonId);
     ctx.session.logons.set(req.logonId, logon);

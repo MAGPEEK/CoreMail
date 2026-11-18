@@ -67,6 +67,16 @@ export function parseRestriction(r: BufferReader, depth = 0): Restriction {
   }
 }
 
+/** Nodes of a restriction tree (evaluation cost per row is linear in it). */
+export function restrictionNodeCount(res: Restriction): number {
+  switch (res.type) {
+    case 'and': case 'or': return 1 + res.items.reduce((n, i) => n + restrictionNodeCount(i), 0);
+    case 'not': case 'sub': case 'count': return 1 + restrictionNodeCount(res.item);
+    case 'comment': return 1 + (res.item ? restrictionNodeCount(res.item) : 0);
+    default: return 1;
+  }
+}
+
 export type PropertyGetter = (tag: number) => LookupResult;
 
 function valueOf(get: PropertyGetter, tag: number): PropValue | undefined {

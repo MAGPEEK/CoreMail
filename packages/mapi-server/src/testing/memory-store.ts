@@ -5,7 +5,7 @@
  */
 import type {
   AttachmentRecord, ComposedMessage, FolderRecord, MailboxRef, MailStore, MapiUser, MessageContent,
-  MessageSummary, SubmitResult,
+  MessageSummary, SubmissionLimits, SubmitResult,
 } from '../store/types.js';
 
 export interface MemoryMessage {
@@ -25,6 +25,7 @@ export class MemoryStore implements MailStore {
   /** Foreign mailboxes a user may open: userId → refs. */
   readonly access = new Map<string, MailboxRef[]>();
   readonly directory = new Map<string, string>();
+  limits: SubmissionLimits = { maxMessageBytes: 25 * 1024 * 1024, maxRecipients: 100 };
   private seq = 0;
   private uid = 100;
 
@@ -163,9 +164,17 @@ export class MemoryStore implements MailStore {
     return { ...m.summary };
   }
 
+  async submissionLimits(): Promise<SubmissionLimits> {
+    return this.limits;
+  }
+
   async submit(user: MapiUser, mailbox: MailboxRef, message: ComposedMessage, opts: { saveCopy: boolean; draft: MessageSummary | null }): Promise<SubmitResult> {
     if (mailbox.readOnly) return { ok: false, reason: 'read-only' };
-    if (message.to.length + message.cc.length + message.bcc.length === 0) return { ok: false, reason: 'no-recipients' };
+    const recipients = message.to.length + message.cc.length + message.bcc.length;
+    if (recipients === 0) return { ok: false, reason: 'no-recipients' };
+    if (recipients > this.limits.maxRecipients) return { ok: false, reason: 'too-many-recipients' };
+    const size = message.bodyText.length + message.bodyHtml.length + message.attachments.reduce((n, a) => n + a.content.length, 0);
+    if (size > this.limits.maxMessageBytes) return { ok: false, reason: 'too-large' };
     this.sent.push({ user, mailbox, message, saveCopy: opts.saveCopy });
     if (opts.draft) await this.deleteMessages(mailbox, opts.draft.folderId, [opts.draft.uid]);
     return { ok: true, jobId: `job-${this.sent.length}` };

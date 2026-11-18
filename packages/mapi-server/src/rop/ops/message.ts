@@ -13,8 +13,9 @@
  */
 import { Ec, RopError, RopId } from '../codes.js';
 import {
-  assertWritable, defineRop, NeedsMoreSpace, objectOf, okResponse, putObject, type RopDef,
+  assertMemory, assertWritable, defineRop, NeedsMoreSpace, objectOf, okResponse, putObject, type RopDef,
 } from '../context.js';
+import { valueBytes } from '../../objects/footprint.js';
 import { lookupProperty, setProperty, stringProp, type PropertyBag } from '../../props/bag.js';
 import { MessageFlag, RecipientKind, Tag } from '../../props/tags.js';
 import { makeId } from '../../ids.js';
@@ -24,13 +25,19 @@ import {
 import { counterOf, folderNode, refreshView, uidOf } from './common.js';
 import { ensureContent } from './content.js';
 import { composeMessage } from './compose.js';
-import { readRecipientRow, writeSmtpRecipientRow, writeTypedString } from './recipients.js';
+import { readRecipientRow, writeSmtpRecipientRow, writeTypedString, type ParsedRecipientRow } from './recipients.js';
 import type { LogonState, MessageState, RecipientState, TableState } from '../../objects/state.js';
 import { MailboxFullError, type MailStore } from '../../store/types.js';
 import type { BufferReader } from '../../wire/reader.js';
 
 const OPEN_READ_ONLY = 0x00;
 const DRAFT_FLAG = '\\Draft';
+/**
+ * Per-message caps of what a client can pile up in a session (the submission
+ * limits of the server still apply when the message is sent).
+ */
+export const MAX_RECIPIENTS = 1000;
+export const MAX_ATTACHMENTS = 250;
 
 /** Message properties including the recipient display strings. */
 export function messageBagWithRecipients(message: MessageState): PropertyBag {
@@ -186,8 +193,14 @@ export const ropSaveChangesMessage = defineRop<SaveReq>({
 
 // ── RopModifyRecipients ──────────────────────────────────────────────────────
 
-interface ModifyRow { rowId: number; type: number; row: ReturnType<typeof readRecipientRow> | null }
+interface ModifyRow { rowId: number; type: number; row: ParsedRecipientRow | null }
 interface ModifyReq { inputIndex: number; rows: ModifyRow[] }
+
+function recipientRowBytes(row: ParsedRecipientRow): number {
+  let n = 64 + valueBytes(row.displayName ?? '') + valueBytes(row.emailAddress ?? '') + valueBytes(row.x500Dn ?? '');
+  for (const v of row.props.values()) n += valueBytes(v);
+  return n;
+}
 
 export const ropModifyRecipients = defineRop<ModifyReq>({
   id: RopId.ModifyRecipients,
@@ -212,22 +225,29 @@ export const ropModifyRecipients = defineRop<ModifyReq>({
     const { logon, message } = objectOf(ctx, req.inputIndex, 'message');
     assertWritable(logon);
     if (message.readOnly || message.submitted) throw new RopError(Ec.AccessDenied, 'message is read-only');
+    // Rows are replaced by RowId; a row without data removes the recipient.
+    const kept = new Map(message.recipients.map((r) => [r.rowId, r]));
+    const changed = new Map<number, ModifyRow & { row: ParsedRecipientRow }>();
     for (const m of req.rows) {
-      message.recipients = message.recipients.filter((x) => x.rowId !== m.rowId);
-      if (!m.row) continue;
+      kept.delete(m.rowId);
+      changed.delete(m.rowId);
+      if (m.row) changed.set(m.rowId, { ...m, row: m.row });
+    }
+    if (kept.size + changed.size > MAX_RECIPIENTS) throw new RopError(Ec.OutOfMemory, `more than ${MAX_RECIPIENTS} recipients`);
+    assertMemory(ctx, [...changed.values()].reduce((n, m) => n + recipientRowBytes(m.row), 0));
+    for (const m of changed.values()) {
       const email = await recipientAddress(ctx.store, m.row);
-      message.recipients.push({
-        rowId: m.rowId, type: m.type, email: email ?? '',
-        displayName: m.row.displayName ?? email ?? '', props: m.row.props,
+      kept.set(m.rowId, {
+        rowId: m.rowId, type: m.type, email: email ?? '', displayName: m.row.displayName ?? email ?? '', props: m.row.props,
       });
     }
-    message.recipients.sort((a, b) => a.rowId - b.rowId);
+    message.recipients = [...kept.values()].sort((a, b) => a.rowId - b.rowId);
     return okResponse(RopId.ModifyRecipients, req.inputIndex).toBuffer();
   },
 });
 
 /** SMTP address of a recipient row: PidTagSmtpAddress, an SMTP address, or a resolved X500 DN. */
-async function recipientAddress(store: MailStore, row: ReturnType<typeof readRecipientRow>): Promise<string | null> {
+async function recipientAddress(store: MailStore, row: ParsedRecipientRow): Promise<string | null> {
   const smtp = stringProp(row.props, Tag.SmtpAddress);
   if (smtp) return smtp;
   if (row.addressType.toUpperCase() === 'SMTP' && row.emailAddress) return row.emailAddress;
@@ -274,8 +294,11 @@ export const ropSetMessageReadFlag = defineRop<ReadFlagReq>({
 
 interface SubmitReq { inputIndex: number; submitFlags: number }
 
+/** MS-OXOMSG, Receiving a RopSubmitMessage ROP Request (error codes). */
 const SUBMIT_ERRORS = {
   'no-recipients': Ec.NoRecipients,
+  'too-many-recipients': Ec.TooManyRecips,
+  'too-large': Ec.MaxSubmissionExceeded,
   'sender-not-allowed': Ec.AccessDenied,
   'over-quota': Ec.QuotaExceeded,
   'read-only': Ec.AccessDenied,
@@ -289,6 +312,7 @@ export const ropSubmitMessage = defineRop<SubmitReq>({
   async execute(ctx, req) {
     const { logon, message } = objectOf(ctx, req.inputIndex, 'message');
     if (message.submitted) throw new RopError(Ec.AccessDenied, 'already submitted');
+    if (message.associated) throw new RopError(Ec.AccessDenied, 'folder associated information cannot be sent');
     if (message.readOnly || !isDraft(message)) throw new RopError(Ec.AccessDenied, 'only unsent messages can be submitted');
     const composed = await composeMessage(ctx.store, message);
     const deleteAfter = lookupProperty(message.props, Tag.DeleteAfterSubmit);
@@ -356,6 +380,7 @@ export const ropCreateAttachment = defineRop<CreateAttachmentReq>({
     assertWritable(logon);
     if (message.readOnly || message.submitted) throw new RopError(Ec.AccessDenied, 'message is read-only');
     await ensureContent(ctx.store, message);
+    if (message.attachments.length >= MAX_ATTACHMENTS) throw new RopError(Ec.OutOfMemory, `more than ${MAX_ATTACHMENTS} attachments`);
     const attachment = newAttachment(message.nextAttachNum++);
     message.attachments.push(attachment);
     putObject(ctx, req.outputIndex, { kind: 'attachment', logon, message, attachment }, req.logonId);

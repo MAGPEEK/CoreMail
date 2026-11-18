@@ -96,7 +96,10 @@ export class MailboxFullError extends Error {
 
 export type SubmitResult =
   | { ok: true; jobId: string }
-  | { ok: false; reason: 'no-recipients' | 'sender-not-allowed' | 'over-quota' | 'read-only' };
+  | { ok: false; reason: 'no-recipients' | 'too-many-recipients' | 'too-large' | 'sender-not-allowed' | 'over-quota' | 'read-only' };
+
+/** Size and recipient limits of a submitted message (storage loadSubmissionLimits). */
+export interface SubmissionLimits { maxMessageBytes: number; maxRecipients: number }
 
 export interface MailStore {
   /** Resolves the mailbox named by a RopLogon Essdn (own mailbox for an empty DN). */
@@ -117,6 +120,8 @@ export interface MailStore {
   moveOrCopy(source: FolderTarget, target: FolderTarget, uids: number[], copy: boolean): Promise<number>;
   /** Saves a draft (replacing `replaces` when given) and returns the stored row. */
   saveDraft(mailbox: MailboxRef, folderId: string, message: ComposedMessage, replaces: MessageSummary | null): Promise<MessageSummary>;
-  /** Sends a message (sender check, quota, queue) and files the Sent copy. */
+  /** The limits RopSubmitMessage enforces (PidTagMaximumSubmitMessageSize of the store). */
+  submissionLimits(): Promise<SubmissionLimits>;
+  /** Sends a message (limits, sender check, quota, queue) and files the Sent copy. */
   submit(user: MapiUser, mailbox: MailboxRef, message: ComposedMessage, opts: { saveCopy: boolean; draft: MessageSummary | null }): Promise<SubmitResult>;
 }

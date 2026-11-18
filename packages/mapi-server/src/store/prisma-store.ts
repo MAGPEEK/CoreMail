@@ -3,8 +3,9 @@
  * every write), raw-always storage, the object store and the outbound queue.
  * Same rules as the other protocol servers:
  *  - deleting messages tombstones them (recoverable, IMAP EXPUNGE semantics);
- *  - sending: send quota, sender identity (own address, aliases, shared
- *    mailboxes with Send As / Full Access), queue, Sent copy;
+ *  - sending: the SMTP submission limits (recipients, size), send quota,
+ *    sender identity (own address, aliases, shared mailboxes with Send As /
+ *    Full Access), queue, Sent copy;
  *  - drafts are stored as raw MIME with \Draft (visible to every client).
  */
 import { randomUUID } from 'node:crypto';
@@ -13,14 +14,14 @@ import {
   prisma, listAccessibleMailboxes, ensureMailboxProvisioned, directoryIdFromLegacyDn, reservedFolderPrefix,
   DEFAULT_FOLDERS, deleteFolderMovingMail, loadRawMessage, parseRawMessage, downloadBuffer, storeRawInFolder,
   expunge, modifyFlags, moveMessages, copyMessages, isMailboxWriteBlocked, checkSendQuota,
-  listAllowedSenderAddresses, isSenderAddressAllowed, normalizeSenderAddress, buildRfc822FromFields,
+  listAllowedSenderAddresses, isSenderAddressAllowed, normalizeSenderAddress, buildRfc822FromFields, loadSubmissionLimits,
   type RawSourceMessage,
 } from '@coremail/storage';
 import { enqueueRawOutbound, type RawOutboundJob } from './outbound.js';
 import {
   MailboxFullError,
   type ComposedMessage, type FolderRecord, type FolderTarget, type MailboxRef, type MailStore, type MapiUser,
-  type MessageContent, type MessageSummary, type SubmitResult,
+  type MessageContent, type MessageSummary, type SubmissionLimits, type SubmitResult,
 } from './types.js';
 
 const log = createLogger('mapi:store');
@@ -88,6 +89,8 @@ export interface PrismaStoreDeps {
   writeBlocked: (mailboxId: string) => Promise<boolean>;
   /** Mailbox change events (Redis pub/sub: webmail event stream, IMAP IDLE). */
   publish: (channel: string, message: string) => Promise<unknown>;
+  /** SMTP submission limits (storage loadSubmissionLimits). */
+  limits: () => Promise<SubmissionLimits>;
 }
 
 export const defaultStoreDeps: PrismaStoreDeps = {
@@ -97,6 +100,7 @@ export const defaultStoreDeps: PrismaStoreDeps = {
   allowedSenders: listAllowedSenderAddresses,
   writeBlocked: isMailboxWriteBlocked,
   publish: (channel, message) => getRedisClient().publish(channel, message),
+  limits: () => loadSubmissionLimits(),
 };
 
 export function createPrismaStore(deps: PrismaStoreDeps = defaultStoreDeps): MailStore {
@@ -289,10 +293,14 @@ export function createPrismaStore(deps: PrismaStoreDeps = defaultStoreDeps): Mai
       return toSummary(row, await attachmentOwners([row.id]));
     },
 
+    submissionLimits: () => deps.limits(),
+
     async submit(user, mailbox, message, opts): Promise<SubmitResult> {
       if (mailbox.readOnly) return { ok: false, reason: 'read-only' };
       const recipients = unique([...message.to, ...message.cc, ...message.bcc]);
       if (recipients.length === 0) return { ok: false, reason: 'no-recipients' };
+      const limits = await deps.limits();
+      if (recipients.length > limits.maxRecipients) return { ok: false, reason: 'too-many-recipients' };
       if (!(await deps.sendAllowed(user.userId))) return { ok: false, reason: 'over-quota' };
       const from = normalizeSenderAddress(message.from ?? mailbox.email);
       if (!isSenderAddressAllowed(from, await deps.allowedSenders(user.userId))) {
@@ -302,6 +310,7 @@ export function createPrismaStore(deps: PrismaStoreDeps = defaultStoreDeps): Mai
       const name = from === normalizeSenderAddress(user.email) ? user.displayName
         : from === normalizeSenderAddress(mailbox.email) ? mailbox.displayName : '';
       const raw = buildMime(message, { address: from, name }, deps.now());
+      if (raw.length > limits.maxMessageBytes) return { ok: false, reason: 'too-large' };
       const jobId = `mapi-${randomUUID()}`;
       await deps.enqueue({ messageId: jobId, from, to: recipients, senderUserId: user.userId, rawMessage: raw.toString('base64') });
       log.info({ userId: user.userId, jobId, rcpt: recipients.length }, 'MAPI mail enqueued');

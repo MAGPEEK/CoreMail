@@ -37,6 +37,7 @@ const jobs: Job[] = [];
 const events: Array<{ channel: string; message: Record<string, unknown> }> = [];
 let writeBlocked = false;
 let sendAllowed = true;
+let limits = { maxMessageBytes: 1024 * 1024, maxRecipients: 10 };
 
 const store = createPrismaStore({
   enqueue: async (j) => { jobs.push(j); },
@@ -45,12 +46,14 @@ const store = createPrismaStore({
   allowedSenders: async () => ['alice@example.test', 'team@example.test'],
   writeBlocked: async () => writeBlocked,
   publish: async (channel, message) => { events.push({ channel, message: JSON.parse(message) as Record<string, unknown> }); },
+  limits: async () => limits,
 });
 
 beforeEach(() => {
   Object.assign(db, emptyDb());
   perms.length = 0; jobs.length = 0; logs.length = 0; events.length = 0; objects.clear();
   writeBlocked = false; sendAllowed = true;
+  limits = { maxMessageBytes: 1024 * 1024, maxRecipients: 10 };
   resetMessageStoreCache();
   db.users.push({ id: 'u1', email: 'alice@example.test', active: true }, { id: 'u2', email: 'bob@example.test', active: true });
   db.sharedMailboxes.push({ id: 'sm1', email: 'team@example.test', displayName: 'Team', active: true });
@@ -165,6 +168,18 @@ test('submit: refused without recipients, over the send quota, for a foreign Fro
   assert.deepEqual(await store.submit(USER, OWN, composed({ from: 'ceo@example.test' }), { saveCopy: true, draft: null }), { ok: false, reason: 'sender-not-allowed' });
   assert.deepEqual(await store.submit(USER, { ...OWN, readOnly: true }, composed(), { saveCopy: true, draft: null }), { ok: false, reason: 'read-only' });
   assert.equal(jobs.length, 0);
+});
+
+test('submit: the SMTP submission limits apply (recipient count after de-duplication, raw size)', async () => {
+  limits = { maxMessageBytes: 4096, maxRecipients: 2 };
+  const three = composed({ to: ['a@example.test', 'b@example.test'], cc: ['c@example.test'], bcc: [] });
+  assert.deepEqual(await store.submit(USER, OWN, three, { saveCopy: true, draft: null }), { ok: false, reason: 'too-many-recipients' });
+  const twoDup = composed({ to: ['a@example.test', 'A@Example.test'], cc: ['b@example.test'], bcc: [] });
+  assert.equal((await store.submit(USER, OWN, twoDup, { saveCopy: false, draft: null })).ok, true, 'duplicates count once');
+  const big = composed({ bcc: [], bodyText: 'x'.repeat(5000) });
+  assert.deepEqual(await store.submit(USER, OWN, big, { saveCopy: true, draft: null }), { ok: false, reason: 'too-large' });
+  assert.equal(jobs.length, 1);
+  assert.deepEqual(await store.submissionLimits(), limits);
 });
 
 test('submit: queue job (envelope incl. Bcc, raw without Bcc), Sent copy, draft removed, MAIL_FLOW log', async () => {

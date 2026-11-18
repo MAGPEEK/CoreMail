@@ -9,7 +9,10 @@
  */
 import { BufferWriter } from '../../wire/writer.js';
 import { Ec, RopError, RopId } from '../codes.js';
-import { defineRop, logonOf, NeedsMoreSpace, objectAt, okResponse, assertWritable, type RopContext, type RopDef } from '../context.js';
+import {
+  assertMemory, assertWritable, defineRop, NeedsMoreSpace, objectAt, okResponse, type RopContext, type RopDef,
+} from '../context.js';
+import { valueBytes } from '../../objects/footprint.js';
 import { lookupProperty, setProperty, tagForUnicodePreference, type LookupResult, type PropertyBag } from '../../props/bag.js';
 import { PropType, propIdOf, propTypeOf, tag as makeTag, Tag } from '../../props/tags.js';
 import { encodedSize, readTaggedValue, writeTaggedValue, isPropError, type TaggedValue } from '../../props/values.js';
@@ -145,12 +148,15 @@ export const ropSetProperties = defineRop<SetReq>({
   responseIndex: (req) => req.inputIndex,
   async execute(ctx, req) {
     const obj = objectAt(ctx, req.inputIndex);
+    const incoming = req.values.reduce((n, v) => n + valueBytes(v.value), 0);
     if (obj.kind === 'message') {
       assertWritable(obj.logon);
       if (obj.message.readOnly || obj.message.submitted) throw new RopError(Ec.AccessDenied, 'message is read-only');
+      assertMemory(ctx, incoming);
       for (const v of req.values) setProperty(obj.message.props, v.tag, v.value);
     } else if (obj.kind === 'attachment') {
       assertWritable(obj.logon);
+      assertMemory(ctx, incoming);
       for (const v of req.values) {
         if (v.tag === Tag.AttachDataBinary && Buffer.isBuffer(v.value)) obj.attachment.data = v.value;
         else setProperty(obj.attachment.props, v.tag, v.value);
@@ -179,15 +185,30 @@ export const ropGetPropertyIdsFromNames = defineRop<IdsFromNamesReq>({
     return { inputIndex, create, names };
   },
   responseIndex: (req) => req.inputIndex,
+  /**
+   * MS-OXCPRPT, Processing RopGetPropertyIdsFromNames: no names on a Logon
+   * object → every registered ID; new IDs only with the Create flag on a
+   * writable mailbox (a read-only delegate must not fill the owner's ID space);
+   * unknown names → 0 with ecWarnWithErrors; ID space full → ecMAPIOOM.
+   */
   async execute(ctx, req) {
-    objectAt(ctx, req.inputIndex);
-    const { named } = logonOf(ctx, req.logonId);
-    const ids = req.names.map((n) => named.idFor(n, req.create) ?? 0);
+    const obj = objectAt(ctx, req.inputIndex);
+    const { named, mailbox } = obj.logon;
+    let ids: number[];
+    if (req.names.length === 0 && obj.kind === 'logon') {
+      ids = named.registeredIds();
+    } else {
+      const create = req.create && !mailbox.readOnly;
+      const found = req.names.map((n) => named.lookup(n, create));
+      if (found.includes('exhausted')) throw new RopError(Ec.OutOfMemory, 'named property ID space exhausted');
+      ids = found.map((x) => (typeof x === 'number' ? x : 0));
+    }
     const w = new BufferWriter(16 + ids.length * 2)
       .u8(RopId.GetPropertyIdsFromNames).u8(req.inputIndex)
       .u32(ids.includes(0) ? Ec.WarnWithErrors : Ec.Success)
       .u16(ids.length);
     for (const id of ids) w.u16(id);
+    if (w.length > ctx.budget) throw new NeedsMoreSpace(w.length);
     return w.toBuffer();
   },
 });
@@ -208,8 +229,7 @@ export const ropGetNamesFromPropertyIds = defineRop<NamesFromIdsReq>({
   },
   responseIndex: (req) => req.inputIndex,
   async execute(ctx, req) {
-    objectAt(ctx, req.inputIndex);
-    const { named } = logonOf(ctx, req.logonId);
+    const { named } = objectAt(ctx, req.inputIndex).logon;
     const w = okResponse(RopId.GetNamesFromPropertyIds, req.inputIndex).u16(req.ids.length);
     for (const id of req.ids) writePropertyName(w, named.nameOf(id) ?? NO_NAME);
     if (w.length > ctx.budget) throw new NeedsMoreSpace(w.length);

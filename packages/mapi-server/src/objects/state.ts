@@ -17,6 +17,8 @@ export interface LogonState {
   guids: StoreGuids;
   view: MailboxView;
   named: NamedPropertyMap;
+  /** Submission size limit at logon (PidTagMaximumSubmitMessageSize). */
+  maxSubmitBytes: number;
 }
 
 export interface RecipientState {

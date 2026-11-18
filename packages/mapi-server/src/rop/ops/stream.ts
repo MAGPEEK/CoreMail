@@ -3,10 +3,13 @@
  * RopWriteStream, RopCommitStream, RopGetStreamSize — on message properties
  * (bodies) and on attachment data. String properties are streamed as their
  * encoded bytes without terminator (PtypString UTF-16LE, PtypString8 Latin-1).
- * A writable stream is limited to MAX_STREAM_BYTES.
+ * A writable stream is limited to MAX_STREAM_BYTES and, with everything else
+ * the session holds, to the session's memory budget (STG_E_MEDIUMFULL).
  */
 import { Ec, RopError, RopId } from '../codes.js';
-import { defineRop, NeedsMoreSpace, objectOf, okResponse, putObject, type RopDef } from '../context.js';
+import {
+  assertMemory, defineRop, fitsMemory, NeedsMoreSpace, objectOf, okResponse, putObject, type RopDef,
+} from '../context.js';
 import { lookupProperty, setProperty } from '../../props/bag.js';
 import { PropType, propTypeOf, Tag } from '../../props/tags.js';
 import { ensureContent } from './content.js';
@@ -87,9 +90,12 @@ export const ropOpenStream = defineRop<OpenReq>({
     }
     if (current === null && !wantsWrite) throw new RopError(Ec.NotFound, 'property not set');
     const data = req.mode === OPEN_CREATE ? Buffer.alloc(0) : (current ?? Buffer.alloc(0));
+    const writable = wantsWrite && canWrite;
+    assertMemory(ctx, data.length);
     const stream: StreamState = {
-      target, tag: req.tag, data: Buffer.from(data), size: data.length, position: 0,
-      writable: wantsWrite && canWrite, dirty: false,
+      // A writable stream works on its own copy; a read-only one shares the value.
+      target, tag: req.tag, data: writable ? Buffer.from(data) : data, size: data.length, position: 0,
+      writable, dirty: false,
     };
     putObject(ctx, req.outputIndex, { kind: 'stream', logon: owner.logon, stream }, req.logonId);
     return okResponse(RopId.OpenStream, req.outputIndex).u32(stream.size).toBuffer();
@@ -137,7 +143,11 @@ export const ropWriteStream = defineRop<WriteReq>({
     const end = stream.position + req.data.length;
     if (end > MAX_STREAM_BYTES) throw new RopError(Ec.StreamSizeError, 'stream too large');
     if (end > stream.data.length) {
-      const grown = Buffer.alloc(Math.max(end, stream.data.length * 2));
+      const current = stream.data.length;
+      const preferred = Math.min(MAX_STREAM_BYTES, Math.max(end, current * 2));
+      const capacity = fitsMemory(ctx, preferred - current) ? preferred : end;
+      assertMemory(ctx, capacity - current, Ec.StreamSizeError);
+      const grown = Buffer.alloc(capacity);
       stream.data.copy(grown, 0, 0, stream.size);
       stream.data = grown;
     }
@@ -158,7 +168,10 @@ export const ropCommitStream = defineRop<IndexReq>({
   responseIndex: (req) => req.inputIndex,
   async execute(ctx, req) {
     const { stream } = objectOf(ctx, req.inputIndex, 'stream');
-    if (stream.writable) commitStream(stream);
+    if (stream.writable) {
+      assertMemory(ctx, stream.size, Ec.StreamSizeError); // the property receives a copy
+      commitStream(stream);
+    }
     return okResponse(RopId.CommitStream, req.inputIndex).toBuffer();
   },
 });

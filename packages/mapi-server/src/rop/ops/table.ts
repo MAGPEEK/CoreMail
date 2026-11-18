@@ -13,7 +13,7 @@
 import { Ec, RopError, RopId } from '../codes.js';
 import { defineRop, NeedsMoreSpace, objectOf, okResponse, type RopContext, type RopDef } from '../context.js';
 import { lookupProperty, type LookupResult, type PropertyBag } from '../../props/bag.js';
-import { compareValues, evaluateRestriction, parseRestriction } from '../../props/restriction.js';
+import { compareValues, evaluateRestriction, parseRestriction, restrictionNodeCount } from '../../props/restriction.js';
 import { writePropertyRow } from '../../props/row.js';
 import { PropType, propTypeOf, Tag } from '../../props/tags.js';
 import { BufferReader } from '../../wire/reader.js';
@@ -30,6 +30,7 @@ const QUERY_NO_ADVANCE = 0x01;
 const MAX_TABLE_STRING = 255;
 const MAX_TABLE_BINARY = 510;
 const MAX_COLUMNS = 512;
+export const MAX_RESTRICTION_NODES = 1024;
 /** RopId + index + ReturnValue + Origin + RowCount. */
 const QUERY_HEADER = 9;
 
@@ -175,7 +176,12 @@ export const ropRestrict = defineRop<RestrictReq>({
   responseIndex: (req) => req.inputIndex,
   async execute(ctx, req) {
     const { table } = objectOf(ctx, req.inputIndex, 'table');
-    table.restriction = req.restriction.length > 0 ? parseRestriction(new BufferReader(req.restriction)) : null;
+    const restriction = req.restriction.length > 0 ? parseRestriction(new BufferReader(req.restriction)) : null;
+    // Every row is tested against the whole tree: a huge filter would block the process.
+    if (restriction && restrictionNodeCount(restriction) > MAX_RESTRICTION_NODES) {
+      throw new RopError(Ec.TooComplex, 'restriction has too many nodes');
+    }
+    table.restriction = restriction;
     invalidate(table);
     return okResponse(RopId.Restrict, req.inputIndex).u8(TABLE_STATUS_COMPLETE).toBuffer();
   },
@@ -185,9 +191,13 @@ export const ropRestrict = defineRop<RestrictReq>({
 
 interface QueryReq { inputIndex: number; flags: number; forward: boolean; rowCount: number }
 
-function originOf(position: number, count: number): number {
-  if (position <= 0) return ORIGIN_BEGINNING;
-  return position >= count ? ORIGIN_END : ORIGIN_CURRENT;
+/**
+ * MS-OXCTABL, Processing RopQueryRows: no rows left in the read direction →
+ * BOOKMARK_END (forward) / BOOKMARK_BEGINNING (backward), else BOOKMARK_CURRENT.
+ */
+function originOf(position: number, count: number, forward: boolean): number {
+  if (forward) return position >= count ? ORIGIN_END : ORIGIN_CURRENT;
+  return position <= 0 ? ORIGIN_BEGINNING : ORIGIN_CURRENT;
 }
 
 export const ropQueryRows = defineRop<QueryReq>({
@@ -197,7 +207,8 @@ export const ropQueryRows = defineRop<QueryReq>({
   responseIndex: (req) => req.inputIndex,
   async execute(ctx, req) {
     const { logon, table } = objectOf(ctx, req.inputIndex, 'table');
-    if (table.columns.length === 0) throw new RopError(Ec.NotInitialized, 'RopSetColumns first');
+    // MS-OXCTABL, Processing RopQueryRows: ecNullObject when RopSetColumns was not sent.
+    if (table.columns.length === 0) throw new RopError(Ec.NullObject, 'RopSetColumns first');
     const rows = await loadTableRows(ctx, logon, table);
     const start = table.position;
     // Rows nearest the cursor first; a backward read is returned in table order.
@@ -221,7 +232,7 @@ export const ropQueryRows = defineRop<QueryReq>({
     const sent = encoded.length;
     if ((req.flags & QUERY_NO_ADVANCE) === 0) table.position = req.forward ? start + sent : start - sent;
     return okResponse(RopId.QueryRows, req.inputIndex)
-      .u8(originOf(table.position, rows.length)).u16(sent).bytes(Buffer.concat(encoded)).toBuffer();
+      .u8(originOf(table.position, rows.length, req.forward)).u16(sent).bytes(Buffer.concat(encoded)).toBuffer();
   },
 });
 

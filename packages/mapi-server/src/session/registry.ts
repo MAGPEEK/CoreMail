@@ -31,6 +31,8 @@ export interface RegistryDeps {
   redis: SessionRedis;
   live: LiveConnectionRegistry;
   idleMs: number;
+  /** Byte budget per session (default DEFAULT_SESSION_MEMORY_BYTES). */
+  memoryLimitBytes?: number;
   now?: () => number;
 }
 
@@ -54,7 +56,7 @@ export class SessionRegistry {
     const context = newCookieValue();
     const sequence = newCookieValue();
     const digest = cookieDigest(context);
-    const session = new MapiSession(digest, auth, sequence, this.now());
+    const session = new MapiSession(digest, auth, sequence, this.now(), this.deps.memoryLimitBytes);
     await this.deps.redis.set(KEY_PREFIX + digest, JSON.stringify({ userId: auth.user.userId, createdAt: session.createdAt }), 'PX', this.deps.idleMs);
     const unregister = this.deps.live.register({
       userId: auth.user.userId,
