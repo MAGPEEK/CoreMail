@@ -27,11 +27,33 @@ export function receiptAddressOf(value: string | null | undefined): string | nul
   return null;
 }
 
-/** Disposition-Notification-To address of raw RFC 5322 octets (top-level header only), or null. */
+type HeaderFields = ReturnType<typeof parseHeaderFields>;
+
+/**
+ * Messages that never get a read receipt, even when they ask for one:
+ * mailing-list / bulk mail (List-Id, List-Post, Precedence bulk|list|junk),
+ * automatically sent mail (Auto-Submitted other than "no") and reports
+ * (multipart/report — e.g. a receipt asking for a receipt).
+ */
+export function receiptSuppressed(fields: HeaderFields): boolean {
+  if (headerValue(fields, 'list-id') !== null || headerValue(fields, 'list-post') !== null) return true;
+  if (/^\s*(bulk|list|junk)\b/i.test(headerValue(fields, 'precedence') ?? '')) return true;
+  const auto = headerValue(fields, 'auto-submitted');
+  if (auto !== null && !/^\s*no\b/i.test(auto)) return true;
+  return /^\s*multipart\/report\b/i.test(headerValue(fields, 'content-type') ?? '');
+}
+
+/**
+ * Address a read receipt for raw RFC 5322 octets goes to (Disposition-Notification-To,
+ * top-level header only), or null — no request, or a message that never gets
+ * one (receiptSuppressed).
+ */
 export function receiptAddressOfRaw(raw: Buffer): string | null {
   const s = raw.subarray(0, Math.min(raw.length, MAX_HEADER_SCAN)).toString('latin1');
   const bodyStart = findBodyStart(s, 0, s.length);
-  return receiptAddressOf(headerValue(parseHeaderFields(s, 0, bodyStart), 'disposition-notification-to'));
+  const fields = parseHeaderFields(s, 0, bodyStart);
+  if (receiptSuppressed(fields)) return null;
+  return receiptAddressOf(headerValue(fields, 'disposition-notification-to'));
 }
 
 /** How the user sent the receipt: answered a prompt, or the policy "always" did. */

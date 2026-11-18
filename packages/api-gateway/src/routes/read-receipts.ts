@@ -7,7 +7,10 @@
  * column is only the webmail's hint). Both actions set the $MDNSent keyword so
  * the user is asked at most once per message — also by other clients that honour
  * the keyword. Sending goes through `smtp-outbound` like every other mail
- * (DKIM of the user's domain, ProhibitSendQuota respected).
+ * (DKIM of the user's domain, ProhibitSendQuota respected) with a null envelope
+ * sender, so a receipt never causes bounces. Never sent: for messages in Junk,
+ * mailing-list / bulk / automatic mail (storage mdn.ts), and `mode: 'automatic'`
+ * only when the user chose "always answer" (Settings → Lesen).
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
@@ -17,10 +20,12 @@ import {
 import { getOutboundJobOptions } from '@coremail/storage/queue-options';
 import { createLogger } from '@coremail/core';
 import { requireAuth } from '../middleware/auth.js';
+import { loadPreferences } from '../lib/preferences-store.js';
 import { getOutboundQueue } from './mail.js';
 
 const log = createLogger('api:read-receipts');
 export const MDN_SENT_FLAG = '$MDNSent';
+const JUNK_FOLDER = 'Junk';
 
 export const readReceiptRouter: RouterType = Router();
 
@@ -37,7 +42,7 @@ readReceiptRouter.post('/messages/:id/receipt', requireAuth, async (req: Request
 
   const msg = await prisma.message.findFirst({
     where: { id, deletedAt: null, folder: { mailbox: { userId } } },
-    include: { attachments: true, folder: { select: { mailboxId: true } } },
+    include: { attachments: true, folder: { select: { mailboxId: true, name: true } } },
   });
   if (!msg) { res.status(404).json({ error: 'Nachricht nicht gefunden' }); return; }
   if (msg.flags.includes(MDN_SENT_FLAG)) {
@@ -51,6 +56,15 @@ readReceiptRouter.post('/messages/:id/receipt', requireAuth, async (req: Request
   if (parsed.data.action === 'ignore') {
     await markHandled();
     res.json({ ok: true, sent: false });
+    return;
+  }
+
+  if (msg.folder.name === JUNK_FOLDER) {
+    res.status(409).json({ error: 'Keine Lesebestätigung für Junk-E-Mails', code: 'RECEIPT_NOT_ALLOWED' });
+    return;
+  }
+  if (parsed.data.mode === 'automatic' && (await loadPreferences(userId)).reading.answerReceipts !== 'always') {
+    res.status(409).json({ error: 'Automatische Lesebestätigungen sind ausgeschaltet', code: 'RECEIPT_NOT_AUTOMATIC' });
     return;
   }
 
@@ -82,8 +96,8 @@ readReceiptRouter.post('/messages/:id/receipt', requireAuth, async (req: Request
   });
   await getOutboundQueue().add('send', {
     messageId: `mdn-${crypto.randomUUID()}`,
-    // envelope sender = the user, like every webmail send (bounces reach them)
-    from: user.email,
+    // null envelope sender: a receipt that cannot be delivered is not reported back
+    from: '',
     to: [to],
     senderUserId: user.id,
     ...(user.domain.dkimPrivateKey ? {

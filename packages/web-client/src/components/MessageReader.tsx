@@ -97,7 +97,8 @@ export function MessageReader({ messageId }: Props) {
   useAutoMarkRead(msg, base, readOnly);
   const receipt = useReadReceipt(msg, {
     ownMailbox: !foreign,
-    inJunk: folders.find((f) => f.id === selectedFolderId)?.name === 'Junk',
+    // the message's own folder (search results span folders)
+    inJunk: folders.find((f) => f.id === (msg?.folderId ?? selectedFolderId))?.name === 'Junk',
   });
 
   const invalidate = () => {

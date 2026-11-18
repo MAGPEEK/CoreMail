@@ -87,7 +87,7 @@ installFakePrisma({
     findFirst: (a) => {
       const w = (a as { where: Row }).where;
       const m = messages.find((x) => x['id'] === w['id']);
-      return m ? { ...m, attachments: [], folder: { mailboxId: 'mb1' } } : null;
+      return m ? { ...m, attachments: [], folder: { mailboxId: 'mb1', name: m['folderName'] ?? 'INBOX' } } : null;
     },
     findMany: (a) => {
       const w = (a as { where: Row }).where;
@@ -289,11 +289,27 @@ test('POST /mail/messages/:id/receipt send: queues a receipt to the requested ad
   assert.equal(r.status, 200);
   assert.equal(queued.length, 1);
   assert.deepEqual(queued[0]!['to'], ['a@ext.example']);
-  assert.equal(queued[0]!['from'], 'bob@ex.com');
+  assert.equal(queued[0]!['from'], '', 'null envelope sender');
   const mdn = Buffer.from(String(queued[0]!['rawMessage']), 'base64').toString();
   assert.match(mdn, /Original-Message-ID: <o@ext\.example>/);
   assert.match(mdn, /Disposition: manual-action\/MDN-sent-manually; displayed/);
   assert.deepEqual(messages[0]!['flags'], ['$MDNSent']);
+});
+
+test('POST /mail/messages/:id/receipt: never for Junk; automatic only with "always answer"', async () => {
+  raw = 'From: a@ext.example\r\nTo: bob@ex.com\r\nDisposition-Notification-To: a@ext.example\r\nSubject: x\r\n\r\nbody\r\n';
+  queued.length = 0;
+  messages = [{ id: 'm5', folderId: 'junk', folderName: 'Junk', flags: [], subject: 'x', messageId: '<j@ext.example>', storagePath: 'raw/m5' }];
+  const junk = await call('POST', '/api/v1/mail/messages/m5/receipt', { token: tok('u2'), body: { action: 'send' } });
+  assert.equal(junk.json['code'], 'RECEIPT_NOT_ALLOWED');
+  messages = [{ id: 'm6', folderId: 'f1', flags: [], subject: 'x', messageId: '<k@ext.example>', storagePath: 'raw/m6' }];
+  const auto = await call('POST', '/api/v1/mail/messages/m6/receipt', { token: tok('u2'), body: { action: 'send', mode: 'automatic' } });
+  assert.equal(auto.json['code'], 'RECEIPT_NOT_AUTOMATIC');
+  assert.equal(queued.length, 0);
+  await call('PATCH', '/api/v1/user/preferences', { token: tok('u2'), body: { preferences: { reading: { answerReceipts: 'always' } } } });
+  const ok = await call('POST', '/api/v1/mail/messages/m6/receipt', { token: tok('u2'), body: { action: 'send', mode: 'automatic' } });
+  assert.equal(ok.status, 200);
+  assert.match(Buffer.from(String(queued[0]!['rawMessage']), 'base64').toString(), /Disposition: automatic-action\/MDN-sent-automatically; displayed/);
 });
 
 // ── Empty Deleted Items on logout ────────────────────────────────────────────

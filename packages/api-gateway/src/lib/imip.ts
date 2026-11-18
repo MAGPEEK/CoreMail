@@ -273,10 +273,18 @@ export function formatInvitationTime(d: Date, allDay: boolean, timeZone?: string
   return timeZone ? `${text} (${timeZone})` : text;
 }
 
-function fmtRange(ev: EventData): string {
-  const allDay = ev.allDay === true;
-  return `${formatInvitationTime(ev.dtStart, allDay, ev.timeZone)} – ${formatInvitationTime(ev.dtEnd, allDay, ev.timeZone)}`;
+/** "start – end" of the invitation text; all-day ends are exclusive → the last day is shown (once for one day). */
+export function formatInvitationRange(ev: Pick<EventData, 'dtStart' | 'dtEnd' | 'allDay' | 'timeZone'>): string {
+  if (ev.allDay === true) {
+    const lastDay = new Date(Math.max(ev.dtStart.getTime(), ev.dtEnd.getTime() - 86_400_000));
+    const first = formatInvitationTime(ev.dtStart, true);
+    const last = formatInvitationTime(lastDay, true);
+    return first === last ? first : `${first} – ${last}`;
+  }
+  return `${formatInvitationTime(ev.dtStart, false, ev.timeZone)} – ${formatInvitationTime(ev.dtEnd, false, ev.timeZone)}`;
 }
+
+const fmtRange = formatInvitationRange;
 
 function buildPlainBody(ev: EventData, method: 'REQUEST' | 'CANCEL'): string {
   if (method === 'CANCEL') {

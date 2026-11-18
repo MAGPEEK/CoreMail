@@ -68,3 +68,15 @@ test('buildReadReceipt: automatic mode, no header injection, unsafe host replace
   assert.match(s, /Reporting-UA: localhost; CoreMail/);
   assert.doesNotMatch(s, /Original-Message-ID/);
 });
+
+test('no receipt for mailing lists, bulk, automatic mail and reports', () => {
+  const head = (extra: string) => Buffer.from(`From: a@example.com\r\nDisposition-Notification-To: a@example.com\r\n${extra}Subject: x\r\n\r\nbody\r\n`);
+  assert.equal(receiptAddressOfRaw(head('')), 'a@example.com');
+  assert.equal(receiptAddressOfRaw(head('Auto-Submitted: no\r\n')), 'a@example.com');
+  assert.equal(receiptAddressOfRaw(head('List-Id: <news.example.com>\r\n')), null);
+  assert.equal(receiptAddressOfRaw(head('List-Post: <mailto:list@example.com>\r\n')), null);
+  assert.equal(receiptAddressOfRaw(head('Precedence: bulk\r\n')), null);
+  assert.equal(receiptAddressOfRaw(head('Precedence: List\r\n')), null);
+  assert.equal(receiptAddressOfRaw(head('Auto-Submitted: auto-replied\r\n')), null);
+  assert.equal(receiptAddressOfRaw(head('Content-Type: multipart/report; report-type=disposition-notification; boundary=b\r\n')), null);
+});
