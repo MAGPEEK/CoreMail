@@ -79,9 +79,9 @@ export async function run(state) {
     return `${body.length} B sha ok; ${r.headers.get('content-type')}; ${cd}; unauth 401, other user 404`;
   });
 
-  await check('rest: /EWS, /OAB, /mapi → 404 (GET + POST)', async () => {
+  await check('rest: /EWS, /OAB → 404 (GET + POST)', async () => {
     const out = [];
-    for (const p of ['/EWS/Exchange.asmx', '/ews/exchange.asmx', '/OAB/oab.xml', '/mapi/emsmdb/', '/mapi/nspi/']) {
+    for (const p of ['/EWS/Exchange.asmx', '/ews/exchange.asmx', '/OAB/oab.xml']) {
       for (const m of ['GET', 'POST']) {
         const r = await http(m, p, { body: m === 'POST' ? '<x/>' : undefined, headers: { 'Content-Type': 'text/xml' } });
         out.push(`${m} ${p} ${r.status}`);

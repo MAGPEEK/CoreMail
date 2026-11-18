@@ -60,7 +60,8 @@ The app container contains **all CoreMail services**, managed by `supervisord`:
 The `api-gateway` handles all HTTP routing without nginx:
 - `/` and `/bcp/` → static frontend bundles (MWA/BCP from `/app/www/`)
 - `/auth/` → auth-service (localhost:3003)
-- `/EWS`, `/OAB`, `/mapi` → 404 (EWS removed in v7.0.0, MAPI over HTTP in v6.0.0)
+- `/EWS`, `/OAB` → 404 (EWS removed in v7.0.0)
+- `/mapi/*` → mapi-server (localhost:3007, MAPI over HTTP since 9.4, off per account by default — see [mapi.md](mapi.md))
 - `/Microsoft-Server-ActiveSync` → activesync (localhost:3005)
 - `/dav/`, `/.well-known/caldav`, `/.well-known/carddav` → caldav-server (localhost:8082);
   clients only need the server name — the well-known URIs lead to `/dav/`, which names the

@@ -195,12 +195,15 @@ function internalProxy(targetBase: string): express.RequestHandler {
   return proxy as express.RequestHandler;
 }
 
-// v7.0.0: Exchange Web Services removed (EWS service package gone; MAPI over
-// HTTP already in v6.0.0). Answer 404 for every method instead of letting GET
-// fall through to the SPA index.html. Express paths are case-insensitive, so
-// /EWS also covers /ews.
-const GONE_PREFIXES = ['/EWS', '/OAB', '/mapi'];
+// v7.0.0: Exchange Web Services removed (EWS service package gone). Answer 404
+// for every method instead of letting GET fall through to the SPA index.html.
+// Express paths are case-insensitive, so /EWS also covers /ews.
+const GONE_PREFIXES = ['/EWS', '/OAB'];
 app.use(GONE_PREFIXES, (_req, res) => { res.status(404).json({ error: 'Not found' }); });
+// 9.4: MAPI over HTTP (classic Outlook) — mapi-server, off per account by default
+// (protocol switch `mapi`). Binary bodies: proxied before express.json().
+const MAPI_URL = process.env['MAPI_SERVICE_URL'] ?? 'http://localhost:3007';
+app.use('/mapi', internalProxy(MAPI_URL));
 // v5.7.1: JMAP — toggle in BCP → Server → „JMAP" (jmap-server returns 404 when off).
 // WebSocket upgrades (/jmap/ws, RFC 8887) are forwarded to jmapProxy.upgrade in
 // start() on the HTTP server and in the TLS proxy.
@@ -455,7 +458,7 @@ if (existsSync(owaDir)) {
   // API/proxy route is an OWA route → return index.html.
   const API_PREFIXES = [
     '/api/', '/auth/', '/.well-known/', '/jmap', '/Autodiscover', '/autodiscover',
-    '/Microsoft-Server-ActiveSync', '/dav', '/bcp', '/branding/',
+    '/Microsoft-Server-ActiveSync', '/dav', '/bcp', '/branding/', '/mapi',
   ];
   app.get('*', (req, res, next) => {
     if (API_PREFIXES.some((p) => req.path === p || req.path.startsWith(p))) {
