@@ -5,14 +5,13 @@
  *  - stripOwnAuthResults for all of our authserv-ids: a local user must not be
  *    able to deliver a forged `Authentication-Results: <our host>; dmarc=pass`
  *    to colleagues (RFC 8601 §5). Port 25 strips on receipt; the local paths
- *    strip here before storing. Same for the internal X-CoreMail-Virus-Scan.
+ *    strip here before storing. Same for the internal X-CoreMail-* headers.
  *  - an NDR for recipients that turn out to be unknown at delivery time
  *    (deleted/deactivated after the message was accepted) — never a silent drop.
  */
 import { createLogger } from '@coremail/core';
-import { prisma, stripHeaders } from '@coremail/storage';
+import { prisma, stripHeaders, internalHeadersExcept } from '@coremail/storage';
 import { stripOwnAuthResults } from './trace.js';
-import { VIRUS_SCAN_HEADER } from '../inbound/virus-scan-header.js';
 import { sendDsnBounce, type DsnOptions } from '../outbound/dsn.js';
 
 const log = createLogger('smtp:local-delivery');
@@ -52,13 +51,19 @@ export function stripOwnAuthResultsAll(raw: Buffer, ids: readonly string[]): Buf
 
 /**
  * Removes Authentication-Results fields carrying one of our authserv-ids and
- * the internal X-CoreMail-Virus-Scan verdict (only the port-25 path adds it,
- * after its own scan) — a local user must not inject either into a
- * colleague's mailbox (mail rules match on the verdict).
+ * every internal X-CoreMail-* header (storage INTERNAL_MAIL_HEADERS: the
+ * virus-scan verdict only the port-25 path adds after its own scan, the
+ * rule-forward loop header, …) — a local user must not inject any of them
+ * into a colleague's mailbox (rules match on the verdict, the loop header
+ * suppresses forwarding). `keepHeaders`: genuine ones of an internal producer.
  */
-export async function stripForLocalDelivery(raw: Buffer, extraIds: readonly string[] = []): Promise<Buffer> {
+export async function stripForLocalDelivery(
+  raw: Buffer,
+  extraIds: readonly string[] = [],
+  keepHeaders: readonly string[] = [],
+): Promise<Buffer> {
   return stripOwnAuthResultsAll(
-    stripHeaders(raw, [VIRUS_SCAN_HEADER]),
+    stripHeaders(raw, internalHeadersExcept(keepHeaders)),
     [...new Set([...(await ownAuthservIds()), ...extraIds.map((i) => i.toLowerCase())])],
   );
 }

@@ -29,7 +29,9 @@ let created = 0;
   domain: { findFirst: async () => ({ id: 'd1', name: 'corp.test' }) },
   user: {
     findFirst: async ({ where, include }: { where: W; include?: W }) => {
-      const hit = where['id'] === 'u1' || String(where['email'] ?? '').toLowerCase() === 'bob@corp.test';
+      const email = where['email'];
+      const emails = (email && typeof email === 'object' ? (email as { in: string[] }).in : [String(email ?? '')]).map((e) => e.toLowerCase());
+      const hit = where['id'] === 'u1' || emails.includes('bob@corp.test');
       if (!hit) return null;
       return include ? { ...user, mailbox } : { ...user };
     },
@@ -49,7 +51,7 @@ const storage = await import('@coremail/storage');
 const { inboundHandlers, refusalForAllRecipients } = await import('../inbound/handler.js');
 const { submissionLimitReply } = await import('../submission/handler.js');
 const { storeInboundMessage, toLocalOutcome } = await import('./message.js');
-const { planAdminForward, adminForwardSource, enqueueRuleForward } = await import('./rule-forward.js');
+const { planAdminForward, forwardSource, inboxRuleForwardOpts, enqueueRuleForward } = await import('./rule-forward.js');
 const { outcomesByOriginal, ledgerEntry, ledgerOutcome } = await import('./delivery.js');
 const { deliverOutboundJob, runForeignSendOnce } = await import('../outbound/queue.js');
 const { policyRefusedDsn, bouncePolicyLocal, POLICY_REFUSED_DIAGNOSTIC } = await import('./local-delivery.js');
@@ -176,16 +178,16 @@ test('NDRs and dead-letter notices of this server reach a mailbox with accept-on
   assert.notEqual(own, 'policy', 'our own notice passes the sender list');
 });
 
-test('admin forwarding source: the S/MIME plaintext never leaves — the received message with header edits instead', () => {
+test('forward source (admin forwarding + inbox rules): the S/MIME plaintext never leaves — the received message with header edits instead', () => {
   const received = Buffer.from('From: a@x.test\r\nSubject: secret\r\nContent-Type: application/pkcs7-mime\r\n\r\nMIAGCSqG\r\n');
   const stored = Buffer.from('From: a@x.test\r\nSubject: secret\r\n\r\nplain text\r\n');
-  assert.equal(adminForwardSource(stored, received, false, null), stored, 'not decrypted → as stored');
-  assert.equal(adminForwardSource(stored, received, true, null), received, 'decrypted → as received');
+  assert.equal(forwardSource(stored, received, false, null), stored, 'not decrypted → as stored');
+  assert.equal(forwardSource(stored, received, true, null), received, 'decrypted → as received');
   const edits = {
     headerAdds: [{ name: 'X-Tag', value: 'ext' }], headerRemoves: [], subjectPrefix: '[EXT] ', subjectSuffix: '',
     disclaimerHtml: '<p>disclaimer</p>',
-  } as unknown as Parameters<typeof adminForwardSource>[3];
-  const out = adminForwardSource(stored, received, true, edits).toString();
+  } as unknown as Parameters<typeof forwardSource>[3];
+  const out = forwardSource(stored, received, true, edits).toString();
   assert.match(out, /^Subject: \[EXT\] secret/m);
   assert.match(out, /^X-Tag: ext/m);
   assert.doesNotMatch(out, /plain text|disclaimer/, 'neither plaintext nor a disclaimer in the encrypted body');
@@ -202,4 +204,35 @@ test('admin forwarding of a Shared Mailbox: envelope = the box, no senderUserId 
   assert.equal('senderUserId' in jobs[0]!, false);
   assert.equal(jobs[1]!['from'], 'bob@corp.test');
   assert.equal(jobs[1]!['senderUserId'], 'u1');
+});
+
+test('9.4 review: inbox-rule forwards and redirects of a decrypted S/MIME message send the encrypted original', async () => {
+  const received = Buffer.from('From: a@x.test\r\nSubject: secret\r\nContent-Type: application/pkcs7-mime; smime-type=enveloped-data\r\n\r\nMIAGCSqG\r\n');
+  const stored = Buffer.from('From: a@x.test\r\nSubject: secret\r\n\r\nplain text\r\n');
+  const source = forwardSource(stored, received, true, null);
+  const requests = inboxRuleForwardOpts(
+    [{ address: 'home@ext.test', mode: 'forward' }, { address: 'list@ext.test', mode: 'redirect' }],
+    { source, user: { id: 'u1', email: 'bob@corp.test' }, originalFrom: 'a@x.test', dedupKey: 'k1', recipient: 'bob@corp.test' },
+  );
+  assert.equal(requests.length, 2);
+  const jobs: Array<Record<string, unknown>> = [];
+  const deps = { claim: async () => true, release: async () => undefined, enqueue: async (j: unknown) => { jobs.push(j as Record<string, unknown>); } };
+  for (const r of requests) await enqueueRuleForward(r, deps);
+  for (const job of jobs) {
+    const sent = Buffer.from(String(job['rawMessage']), 'base64').toString();
+    assert.doesNotMatch(sent, /plain text/, 'the decrypted plaintext never leaves');
+    assert.match(sent, /MIAGCSqG/);
+    assert.equal(job['ruleForward'], true, 'marked as rule forward (its local delivery keeps the loop header)');
+  }
+  assert.equal(jobs[1]!['ruleRedirect'], true);
+  assert.equal(jobs[1]!['from'], 'a@x.test', 'redirect keeps the original envelope sender');
+});
+
+test('9.4 review IDN: RCPT TO refuses a sender in either spelling of an internationalized reject-from entry', async () => {
+  policyRow = { rejectFrom: ['bücher.example'] };
+  assert.match(String(await inboundHandlers.onRcptTo('bob@corp.test', 'x@xn--bcher-kva.example', authUser)), /^550 5\.7\.1 /);
+  policyRow = { rejectFrom: ['xn--bcher-kva.example'] };
+  assert.match(String(await inboundHandlers.onRcptTo('bob@corp.test', 'x@Bücher.Example', authUser)), /^550 5\.7\.1 /);
+  policyRow = { acceptFrom: ['partner@bücher.example'] };
+  assert.equal(await inboundHandlers.onRcptTo('bob@corp.test', 'partner@xn--bcher-kva.example', authUser), null);
 });

@@ -1,9 +1,14 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
-import { prisma } from '@coremail/storage';
+import { prisma, announceUserEvent } from '@coremail/storage';
 import { markSessionsRevoked, revokeAllSessions } from '@coremail/storage/auth';
 import { requireBearerSession, requireBearerUser } from './bearer.js';
 
 export const sessionRouter: RouterType = Router();
+
+/** 9.4 review: the user's other tabs and devices refresh their sessions list (Settings → Sicherheit). */
+function announceSessionsChanged(userId: string): void {
+  announceUserEvent(userId, { type: 'settings', section: 'security', action: 'delete' });
+}
 
 // v8.1: the admin "revoke all sessions of a user" endpoint (DELETE
 // /auth/sessions/admin/:userId) is gone from the auth-service — it did its own
@@ -40,6 +45,7 @@ sessionRouter.post('/revoke-others', async (req: Request, res: Response) => {
     ...(auth.sessionId ? { exceptSessionId: auth.sessionId } : {}),
     reason: 'user-revoke-other-sessions',
   });
+  announceSessionsChanged(auth.userId);
   res.json({ ok: true, revoked: result.sessions });
 });
 
@@ -54,5 +60,6 @@ sessionRouter.delete('/:id', async (req: Request, res: Response) => {
   // v7.1.0: access tokens of the deleted session are rejected immediately
   // (memory + Redis marker + invalidation event), not only once they expire.
   await markSessionsRevoked([sessionId], userId);
+  announceSessionsChanged(userId);
   res.json({ ok: true });
 });

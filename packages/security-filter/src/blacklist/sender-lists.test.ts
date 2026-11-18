@@ -192,3 +192,30 @@ test('local-spoof action from SecuritySettings (BCP) applies; the environment va
   assert.equal(r.action, 'accept');
   assert.equal(r.junkFolder, true, 'LOCAL_SPOOF_ACTION=junk overrides the BCP value');
 });
+
+// ── 9.4 review: internationalized domains ────────────────────────────────────
+
+test('IDN: entries and senders match in Unicode and punycode spelling (EXACT, domain wildcard, glob, regex)', () => {
+  const U = 'bücher.example';
+  const A = 'xn--bcher-kva.example';
+  const m = (pattern: string, patternType: string, from: string) => lists.matchBlacklistEntry({ pattern, patternType }, from)?.matched;
+  assert.equal(m(`spam@${U}`, 'EXACT', `SPAM@${A}`), true);
+  assert.equal(m(`spam@${A}`, 'EXACT', `spam@${U}`), true);
+  assert.equal(m(`*@${U}`, 'WILDCARD', `x@${A}`), true);
+  assert.equal(m(`*@${A}`, 'WILDCARD', `x@${U}`), true);
+  assert.equal(m(`x@*.${U}`, 'WILDCARD', `x@mail.${A}`), true);
+  assert.equal(m('*bücher*', 'WILDCARD', `x@${A}`), true, 'a glob on the Unicode spelling still matches');
+  assert.equal(m(`^.*@xn--bcher-kva\\.example$`, 'REGEX', `x@${U}`), true);
+  assert.equal(m(`*@${U}`, 'WILDCARD', 'x@buecher.example'), false);
+});
+
+test('IDN: a recipient in either spelling resolves to its mailbox and domain scope', async () => {
+  tables['domain']!.push({ id: 'd3', name: 'bücher.example' });
+  tables['user']!.push({ id: 'u3', email: 'anna@xn--bcher-kva.example', domainId: 'd3' });
+  const [byUnicode, byPunycode, unknown] = await lists.resolveRecipientScopes([
+    'Anna@Bücher.example', 'anna@xn--bcher-kva.example', 'other@xn--bcher-kva.example',
+  ]);
+  assert.deepEqual(byUnicode, { userId: 'u3', domainId: 'd3' });
+  assert.deepEqual(byPunycode, { userId: 'u3', domainId: 'd3' });
+  assert.deepEqual(unknown, { domainId: 'd3' }, 'the domain stored as U-label matches the punycode recipient');
+});

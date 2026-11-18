@@ -12,14 +12,12 @@
  * neither be forged nor ever be trusted.
  */
 
-/** Informational trace header added to released messages. Never trusted. */
-export const QUARANTINE_RELEASE_HEADER = 'X-CoreMail-Quarantine-Released';
+import { INTERNAL_MAIL_HEADERS } from './internal-headers.js';
 
-/** Virus-scan verdict for mail delivered/quarantined without a clean ClamAV scan (smtp-server, 9.2). */
-export const VIRUS_SCAN_HEADER = 'X-CoreMail-Virus-Scan';
-
-/** Internal headers that must never be accepted from external senders. */
-export const INTERNAL_MAIL_HEADERS: readonly string[] = [QUARANTINE_RELEASE_HEADER, VIRUS_SCAN_HEADER];
+// The complete internal header list (incl. the quarantine trace header) lives in internal-headers.ts.
+export {
+  QUARANTINE_RELEASE_HEADER, VIRUS_SCAN_HEADER, RULE_FORWARDED_HEADER, INTERNAL_MAIL_HEADERS, internalHeadersExcept,
+} from './internal-headers.js';
 
 export type QuarantineReason = 'VIRUS' | 'SPAM' | 'POLICY';
 

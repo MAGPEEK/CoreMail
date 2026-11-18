@@ -8,7 +8,7 @@
  *   listType,scope,target,patternType,pattern,comment,active
  * `target` is empty for GLOBAL, the domain name for DOMAIN and the mailbox address for USER.
  */
-import { validateRulePattern } from '@coremail/storage';
+import { validateRulePattern, canonicalAddressPattern, canonicalAddress, canonicalDomain } from '@coremail/storage';
 
 export const LIST_TYPES = ['BLOCK', 'ALLOW'] as const;
 export const LIST_SCOPES = ['GLOBAL', 'DOMAIN', 'USER'] as const;
@@ -36,6 +36,17 @@ export interface SenderListInput {
 const ADDRESS_CHARS = /^[^\s<>()[\]\\,;:"]+$/;
 const isOneOf = <T extends string>(list: readonly T[], v: string): v is T => (list as readonly string[]).includes(v);
 
+/**
+ * Pure (9.4 review): a domain label of a stored (canonical) pattern that is
+ * still non-ASCII could not be converted to an A-label — no valid IDN. Labels
+ * with a `*` are globs and stay as written.
+ */
+function hasInvalidIdnLabel(pattern: string): boolean {
+  const at = pattern.lastIndexOf('@');
+  if (at < 0) return false;
+  return pattern.slice(at + 1).split('.').some((label) => !label.includes('*') && /[^\x00-\x7f]/.test(label));
+}
+
 /** Pure: a refusal message for the pattern, or null when it is valid for its type. */
 export function patternError(patternType: PatternType, pattern: string): string | null {
   if (pattern.length === 0 || pattern.length > 254) return 'pattern must be 1–254 characters';
@@ -45,11 +56,21 @@ export function patternError(patternType: PatternType, pattern: string): string 
     return v.ok ? null : `invalid regular expression: ${v.error}`;
   }
   if (!ADDRESS_CHARS.test(pattern)) return 'pattern contains characters that never occur in an address';
+  if (hasInvalidIdnLabel(pattern)) return 'pattern contains an invalid internationalized domain name';
   if (patternType === 'EXACT' && (pattern.includes('*') || !/^[^@]+@[^@]+$/.test(pattern))) {
     return 'EXACT needs a complete address (name@domain), use WILDCARD for *@domain';
   }
   if (patternType === 'WILDCARD' && !pattern.includes('*')) return 'WILDCARD needs at least one *';
   return null;
+}
+
+/**
+ * Pure: the stored form of a pattern. EXACT / WILDCARD compare case-insensitively —
+ * stored lower case, an internationalized domain as A-label (9.4 review: both
+ * spellings are one entry); REGEX as written.
+ */
+export function storedPattern(patternType: PatternType, pattern: string): string {
+  return patternType === 'REGEX' ? pattern.trim() : canonicalAddressPattern(pattern);
 }
 
 /** Pure: normalise + validate one entry (from the API body or a CSV row). */
@@ -61,11 +82,10 @@ export function normalizeEntry(raw: Record<string, unknown>): { ok: true; entry:
   if (!isOneOf(LIST_TYPES, listType)) return { ok: false, error: `listType must be one of ${LIST_TYPES.join(', ')}` };
   if (!isOneOf(LIST_SCOPES, scope)) return { ok: false, error: `scope must be one of ${LIST_SCOPES.join(', ')}` };
   if (!isOneOf(PATTERN_TYPES, patternType)) return { ok: false, error: `patternType must be one of ${PATTERN_TYPES.join(', ')}` };
-  // EXACT / WILDCARD compare case-insensitively — stored lower-case; REGEX as written
-  const pattern = patternType === 'REGEX' ? text('pattern') : text('pattern').toLowerCase();
+  const pattern = storedPattern(patternType, text('pattern'));
   const perr = patternError(patternType, pattern);
   if (perr) return { ok: false, error: perr };
-  const target = text('target').toLowerCase();
+  const target = scope === 'DOMAIN' ? canonicalDomain(text('target')) : canonicalAddress(text('target'));
   if (scope === 'GLOBAL' && target) return { ok: false, error: 'GLOBAL entries have no target' };
   if (scope !== 'GLOBAL' && !target) return { ok: false, error: `${scope} entries need a target (${scope === 'DOMAIN' ? 'domain name' : 'mailbox address'})` };
   const comment = text('comment');

@@ -79,6 +79,8 @@ const SETTINGS_KEYS: Record<string, QueryKey[]> = {
   rules: [['rules']],
   categories: [['categories']],
   mailboxes: [['user-shared-mailboxes'], ACCESSIBLE_MAILBOXES_KEY],
+  // Settings → Sicherheit (components/settings/SecurityPanels.tsx): sessions list + S/MIME options
+  security: [['user-sessions'], ['smime-settings']],
 };
 
 function settingsPlan(d: Obj): RealtimePlan {

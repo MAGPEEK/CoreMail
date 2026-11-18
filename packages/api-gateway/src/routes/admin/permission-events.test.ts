@@ -119,6 +119,25 @@ test('delegation grant / revoke → permission-change for the grantee', async ()
   assert.deepEqual(permissionEvents(), ['g5']);
 });
 
+test('9.4 review: a grant change (incl. autoMap) reaches the grantee webmail live (settings / mailboxes event)', async () => {
+  const sent: Array<{ channel: string; message: string }> = [];
+  const g2 = globalThis as { __realtimeRedis?: unknown };
+  const previous = g2.__realtimeRedis;
+  g2.__realtimeRedis = { publish: async (channel: string, message: string) => { sent.push({ channel, message }); return 1; } };
+  try {
+    const grantee = (userId: string) => sent.filter((s) => s.channel === core.userEventsChannel(userId)).map((s) => JSON.parse(s.message) as Row);
+    assert.equal(await call('POST', '/mailboxes/owner1/delegates', { granteeId: 'g7', permission: 'FULL_ACCESS', autoMap: false }), 201);
+    assert.equal(await call('POST', '/shared-mailboxes/sm1/permissions', { userId: 'g8', permissions: ['FULL_ACCESS'], autoMap: false }), 201);
+    assert.equal(await call('DELETE', '/shared-mailboxes/sm1/permissions/g1'), 204);
+    await new Promise((r) => setTimeout(r, 20));
+    for (const id of ['g7', 'g8', 'g1']) {
+      assert.deepEqual(grantee(id), [{ type: 'settings', section: 'mailboxes', action: 'update' }], id);
+    }
+  } finally {
+    g2.__realtimeRedis = previous;
+  }
+});
+
 test('permission-change ends no live connection (neutral reason)', () => {
   const conn = { userId: 'g1', credential: 'app_password' as const, appPasswordId: 'a1', terminate: () => undefined };
   assert.equal(core.connectionAffected({ userId: 'g1', reason: 'permission-change' }, conn), false);

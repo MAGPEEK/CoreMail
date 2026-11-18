@@ -13,6 +13,7 @@ import { prisma } from './prisma/index.js';
 import { findBodyStart, parseHeaderFields } from './mime/tree.js';
 import { addressesOf } from './mime/address.js';
 import { normalizeSenderAddress } from './sender-identity.js';
+import { addressVariants, canonicalAddress, canonicalDomain } from './idn.js';
 
 export interface MailFlowSettings {
   hiddenFromGal: boolean;
@@ -89,13 +90,18 @@ export function isMailAddress(value: string): boolean {
 /**
  * Pure: one sender-list entry in its stored form — an address
  * ("user@example.org") or a domain ("example.org"; "@example.org" is
- * accepted as input), lower case. null when invalid.
+ * accepted as input), lower case, an internationalized domain as A-label
+ * ("bücher.example" → "xn--bcher-kva.example"). null when invalid.
  */
 export function normalizeSenderPattern(entry: string): string | null {
   const v = entry.trim().toLowerCase().replace(/^@/, '');
   if (!v) return null;
-  if (v.includes('@')) return isMailAddress(v) ? v : null;
-  return isDomainName(v) ? v : null;
+  if (v.includes('@')) {
+    const address = canonicalAddress(v);
+    return isMailAddress(address) ? address : null;
+  }
+  const domain = canonicalDomain(v);
+  return isDomainName(domain) ? domain : null;
 }
 
 export type SenderListResult = { ok: true; values: string[] } | { ok: false; invalid: string[] };
@@ -115,14 +121,17 @@ export function parseSenderList(entries: readonly string[]): SenderListResult {
 
 /**
  * Pure: does a sender address match a list entry? An address entry matches
- * exactly; a domain entry matches that domain and its subdomains.
+ * exactly; a domain entry matches that domain and its subdomains. Both sides
+ * are compared in canonical form (lower case, domain as A-label), so the
+ * Unicode and the punycode spelling of an internationalized domain match.
  */
 export function senderMatches(pattern: string, address: string): boolean {
-  const a = normalizeSenderAddress(address);
+  const a = canonicalAddress(normalizeSenderAddress(address));
   if (!a) return false;
-  if (pattern.includes('@')) return a === pattern;
+  if (pattern.includes('@')) return a === canonicalAddress(pattern);
+  const p = canonicalDomain(pattern);
   const domain = a.slice(a.lastIndexOf('@') + 1);
-  return domain === pattern || domain.endsWith(`.${pattern}`);
+  return domain === p || domain.endsWith(`.${p}`);
 }
 
 export const SENDER_REFUSED_REPLY = '550 5.7.1 Recipient does not accept mail from this sender';
@@ -245,14 +254,15 @@ export async function saveMailFlowPolicy(owner: MailFlowOwner, policy: MailFlowS
 /**
  * The policy of the mailbox a (canonical) recipient address delivers to: an
  * active user, Shared Mailbox or an active alias of either. null when the
- * address is no such mailbox (resource mailboxes, postmaster, unknown).
+ * address is no such mailbox (resource mailboxes, postmaster, unknown). An
+ * internationalized domain matches in either spelling (A-label / U-label).
  */
 export async function mailFlowForRecipient(address: string): Promise<{ owner: MailFlowOwner; policy: MailFlowSettings } | null> {
-  const addr = address.trim().toLowerCase();
+  const spellings = addressVariants(address.trim().toLowerCase());
   const [user, shared, alias] = await Promise.all([
-    prisma.user.findFirst({ where: { email: addr, active: true }, select: { id: true } }),
-    prisma.sharedMailbox.findFirst({ where: { email: addr, active: true }, select: { id: true } }),
-    prisma.emailAlias.findFirst({ where: { address: addr, active: true }, select: { targetUserId: true, targetSharedId: true } }),
+    prisma.user.findFirst({ where: { email: { in: spellings }, active: true }, select: { id: true } }),
+    prisma.sharedMailbox.findFirst({ where: { email: { in: spellings }, active: true }, select: { id: true } }),
+    prisma.emailAlias.findFirst({ where: { address: { in: spellings }, active: true }, select: { targetUserId: true, targetSharedId: true } }),
   ]);
   const owner: MailFlowOwner | null = user ? { userId: user.id }
     : shared ? { sharedMailboxId: shared.id }

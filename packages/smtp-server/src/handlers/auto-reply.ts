@@ -27,9 +27,8 @@
  *    internal/external split (oofExternalEnabled, oofExternalOnlyContacts)
  */
 import { createHash, randomUUID } from 'node:crypto';
-import MailComposer from 'nodemailer/lib/mail-composer/index.js';
 import { createLogger, getRedisClient } from '@coremail/core';
-import { prisma } from '@coremail/storage';
+import { prisma, buildCrlfMime } from '@coremail/storage';
 
 const log = createLogger('smtp:auto-reply');
 
@@ -187,7 +186,7 @@ export async function buildAutoReply(opts: {
   const msgId = first('message-id')?.trim();
   const refs = [...(first('references')?.split(/\s+/).filter(Boolean) ?? []), ...(msgId ? [msgId] : [])];
   const isHtml = /<[a-z][\s\S]*>/i.test(opts.body);
-  const composer = new MailComposer({
+  return buildCrlfMime({
     from: opts.fromName ? { name: opts.fromName, address: opts.fromAddress } : opts.fromAddress,
     to: opts.to,
     subject: `Auto: ${origSubject || '(no subject)'}`,
@@ -201,7 +200,6 @@ export async function buildAutoReply(opts: {
     },
     ...(isHtml ? { html: opts.body, text: htmlToText(opts.body) } : { text: opts.body }),
   });
-  return composer.compile().build();
 }
 
 export interface AutoReplyDeps {

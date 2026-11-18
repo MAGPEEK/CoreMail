@@ -151,7 +151,8 @@ async function onMessage(
   meta?: MessageMeta,
 ): Promise<void> {
   const hostname = meta?.hostname ?? (process.env['SMTP_HOSTNAME']?.trim() || 'mail.localhost');
-  // Internal CoreMail headers (quarantine-release trace) are never accepted
+  // Internal CoreMail headers (storage INTERNAL_MAIL_HEADERS: rule-forward loop,
+  // virus-scan verdict, quarantine-release trace, …) are never accepted
   // from outside — strip them before filtering, quarantine or delivery. Same
   // for Authentication-Results fields carrying our authserv-id (RFC 8601 §5).
   const stripped = stripOwnAuthResults(stripHeaders(receivedRaw, INTERNAL_MAIL_HEADERS), hostname);

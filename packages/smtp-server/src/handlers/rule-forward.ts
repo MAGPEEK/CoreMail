@@ -1,13 +1,14 @@
 import { createHash, randomUUID } from 'crypto';
 import { createLogger, getRedisClient } from '@coremail/core';
-import { applyOutcomeToBuffer, type TransportOutcome } from '@coremail/storage';
+import { applyOutcomeToBuffer, RULE_FORWARDED_HEADER, type TransportOutcome } from '@coremail/storage';
 import { enqueueOutbound, type OutboundJob } from '../outbound/queue.js';
 import { PARTIAL_DELIVERY_TTL_SEC } from './delivery.js';
 import { formatRfc5322Date, headerBounds } from './trace.js';
 
 const log = createLogger('smtp:rule-forward');
 
-const LOOP_HEADER = 'X-CoreMail-RuleForwarded';
+/** Internal header (storage INTERNAL_MAIL_HEADERS): stripped from every received or submitted message. */
+const LOOP_HEADER = RULE_FORWARDED_HEADER;
 
 /**
  * Checks the loop-protection header. If the mail has already been forwarded
@@ -51,13 +52,14 @@ export function planAdminForward(
 }
 
 /**
- * Pure (9.4): the message an admin forwarding sends. The S/MIME plaintext that
- * was decrypted for storage never leaves the server: a decrypted message is
- * forwarded as it was received (still encrypted) with the transport rules'
- * header and subject changes — without a disclaimer, as the body is the
- * encrypted entity. Anything else is forwarded as it is stored.
+ * Pure (9.4): the message every forward sends — the admin forwarding and the
+ * user's inbox-rule forwards/redirects. The S/MIME plaintext that was decrypted
+ * for storage never leaves the server: a decrypted message is forwarded as it
+ * was received (still encrypted) with the transport rules' header and subject
+ * changes — without a disclaimer, as the body is the encrypted entity.
+ * Anything else is forwarded as it is stored.
  */
-export function adminForwardSource(
+export function forwardSource(
   stored: Buffer,
   received: Buffer,
   decrypted: boolean,
@@ -65,6 +67,25 @@ export function adminForwardSource(
 ): Buffer {
   if (!decrypted) return stored;
   return transport ? applyOutcomeToBuffer(received, { ...transport, disclaimerHtml: '' }) : received;
+}
+
+/**
+ * Pure (9.4 review): the forward requests of a user's inbox rules. They send
+ * `source` (see {@link forwardSource}) — never the decrypted copy kept for storage.
+ */
+export function inboxRuleForwardOpts(
+  forwards: ReadonlyArray<{ address: string; mode: 'forward' | 'redirect' }>,
+  ctx: { source: Buffer; user: { id: string; email: string }; originalFrom: string; dedupKey?: string | undefined; recipient: string },
+): RuleForwardOpts[] {
+  return forwards.map((fwd) => ({
+    rawBuffer:      ctx.source,
+    toAddress:      fwd.address,
+    forwardingUser: { id: ctx.user.id, email: ctx.user.email },
+    mode:           fwd.mode,
+    originalFrom:   ctx.originalFrom,
+    dedupKey:       ctx.dedupKey,
+    recipient:      ctx.recipient,
+  }));
 }
 
 export interface RuleForwardOpts {
@@ -162,6 +183,8 @@ export async function enqueueRuleForward(opts: RuleForwardOpts, deps: RuleForwar
       to:         [opts.toAddress],
       rawMessage: raw.toString('base64'),
       ...(opts.forwardingUser.shared ? {} : { senderUserId: opts.forwardingUser.id }),
+      // the local delivery of this job keeps the genuine loop header (queue.ts localDeliveryBuffer)
+      ruleForward: true,
       ...(opts.mode === 'redirect' ? { ruleRedirect: true } : {}),
     });
   } catch (err) {

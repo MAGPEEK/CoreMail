@@ -164,6 +164,7 @@ test('queue jobs: only an authenticated user job (not rule forwards / redirects 
   assert.deepEqual(senderAuthForJob(base, raw), {});
   assert.deepEqual(senderAuthForJob({ ...base, senderUserId: 'u1', ruleRedirect: true }, raw), {});
   assert.deepEqual(senderAuthForJob({ ...base, senderUserId: 'u1', quarantineReleaseId: 'q' }, raw), {});
+  assert.deepEqual(senderAuthForJob({ ...base, senderUserId: 'u1', ruleForward: true }, raw), {}, '9.4: rule forward job flag');
   assert.deepEqual(senderAuthForJob({ ...base, senderUserId: 'u1' }, Buffer.from('X-CoreMail-RuleForwarded: u1\r\nSubject: x\r\n\r\nb')), {});
 });
 

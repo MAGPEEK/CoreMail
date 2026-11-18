@@ -189,6 +189,20 @@ test('9.2 review: local deliveries (REST/JMAP/EAS/submission via the queue) stri
   assert.equal(await localDeliveryBuffer(forged, { quarantineReleaseId: 'q1' }), forged);
 });
 
+test('9.4 review: client submissions delivered locally lose every internal header; a rule forward keeps its loop header', async () => {
+  const forged = Buffer.from([
+    'X-CoreMail-RuleForwarded: someone', 'X-CoreMail-Draft-Pending: e30=',
+    'X-CoreMail-Quarantine-Released: q9', 'X-CoreMail-Virus-Scan: unscanned; host=x',
+    'From: mallory@corp.test', 'Subject: s', '', 'body', '',
+  ].join('\r\n'));
+  const user = (await localDeliveryBuffer(forged, {})).toString();
+  assert.doesNotMatch(user, /X-CoreMail-/i, 'REST/JMAP/EAS submission: nothing internal reaches the colleague');
+  const forward = (await localDeliveryBuffer(forged, { ruleForward: true })).toString();
+  assert.match(forward, /^X-CoreMail-RuleForwarded: someone/m, 'genuine loop header of a rule forward stays');
+  assert.doesNotMatch(forward, /X-CoreMail-(Draft-Pending|Quarantine-Released|Virus-Scan)/i);
+  assert.match((await localDeliveryBuffer(forged, { ruleRedirect: true })).toString(), /^X-CoreMail-RuleForwarded:/m);
+});
+
 // ── Finding 10: X-Filter-Context size ───────────────────────────────────────
 
 test('X-Filter-Context lists at most 100 recipients and carries the total count', () => {

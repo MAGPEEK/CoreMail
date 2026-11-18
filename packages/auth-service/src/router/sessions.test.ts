@@ -13,6 +13,7 @@ process.env['DATABASE_URL'] ??= 'postgresql://test:test@localhost:5432/test';
 process.env['JWT_SECRET'] ??= 'test-secret-test-secret-test-secret-1234';
 process.env['PEPPER'] ??= 'test-pepper-test-pepper-test-pepper-1234';
 delete process.env['MFA_ENCRYPTION_KEY'];
+(globalThis as { __realtimeRedis?: unknown }).__realtimeRedis ??= null;   // realtime events go nowhere unless a test captures them
 
 const { createFakePrisma, createFakeRedis } = await import('@coremail/storage/auth/testing');
 const db = createFakePrisma();
@@ -76,6 +77,31 @@ test('sessions: revoke-others keeps only the calling session', async () => {
   const rows = (await call('GET', '/auth/sessions', undefined, keep)).body as SessionRow[];
   assert.deepEqual(rows.map((s) => s.current), [true]);
   assert.equal((await call('GET', '/auth/sessions', undefined, gone)).status, 401);
+});
+
+test('9.4 review: ending a session / the other sessions announces a live update to the user', async () => {
+  const sent: Array<{ channel: string; message: string }> = [];
+  const g = globalThis as { __realtimeRedis?: unknown };
+  const previous = g.__realtimeRedis;
+  g.__realtimeRedis = { publish: async (channel: string, message: string) => { sent.push({ channel, message }); return 1; } };
+  try {
+    const keep = await login('dora@example.com');
+    await login('dora@example.com');
+    const userId = String((await db.user.findFirst({ where: { email: 'dora@example.com' } }))!['id']);
+    assert.equal((await call('POST', '/auth/sessions/revoke-others', {}, keep)).status, 200);
+    const other = await login('dora@example.com');
+    const rows = (await call('GET', '/auth/sessions', undefined, keep)).body as SessionRow[];
+    assert.equal((await call('DELETE', `/auth/sessions/${rows.find((s) => !s.current)!.id}`, undefined, keep)).status, 200);
+    assert.ok(other);
+    await new Promise((r) => setTimeout(r, 20));
+    const mine = sent.filter((s) => s.channel === core.userEventsChannel(userId)).map((s) => JSON.parse(s.message) as unknown);
+    assert.deepEqual(mine, [
+      { type: 'settings', action: 'delete', section: 'security' },
+      { type: 'settings', action: 'delete', section: 'security' },
+    ]);
+  } finally {
+    g.__realtimeRedis = previous;
+  }
 });
 
 test('sessions: another user\'s session is not found; no token → 401', async () => {

@@ -5,6 +5,7 @@ import { createBullMqConnection, createLogger } from '@coremail/core';
 import {
   prisma, downloadBuffer, deleteObject, buildOutboundJobOptions, getOutboundJobOptions, loadQueueSettings, isExpiredInQueue,
   outboundRetryDelay, queueStartMs, receiptAddressOf, afterForeignSend, importanceMailOption, normalizeImportance,
+  CRLF_STREAM_TRANSPORT, RULE_FORWARDED_HEADER,
 } from '@coremail/storage';
 import { relayMessage, type RecipientFailure, type RelayResult, type DkimOptions, type RelayOptions } from './relay.js';
 import { extractSmtpCode, sendDsnBounce, sendSuccessDsn, rawSubjectAndId, type DsnOptions } from './dsn.js';
@@ -19,6 +20,7 @@ import type { SenderAuth } from '@coremail/storage';
 import { expandRecipients } from '../handlers/expand.js';
 import { resolveJobDkim } from './dkim.js';
 import { notifyDeadLetter, startQueueMaintenance } from './dead-letter.js';
+import { refuseRevokedSender, defaultSendTimeSenderDeps } from './send-time-sender.js';
 // Journaling feature completely removed in v3.13.6
 
 const log = createLogger('smtp:outbound-queue');
@@ -91,6 +93,12 @@ export interface OutboundJob {
    * never to an external one (no backscatter).
    */
   ruleRedirect?:  boolean;
+  /**
+   * 9.4: created by an inbox-rule or admin forward/redirect (handlers/rule-forward.ts).
+   * Its local delivery keeps the genuine loop header; every other job's local
+   * delivery strips all internal headers (storage INTERNAL_MAIL_HEADERS).
+   */
+  ruleForward?:   boolean;
   dkimDomain?:    string;
   dkimSelector?:  string;
   dkimPrivateKey?: string;
@@ -171,12 +179,8 @@ export async function buildRawFromMessage(
     }))
   );
 
-  const transport = nodemailer.createTransport({
-    streamTransport: true,
-    // RFC 5321: SMTP requires CRLF. nodemailer knows 'windows' — 'crlf' is no
-    // valid value and left bare LF line ends in the generated message.
-    newline: 'windows',
-  });
+  // RFC 5321: SMTP requires CRLF (storage CRLF_STREAM_TRANSPORT, shared by every builder).
+  const transport = nodemailer.createTransport(CRLF_STREAM_TRANSPORT);
 
   const fromField: SendMailOptions['from'] = msg.fromName
     ? { name: msg.fromName, address: msg.from }
@@ -558,24 +562,42 @@ export function finalBounceRecipients(data: OutboundJob, err: unknown): Recipien
  * (they carry someone else's message) and not quarantine releases.
  */
 export function senderAuthForJob(job: OutboundJob, raw: Buffer): { senderAuth: SenderAuth } | Record<string, never> {
-  if (!job.senderUserId || job.ruleRedirect || job.quarantineReleaseId) return {};
-  if (isRuleForwardedAlready(raw)) return {};
+  if (!job.senderUserId || job.ruleRedirect || job.ruleForward || job.quarantineReleaseId) return {};
+  if (isRuleForwardedAlready(raw)) return {};   // rule forwards queued before 9.4 carry no job flag
   return { senderAuth: { authenticatedSender: job.from } };
+}
+
+/**
+ * Pure (9.4 review): a user's held message — scheduled send, undo-send hold or
+ * JMAP FUTURERELEASE (a delayed job) — whose sender rights are checked again
+ * when it is sent. Rule forwards and quarantine releases carry someone else's
+ * message and are never held.
+ */
+export function needsSendTimeSenderCheck(job: { data: OutboundJob; opts: { delay?: number | undefined } }): boolean {
+  const d = job.data;
+  return !!d.senderUserId && !isRuleForwardJob(d) && !d.quarantineReleaseId && (job.opts.delay ?? 0) > 0;
+}
+
+/** Pure: is this job a rule / admin forward or redirect (its loop header is genuine)? */
+export function isRuleForwardJob(job: Pick<OutboundJob, 'ruleForward' | 'ruleRedirect'>): boolean {
+  return job.ruleForward === true || job.ruleRedirect === true;
 }
 
 /**
  * The buffer a queue job stores locally. Authentication-Results fields with
  * our authserv-id are removed (RFC 8601 §5) for every producer — REST/MWA,
  * JMAP, EAS, SMTP submission and rule forwards — so a local user cannot hand a
- * colleague a forged `dmarc=pass`. Exception: a BCP quarantine release
- * re-injects a message that carries our own genuine inbound verdict.
+ * colleague a forged `dmarc=pass`; so are all internal X-CoreMail-* headers
+ * (a rule forward keeps its genuine loop header). Exception: a BCP quarantine
+ * release re-injects a message that carries our own genuine inbound verdict.
  */
 export async function localDeliveryBuffer(
   raw: Buffer,
-  job: Pick<OutboundJob, 'quarantineReleaseId'>,
-  strip: (raw: Buffer) => Promise<Buffer> = (r) => stripForLocalDelivery(r),
+  job: Pick<OutboundJob, 'quarantineReleaseId' | 'ruleForward' | 'ruleRedirect'>,
+  strip: (raw: Buffer, keepHeaders: readonly string[]) => Promise<Buffer> = (r, keep) => stripForLocalDelivery(r, [], keep),
 ): Promise<Buffer> {
-  return job.quarantineReleaseId ? raw : strip(raw);
+  if (job.quarantineReleaseId) return raw;
+  return strip(raw, isRuleForwardJob(job) ? [RULE_FORWARDED_HEADER] : []);
 }
 
 // ── Retry schedule + expiry ───────────────────────────────────────────────────
@@ -714,6 +736,16 @@ export function startOutboundWorker(): Worker<OutboundJob> {
         log.debug({ jobId: job.id }, 'RFC 5322 buffer decoded from base64 raw data');
       } else {
         throw new UnrecoverableError('OutboundJob without message and rawMessage — invalid job');
+      }
+
+      // 9.4 review: a held message (scheduled send, undo hold, FUTURERELEASE) is
+      // sent only while its sender still has the rights it was queued with.
+      if (needsSendTimeSenderCheck(job)) {
+        const refused = await refuseRevokedSender(job, buffer, { ...defaultSendTimeSenderDeps, bounce: defaultOutboundDeps.bounce, hostname: defaultOutboundDeps.hostname });
+        if (refused) {
+          log.warn({ jobId: job.id, from, userId: senderUserId, reason: refused.message }, 'Held message not sent — sender rights revoked');
+          throw refused;
+        }
       }
 
       // 9.4: send as / on behalf of a Shared Mailbox → audit + its Sent copy

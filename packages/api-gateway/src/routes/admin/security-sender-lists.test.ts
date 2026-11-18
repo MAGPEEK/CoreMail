@@ -16,7 +16,7 @@ let lists: Row[] = [];
 let security: Row = {};
 const audits: Row[] = [];
 let seq = 0;
-const DOMAINS = [{ id: 'd1', name: 'corp.test' }];
+const DOMAINS = [{ id: 'd1', name: 'corp.test' }, { id: 'd2', name: 'bücher.example' }];
 const MAILBOXES = [{ id: 'u1', email: 'bob@corp.test' }];
 
 const matches = (row: Row, where: Row = {}): boolean => Object.entries(where).every(([k, v]) => {
@@ -33,10 +33,12 @@ installFakePrisma({
       return applySelect({ id, email: `${id}@ex.com`, role: id.replace(/^actor-/, ''), active: true }, q.select);
     },
     findMany: (a) => MAILBOXES.filter((m) => matches(m, (a as { where: Row }).where)),
+    findFirst: (a) => applySelect(MAILBOXES.find((m) => matches(m, (a as { where: Row }).where)) ?? null, (a as { select?: Row }).select),
   },
   domain: {
     findUnique: (a) => DOMAINS.find((d) => d.name === (a as { where: Row }).where['name']) ?? null,
     findMany: (a) => DOMAINS.filter((d) => matches(d, (a as { where: Row }).where)),
+    findFirst: (a) => DOMAINS.find((d) => matches(d, (a as { where: Row }).where)) ?? null,
   },
   blacklist: {
     findMany: (a) => lists.filter((r) => matches(r, (a as { where: Row }).where)),
@@ -178,4 +180,27 @@ test('spoofing: PUT validates entries, saves normalised lists and audits the dif
     localSpoofAction: { from: '"policy"', to: '"reject"' },
     localSpoofAllow: { from: '[]', to: '["203.0.113.7","mailer.example"]' },
   });
+});
+
+test('9.4 review IDN: entries are stored as A-label, both spellings are one entry, an IDN domain target is found', async () => {
+  const c = await call('POST', '/sender-lists', undefined, { listType: 'BLOCK', scope: 'GLOBAL', patternType: 'EXACT', pattern: 'Spam@Bücher.Example' });
+  assert.equal(c.status, 201);
+  assert.equal(((await c.json()) as Row)['pattern'], 'spam@xn--bcher-kva.example');
+  const dup = await call('POST', '/sender-lists', undefined, { listType: 'BLOCK', scope: 'GLOBAL', patternType: 'EXACT', pattern: 'spam@xn--bcher-kva.example' });
+  assert.equal(dup.status, 409, 'the punycode spelling is the same entry');
+  const wild = await call('POST', '/sender-lists', undefined, { scope: 'DOMAIN', target: 'xn--bcher-kva.example', patternType: 'WILDCARD', pattern: '*@Bücher.example' });
+  assert.equal(wild.status, 201, 'the domain stored as U-label is found by its A-label');
+  const row = (await wild.json()) as Row;
+  assert.equal(row['scopeId'], 'd2');
+  assert.equal(row['pattern'], '*@xn--bcher-kva.example');
+});
+
+test('9.4 review IDN: a domain that is no valid IDN is refused with 400 (globs stay allowed)', async () => {
+  for (const pattern of ['spam@xn--bücher.example', 'spam@\u0301bc.example']) {
+    const r = await call('POST', '/sender-lists', undefined, { listType: 'BLOCK', scope: 'GLOBAL', patternType: 'EXACT', pattern });
+    assert.equal(r.status, 400, pattern);
+    assert.match(String(((await r.json()) as Row)['error']), /internationalized domain/);
+  }
+  const glob = await call('POST', '/sender-lists', undefined, { listType: 'BLOCK', scope: 'GLOBAL', patternType: 'WILDCARD', pattern: '*@*bücher*' });
+  assert.equal(glob.status, 201, 'a glob label is matched as written');
 });

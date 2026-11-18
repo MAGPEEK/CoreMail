@@ -11,7 +11,8 @@
     "./mime": "./dist/mime/index.js",
     "./auth": "./dist/auth/index.js",
     "./auth/testing": "./dist/auth/testing.js",
-    "./queue-options": "./dist/queue-options.js"
+    "./queue-options": "./dist/queue-options.js",
+    "./idn": "./dist/idn.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
