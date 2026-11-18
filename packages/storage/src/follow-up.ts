@@ -113,6 +113,21 @@ export function followUpAfterKeywords(row: FollowUpRow, nextFlags: readonly stri
   return followUpColumns(normalizeFollowUp({ status: 'none' }, new Date()));
 }
 
+/**
+ * Bulk form of {@link followUpAfterKeywords} for one keyword list written to many
+ * rows (message-store touchMessages): the stored status that changes (`from`, a
+ * Prisma filter on flagStatus) and its new columns. The outcome only depends on
+ * the stored status, so one `UPDATE … WHERE flagStatus …` keeps every row in step
+ * without reading them.
+ */
+export function followUpBulkAfterKeywords(
+  nextFlags: readonly string[],
+): { from: { not: 'flagged' } | 'flagged'; data: Partial<FollowUpColumns> } {
+  return nextFlags.includes(FLAGGED_KEYWORD)
+    ? { from: { not: 'flagged' }, data: { flagStatus: 'flagged', flagCompletedAt: null } }
+    : { from: 'flagged', data: followUpColumns(normalizeFollowUp({ status: 'none' }, new Date())) };
+}
+
 /** Follow-up columns of a newly created row whose keywords include `\Flagged`. */
 export function followUpForNewRow(data: { flags?: unknown; flagStatus?: unknown }): Partial<FollowUpColumns> {
   if (data.flagStatus !== undefined) return {};

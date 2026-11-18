@@ -1110,6 +1110,9 @@ model ResourceCalendar {
   resource   ResourceMailbox  @relation(fields: [resourceId], references: [id], onDelete: Cascade)
   resourceId String           @unique
   bookings   ResourceBooking[]
+  // 9.4: incremented under the row lock by every booking write (lockResourceCalendar) —
+  // serialises conflict check + booking per resource, so a slot is booked only once
+  bookingSeq Int              @default(0)
   createdAt  DateTime         @default(now())
 
   @@map("resource_calendars")

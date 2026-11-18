@@ -29,6 +29,13 @@ installFakePrisma({
     findMany: () => tasks.map((t) => ({ ...t })),
     create: (a) => { const row = { id: `t${++seq}`, createdAt: new Date(), ...(a as { data: Row }).data }; tasks.push(row); return row; },
     update: (a) => { const { where, data } = a as { where: Row; data: Row }; const row = tasks.find((t) => t['id'] === where['id'])!; Object.assign(row, data); return { ...row }; },
+    updateMany: (a) => {
+      const { where, data } = a as { where: Row & { status?: { not: string } }; data: Row };
+      const rows = tasks.filter((t) => t['id'] === where['id'] && t['userId'] === where['userId']
+        && (!where.status || t['status'] !== where.status.not));
+      for (const row of rows) Object.assign(row, data);
+      return { count: rows.length };
+    },
   },
   mailbox: {
     findFirst: () => ({ id: 'mb1' }),
@@ -115,6 +122,27 @@ test('tasks: completing a recurring task creates the next occurrence and closes 
   assert.equal(done.json.next.dueDate, '2026-03-13T00:00:00.000Z');
   assert.equal(done.json.next.status, 'NOT_STARTED');
   assert.equal(done.json.next.rrule, 'FREQ=WEEKLY;BYDAY=FR');
+});
+
+test('tasks (review): completing a recurring task twice at once creates the next task once', async () => {
+  const r = await call('POST', '/tasks', { subject: 'Monatsabschluss', dueDate: '2026-03-31T00:00:00.000Z', rrule: 'FREQ=MONTHLY;BYMONTHDAY=-1' });
+  const before = tasks.filter((t) => t['subject'] === 'Monatsabschluss').length;
+  const results = await Promise.all([
+    call('PUT', `/tasks/${r.json.id}`, { status: 'COMPLETED' }),
+    call('PUT', `/tasks/${r.json.id}`, { percentComplete: 100 }),
+  ]);
+  assert.deepEqual(results.map((x) => x.status), [200, 200]);
+  assert.equal(results.filter((x) => x.json.next).length, 1);
+  assert.equal(tasks.filter((t) => t['subject'] === 'Monatsabschluss').length, before + 1);
+  // completing the closed occurrence again creates nothing
+  assert.equal((await call('PUT', `/tasks/${r.json.id}`, { status: 'COMPLETED' })).json.next, undefined);
+});
+
+test('tasks (review): a task repeats at most daily; RRULE parts are validated', async () => {
+  for (const rrule of ['FREQ=SECONDLY', 'FREQ=HOURLY;INTERVAL=1', 'FREQ=DAILY;X', 'FREQ=DAILY;COUNT=3\nX:1']) {
+    assert.equal((await call('POST', '/tasks', { subject: 'x', rrule })).status, 400, rrule);
+  }
+  assert.equal((await call('POST', '/tasks', { subject: 'ok', rrule: 'RRULE:FREQ=WEEKLY;BYDAY=MO,FR;UNTIL=20261231T000000Z' })).status, 201);
 });
 
 test('follow-up: flag with due date sets \\Flagged; complete clears it; the list derives legacy rows', async () => {

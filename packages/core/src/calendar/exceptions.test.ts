@@ -86,6 +86,21 @@ test('all-day series: EXDATE and RECURRENCE-ID as dates', () => {
   assert.match(ov, /RECURRENCE-ID;VALUE=DATE:20260709/);
 });
 
+test('review: floating series keep floating EXDATE / RECURRENCE-ID; UTC series stay UTC', () => {
+  const floating = [
+    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//test//EN',
+    'BEGIN:VEVENT', 'UID:float@test', 'DTSTAMP:20260101T000000Z', 'DTSTART:20260601T090000', 'DTEND:20260601T100000',
+    'RRULE:FREQ=DAILY;COUNT=3', 'SUMMARY:Float', 'END:VEVENT', 'END:VCALENDAR', '',
+  ].join(CRLF);
+  const ex = excludeOccurrence(floating, d('2026-06-02T09:00:00Z'))!;
+  assert.match(ex, /\r\nEXDATE:20260602T090000\r\n/);
+  const ov = upsertOccurrence(floating, d('2026-06-03T09:00:00Z'), { summary: 'x' })!;
+  assert.match(ov, /\r\nRECURRENCE-ID:20260603T090000\r\n/);
+  assert.equal(isSeriesOccurrence(ex, d('2026-06-02T09:00:00Z')), false, 'the floating EXDATE removes the instance');
+  const utc = buildVCalendar({ uid: 'u', summary: 'u', start: d('2026-06-01T09:00:00Z'), end: d('2026-06-01T10:00:00Z'), rrule: 'FREQ=DAILY;COUNT=3' });
+  assert.match(excludeOccurrence(utc, d('2026-06-02T09:00:00Z'))!, /EXDATE:20260602T090000Z/);
+});
+
 test('show-as and reminders: build, parse, patch (TRANSP + busy status, VALARM display/e-mail)', () => {
   const ics = buildVCalendar({
     uid: 'u', summary: 'Fokuszeit', start: d('2026-01-05T08:00:00Z'), end: d('2026-01-05T10:00:00Z'),

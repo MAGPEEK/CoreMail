@@ -8,7 +8,7 @@
  * window, approval) — the same ones the mail path (smtp-server
  * handlers/resource-booking.ts) applies to invitations from other clients.
  */
-import { prisma } from '@coremail/storage';
+import { prisma, lockResourceCalendar } from '@coremail/storage';
 import { expandStoredEvent, overlaps } from '@coremail/core/recurrence';
 import { mergeBusy, type BusyInterval } from '@coremail/core/free-busy';
 
@@ -63,6 +63,9 @@ export interface BookingRow {
   icalData: string;
 }
 
+/** Pure: does the calendar data carry a recurrence rule (RRULE line)? */
+const hasRrule = (icalData: string): boolean => /\nRRULE[:;]/i.test(icalData);
+
 /** Pure: busy intervals of a room's bookings in [ws, we) — accepted and tentative only, recurring ones expanded. */
 export function bookingIntervals(bookings: readonly BookingRow[], ws: Date, we: Date, excludeUid?: string): BusyInterval[] {
   const out: BusyInterval[] = [];
@@ -71,7 +74,7 @@ export function bookingIntervals(bookings: readonly BookingRow[], ws: Date, we: 
     const status = b.status.toUpperCase();
     if (status !== 'ACCEPTED' && status !== 'TENTATIVE') continue;
     const instances = expandStoredEvent(
-      { dtStart: b.dtStart, dtEnd: b.dtEnd, allDay: false, recurring: /\nRRULE[:;]/i.test(b.icalData), rrule: null, icalData: b.icalData },
+      { dtStart: b.dtStart, dtEnd: b.dtEnd, allDay: false, recurring: hasRrule(b.icalData), rrule: null, icalData: b.icalData },
       ws, we,
     );
     for (const i of instances) out.push({ start: i.dtStart, end: i.dtEnd, kind: status === 'TENTATIVE' ? 'tentative' : 'busy' });
@@ -101,8 +104,10 @@ export interface RoomAvailability {
   busy: Array<{ start: string; end: string; kind: BusyInterval['kind'] }>;
 }
 
-async function bookingsOf(calendarIds: string[], ws: Date, we: Date): Promise<Map<string, BookingRow[]>> {
-  const rows = calendarIds.length === 0 ? [] : await prisma.resourceBooking.findMany({
+type BookingDb = Pick<typeof prisma, 'resourceBooking'>;
+
+async function bookingsOf(db: BookingDb, calendarIds: string[], ws: Date, we: Date): Promise<Map<string, BookingRow[]>> {
+  const rows = calendarIds.length === 0 ? [] : await db.resourceBooking.findMany({
     where: { calendarId: { in: calendarIds }, dtStart: { lt: we } },
     select: { calendarId: true, uid: true, status: true, dtStart: true, dtEnd: true, icalData: true },
   });
@@ -113,12 +118,13 @@ async function bookingsOf(calendarIds: string[], ws: Date, we: Date): Promise<Ma
 
 /** Active rooms/resources of the user's domain with their availability in [start, end). */
 export async function listRooms(domainId: string | undefined, start: Date, end: Date, excludeUid?: string): Promise<RoomAvailability[]> {
+  if (!domainId) return []; // never list other domains' rooms
   const rooms = await prisma.resourceMailbox.findMany({
-    where: { active: true, ...(domainId ? { domainId } : {}) },
+    where: { active: true, domainId },
     select: ROOM_SELECT,
     orderBy: { displayName: 'asc' },
   });
-  const bookings = await bookingsOf(rooms.flatMap((r) => (r.calendar ? [r.calendar.id] : [])), start, end);
+  const bookings = await bookingsOf(prisma, rooms.flatMap((r) => (r.calendar ? [r.calendar.id] : [])), start, end);
   return rooms.map((r) => {
     const busy = bookingIntervals(r.calendar ? bookings.get(r.calendar.id) ?? [] : [], start, end, excludeUid);
     return {
@@ -156,7 +162,11 @@ const PARTSTAT: Record<RoomBookingStatus, BookedRoom['partstat']> = { ACCEPTED: 
 /**
  * Book (or re-check) the given rooms for a meeting; returns their attendee
  * entries. Unknown or foreign-domain addresses are ignored. The booking row is
- * keyed by the meeting UID per room, so saving again updates it.
+ * keyed by the meeting UID per room, so saving again updates it. Conflict check
+ * and write run in one transaction under the room's booking lock
+ * (lockResourceCalendar): of two concurrent bookings of the same slot exactly one
+ * gets the room. `meeting.icalData` must be the meeting as it will be stored — its
+ * DTSTART/RRULE/EXDATE/overrides decide which occurrences are checked.
  */
 export async function bookRooms(
   meeting: MeetingToBook,
@@ -164,32 +174,39 @@ export async function bookRooms(
   domainId: string | undefined,
   now = new Date(),
 ): Promise<BookedRoom[]> {
-  if (roomEmails.length === 0) return [];
+  // rooms belong to a domain: without one the user books none (never another domain's)
+  if (roomEmails.length === 0 || !domainId) return [];
   const rooms = await prisma.resourceMailbox.findMany({
-    where: { email: { in: roomEmails.map((e) => e.toLowerCase()) }, ...(domainId ? { domainId } : {}) },
+    where: { email: { in: roomEmails.map((e) => e.toLowerCase()) }, domainId },
     select: ROOM_SELECT,
   });
+  const recurring = meeting.rrule !== null || hasRrule(meeting.icalData);
   const windowEnd = (room: { bookingWindowDays: number }) => new Date(Math.max(meeting.dtEnd.getTime(), now.getTime() + room.bookingWindowDays * DAY_MS));
   const out: BookedRoom[] = [];
   for (const room of rooms) {
     if (!room.calendar) continue;
     const ws = meeting.dtStart;
     const we = windowEnd(room);
+    const calendarId = room.calendar.id;
     const instances = expandStoredEvent(
-      { dtStart: meeting.dtStart, dtEnd: meeting.dtEnd, allDay: meeting.allDay, recurring: meeting.rrule !== null, rrule: meeting.rrule, icalData: meeting.icalData },
+      { dtStart: meeting.dtStart, dtEnd: meeting.dtEnd, allDay: meeting.allDay, recurring, rrule: meeting.rrule, icalData: meeting.icalData },
       ws, we,
     ).slice(0, MAX_CHECKED_OCCURRENCES);
-    const bookings = (await bookingsOf([room.calendar.id], ws, we)).get(room.calendar.id) ?? [];
-    const busy = bookingIntervals(bookings, ws, we, meeting.uid);
-    const decision = decideRoomBooking(room, { start: meeting.dtStart, end: meeting.dtEnd, recurring: meeting.rrule !== null }, conflictsWith(instances, busy), now);
-    const data = {
-      summary: meeting.summary, organizer: meeting.organizer, dtStart: meeting.dtStart, dtEnd: meeting.dtEnd,
-      status: decision.status, icalData: meeting.icalData,
-    };
-    await prisma.resourceBooking.upsert({
-      where: { calendarId_uid: { calendarId: room.calendar.id, uid: meeting.uid } },
-      create: { calendarId: room.calendar.id, uid: meeting.uid, ...data },
-      update: data,
+    const decision = await prisma.$transaction(async (tx) => {
+      await lockResourceCalendar(tx, calendarId);
+      const bookings = (await bookingsOf(tx, [calendarId], ws, we)).get(calendarId) ?? [];
+      const busy = bookingIntervals(bookings, ws, we, meeting.uid);
+      const result = decideRoomBooking(room, { start: meeting.dtStart, end: meeting.dtEnd, recurring }, conflictsWith(instances, busy), now);
+      const data = {
+        summary: meeting.summary, organizer: meeting.organizer, dtStart: meeting.dtStart, dtEnd: meeting.dtEnd,
+        status: result.status, icalData: meeting.icalData,
+      };
+      await tx.resourceBooking.upsert({
+        where: { calendarId_uid: { calendarId, uid: meeting.uid } },
+        create: { calendarId, uid: meeting.uid, ...data },
+        update: data,
+      });
+      return result;
     });
     out.push({
       email: room.email, cn: room.displayName, cutype: room.resourceType === 'ROOM' ? 'ROOM' : 'RESOURCE',
@@ -198,6 +215,19 @@ export async function bookRooms(
     });
   }
   return out;
+}
+
+/**
+ * Store the meeting's new calendar data on its existing room bookings without a
+ * new decision — an occurrence was deleted, so its slot is free again; the rooms'
+ * answers stay.
+ */
+export async function refreshRoomBookings(uid: string, roomEmails: readonly string[], icalData: string): Promise<void> {
+  if (roomEmails.length === 0) return;
+  await prisma.resourceBooking.updateMany({
+    where: { uid, calendar: { resource: { email: { in: roomEmails.map((e) => e.toLowerCase()) } } } },
+    data: { icalData },
+  });
 }
 
 /** Remove the meeting's bookings of the given rooms (room removed from the meeting, meeting deleted). */

@@ -42,7 +42,7 @@ import type { MailboxChangeKind } from '@coremail/core/realtime';
 import { cachedReferencesColumn } from './references.js';
 import { recordMailboxChange } from './realtime/change-scope.js';
 import {
-  flagsForFollowUp, followUpAfterKeywords, followUpColumns, followUpForNewRow, normalizeFollowUp,
+  flagsForFollowUp, followUpAfterKeywords, followUpBulkAfterKeywords, followUpColumns, followUpForNewRow, normalizeFollowUp,
   type FollowUpState, type FollowUpStatus,
 } from './follow-up.js';
 
@@ -221,8 +221,16 @@ export async function touchMessages(
   opts: TouchOpts = {},
 ): Promise<Map<string, bigint>> {
   const result = new Map<string, bigint>();
+  // 9.4: a keyword list keeps the follow-up flag in step (one extra statement, no reads)
+  const followUp = Array.isArray(data.flags) ? followUpBulkAfterKeywords(data.flags as string[]) : null;
   for (const [mailboxId, group] of await byMailbox(tx, ids, opts, opts.where)) {
     const modSeq = await nextModSeq(tx, mailboxId);
+    if (followUp) {
+      await tx.message.updateMany({
+        where: { ...(opts.where ?? {}), id: { in: group.ids }, flagStatus: followUp.from },
+        data: followUp.data,
+      });
+    }
     await tx.message.updateMany({
       where: { ...(opts.where ?? {}), id: { in: group.ids } },
       data: { ...data, modSeq, changeKey: modSeq.toString() },
@@ -396,9 +404,11 @@ export async function moveMessages(
   if (ids.length === 0) return { mapping: [], modSeq: null };
   const src = await tx.message.findMany({
     where: { id: { in: ids }, NOT: { folderId: targetFolderId } },
-    select: { id: true, uid: true, folderId: true },
+    select: { id: true, uid: true, folderId: true, flags: true, flagStatus: true },
     orderBy: [{ uid: 'asc' }],
   });
+  // 9.4: new keywords with the move (JMAP, REST, mail rules) keep the follow-up flag in step
+  const newFlags = Array.isArray(opts.data?.flags) ? opts.data.flags as string[] : null;
   if (src.length === 0) return { mapping: [], modSeq: null };
   const targetMailboxId = opts.targetMailboxId ?? await mailboxOfFolder(tx, targetFolderId);
   const { firstUid, modSeq } = await allocate(tx, targetMailboxId, src.length);
@@ -411,10 +421,11 @@ export async function moveMessages(
     const newUid = firstUid + i;
     // Entering another mailbox is a creation from the target mailbox's point of view.
     const crossMailbox = mailboxByFolder.get(m.folderId) !== targetMailboxId;
+    const followUp = newFlags ? followUpAfterKeywords(m, newFlags) : null;
     await tx.message.update({
       where: { id: m.id },
       data: {
-        ...(opts.data ?? {}), folderId: targetFolderId, uid: newUid, modSeq, changeKey: modSeq.toString(),
+        ...(followUp ?? {}), ...(opts.data ?? {}), folderId: targetFolderId, uid: newUid, modSeq, changeKey: modSeq.toString(),
         ...(crossMailbox ? { createdModSeq: modSeq } : {}),
       },
     });

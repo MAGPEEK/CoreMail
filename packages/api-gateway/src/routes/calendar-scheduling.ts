@@ -8,9 +8,8 @@
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { prisma } from '@coremail/storage';
 import { mergeBusy, suggestSlots, type BusyInterval, type WorkingHours } from '@coremail/core/free-busy';
-import { busyForUser } from '../lib/calendar-busy.js';
+import { busyForUser, freeBusyDirectory } from '../lib/calendar-busy.js';
 import { listRooms } from '../lib/room-booking.js';
 import { loadPreferences } from '../lib/preferences-store.js';
 
@@ -58,7 +57,7 @@ calendarSchedulingRouter.post('/schedule-suggestions', async (req: Request, res:
   const callerId = req.apiUser!.userId;
 
   const emails = [...new Set([req.apiUser!.email.toLowerCase(), ...parsed.data.attendees.map((e) => e.toLowerCase())])];
-  const users = await prisma.user.findMany({ where: { email: { in: emails }, active: true }, select: { id: true, email: true } });
+  const users = await freeBusyDirectory(req.apiUser!, emails);
   const busy: BusyInterval[][] = [];
   const unknown: string[] = [];
   for (const email of emails) {

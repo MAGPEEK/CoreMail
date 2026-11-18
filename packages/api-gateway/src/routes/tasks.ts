@@ -31,7 +31,8 @@ const TaskSchema = z.object({
   reminder:          nullableDate,
   reminderByMail:    z.boolean().optional().default(false),
   isPrivate:         z.boolean().optional(),
-  rrule:             z.string().max(500).regex(/^(RRULE:)?FREQ=[A-Za-z0-9=;,:+-]+$/i, 'Invalid RRULE').nullable().optional(),
+  // a task repeats at most daily (the next task is created on completion)
+  rrule:             z.string().max(500).regex(/^(RRULE:)?FREQ=(DAILY|WEEKLY|MONTHLY|YEARLY)(;[A-Za-z]+=[A-Za-z0-9,:+-]+)*$/i, 'Invalid RRULE').nullable().optional(),
   totalWorkMinutes:  z.number().int().min(0).max(1_000_000).nullable().optional(),
   actualWorkMinutes: z.number().int().min(0).max(1_000_000).nullable().optional(),
   mileage:           text(500).optional(),
@@ -149,22 +150,31 @@ tasksRouter.put('/:id', async (req: Request, res: Response) => {
       })
     : null;
 
-  const updated = await prisma.task.update({
-    where: { id },
-    // only the fields that were sent (a one-field PUT must not rewrite the others)
-    data: { ...columns, ...(progressTouched ? progress : {}), ...(justCompleted && rrule ? { rrule: null } : {}) },
+  // only the fields that were sent (a one-field PUT must not rewrite the others)
+  const data = { ...columns, ...(progressTouched ? progress : {}), ...(justCompleted && rrule ? { rrule: null } : {}) };
+  if (!next) {
+    res.json(await prisma.task.update({ where: { id }, data }));
+    return;
+  }
+  // Completing a recurring occurrence creates the next one exactly once: the update
+  // only applies while the task is still open (a concurrent or repeated completion
+  // matches no row and creates nothing).
+  const { updated, created } = await prisma.$transaction(async (tx) => {
+    const won = await tx.task.updateMany({ where: { id, userId: task.userId, status: { not: 'COMPLETED' } }, data });
+    const row = await tx.task.findFirst({ where: { id, userId: task.userId } });
+    if (won.count === 0 || !row) return { updated: row, created: null };
+    const nextTask = await tx.task.create({
+      data: {
+        userId: task.userId, subject: row.subject, body: row.body, bodyHtml: row.bodyHtml,
+        priority: row.priority, reminderByMail: row.reminderByMail, isPrivate: row.isPrivate,
+        totalWorkMinutes: row.totalWorkMinutes, mileage: row.mileage, billingInfo: row.billingInfo,
+        companies: row.companies, status: 'NOT_STARTED', percentComplete: 0,
+        rrule: next.rrule, dueDate: next.dueDate, startDate: next.startDate, reminder: next.reminder,
+      },
+    });
+    return { updated: row, created: nextTask };
   });
-  const created = next
-    ? await prisma.task.create({
-        data: {
-          userId: task.userId, subject: updated.subject, body: updated.body, bodyHtml: updated.bodyHtml,
-          priority: updated.priority, reminderByMail: updated.reminderByMail, isPrivate: updated.isPrivate,
-          totalWorkMinutes: updated.totalWorkMinutes, mileage: updated.mileage, billingInfo: updated.billingInfo,
-          companies: updated.companies, status: 'NOT_STARTED', percentComplete: 0,
-          rrule: next.rrule, dueDate: next.dueDate, startDate: next.startDate, reminder: next.reminder,
-        },
-      })
-    : null;
+  if (!updated) { res.status(404).json({ error: 'Task not found' }); return; }
   res.json(created ? { ...updated, next: created } : updated);
 });
 

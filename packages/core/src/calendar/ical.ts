@@ -898,6 +898,14 @@ const stricterClass = (a: Classification, b: Classification): Classification => 
 const componentClass = (c: IcalComponent | null): Classification => normClass(c ? getProperty(c, 'CLASS')?.value : null);
 
 /**
+ * 9.4: classification of one occurrence as a grantee sees it — the stricter of the
+ * series and its override (an override never makes an occurrence more visible).
+ */
+export function stricterClassification(a: string | null | undefined, b: string | null | undefined): Classification {
+  return stricterClass(normClass(a), normClass(b));
+}
+
+/**
  * Properties a grantee may see of a PRIVATE component: the scheduling skeleton only.
  * Everything else — SUMMARY, DESCRIPTION, LOCATION, attendees, CONFERENCE, GEO,
  * STYLED-DESCRIPTION, RELATED-TO, IMAGE, URL, X-…, alarms — is dropped.

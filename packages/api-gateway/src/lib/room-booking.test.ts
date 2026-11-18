@@ -16,8 +16,10 @@ const ROOM = {
   active: true, autoAccept: true, autoDeclineConflict: true, allowRecurring: true, maxDurationMinutes: 240,
   bookingWindowDays: 180, requireApproval: false, calendar: { id: 'rc1' },
 };
+const locks: string[] = [];
 installFakePrisma({
   resourceMailbox: { findMany: async () => [ROOM] },
+  resourceCalendar: { update: async (a: unknown) => { locks.push((a as { where: { id: string } }).where.id); return { id: 'rc1' }; } },
   resourceBooking: {
     findMany: async () => bookings.map((b) => ({ ...b })),
     upsert: async (a: unknown) => {
@@ -85,4 +87,36 @@ test('bookRooms: books a free room (ROOM attendee, accepted), declines a weekly 
   const again = await bookRooms({ uid: 'm1', summary: 'Planung', organizer: 'alice@example.com', dtStart: d('2026-05-04T09:00:00Z'), dtEnd: d('2026-05-04T10:00:00Z'), allDay: false, rrule: null, icalData: first }, ['raum-a@example.com'], 'd1', now);
   assert.equal(again[0]!.partstat, 'ACCEPTED');
   assert.equal(bookings.filter((b) => b['uid'] === 'm1').length, 1);
+});
+
+test('bookRooms (review): two concurrent bookings of the same slot — exactly one gets the room', async () => {
+  const meeting = (uid: string) => ({
+    uid, summary: uid, organizer: 'alice@example.com', dtStart: d('2026-06-01T09:00:00Z'), dtEnd: d('2026-06-01T10:00:00Z'),
+    allDay: false, rrule: null, icalData: buildVCalendar({ uid, summary: uid, start: d('2026-06-01T09:00:00Z'), end: d('2026-06-01T10:00:00Z') }),
+  });
+  const [a, b] = await Promise.all([
+    bookRooms(meeting('race-a'), ['raum-a@example.com'], 'd1', now),
+    bookRooms(meeting('race-b'), ['raum-a@example.com'], 'd1', now),
+  ]);
+  assert.deepEqual([a[0]!.partstat, b[0]!.partstat].sort(), ['ACCEPTED', 'DECLINED']);
+  assert.equal(bookings.filter((x) => String(x['uid']).startsWith('race-') && x['status'] === 'ACCEPTED').length, 1);
+  assert.ok(locks.length >= 2 && locks.every((id) => id === 'rc1'), 'each booking took the room lock');
+});
+
+test('bookRooms (review): the occurrences of the stored calendar data are checked, not the row columns', async () => {
+  // weekly series whose calendar data says 09:00 — it collides in week two with the blocker
+  const stored = buildVCalendar({ uid: 'mv', summary: 'mv', start: d('2026-06-08T09:00:00Z'), end: d('2026-06-08T10:00:00Z'), rrule: 'FREQ=WEEKLY;COUNT=2' });
+  const blocker = await bookRooms({ uid: 'blk', summary: 'blk', organizer: 'bob@example.com', dtStart: d('2026-06-15T09:00:00Z'), dtEnd: d('2026-06-15T10:00:00Z'), allDay: false, rrule: null,
+    icalData: buildVCalendar({ uid: 'blk', summary: 'blk', start: d('2026-06-15T09:00:00Z'), end: d('2026-06-15T10:00:00Z') }) }, ['raum-a@example.com'], 'd1', now);
+  assert.equal(blocker[0]!.partstat, 'ACCEPTED');
+  // the row columns are absent (rrule null) — the RRULE in the data still makes it a series
+  const declined = await bookRooms({ uid: 'mv', summary: 'mv', organizer: 'alice@example.com', dtStart: d('2026-06-08T09:00:00Z'), dtEnd: d('2026-06-08T10:00:00Z'), allDay: false, rrule: null, icalData: stored }, ['raum-a@example.com'], 'd1', now);
+  assert.equal(declined[0]!.partstat, 'DECLINED');
+});
+
+test('bookRooms / listRooms (review): no domain → no rooms (never another domain\'s)', async () => {
+  const { listRooms } = await import('./room-booking.js');
+  const m = { uid: 'nd', summary: 'nd', organizer: 'x@example.com', dtStart: d('2026-06-20T09:00:00Z'), dtEnd: d('2026-06-20T10:00:00Z'), allDay: false, rrule: null, icalData: '' };
+  assert.deepEqual(await bookRooms(m, ['raum-a@example.com'], undefined, now), []);
+  assert.deepEqual(await listRooms(undefined, d('2026-06-20T00:00:00Z'), d('2026-06-21T00:00:00Z')), []);
 });

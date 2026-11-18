@@ -66,7 +66,10 @@ export function seriesDateProp(name: string, date: Date, master: IcalComponent, 
     const local = formatUtcDateTime(new Date(utcToWallClockMs(date.getTime(), zone))).slice(0, -1);
     return { name, params: { TZID: tzParam }, value: local };
   }
-  return { name, params: {}, value: formatUtcDateTime(date) };
+  // floating master (no Z, no TZID): read as UTC wall time, so written back floating too
+  const floating = !tzParam && !/Z$/i.test(start?.value.trim() ?? 'Z');
+  const utc = formatUtcDateTime(date);
+  return { name, params: {}, value: floating ? utc.slice(0, -1) : utc };
 }
 
 function overrideIndex(series: Series, recurrenceId: Date): number {

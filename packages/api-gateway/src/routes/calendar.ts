@@ -23,12 +23,13 @@ import {
 } from '../lib/imip.js';
 import {
   buildVCalendar, patchVEvent, normalizeAllDayRange, granteeMayWrite, parseCalendarObject, SHOW_AS_VALUES,
+  stricterClassification,
   type AlarmSpec, type ShowAs, type VEventFields,
 } from '@coremail/core/calendar';
 import { excludeOccurrence, isSeriesOccurrence, upsertOccurrence } from '@coremail/core/calendar-exceptions';
 import { expandStoredEvent } from '../lib/recurrence.js';
-import { busyForUser } from '../lib/calendar-busy.js';
-import { bookRooms, isRoomAttendee, releaseRooms, type BookedRoom } from '../lib/room-booking.js';
+import { busyForUser, freeBusyDirectory } from '../lib/calendar-busy.js';
+import { bookRooms, isRoomAttendee, refreshRoomBookings, releaseRooms, type BookedRoom } from '../lib/room-booking.js';
 import { calendarSchedulingRouter } from './calendar-scheduling.js';
 
 /**
@@ -94,7 +95,7 @@ interface OccurrenceView {
   dtStart: Date;
   dtEnd: Date;
   recurrenceId: string;
-  override: { summary: string; description: string; location: string; showAs: ShowAs } | null;
+  override: { summary: string; description: string; location: string; showAs: ShowAs; classification: string } | null;
 }
 
 /** 9.4: one occurrence of a stored series as it is now (moved/changed by its override, if any). */
@@ -753,10 +754,8 @@ calendarRouter.post('/freebusy', async (req: Request, res: Response) => {
   }
 
   // Email → user mapping
-  const users = await prisma.user.findMany({
-    where: { email: { in: parsed.data.userEmails.map((e) => e.toLowerCase()) }, active: true },
-    select: { id: true, email: true, displayName: true },
-  });
+  // 9.4 review: only addresses the caller may know (own domain's address list, shares)
+  const users = await freeBusyDirectory(req.apiUser!, parsed.data.userEmails);
   const usersByEmail = new Map(users.map((u) => [u.email.toLowerCase(), u]));
 
   const result: Array<{
@@ -845,6 +844,8 @@ calendarRouter.get('/events', async (req: Request, res: Response) => {
     expandStoredEvent(ev, start, end).map((inst) => ({
       ...ev,
       ...(inst.override ?? {}),
+      // masking below: an override is never less private than its series
+      classification: stricterClassification(ev.classification, inst.override?.classification),
       dtStart: inst.dtStart,
       dtEnd: inst.dtEnd,
       allDay: inst.allDay,
@@ -899,7 +900,10 @@ calendarRouter.get('/events/:id', async (req: Request, res: Response) => {
   if (occurrence) {
     const view = isSeriesOccurrence(icalData, occurrence) ? occurrenceView(stored, occurrence) : null;
     if (!view) { res.status(404).json({ error: 'Occurrence not found' }); return; }
-    event = { ...event, ...(view.override ?? {}), dtStart: view.dtStart, dtEnd: view.dtEnd, recurrenceId: view.recurrenceId };
+    event = {
+      ...event, ...(view.override ?? {}), dtStart: view.dtStart, dtEnd: view.dtEnd, recurrenceId: view.recurrenceId,
+      classification: stricterClassification(master.classification, view.override?.classification),
+    };
   }
   const reminder = access.isOwner ? eventReminder(icalData) : null;
   const extras = {
@@ -909,7 +913,7 @@ calendarRouter.get('/events/:id', async (req: Request, res: Response) => {
 
   // Masking for PRIVATE/CONFIDENTIAL for grantees (incl. a private override of a public series)
   if (!access.isOwner) {
-    const cls = (stored.classification ?? 'PUBLIC').toUpperCase();
+    const cls = (event.classification ?? 'PUBLIC').toUpperCase();
     if (cls === 'CONFIDENTIAL') {
       res.status(404).json({ error: 'Event not found' });
       return;
@@ -1087,7 +1091,7 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
     return;
   }
   if (occurrence) {
-    await updateOccurrence(res, event, occurrence, parsed.data);
+    await updateOccurrence(res, event, occurrence, parsed.data, req.apiUser!);
     return;
   }
 
@@ -1147,16 +1151,6 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
   const wantedRooms = parsed.data.rooms?.map((e) => e.toLowerCase()) ?? stored.rooms.map(roomEmail);
   const roomsTouched = (stored.rooms.length > 0 || wantedRooms.length > 0)
     && (parsed.data.rooms !== undefined || datesTouched || rrule !== undefined);
-  let roomJson: Array<Record<string, unknown> | BookedRoom> = stored.rooms;
-  if (roomsTouched) {
-    await releaseRooms(event.uid, stored.rooms.map(roomEmail).filter((e) => !wantedRooms.includes(e)));
-    roomJson = await bookRooms(
-      { uid: event.uid, summary: summary ?? event.summary, organizer: event.organizer ?? req.apiUser!.email,
-        dtStart: range.start, dtEnd: range.end, allDay: effectiveAllDay, rrule: effectiveRrule, icalData: event.icalData },
-      wantedRooms, req.apiUser!.domainId,
-    );
-  }
-  const newAttendeesJson = [...newPeople, ...roomJson];
   const attendeesChanged = attendees !== undefined || roomsTouched;
 
   // 9.4: reminder (owner only — alarms are the calendar owner's) and show-as
@@ -1179,12 +1173,14 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
     ...(datesTouched ? { start: range.start, end: range.end, allDay: effectiveAllDay } : {}),
     ...(rrule !== undefined ? { rrule: effectiveRrule } : {}),
     ...(classification !== undefined ? { classification: effectiveClass } : {}),
-    ...(attendeesChanged ? { attendees: newAttendeesJson as Array<{ email: string; cn?: string; partstat?: string }> } : {}),
     ...(parsed.data.showAs !== undefined ? { showAs: parsed.data.showAs } : {}),
     ...(alarm !== undefined ? { alarm } : {}),
     sequence: newSequence,
   };
-  const icalData = patchVEvent(event.icalData, patch) ?? buildVCalendar({
+  type AttendeeList = Array<{ email: string; cn?: string; partstat?: string }>;
+  const icalWith = (list: AttendeeList): string => patchVEvent(event.icalData, {
+    ...patch, ...(attendeesChanged ? { attendees: list } : {}),
+  }) ?? buildVCalendar({
     uid: event.uid,
     summary: summary ?? event.summary,
     description: description ?? event.description,
@@ -1196,10 +1192,25 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
     sequence: newSequence,
     ...(effectiveRrule ? { rrule: effectiveRrule } : {}),
     ...(event.organizer ? { organizer: { email: event.organizer } } : {}),
-    attendees: newAttendeesJson as Array<{ email: string; cn?: string; partstat?: string }>,
+    attendees: list,
     ...(parsed.data.showAs !== undefined ? { showAs: parsed.data.showAs } : {}),
     ...(alarm ? { alarm } : {}),
   });
+
+  // Rooms are checked against the meeting as it will be stored (new DTSTART/RRULE),
+  // not the old calendar data.
+  let roomJson: Array<Record<string, unknown> | BookedRoom> = stored.rooms;
+  if (roomsTouched) {
+    await releaseRooms(event.uid, stored.rooms.map(roomEmail).filter((e) => !wantedRooms.includes(e)));
+    roomJson = await bookRooms(
+      { uid: event.uid, summary: summary ?? event.summary, organizer: event.organizer ?? req.apiUser!.email,
+        dtStart: range.start, dtEnd: range.end, allDay: effectiveAllDay, rrule: effectiveRrule,
+        icalData: icalWith([...newPeople, ...stored.rooms] as AttendeeList) },
+      wantedRooms, req.apiUser!.domainId,
+    );
+  }
+  const newAttendeesJson = [...newPeople, ...roomJson];
+  const icalData = icalWith(newAttendeesJson as AttendeeList);
 
   const updated = await prisma.calendarEvent.update({
     where: { id },
@@ -1220,20 +1231,9 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
     },
   });
 
-  // v3.18.25 A5: send REQUEST update to attendees (with incremented SEQUENCE)
-  const finalAttendees = Array.isArray(updated.attendees) ? updated.attendees : [];
-  if (willSendUpdate && finalAttendees.length > 0 && event.organizer) {
-    const organizerUser = await prisma.user.findFirst({
-      where: { email: event.organizer },
-      select: { displayName: true },
-    });
-    void sendInvitations({
-      ev: updated,
-      organizerEmail: event.organizer,
-      organizerName: organizerUser?.displayName ?? event.organizer,
-      method: 'REQUEST',
-    });
-  }
+  // v3.18.25 A5: send REQUEST update to the people (with incremented SEQUENCE); a
+  // meeting with rooms only sends nothing (rooms are booked directly)
+  if (willSendUpdate) void notifyAttendees(updated, 'REQUEST');
 
   announceCalendarChange([event.calendarId], { action: 'update', ids: [id] });
   res.json(updated);
@@ -1264,6 +1264,8 @@ calendarRouter.delete('/events/:id', async (req: Request, res: Response) => {
     const icalData = view ? excludeOccurrence(event.icalData, occurrence) : null;
     if (!view || !icalData) { res.status(404).json({ error: 'Occurrence not found' }); return; }
     const updated = await prisma.calendarEvent.update({ where: { id }, data: { icalData, sequence: event.sequence + 1 } });
+    // the rooms' bookings get the EXDATE too, so the occurrence's slot is free again
+    await refreshRoomBookings(event.uid, splitAttendees(event.attendees).rooms.map(roomEmail), icalData);
     announceCalendarChange([event.calendarId], { action: 'update', ids: [id] });
     void notifyAttendees(updated, 'CANCEL', { ...occurrenceFields(view, event), recurrenceId: occurrence });
     res.json({ ok: true });
@@ -1299,7 +1301,9 @@ async function notifyAttendees(
   occurrence?: Pick<StoredEvent, 'summary' | 'description' | 'location' | 'dtStart' | 'dtEnd'> & { recurrenceId: Date },
 ): Promise<void> {
   if (!ev.organizer || splitAttendees(ev.attendees).people.length === 0) return;
-  const organizerUser = await prisma.user.findFirst({ where: { email: ev.organizer }, select: { displayName: true } });
+  // called fire-and-forget: a failed lookup must not become an unhandled rejection
+  const organizerUser = await prisma.user.findFirst({ where: { email: ev.organizer }, select: { displayName: true } })
+    .catch(() => null);
   await sendInvitations({
     ev: occurrence ? { ...ev, ...occurrence } : ev,
     organizerEmail: ev.organizer,
@@ -1321,15 +1325,39 @@ function occurrenceFields(view: OccurrenceView, master: StoredEvent) {
 }
 
 /**
+ * 9.4: the series' rooms after one occurrence moved — booked again against the
+ * new calendar data (the moved occurrence may now collide); returns the data with
+ * the rooms' answers on the master, null when the meeting has no rooms.
+ */
+async function recheckRooms(
+  event: StoredEvent,
+  icalData: string,
+  user: { email: string; domainId?: string },
+): Promise<{ icalData: string; attendees: Array<Record<string, unknown>> } | null> {
+  const stored = splitAttendees(event.attendees);
+  if (stored.rooms.length === 0) return null;
+  const roomJson = await bookRooms(
+    { uid: event.uid, summary: event.summary, organizer: event.organizer ?? user.email,
+      dtStart: event.dtStart, dtEnd: event.dtEnd, allDay: event.allDay, rrule: event.rrule, icalData },
+    stored.rooms.map(roomEmail), user.domainId,
+  );
+  const attendees = [...stored.people, ...roomJson] as Array<Record<string, unknown>>;
+  const patched = patchVEvent(icalData, { attendees: attendees as Array<{ email: string; cn?: string; partstat?: string }> });
+  return { icalData: patched ?? icalData, attendees };
+}
+
+/**
  * 9.4: PUT ?occurrence= — change one occurrence (override with RECURRENCE-ID).
- * Text, time, show-as and classification of the occurrence; recurrence, attendees,
- * rooms and the reminder belong to the series and are not changed here.
+ * Text, time, show-as and classification of the occurrence; recurrence, attendees
+ * and the reminder belong to the series and are not changed here. A moved
+ * occurrence re-checks the series' rooms.
  */
 async function updateOccurrence(
   res: Response,
   event: StoredEvent,
   occurrence: Date,
   data: { [K in keyof z.infer<typeof EventSchema>]?: z.infer<typeof EventSchema>[K] | undefined },
+  user: { email: string; domainId?: string },
 ): Promise<void> {
   const view = isSeriesOccurrence(event.icalData, occurrence) ? occurrenceView(event, occurrence) : null;
   if (!view) { res.status(404).json({ error: 'Occurrence not found' }); return; }
@@ -1351,7 +1379,11 @@ async function updateOccurrence(
     sequence,
   });
   if (!icalData) { res.status(404).json({ error: 'Occurrence not found' }); return; }
-  const updated = await prisma.calendarEvent.update({ where: { id: event.id }, data: { icalData, sequence } });
+  const rooms = datesTouched ? await recheckRooms(event, icalData, user) : null;
+  const updated = await prisma.calendarEvent.update({
+    where: { id: event.id },
+    data: { icalData: rooms?.icalData ?? icalData, sequence, ...(rooms ? { attendees: rooms.attendees as object[] } : {}) },
+  });
   const changed = occurrenceView(updated, occurrence) ?? view;
   announceCalendarChange([event.calendarId], { action: 'update', ids: [event.id] });
   void notifyAttendees(updated, 'REQUEST', { ...occurrenceFields(changed, updated), recurrenceId: occurrence });

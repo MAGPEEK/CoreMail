@@ -229,4 +229,20 @@ export async function run(state) {
     assert(tooLong.status === 400, `window > 31 days → ${tooLong.status}`);
     return `${rooms.json.length} rooms, ${s.json.suggestions.length} suggestions`;
   });
+
+  await check('rest (review): free/busy finds no address outside the own address list; a repeated completion creates no second task', async () => {
+    const fb = await http('POST', '/api/v1/calendar/freebusy', { token: tok, body: {
+      userEmails: ['nobody-e2e@unrelated.invalid'], start: '2026-12-07T00:00:00.000Z', end: '2026-12-08T00:00:00.000Z',
+    } });
+    assert(fb.status === 200 && fb.json.users[0].found === false && fb.json.users[0].visible === false, fb.text);
+    const r = await http('POST', '/api/v1/tasks', { token: tok, body: { subject: 'E2E Tagesaufgabe', dueDate: '2026-12-07T00:00:00.000Z', rrule: 'FREQ=DAILY;COUNT=5' } });
+    const [a, b] = await Promise.all([
+      http('PUT', `/api/v1/tasks/${r.json.id}`, { token: tok, body: { status: 'COMPLETED' } }),
+      http('PUT', `/api/v1/tasks/${r.json.id}`, { token: tok, body: { status: 'COMPLETED' } }),
+    ]);
+    const created = [a, b].filter((x) => x.json?.next).map((x) => x.json.next.id);
+    assert(a.status === 200 && b.status === 200 && created.length === 1, `${a.status}/${b.status}, next tasks: ${created.length}`);
+    for (const id of [r.json.id, ...created]) await http('DELETE', `/api/v1/tasks/${id}`, { token: tok });
+    return 'not found; one next task';
+  });
 }

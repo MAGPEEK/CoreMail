@@ -5,8 +5,9 @@
  * access the result is `visible: false` (unknown, not "free").
  * 9.4: "Anzeigen als" — FREE events do not block, TENTATIVE/OOF are reported as such.
  */
-import { prisma } from '@coremail/storage';
+import { prisma, GAL_VISIBLE_WHERE } from '@coremail/storage';
 import { expandStoredEvent } from '@coremail/core/recurrence';
+import { stricterClassification } from '@coremail/core/calendar';
 import { busyKindOf, type BusyKind } from '@coremail/core/free-busy';
 
 export interface BusySlot {
@@ -20,6 +21,31 @@ export interface BusySlot {
 export interface UserBusy {
   visible: boolean;
   slots: BusySlot[];
+}
+
+/**
+ * 9.4 review: users the caller may look up for free/busy by address — no directory
+ * enumeration beyond the address list: the caller, active users of the caller's
+ * domain that are shown in the address list, and users who shared a calendar with
+ * the caller. Anyone else is reported as not found.
+ */
+export async function freeBusyDirectory(
+  caller: { userId: string; domainId?: string | undefined },
+  emails: readonly string[],
+): Promise<Array<{ id: string; email: string; displayName: string | null }>> {
+  if (emails.length === 0) return [];
+  return prisma.user.findMany({
+    where: {
+      email: { in: emails.map((e) => e.toLowerCase()) },
+      active: true,
+      OR: [
+        { id: caller.userId },
+        ...(caller.domainId ? [{ domainId: caller.domainId, ...GAL_VISIBLE_WHERE }] : []),
+        { calendars: { some: { shares: { some: { granteeId: caller.userId } } } } },
+      ],
+    },
+    select: { id: true, email: true, displayName: true },
+  });
 }
 
 export async function busyForUser(callerId: string, targetUserId: string, start: Date, end: Date): Promise<UserBusy> {
@@ -44,10 +70,11 @@ export async function busyForUser(callerId: string, targetUserId: string, start:
 
   const slots: BusySlot[] = [];
   for (const e of events) {
-    const cls = (e.classification ?? 'PUBLIC').toUpperCase();
-    if (cls === 'CONFIDENTIAL' && !self) continue;
-    const detailed = self || cls === 'PUBLIC';
     for (const inst of expandStoredEvent(e, start, end)) {
+      // an override may be stricter than its series (a private occurrence of a public series)
+      const cls = stricterClassification(e.classification, inst.override?.classification);
+      if (cls === 'CONFIDENTIAL' && !self) continue;
+      const detailed = self || cls === 'PUBLIC';
       const kind = busyKindOf(inst.override?.showAs ?? e.showAs, e.status);
       if (!kind) continue;
       slots.push({

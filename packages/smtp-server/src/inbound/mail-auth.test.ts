@@ -24,6 +24,9 @@ const resources: Record<string, { id: string; autoAccept: boolean; requireApprov
 const none = async () => null;
 (globalThis as unknown as { __prisma: unknown }).__prisma = {
   $on: () => undefined,
+  // 9.4: bookings run in a transaction under the resource's booking lock
+  $transaction: async (fn: (tx: unknown) => unknown) => fn((globalThis as unknown as { __prisma: unknown }).__prisma),
+  resourceCalendar: { update: async ({ where }: { where: { id: string } }) => ({ id: where.id }) },
   smtpSettings: { findUnique: async () => ({ localDeliveryEnabled: true }) },
   domain: { findFirst: async ({ where }: { where: { name: string } }) => (where.name === 'corp.test' ? { id: 'd1' } : null) },
   user: { findFirst: none, findMany: async () => [] },

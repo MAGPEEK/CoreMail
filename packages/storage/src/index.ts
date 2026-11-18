@@ -48,3 +48,4 @@ export * from './submission-limits.js';
 export * from './importance.js';
 export * from './follow-up.js';
 export * from './task-rules.js';
+export * from './resource-lock.js';

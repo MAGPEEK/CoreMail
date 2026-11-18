@@ -58,7 +58,12 @@ the caller may see — the own calendars and calendars shared with the caller (u
 3.18.17). `FREE` events do not block; `TENTATIVE` (or `STATUS:TENTATIVE`) is reported as
 `tentative`, `OOF` as `oof`; `CANCELLED` events are left out. Users without access are returned
 with `visible: false` — their availability is unknown, not free. Private events of others show no
-subject, confidential ones are left out.
+subject, confidential ones are left out; an occurrence counts with the stricter classification of
+its series and its own override (a private occurrence of a public series is masked — in the event
+list too). Addresses are looked up only among the caller, the address-list users of the caller's
+domain (not hidden from the address list) and users who shared a calendar with the caller;
+anything else is `found: false` (no directory enumeration). The scheduling assistant uses the
+same lookup.
 
 ### Scheduling assistant
 
@@ -93,10 +98,17 @@ booked when the event is saved — no invitation mail goes to them. The resource
 | approval / no auto-accept | the booking stays pending (`NEEDS-ACTION`) |
 
 The answer is the room's attendee entry (`ACCEPTED`, `DECLINED` with the reason, or
-`NEEDS-ACTION`) and is shown next to the room. Moving the meeting or changing its recurrence
-re-checks the rooms; removing a room or deleting the meeting releases the booking. Invitations
-from other mail clients still reach rooms through the mail path (smtp-server
-`handlers/resource-booking.ts`, same rules). Moving a single occurrence does not re-check rooms.
+`NEEDS-ACTION`) and is shown next to the room. Moving the meeting, changing its recurrence or
+moving a single occurrence re-checks the rooms against the meeting as it is stored afterwards;
+deleting a single occurrence frees its slot (the booking gets the `EXDATE`, the answer stays);
+removing a room or deleting the meeting releases the booking. Invitations from other mail
+clients still reach rooms through the mail path (smtp-server `handlers/resource-booking.ts`,
+same rules).
+
+Conflict check and booking run in one transaction under the room's booking lock
+(storage `lockResourceCalendar`, row lock on `ResourceCalendar.bookingSeq`) on both paths: of
+two concurrent bookings of the same slot exactly one gets the room. Users only see and book the
+rooms of their own domain.
 
 ### Reminders
 

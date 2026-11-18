@@ -87,7 +87,10 @@ rich-text Notiz (`bodyHtml`, shown sanitised; `body` keeps the plain text).
 Completing a recurring task closes this occurrence (its rule is removed) and creates the next
 task: the next date of the rule after the current due date, start date and reminder keep their
 distance, `COUNT` is reduced by one; when the series is over no task follows. `PUT /tasks/:id`
-returns the new task as `next`.
+returns the new task as `next`. The completion is a conditional update (only while the task is
+still open) in one transaction with the creation, so two concurrent or repeated completions
+create the next task once. A task rule repeats at most daily (`FREQ=DAILY|WEEKLY|MONTHLY|YEARLY`
+with `NAME=value` parts); anything else is refused with 400.
 
 ### Not covered
 

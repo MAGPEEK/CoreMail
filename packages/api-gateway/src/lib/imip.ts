@@ -112,7 +112,8 @@ function buildIcs(ev: EventData, method: ICalCalendarMethod, status: ICalEventSt
     end: ev.dtEnd,
     ...(ev.allDay ? { allDay: true } : {}),
     ...(ev.rrule && !ev.recurrenceId ? { repeating: recurrenceLines(ev) } : {}),
-    ...(ev.recurrenceId ? { recurrenceId: ev.recurrenceId } : {}),
+    // all-day: RECURRENCE-ID is a DATE like DTSTART — added below (the generator writes a date-time)
+    ...(ev.recurrenceId && !ev.allDay ? { recurrenceId: ev.recurrenceId } : {}),
     summary: ev.summary,
     ...(ev.description ? { description: ev.description } : {}),
     ...(ev.location ? { location: ev.location } : {}),
@@ -144,7 +145,15 @@ function buildIcs(ev: EventData, method: ICalCalendarMethod, status: ICalEventSt
     });
   }
 
-  return cal.toString();
+  const ics = cal.toString();
+  return ev.recurrenceId && ev.allDay ? withDateRecurrenceId(ics, ev.recurrenceId) : ics;
+}
+
+const utcDate = (d: Date): string => `${d.getUTCFullYear()}${pad2(d.getUTCMonth() + 1)}${pad2(d.getUTCDate())}`;
+
+/** RECURRENCE-ID;VALUE=DATE of an all-day occurrence, added to the (single) VEVENT. */
+export function withDateRecurrenceId(ics: string, recurrenceId: Date): string {
+  return ics.replace(/\r?\nEND:VEVENT/, (end) => `\r\nRECURRENCE-ID;VALUE=DATE:${utcDate(recurrenceId)}${end}`);
 }
 
 const BUSY_STATUS: Record<NonNullable<EventData['showAs']>, ICalEventBusyStatus> = {
@@ -160,7 +169,7 @@ const pad2 = (n: number): string => String(n).padStart(2, '0');
 export function recurrenceLines(ev: Pick<EventData, 'rrule' | 'exdates' | 'allDay'>): string {
   const lines = [`RRULE:${(ev.rrule ?? '').replace(/^RRULE:/i, '')}`];
   for (const d of ev.exdates ?? []) {
-    const date = `${d.getUTCFullYear()}${pad2(d.getUTCMonth() + 1)}${pad2(d.getUTCDate())}`;
+    const date = utcDate(d);
     lines.push(ev.allDay
       ? `EXDATE;VALUE=DATE:${date}`
       : `EXDATE:${date}T${pad2(d.getUTCHours())}${pad2(d.getUTCMinutes())}${pad2(d.getUTCSeconds())}Z`);

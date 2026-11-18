@@ -28,6 +28,7 @@ function matchField(v: unknown, c: unknown): boolean {
   if (c && typeof c === 'object' && !Array.isArray(c) && !(c instanceof Date)) {
     const o = c as Row;
     if ('in' in o && !(o['in'] as unknown[]).includes(v)) return false;
+    if ('not' in o && v === o['not']) return false;
     if ('lt' in o && !(cmp(v, o['lt']) < 0)) return false;
     if ('lte' in o && !(cmp(v, o['lte']) <= 0)) return false;
     if ('gt' in o && !(cmp(v, o['gt']) > 0)) return false;
@@ -314,6 +315,37 @@ test('9.4 follow-up: a message created with \\Flagged (mail rule) is flagged; co
   const copy = byId(mapping[0]!.newId);
   assert.equal(copy['flagStatus'], 'none');
   assert.deepEqual(copy['flags'], []);
+});
+
+test('9.4 follow-up (review): keywords written with a move or touchMessages keep the flag in step', async () => {
+  const due = new Date('2026-03-06T00:00:00Z');
+  Object.assign(byId('a'), { flags: ['\\Flagged'], flagStatus: 'flagged', flagDueAt: due });
+  Object.assign(byId('b'), { flags: [], flagStatus: 'complete', flagCompletedAt: due });
+
+  // JMAP / REST move with new keywords (no \Flagged) clears a flagged message
+  await prisma.$transaction((tx) => store.moveMessages(tx, ['a'], 'archive', { data: { flags: ['\\Seen'] } }));
+  assert.equal(byId('a')['flagStatus'], 'none');
+  assert.equal(byId('a')['flagDueAt'], null);
+
+  // mail rule "flag" through a move re-flags a completed message
+  await prisma.$transaction((tx) => store.moveMessages(tx, ['b'], 'archive', { data: { flags: ['\\Flagged'] } }));
+  assert.equal(byId('b')['flagStatus'], 'flagged');
+  assert.equal(byId('b')['flagCompletedAt'], null);
+
+  // a move without keywords leaves the flag alone
+  Object.assign(byId('c'), { flags: ['\\Flagged'], flagStatus: 'flagged' });
+  await prisma.$transaction((tx) => store.moveMessages(tx, ['c'], 'archive'));
+  assert.equal(byId('c')['flagStatus'], 'flagged');
+
+  // touchMessages (mail rules, superseded drafts) with a keyword list
+  await prisma.$transaction((tx) => store.touchMessages(tx, ['b', 'c'], { flags: [] }));
+  assert.equal(byId('b')['flagStatus'], 'none');
+  assert.equal(byId('c')['flagStatus'], 'none');
+  await prisma.$transaction((tx) => store.touchMessages(tx, ['a'], { flags: ['\\Flagged'] }));
+  assert.equal(byId('a')['flagStatus'], 'flagged');
+  // other metadata changes do not touch the flag
+  await prisma.$transaction((tx) => store.touchMessages(tx, ['a'], { pinnedAt: new Date(0) }));
+  assert.equal(byId('a')['flagStatus'], 'flagged');
 });
 
 test('touchMessages and expunge give changed rows a fresh modSeq', async () => {
