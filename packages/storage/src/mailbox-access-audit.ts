@@ -30,7 +30,7 @@
  * Recording never throws: an audit failure must not break mail access.
  */
 import { randomUUID } from 'node:crypto';
-import { createLogger, getRedisClient } from '@coremail/core';
+import { createLogger, peekRedisClient } from '@coremail/core';
 import { prisma } from './prisma/index.js';
 
 const log = createLogger('storage:mailbox-access-audit');
@@ -183,9 +183,13 @@ export const SHARED_CLAIM_TIMEOUT_MS = 500;
 /** A key another process holds is not asked again for this long (bounded Redis traffic). */
 const FOREIGN_CLAIM_RECHECK_MS = 5 * 60_000;
 
+/**
+ * The services that audit (api-gateway, IMAP, JMAP, SMTP, ActiveSync) create
+ * the shared client at start; the claim never opens a connection itself.
+ */
 function claimRedis(): AccessClaimRedis | null {
   if (globalThis.__accessAuditRedis !== undefined) return globalThis.__accessAuditRedis;
-  return getRedisClient() as unknown as AccessClaimRedis;
+  return peekRedisClient() as unknown as AccessClaimRedis | null;
 }
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {

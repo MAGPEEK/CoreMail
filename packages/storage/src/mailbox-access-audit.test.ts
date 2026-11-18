@@ -146,6 +146,22 @@ test('shared claim: Redis not ready, failing or slow → per-process fallback (n
   assert.equal(await claimShared('k-none', 3600, null, 2000), false);
 });
 
+test('shared claim never opens a Redis connection: without a client of the process it aggregates locally', async () => {
+  const { peekRedisClient } = await import('@coremail/core');
+  const g = globalThis as unknown as { __accessAuditRedis: unknown };
+  const saved = g.__accessAuditRedis;
+  g.__accessAuditRedis = undefined; // default resolution: the process's shared client, if any
+  try {
+    resetLocalAccessClaims();
+    assert.equal(peekRedisClient(), null);
+    assert.equal(await claimShared('k-default', 3600), true);
+    assert.equal(await claimShared('k-default', 3600), false);
+    assert.equal(peekRedisClient(), null, 'no client was created (no reconnect loop in tools / tests)');
+  } finally {
+    g.__accessAuditRedis = saved;
+  }
+});
+
 test('retention: cutoff from days (0 = keep), purge deletes only mailbox.foreign.* rows older than the cutoff', async () => {
   const now = new Date('2026-11-17T00:00:00Z');
   assert.equal(accessPurgeCutoff(now, 0), null);
