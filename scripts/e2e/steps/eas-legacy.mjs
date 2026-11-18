@@ -210,21 +210,25 @@ export async function run(state) {
     } finally { v14.policyKey = key; }
   });
 
-  await check('eas-legacy: SendMail above the maximum message size → Status 115 (14.0) / HTTP 413 (12.1)', async () => {
-    // BCP → Settings → Mail: 1 MB (the services cache the limit for up to 60 s)
+  await check('eas-legacy: SendMail above the maximum message size → Status 115 (14.0) / HTTP 413 (12.1); body cap follows the setting', async () => {
+    // BCP → Settings → Mail: 1 MB — the settings reload drops the cached limit in the
+    // services at once (request-body cap: 1 MB × 4/3 + 1 MB ≈ 2.3 MB, body-limit.ts)
     const admin = await session(state, 'admin', state.adminEmail, creds().admin);
     const set = (mb) => http('PUT', '/api/v1/admin/settings/mail', { token: admin, body: { maxMessageSizeMb: mb } });
     assert((await set(1)).status === 200, 'maxMessageSizeMb=1 not saved');
     try {
-      console.log('  waiting 61 s for the message-size cache…');
-      await new Promise((r) => setTimeout(r, 61_000));
+      await new Promise((r) => setTimeout(r, 3_000)); // Redis settings reload → activesync
       const big = Buffer.concat([mimeFromB(state, `E2E EAS too large ${Date.now()}`), Buffer.alloc(2 * 1024 * 1024, 0x61)]);
       const CM = (t, k) => [21, t, k];
       const r14 = await v14.postRaw('SendMail', CM(0x05, [CM(0x11, `e2e-big-${Date.now()}`), CM(0x08), CM(0x10, big.toString('latin1'))]));
       assert(r14.status === 200 && kid(decodeWbxml(r14.body), 'Status')?.text === '115', `14.0 → HTTP ${r14.status} ${r14.body.length} B`);
       const r12 = await http('POST', legacy.url('SendMail'), { raw: true, body: big, headers: legacy.headers({ 'Content-Type': 'message/rfc822' }) });
       assert(r12.status === 413, `12.1 → HTTP ${r12.status}`);
-      return '14.0 Status 115, 12.1 HTTP 413 (limit 1 MB, message 2 MB)';
+      // a body above the cap is refused by the body parser before the command runs
+      const huge = Buffer.concat([mimeFromB(state, `E2E EAS over cap ${Date.now()}`), Buffer.alloc(3 * 1024 * 1024, 0x61)]);
+      const rCap = await http('POST', legacy.url('SendMail'), { raw: true, body: huge, headers: legacy.headers({ 'Content-Type': 'message/rfc822' }) });
+      assert(rCap.status === 413, `body above the cap → HTTP ${rCap.status}`);
+      return '14.0 Status 115, 12.1 HTTP 413 (limit 1 MB, message 2 MB); 3 MB body → 413 at the body cap';
     } finally {
       await set(25);
     }

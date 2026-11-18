@@ -90,8 +90,8 @@ Status 142 in WBXML, provisions, syncs (Email2 ConversationId present), reads Us
 EmailAddresses form and sends with ComposeMail WBXML (9.4: empty success response). 9.4: the 14.0
 device pings without `X-MS-PolicyKey` (served — Status 5 for the too short heartbeat — while
 FolderSync without key and an unknown device still get 142); with BCP → Settings → Mail set to 1 MB
-(61 s wait for the cached limit) a 2 MB SendMail gets Status 115 (14.0) / HTTP 413 (12.1), then the
-limit is restored to 25 MB. See [activesync.md](activesync.md).
+(applied at once through the settings reload) a 2 MB SendMail gets Status 115 (14.0) / HTTP 413
+(12.1) and a 3 MB body HTTP 413 at the request-body cap, then the limit is restored to 25 MB. See [activesync.md](activesync.md).
 `schema-upgrade` builds a database from the 8.0.0 schema (`E2E_SCHEMA_BASE`, default `d5ad681`) and checks that schema-sync upgrades it, refuses duplicates and fails closed on a dropped column with data (`E2E_PG_CONTAINER` selects the PostgreSQL container).
 `webmail` (9.3): shared / delegated mailboxes in the mail view at API level — A lists the team
 mailbox in `GET /api/v1/user/accessible-mailboxes` (FULL_ACCESS + SEND_AS), hides and shows it
