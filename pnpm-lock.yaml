@@ -583,6 +583,37 @@ importers:
         specifier: ^5.5.0
         version: 5.9.3
 
+  packages/mapi-server:
+    dependencies:
+      '@coremail/auth-ldap':
+        specifier: workspace:*
+        version: link:../auth-ldap
+      '@coremail/core':
+        specifier: workspace:*
+        version: link:../core
+      '@coremail/storage':
+        specifier: workspace:*
+        version: link:../storage
+      bullmq:
+        specifier: ^5.76.6
+        version: 5.76.6(supports-color@7.2.0)
+      express:
+        specifier: ^4.22.3
+        version: 4.22.3(supports-color@7.2.0)
+    devDependencies:
+      '@types/express':
+        specifier: ^4.17.21
+        version: 4.17.25
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.18
+      tsx:
+        specifier: ^4.16.0
+        version: 4.21.0
+      typescript:
+        specifier: ^5.5.0
+        version: 5.9.3
+
   packages/pop3-server:
     dependencies:
       '@coremail/auth-ldap':
@@ -6919,11 +6950,11 @@ snapshots:
   '@types/body-parser@1.19.6':
     dependencies:
       '@types/connect': 3.4.38
-      '@types/node': 22.19.18
+      '@types/node': 20.19.41
 
   '@types/connect@3.4.38':
     dependencies:
-      '@types/node': 22.19.18
+      '@types/node': 20.19.41
 
   '@types/d3-array@3.2.2': {}
 
@@ -6959,7 +6990,7 @@ snapshots:
 
   '@types/express-serve-static-core@4.19.8':
     dependencies:
-      '@types/node': 22.19.18
+      '@types/node': 20.19.41
       '@types/qs': 6.15.1
       '@types/range-parser': 1.2.7
       '@types/send': 1.2.1
@@ -7038,16 +7069,16 @@ snapshots:
   '@types/send@0.17.6':
     dependencies:
       '@types/mime': 1.3.5
-      '@types/node': 22.19.18
+      '@types/node': 20.19.41
 
   '@types/send@1.2.1':
     dependencies:
-      '@types/node': 22.19.18
+      '@types/node': 20.19.41
 
   '@types/serve-static@1.15.10':
     dependencies:
       '@types/http-errors': 2.0.5
-      '@types/node': 22.19.18
+      '@types/node': 20.19.41
       '@types/send': 0.17.6
 
   '@types/trusted-types@2.0.7':

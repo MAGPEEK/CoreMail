@@ -80,7 +80,7 @@ node scripts/e2e/run.mjs imap pop3       # single steps (state is kept in state.
 node --test scripts/e2e/repo-hygiene.test.mjs   # static regression checks (no stack needed)
 ```
 
-Steps: `setup users smtp imap pop3 jmap dav eas eas-body eas-commands eas-legacy rest webmail admin tls legacy-clients backup branding mfa live protocols lockout restart storage schema-upgrade`.
+Steps: `setup users smtp imap pop3 jmap dav eas eas-body eas-commands eas-legacy rest webmail admin tls legacy-clients backup branding mfa live protocols mapi lockout restart storage schema-upgrade`.
 `eas-legacy`: OPTIONS announces `12.1,14.0,14.1` and an unannounced version (2.5) is served as 14.1
 (Status 142 in WBXML for the unprovisioned device); a 12.1
 device gets HTTP 449 without a policy key, provisions, syncs (no Email2 / 14.x tags in any
@@ -163,6 +163,13 @@ closed, a new login with the correct password gets `NO [AUTHORIZATIONFAILED]`, a
 `POST /auth/login` and B's existing session on
 `/api/v1/mail/folders` answer 403 `PROTOCOL_DISABLED`; back to inherit → web login and IMAP work.
 B's switches are reset to inherit at the end. See [protocol-access.md](protocol-access.md).
+`mapi` (9.4): MAPI over HTTP is off by default (Connect → 403 without a password prompt; GET →
+X-ResponseCode 2; no credentials → 401). The admin turns the switch on for A, B sends A a mail over
+SMTP submission; A connects (`Connect`, cookies, PROCESSING/DONE), logs on, finds the mail in the
+Inbox contents table, opens it and reads the body through a stream, then creates a message in the
+Outbox (`SetProperties`, `ModifyRecipients`, `SubmitMessage`) that reaches B (IMAP search). Switch off
+→ the running session and a new Connect get 403. A's switch is reset to inherit. The compose override
+sets `MAPI_ALLOW_PLAIN_HTTP=true` (the runner uses plain HTTP). See [mapi.md](mapi.md).
 `setup` reads the one-time setup token from `docker logs coremail-e2e`. Each run prints
 `[PASS]/[FAIL]` lines and writes `$E2E_STATE_DIR/results-<steps>.json`; the exit code is
 non-zero when a check failed.

@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "references": [
+    { "path": "../core" },
+    { "path": "../storage" },
+    { "path": "../auth-ldap" }
+  ],
+  "include": ["src/**/*"],
+  "exclude": ["src/**/*.test.ts", "src/test-env.ts", "src/testing/**", "node_modules", "dist"]
+}

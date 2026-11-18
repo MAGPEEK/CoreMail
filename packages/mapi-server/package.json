@@ -1,0 +1,27 @@
+{
+  "name": "@coremail/mapi-server",
+  "version": "9.3.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/server.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/server.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --import ./src/test-env.ts --test src/wire/wire.test.ts src/props/props.test.ts src/rop/buffer.test.ts src/rop/handles.test.ts src/rop/ops/ops.test.ts src/objects/footprint.test.ts src/http/envelope.test.ts src/emsmdb/bodies.test.ts src/session/session.test.ts src/store/prisma-store.test.ts src/app.test.ts",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "@coremail/auth-ldap": "workspace:*",
+    "@coremail/core": "workspace:*",
+    "@coremail/storage": "workspace:*",
+    "bullmq": "^5.76.6",
+    "express": "^4.22.3"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.16.0",
+    "typescript": "^5.5.0"
+  }
+}

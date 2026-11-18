@@ -12,7 +12,7 @@ the server, per domain and per mailbox.
 | `jmap`       | JMAP (`/jmap/*`, `/.well-known/jmap`, WebSocket)                                       |
 | `dav`        | CalDAV and CardDAV (`/dav/*`)                                                           |
 | `webmail`    | web login (password, MFA, SSO, token refresh) and the webmail / user REST API          |
-| `mapi`       | MAPI over HTTP — not implemented yet; the switch exists and is off by default          |
+| `mapi`       | MAPI over HTTP (`/mapi/emsmdb`, `/mapi/nspi`, classic Outlook — see [mapi.md](mapi.md)), off by default |
 
 ## Levels and resolution
 
@@ -50,6 +50,7 @@ without the password. A correct password with the protocol off gets:
 | SMTP submission     | `535 5.7.1 Mail submission is disabled for this account` (not counted as an AUTH failure) |
 | ActiveSync          | HTTP 403 (no `WWW-Authenticate`, so devices stop syncing instead of asking for a password) |
 | JMAP                | HTTP 403 `application/problem+json` (Basic, Bearer, WebSocket upgrade)              |
+| MAPI over HTTP      | HTTP 403 (no `WWW-Authenticate`), the session named by the cookie ends             |
 | CalDAV / CardDAV    | HTTP 403 (Basic and Bearer)                                                         |
 | Web / REST API      | HTTP 403 `{ "code": "PROTOCOL_DISABLED", "protocol": "webmail" }`                  |
 

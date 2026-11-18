@@ -19,6 +19,7 @@
 #   3004  backup-service  3005  activesync
 #   8081  autodiscover
 #   8082  caldav-server   3006  jmap-server
+#   3007  mapi-server
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Stage 1: Build all Node.js packages ──────────────────────────────────────
@@ -49,6 +50,7 @@ COPY packages/backup-service/package.json ./packages/backup-service/
 COPY packages/security-filter/package.json ./packages/security-filter/
 COPY packages/activesync/package.json     ./packages/activesync/
 COPY packages/jmap-server/package.json    ./packages/jmap-server/
+COPY packages/mapi-server/package.json    ./packages/mapi-server/
 COPY packages/cli/package.json            ./packages/cli/
 
 RUN pnpm install --frozen-lockfile
@@ -69,6 +71,7 @@ COPY packages/backup-service    ./packages/backup-service
 COPY packages/security-filter   ./packages/security-filter
 COPY packages/activesync        ./packages/activesync
 COPY packages/jmap-server       ./packages/jmap-server
+COPY packages/mapi-server       ./packages/mapi-server
 COPY packages/cli               ./packages/cli
 
 # Generate Prisma client and build all packages
@@ -90,6 +93,7 @@ RUN pnpm --filter @coremail/auth-ldap      build \
  && pnpm --filter @coremail/security-filter build \
  && pnpm --filter @coremail/activesync     build \
  && pnpm --filter @coremail/jmap-server    build \
+ && pnpm --filter @coremail/mapi-server    build \
  && pnpm --filter @coremail/cli            build
 
 # ── Stage 2: Frontend build ───────────────────────────────────────────────────
@@ -184,6 +188,8 @@ COPY --from=builder /app/packages/activesync/package.json     ./packages/actives
 COPY --from=builder /app/packages/activesync/dist             ./packages/activesync/dist
 COPY --from=builder /app/packages/jmap-server/package.json    ./packages/jmap-server/
 COPY --from=builder /app/packages/jmap-server/dist            ./packages/jmap-server/dist
+COPY --from=builder /app/packages/mapi-server/package.json    ./packages/mapi-server/
+COPY --from=builder /app/packages/mapi-server/dist            ./packages/mapi-server/dist
 COPY --from=builder /app/packages/cli/package.json            ./packages/cli/
 COPY --from=builder /app/packages/cli/dist                    ./packages/cli/dist
 

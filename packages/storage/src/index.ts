@@ -43,3 +43,6 @@ export * from './realtime/announce.js';
 export * from './mail-flow.js';
 export * from './mailbox-access-audit.js';
 export * from './shared-sent-copy.js';
+export * from './legacy-dn.js';
+export * from './store-raw.js';
+export * from './submission-limits.js';

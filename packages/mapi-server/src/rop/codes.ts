@@ -1,0 +1,78 @@
+/** RopIds (MS-OXCROPS 2.2.2) and return values (MS-OXCDATA 2.4). */
+
+export const RopId = {
+  Release: 0x01,
+  OpenFolder: 0x02,
+  OpenMessage: 0x03,
+  GetHierarchyTable: 0x04,
+  GetContentsTable: 0x05,
+  CreateMessage: 0x06,
+  GetPropertiesSpecific: 0x07,
+  GetPropertiesAll: 0x08,
+  SetProperties: 0x0a,
+  SaveChangesMessage: 0x0c,
+  ModifyRecipients: 0x0e,
+  SetMessageReadFlag: 0x11,
+  SetColumns: 0x12,
+  SortTable: 0x13,
+  Restrict: 0x14,
+  QueryRows: 0x15,
+  QueryPosition: 0x17,
+  SeekRow: 0x18,
+  CreateFolder: 0x1c,
+  DeleteFolder: 0x1d,
+  DeleteMessages: 0x1e,
+  GetAttachmentTable: 0x21,
+  OpenAttachment: 0x22,
+  CreateAttachment: 0x23,
+  SaveChangesAttachment: 0x25,
+  GetReceiveFolder: 0x27,
+  RegisterNotification: 0x29,
+  OpenStream: 0x2b,
+  ReadStream: 0x2c,
+  WriteStream: 0x2d,
+  SubmitMessage: 0x32,
+  MoveCopyMessages: 0x33,
+  GetNamesFromPropertyIds: 0x55,
+  GetPropertyIdsFromNames: 0x56,
+  CommitStream: 0x5d,
+  GetStreamSize: 0x5e,
+  Logon: 0xfe,
+  BufferTooSmall: 0xff,
+} as const;
+
+export const Ec = {
+  Success: 0x00000000,
+  LoginPerm: 0x000003f2,
+  BufferTooSmall: 0x0000047d,
+  RpcFormat: 0x000004b6,
+  NullObject: 0x000004b9,
+  QuotaExceeded: 0x000004d9,
+  MaxSubmissionExceeded: 0x000004da,
+  NullDestinationObject: 0x00000503,
+  TooManyRecips: 0x00000505,
+  WarnWithErrors: 0x00040380,
+  GeneralFailure: 0x80004005,
+  AccessDenied: 0x80070005,
+  OutOfMemory: 0x8007000e,
+  InvalidParameter: 0x80070057,
+  StreamSizeError: 0x80030070,
+  NotSupported: 0x80040102,
+  InvalidObject: 0x80040108,
+  NotFound: 0x8004010f,
+  TooComplex: 0x80040117,
+  CollidingNames: 0x80040604,
+  NoRecipients: 0x80040607,
+  HasFolders: 0x80040609,
+  HasMessages: 0x8004060a,
+} as const;
+
+/** A ROP failed with a MAPI return value (sent in the ROP's failure response). */
+export class RopError extends Error {
+  readonly code: number;
+  constructor(code: number, message?: string) {
+    super(message ?? `ROP failed with 0x${code.toString(16).padStart(8, '0')}`);
+    this.name = 'RopError';
+    this.code = code;
+  }
+}

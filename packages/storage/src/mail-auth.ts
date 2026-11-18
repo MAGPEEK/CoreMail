@@ -100,7 +100,7 @@ function getVerifier(): MailCredentialVerifier {
 
 /** 9.4: the protocol switch a mail-protocol login is subject to (Autodiscover has none). */
 export const MAIL_PROTOCOL_ACCESS: Readonly<Record<MailProtocol, AccessProtocol | null>> = {
-  smtp: 'smtp', imap: 'imap', pop3: 'pop3', activesync: 'activesync', jmap: 'jmap', caldav: 'dav', autodiscover: null,
+  smtp: 'smtp', imap: 'imap', pop3: 'pop3', activesync: 'activesync', jmap: 'jmap', caldav: 'dav', mapi: 'mapi', autodiscover: null,
 };
 
 /** The shared credential check for all mail protocols. Never throws. */

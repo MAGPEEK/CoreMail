@@ -8,6 +8,7 @@ export * from './http/index.js';
 export * from './logger/runtime.js';
 export * from './net/ssrf.js';
 export * from './net/connection-limiter.js';
+export * from './net/rate-limit.js';
 export * from './net/listen.js';
 export * from './net/cidr.js';
 export * from './realtime/index.js';

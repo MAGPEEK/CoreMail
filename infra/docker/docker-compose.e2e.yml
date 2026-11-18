@@ -18,6 +18,9 @@ services:
     image: ${E2E_IMAGE:-coremail-app:e2e}
     container_name: coremail-e2e
     restart: "no"
+    environment:
+      # The e2e runner talks plain HTTP to port 3000; MAPI Basic auth is HTTPS-only otherwise.
+      MAPI_ALLOW_PLAIN_HTTP: "true"
     ports: !override
       - "127.0.0.1:12525:25"
       - "127.0.0.1:12465:465"
