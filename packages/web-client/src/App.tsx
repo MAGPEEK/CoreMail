@@ -24,7 +24,6 @@ import { useInactivityLogout } from './hooks/useInactivityLogout.js';
 import { useTaskReminders } from './hooks/useTaskReminders.js';
 import { ErrorBoundary } from './components/ErrorBoundary.js';
 import { ShortcutHelpDialog } from './components/ShortcutHelpDialog.js';
-import { LiveRegion } from './components/LiveRegion.js';
 import { useGlobalShortcuts } from './hooks/useGlobalShortcuts.js';
 import { useSendGuard } from './components/DelayedSendToast.js';
 import { useComposeRouting } from './hooks/useComposeRouting.js';
@@ -139,7 +138,6 @@ function Layout({ children }: { children: React.ReactNode }) {
         </main>
       </div>
       <ShortcutHelpDialog />
-      <LiveRegion />
     </div>
   );
 }

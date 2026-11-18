@@ -20,12 +20,14 @@ A "Zum Inhalt springen" link is the first focusable element and moves focus to `
   node or steps into it, Left closes it or steps to the parent (`lib/rovingFocus.ts`).
 - **Message list**: `role="grid"` with one `row` per message and `aria-selected`. One row is in the
   tab order; Up/Down/Home/End/PageUp/PageDown move, Enter opens, Delete deletes. The buttons inside a
-  row are only tabbable on that row and the quick actions show while the row has focus.
+  row are only tabbable on that row and the quick actions show while the row has keyboard focus.
+  Arrow keys move focus only; keyboard commands (Enter, Delete, `j`/`k`, `x` ...) act on the
+  focused row, else on the open message, so focus and target never differ.
   When the focused row leaves the list (delete, move, archive) focus goes to its neighbour.
 - **Reading pane**: single pane layout moves focus into the opened message and back onto its row on
   "back". Dialogs (`Modal`) trap focus and return it on close.
-- **Live regions**: toasts (undo send / delete / move, new mail) are `role="status"`; selection
-  changes are announced through `LiveRegion` (`lib/announce.ts`).
+- **Live regions**: toasts (undo send / delete / move, new mail) and the selection counter of the
+  command bar are `role="status"`; nothing is announced twice.
 - Targets are at least 24 x 24 px (checkbox and flag of the list rows included); the focus ring is
   the global `:focus-visible` outline in the accent text token.
 

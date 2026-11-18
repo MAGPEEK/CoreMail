@@ -1,5 +1,5 @@
 ### Added
-- Webmail accessibility (WCAG 2.2 AA): folder tree as ARIA tree and message list as ARIA grid with roving tabindex and arrow-key navigation, focus moves to the neighbouring message when the focused one is deleted or moved, a live region for selection announcements, a "skip to content" link, labelled landmarks. See `docs/webmail-accessibility.md`.
+- Webmail accessibility (WCAG 2.2 AA): folder tree as ARIA tree and message list as ARIA grid with roving tabindex and arrow-key navigation, focus moves to the neighbouring message when the focused one is deleted or moved, a "skip to content" link, labelled landmarks. See `docs/webmail-accessibility.md`.
 - Responsive webmail: below 768 px a single pane flow (folders, message list, message, back button), 768 - 1099 px list and message with the folders in a drawer, the calendar starts in the day view on small screens.
 
 ### Changed

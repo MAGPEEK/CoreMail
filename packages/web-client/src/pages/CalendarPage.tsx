@@ -79,6 +79,8 @@ export function CalendarPage() {
   // 9.5: a phone starts in the day view (the month grid does not fit 320 px)
   const compactScreen = useLayoutMode() === 'single';
   const [calendarListOpen, setCalendarListOpen] = useState(false);
+  // the sheet belongs to the phone layout: it does not reopen when the screen shrinks again
+  useEffect(() => { if (!compactScreen) setCalendarListOpen(false); }, [compactScreen]);
   const [initialView] = useState<CalendarView>(() => (compactScreen ? 'timeGridDay' : 'dayGridMonth'));
   const [view, setView] = useState<CalendarView>(initialView);
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());

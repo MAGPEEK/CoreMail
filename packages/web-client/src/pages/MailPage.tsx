@@ -310,7 +310,9 @@ export function MailPage() {
   // Choosing a folder (also the one already open) leads on to its message list
   const pickProps = {
     onClickCapture: (e: React.MouseEvent) => {
-      if ((e.target as Element).closest('[role="treeitem"]')) setFoldersShown(false);
+      const target = e.target as Element;
+      // the expand arrow of a folder only opens its subfolders
+      if (target.closest('[role="treeitem"]') && !target.closest('[data-folder-toggle]')) setFoldersShown(false);
     },
     onKeyDownCapture: (e: React.KeyboardEvent) => {
       const onItem = (e.target as Element).getAttribute('role') === 'treeitem';
@@ -336,9 +338,9 @@ export function MailPage() {
           {panes.includes('compose') && composePanel}
         </>
       )}
-      {mode === 'two' && !selectedFolderId && (
-        <div className="flex-1 flex items-center justify-center text-fg-subtle text-sm">Ordner auswählen</div>
-      )}
+      {mode === 'two' && !selectedFolderId && (panes.includes('compose')
+        ? composePanel
+        : <div className="flex-1 flex items-center justify-center text-fg-subtle text-sm">Ordner auswählen</div>)}
       {mode === 'two' && foldersShown && (
         <>
           <div className="absolute inset-0 z-20 bg-scrim/40" onClick={() => setFoldersShown(false)} aria-hidden="true" />

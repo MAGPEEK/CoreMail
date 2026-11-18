@@ -292,10 +292,13 @@ function ForeignMailboxNode({ entry, expanded, onToggle, onHide }: {
       </div>
 
       {expanded && (
-        <div className="space-y-0.5" role="group" aria-label={title}>
+        <div className="space-y-0.5">
           {isLoading && <p className="pl-8 py-1 text-xs text-fg-subtle">Lade Ordner…</p>}
           {isError && <p role="alert" className="pl-8 py-1 text-xs text-danger-fg">Ordner konnten nicht geladen werden.</p>}
-          {systemFoldersOf(all).map((f) => renderFolder(f, 1))}
+          {/* the folder items are tree items — they need a tree of their own */}
+          <div role="tree" aria-label={title} className="space-y-0.5">
+            {systemFoldersOf(all).map((f) => renderFolder(f, 1))}
+          </div>
           {entry.kind === 'shared' && (
             <QuotaIndicator sharedMailboxId={entry.id} className="pl-8 pr-3 py-1" />
           )}

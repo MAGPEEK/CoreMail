@@ -36,7 +36,6 @@ import { followUpStatusOf } from '../lib/followUp.js';
 import { useFollowUp } from '../hooks/useFollowUp.js';
 import { conversationKey, orderForDisplay, sortParams } from '../lib/conversationOrder.js';
 import { listTarget, tabStopIndex } from '../lib/rovingFocus.js';
-import { announce, selectionAnnouncement } from '../lib/announce.js';
 
 /** True when the query uses search operators / quotes / negation (typeahead stays for plain words). */
 function hasOperatorSyntax(q: string): boolean {
@@ -67,8 +66,11 @@ function MessageRow({
   folders,
   readOnly = false,
   tabStop,
+  rowIndex,
 }: {
   msg: MessageSummary;
+  /** 1-based position in the grid (the list loads page by page) */
+  rowIndex: number;
   selected: boolean;
   checked: boolean;
   onClick: (e: React.MouseEvent) => void;
@@ -125,10 +127,14 @@ function MessageRow({
       onClick={onClick}
       onKeyDown={(e) => {
         // Enter opens the row like a click (shortcut manager leaves it alone)
-        if (e.key === 'Enter' && e.target === e.currentTarget) onClick(e as unknown as React.MouseEvent);
+        if (e.key === 'Enter' && e.target === e.currentTarget) {
+          e.preventDefault(); // the global "open" shortcut would act on the previously selected row
+          onClick(e as unknown as React.MouseEvent);
+        }
       }}
       onContextMenu={onContextMenu}
       aria-selected={selected || checked}
+      aria-rowindex={rowIndex}
       className={`w-full text-left px-3 ${py} border-b border-line transition-all duration-150 relative group cursor-pointer ${
         selected
           ? 'bg-accent/10 shadow-sm'
@@ -136,6 +142,7 @@ function MessageRow({
             ? 'bg-accent/5'
             : 'hover:bg-surface-2 hover:shadow-sm'
       } ${isUnread ? 'border-l-2 border-l-accent-fg' : 'border-l-2 border-l-transparent'} ${isDragging ? 'opacity-30' : ''}`}
+      // the three undefined props drop the button semantics dnd-kit's `attributes` add
       role="row"
       aria-roledescription={undefined}
       aria-pressed={undefined}
@@ -156,7 +163,7 @@ function MessageRow({
             className={`w-4 h-4 rounded-sm border flex items-center justify-center transition-all duration-150 ${
               checked
                 ? 'bg-accent border-accent-fg text-white animate-bounce-in'
-                : 'border-line-strong opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 group-hover/check:border-accent-fg group-hover/check:scale-110'
+                : 'border-line-strong opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 group-has-[:focus-visible]:opacity-100 group-hover/check:border-accent-fg group-hover/check:scale-110'
             }`}
           >
             {checked && <span className="text-[10px] leading-none">✓</span>}
@@ -241,7 +248,7 @@ function MessageRow({
         </div>
 
         {/* Hover quick actions (Gmail style) — fade-in with slight slide */}
-        <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5 bg-surface border border-line rounded shadow-md opacity-0 translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 group-focus-within:opacity-100 group-focus-within:translate-x-0 transition-all duration-150 pointer-events-none group-hover:pointer-events-auto group-focus-within:pointer-events-auto">
+        <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5 bg-surface border border-line rounded shadow-md opacity-0 translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 group-focus-visible:opacity-100 group-focus-visible:translate-x-0 group-has-[:focus-visible]:opacity-100 group-has-[:focus-visible]:translate-x-0 transition-all duration-150 pointer-events-none group-hover:pointer-events-auto group-focus-visible:pointer-events-auto group-has-[:focus-visible]:pointer-events-auto">
           <button aria-label="Archivieren"
             tabIndex={tabStop ? 0 : -1}
             aria-keyshortcuts={ariaKeys('mail.archive')}
@@ -442,6 +449,12 @@ export function MessageList({ folderId }: Props) {
     setFocusedRowId(id);
     document.getElementById(`msg-row-${id}`)?.focus();
   };
+  /** Row that holds the keyboard focus (the row itself or a button in it), if any. */
+  const rowWithFocus = (): string | undefined => {
+    const active = document.activeElement as HTMLElement | null;
+    if (!active || !scrollRef.current?.contains(active)) return undefined;
+    return active.closest('[role="row"]')?.id.replace('msg-row-', '');
+  };
   const handleGridFocus = (e: React.FocusEvent) => {
     if ((e.target as HTMLElement).getAttribute('role') === 'row') setFocusedRowId(e.target.id.replace('msg-row-', ''));
   };
@@ -455,10 +468,6 @@ export function MessageList({ folderId }: Props) {
     focusRow(orderedIds[to]);
   };
 
-  // Screen readers hear the selection count of the checkbox selection
-  useEffect(() => {
-    if (selectedIds.size > 0) announce(selectionAnnouncement(selectedIds.size));
-  }, [selectedIds.size]);
   const allChecked = orderedIds.length > 0 && orderedIds.every((id) => selectedIds.has(id));
 
   const invalidate = () => {
@@ -483,11 +492,14 @@ export function MessageList({ folderId }: Props) {
   const locate = (id: string): MessageLocation => ({
     id, folderId: displayMessages.find((m) => m.id === id)?.folderId ?? folderId,
   });
-  /** Checked messages, else the open one. */
+  /** The message a keyboard command is about: the focused row (arrow keys move focus only), else the open one. */
+  const anchorId = (): string | undefined => rowWithFocus() ?? selectedMessageId ?? undefined;
+  /** Checked messages, else the focused row, else the open one. */
   const currentTargets = (): MessageLocation[] => {
+    const anchor = anchorId();
     const ids = useUiStore.getState().selectedIds.size > 0
       ? [...useUiStore.getState().selectedIds]
-      : selectedMessageId ? [selectedMessageId] : [];
+      : anchor ? [anchor] : [];
     return ids.map(locate);
   };
 
@@ -501,8 +513,7 @@ export function MessageList({ folderId }: Props) {
         ?? null;
     };
     // Focus inside the list must not fall to <body> when its row disappears
-    const active = document.activeElement as HTMLElement | null;
-    const focusRowId = active && scrollRef.current?.contains(active) ? active.closest('[role="row"]')?.id.replace('msg-row-', '') : undefined;
+    const focusRowId = rowWithFocus();
     if (focusRowId && gone.has(focusRowId)) {
       const neighbour = neighbourOf(focusRowId);
       if (neighbour) focusRow(neighbour);
@@ -524,9 +535,11 @@ export function MessageList({ folderId }: Props) {
   };
   const openAt = (id: string | undefined) => {
     if (!id) return false;
+    const focusFollows = rowWithFocus() !== undefined;
     clearSelection();
     setSelectedMessage(id);
     scrollToRow(id);
+    if (focusFollows) focusRow(id);
     return true;
   };
   const stepConversation = (dir: 1 | -1) => {
@@ -571,14 +584,16 @@ export function MessageList({ folderId }: Props) {
     'mail.markRead': () => { const ids = currentTargets().map((i) => i.id); void setState('read', ids); return ids.length > 0; },
     'mail.markUnread': () => { const ids = currentTargets().map((i) => i.id); void setState('unread', ids); return ids.length > 0; },
     'mail.next': () => {
-      const idx = selectedMessageId ? orderedIds.indexOf(selectedMessageId) : -1;
+      const anchor = anchorId();
+      const idx = anchor ? orderedIds.indexOf(anchor) : -1;
       return openAt(orderedIds[Math.min(idx + 1, orderedIds.length - 1)]);
     },
     'mail.prev': () => {
-      const idx = selectedMessageId ? orderedIds.indexOf(selectedMessageId) : orderedIds.length;
+      const anchor = anchorId();
+      const idx = anchor ? orderedIds.indexOf(anchor) : orderedIds.length;
       return openAt(orderedIds[Math.max(idx - 1, 0)]);
     },
-    'mail.open': () => openAt(selectedMessageId ?? orderedIds[0]),
+    'mail.open': () => openAt(anchorId() ?? orderedIds[0]),
     'mail.back': () => {
       if (!selectedMessageId && selectedIds.size === 0) return false;
       const last = selectedMessageId;
@@ -588,7 +603,7 @@ export function MessageList({ folderId }: Props) {
       return true;
     },
     'mail.select': () => {
-      const id = selectedMessageId ?? orderedIds[0];
+      const id = anchorId() ?? orderedIds[0];
       if (!id) return false;
       toggleSelection(id);
       return true;
@@ -869,13 +884,14 @@ export function MessageList({ folderId }: Props) {
             role="grid"
             aria-label="Nachrichtenliste"
             aria-multiselectable="true"
-            aria-rowcount={totalCount}
+            aria-rowcount={hasNextPage ? -1 : displayMessages.length}
             onKeyDown={handleGridKeyDown}
             onFocus={handleGridFocus}
           >
-          {displayMessages.map((msg) => (
+          {displayMessages.map((msg, i) => (
             <MessageRow
               key={msg.id}
+              rowIndex={i + 1}
               msg={msg}
               tabStop={msg.id === tabStopId}
               selected={msg.id === selectedMessageId && selectedIds.size === 0}

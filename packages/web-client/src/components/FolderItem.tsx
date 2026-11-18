@@ -145,6 +145,7 @@ export function FolderItem({
         } ${
           selected ? 'bg-accent/10 text-accent-fg font-medium' : 'text-fg-muted hover:bg-surface-2 hover:translate-x-0.5'
         } ${isDragging ? 'opacity-40' : ''}`}
+        // the three undefined props drop the button semantics dnd-kit's `attributes` add
         role="treeitem"
         aria-level={indent + 1}
         aria-selected={selected}
@@ -159,6 +160,7 @@ export function FolderItem({
           // Pointer affordance only: the arrow keys open/close (a treeitem has no nested controls)
           <span
             aria-hidden="true"
+            data-folder-toggle=""
             onClick={(e) => { e.stopPropagation(); onToggleExpand(); }}
             onPointerDown={(e) => e.stopPropagation()}
             className="w-6 h-6 -my-1 -ml-1 flex items-center justify-center text-fg-subtle hover:text-fg-muted shrink-0"
