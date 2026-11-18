@@ -19,8 +19,8 @@
     properties, notification registration. Sending uses the same rules as SMTP submission and JMAP
     (SMTP recipient and size limits, send quota, sender identity, queue, Sent copy).
   - Limits: requests per mail account (`MAPI_RATE_LIMIT`, default 3000 per `MAPI_RATE_WINDOW_SEC` = 300;
-    503 + Retry-After, as for a locked account — never 401), memory of the open objects per session (`MAPI_SESSION_MEMORY_MB`, 64), 1000
-    recipients and 250 attachments per message, 1024 restriction nodes per table filter.
+    503 + Retry-After, as for a locked account — never 401), memory of the open objects per session (`MAPI_SESSION_MEMORY_MB`, 64), 250
+    attachments per message (`ecMaxAttachmentExceeded`), 10 000 recipients (`ecTooManyRecips` at submit), 1024 restriction nodes per table filter.
   - `/mapi/nspi` is routed and authenticated (`PING`); the address book follows.
 - One storage helper for the limits of a submitted message (`submission-limits.ts`, replaces
   `message-size-limit.ts`): `loadSubmissionLimits()` (global: the stricter max. message size, SMTP

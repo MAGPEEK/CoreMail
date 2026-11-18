@@ -49,6 +49,8 @@ export const Ec = {
   NullObject: 0x000004b9,
   QuotaExceeded: 0x000004d9,
   MaxSubmissionExceeded: 0x000004da,
+  /** MS-OXCDATA 2.4.1 ecMaxAttachmentExceeded; RopCreateAttachment (MS-OXCMSG 3.2.5.13). */
+  MaxAttachmentExceeded: 0x000004db,
   NullDestinationObject: 0x00000503,
   TooManyRecips: 0x00000505,
   WarnWithErrors: 0x00040380,

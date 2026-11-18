@@ -488,27 +488,36 @@ test('session memory budget: WriteStream past it fails with STG_E_MEDIUMFULL, Se
   assert.equal(r.u16(), 0);
 });
 
-test('ModifyRecipients: at most MAX_RECIPIENTS per message (ecMAPIOOM); rows replace by RowId', async () => {
+test('ModifyRecipients has no count error; more than MAX_RECIPIENTS → ecTooManyRecips at SubmitMessage; rows replace by RowId', async () => {
   const h = new Harness();
   await h.logon();
   await outboxMessage(h);
+  h.store.limits = { maxMessageBytes: 25 * 1024 * 1024, maxRecipients: 2 * MAX_RECIPIENTS };
   const rows = (from: number, n: number) => Array.from({ length: n }, (_, i) => ({ rowId: from + i, type: 1, email: `r${from + i}@example.test`, name: `R${from + i}` }));
-  for (let start = 0; start < MAX_RECIPIENTS; start += 200) ok(await h.run(rop.modifyRecipients(2, rows(start, 200))), RopId.ModifyRecipients);
+  for (let start = 0; start < MAX_RECIPIENTS; start += 500) ok(await h.run(rop.modifyRecipients(2, rows(start, 500))), RopId.ModifyRecipients);
   ok(await h.run(rop.modifyRecipients(2, rows(0, 10))), RopId.ModifyRecipients, 2);
-  const r = await h.run(rop.modifyRecipients(2, rows(MAX_RECIPIENTS, 1)));
-  assert.equal(responseHead(r).returnValue, Ec.OutOfMemory);
-  h.store.limits = { maxMessageBytes: 25 * 1024 * 1024, maxRecipients: 5000 };
-  ok(await h.run(rop.submitMessage(2)), RopId.SubmitMessage);
+  ok(await h.run(rop.modifyRecipients(2, rows(MAX_RECIPIENTS, 1))), RopId.ModifyRecipients, 2);
+  let r = await h.run(rop.submitMessage(2));
+  // byte level: RopId 0x32, InputHandleIndex 2, ReturnValue ecTooManyRecips 0x00000505
+  assert.deepEqual(r.bytes(6), Buffer.from([0x32, 0x02, 0x05, 0x05, 0x00, 0x00]));
+  assert.equal(h.store.sent.length, 0);
+  // remove the extra row (RowId MAX_RECIPIENTS, RecipientRowSize 0)
+  const remove = new Writer().u8(RopId.ModifyRecipients).u8(0).u8(2).u16(0).u16(1).u32(MAX_RECIPIENTS).u8(1).u16(0).toBuffer();
+  r = await h.run(remove, rop.submitMessage(2));
+  ok(r, RopId.ModifyRecipients);
+  ok(r, RopId.SubmitMessage);
   assert.equal(h.store.sent[0]!.message.to.length, MAX_RECIPIENTS, 'replaced rows are not duplicated');
 });
 
-test('CreateAttachment: at most MAX_ATTACHMENTS per message', async () => {
+test('CreateAttachment: beyond MAX_ATTACHMENTS → ecMaxAttachmentExceeded (MS-OXCMSG 3.2.5.13)', async () => {
   const h = new Harness();
   await h.logon();
   await outboxMessage(h);
   const create = new Writer().u8(RopId.CreateAttachment).u8(0).u8(2).u8(3).toBuffer();
   for (let i = 0; i < MAX_ATTACHMENTS; i++) ok(await h.run(create, rop.release(3)), RopId.CreateAttachment, 3);
-  assert.equal(responseHead(await h.run(create)).returnValue, Ec.OutOfMemory);
+  const r = await h.run(create);
+  // byte level: RopId, OutputHandleIndex 3, ReturnValue 0x000004DB
+  assert.deepEqual(r.bytes(6), Buffer.from([RopId.CreateAttachment, 0x03, 0xdb, 0x04, 0x00, 0x00]));
 });
 
 test('SubmitMessage (MS-OXOMSG): ecTooManyRecips, ecMaxSubmissionExceeded from the server limits; FAI → ecAccessDenied', async () => {

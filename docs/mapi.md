@@ -72,7 +72,9 @@ Refusals before a session exists:
   bounded by the shared mail-login lockout.
 - Each session holds its open messages, attachments and streams in memory, at most
   `MAPI_SESSION_MEMORY_MB` (64) — beyond it writes fail (`STG_E_MEDIUMFULL` / `ecMAPIOOM`); a single
-  stream holds at most 32 MB; a message at most 1000 recipients and 250 attachments; a table filter
+  stream holds at most 32 MB; a message at most 250 attachments (`ecMaxAttachmentExceeded` at `RopCreateAttachment`) and
+  10 000 recipients (`ecTooManyRecips` at `RopSubmitMessage`; `RopModifyRecipients` has no count error,
+  the session memory budget bounds it); a table filter
   at most 1024 restriction nodes (`ecTooComplex`).
 
 ## Operations

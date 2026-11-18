@@ -33,10 +33,16 @@ import type { BufferReader } from '../../wire/reader.js';
 const OPEN_READ_ONLY = 0x00;
 const DRAFT_FLAG = '\\Draft';
 /**
- * Per-message caps of what a client can pile up in a session (the submission
- * limits of the server still apply when the message is sent).
+ * Per-message caps (the submission limits of the user still apply when the
+ * message is sent; the session memory budget bounds what a client can pile up):
+ *  - attachments: RopCreateAttachment beyond the cap → ecMaxAttachmentExceeded
+ *    (MS-OXCMSG 3.2.5.13);
+ *  - recipients: RopModifyRecipients has no count error (MS-OXCMSG 3.2.5.5) —
+ *    the memory budget protects it; the hard cap is checked at RopSubmitMessage
+ *    with ecTooManyRecips (MS-OXCDATA 2.4.1), as high as the largest per-mailbox
+ *    recipient limit (storage MAX_FLOW_RECIPIENTS).
  */
-export const MAX_RECIPIENTS = 1000;
+export const MAX_RECIPIENTS = 10_000;
 export const MAX_ATTACHMENTS = 250;
 
 /** Message properties including the recipient display strings. */
@@ -233,7 +239,6 @@ export const ropModifyRecipients = defineRop<ModifyReq>({
       changed.delete(m.rowId);
       if (m.row) changed.set(m.rowId, { ...m, row: m.row });
     }
-    if (kept.size + changed.size > MAX_RECIPIENTS) throw new RopError(Ec.OutOfMemory, `more than ${MAX_RECIPIENTS} recipients`);
     assertMemory(ctx, [...changed.values()].reduce((n, m) => n + recipientRowBytes(m.row), 0));
     for (const m of changed.values()) {
       const email = await recipientAddress(ctx.store, m.row);
@@ -314,6 +319,7 @@ export const ropSubmitMessage = defineRop<SubmitReq>({
     if (message.submitted) throw new RopError(Ec.AccessDenied, 'already submitted');
     if (message.associated) throw new RopError(Ec.AccessDenied, 'folder associated information cannot be sent');
     if (message.readOnly || !isDraft(message)) throw new RopError(Ec.AccessDenied, 'only unsent messages can be submitted');
+    if (message.recipients.length > MAX_RECIPIENTS) throw new RopError(Ec.TooManyRecips, `more than ${MAX_RECIPIENTS} recipients`);
     const composed = await composeMessage(ctx.store, message);
     const deleteAfter = lookupProperty(message.props, Tag.DeleteAfterSubmit);
     const result = await ctx.store.submit(ctx.session.user, logon.mailbox, composed, {
@@ -380,7 +386,7 @@ export const ropCreateAttachment = defineRop<CreateAttachmentReq>({
     assertWritable(logon);
     if (message.readOnly || message.submitted) throw new RopError(Ec.AccessDenied, 'message is read-only');
     await ensureContent(ctx.store, message);
-    if (message.attachments.length >= MAX_ATTACHMENTS) throw new RopError(Ec.OutOfMemory, `more than ${MAX_ATTACHMENTS} attachments`);
+    if (message.attachments.length >= MAX_ATTACHMENTS) throw new RopError(Ec.MaxAttachmentExceeded, `more than ${MAX_ATTACHMENTS} attachments`);
     const attachment = newAttachment(message.nextAttachNum++);
     message.attachments.push(attachment);
     putObject(ctx, req.outputIndex, { kind: 'attachment', logon, message, attachment }, req.logonId);
