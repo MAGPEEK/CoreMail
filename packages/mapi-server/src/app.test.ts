@@ -10,12 +10,13 @@ import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { createFixedWindowLimiter, LiveConnectionRegistry, type CounterStore } from '@coremail/core';
 import { createApp } from './app.js';
-import { SessionRegistry, type SessionRedis } from './session/registry.js';
+import { SessionRegistry } from './session/registry.js';
+import { MemoryRedis } from './testing/memory-redis.js';
 import { ROP_REGISTRY } from './rop/registry.js';
 import { MemoryDirectory, MemoryStore } from './testing/memory-store.js';
 import {
   MapiHttpClient, rop, decodeLogon, decodeQueryRows, responseHead, TAG, HANDLE_UNUSED, connectBody, AB, nspiBody, nspiDecode,
-  parseExecuteResponse, readNotifications, ropOutput, type ClientResult,
+  parseExecuteResponse, readNotifications, ropOutput, ICS, decodeGetBuffer, decodeIcsStream, type ClientResult,
 } from './testing/mapi-client.js';
 import { authenticate, type AuthOutcome } from './http/auth.js';
 import { queueNotificationSource, type NotificationSource } from './emsmdb/notification-wait.js';
@@ -26,13 +27,6 @@ const USERS: Record<string, { password: string; userId: string; mapi: boolean }>
   'bob@example.test': { password: 'pw-b', userId: 'ub', mapi: false },
   'carol@example.test': { password: 'pw-c', userId: 'uc', mapi: true },
 };
-
-class MemoryRedis implements SessionRedis {
-  keys = new Set<string>();
-  async set(key: string): Promise<unknown> { this.keys.add(key); return 'OK'; }
-  async pexpire(key: string): Promise<number> { return this.keys.has(key) ? 1 : 0; }
-  async del(key: string): Promise<number> { return this.keys.delete(key) ? 1 : 0; }
-}
 
 async function fakeAuthenticate(header: string | undefined): Promise<AuthOutcome> {
   if (!header?.startsWith('Basic ')) return { ok: false, status: 401, reason: 'credentials required' };
@@ -444,6 +438,50 @@ test('address book: another account cannot use a session cookie; a malformed Bin
   assertOk(await third.request('nspi', 'Bind', nspiBody.bind()));
   assertOk(await third.request('nspi', 'QueryRows', nspiBody.queryRows({}, 1, [TAG.DisplayName])));
   assert.ok(directory.loads - loads <= 1, 'sessions of one domain share the address book snapshot');
+});
+
+test('cached mode over HTTP: ICS initial sync in partial buffers, then an incremental sync with the uploaded state', async () => {
+  const c = alice();
+  assertOk(await c.connect(''));
+  const sync = async (state: Map<number, Buffer>): Promise<ReturnType<typeof decodeIcsStream>> => {
+    const logon = await c.execute([rop.logon(0)], [HANDLE_UNUSED]);
+    const inbox = decodeLogon(logon.rop!.responses).folderIds[4]!;
+    const rops = [rop.openFolder(0, 1, inbox), rop.syncConfigure(1, 2, ICS.SyncContents, ICS.FlagUnicode | ICS.FlagNormal | ICS.FlagReadState, ICS.ExtraEid)];
+    for (const [tag, value] of state) rops.push(rop.uploadStateBegin(2, tag, value.length), rop.uploadStateContinue(2, value), rop.uploadStateEnd(2));
+    let handles = (await c.execute(rops, [logon.rop!.handles[0]!, HANDLE_UNUSED, HANDLE_UNUSED])).rop!.handles;
+    const parts: Buffer[] = [];
+    for (;;) {
+      const g = await c.execute([rop.getBuffer(2, 64)], handles);
+      handles = g.rop!.handles;
+      const chunk = decodeGetBuffer(g.rop!.responses);
+      assert.equal(chunk.returnValue, 0);
+      parts.push(chunk.data);
+      if (chunk.status === 3) return decodeIcsStream(Buffer.concat(parts));
+    }
+  };
+  const first = await sync(new Map());
+  assert.ok(first.messages.some((m) => m.props.get(TAG.Subject) === 'Welcome'));
+  const inbox = store.folderByName('mba', 'INBOX').id;
+  store.addMessage(inbox, { subject: 'Synced later' });
+  const delta = await sync(first.state);
+  assert.deepEqual(delta.messages.map((m) => m.props.get(TAG.Subject)), ['Synced later']);
+  assert.equal(delta.ended, true);
+});
+
+test('review 9.4: a Bind with CP_WINUNICODE or an unserved code page → InvalidCodepage and no session; a Western Bind works', async () => {
+  const before = sessions.size;
+  for (const codePage of [AB.CP_WINUNICODE, 4711]) {
+    const c = alice();
+    const r = await c.request('nspi', 'Bind', nspiBody.bind({ codePage }));
+    assertOk(r);
+    assert.equal(nspiDecode.bind(r.mapi!.body).errorCode, 0x8004011e, `code page ${codePage}`);
+    assert.equal(c.cookies.has('NspiContext'), false);
+  }
+  assert.equal(sessions.size, before, 'no session context');
+  const ok = alice();
+  const r = await ok.request('nspi', 'Bind', nspiBody.bind({ codePage: 1251 }));
+  assert.equal(nspiDecode.bind(r.mapi!.body).errorCode, 0);
+  assertOk(await ok.request('nspi', 'QueryRows', nspiBody.queryRows({}, 1, [TAG.DisplayName])));
 });
 
 test('no Negotiate / NTLM: such a header gets the Basic challenge only', async () => {

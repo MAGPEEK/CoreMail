@@ -69,6 +69,13 @@ export class MapiSession {
 
   get user(): MapiUser { return this.auth.user; }
 
+  /** Ends a logon: its objects are released and its notifications dropped. */
+  dropLogon(logonId: number): void {
+    this.objects.releaseLogon(logonId);
+    this.logons.delete(logonId);
+    this.notifications.drop({ logonId });
+  }
+
   /** Message ID counter for a message that has not been saved yet. */
   nextDraftCounter(): bigint {
     this.draftCounter += 1n;

@@ -44,6 +44,11 @@ let writeBlocked = false;
 let sendAllowed = true;
 let limits = { maxMessageBytes: 1024 * 1024, maxRecipients: 10 };
 
+const { MemoryRedis } = await import('../testing/memory-redis.js');
+const { createRedisLocalIdStore, localIdSeed } = await import('./local-ids.js');
+const redis = new MemoryRedis();
+const NOW_MS = Date.parse('2026-11-17T09:00:00Z');
+
 const store = createPrismaStore({
   enqueue: async (j) => { jobs.push(j); },
   now: () => new Date('2026-11-17T09:00:00Z'),
@@ -52,6 +57,7 @@ const store = createPrismaStore({
   writeBlocked: async () => writeBlocked,
   limits: async () => limits,
   audit: async (e) => { audits.push(e as unknown as Record<string, unknown>); },
+  localIds: createRedisLocalIdStore(() => redis, () => NOW_MS),
 });
 
 beforeEach(() => {
@@ -264,4 +270,61 @@ test('loadContent: bodies from the raw original, Bcc from the row, attachment re
   assert.equal(content.attachments.length, 1);
   assert.equal(content.attachments[0]!.filename, 'a.txt');
   assert.equal((await store.loadAttachment(content.attachments[0]!.id)).toString(), 'att');
+});
+
+// ── Cached mode (ICS upload) ─────────────────────────────────────────────────
+
+test('importMessage: raw MIME through the message store, a regular row (no \\Draft) with the uploaded read state and date', async () => {
+  const date = new Date('2026-10-01T08:00:00Z');
+  const saved = await store.importMessage(OWN, 'archive', composed({ from: 'carol@example.test', subject: 'Copied offline' }), { read: true, date });
+  assert.deepEqual(saved.flags, ['\\Seen']);
+  const row = db.messages.find((m) => m['id'] === saved.id)!;
+  assert.equal(row['folderId'], 'archive');
+  const raw = objects.get(String(row['storagePath']))!.toString();
+  assert.match(raw, /^From: carol@example\.test/m);
+  assert.match(raw, /^Date: Thu, 01 Oct 2026 08:00:00/m);
+  const unread = await store.importMessage(OWN, 'archive', composed(), { read: false, date: null });
+  assert.deepEqual(unread.flags, []);
+  assert.equal(db.folders.find((f) => f['id'] === 'archive')!['unreadCount'], 1);
+  writeBlocked = true;
+  await assert.rejects(store.importMessage(OWN, 'archive', composed(), { read: false, date: null }), MailboxFullError);
+});
+
+test('renameFolder: the folder and its subfolders follow; collisions, default names and moves into itself are refused', async () => {
+  const inbox = (await store.listFolders('mb1')).find((f) => f.name === 'INBOX')!;
+  const projects = await store.createFolder(OWN, inbox, 'Projects');
+  assert.equal(typeof projects, 'object');
+  const p = projects as Exclude<typeof projects, string>;
+  const sub = await store.createFolder(OWN, p, 'Q4') as Exclude<typeof projects, string>;
+  events.length = 0;
+  assert.equal(await store.renameFolder(OWN, p.id, null, 'Clients'), 'ok');
+  assert.deepEqual(db.folders.filter((f) => [p.id, sub.id].includes(f['id'] as string)).map((f) => [f['name'], f['parentId']]),
+    [['Clients', null], ['Clients.Q4', p.id]]);
+  assert.equal(db.folders.find((f) => f['id'] === p.id)!['displayName'], 'Clients');
+  await settle();
+  assert.ok(events.some((e) => (e['kinds'] as string[]).includes('folders')), 'the folder list change is announced');
+  assert.equal(await store.renameFolder(OWN, p.id, null, 'Archive'), 'exists');
+  assert.equal(await store.renameFolder(OWN, p.id, null, 'sent'), 'exists', 'default names stay reserved');
+  assert.equal(await store.renameFolder(OWN, p.id, { ...sub, name: 'Clients.Q4' }, 'Loop'), 'invalid-name');
+  assert.equal(await store.renameFolder(OWN, 'nope', null, 'X'), 'not-found');
+});
+
+test('foreignAccess: the current permission of a logon to a shared mailbox (read-only change, revocation), no audit entry', async () => {
+  const shared = { mailboxId: 'mb2', kind: 'shared' as const, email: 'team@example.test', displayName: 'Team', readOnly: false, directoryId: 'sm1' };
+  perms.push({ permission: 'READ_ONLY', sharedMailbox: { id: 'sm1', email: 'team@example.test', displayName: 'Team', active: true, mailbox: { id: 'mb2' } } });
+  assert.deepEqual(await store.foreignAccess(USER, shared), { ...shared, readOnly: true });
+  perms.length = 0;
+  assert.equal(await store.foreignAccess(USER, shared), null);
+  await settle();
+  assert.deepEqual(audits, []);
+});
+
+test('local replica IDs: consecutive ranges above every UID, seeded from the clock, shared through Redis; replaced IDs remembered', async () => {
+  const first = await store.reserveLocalIds('mb1', 10);
+  assert.equal(first, localIdSeed(NOW_MS));
+  assert.equal(await store.reserveLocalIds('mb1', 5), first + 10n);
+  assert.equal(await store.reserveLocalIds('mb2', 1), localIdSeed(NOW_MS), 'per mailbox');
+  await store.addReplacedLocalIds('mb1', [first, first + 1n]);
+  assert.deepEqual([...await store.replacedLocalIds('mb1')], [first, first + 1n]);
+  assert.deepEqual([...await store.replacedLocalIds('mb2')], []);
 });

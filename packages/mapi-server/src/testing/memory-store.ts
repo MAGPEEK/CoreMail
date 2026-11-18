@@ -4,9 +4,10 @@
  * queueing it.
  */
 import type {
-  AttachmentRecord, ComposedMessage, DirectoryRecord, DirectoryStore, FolderRecord, MailboxRef, MailStore, MapiUser,
-  MessageContent, MessageSummary, NewMessage, SubmissionLimits, SubmitResult,
+  AttachmentRecord, ComposedMessage, DirectoryRecord, DirectoryStore, FolderRecord, ImportOptions, MailboxRef, MailStore,
+  MapiUser, MessageContent, MessageSummary, NewMessage, SubmissionLimits, SubmitResult,
 } from '../store/types.js';
+import { LOCAL_ID_BASE } from '../ics/keys.js';
 
 export interface MemoryMessage {
   summary: MessageSummary;
@@ -28,9 +29,13 @@ export class MemoryStore implements MailStore {
   readonly access = new Map<string, MailboxRef[]>();
   readonly directory = new Map<string, string>();
   limits: SubmissionLimits = { maxMessageBytes: 25 * 1024 * 1024, maxRecipients: 100 };
+  /** Messages stored by importMessage (with their options). */
+  readonly imported: Array<{ message: ComposedMessage; opts: ImportOptions }> = [];
+  readonly replaced = new Map<string, Set<bigint>>();
   private seq = 0;
   private uid = 100;
   private modSeq = 0n;
+  private nextLocalId = LOCAL_ID_BASE;
 
   addMailbox(ref: MailboxRef, folders: string[] = ['INBOX', 'Drafts', 'Sent', 'Trash', 'Junk', 'Archive']): void {
     this.mailboxes.set(ref.mailboxId, ref);
@@ -51,11 +56,12 @@ export class MemoryStore implements MailStore {
 
   addMessage(folderId: string, fields: Partial<MessageSummary> & { bodyText?: string; bodyHtml?: string; attachments?: Array<AttachmentRecord & { data: Buffer }> } = {}): MemoryMessage {
     const atts = fields.attachments ?? [];
+    const modSeq = ++this.modSeq;
     const summary: MessageSummary = {
       id: `m${++this.seq}`, folderId, uid: ++this.uid, flags: [], subject: 'Hello', fromAddr: 'sender@example.test',
       fromName: 'Sender', toAddrs: ['user@example.test'], ccAddrs: [], messageIdHeader: `<m${this.seq}@example.test>`,
       inReplyTo: null, date: new Date('2026-02-01T10:00:00Z'), createdAt: new Date('2026-02-01T10:00:05Z'),
-      rawSize: 1234, hasAttachments: atts.length > 0, modSeq: 1n, ...fields,
+      rawSize: 1234, hasAttachments: atts.length > 0, modSeq, ...fields,
     };
     const msg: MemoryMessage = {
       summary,
@@ -65,7 +71,7 @@ export class MemoryStore implements MailStore {
       },
       attachmentData: new Map(atts.map((a) => [a.id, a.data])),
       deleted: false,
-      createdModSeq: ++this.modSeq,
+      createdModSeq: modSeq,
     };
     this.messages.push(msg);
     this.recount(folderId);
@@ -137,13 +143,15 @@ export class MemoryStore implements MailStore {
   async setRead(_mailbox: MailboxRef, message: MessageSummary, read: boolean): Promise<void> {
     const m = this.messages.find((x) => x.summary.id === message.id)!;
     const flags = m.summary.flags.filter((f) => f !== '\\Seen');
+    if (m.summary.flags.includes('\\Seen') === read) return;
     m.summary.flags = read ? [...flags, '\\Seen'] : flags;
+    m.summary.modSeq = ++this.modSeq;
     this.recount(m.summary.folderId);
   }
 
   async deleteMessages(_mailbox: MailboxRef, folderId: string, uids: number[]): Promise<number> {
     const hit = this.live(folderId).filter((m) => uids.includes(m.summary.uid));
-    for (const m of hit) m.deleted = true;
+    for (const m of hit) { m.deleted = true; m.summary.modSeq = ++this.modSeq; }
     this.recount(folderId);
     return hit.length;
   }
@@ -151,8 +159,9 @@ export class MemoryStore implements MailStore {
   async moveOrCopy(source: { folderId: string }, target: { folderId: string }, uids: number[], copy: boolean): Promise<number> {
     const hit = this.live(source.folderId).filter((m) => uids.includes(m.summary.uid));
     for (const m of hit) {
-      if (copy) this.messages.push({ ...m, summary: { ...m.summary, id: `m${++this.seq}`, uid: ++this.uid, folderId: target.folderId }, createdModSeq: ++this.modSeq });
-      else { m.summary.folderId = target.folderId; m.summary.uid = ++this.uid; m.createdModSeq = ++this.modSeq; }
+      const modSeq = ++this.modSeq;
+      if (copy) this.messages.push({ ...m, summary: { ...m.summary, id: `m${++this.seq}`, uid: ++this.uid, folderId: target.folderId, modSeq }, createdModSeq: modSeq });
+      else { m.summary.folderId = target.folderId; m.summary.uid = ++this.uid; m.summary.modSeq = modSeq; m.createdModSeq = modSeq; }
     }
     this.recount(source.folderId);
     this.recount(target.folderId);
@@ -194,6 +203,48 @@ export class MemoryStore implements MailStore {
       .sort((a, b) => Number(a.createdModSeq - b.createdModSeq))
       .slice(0, limit)
       .map((m) => ({ folderId: m.summary.folderId, uid: m.summary.uid, read: m.summary.flags.includes('\\Seen'), createdModSeq: m.createdModSeq }));
+  }
+
+  async importMessage(_mailbox: MailboxRef, folderId: string, message: ComposedMessage, opts: ImportOptions): Promise<MessageSummary> {
+    this.imported.push({ message, opts });
+    const m = this.addMessage(folderId, {
+      flags: opts.read ? ['\\Seen'] : [], subject: message.subject, fromAddr: message.from ?? '', toAddrs: message.to,
+      ccAddrs: message.cc, bodyText: message.bodyText, bodyHtml: message.bodyHtml, ...(opts.date ? { date: opts.date } : {}),
+    });
+    return { ...m.summary };
+  }
+
+  async renameFolder(mailbox: MailboxRef, folderId: string, parent: FolderRecord | null, displayName: string): Promise<'ok' | 'exists' | 'invalid-name' | 'not-found'> {
+    const f = this.folders.find((x) => x.id === folderId && x.mailboxId === mailbox.mailboxId);
+    if (!f) return 'not-found';
+    const name = parent ? `${parent.name}.${displayName}` : displayName;
+    if (this.folders.some((x) => x.mailboxId === mailbox.mailboxId && x.name === name && x.id !== folderId)) return 'exists';
+    const old = f.name;
+    for (const x of this.folders) {
+      if (x.mailboxId === mailbox.mailboxId && x.name.startsWith(`${old}.`)) x.name = name + x.name.slice(old.length);
+    }
+    Object.assign(f, { name, displayName, parentId: parent?.id ?? null });
+    return 'ok';
+  }
+
+  async reserveLocalIds(_mailboxId: string, count: number): Promise<bigint> {
+    const first = this.nextLocalId;
+    this.nextLocalId += BigInt(count);
+    return first;
+  }
+
+  async replacedLocalIds(mailboxId: string): Promise<Set<bigint>> {
+    return new Set(this.replaced.get(mailboxId) ?? []);
+  }
+
+  async addReplacedLocalIds(mailboxId: string, ids: readonly bigint[]): Promise<void> {
+    const set = this.replaced.get(mailboxId) ?? new Set<bigint>();
+    for (const id of ids) set.add(id);
+    this.replaced.set(mailboxId, set);
+  }
+
+  async foreignAccess(user: MapiUser, mailbox: MailboxRef): Promise<MailboxRef | null> {
+    return (this.access.get(user.userId) ?? []).find((m) => m.mailboxId === mailbox.mailboxId) ?? null;
   }
 }
 

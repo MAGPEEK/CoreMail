@@ -18,6 +18,7 @@ import { connectDatabase, waitForObjectStorage, startWebmailPolicySubscriber } f
 import { createApp } from './app.js';
 import { authenticate } from './http/auth.js';
 import { SessionRegistry, type SessionRedis } from './session/registry.js';
+import { startForeignAccessWatcher } from './session/foreign-access.js';
 import { queueNotificationSource } from './emsmdb/notification-wait.js';
 import { startNotificationBus } from './emsmdb/notify/bus.js';
 import { createPrismaStore } from './store/prisma-store.js';
@@ -57,6 +58,8 @@ async function main(): Promise<void> {
 
   const store = createPrismaStore();
   startNotificationBus({ sessions, store });
+  // 9.5: a revoked shared / delegated mailbox grant ends that logon in open sessions at once.
+  startForeignAccessWatcher({ sessions, store });
   const app = createApp({
     sessions,
     store,

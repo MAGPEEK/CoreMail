@@ -23,8 +23,8 @@ import { respondFailure, respondStreaming, type WorkResult } from '../http/respo
 import { admit, dropNamedSession, sameContext, type EmsmdbDeps } from '../emsmdb/handler.js';
 import { WireFormatError } from '../wire/reader.js';
 import { AddressBook } from './address-book.js';
-import { buildFailureBody, parseBind } from './bodies.js';
-import { NSPI_OPERATIONS, type NspiContext } from './operations.js';
+import { buildFailureBody } from './bodies.js';
+import { bindCodePage, DEFAULT_BIND_CODEPAGE, NSPI_OPERATIONS, type NspiContext } from './operations.js';
 import type { MapiSession } from '../session/session.js';
 import type { DirectoryStore } from '../store/types.js';
 
@@ -65,6 +65,8 @@ export function nspiHandler(deps: NspiDeps): RequestHandler {
   const books = new Map<string, Snapshot>();
   // Hidden entries each session may read by MID (operations.ts NspiContext.revealed).
   const revealed = new WeakMap<MapiSession, Set<string>>();
+  // The 8-bit code page each session bound with (MS-OXNSPI 3.1.4.1.1).
+  const codePages = new WeakMap<MapiSession, number>();
 
   const stream = (res: Response, h: MapiRequestHeaders, setCookies: string[], work: () => Promise<WorkResult>): Promise<void> =>
     respondStreaming(res, h, { pendingMs: deps.config.pendingMs, expirationMs: deps.config.idleMs, setCookies }, work);
@@ -98,6 +100,7 @@ export function nspiHandler(deps: NspiDeps): RequestHandler {
       },
       endpoints: deps.endpoints,
       revealed: session ? revealedOf(session) : new Set(),
+      codePage: (session && codePages.get(session)) ?? DEFAULT_BIND_CODEPAGE,
     };
   }
 
@@ -113,10 +116,16 @@ export function nspiHandler(deps: NspiDeps): RequestHandler {
   }
 
   async function bind(req: Request, res: Response, h: MapiRequestHeaders, auth: { auth: MapiSession['auth']; startedAt: number }): Promise<void> {
-    // A malformed Bind creates no session context.
-    try { parseBind(bodyOf(req)); } catch (err) {
+    // A malformed Bind, or one with a code page the server does not serve, creates no session context.
+    let bound: ReturnType<typeof bindCodePage>;
+    try { bound = bindCodePage(bodyOf(req)); } catch (err) {
       if (!(err instanceof WireFormatError)) throw err;
       respondFailure(res, h, ResponseCode.InvalidRequestBody, 'invalid Bind body');
+      return;
+    }
+    if (!bound.ok) {
+      const response = bound.response;
+      await stream(res, h, [], async () => ({ responseCode: ResponseCode.Success, body: response }));
       return;
     }
     // Reconnecting with the cookies of a live context: that context ends first (MS-OXCMAPIHTTP 3.2.5.6).
@@ -126,6 +135,7 @@ export function nspiHandler(deps: NspiDeps): RequestHandler {
       if (old) await deps.sessions.end(old);
     }
     const created = await deps.sessions.create(auth.auth, auth.startedAt, 'nspi');
+    codePages.set(created.session, bound.codePage);
     log.info({ userId: auth.auth.user.userId, client: h.clientApplication.slice(0, 80) }, 'NSPI session created');
     await stream(res, h, [cookie(NSPI_CONTEXT_COOKIE, created.context, req), cookie(NSPI_SEQUENCE_COOKIE, created.sequence, req)],
       () => run(h, bodyOf(req), created.session));

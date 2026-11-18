@@ -9,6 +9,7 @@ import { Tag, ObjectType, MessageFlag, RecipientKind } from '../props/tags.js';
 import {
   makeId, folderEntryId, messageEntryId, addressBookEntryId, objectKey, SpecialCounter,
 } from '../ids.js';
+import { changeKey, changeNumberId, folderChangeNumber, predecessorChangeList, sourceKey } from '../ics/keys.js';
 import type { FolderNode } from './mailbox-view.js';
 import type { LogonState, AttachmentState, RecipientState } from './state.js';
 import type { AttachmentRecord, MessageContent, MessageSummary } from '../store/types.js';
@@ -70,7 +71,10 @@ export function folderBag(logon: LogonState, node: FolderNode): PropertyBag {
   bag.set(Tag.EntryId, folderEntryId(guids, node.counter));
   bag.set(Tag.RecordKey, folderEntryId(guids, node.counter));
   bag.set(Tag.InstanceKey, objectKey('folder-instance', `${mailbox.mailboxId}:${id}`));
-  bag.set(Tag.ChangeKey, objectKey('folder-change', `${id}:${node.record?.totalCount ?? 0}:${node.record?.unreadCount ?? 0}`));
+  const folderChange = changeKey(guids, folderChangeNumber(node));
+  bag.set(Tag.SourceKey, sourceKey(guids, node.counter));
+  bag.set(Tag.ChangeKey, folderChange);
+  bag.set(Tag.PredecessorChangeList, predecessorChangeList(folderChange));
   bag.set(Tag.ObjectType, ObjectType.Folder);
   bag.set(Tag.FolderType, node.special === 'root' ? FOLDER_TYPE_ROOT : FOLDER_TYPE_GENERIC);
   bag.set(Tag.ContentCount, node.record?.totalCount ?? 0);
@@ -90,6 +94,7 @@ export function folderBag(logon: LogonState, node: FolderNode): PropertyBag {
   if (node.parentCounter !== null) {
     bag.set(Tag.ParentFolderId, makeId(node.parentCounter));
     bag.set(Tag.ParentEntryId, folderEntryId(guids, node.parentCounter));
+    bag.set(Tag.ParentSourceKey, sourceKey(guids, node.parentCounter));
   }
   if (node.special === 'root' || node.role === 'inbox') {
     const drafts = view.role('drafts');
@@ -141,7 +146,12 @@ export function messageSummaryBag(logon: LogonState, folderCounter: bigint, m: M
   bag.set(Tag.RecordKey, messageEntryId(guids, folderCounter, counter));
   bag.set(Tag.InstanceKey, objectKey('message-instance', m.id));
   bag.set(Tag.SearchKey, objectKey('message-search', m.messageIdHeader ?? m.id));
-  bag.set(Tag.ChangeKey, objectKey('message-change', `${m.id}:${m.modSeq}`));
+  const change = changeKey(guids, m.modSeq);
+  bag.set(Tag.SourceKey, sourceKey(guids, counter));
+  bag.set(Tag.ParentSourceKey, sourceKey(guids, folderCounter));
+  bag.set(Tag.ChangeKey, change);
+  bag.set(Tag.PredecessorChangeList, predecessorChangeList(change));
+  bag.set(Tag.ChangeNumber, changeNumberId(m.modSeq));
   bag.set(Tag.ObjectType, ObjectType.Message);
   bag.set(Tag.MessageClass, 'IPM.Note');
   bag.set(Tag.Subject, m.subject);

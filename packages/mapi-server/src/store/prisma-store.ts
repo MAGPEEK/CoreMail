@@ -16,7 +16,7 @@
  *  - drafts are stored as raw MIME with \Draft (visible to every client).
  */
 import { randomUUID } from 'node:crypto';
-import { createLogger } from '@coremail/core';
+import { createLogger, getRedisClient } from '@coremail/core';
 import {
   prisma, listAccessibleMailboxes, ensureMailboxProvisioned, directoryIdFromLegacyDn, reservedFolderPrefix,
   DEFAULT_FOLDERS, deleteFolderMovingMail, loadRawMessage, parseRawMessage, downloadBuffer, storeRawInFolder,
@@ -26,6 +26,7 @@ import {
   type RawSourceMessage, type MailboxAccessEvent, type MailboxAccessAction,
 } from '@coremail/storage';
 import { enqueueRawOutbound, type RawOutboundJob } from './outbound.js';
+import { createRedisLocalIdStore, type LocalIdRedis, type LocalIdStore } from './local-ids.js';
 import {
   MailboxFullError,
   type ComposedMessage, type FolderRecord, type FolderTarget, type MailboxRef, type MailStore, type MapiUser,
@@ -99,6 +100,8 @@ export interface PrismaStoreDeps {
   limits: (userId: string) => Promise<SubmissionLimits>;
   /** Mailbox access audit entry (storage recordMailboxAccess; never throws). */
   audit: (event: MailboxAccessEvent) => Promise<unknown>;
+  /** Client-assigned IDs of cached mode (Redis, shared by every instance). */
+  localIds: LocalIdStore;
 }
 
 export const defaultStoreDeps: PrismaStoreDeps = {
@@ -112,6 +115,7 @@ export const defaultStoreDeps: PrismaStoreDeps = {
     return { maxMessageBytes: l.maxBytes, maxRecipients: l.maxRecipients };
   },
   audit: recordMailboxAccess,
+  localIds: createRedisLocalIdStore(() => getRedisClient() as unknown as LocalIdRedis),
 };
 
 export function createPrismaStore(deps: PrismaStoreDeps = defaultStoreDeps): MailStore {
@@ -381,6 +385,47 @@ export function createPrismaStore(deps: PrismaStoreDeps = defaultStoreDeps): Mai
         take: limit,
       });
       return rows.map((r) => ({ folderId: r.folderId, uid: r.uid, read: r.flags.includes(SEEN), createdModSeq: r.createdModSeq ?? 0n }));
+    },
+
+    async importMessage(mailbox, folderId, message, opts) {
+      if (await deps.writeBlocked(mailbox.mailboxId)) throw new MailboxFullError();
+      const own = message.from === null;
+      const raw = buildMime(message, { address: message.from ?? mailbox.email, name: own ? mailbox.displayName : '' }, opts.date ?? deps.now());
+      const row = await storeRawInFolder({
+        mailboxId: mailbox.mailboxId, folderId, raw, flags: opts.read ? [SEEN] : [], bccAddrs: unique(message.bcc),
+      });
+      return toSummary(row, await attachmentOwners([row.id]));
+    },
+
+    async renameFolder(mailbox, folderId, parent, displayName) {
+      const name = parent ? `${parent.name}.${displayName}` : displayName;
+      if (reservedFolderPrefix(name)) return 'invalid-name';
+      if (!parent && TOP_LEVEL_DEFAULTS.has(name.toLowerCase())) return 'exists';
+      const folders = await prisma.folder.findMany({ where: { mailboxId: mailbox.mailboxId }, select: { id: true, name: true } });
+      const folder = folders.find((f) => f.id === folderId);
+      if (!folder) return 'not-found';
+      const moving = folders.filter((f) => f.id === folderId || f.name.startsWith(`${folder.name}.`));
+      if (parent && moving.some((f) => f.id === parent.id)) return 'invalid-name'; // into itself
+      const renames = moving.map((f) => ({ id: f.id, name: name + f.name.slice(folder.name.length) }));
+      const others = new Set(folders.filter((f) => !moving.includes(f)).map((f) => f.name));
+      if (renames.some((r) => others.has(r.name))) return 'exists';
+      await prisma.$transaction(async (tx) => {
+        await tx.folder.update({ where: { id: folderId }, data: { name, displayName, parentId: parent?.id ?? null } });
+        for (const r of renames) if (r.id !== folderId) await tx.folder.update({ where: { id: r.id }, data: { name: r.name } });
+      });
+      announceFolderListChange(mailbox.mailboxId);
+      audit(mailbox, 'mailbox.foreign.folder.update', { count: 1 });
+      return 'ok';
+    },
+
+    reserveLocalIds: (mailboxId, count) => deps.localIds.reserve(mailboxId, count),
+    replacedLocalIds: (mailboxId) => deps.localIds.replaced(mailboxId),
+    addReplacedLocalIds: (mailboxId, ids) => deps.localIds.addReplaced(mailboxId, ids),
+
+    async foreignAccess(user, mailbox) {
+      const accessible = await listAccessibleMailboxes(prisma, user.userId);
+      const hit = accessible.find((a) => a.mailboxId === mailbox.mailboxId);
+      return hit ? { ...mailbox, readOnly: hit.readOnly } : null;
     },
   };
 }

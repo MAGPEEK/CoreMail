@@ -25,6 +25,7 @@ import {
 import { counterOf, folderNode, refreshView, uidOf } from './common.js';
 import { ensureContent } from './content.js';
 import { composeMessage } from './compose.js';
+import { saveImported } from './sync-import.js';
 import { readRecipientRow, writeSmtpRecipientRow, writeTypedString, type ParsedRecipientRow } from './recipients.js';
 import type { LogonState, MessageState, RecipientState, TableState } from '../../objects/state.js';
 import { MailboxFullError, type MailStore } from '../../store/types.js';
@@ -103,7 +104,7 @@ export const ropOpenMessage = defineRop<OpenReq>({
       props: messageSummaryBag(logon, folderCounter, summary),
       recipients: recipientsFromRow(summary, null), attachments: [], nextAttachNum: 0,
       readOnly: req.mode === OPEN_READ_ONLY || logon.mailbox.readOnly,
-      contentLoaded: false, submitted: false, associated: false,
+      contentLoaded: false, submitted: false, associated: false, imported: null,
     };
     putObject(ctx, req.outputIndex, { kind: 'message', logon, message }, req.logonId);
 
@@ -159,7 +160,7 @@ export const ropCreateMessage = defineRop<CreateReq>({
     const message: MessageState = {
       folderCounter, counter, summary: null, props: newMessageBag(logon, folderCounter, counter, ctx.now()),
       recipients: [], attachments: [], nextAttachNum: 0, readOnly: false, contentLoaded: true,
-      submitted: false, associated: req.associated,
+      submitted: false, associated: req.associated, imported: null,
     };
     putObject(ctx, req.outputIndex, { kind: 'message', logon, message }, req.logonId);
     return okResponse(RopId.CreateMessage, req.outputIndex).u8(0).toBuffer();
@@ -192,7 +193,8 @@ export const ropSaveChangesMessage = defineRop<SaveReq>({
     if (message.readOnly || message.submitted) throw new RopError(Ec.AccessDenied, 'message is read-only');
     assertWritable(logon);
     await refreshView(ctx.store, logon);
-    await persistDraft(ctx.store, logon, message);
+    if (message.imported) await saveImported(ctx.store, logon, message);
+    else await persistDraft(ctx.store, logon, message);
     return okResponse(RopId.SaveChangesMessage, req.responseIndex).u8(req.inputIndex).u64(makeId(message.counter)).toBuffer();
   },
 });

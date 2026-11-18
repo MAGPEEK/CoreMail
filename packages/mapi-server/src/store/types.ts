@@ -155,6 +155,28 @@ export interface MailStore {
    * `sinceModSeq` (created, copied or moved in), oldest first, at most `limit`.
    */
   messagesCreatedSince(folderIds: readonly string[], sinceModSeq: bigint, limit: number): Promise<NewMessage[]>;
+
+  // ── Cached mode (ICS upload, docs/mapi.md) ──
+  /** Stores a message the client uploaded as a regular (not draft) message; returns the row. */
+  importMessage(mailbox: MailboxRef, folderId: string, message: ComposedMessage, opts: ImportOptions): Promise<MessageSummary>;
+  /** Renames and / or moves a folder below `parent` (null = top level); its subfolders follow. */
+  renameFolder(mailbox: MailboxRef, folderId: string, parent: FolderRecord | null, displayName: string): Promise<'ok' | 'exists' | 'invalid-name' | 'not-found'>;
+  /** Reserves `count` IDs for the client (RopGetLocalReplicaIds); returns the first GLOBCNT. */
+  reserveLocalIds(mailboxId: string, count: number): Promise<bigint>;
+  /** Client-assigned IDs whose objects the server stored under its own ID. */
+  replacedLocalIds(mailboxId: string): Promise<Set<bigint>>;
+  addReplacedLocalIds(mailboxId: string, ids: readonly bigint[]): Promise<void>;
+  /**
+   * The session user's current access to a shared / delegated mailbox it is
+   * logged on to (null = revoked); no mailbox access audit entry.
+   */
+  foreignAccess(user: MapiUser, mailbox: MailboxRef): Promise<MailboxRef | null>;
+}
+
+export interface ImportOptions {
+  read: boolean;
+  /** Date of the message (PidTagClientSubmitTime / delivery time); null = now. */
+  date: Date | null;
 }
 
 /** A message that appeared in a folder (NewMail notifications). */

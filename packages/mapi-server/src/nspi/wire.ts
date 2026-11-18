@@ -120,7 +120,11 @@ function writeScalar(w: BufferWriter, type: number, v: unknown): void {
     case PropType.Time: w.u64(toFileTime(v as Date)); return;
     case PropType.Guid: w.bytes(v as Buffer); return;
     case PropType.String: w.utf16Z(String(v)); return;
-    case PropType.String8: w.asciiZ(toLatin1(String(v))); return;
+    // An 8-bit string arrives encoded in the request's code page (address-book.ts cellsOf).
+    case PropType.String8:
+      if (Buffer.isBuffer(v)) w.bytes(v).u8(0);
+      else w.asciiZ(toLatin1(String(v)));
+      return;
     case PropType.Binary: { const b = v as Buffer; w.u32(b.length).bytes(b); return; }
     default: throw new RangeError(`address book value of type 0x${type.toString(16)} cannot be serialized`);
   }

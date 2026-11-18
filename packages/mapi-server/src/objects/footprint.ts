@@ -45,6 +45,8 @@ export function sessionFootprint(objects: Iterable<ServerObject>): number {
     else if (o.kind === 'stream') {
       buffer(o.stream.data);
       if (o.stream.target.kind !== 'readonly') message(o.stream.target.message);
+    } else if (o.kind === 'syncDownload' || o.kind === 'syncUpload') {
+      total += o.sync.stateUpload?.size ?? 0; // an ICS state being uploaded
     }
   }
   return total;
