@@ -72,7 +72,7 @@ GET  /api/v1/events?ticket=<ticket>
   **deprecated** and will be removed.
 - Frontends: request a fresh ticket before every `new EventSource(...)`,
   including reconnects, because a ticket cannot be reused. Since 9.0 the MWA
-  (`useMailEvents`) and the BCP dashboard do exactly that
+  (`useRealtime`, since 9.4 one connection per browser) and the BCP dashboard do exactly that
   (`lib/reconnectingEventSource.ts`, ticket request through the API client, one
   refresh on a 401); neither puts the access token into a URL any more.
 

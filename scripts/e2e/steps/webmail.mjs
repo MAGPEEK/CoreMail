@@ -5,7 +5,7 @@
 // 403 READ_ONLY (shared + delegated), SEND_AS-free users see nothing; 9.4 live
 // stream (contacts / calendar / mailbox events), manifest + service worker. Grants made
 // here are removed again at the end.
-import { check, assert, creds, http, session, openSse } from '../lib.mjs';
+import { BASE, check, assert, creds, http, session, openSse } from '../lib.mjs';
 
 export async function run(state) {
   const c = creds();
@@ -193,6 +193,14 @@ export async function run(state) {
     const m = await http('GET', '/manifest.webmanifest');
     assert(m.status === 200 && /manifest\+json/.test(m.headers.get('content-type') ?? ''), `manifest ${m.status}`);
     assert(m.json?.name && m.json.start_url === '/mail' && m.json.icons?.length, `manifest ${m.text.slice(0, 200)}`);
+    // 9.4: PNG icons 192 + 512 (built-in or scaled from a PNG favicon), each one served as a PNG
+    const sizes = new Set(m.json.icons.filter((i) => i.type === 'image/png').map((i) => i.sizes));
+    assert(sizes.has('192x192') && sizes.has('512x512'), `icon sizes ${[...sizes].join(',')}`);
+    for (const icon of m.json.icons) {
+      const r = await fetch(new URL(icon.src, BASE));
+      const bytes = Buffer.from(await r.arrayBuffer());
+      assert(r.status === 200 && bytes.subarray(1, 4).toString('latin1') === 'PNG', `icon ${icon.src} → ${r.status}`);
+    }
     const sw = await http('GET', '/sw.js');
     assert(sw.status === 200 && /no-cache/.test(sw.headers.get('cache-control') ?? ''), `sw.js ${sw.status} ${sw.headers.get('cache-control')}`);
     return `${m.json.name}; sw.js no-cache`;
