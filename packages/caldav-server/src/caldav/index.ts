@@ -39,6 +39,9 @@ import {
   resourceIdFromHref,
   sendDavError,
   sendMultistatus,
+  sendReadOnlyProppatch,
+  sendUidConflict,
+  isUniqueViolation,
   syncTokenFor,
   xmlChild,
   xmlChildren,
@@ -46,6 +49,7 @@ import {
   type XmlNode,
 } from '../dav-utils.js';
 import { compileCalendarFilter, UnsupportedFilterError } from '../dav-filter.js';
+import { appendTaskCollection } from './tasks.js';
 
 const log = createLogger('caldav');
 
@@ -247,7 +251,9 @@ caldavRouter.all('/calendars/:userId', asyncHandler(async (req: Request, res: Re
   appendCurrentUserPrincipal(homeProp, req);
   homeStat.ele('d:status').txt('HTTP/1.1 200 OK');
 
-  if (req.get('Depth') !== '0') {
+  // 9.5: calendars and the task list, each only while its webmail module is on
+  const modules = req.davModules ?? { calendar: true, tasks: true };
+  if (req.get('Depth') !== '0' && modules.calendar) {
     const [owned, shares] = await Promise.all([
       prisma.calendar.findMany({ where: { userId } }),
       prisma.calendarShare.findMany({
@@ -271,6 +277,7 @@ caldavRouter.all('/calendars/:userId', asyncHandler(async (req: Request, res: Re
       propstat.ele('d:status').txt('HTTP/1.1 200 OK');
     }
   }
+  if (req.get('Depth') !== '0' && modules.tasks) await appendTaskCollection(doc, req, userId);
 
   sendMultistatus(res, doc);
 }));
@@ -351,17 +358,6 @@ function appendEventResponse(doc: XmlNode, req: Request, href: string, etag: str
   appendPrivilegeSet(evProp.ele('d:current-user-privilege-set'), permission);
   appendCurrentUserPrincipal(evProp, req);
   evPropstat.ele('d:status').txt('HTTP/1.1 200 OK');
-}
-
-/** PROPPATCH on a resource without writable properties: 403 for each property (RFC 4918 §9.2). */
-function sendReadOnlyProppatch(req: Request, res: Response, href: string): void {
-  const ops = parseProppatch(req.body);
-  if (!ops) { res.status(400).send('Bad Request — DAV:propertyupdate expected'); return; }
-  const doc = newMultistatus();
-  const r = doc.ele('d:response');
-  r.ele('d:href').txt(href);
-  appendPropResults(r, ops.map((o) => ({ prop: o.prop, status: 403 })));
-  sendMultistatus(res, doc);
 }
 
 // ─── Settable collection properties (PROPPATCH + MKCALENDAR) ─────────────────
@@ -651,14 +647,6 @@ export function validateCalendarObject(text: string): Validation {
   const parsed = parseCalendarObject(text);
   if (!parsed) return { ok: false, status: 400, element: 'c:valid-calendar-data', message: 'no valid VEVENT with DTSTART' };
   return { ok: true, uid: parsed.main.uid, parsed };
-}
-
-function isUniqueViolation(err: unknown): boolean {
-  return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 'P2002';
-}
-
-function sendUidConflict(res: Response, href: string): void {
-  sendDavError(res, 409, 'c:no-uid-conflict', (el) => { el.ele('d:href').txt(href); });
 }
 
 // PUT /calendars/:userId/:calendarId/:eventId.ics — create or update event

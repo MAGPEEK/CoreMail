@@ -86,7 +86,8 @@ domain (BCP → Ressourcen) with capacity, location, `available` for the slot an
 
 Rooms selected in the event form (`rooms: [addresses]` on `POST`/`PUT /calendar/events`) are
 booked when the event is saved — no invitation mail goes to them. The resource settings decide
-(`api-gateway/src/lib/room-booking.ts`):
+(storage `resource-booking-rules.ts`, used by `api-gateway/src/lib/room-booking.ts` and the mail
+path):
 
 | Setting | Effect |
 |---------|--------|
@@ -94,16 +95,39 @@ booked when the event is saved — no invitation mail goes to them. The resource
 | recurring not allowed | a series is declined |
 | max. duration | longer meetings are declined |
 | booking window (days) | meetings starting later are declined |
-| decline conflicts | a meeting overlapping an accepted/tentative booking (recurring bookings expanded, every occurrence of a recurring meeting checked within the booking window) is declined |
+| decline conflicts | a meeting overlapping an accepted/tentative booking (recurring bookings expanded, every occurrence of a recurring meeting checked) is declined; without this setting it is accepted and the conflicting dates are listed with the booking |
 | approval / no auto-accept | the booking stays pending (`NEEDS-ACTION`) |
+
+Conflicts are checked from the meeting start to the end of the booking window, at most one year
+ahead, for at most 400 occurrences of a series (`EXDATE`s and moved or cancelled occurrences
+applied). The conflicting occurrences (up to 50) are stored with the booking
+(`ResourceBooking.conflicts`, 9.5) — the reason of a decline, or the list that comes with an
+acceptance when the room does not decline conflicts.
 
 The answer is the room's attendee entry (`ACCEPTED`, `DECLINED` with the reason, or
 `NEEDS-ACTION`) and is shown next to the room. Moving the meeting, changing its recurrence or
 moving a single occurrence re-checks the rooms against the meeting as it is stored afterwards;
 deleting a single occurrence frees its slot (the booking gets the `EXDATE`, the answer stays);
-removing a room or deleting the meeting releases the booking. Invitations from other mail
-clients still reach rooms through the mail path (smtp-server `handlers/resource-booking.ts`,
-same rules).
+removing a room or deleting the meeting releases the booking.
+
+#### Invitations by mail
+
+Invitations from other mail clients reach rooms through the mail path (smtp-server
+`handlers/resource-booking.ts`), for every delivery path. Since 9.5 it applies the same rules as
+the event form — before, a mailed series was checked with its first occurrence only, the
+settings for series, duration and booking window were not applied, and `TZID` start times were
+read as UTC:
+
+| Invitation | Effect on the room's booking |
+|------------|------------------------------|
+| `REQUEST` with the series (or a single meeting) | decided by the rules above, every occurrence checked |
+| `REQUEST` with only `RECURRENCE-ID` occurrences (a moved occurrence) | merged into the stored series, which is checked again |
+| `CANCEL` of the series | the booking is removed |
+| `CANCEL` with only `RECURRENCE-ID` occurrences | those occurrences get an `EXDATE`, their slots are free; the answer stays |
+
+Only the authenticated organizer of a booking changes or cancels it; a request from an
+unauthenticated organizer stays pending. The room sends no reply mail; its answer is the booking
+status (`GET /api/v1/admin/resources/:id/bookings`, with `conflicts`).
 
 Conflict check and booking run in one transaction under the room's booking lock
 (storage `lockResourceCalendar`, row lock on `ResourceCalendar.bookingSeq`) on both paths: of

@@ -32,9 +32,9 @@ deleted with the domain or user) and `trusted_image_senders`. The schema change 
 
 | Switch            | Webmail (hidden)                                    | Enforced on the server                                                |
 |-------------------|-----------------------------------------------------|-----------------------------------------------------------------------|
-| `calendar`        | rail entry, page, calendar settings                 | `/api/v1/calendar/*`; CalDAV `/dav/calendars/*` (403); ActiveSync MeetingResponse (Status 2, nothing written) |
+| `calendar`        | rail entry, page, calendar settings                 | `/api/v1/calendar/*`; CalDAV calendars `/dav/calendars/<id>/<calendar>/` (403; the calendar home stays open while tasks are on and then lists only the task list); ActiveSync MeetingResponse (Status 2, nothing written) |
 | `contacts`        | rail entry, page                                    | `/api/v1/contacts/*` (the compose autocomplete `GET /contacts?q=` stays and returns address-list entries only); CardDAV `/dav/addressbooks/*` (403); ActiveSync ResolveRecipients without personal contacts |
-| `tasks`           | rail entry, page, task reminders                    | `/api/v1/tasks/*`                                                     |
+| `tasks`           | rail entry, page, task reminders                    | `/api/v1/tasks/*`; CalDAV task list `/dav/calendars/<id>/tasks/` (403, not listed in the calendar home; 9.5) |
 | `notes`           | rail entry, page                                    | `/api/v1/notes/*`                                                     |
 | `rules`           | settings section, "Regeln" in the message menu      | `/api/v1/user/rules/*`                                                |
 | `signatures`      | settings section, signatures in compose             | `/api/v1/user/signature(s)`, signature defaults in `/user/preferences` |
