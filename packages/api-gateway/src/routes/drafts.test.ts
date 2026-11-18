@@ -411,7 +411,8 @@ test('send-from-draft enqueues like /send, then the draft becomes the Sent copy'
   const job = [...jobs.values()].at(-1)!;
   const m = job.data['message'] as Row;
   assert.equal(job.data['from'], 'team@ex.com', 'send-as resolved like /send');
-  assert.deepEqual(job.data['to'], ['Jörg <joerg@x.test>', 'c@x.test', 'b@x.test']);
+  assert.deepEqual(job.data['to'], ['joerg@x.test', 'c@x.test', 'b@x.test'], 'envelope: bare addresses');
+  assert.equal(job.data['dsn'], undefined, 'no delivery receipt asked for');
   assert.deepEqual(m['bcc'], ['b@x.test']);
   assert.equal(m['messageId'], draftMid, 'draft Message-ID is kept');
   const qAtt = (m['attachments'] as Row[])[0]!;
@@ -596,9 +597,12 @@ test('9.4 importance: stored in the draft (headers + column), loaded back, carri
   const low = await call('PUT', `/drafts/${id}`, { user: 'u1', body: { to: ['imp@x.test'], subject: 'Wichtig', importance: 'low' } });
   const lowId = String(low.json['id']);
   assert.equal((await call('GET', `/drafts/${lowId}`, { user: 'u1' })).json['importance'], 'low');
-  const sent = await call('POST', `/drafts/${lowId}/send`, { user: 'u1', body: {} });
+  const sent = await call('POST', `/drafts/${lowId}/send`, { user: 'u1', body: { requestDeliveryReceipt: true } });
   assert.equal(sent.status, 200);
-  assert.equal(([...jobs.values()].at(-1)!.data['message'] as Row)['importance'], 'low');
+  const job = [...jobs.values()].at(-1)!;
+  assert.equal((job.data['message'] as Row)['importance'], 'low');
+  // 9.4: delivery receipt = success DSN for every envelope recipient
+  assert.deepEqual(job.data['dsn'], { ret: 'HDRS', rcpts: { 'imp@x.test': { notify: ['SUCCESS', 'FAILURE'] } } });
 
   const normal = await call('POST', '/drafts', { user: 'u1', body: { to: ['imp@x.test'], subject: 'Normal' } });
   const nid = String(normal.json['id']);

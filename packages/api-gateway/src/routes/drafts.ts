@@ -446,6 +446,8 @@ const SendDraftSchema = z.object({
   scheduledAt: isoDateTime().optional(),
   /** 9.4: ask the recipients for a read receipt */
   requestReceipt: z.boolean().optional(),
+  /** 9.4: ask for a delivery receipt (success DSN) */
+  requestDeliveryReceipt: z.boolean().optional(),
 });
 
 /**
@@ -541,6 +543,7 @@ draftsRouter.post('/:id/send', sendRateLimiter.middleware, async (req: Request, 
       sendAs: mode.sendAs,
       sendOnBehalfOf: mode.sendOnBehalfOf,
       requestReceipt: parsedBody.data.requestReceipt === true,
+      requestDeliveryReceipt: parsedBody.data.requestDeliveryReceipt === true,
       importance: f.importance,
       messageId: f.messageId,
       // 8.1: inline images keep their Content-ID (cid without angle brackets)

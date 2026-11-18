@@ -19,7 +19,7 @@ import {
 import { getRedisClient, createBullMqConnection, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
 import { requireAuth } from '../middleware/auth.js';
 import { checkFolderParent, type FolderLookup } from '../lib/folder-tree.js';
-import { withBodyLimit, checkRecipients, MAX_SEND_FILES } from '../lib/send-limits.js';
+import { withBodyLimit, checkRecipients, envelopeRecipients, deliveryReceiptDsn, MAX_SEND_FILES } from '../lib/send-limits.js';
 import { createUserRateLimiter, envInt } from '../lib/user-rate-limit.js';
 import { resolveReplyHeaders, prismaReplyLookup, parseClientReferences } from '../lib/reply-headers.js';
 import { rspamdControllerHeaders } from '../lib/rspamd-controller.js';
@@ -825,6 +825,7 @@ mailRouter.post(
     let sendOnBehalfOf: string | null = null;    // shared mailbox address as „on behalf of" (SEND_ON_BEHALF)
     let requestReceipt = false;                  // 9.4: Disposition-Notification-To
     let importance: Importance = 'normal';       // 9.4: Importance / X-Priority
+    let requestDeliveryReceipt = false;          // 9.4: success DSN (NOTIFY=SUCCESS,FAILURE)
 
     const ct = req.headers['content-type'] ?? '';
     if (ct.startsWith('application/json')) {
@@ -841,6 +842,7 @@ mailRouter.post(
         sendAs:        z.string().email().optional(),
         sendOnBehalfOf: z.string().email().optional(),
         requestReceipt: z.boolean().optional(),
+        requestDeliveryReceipt: z.boolean().optional(),
         importance: z.enum(['high', 'normal', 'low']).optional(),
       });
       const parsed = schema.safeParse(req.body);
@@ -857,6 +859,7 @@ mailRouter.post(
       if (parsed.data.sendAs)         sendAsAddress  = parsed.data.sendAs.toLowerCase();
       if (parsed.data.sendOnBehalfOf) sendOnBehalfOf = parsed.data.sendOnBehalfOf.toLowerCase();
       requestReceipt = parsed.data.requestReceipt === true;
+      requestDeliveryReceipt = parsed.data.requestDeliveryReceipt === true;
       importance = normalizeImportance(parsed.data.importance);
     } else {
       // multipart — fields arrive as strings (arrays as comma-separated list)
@@ -875,13 +878,14 @@ mailRouter.post(
       if (req.body['sendAs'])         sendAsAddress  = String(req.body['sendAs']).toLowerCase();
       if (req.body['sendOnBehalfOf']) sendOnBehalfOf = String(req.body['sendOnBehalfOf']).toLowerCase();
       requestReceipt = String(req.body['requestReceipt'] ?? '') === 'true';
+      requestDeliveryReceipt = String(req.body['requestDeliveryReceipt'] ?? '') === 'true';
       importance = normalizeImportance(req.body['importance']);
     }
 
     const files = (req.files as Express.Multer.File[] | undefined) ?? [];
     const out = await performSend(req.apiUser!.userId, {
       to, cc, bcc, subject, bodyHtml, bodyText, inReplyTo, referencesRaw, scheduledAt,
-      sendAs: sendAsAddress, sendOnBehalfOf, requestReceipt, importance,
+      sendAs: sendAsAddress, sendOnBehalfOf, requestReceipt, requestDeliveryReceipt, importance,
       attachments: files.map((f) => ({ filename: f.originalname, contentType: f.mimetype, size: f.size, buffer: f.buffer })),
     });
     res.status(out.status).json(out.body);
@@ -939,6 +943,12 @@ export interface SendRequest {
   requestReceipt?: boolean;
   /** 9.4: Importance / X-Priority of the mail (normal: no header). */
   importance?: Importance;
+  /**
+   * 9.4: delivery receipt — a success DSN per recipient (NOTIFY=SUCCESS,FAILURE):
+   * the worker reports local deliveries itself and passes the request on to a
+   * next hop that supports DSN ("relayed" when it does not).
+   */
+  requestDeliveryReceipt?: boolean;
   attachments: SendAttachment[];
   /** Message-ID header to use (a draft keeps its own); default: a new one. */
   messageId?: string | null;
@@ -1103,7 +1113,9 @@ export async function performSend(userId: string, input: SendRequest): Promise<S
     // ── BullMQ job: structured message (v3.17.30+) ───────────────────────────
     // No more rawMessage (base64 blob) — the worker builds the RFC 5322 buffer
     // itself. DKIM signing happens via the nodemailer transport option.
-    const smtpRecipients = [...to, ...cc, ...bcc];
+    // 9.4: the envelope carries bare addresses (a picked contact is "Name <a@b>";
+    // as RCPT TO it was neither recognised as local nor a valid path)
+    const smtpRecipients = envelopeRecipients([to, cc, bcc]);
 
     // BullMQ job: with scheduledAt enqueue with `delay` — the worker starts
     // sending only at the scheduled time. delay is measured internally in ms.
@@ -1122,6 +1134,7 @@ export async function performSend(userId: string, input: SendRequest): Promise<S
         from:         effectiveFromEmail,
         to:           smtpRecipients,
         senderUserId: user.id,
+        ...(input.requestDeliveryReceipt ? { dsn: deliveryReceiptDsn(smtpRecipients) } : {}),
         ...(user.domain.dkimPrivateKey ? {
           dkimDomain:     user.domain.name,
           dkimSelector:   user.domain.dkimSelector ?? 'mail',
