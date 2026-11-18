@@ -226,6 +226,9 @@ export async function run(state) {
       assert(r.rowSet.rows[0][0] === B.toLowerCase(), `row ${JSON.stringify(r.rowSet.rows[0])}`);
       const dn = nspiDecode.dnToMId((await book.request('nspi', 'DNToMId', nspiBody.dnToMId([LEGACY_DN + state.users.a.id]))).mapi.body);
       assert(dn.mids[0] >= 0x10, 'own legacy DN → MID');
+      // Result bound: more than 1000 names in one ResolveNames → TableTooBig (0x80040403), no work done.
+      const flood = nspiDecode.resolveNames((await book.request('nspi', 'ResolveNames', nspiBody.resolveNames(Array.from({ length: 1001 }, () => 'x'), [SMTP_ADDRESS]))).mapi.body);
+      assert(flood.errorCode === 0x80040403, `ResolveNames with 1001 names 0x${flood.errorCode.toString(16)}`);
       const unbind = await book.request('nspi', 'Unbind', nspiBody.unbind());
       assert(unbind.responseCode === 0 && !book.cookies.has('NspiContext'), 'Unbind');
       return `B → MID 0x${r.mids[0].toString(16)}`;

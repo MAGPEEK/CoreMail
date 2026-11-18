@@ -16,7 +16,11 @@ import {
 import {
   AbTag, AddressBook, AnrMid, ephemeralEntryId, GAL_DISPLAY_NAME, galHierarchyRow, Mid, NspiError, NSPI_SERVER_GUID,
 } from './address-book.js';
-import { currentPosition, HIERARCHY_VERSION, NSPI_OPERATIONS, statAt, type NspiContext } from './operations.js';
+import {
+  currentPosition, HIERARCHY_VERSION, MAX_FILTER_NODES, MAX_RESOLVE_NAMES, MAX_RESULT_CELLS, MAX_ROWS_PER_REQUEST, NSPI_OPERATIONS,
+  pageRows, statAt, type NspiContext,
+} from './operations.js';
+import { legacyDnFor } from '@coremail/storage';
 import type { DirectoryRecord } from '../store/types.js';
 
 const hex = (s: string): Buffer => Buffer.from(s.replace(/\s+/g, ''), 'hex');
@@ -186,8 +190,11 @@ test('positioning: absolute (beginning / end / MID + Delta, clamped) and fractio
   assert.equal(currentPosition({ ...STAT, currentRec: Mid.Current, numPos: 50, totalRecs: 100 }, 10, index), 5);
 });
 
-function ctxOf(book: AddressBook): NspiContext {
-  return { book: async () => book, endpoints: async () => ({ mailStore: 'https://h.example.test/mapi/emsmdb/', addressBook: 'https://h.example.test/mapi/nspi/' }) };
+function ctxOf(book: AddressBook, revealed = new Set<string>()): NspiContext {
+  return {
+    book: async () => book, revealed,
+    endpoints: async () => ({ mailStore: 'https://h.example.test/mapi/emsmdb/', addressBook: 'https://h.example.test/mapi/nspi/' }),
+  };
 }
 
 const body = (fn: (w: BufferWriter) => void): Buffer => bytes(fn);
@@ -325,4 +332,85 @@ test('GetProps without tags returns every property; an unknown MID → NotFound;
   mod.u32();
   assert.equal(mod.u32(), NspiError.NotSupported);
   assert.deepEqual(statAt(STAT, 0, []), { ...STAT, currentRec: Mid.EndOfTable, numPos: 0, totalRecs: 0 });
+});
+
+// ── Review fixes (hidden entries by MID, result bounds) ──────────────────────
+
+test('hidden entries: a MID alone reveals nothing (GetProps, GetPropList, explicit QueryRows); after DNToMId, or for the own entry, it does', async () => {
+  const book = new AddressBook(RECORDS);
+  const ghost = book.entryByDn(legacyDnFor('u-hidden'))!;
+  const getProps = async (c: NspiContext): Promise<number> => {
+    const r = new BufferReader(await NSPI_OPERATIONS['GetProps']!(body((w) => {
+      w.u32(0); withStat(w, { ...STAT, currentRec: ghost.mid }).u8(1).u32(1).u32(Tag.SmtpAddress).u32(0);
+    }), c));
+    r.u32();
+    return r.u32();
+  };
+  const propList = async (c: NspiContext): Promise<number> => {
+    const r = new BufferReader(await NSPI_OPERATIONS['GetPropList']!(body((w) => { w.u32(0).u32(ghost.mid).u32(1200).u32(0); }), c));
+    r.u32();
+    return r.u32();
+  };
+  const explicitCell = async (c: NspiContext): Promise<string | number> => {
+    const r = new BufferReader(await NSPI_OPERATIONS['QueryRows']!(body((w) => {
+      w.u32(0); withStat(w, STAT).u32(1).u32(ghost.mid).u32(1).u8(1).u32(1).u32(Tag.SmtpAddress).u32(0);
+    }), c));
+    r.u32();
+    assert.equal(r.u32(), 0);
+    r.u8(); readStat(r); r.u8(); r.u32(); r.u32();
+    assert.equal(r.u32(), 1, 'one row per requested MID');
+    if (r.u8() === 0) { r.u8(); return r.utf16Z(); }
+    assert.equal(r.u8(), 0x0a, 'flagged error cell');
+    return r.u32();
+  };
+
+  const stranger = ctxOf(book);
+  assert.equal(await getProps(stranger), NspiError.NotFound, 'GetProps by a guessed MID');
+  assert.equal(await propList(stranger), NspiError.NotFound, 'GetPropList by a guessed MID');
+  assert.equal(await explicitCell(stranger), NspiError.NotFound, 'explicit QueryRows by a guessed MID');
+
+  const dn = new BufferReader(await NSPI_OPERATIONS['DNToMId']!(body((w) => { w.u32(0).u8(1).u32(1).asciiZ(ghost.dn).u32(0); }), stranger));
+  dn.u32(); dn.u32(); dn.u8(); dn.u32();
+  assert.equal(dn.u32(), ghost.mid, 'the DN still resolves');
+  assert.equal(await getProps(stranger), NspiError.Success, 'readable after DNToMId');
+  assert.equal(await propList(stranger), NspiError.Success);
+  assert.equal(await explicitCell(stranger), 'ghost@example.test');
+
+  assert.equal(await getProps(ctxOf(book, new Set(['u-hidden']))), NspiError.Success, 'the own (hidden) entry is always readable');
+  assert.equal(book.reachable(book.table[0]!.mid, new Set()), book.table[0], 'visible entries need no reveal');
+});
+
+test('result bounds: explicit MID lists / ResolveNames beyond the cell budget → TableTooBig, paged reads shrink, big filters → TooComplex', async () => {
+  const book = new AddressBook(RECORDS);
+  const ctx = ctxOf(book);
+  const errorOf = (buf: Buffer): number => { const r = new BufferReader(buf); r.u32(); return r.u32(); };
+
+  const columns = Array.from({ length: 200 }, () => Tag.DisplayName);
+  const mids = Array.from({ length: 1000 }, () => book.table[0]!.mid);
+  assert.ok(mids.length * columns.length > MAX_RESULT_CELLS);
+  assert.equal(errorOf(await NSPI_OPERATIONS['QueryRows']!(body((w) => {
+    w.u32(0); withStat(w, STAT).u32(mids.length);
+    for (const m of mids) w.u32(m);
+    w.u32(10).u8(1).u32(columns.length);
+    for (const c of columns) w.u32(c);
+    w.u32(0);
+  }), ctx)), NspiError.TableTooBig);
+
+  assert.equal(pageRows(5000, 10), MAX_ROWS_PER_REQUEST);
+  assert.equal(pageRows(5000, 1000), MAX_RESULT_CELLS / 1000);
+  assert.equal(pageRows(5000, MAX_RESULT_CELLS * 4), 1, 'always at least one row');
+  assert.equal(pageRows(3, 10), 3);
+
+  assert.equal(errorOf(await NSPI_OPERATIONS['ResolveNames']!(body((w) => {
+    w.u32(0); withStat(w, STAT).u8(0).u8(1).u32(MAX_RESOLVE_NAMES + 1);
+    for (let i = 0; i <= MAX_RESOLVE_NAMES; i++) w.utf16Z('x');
+    w.u32(0);
+  }), ctx)), NspiError.TableTooBig);
+
+  assert.equal(errorOf(await NSPI_OPERATIONS['GetMatches']!(body((w) => {
+    w.u32(0); withStat(w, STAT).u8(0).u32(0).u8(1);
+    w.u8(0x01).u32(MAX_FILTER_NODES);
+    for (let i = 0; i < MAX_FILTER_NODES; i++) w.u8(0x08).u32(Tag.DisplayName);
+    w.u8(0).u32(100).u8(0).u32(0);
+  }), ctx)), NspiError.TooComplex);
 });

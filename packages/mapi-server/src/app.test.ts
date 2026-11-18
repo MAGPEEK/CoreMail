@@ -420,6 +420,32 @@ test('address book: a malformed body ends with X-ResponseCode 12 after PROCESSIN
   assert.equal(r.responseCode, 12);
 });
 
+test('address book: another account cannot use a session cookie; a malformed Bind creates no session; one directory load per domain', async () => {
+  const a = alice();
+  assertOk(await a.request('nspi', 'Bind', nspiBody.bind()));
+  const carol = new MapiHttpClient(base, 'carol@example.test', 'pw-c');
+  carol.cookies.set('NspiContext', a.cookies.get('NspiContext')!);
+  carol.cookies.set('NspiSequence', a.cookies.get('NspiSequence')!);
+  assert.equal((await carol.request('nspi', 'QueryRows', nspiBody.queryRows({}, 1, [TAG.DisplayName]))).responseCode, 10, 'Context Not Found');
+  assertOk(await a.request('nspi', 'QueryRows', nspiBody.queryRows({}, 1, [TAG.DisplayName])));
+
+  const before = sessions.size;
+  const bad = alice();
+  const r = await bad.request('nspi', 'Bind', Buffer.from([1]));
+  assert.equal(r.responseCode, 12);
+  assert.equal(bad.cookies.has('NspiContext'), false);
+  assert.equal(sessions.size, before, 'no session context for a malformed Bind');
+
+  const loads = directory.loads;
+  const second = new MapiHttpClient(base, 'carol@example.test', 'pw-c');
+  assertOk(await second.request('nspi', 'Bind', nspiBody.bind()));
+  assertOk(await second.request('nspi', 'QueryRows', nspiBody.queryRows({}, 1, [TAG.DisplayName])));
+  const third = alice();
+  assertOk(await third.request('nspi', 'Bind', nspiBody.bind()));
+  assertOk(await third.request('nspi', 'QueryRows', nspiBody.queryRows({}, 1, [TAG.DisplayName])));
+  assert.ok(directory.loads - loads <= 1, 'sessions of one domain share the address book snapshot');
+});
+
 test('no Negotiate / NTLM: such a header gets the Basic challenge only', async () => {
   for (const header of ['Negotiate YIIGhgYGKwYBBQUCoIIGejCCBnag', 'NTLM TlRMTVNTUAABAAAAB4IIog==']) {
     const outcome = await authenticate(header, { ip: '127.0.0.1', plainHttp: false });

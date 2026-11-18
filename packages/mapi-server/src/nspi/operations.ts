@@ -41,7 +41,17 @@ const QUERY_COLUMNS_UNICODE = 0x80000000;
 export const HIERARCHY_VERSION = 1;
 /** Rows per QueryRows / SeekEntries answer (Outlook pages with far fewer). */
 export const MAX_ROWS_PER_REQUEST = 1000;
-const MAX_FILTER_NODES = 1024;
+/**
+ * Cells (rows × columns) in one answer: a request may name up to 100 000
+ * columns and 10 000 MIDs, so the result is bounded, not just its parts.
+ * Paged reads (QueryRows, SeekEntries) return fewer rows; result sets the
+ * client fixed (explicit MID lists, GetMatches, ResolveNames) answer
+ * TableTooBig.
+ */
+export const MAX_RESULT_CELLS = 100_000;
+/** Names in one ResolveNames request (each one is matched against the whole table). */
+export const MAX_RESOLVE_NAMES = 1000;
+export const MAX_FILTER_NODES = 256;
 const DEFAULT_CODEPAGE = 1252;
 
 export interface NspiContext {
@@ -49,6 +59,11 @@ export interface NspiContext {
   book(): Promise<AddressBook>;
   /** Public MAPI endpoint URLs (null when no public host name is configured). */
   endpoints(): Promise<MapiEndpoints | null>;
+  /**
+   * Directory ids of hidden entries the session may read by MID: its own and
+   * those it named by DN (DNToMId adds them). Kept across book reloads.
+   */
+  revealed: Set<string>;
 }
 
 type Operation = (body: Buffer, ctx: NspiContext) => Promise<Buffer>;
@@ -91,10 +106,20 @@ function rowSet(book: AddressBook, entries: readonly AbEntry[], columns: readonl
   return { columns: [...columns], rows: entries.map((e) => book.cells(e, columns, opts)) };
 }
 
-/** Rows for an explicit MID list: unknown MIDs get NotFound errors in every column. */
-function explicitRows(book: AddressBook, mids: readonly number[], columns: readonly number[], opts: CellOptions): AbRowSet {
+/** Whether `rows` rows of `columns` columns fit into one answer. */
+export function fitsResult(rows: number, columns: number): boolean {
+  return rows * columns <= MAX_RESULT_CELLS;
+}
+
+/** Rows a paged read returns: what the client asked for, at most one page and the cell budget (≥ 1). */
+export function pageRows(requested: number, columns: number): number {
+  return Math.min(requested, MAX_ROWS_PER_REQUEST, Math.max(1, Math.floor(MAX_RESULT_CELLS / Math.max(1, columns))));
+}
+
+/** Rows for an explicit MID list: unknown and unreachable MIDs get NotFound errors in every column. */
+function explicitRows(book: AddressBook, mids: readonly number[], columns: readonly number[], opts: CellOptions, revealed: ReadonlySet<string>): AbRowSet {
   const rows = mids.map((mid): AbCell[] => {
-    const e = book.entry(mid);
+    const e = book.reachable(mid, revealed);
     return e ? book.cells(e, columns, opts) : columns.map((t) => ({ kind: 'error', tag: t, error: NspiError.NotFound }));
   });
   return { columns: [...columns], rows };
@@ -129,11 +154,12 @@ const queryRows: Operation = async (body, ctx) => {
   const columns = req.columns ?? DEFAULT_COLUMNS;
   const opts: CellOptions = { ephemeral: (req.flags & FLAG_EPHEMERAL_ID) !== 0, unicode: unicodeFor(stat) };
   if (req.explicitTable.length > 0) {
-    return buildTableResponse(NspiError.Success, { ...stat, delta: 0 }, explicitRows(book, req.explicitTable, columns, opts));
+    if (!fitsResult(req.explicitTable.length, columns.length)) return buildTableResponse(NspiError.TableTooBig, null, null);
+    return buildTableResponse(NspiError.Success, { ...stat, delta: 0 }, explicitRows(book, req.explicitTable, columns, opts, ctx.revealed));
   }
   const start = currentPosition(stat, book.table.length, (m) => book.indexOf(m));
   if (start === null) return buildTableResponse(NspiError.NotFound, null, null);
-  const page = book.table.slice(start, start + Math.min(req.rowCount, MAX_ROWS_PER_REQUEST));
+  const page = book.table.slice(start, start + pageRows(req.rowCount, columns.length));
   return buildTableResponse(NspiError.Success, statAt(stat, start + page.length, book.table), rowSet(book, page, columns, opts));
 };
 
@@ -162,7 +188,7 @@ const seekEntries: Operation = async (body, ctx) => {
   const found = book.seek(candidates, req.target.value);
   if (found < 0) return buildTableResponse(NspiError.NotFound, null, null);
   const opts: CellOptions = { ephemeral: false, unicode: unicodeFor(stat) };
-  const rows = req.columns ? rowSet(book, candidates.slice(found, found + MAX_ROWS_PER_REQUEST), req.columns, opts) : null;
+  const rows = req.columns ? rowSet(book, candidates.slice(found, found + pageRows(MAX_ROWS_PER_REQUEST, req.columns.length)), req.columns, opts) : null;
   return buildTableResponse(NspiError.Success, statAt(stat, found, candidates), rows);
 };
 
@@ -175,7 +201,9 @@ const getMatches: Operation = async (body, ctx) => {
   const candidates = req.propertyName ? [] : req.mids ? book.visible(req.mids) : book.table;
   if (req.filter && restrictionNodeCount(req.filter) > MAX_FILTER_NODES) return buildTableResponse(NspiError.TooComplex, null, null, null);
   const matches = req.filter ? book.filter(candidates, req.filter) : [...candidates];
-  if (matches.length > req.rowCount) return buildTableResponse(NspiError.TableTooBig, null, null, null);
+  if (matches.length > req.rowCount || (req.columns && !fitsResult(matches.length, req.columns.length))) {
+    return buildTableResponse(NspiError.TableTooBig, null, null, null);
+  }
   const opts: CellOptions = { ephemeral: false, unicode: unicodeFor(stat) };
   const out: Stat = { ...stat, currentRec: Mid.BeginningOfTable, delta: 0, numPos: 0, totalRecs: matches.length };
   const rows = req.columns ? rowSet(book, matches, req.columns, opts) : null;
@@ -185,6 +213,10 @@ const getMatches: Operation = async (body, ctx) => {
 const resolveNames: Operation = async (body, ctx) => {
   const req = parseResolveNames(body);
   if (req.state && req.state.containerId !== GAL_CONTAINER_ID) return buildResolveNamesResponse(NspiError.InvalidBookmark, DEFAULT_CODEPAGE, null, null);
+  const columns = req.tags ?? DEFAULT_COLUMNS;
+  if (req.names.length > MAX_RESOLVE_NAMES || !fitsResult(req.names.length, columns.length)) {
+    return buildResolveNamesResponse(NspiError.TableTooBig, DEFAULT_CODEPAGE, null, null);
+  }
   const book = await ctx.book();
   const resolved: AbEntry[] = [];
   const mids = req.names.map((name) => {
@@ -195,21 +227,27 @@ const resolveNames: Operation = async (body, ctx) => {
     return hits[0]!.mid;
   });
   const opts: CellOptions = { ephemeral: false, unicode: true };
-  const rows = rowSet(book, resolved, req.tags ?? DEFAULT_COLUMNS, opts);
+  const rows = rowSet(book, resolved, columns, opts);
   return buildResolveNamesResponse(NspiError.Success, req.state?.codePage ?? DEFAULT_CODEPAGE, mids, rows);
 };
 
 const dnToMId: Operation = async (body, ctx) => {
   const req = parseDnToMId(body);
   const book = await ctx.book();
-  return buildDnToMIdResponse(NspiError.Success, req.names.map((dn) => book.entryByDn(dn)?.mid ?? 0));
+  const mids = req.names.map((dn) => {
+    const entry = book.entryByDn(dn);
+    if (!entry) return 0;
+    if (entry.hidden) ctx.revealed.add(entry.id);
+    return entry.mid;
+  });
+  return buildDnToMIdResponse(NspiError.Success, mids);
 };
 
 const getProps: Operation = async (body, ctx) => {
   const req = parseGetProps(body);
   const stat = requireStat(req.state);
   const book = await ctx.book();
-  const entry = book.entry(stat.currentRec);
+  const entry = book.reachable(stat.currentRec, ctx.revealed);
   if (!entry) return buildGetPropsResponse(NspiError.NotFound, stat.codePage, null);
   const opts: CellOptions = { ephemeral: (req.flags & FLAG_EPHEMERAL_ID) !== 0, unicode: unicodeFor(stat) };
   const cells = req.tags ? book.cells(entry, req.tags, opts) : book.allCells(entry, opts);
@@ -219,7 +257,7 @@ const getProps: Operation = async (body, ctx) => {
 
 const getPropList: Operation = async (body, ctx) => {
   const req = parseGetPropList(body);
-  const entry = (await ctx.book()).entry(req.mid);
+  const entry = (await ctx.book()).reachable(req.mid, ctx.revealed);
   if (!entry) return buildGetPropListResponse(NspiError.NotFound, null);
   return buildGetPropListResponse(NspiError.Success, propertyList(entry, req.codePage === CP_WINUNICODE));
 };

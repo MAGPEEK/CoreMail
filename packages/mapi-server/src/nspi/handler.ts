@@ -3,8 +3,8 @@
  *  Bind    → new session context (cookies NspiContext + NspiSequence, path /mapi/nspi)
  *  Unbind  → the session ends, cookies cleared
  *  PING    → refreshes the session's idle timer
- *  others  → the address book operations (operations.ts) over the session's
- *            address book snapshot (reloaded after BOOK_TTL_MS)
+ *  others  → the address book operations (operations.ts) over the address
+ *            book snapshot of the caller's domain (reloaded after BOOK_TTL_MS)
  *
  * Same rules as the mailbox endpoint: every request is authenticated (Basic,
  * protocol switch `mapi`), the session is bound to its credentials (else 10
@@ -23,14 +23,14 @@ import { respondFailure, respondStreaming, type WorkResult } from '../http/respo
 import { admit, dropNamedSession, sameContext, type EmsmdbDeps } from '../emsmdb/handler.js';
 import { WireFormatError } from '../wire/reader.js';
 import { AddressBook } from './address-book.js';
-import { buildFailureBody } from './bodies.js';
+import { buildFailureBody, parseBind } from './bodies.js';
 import { NSPI_OPERATIONS, type NspiContext } from './operations.js';
 import type { MapiSession } from '../session/session.js';
 import type { DirectoryStore } from '../store/types.js';
 
 const log = createLogger('mapi:nspi');
 
-/** How long a session works with one address book snapshot. */
+/** How long the sessions of a domain work with one address book snapshot. */
 export const BOOK_TTL_MS = 60_000;
 
 export interface NspiDeps extends Pick<EmsmdbDeps, 'authenticate' | 'limiter' | 'config' | 'sessions'> {
@@ -40,7 +40,7 @@ export interface NspiDeps extends Pick<EmsmdbDeps, 'authenticate' | 'limiter' | 
   now?: () => number;
 }
 
-interface Snapshot { book: AddressBook; loadedAt: number }
+interface Snapshot { book: Promise<AddressBook>; loadedAt: number }
 
 function secure(req: Request): boolean {
   return (req.get('x-forwarded-proto') ?? 'https').toLowerCase() !== 'http';
@@ -60,22 +60,44 @@ function clearCookies(req: Request): string[] {
 
 export function nspiHandler(deps: NspiDeps): RequestHandler {
   const now = deps.now ?? (() => Date.now());
-  const books = new WeakMap<MapiSession, Snapshot>();
+  // The directory depends only on the caller's domain: one snapshot (and one
+  // load, also for concurrent requests) per domain instead of one per session.
+  const books = new Map<string, Snapshot>();
+  // Hidden entries each session may read by MID (operations.ts NspiContext.revealed).
+  const revealed = new WeakMap<MapiSession, Set<string>>();
 
   const stream = (res: Response, h: MapiRequestHeaders, setCookies: string[], work: () => Promise<WorkResult>): Promise<void> =>
     respondStreaming(res, h, { pendingMs: deps.config.pendingMs, expirationMs: deps.config.idleMs, setCookies }, work);
+
+  function bookOf(user: MapiSession['user']): Promise<AddressBook> {
+    const at = now();
+    const hit = books.get(user.domainId);
+    if (hit && at - hit.loadedAt < BOOK_TTL_MS) return hit.book;
+    for (const [domainId, s] of books) if (at - s.loadedAt >= BOOK_TTL_MS) books.delete(domainId);
+    const snapshot: Snapshot = { book: deps.directory.listDirectory(user).then((records) => new AddressBook(records)), loadedAt: at };
+    books.set(user.domainId, snapshot);
+    // A failed load is not cached; the request that waited on it fails.
+    snapshot.book.catch(() => { if (books.get(user.domainId) === snapshot) books.delete(user.domainId); });
+    return snapshot.book;
+  }
+
+  function revealedOf(session: MapiSession): Set<string> {
+    let ids = revealed.get(session);
+    if (!ids) {
+      ids = new Set([session.user.userId]);
+      revealed.set(session, ids);
+    }
+    return ids;
+  }
 
   function contextFor(session: MapiSession | null): NspiContext {
     return {
       book: async () => {
         if (!session) throw new Error('address book without a session');
-        const hit = books.get(session);
-        if (hit && now() - hit.loadedAt < BOOK_TTL_MS) return hit.book;
-        const book = new AddressBook(await deps.directory.listDirectory(session.user));
-        books.set(session, { book, loadedAt: now() });
-        return book;
+        return bookOf(session.user);
       },
       endpoints: deps.endpoints,
+      revealed: session ? revealedOf(session) : new Set(),
     };
   }
 
@@ -91,6 +113,12 @@ export function nspiHandler(deps: NspiDeps): RequestHandler {
   }
 
   async function bind(req: Request, res: Response, h: MapiRequestHeaders, auth: { auth: MapiSession['auth']; startedAt: number }): Promise<void> {
+    // A malformed Bind creates no session context.
+    try { parseBind(bodyOf(req)); } catch (err) {
+      if (!(err instanceof WireFormatError)) throw err;
+      respondFailure(res, h, ResponseCode.InvalidRequestBody, 'invalid Bind body');
+      return;
+    }
     // Reconnecting with the cookies of a live context: that context ends first (MS-OXCMAPIHTTP 3.2.5.6).
     const previous = h.cookies[NSPI_CONTEXT_COOKIE];
     if (isCookieValue(previous)) {

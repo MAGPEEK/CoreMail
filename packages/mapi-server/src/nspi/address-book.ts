@@ -11,7 +11,9 @@
  *  - Mailboxes hidden from the address list (mail flow policy) are not in the
  *    table and never found by name (ANR, GetMatches, SeekEntries); a client
  *    that already knows the DN (its own profile, an EX address in a message)
- *    can still resolve it (DNToMId, GetProps).
+ *    can still resolve it (DNToMId) and then read it by that MID (GetProps,
+ *    explicit QueryRows). A MID alone never reveals a hidden entry
+ *    (reachable()): MIDs are 31-bit hashes and could be enumerated.
  *  - Recipients are addressed as type "EX" with their legacy DN (storage
  *    legacy-dn, the DN CoreMail's mailbox endpoint and Autodiscover use);
  *    PidTagSmtpAddress and PidTagAddressBookProxyAddresses carry the SMTP
@@ -102,6 +104,10 @@ export class AddressBook {
   private readonly byMid = new Map<number, AbEntry>();
   private readonly byDn = new Map<string, AbEntry>();
   private readonly position = new Map<number, number>();
+  /** Visible entries by primary address and alias (exact ANR matches). */
+  private readonly byAddress = new Map<string, AbEntry[]>();
+  /** Property bags for filter evaluation, built once per entry. */
+  private readonly filterBags = new Map<number, PropertyBag>();
 
   constructor(records: readonly DirectoryRecord[]) {
     const ordered = [...records].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
@@ -114,10 +120,23 @@ export class AddressBook {
     }
     this.table = [...this.byMid.values()].filter((e) => !e.hidden)
       .sort((a, b) => collator.compare(a.displayName, b.displayName) || a.email.localeCompare(b.email));
-    this.table.forEach((e, i) => this.position.set(e.mid, i));
+    this.table.forEach((e, i) => {
+      this.position.set(e.mid, i);
+      for (const address of new Set([e.email, ...e.aliases])) this.byAddress.set(address, [...(this.byAddress.get(address) ?? []), e]);
+    });
   }
 
+  /** Entry of a MID, hidden entries included (internal; a MID from the client goes through reachable()). */
   entry(mid: number): AbEntry | undefined { return this.byMid.get(mid); }
+
+  /**
+   * Entry of a MID the caller may read: a visible entry, or a hidden one whose
+   * directory id is in `revealed` (the caller's own, those it named by DN).
+   */
+  reachable(mid: number, revealed: ReadonlySet<string>): AbEntry | undefined {
+    const e = this.byMid.get(mid);
+    return e && (!e.hidden || revealed.has(e.id)) ? e : undefined;
+  }
 
   /** Entry of a legacy DN (case-insensitive), hidden entries included. */
   entryByDn(dn: string): AbEntry | undefined { return this.byDn.get(dn.trim().toLowerCase()); }
@@ -139,15 +158,15 @@ export class AddressBook {
   resolve(name: string): AbEntry[] {
     const q = name.trim().replace(/^smtp:/i, '').toLowerCase();
     if (!q) return [];
-    const exact = this.table.filter((e) => e.email === q || e.aliases.includes(q));
-    if (exact.length > 0) return exact;
+    const exact = this.byAddress.get(q);
+    if (exact) return [...exact];
     return this.table.filter((e) => anrPrefixMatch(e, q));
   }
 
   /** Rows of `entries` matching a GetMatches filter (PidTagAnr nodes use ANR). */
   filter(entries: readonly AbEntry[], restriction: Restriction): AbEntry[] {
     return entries.filter((e) => {
-      const bag = entryBag(e, { ephemeral: false, unicode: true });
+      const bag = this.filterBagOf(e);
       return evaluateRestriction(restriction, (t) => lookupProperty(bag, t), (node) => {
         if ((node.type !== 'property' && node.type !== 'content') || propIdOf(node.tag) !== propIdOf(AbTag.Anr)) return undefined;
         const v = node.value.value;
@@ -164,6 +183,15 @@ export class AddressBook {
   /** Every property of an entry (GetProps without tags), strings per `opts.unicode`. */
   allCells(e: AbEntry, opts: CellOptions): AbCell[] {
     return cellsOf(entryBag(e, opts), propertyList(e, opts.unicode));
+  }
+
+  private filterBagOf(e: AbEntry): PropertyBag {
+    let bag = this.filterBags.get(e.mid);
+    if (!bag) {
+      bag = entryBag(e, { ephemeral: false, unicode: true });
+      this.filterBags.set(e.mid, bag);
+    }
+    return bag;
   }
 }
 
