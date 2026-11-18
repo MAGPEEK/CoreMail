@@ -128,6 +128,7 @@ test('PropertyName codec (LID and string names) and the name ↔ id map', () => 
   const guid = hex('0820060000000000c000000000000046');
   const lid = { kind: NameKind.Lid, guid, lid: 0x8503 };
   const named = { kind: NameKind.Name, guid, name: 'x-custom' };
+  assert.deepEqual(bytes((w) => writePropertyName(w, { kind: NameKind.None, guid })), Buffer.from([0xff]), 'Kind 0xFF: no GUID follows');
   const buf = bytes((w) => { writePropertyName(w, lid); writePropertyName(w, named); });
   assert.deepEqual(buf.subarray(0, 21), Buffer.concat([hex('00'), guid, hex('03850000')]));
   assert.equal(buf[21 + 17], 18); // NameSize = UTF-16 bytes incl. terminator

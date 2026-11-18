@@ -2,6 +2,8 @@
  * Named properties (MS-OXCDATA 2.6.1 PropertyName, MS-OXCPRPT 3.2.5.x):
  *   Kind (1: 0x00 LID, 0x01 Name, 0xFF none) | GUID (16) | LID (4, Kind 0)
  *   | NameSize (1, Kind 1) + Name (UTF-16LE incl. terminator, Kind 1)
+ * An ID without a name is written as the Kind byte 0xFF alone — "There is no
+ * other return data for this entry" (MS-OXCPRPT 3.2.5.9, RopGetNamesFromPropertyIds).
  *
  * The registry maps names to property IDs from 0x8001 upwards, one map per
  * mailbox and process: IDs are stable for every session of this server process.
@@ -34,6 +36,7 @@ export function readPropertyName(r: BufferReader): PropertyName {
 }
 
 export function writePropertyName(w: BufferWriter, n: PropertyName): void {
+  if (n.kind === NameKind.None) { w.u8(n.kind); return; }
   w.u8(n.kind).bytes(n.guid);
   if (n.kind === NameKind.Lid) w.u32(n.lid ?? 0);
   else if (n.kind === NameKind.Name) {

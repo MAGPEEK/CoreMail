@@ -215,7 +215,8 @@ export const ropGetPropertyIdsFromNames = defineRop<IdsFromNamesReq>({
 
 interface NamesFromIdsReq { inputIndex: number; ids: number[] }
 
-const NO_NAME: PropertyName = { kind: NameKind.None, guid: Buffer.alloc(16) };
+/** An ID without a name: the Kind byte 0xFF only (MS-OXCPRPT 3.2.5.9). */
+const NO_NAME: PropertyName = { kind: NameKind.None, guid: Buffer.alloc(0) };
 
 export const ropGetNamesFromPropertyIds = defineRop<NamesFromIdsReq>({
   id: RopId.GetNamesFromPropertyIds,

@@ -391,6 +391,26 @@ test('named properties: ids from names (create flag), names from ids, unknown na
   assert.equal(r.u32(), 0x0037);
 });
 
+test('GetNamesFromPropertyIds (MS-OXCPRPT 3.2.5.9): an ID without a name is the Kind byte 0xFF alone, the next entry follows at once', async () => {
+  const h = new Harness();
+  await h.logon();
+  const guid = Buffer.from('0820060000000000c000000000000046', 'hex');
+  let r = await h.run(new Writer().u8(RopId.GetPropertyIdsFromNames).u8(0).u8(0).u8(0x02).u16(1).u8(0).bytes(guid).u32(0x8503).toBuffer());
+  ok(r, RopId.GetPropertyIdsFromNames, 0);
+  r.u16();
+  const known = r.u16();
+  r = await h.run(new Writer().u8(RopId.GetNamesFromPropertyIds).u8(0).u8(0).u16(3).u16(0xfffe).u16(known).u16(0xfffd).toBuffer());
+  ok(r, RopId.GetNamesFromPropertyIds);
+  const body = r.bytes(r.remaining);
+  const expected = Buffer.concat([
+    Buffer.from([0x03, 0x00]), // PropertyNameCount
+    Buffer.from([0xff]), // unnamed ID: Kind only
+    Buffer.from([0x00]), guid, Buffer.from([0x03, 0x85, 0x00, 0x00]), // Kind 0x00, GUID, LID 0x8503
+    Buffer.from([0xff]),
+  ]);
+  assert.deepEqual(body, expected);
+});
+
 test('GetPropertiesAll on the store object returns tagged values incl. the IPM subtree EntryID', async () => {
   const h = new Harness();
   await h.logon();
