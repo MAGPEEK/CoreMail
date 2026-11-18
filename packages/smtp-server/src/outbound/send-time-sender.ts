@@ -21,18 +21,30 @@ export function senderRevokedReason(verdict: HeaderSenderVerdict): string {
   return `${SENDER_REVOKED_PREFIX}: ${(verdict.reason ?? 'not allowed').replace(/[\r\n]+/g, ' ')}`;
 }
 
-/** Pure: the NDR to the sending user for every recipient of the refused job. */
-export function senderRevokedDsn(job: OutboundJob, buffer: Buffer, userEmail: string, reason: string, hostname: string): DsnOptions {
+/**
+ * Pure: recipients of the job not yet handled — neither delivered nor bounced
+ * on an earlier attempt nor named in a final NDR (an admin "Retry" keeps that
+ * progress). Only these are refused and named in the NDR.
+ */
+export function openRecipients(job: Pick<OutboundJob, 'to' | 'deliveredRcpts' | 'bouncedRcpts' | 'finalNdrRcpts'>): string[] {
+  const done = new Set([...(job.deliveredRcpts ?? []), ...(job.bouncedRcpts ?? []), ...(job.finalNdrRcpts ?? [])]);
+  return job.to.filter((rcpt) => !done.has(rcpt));
+}
+
+/** Pure: the NDR to the sending user for the refused recipients `rcpts`. */
+export function senderRevokedDsn(
+  job: OutboundJob, buffer: Buffer, userEmail: string, reason: string, hostname: string, rcpts: readonly string[] = job.to,
+): DsnOptions {
   const original = rawSubjectAndId(buffer);
   return {
     originalFrom:      userEmail,
-    originalTo:        [...job.to],
+    originalTo:        [...rcpts],
     originalSubject:   job.message?.subject ?? original.subject,
     originalMessageId: job.message?.messageId ?? original.messageId,
     failureReason:     reason,
     smtpCode:          550,
     serverHostname:    hostname,
-    recipients:        job.to.map((rcpt) => ({ rcpt, status: '5.7.1', diagnostic: reason })),
+    recipients:        rcpts.map((rcpt) => ({ rcpt, status: '5.7.1', diagnostic: reason })),
     originalRaw:       buffer,
   };
 }
@@ -56,8 +68,10 @@ export const defaultSendTimeSenderDeps: Pick<SendTimeSenderDeps, 'check' | 'user
 
 /**
  * Re-checks the sender of a held job. Returns null when it may be sent;
- * otherwise notifies the user, records every recipient as bounced (the failed
- * handler sends no second NDR) and returns the error the worker throws.
+ * otherwise notifies the user about the still open recipients (not those
+ * delivered on an earlier attempt), records them as bounced (neither the
+ * failed handler nor a later admin "Retry" sends a second NDR) and returns
+ * the error the worker throws.
  */
 export async function refuseRevokedSender(
   job: { id?: string | undefined; data: OutboundJob; updateData(data: OutboundJob): Promise<void> },
@@ -70,11 +84,13 @@ export async function refuseRevokedSender(
   if (verdict.ok) return null;
 
   const reason = senderRevokedReason(verdict);
-  const data: OutboundJob = { ...job.data, bouncedRcpts: [...new Set([...(job.data.bouncedRcpts ?? []), ...job.data.to])] };
+  if (job.id) await deps.cancelScheduled(job.id);
+  const refused = openRecipients(job.data);
+  if (refused.length === 0) return new UnrecoverableError(reason);   // everyone was handled before: no NDR
+  const data: OutboundJob = { ...job.data, bouncedRcpts: [...new Set([...(job.data.bouncedRcpts ?? []), ...refused])] };
   await job.updateData(data);
   job.data = data;
-  if (job.id) await deps.cancelScheduled(job.id);
   const userEmail = await deps.userEmail(userId);
-  if (userEmail) await deps.bounce(senderRevokedDsn(job.data, buffer, userEmail, reason, await deps.hostname()));
+  if (userEmail) await deps.bounce(senderRevokedDsn(job.data, buffer, userEmail, reason, await deps.hostname(), refused));
   return new UnrecoverableError(reason);
 }
