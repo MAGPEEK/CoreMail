@@ -14,7 +14,9 @@ SemVer: PATCH. No schema or configuration change, no removed endpoint. Additive 
 - Scheduled sends, undo-send holds and delayed JMAP submissions are checked again for send-as /
   send-on-behalf rights and the sender identity when they are sent. With revoked rights (or a
   deactivated account) nothing is sent; the sending user gets an NDR (5.7.1) in their own mailbox,
-  the scheduled message is shown as cancelled and the job fails without a second NDR.
+  the scheduled message is shown as cancelled and the job fails without a second NDR. The NDR
+  names only the recipients still open (not those delivered on an earlier attempt), and an admin
+  "Retry" of the failed message sends no further NDR.
 - Internal `X-CoreMail-*` headers (rule-forward loop protection, draft pending recipients,
   quarantine release trace, virus-scan verdict) are one complete list and are stripped at every
   ingress before any rule or forward is evaluated: port 25, device relay, SMTP submission and the
@@ -31,6 +33,12 @@ SemVer: PATCH. No schema or configuration change, no removed endpoint. Additive 
   canonical form (lower case, domain as punycode) — an entry in Unicode spelling matches a sender
   in punycode spelling and vice versa, both spellings are one entry, Unicode domains are accepted
   as entries, and recipients (RCPT TO) and domain / mailbox targets are found in either spelling.
+  A sender-list entry whose domain is no valid internationalized domain name is refused (400), and
+  marking mail as junk again no longer adds a second entry next to one in Unicode spelling.
+- Sender identity checks (SMTP submission, JMAP, ActiveSync, MAPI and the send-time re-check of
+  held messages) accept an allowed address in either spelling of an internationalized domain — the
+  webmail writes the punycode spelling into From / Sender, so a scheduled send from an address
+  stored in Unicode spelling was cancelled.
 - Generated messages use CRLF line ends everywhere: JMAP Email/set built bare LF line ends, and
   out-of-office replies with multi-line text kept bare LF. Every in-memory MIME builder now uses
   one shared option (a repository test guards against new builders without it).
