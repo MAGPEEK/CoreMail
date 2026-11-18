@@ -983,6 +983,51 @@ export async function resolveSender(
   return { ok: true, fromEmail: user.email, fromName: (user.displayName ?? '').trim(), onBehalfHeader: null };
 }
 
+/**
+ * A webmail message as it is sent: the `message` of the outbound job (without
+ * attachments; smtp-server outbound/queue.ts StructuredMessage).
+ */
+export interface OutgoingMessage {
+  from: string;
+  fromName: string;
+  sender?: string;
+  to: string[];
+  cc: string[];
+  bcc: string[];
+  subject: string;
+  html: string;
+  text: string;
+  messageId: string;
+  /** ISO date */
+  date: string;
+  inReplyTo?: string;
+  references?: string;
+}
+
+/**
+ * Pure (9.4): MIME options of the sender's own Sent copy — the From, Sender,
+ * Date, Message-ID and reply fields exactly as the outbound worker builds them
+ * from the job's message (smtp-server buildRawFromMessage), plus Bcc, which
+ * only the sender's copy keeps. Mail sent as / on behalf of a Shared Mailbox
+ * therefore shows the box (and the user as Sender) in the user's Sent folder.
+ */
+export function sentCopyMailOptions(msg: OutgoingMessage, attachments: SendMailOptions['attachments'] = []): SendMailOptions {
+  return {
+    messageId: msg.messageId,
+    from:      msg.fromName ? { name: msg.fromName, address: msg.from } : msg.from,
+    ...(msg.sender ? { sender: msg.sender } : {}),
+    to:        msg.to,
+    subject:   msg.subject,
+    date:      new Date(msg.date),
+    ...(msg.cc.length  ? { cc: msg.cc }   : {}),
+    ...(msg.bcc.length ? { bcc: msg.bcc } : {}),
+    ...(msg.html       ? { html: msg.html } : {}),
+    ...(msg.text       ? { text: msg.text } : {}),
+    ...(msg.inReplyTo  ? { inReplyTo: msg.inReplyTo, references: msg.references ?? msg.inReplyTo } : {}),
+    ...(attachments && attachments.length ? { attachments } : {}),
+  };
+}
+
 /** Pure (9.4): size estimate of an outgoing webmail message for the per-mailbox send limit. */
 export function estimatedSendSize(bodyHtml: string, bodyText: string, files: ReadonlyArray<{ size: number }>): number {
   return Buffer.byteLength(bodyHtml ?? '') + Buffer.byteLength(bodyText ?? '') + files.reduce((n, f) => n + (f.size || 0), 0);
@@ -1110,6 +1155,24 @@ export async function performSend(userId: string, input: SendRequest): Promise<S
       jobOptions.delay = holdMs;
     }
     const sendAt = scheduledAt ?? (holdMs > 0 ? new Date(now + holdMs) : null);
+    // The message as sent: the worker builds the MIME from it, and the sender's
+    // own Sent copy below is built from the same fields (sentCopyMailOptions).
+    const outgoing: OutgoingMessage = {
+      from:      effectiveFromEmail,
+      fromName:  displayName,          // empty → nodemailer omits the quoted string
+      ...(onBehalfHeader ? { sender: onBehalfHeader } : {}),  // RFC 5322 §3.6.2 „Sender:" header
+      to,
+      cc,
+      bcc,                             // only in the SMTP envelope, not in the header
+      subject,
+      html:      bodyHtml,
+      text:      bodyText,
+      messageId: msgId,
+      // For schedule-send: set the Date header to scheduledAt so that the
+      // recipient sees the scheduled send time (not the creation time)
+      date:      (scheduledAt ?? sendDate).toISOString(),
+      ...replyHeaders,
+    };
     try {
       await getOutboundQueue().add('send', {
         messageId:    jobId,
@@ -1123,23 +1186,7 @@ export async function performSend(userId: string, input: SendRequest): Promise<S
           dkimSelector:   user.domain.dkimSelector ?? 'mail',
           dkimPrivateKey: user.domain.dkimPrivateKey,
         } : {}),
-        message: {
-          from:      effectiveFromEmail,
-          fromName:  displayName,          // empty → nodemailer omits the quoted string
-          ...(onBehalfHeader ? { sender: onBehalfHeader } : {}),  // RFC 5322 §3.6.2 „Sender:" header
-          to,
-          cc,
-          bcc,                             // only in the SMTP envelope, not in the header
-          subject,
-          html:      bodyHtml,
-          text:      bodyText,
-          messageId: msgId,
-          // For schedule-send: set the Date header to scheduledAt so that the
-          // recipient sees the scheduled send time (not the creation time)
-          date:      (scheduledAt ?? sendDate).toISOString(),
-          ...replyHeaders,
-          attachments: queueAttachments,
-        },
+        message: { ...outgoing, attachments: queueAttachments },
       }, jobOptions);
     } catch (queueErr) {
       log.error({ err: queueErr }, 'Outbound queue add failed');
@@ -1198,23 +1245,9 @@ export async function performSend(userId: string, input: SendRequest): Promise<S
           ...(f.cid ? { cid: f.cid.replace(/^<|>$/g, '') } : {}),
           ...(f.inline ? { contentDisposition: 'inline' as const } : {}),
         })));
-        const fromAddress: SendMailOptions['from'] = displayName
-          ? { name: displayName, address: user.email }
-          : user.email;
-
-        const rawBuffer = await buildRawMime({
-          messageId: msgId,
-          from:      fromAddress,
-          to,
-          subject,
-          date:      sendDate,
-          ...(cc.length             ? { cc }                                  : {}),
-          ...(bcc.length            ? { bcc }                                 : {}),
-          ...(bodyHtml              ? { html: bodyHtml }                      : {}),
-          ...(bodyText              ? { text: bodyText }                      : {}),
-          ...replyHeaders,
-          ...(sentAttachments.length ? { attachments: sentAttachments }        : {}),
-        });
+        // 9.4: From / Sender / Date as sent (send as / on behalf of a Shared
+        // Mailbox shows the box, not the user's own address), plus Bcc.
+        const rawBuffer = await buildRawMime(sentCopyMailOptions(outgoing, sentAttachments));
 
         const parsed = await parseRawMessage(rawBuffer);
 

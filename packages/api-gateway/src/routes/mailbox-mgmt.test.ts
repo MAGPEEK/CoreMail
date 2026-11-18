@@ -65,7 +65,7 @@ const { adminSharedMailboxesRouter } = await import('./admin/shared-mailboxes.js
 const { parseMailFlowPatch, mailFlowDiff, mailFlowView } = await import('../lib/mail-flow-admin.js');
 const { folderPaneHidden, nextFolderPaneLists, ownerAccessEntry } = await import('./user.js');
 const { auditCategoryWhere } = await import('./admin/audit-log.js');
-const { estimatedSendSize } = await import('./mail.js');
+const { estimatedSendSize, sentCopyMailOptions, buildRawMime } = await import('./mail.js');
 const storage = await import('@coremail/storage');
 
 type TokenRole = Parameters<typeof core.signAccessToken>[0]['role'];
@@ -199,4 +199,41 @@ test('audit category "mailbox-access" filters the mailbox access audit; unknown 
 
 test('webmail send size estimate: bodies in bytes plus attachment sizes', () => {
   assert.equal(estimatedSendSize('<p>ä</p>', 'ä', [{ size: 10 }, { size: 5 }]), 9 + 2 + 15);
+});
+
+/** Header block of a raw message, unfolded (CRLF or LF line ends). */
+function headersOf(raw: Buffer): Record<string, string> {
+  const head = (raw.toString('utf8').split(/\r?\n\r?\n/)[0] ?? '').replace(/\r?\n[ \t]+/g, ' ');
+  const out: Record<string, string> = {};
+  for (const line of head.split(/\r?\n/)) {
+    const i = line.indexOf(':');
+    if (i > 0) out[line.slice(0, i).toLowerCase()] = line.slice(i + 1).trim();
+  }
+  return out;
+}
+
+const outgoing = {
+  from: 'team@ex.com', fromName: 'Team', to: ['a@ext.example'], cc: [], bcc: ['hidden@ext.example'],
+  subject: 'Hello', html: '', text: 'Hi', messageId: '<m1@ex.com>', date: '2026-11-20T08:00:00.000Z',
+};
+
+test('own Sent copy of a send as: From is the Shared Mailbox (as sent), Bcc kept, scheduled Date as sent', async () => {
+  const h = headersOf(await buildRawMime(sentCopyMailOptions(outgoing)));
+  assert.match(h['from'] ?? '', /Team <team@ex\.com>/);
+  assert.equal(h['sender'], undefined);
+  assert.match(h['bcc'] ?? '', /hidden@ext\.example/, 'the sender copy keeps Bcc');
+  assert.equal(h['message-id'], '<m1@ex.com>');
+  assert.equal(new Date(h['date'] ?? '').toISOString(), '2026-11-20T08:00:00.000Z');
+});
+
+test('own Sent copy of a send on behalf: From = Shared Mailbox, Sender = the user; reply fields as the worker sets them', async () => {
+  const h = headersOf(await buildRawMime(sentCopyMailOptions({
+    ...outgoing, bcc: [], sender: '"Bob" <bob@ex.com>', inReplyTo: '<p1@ext.example>',
+  })));
+  assert.match(h['from'] ?? '', /team@ex\.com/);
+  assert.doesNotMatch(h['from'] ?? '', /bob@ex\.com/);
+  assert.match(h['sender'] ?? '', /bob@ex\.com/);
+  assert.equal(h['in-reply-to'], '<p1@ext.example>');
+  assert.equal(h['references'], '<p1@ext.example>');
+  assert.equal(h['bcc'], undefined);
 });
