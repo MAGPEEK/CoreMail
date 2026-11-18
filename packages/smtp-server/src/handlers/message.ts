@@ -1,8 +1,8 @@
-import { prisma, parseRawMessage, uploadBuffer, storeRawMessage, truncateBodyColumn, attachmentKey, applyMailRules, applyTransportRules, applyOutcomeToBuffer, processITipInbound, deliveredImportance, createMessage, deferMailboxChanges, createRulePatternBudget, ruleMessageStepBudget, checkReceiveQuota, recordDelivery, loadMailFlowPolicy, deliveryRefusal, headerFromAddress, type SenderAuth, type QuotaOwner, type MailFlowOwner, type TransportOutcome } from '@coremail/storage';
+import { prisma, parseRawMessage, uploadBuffer, storeRawMessage, truncateBodyColumn, attachmentKey, applyMailRules, applyTransportRules, applyOutcomeToBuffer, processITipInbound, deliveredImportance, createMessage, deferMailboxChanges, createRulePatternBudget, ruleMessageStepBudget, checkReceiveQuota, recordDelivery, loadMailFlowPolicy, deliveryRefusal, headerFromAddress, addressVariants, type SenderAuth, type QuotaOwner, type MailFlowOwner, type TransportOutcome } from '@coremail/storage';
 import type { LocalOutcome } from './delivery.js';
 import { getRedisClient, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
 import { verifyIncomingSmime, decryptIncomingSmime } from '../smime/index.js';
-import { enqueueRuleForward, isRuleForwardedAlready, planAdminForward, adminForwardSource } from './rule-forward.js';
+import { enqueueRuleForward, isRuleForwardedAlready, planAdminForward, forwardSource, inboxRuleForwardOpts } from './rule-forward.js';
 import { handleTransportOutcome } from './transport-actions.js';
 import { sendAutoReplyIfNeeded } from './auto-reply.js';
 import { withReturnPath } from './trace.js';
@@ -162,7 +162,7 @@ async function deliverInbound(rawBuffer: Buffer, opts: StoreOptions): Promise<St
       where: {
         scope: 'USER-JUNK',
         scopeId: user.id,
-        pattern: opts.fromAddr.toLowerCase(),
+        pattern: { in: addressVariants(opts.fromAddr) },   // IDN: either spelling
         active: true,
       },
     });
@@ -254,16 +254,16 @@ async function deliverInbound(rawBuffer: Buffer, opts: StoreOptions): Promise<St
   // Queued before the local copy is committed, like rule forwards (a failure
   // defers the transaction; the claim keyed by the transaction prevents a second
   // forward on the retry). When the mailbox keeps no copy, delivery ends here.
-  // An S/MIME message decrypted for storage is forwarded still encrypted.
-  const forwardSource = adminForwardSource(effectiveBuffer, rawBuffer, smimeDecrypted, appliedTransport);
+  // An S/MIME message decrypted for storage is forwarded still encrypted (also by inbox rules).
+  const outgoingSource = forwardSource(effectiveBuffer, rawBuffer, smimeDecrypted, appliedTransport);
   const adminForward = planAdminForward(flow, {
-    envelopeFrom: opts.fromAddr, alreadyForwarded: isRuleForwardedAlready(forwardSource),
+    envelopeFrom: opts.fromAddr, alreadyForwarded: isRuleForwardedAlready(outgoingSource),
   });
   if (adminForward === 'skipped-loop') {
     log.warn({ rcptTo: opts.rcptTo, to: flow.forwardTo }, 'Admin forwarding skipped (already forwarded / bounce) — delivering locally');
   } else if (adminForward !== 'none') {
     await enqueueRuleForward({
-      rawBuffer:      forwardSource,
+      rawBuffer:      outgoingSource,
       toAddress:      adminForward.to,
       forwardingUser: ownerType === 'user' && user
         ? { id: user.id, email: user.email.toLowerCase() }
@@ -334,19 +334,14 @@ async function deliverInbound(rawBuffer: Buffer, opts: StoreOptions): Promise<St
   // store below fails instead, the retry finds the forward claimed under the
   // transaction key and does not queue it twice.
   // Redirects keep the original envelope sender (§3.9.1) — a null reverse-path
-  // stays null, so a redirected bounce cannot loop.
+  // stays null, so a redirected bounce cannot loop. Like the admin forwarding,
+  // an S/MIME message decrypted for storage leaves still encrypted.
   if (user) {
-    for (const fwd of ruleForwards) {
-      await enqueueRuleForward({
-        rawBuffer:      effectiveBuffer,
-        toAddress:      fwd.address,
-        forwardingUser: { id: user.id, email: user.email },
-        mode:           fwd.mode,
-        originalFrom:   opts.fromAddr,
-        dedupKey:       opts.deliveryKey,
-        recipient:      opts.rcptTo,
-      });
-    }
+    const requests = inboxRuleForwardOpts(ruleForwards, {
+      source: outgoingSource, user: { id: user.id, email: user.email },
+      originalFrom: opts.fromAddr, dedupKey: opts.deliveryKey, recipient: opts.rcptTo,
+    });
+    for (const request of requests) await enqueueRuleForward(request);
   }
 
   if (ruleDiscard) {

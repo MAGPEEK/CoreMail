@@ -1,6 +1,7 @@
 // Step 10: admin flows — certificate, transport-rule quarantine + release, out-of-office,
 // sender lists / spoofing settings / API rate limit (9.4).
 import tls from 'node:tls';
+import { domainToASCII } from 'node:url';
 import {
   check, assert, creds, http, session, buildMime, imapCmd, imapQuote, waitFor, sleep, HOST, PORTS, DOMAIN,
   smtpOpen, smtpCmd, smtpSend, resetGatewayRateLimits,
@@ -172,6 +173,43 @@ async function hygieneChecks(state, admin) {
     } finally {
       await http('DELETE', `${BASE}/sender-lists/${c.json.id}`, { token: admin });
     }
+  });
+
+  await check('hygiene (9.4 review): an internationalized block entry is stored as A-label and refuses the punycode sender', async () => {
+    const unicode = `pest-${Date.now()}@bücher-e2e.test`;
+    const ascii = `${unicode.split('@')[0]}@${domainToASCII('bücher-e2e.test')}`;
+    const c = await http('POST', `${BASE}/sender-lists`, { token: admin, body: { listType: 'BLOCK', scope: 'USER', target: B, patternType: 'EXACT', pattern: unicode } });
+    assert(c.status === 201, `create ${c.status} ${c.text.slice(0, 200)}`);
+    try {
+      assert(c.json.pattern === ascii, `stored pattern ${c.json.pattern}, expected ${ascii}`);
+      const dup = await http('POST', `${BASE}/sender-lists`, { token: admin, body: { listType: 'BLOCK', scope: 'USER', target: B, patternType: 'EXACT', pattern: ascii } });
+      assert(dup.status === 409, `punycode spelling must be the same entry: ${dup.status}`);
+      const [toB] = await inbound(ascii, [B]);
+      assert(toB.code === 550 && /5\.7\.1/.test(toB.text), `RCPT B: ${toB.text}`);
+      return `${c.json.pattern}: ${toB.text.trim()}`;
+    } finally {
+      await http('DELETE', `${BASE}/sender-lists/${c.json.id}`, { token: admin });
+    }
+  });
+
+  await check('ingress (9.4 review): internal X-CoreMail-* headers of an external sender are stripped before delivery', async () => {
+    const subject = `E2E forged internal headers ${Date.now()}`;
+    const raw = buildMime({
+      from: 'External <sender@external-e2e.test>', to: B, subject, text: 'forged',
+      extraHeaders: ['X-CoreMail-RuleForwarded: forged', 'X-CoreMail-Draft-Pending: e30=', 'X-CoreMail-Quarantine-Released: forged'],
+    });
+    // envelope sender of the smtp step: its greylisting triple for B has passed
+    const r = await inbound('sender@external-e2e.test', [B], raw);
+    assert(r.code === 250, `${r.stage}: ${r.text}`);
+    let stored = '';
+    await waitFor(async () => {
+      const found = await findSubject(B, creds().userB, subject, { wantRaw: true });
+      stored = Array.isArray(found) ? '' : found.raw;
+      return stored !== '';
+    }, { timeout: 30000, what: 'forged-header mail in B INBOX' });
+    const head = stored.slice(0, stored.indexOf('\r\n\r\n'));
+    assert(!/^X-CoreMail-(RuleForwarded|Draft-Pending|Quarantine-Released):/im.test(head), 'an internal header reached the mailbox');
+    return 'stripped';
   });
 
   await check('hygiene: spoofing action from the BCP takes effect without a restart (reject → 550 for a forged local From)', async () => {

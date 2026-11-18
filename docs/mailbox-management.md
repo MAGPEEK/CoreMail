@@ -79,7 +79,9 @@ defaults). Logic in `packages/storage/src/mail-flow.ts`.
 
 * **Sender lists** — reject-from refuses when the envelope sender *or* the header
   From: matches; accept-only-from needs every known sender to match and refuses
-  a message without any sender (null reverse-path and no From:).
+  a message without any sender (null reverse-path and no From:). Internationalized
+  domains are stored as punycode and compared in canonical form, so an entry and a
+  sender match in either spelling (Unicode or punycode).
   * Port 25 `RCPT TO`: envelope sender → `550 5.7.1 Recipient does not accept mail from this sender`.
     A null reverse-path is judged at DATA / delivery, where the header From: is known.
   * Port 25 `DATA`: when every local recipient refuses (header From:, size) and
@@ -111,7 +113,9 @@ defaults). Logic in `packages/storage/src/mail-flow.ts`.
   outbound queue before the local copy is committed (a transaction retry does
   not forward twice). Loop protection: a message that already carries
   `X-CoreMail-RuleForwarded` (forwarded by a rule or an admin forwarding) is not
-  forwarded again and is always kept locally; null-sender messages (bounces,
+  forwarded again and is always kept locally — the header is internal: a copy
+  supplied by a sender (port 25, submission, webmail / JMAP / ActiveSync) is
+  stripped on receipt, only CoreMail's own forwards carry it; null-sender messages (bounces,
   DSNs) are never forwarded. Forwarding to the mailbox's own address or alias is
   refused by the API. Transport rules run first; a transport rule that stops the
   delivery stops the forwarding too. An S/MIME message decrypted for storage is

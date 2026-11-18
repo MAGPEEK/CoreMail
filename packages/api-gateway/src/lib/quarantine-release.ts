@@ -14,7 +14,7 @@
  */
 import crypto from 'node:crypto';
 import {
-  QUARANTINE_RELEASE_HEADER, VIRUS_SCAN_HEADER, INTERNAL_MAIL_HEADERS, prependHeader, quarantineEnvelope, stripHeaders,
+  QUARANTINE_RELEASE_HEADER, VIRUS_SCAN_HEADER, RULE_FORWARDED_HEADER, internalHeadersExcept, prependHeader, quarantineEnvelope, stripHeaders,
 } from '@coremail/storage';
 
 export interface QuarantineRow {
@@ -85,9 +85,10 @@ export async function releaseQuarantine(id: string, actorId: string, deps: Relea
   // Trace header: replace anything stored with ours (never trusted, informational).
   // The X-CoreMail-Virus-Scan verdict stays: smtp-server strips sender copies on
   // receipt, so the stored one is ours (e.g. "infected" with clamavAction=pass
-  // on a transport-rule quarantine) and must survive the release.
+  // on a transport-rule quarantine) and must survive the release — like a
+  // genuine rule-forward loop header (forged copies never get past ingress).
   const released = prependHeader(
-    stripHeaders(raw, INTERNAL_MAIL_HEADERS.filter((h) => h.toLowerCase() !== VIRUS_SCAN_HEADER.toLowerCase())),
+    stripHeaders(raw, internalHeadersExcept([VIRUS_SCAN_HEADER, RULE_FORWARDED_HEADER])),
     QUARANTINE_RELEASE_HEADER, id,
   );
 

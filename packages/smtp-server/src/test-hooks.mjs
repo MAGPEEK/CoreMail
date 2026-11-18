@@ -21,6 +21,7 @@ const STUB_SOURCE = `
 const g = (globalThis.__coremailTest ??= {});
 export * from '${new URL('../../core/src/tls/tls-errors.ts', import.meta.url).href}';
 export * from '${new URL('../../core/src/tls/legacy-tls.ts', import.meta.url).href}';
+export * from '${new URL('../../storage/src/idn.ts', import.meta.url).href}';
 const noop = () => {};
 const logger = { debug: noop, info: noop, warn: noop, error: noop, trace: noop, fatal: noop, child: () => logger };
 export const createLogger = () => logger;

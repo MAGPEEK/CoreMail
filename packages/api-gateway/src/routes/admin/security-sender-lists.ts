@@ -16,10 +16,10 @@
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { prisma } from '@coremail/storage';
+import { prisma, addressVariants, domainVariants } from '@coremail/storage';
 import { audit, auditContext } from '../../lib/audit.js';
 import {
-  normalizeEntry, entryKey, toCsv, parseSenderListCsv, LIST_TYPES, PATTERN_TYPES, patternError,
+  normalizeEntry, entryKey, toCsv, parseSenderListCsv, LIST_TYPES, PATTERN_TYPES, patternError, storedPattern,
   type SenderListInput,
 } from '../../lib/sender-lists.js';
 
@@ -46,14 +46,17 @@ async function withTargets(rows: Row[]): Promise<Array<Row & { target: string }>
   }));
 }
 
-/** scopeId for a target, or an error text (unknown domain / mailbox). */
+/**
+ * scopeId for a target, or an error text (unknown domain / mailbox). An
+ * internationalized domain is found in either spelling (A-label / U-label).
+ */
 async function resolveTarget(scope: string, target: string): Promise<{ scopeId: string | null } | { error: string }> {
   if (scope === 'GLOBAL') return { scopeId: null };
   if (scope === 'DOMAIN') {
-    const d = await prisma.domain.findUnique({ where: { name: target }, select: { id: true } });
+    const d = await prisma.domain.findFirst({ where: { name: { in: domainVariants(target) } }, select: { id: true } });
     return d ? { scopeId: d.id } : { error: `unknown domain ${target}` };
   }
-  const u = await prisma.user.findUnique({ where: { email: target }, select: { id: true } });
+  const u = await prisma.user.findFirst({ where: { email: { in: addressVariants(target) } }, select: { id: true } });
   return u ? { scopeId: u.id } : { error: `unknown mailbox ${target}` };
 }
 
@@ -132,7 +135,7 @@ adminSenderListsRouter.patch('/:id', async (req: Request, res: Response) => {
   if (!before || !SCOPES.includes(before.scope)) { res.status(404).json({ error: 'entry not found' }); return; }
   const patternType = parsed.data.patternType ?? before.patternType as SenderListInput['patternType'];
   const rawPattern = (parsed.data.pattern ?? before.pattern).trim();
-  const pattern = patternType === 'REGEX' ? rawPattern : rawPattern.toLowerCase();
+  const pattern = storedPattern(patternType, rawPattern);
   const perr = patternError(patternType, pattern);
   if (perr) { res.status(400).json({ error: perr }); return; }
   const data = {

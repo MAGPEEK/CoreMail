@@ -10,9 +10,8 @@
 import { createLogger } from '@coremail/core';
 import {
   prisma, checkHeaderSenderIdentity, isSenderAddressAllowed, listAllowedSenderAddresses, checkSendQuota,
-  stripHeaders, checkUserSendLimits, afterForeignSend, type SendLimitVerdict,
+  stripHeaders, INTERNAL_MAIL_HEADERS, checkUserSendLimits, afterForeignSend, type SendLimitVerdict,
 } from '@coremail/storage';
-import { VIRUS_SCAN_HEADER } from '../inbound/virus-scan-header.js';
 import { storeInboundMessage, toLocalOutcome } from '../handlers/message.js';
 import { expandRecipientsWithOrigins, isLocalDomainAddress } from '../handlers/expand.js';
 import { enqueueOutbound } from '../outbound/queue.js';
@@ -50,11 +49,6 @@ export function completeSubmissionHeaders(raw: Buffer, hostname: string, now = n
   return Buffer.concat([Buffer.from(add.map((h) => `${h}\r\n`).join('')), raw]);
 }
 
-/**
- * Pure: removes X-CoreMail-Virus-Scan from a submitted message (local and
- * external recipients). Port 25 strips it on receipt as well; only the inbound
- * path adds it after its own ClamAV scan.
- */
 /** Pure: the SMTP reply for a per-mailbox send limit verdict (9.4), or null. */
 export function submissionLimitReply(verdict: SendLimitVerdict): string | null {
   if (verdict.ok) return null;
@@ -63,8 +57,14 @@ export function submissionLimitReply(verdict: SendLimitVerdict): string | null {
     : `550 5.5.3 Too many recipients for this sender (max ${verdict.limit})`;
 }
 
+/**
+ * Pure: removes every internal X-CoreMail-* header (storage INTERNAL_MAIL_HEADERS:
+ * virus-scan verdict, rule-forward loop header, …) from a submitted message —
+ * local and external recipients — before any rule or forward is evaluated.
+ * Port 25 strips them on receipt as well; CoreMail adds its genuine values later.
+ */
 export function stripSubmittedInternalHeaders(raw: Buffer): Buffer {
-  return stripHeaders(raw, [VIRUS_SCAN_HEADER]);
+  return stripHeaders(raw, INTERNAL_MAIL_HEADERS);
 }
 
 const log = createLogger('smtp:submission');

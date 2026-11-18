@@ -18,7 +18,7 @@ import {
 } from '../lib/attachment-download.js';
 import { getRedisClient, createBullMqConnection, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
 import { requireAuth } from '../middleware/auth.js';
-import { announceFolderListChange } from '@coremail/storage';
+import { announceFolderListChange, CRLF_STREAM_TRANSPORT, canonicalAddress, addressVariants } from '@coremail/storage';
 import { checkFolderParent, type FolderLookup } from '../lib/folder-tree.js';
 import { withBodyLimit, checkRecipients, envelopeRecipients, deliveryReceiptDsn, maxRecipients, MAX_SEND_FILES } from '../lib/send-limits.js';
 import { createUserRateLimiter, envInt } from '../lib/user-rate-limit.js';
@@ -120,7 +120,7 @@ export function getOutboundQueue(): Queue {
 // (only string content). With 'unix' (LF-only) the receiving MTA cannot detect
 // the header/body separator (\r\n\r\n) → raw MIME text in the body.
 export async function buildRawMime(options: SendMailOptions): Promise<Buffer> {
-  const transport = nodemailer.createTransport({ streamTransport: true, newline: 'windows' });
+  const transport = nodemailer.createTransport(CRLF_STREAM_TRANSPORT);
   const info = await transport.sendMail(options);
   const stream = info.message as Readable;
   const chunks: Buffer[] = [];
@@ -507,7 +507,8 @@ mailRouter.post('/messages/bulk', async (req: Request, res: Response) => {
             where: { id: { in: ownedIds } },
             select: { fromAddr: true },
           });
-          const senders = [...new Set(msgs.map((m) => m.fromAddr.toLowerCase()))];
+          // stored canonical (IDN domain as A-label); delivery looks the entry up in both spellings
+          const senders = [...new Set(msgs.map((m) => canonicalAddress(m.fromAddr)))];
           for (const sender of senders) {
             const exists = await prisma.blacklist.findFirst({
               where: { scope: 'USER-JUNK', scopeId: req.apiUser!.userId, pattern: sender },
@@ -546,7 +547,7 @@ mailRouter.post('/messages/bulk', async (req: Request, res: Response) => {
             where: { id: { in: ownedIds } },
             select: { fromAddr: true },
           });
-          const senders = [...new Set(msgs.map((m) => m.fromAddr.toLowerCase()))];
+          const senders = [...new Set(msgs.flatMap((m) => addressVariants(m.fromAddr)))];
           await prisma.blacklist.deleteMany({
             where: { scope: 'USER-JUNK', scopeId: req.apiUser!.userId, pattern: { in: senders } },
           });

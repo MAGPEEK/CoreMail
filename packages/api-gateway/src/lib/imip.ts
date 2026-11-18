@@ -20,6 +20,7 @@ import ical, {
 } from 'ical-generator';
 import nodemailer from 'nodemailer';
 import type { Readable } from 'node:stream';
+import { CRLF_STREAM_TRANSPORT } from '@coremail/storage';
 
 export type AttendeeStatus = 'NEEDS-ACTION' | 'ACCEPTED' | 'DECLINED' | 'TENTATIVE';
 
@@ -181,7 +182,7 @@ export async function buildInvitationMime(args: {
   htmlBody?: string;
 }): Promise<Buffer> {
   const methodLower = args.method.toLowerCase();
-  const transport = nodemailer.createTransport({ streamTransport: true, newline: 'windows' }); // CRLF
+  const transport = nodemailer.createTransport(CRLF_STREAM_TRANSPORT);
   const info = await transport.sendMail({
     from: args.from.name
       ? { name: args.from.name, address: args.from.email }

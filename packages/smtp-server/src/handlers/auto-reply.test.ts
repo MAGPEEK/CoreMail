@@ -146,6 +146,11 @@ test('HTML out-of-office text produces an alternative text part', async () => {
   assert.match(raw, /Away & back/);
 });
 
+test('9.4 review: an auto-reply with multi-line text has CRLF line ends only', async () => {
+  const raw = await buildAutoReply({ fromAddress: 'bob@local.example', to: 'ann@ext.example', originalHeaders: parseHeaderBlock(ORIG), body: 'Away.\nBack on Monday.\n', hostname: 'h.example' });
+  assert.ok(!/(^|[^\r])\n/.test(raw.toString('latin1')), 'no bare LF');
+});
+
 // ── v8.1: exactly one reply per sender per OOF period ─────────────────────────
 
 test('one reply per sender per OOF period: no second reply weeks later, a new period replies again', async () => {

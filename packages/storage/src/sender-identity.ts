@@ -145,6 +145,50 @@ export function evaluateHeaderSenders(
   return { ok: true };
 }
 
+/**
+ * Pure (9.4 review): the header check plus the envelope sender. The envelope
+ * sender must be an allowed address — or, for SEND_ON_BEHALF, an on-behalf
+ * address while the Sender: field names an allowed (own) address. A null
+ * envelope sender is never a user's submission.
+ */
+export function evaluateSubmissionSender(
+  raw: Buffer,
+  envelopeFrom: string,
+  allowed: Iterable<string>,
+  onBehalf: Iterable<string> = [],
+): HeaderSenderVerdict {
+  const allowedList = [...allowed];
+  const onBehalfList = [...onBehalf];
+  const header = evaluateHeaderSenders(raw, allowedList, onBehalfList);
+  if (!header.ok) return header;
+  if (isSenderAddressAllowed(envelopeFrom, allowedList)) return { ok: true };
+  if (isSenderAddressAllowed(envelopeFrom, onBehalfList) && hasAllowedSenderField(raw, allowedList)) return { ok: true };
+  return { ok: false, reason: `Envelope sender <${normalizeSenderAddress(envelopeFrom)}> not allowed` };
+}
+
+/** Pure: the message has one Sender: field naming exactly one allowed address. */
+function hasAllowedSenderField(raw: Buffer, allowed: readonly string[]): boolean {
+  const s = raw.toString('latin1');
+  const senders = parseHeaderFields(s, 0, findBodyStart(s, 0, s.length)).filter((f) => f.name.toLowerCase() === 'sender');
+  if (senders.length !== 1) return false;
+  const addrs = addressesOf(senders[0]!.value);
+  return addrs.length === 1 && isSenderAddressAllowed(addrs[0]!, allowed);
+}
+
+/**
+ * {@link evaluateSubmissionSender} with the user's current rights from the
+ * database — used again when a scheduled / held message is finally sent, so
+ * revoked send-as / on-behalf rights or a deactivated account stop it.
+ */
+export async function checkSubmissionSenderIdentity(raw: Buffer, envelopeFrom: string, userId: string): Promise<HeaderSenderVerdict> {
+  const [allowed, onBehalf] = await Promise.all([
+    listAllowedSenderAddresses(userId),
+    listOnBehalfSenderAddresses(userId),
+  ]);
+  if (allowed.length === 0) return { ok: false, reason: 'unknown or inactive user' };
+  return evaluateSubmissionSender(raw, envelopeFrom, allowed, onBehalf);
+}
+
 /** {@link evaluateHeaderSenders} with the user's allowed + on-behalf addresses from the database. */
 export async function checkHeaderSenderIdentity(raw: Buffer, userId: string): Promise<HeaderSenderVerdict> {
   const [allowed, onBehalf] = await Promise.all([

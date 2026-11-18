@@ -14,7 +14,9 @@
  * USER-JUNK entries (webmail "Junk" action) are handled by smtp-server at delivery.
  */
 import { createLogger } from '@coremail/core';
-import { prisma, tryMatchRulePattern } from '@coremail/storage';
+import {
+  prisma, tryMatchRulePattern, addressVariants, domainVariants, canonicalAddress, canonicalDomain, canonicalAddressPattern,
+} from '@coremail/storage';
 
 const log = createLogger('security-filter:blacklist');
 
@@ -100,25 +102,31 @@ export function combineVerdicts(verdicts: readonly SenderListVerdict[]): Blackli
 
 const domainOf = (addr: string): string => addr.slice(addr.lastIndexOf('@') + 1);
 
-/** Domain / mailbox owner of each recipient (users, aliases, shared mailboxes, local domains). */
+/**
+ * Domain / mailbox owner of each recipient (users, aliases, shared mailboxes, local domains).
+ * Addresses and domain names compare in canonical form (9.4 review: an internationalized
+ * domain matches in its Unicode and its punycode spelling).
+ */
 export async function resolveRecipientScopes(rcpts: readonly string[]): Promise<RecipientScope[]> {
-  const addrs = rcpts.map((r) => r.trim().toLowerCase());
+  const addrs = rcpts.map((r) => canonicalAddress(r));
   const unique = [...new Set(addrs.filter((a) => a.includes('@')))];
   if (unique.length === 0) return addrs.map(() => ({}));
+  const spellings = [...new Set(unique.flatMap(addressVariants))];
+  const domainSpellings = [...new Set(unique.map(domainOf).flatMap(domainVariants))];
   const [users, aliases, shared, domains] = await Promise.all([
-    prisma.user.findMany({ where: { email: { in: unique } }, select: { id: true, email: true, domainId: true } }),
-    prisma.emailAlias.findMany({ where: { address: { in: unique }, active: true }, select: { address: true, domainId: true, targetUserId: true } }),
-    prisma.sharedMailbox.findMany({ where: { email: { in: unique } }, select: { email: true, domainId: true } }),
-    prisma.domain.findMany({ where: { name: { in: [...new Set(unique.map(domainOf))] } }, select: { id: true, name: true } }),
+    prisma.user.findMany({ where: { email: { in: spellings } }, select: { id: true, email: true, domainId: true } }),
+    prisma.emailAlias.findMany({ where: { address: { in: spellings }, active: true }, select: { address: true, domainId: true, targetUserId: true } }),
+    prisma.sharedMailbox.findMany({ where: { email: { in: spellings } }, select: { email: true, domainId: true } }),
+    prisma.domain.findMany({ where: { name: { in: domainSpellings } }, select: { id: true, name: true } }),
   ]);
   return addrs.map((addr): RecipientScope => {
-    const user = users.find((u) => u.email.toLowerCase() === addr);
+    const user = users.find((u) => canonicalAddress(u.email) === addr);
     if (user) return { userId: user.id, domainId: user.domainId };
-    const alias = aliases.find((a) => a.address.toLowerCase() === addr);
+    const alias = aliases.find((a) => canonicalAddress(a.address) === addr);
     if (alias) return { domainId: alias.domainId, ...(alias.targetUserId ? { userId: alias.targetUserId } : {}) };
-    const box = shared.find((s) => s.email.toLowerCase() === addr);
+    const box = shared.find((s) => canonicalAddress(s.email) === addr);
     if (box) return { domainId: box.domainId };
-    const domain = domains.find((d) => d.name.toLowerCase() === domainOf(addr));
+    const domain = domains.find((d) => canonicalDomain(d.name) === domainOf(addr));
     return domain ? { domainId: domain.id } : {};
   });
 }
@@ -160,32 +168,41 @@ export interface BlacklistEntryLike {
 
 /**
  * Pure: does one blacklist entry match the sender address?
- * EXACT/WILDCARD compare case-insensitively. REGEX patterns are matched
- * as written, case-insensitively — they must NOT be lower-cased first
- * (that turned `\D` into `\d`, `\S` into `\s`, `\W` into `\w`).
+ * EXACT/WILDCARD compare case-insensitively in canonical form (9.4 review: an
+ * internationalized domain as A-label — entry and sender may use either
+ * spelling). REGEX patterns are matched as written, case-insensitively, against
+ * both spellings — they must NOT be lower-cased first (that turned `\D` into
+ * `\d`, `\S` into `\s`, `\W` into `\w`).
  * Returns null for an invalid or unsupported regex.
  */
 export function matchBlacklistEntry(entry: BlacklistEntryLike, fromAddr: string): { matched: boolean; reason: string } | null {
-  const lowerFrom = fromAddr.toLowerCase();
-  const fromDomain = lowerFrom.includes('@') ? lowerFrom.slice(lowerFrom.lastIndexOf('@') + 1) : '';
+  const from = canonicalAddress(fromAddr);
+  const fromDomain = from.includes('@') ? from.slice(from.lastIndexOf('@') + 1) : '';
+  const spellings = [...new Set([from, ...addressVariants(from)])];
 
   if (entry.patternType === 'EXACT') {
-    return { matched: lowerFrom === entry.pattern.toLowerCase(), reason: 'Sender blocked' };
+    return { matched: from === canonicalAddress(entry.pattern), reason: 'Sender blocked' };
   }
   if (entry.patternType === 'WILDCARD') {
-    const pattern = entry.pattern.toLowerCase();
+    const pattern = canonicalAddressPattern(entry.pattern);
     if (pattern.startsWith('*@')) {
       return { matched: fromDomain === pattern.slice(2), reason: 'Sender domain blocked' };
     }
-    return { matched: matchWildcard(lowerFrom, pattern), reason: 'Sender blocked' };
+    const raw = entry.pattern.trim().toLowerCase();
+    return { matched: spellings.some((s) => matchWildcard(s, pattern) || matchWildcard(s, raw)), reason: 'Sender blocked' };
   }
   if (entry.patternType === 'REGEX') {
     // v8.1: linear-time matcher (storage rule-pattern.ts) — the sender address is
     // attacker-controlled; a backtracking RegExp could stall the filter (ReDoS).
     // Unsupported syntax (backreferences, lookarounds) → null (skipped + logged);
     // new patterns are validated when saved in the admin API.
-    const m = tryMatchRulePattern(entry.pattern, fromAddr);
-    return m === null ? null : { matched: m, reason: 'Sender blocked by policy' };
+    let matched = false;
+    for (const spelling of [fromAddr, ...spellings]) {
+      const m = tryMatchRulePattern(entry.pattern, spelling);
+      if (m === null) return null;
+      if (m) { matched = true; break; }
+    }
+    return { matched, reason: 'Sender blocked by policy' };
   }
   return { matched: false, reason: '' };
 }

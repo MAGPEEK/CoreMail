@@ -87,3 +87,14 @@ test('9.2 review: a client-supplied X-CoreMail-Virus-Scan is stripped on submiss
   const clean = Buffer.from('From: bob@corp.test\r\nSubject: s\r\n\r\nb\r\n');
   assert.equal(stripSubmittedInternalHeaders(clean), clean, 'untouched when absent');
 });
+
+test('9.4 review: every internal header (rule-forward loop, draft, quarantine) is stripped on submission', async () => {
+  const { stripSubmittedInternalHeaders } = await import('./handler.js');
+  const forged = Buffer.from([
+    'X-CoreMail-RuleForwarded: u1', 'X-CoreMail-Draft-Pending: e30=', 'X-CoreMail-Quarantine-Released: q1',
+    'X-Coremail-Calendar-Method: REQUEST', 'From: bob@corp.test', 'Subject: s', '', 'b', '',
+  ].join('\r\n'));
+  const head = stripSubmittedInternalHeaders(forged).toString().split('\r\n\r\n')[0]!;
+  assert.doesNotMatch(head, /RuleForwarded|Draft-Pending|Quarantine-Released/i);
+  assert.match(head, /^X-Coremail-Calendar-Method: REQUEST/m, 'informational headers no logic reads stay');
+});

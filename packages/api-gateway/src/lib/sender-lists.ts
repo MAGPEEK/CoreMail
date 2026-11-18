@@ -8,7 +8,7 @@
  *   listType,scope,target,patternType,pattern,comment,active
  * `target` is empty for GLOBAL, the domain name for DOMAIN and the mailbox address for USER.
  */
-import { validateRulePattern } from '@coremail/storage';
+import { validateRulePattern, canonicalAddressPattern, canonicalAddress, canonicalDomain } from '@coremail/storage';
 
 export const LIST_TYPES = ['BLOCK', 'ALLOW'] as const;
 export const LIST_SCOPES = ['GLOBAL', 'DOMAIN', 'USER'] as const;
@@ -52,6 +52,15 @@ export function patternError(patternType: PatternType, pattern: string): string 
   return null;
 }
 
+/**
+ * Pure: the stored form of a pattern. EXACT / WILDCARD compare case-insensitively —
+ * stored lower case, an internationalized domain as A-label (9.4 review: both
+ * spellings are one entry); REGEX as written.
+ */
+export function storedPattern(patternType: PatternType, pattern: string): string {
+  return patternType === 'REGEX' ? pattern.trim() : canonicalAddressPattern(pattern);
+}
+
 /** Pure: normalise + validate one entry (from the API body or a CSV row). */
 export function normalizeEntry(raw: Record<string, unknown>): { ok: true; entry: SenderListInput } | { ok: false; error: string } {
   const text = (k: string) => (typeof raw[k] === 'string' ? (raw[k] as string).trim() : '');
@@ -61,11 +70,10 @@ export function normalizeEntry(raw: Record<string, unknown>): { ok: true; entry:
   if (!isOneOf(LIST_TYPES, listType)) return { ok: false, error: `listType must be one of ${LIST_TYPES.join(', ')}` };
   if (!isOneOf(LIST_SCOPES, scope)) return { ok: false, error: `scope must be one of ${LIST_SCOPES.join(', ')}` };
   if (!isOneOf(PATTERN_TYPES, patternType)) return { ok: false, error: `patternType must be one of ${PATTERN_TYPES.join(', ')}` };
-  // EXACT / WILDCARD compare case-insensitively — stored lower-case; REGEX as written
-  const pattern = patternType === 'REGEX' ? text('pattern') : text('pattern').toLowerCase();
+  const pattern = storedPattern(patternType, text('pattern'));
   const perr = patternError(patternType, pattern);
   if (perr) return { ok: false, error: perr };
-  const target = text('target').toLowerCase();
+  const target = scope === 'DOMAIN' ? canonicalDomain(text('target')) : canonicalAddress(text('target'));
   if (scope === 'GLOBAL' && target) return { ok: false, error: 'GLOBAL entries have no target' };
   if (scope !== 'GLOBAL' && !target) return { ok: false, error: `${scope} entries need a target (${scope === 'DOMAIN' ? 'domain name' : 'mailbox address'})` };
   const comment = text('comment');

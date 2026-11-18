@@ -10,6 +10,7 @@
 import { simpleParser, type AddressObject, type ParsedMail } from 'mailparser';
 import { capHeaderSection } from './mime/index.js';
 import { importanceOfRaw, type Importance } from './importance.js';
+import { DRAFT_PENDING_HEADER } from './internal-headers.js';
 
 export const DRAFTS_FOLDER = 'Drafts';
 export const DRAFT_FLAG = '\\Draft';
@@ -68,8 +69,9 @@ function msgIdList(v: string | string[] | undefined): string[] {
  * Recipients the user typed that are not (yet) valid addresses ("bob", "a@") cannot
  * be written into To/Cc/Bcc; drafts keep them in this header (base64 JSON) so
  * nothing typed is lost. Sending such a draft fails the recipient check.
+ * Internal header (internal-headers.ts): stripped from every received or submitted message.
  */
-export const DRAFT_PENDING_HEADER = 'X-CoreMail-Draft-Pending';
+export { DRAFT_PENDING_HEADER };
 export const MAX_DRAFT_PENDING_BYTES = 16 * 1024;
 
 export interface PendingRecipients { to: string[]; cc: string[]; bcc: string[] }

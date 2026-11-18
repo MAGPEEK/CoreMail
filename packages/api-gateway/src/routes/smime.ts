@@ -1,5 +1,6 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { prisma } from '@coremail/storage/prisma';
+import { announceUserEvent } from '@coremail/storage';
 import { requireAuth } from '../middleware/auth.js';
 
 export const smimeRouter: RouterType = Router();
@@ -280,5 +281,7 @@ smimeRouter.put('/settings', async (req: Request, res: Response) => {
     select: { autoSign: true, autoEncrypt: true, verifyIncoming: true, decryptIncoming: true },
   });
 
+  // 9.4 review: the user's other tabs and devices show the saved options at once
+  announceUserEvent(req.apiUser!.userId, { type: 'settings', section: 'security', action: 'update' });
   res.json(settings);
 });

@@ -8,7 +8,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { encodeWbxml, decodeWbxml, el, type WbxmlElement } from './wbxml.js';
+import { encodeWbxml, decodeWbxml, el, MAX_WBXML_DEPTH, MAX_WBXML_NODES, WbxmlLimitError, type WbxmlElement } from './wbxml.js';
 
 const kids = (e: WbxmlElement): WbxmlElement[] => (e.children ?? []).filter((c): c is WbxmlElement => typeof c !== 'string');
 
@@ -105,4 +105,18 @@ test('decoder rejects truncated OPAQUE data, unterminated strings and unsupporte
   // a valid OPAQUE still decodes byte-exact
   const ok = decodeWbxml(Buffer.from([...H, 0x45, 0x50, 0xc3, 0x02, 0xe9, 0x00, 0x01, 0x01]));
   assert.deepEqual([...(kids(ok)[0]!.bytes ?? [])], [0xe9, 0x00]);
+});
+
+test('9.4 review: hostile bodies hit explicit depth / node limits instead of deep recursion', () => {
+  const H = [0x03, 0x01, 0x6a, 0x00, 0x00, 21];
+  const nested = (levels: number) => Buffer.from([...H, ...new Array(levels).fill(0x45), ...new Array(levels).fill(0x01)]);
+  assert.doesNotThrow(() => decodeWbxml(nested(MAX_WBXML_DEPTH)), 'the deepest allowed document decodes');
+  assert.throws(() => decodeWbxml(nested(MAX_WBXML_DEPTH + 1)), WbxmlLimitError);
+  assert.throws(() => decodeWbxml(nested(200_000)), WbxmlLimitError, 'very deep input: limit error, no stack overflow');
+  // wide: one element with more children than the node limit
+  const wide = Buffer.concat([Buffer.from([...H, 0x45]), Buffer.alloc(MAX_WBXML_NODES + 1, 0x05), Buffer.from([0x01])]);
+  assert.throws(() => decodeWbxml(wide), WbxmlLimitError);
+  // a long run of SWITCH_PAGE tokens is no recursion either
+  const pages = Buffer.concat([Buffer.from(H), Buffer.from(new Array(200_000).fill([0x00, 21]).flat()), Buffer.from([0x45, 0x01])]);
+  assert.equal(decodeWbxml(pages).children?.length, 0);
 });

@@ -315,9 +315,28 @@ function hide(obj: object, key: string, value: unknown): void {
 }
 
 // ─── Decoder ─────────────────────────────────────────────────────────────────
+
+/**
+ * 9.4 review: limits of one decoded body. EAS documents nest about ten levels;
+ * a hostile body must not drive the recursive decoder into deep recursion or
+ * build millions of nodes — the request is answered 400 (server.ts).
+ */
+export const MAX_WBXML_DEPTH = 64;
+export const MAX_WBXML_NODES = 100_000;
+
+/** A WBXML body exceeds MAX_WBXML_DEPTH or MAX_WBXML_NODES. */
+export class WbxmlLimitError extends Error {
+  constructor(message: string) { super(message); this.name = 'WbxmlLimitError'; }
+}
+
 export function decodeWbxml(buf: Buffer): WbxmlElement {
   let pos = 0;
   let currentPage = 0;
+  let nodes = 0;
+
+  function countNode(): void {
+    if (++nodes > MAX_WBXML_NODES) throw new WbxmlLimitError(`WBXML body exceeds ${MAX_WBXML_NODES} nodes`);
+  }
 
   function readByte(): number {
     if (pos >= buf.length) throw new Error('Unexpected end of WBXML');
@@ -364,17 +383,20 @@ export function decodeWbxml(buf: Buffer): WbxmlElement {
   const strTableLen = readMBUInt32();
   pos += strTableLen; // skip string table
 
-  function parseElement(): WbxmlElement | Content | null {
+  /** `depth`: nesting level of the element read next (root = 1). */
+  function parseElement(depth: number): WbxmlElement | Content | null {
     if (pos >= buf.length) return null;
-    const byte = readByte();
+    let byte = readByte();
+    // a run of SWITCH_PAGE tokens is read in a loop (no recursion per token)
+    while (byte === SWITCH_PAGE) {
+      currentPage = readByte();
+      if (pos >= buf.length) return null;
+      byte = readByte();
+    }
 
     if (byte === END) return null;
 
-    if (byte === SWITCH_PAGE) {
-      currentPage = readByte();
-      return parseElement();
-    }
-
+    countNode();
     if (byte === STR_I) {
       return new Content(readStrI());
     }
@@ -382,6 +404,7 @@ export function decodeWbxml(buf: Buffer): WbxmlElement {
     if (byte === OPAQUE) {
       return new Content(readOpaque());
     }
+    if (depth > MAX_WBXML_DEPTH) throw new WbxmlLimitError(`WBXML body nests deeper than ${MAX_WBXML_DEPTH} levels`);
 
     const hasContent = !!(byte & 0x40);
     const hasAttributes = !!(byte & 0x80);
@@ -405,7 +428,7 @@ export function decodeWbxml(buf: Buffer): WbxmlElement {
     if (hasContent) {
       let child: WbxmlElement | Content | null;
       const parts: Buffer[] = [];
-      while ((child = parseElement()) !== null) {
+      while ((child = parseElement(depth + 1)) !== null) {
         if (child instanceof Content) {
           parts.push(child.raw);
         } else {
@@ -422,7 +445,7 @@ export function decodeWbxml(buf: Buffer): WbxmlElement {
     return elem;
   }
 
-  const root = parseElement();
+  const root = parseElement(1);
   if (!root || root instanceof Content) throw new Error('Invalid WBXML: no root element');
   return root;
 }

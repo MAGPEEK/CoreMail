@@ -5,7 +5,7 @@
  */
 import nodemailer, { type SendMailOptions } from 'nodemailer';
 import { simpleParser, type ParsedMail } from 'mailparser';
-import { capHeaderSection, downloadBuffer } from '@coremail/storage';
+import { capHeaderSection, downloadBuffer, CRLF_STREAM_TRANSPORT } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import type { EmailAddress, EmailHeader } from '../types.js';
 
@@ -97,7 +97,7 @@ function angle(id: string): string {
 }
 
 export async function buildRfc822(o: BuildOptions): Promise<Buffer> {
-  const transport = nodemailer.createTransport({ streamTransport: true, newline: 'crlf', buffer: true });
+  const transport = nodemailer.createTransport({ ...CRLF_STREAM_TRANSPORT, buffer: true });
   const headers: Record<string, string> = {};
   for (const h of o.extraHeaders) headers[h.name] = h.value;
   const info = await transport.sendMail({
