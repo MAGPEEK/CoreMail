@@ -51,12 +51,12 @@ export interface RoomDecision {
  */
 export function decideRoomBooking(
   room: RoomPolicy,
-  slot: { start: Date; end: Date; recurring: boolean },
+  slot: { start: Date; end: Date; recurring: boolean; /** repeats more than daily (isBookableRecurrence) */ tooFrequent?: boolean },
   hasConflict: boolean,
   now: Date,
 ): RoomDecision {
   if (!room.active) return { status: 'DECLINED', reason: 'inactive' };
-  if (slot.recurring && !room.allowRecurring) return { status: 'DECLINED', reason: 'recurring' };
+  if (slot.recurring && (!room.allowRecurring || slot.tooFrequent === true)) return { status: 'DECLINED', reason: 'recurring' };
   const minutes = (slot.end.getTime() - slot.start.getTime()) / 60_000;
   if (room.maxDurationMinutes !== null && minutes > room.maxDurationMinutes) return { status: 'DECLINED', reason: 'duration' };
   if (slot.start.getTime() > now.getTime() + room.bookingWindowDays * DAY_MS) return { status: 'DECLINED', reason: 'window' };
@@ -76,6 +76,31 @@ export interface BookingRow {
 /** Pure: does the calendar data carry a recurrence rule (RRULE line)? */
 export const hasRrule = (icalData: string): boolean => /\nRRULE[:;]/i.test(icalData);
 
+/** Rule parts that repeat a meeting several times a day (more than one value). */
+const SUB_DAY_PARTS = /^BY(HOUR|MINUTE|SECOND)=.*,/;
+const AT_MOST_DAILY = new Set(['DAILY', 'WEEKLY', 'MONTHLY', 'YEARLY']);
+
+/** Pure: one recurrence rule repeats at most daily (FREQ DAILY…YEARLY, one BYHOUR / BYMINUTE / BYSECOND value at most). */
+function ruleAtMostDaily(rrule: string): boolean {
+  const parts = rrule.trim().replace(/^RRULE:/i, '').toUpperCase().split(';');
+  const freq = parts.find((p) => p.startsWith('FREQ='))?.slice('FREQ='.length) ?? '';
+  return AT_MOST_DAILY.has(freq) && !parts.some((p) => SUB_DAY_PARTS.test(p));
+}
+
+/**
+ * Pure: every recurrence rule of the meeting repeats at most daily. A denser series
+ * (FREQ=HOURLY/MINUTELY/SECONDLY, several times a day) is no room booking, and its
+ * expansion runs from the series start on every later check of the resource, growing
+ * with time (DoS guard): such a request is declined, such a stored booking blocks its
+ * first slot only.
+ */
+export function isBookableRecurrence(meeting: { rrule: string | null; icalData: string }): boolean {
+  const unfolded = meeting.icalData.replace(/\r?\n[ \t]/g, '');
+  const rules = [...unfolded.matchAll(/^RRULE(?:;[^:\r\n]*)?:([^\r\n]*)$/gim)].map((m) => m[1] ?? '');
+  if (meeting.rrule !== null) rules.push(meeting.rrule);
+  return rules.every(ruleAtMostDaily);
+}
+
 /** Pure: busy intervals of a resource's bookings in [ws, we) — accepted and tentative only, recurring ones expanded. */
 export function bookingIntervals(bookings: readonly BookingRow[], ws: Date, we: Date, excludeUid?: string): BusyInterval[] {
   const out: BusyInterval[] = [];
@@ -83,8 +108,9 @@ export function bookingIntervals(bookings: readonly BookingRow[], ws: Date, we: 
     if (b.uid === excludeUid) continue;
     const status = b.status.toUpperCase();
     if (status !== 'ACCEPTED' && status !== 'TENTATIVE') continue;
+    const recurring = hasRrule(b.icalData) && isBookableRecurrence({ rrule: null, icalData: b.icalData });
     const instances = expandStoredEvent(
-      { dtStart: b.dtStart, dtEnd: b.dtEnd, allDay: false, recurring: hasRrule(b.icalData), rrule: null, icalData: b.icalData },
+      { dtStart: b.dtStart, dtEnd: b.dtEnd, allDay: false, recurring, rrule: null, icalData: b.icalData },
       ws, we,
     );
     for (const i of instances) out.push({ start: i.dtStart, end: i.dtEnd, kind: status === 'TENTATIVE' ? 'tentative' : 'busy' });
@@ -130,8 +156,10 @@ export function bookingHorizon(room: Pick<RoomPolicy, 'bookingWindowDays'>, meet
 
 /** Pure: the meeting's occurrences in the horizon (series expanded, EXDATE / overrides applied, capped). */
 export function meetingOccurrences(meeting: MeetingToCheck, horizon: { start: Date; end: Date }): Occurrence[] {
+  // a too dense series is declined anyway: its first slot only, never its expansion
+  const expand = isRecurringMeeting(meeting) && isBookableRecurrence(meeting);
   return expandStoredEvent(
-    { dtStart: meeting.dtStart, dtEnd: meeting.dtEnd, allDay: meeting.allDay, recurring: isRecurringMeeting(meeting), rrule: meeting.rrule, icalData: meeting.icalData },
+    { dtStart: meeting.dtStart, dtEnd: meeting.dtEnd, allDay: meeting.allDay, recurring: expand, rrule: expand ? meeting.rrule : null, icalData: meeting.icalData },
     horizon.start, horizon.end,
   ).slice(0, MAX_CHECKED_OCCURRENCES).map((i) => ({ dtStart: i.dtStart, dtEnd: i.dtEnd }));
 }
@@ -161,6 +189,20 @@ export async function checkResourceBooking(
   now: Date,
 ): Promise<ResourceCheck> {
   await lockResourceCalendar(tx, calendarId);
+  return checkLockedResourceBooking(tx, calendarId, room, meeting, now);
+}
+
+/**
+ * {@link checkResourceBooking} for a caller that already holds the resource's booking
+ * lock in `tx` (it read the booking it changes under the lock as well).
+ */
+export async function checkLockedResourceBooking(
+  tx: ResourceBookingTx,
+  calendarId: string,
+  room: RoomPolicy,
+  meeting: MeetingToCheck,
+  now: Date,
+): Promise<ResourceCheck> {
   const horizon = bookingHorizon(room, meeting, now);
   const rows = await tx.resourceBooking.findMany({
     where: { calendarId, dtStart: { lt: horizon.end } },
@@ -170,7 +212,7 @@ export async function checkResourceBooking(
   const conflicts = conflictingOccurrences(meetingOccurrences(meeting, horizon), busy);
   const decision = decideRoomBooking(
     room,
-    { start: meeting.dtStart, end: meeting.dtEnd, recurring: isRecurringMeeting(meeting) },
+    { start: meeting.dtStart, end: meeting.dtEnd, recurring: isRecurringMeeting(meeting), tooFrequent: !isBookableRecurrence(meeting) },
     conflicts.length > 0,
     now,
   );

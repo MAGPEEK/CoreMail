@@ -231,6 +231,32 @@ test('completing a recurring task over CalDAV closes it and creates the next one
   // sending the completion again creates nothing more
   await dav('PUT', `${LIST}weekly.ics`, { body: vtodo('weekly', 'SUMMARY:Wochenbericht', 'DUE;VALUE=DATE:20261204', 'RRULE:FREQ=WEEKLY', 'STATUS:COMPLETED') });
   assert.equal(tasks.length, 2);
+  // review: …and does not revive the rule on the completed task (reopening it later would start a second series)
+  assert.equal(closed['rrule'], null);
+  assert.doesNotMatch(unfold((await dav('GET', `${LIST}weekly.ics`)).text), /\r\nRRULE:/);
+  // reopening it with its rule is the client's explicit choice
+  await dav('PUT', `${LIST}weekly.ics`, { body: vtodo('weekly', 'SUMMARY:Wochenbericht', 'DUE;VALUE=DATE:20261204', 'RRULE:FREQ=WEEKLY', 'STATUS:NEEDS-ACTION') });
+  assert.equal(closed['status'], 'NOT_STARTED');
+  assert.equal(closed['rrule'], 'FREQ=WEEKLY');
+});
+
+test('review: the reserved name — no second "tasks" collection in the home, MKCALENDAR refused in every spelling', async () => {
+  const legacy = { id: 'tasks', name: 'Alt', userId: 'alice', color: '#0078D4', sortOrder: 0 };
+  const shared = { id: 'Tasks', name: 'Geteilt', userId: 'bob', color: '#0078D4', sortOrder: 0 };
+  db['calendar'] = { ...empty, findMany: async () => [legacy, { ...legacy, id: 'work', name: 'Arbeit' }] };
+  db['calendarShare'] = { ...empty, findMany: async () => [{ permission: 'READ', calendar: shared }] };
+  try {
+    const home = await dav('PROPFIND', '/dav/calendars/alice', { headers: { Depth: '1' } });
+    assert.equal(home.status, 207);
+    assert.equal((home.text.match(/<d:href>\/dav\/calendars\/alice\/tasks\/<\/d:href>/gi) ?? []).length, 1, 'only the task list');
+    assert.match(home.text, /\/dav\/calendars\/alice\/work\//);
+  } finally {
+    db['calendar'] = empty;
+    db['calendarShare'] = empty;
+  }
+  for (const path of ['/dav/calendars/alice/Tasks/', '/dav/calendars/alice/%74asks/']) {
+    assert.equal((await dav('MKCALENDAR', path)).status, 405, path);
+  }
 });
 
 test('PUT preconditions: UID conflict, foreign resource name, VEVENT, unsupported rule', async () => {

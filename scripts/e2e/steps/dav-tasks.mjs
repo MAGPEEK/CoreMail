@@ -88,8 +88,21 @@ export async function run(state) {
     assert(next && String(next.dueDate).startsWith('2026-12-11') && next.rrule === 'FREQ=WEEKLY', JSON.stringify(weekly));
     const g = unfold((await http('GET', path, { headers: H() })).text);
     assert(/STATUS:COMPLETED/.test(g) && !/RRULE/.test(g), `completed occurrence:\n${g}`);
+    // review: the client sending its completed copy again (with RRULE) neither creates nor revives the series
+    const again = await http('PUT', path, { headers: H({ 'Content-Type': 'text/calendar' }), body: body('STATUS:COMPLETED', 'COMPLETED:20261204T150000Z') });
+    assert(again.status === 204, `${again.status}`);
+    const after = ((await http('GET', '/api/v1/tasks', { token: tok })).json ?? []).filter((t) => t.subject === 'E2E weekly task');
+    assert(after.length === 2 && after.find((t) => t.status === 'COMPLETED')?.rrule === null, JSON.stringify(after));
     for (const t of weekly) await http('DELETE', `/api/v1/tasks/${encodeURIComponent(t.id)}`, { token: tok });
     return `next due ${next.dueDate}`;
+  });
+
+  await check('caldav tasks: the name of the task list is reserved (MKCALENDAR 405, also percent-encoded)', async () => {
+    for (const p of [`/dav/calendars/${uid}/Tasks/`, `/dav/calendars/${uid}/%74asks/`]) {
+      const r = await http('MKCALENDAR', p, { headers: H() });
+      assert(r.status === 405, `${p}: ${r.status}`);
+    }
+    return '405';
   });
 
   await check('caldav tasks: DELETE with a stale If-Match → 412, with the current ETag → 204', async () => {

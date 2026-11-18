@@ -7,7 +7,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildVCalendar } from '@coremail/core/calendar';
 import {
-  bookingHorizon, checkResourceBooking, conflictList, conflictingOccurrences, meetingOccurrences,
+  bookingHorizon, bookingIntervals, checkResourceBooking, conflictList, conflictingOccurrences, isBookableRecurrence,
+  meetingOccurrences,
   MAX_CHECKED_OCCURRENCES, MAX_LISTED_CONFLICTS, type RoomPolicy,
 } from './resource-booking-rules.js';
 
@@ -62,4 +63,41 @@ test('checkResourceBooking: takes the lock first, expands the stored recurring b
   const tolerant = await checkResourceBooking(tx, 'rc', { ...ROOM, autoDeclineConflict: false }, meeting, NOW);
   assert.deepEqual(tolerant.decision, { status: 'ACCEPTED' });
   assert.equal(tolerant.conflicts.length, 1);
+});
+
+test('isBookableRecurrence: at most daily — HOURLY/MINUTELY/SECONDLY and several times a day are refused (also folded)', () => {
+  const ok = (rrule: string): boolean => isBookableRecurrence(series('x', '2026-12-01T09:00:00Z', rrule));
+  assert.equal(ok('FREQ=DAILY'), true);
+  assert.equal(ok('FREQ=WEEKLY;BYDAY=MO,WE;COUNT=1000000'), true);
+  assert.equal(ok('FREQ=DAILY;BYHOUR=9'), true);
+  assert.equal(ok('FREQ=MINUTELY'), false);
+  assert.equal(ok('FREQ=SECONDLY;BYMONTH=2'), false);
+  assert.equal(ok('FREQ=HOURLY;INTERVAL=24'), false);
+  assert.equal(ok('FREQ=DAILY;BYHOUR=9,10'), false);
+  assert.equal(ok('FREQ=YEARLY;BYMINUTE=0,30'), false);
+  const folded = series('y', '2026-12-01T09:00:00Z', 'FREQ=DAILY').icalData.replace('RRULE:FREQ=DAILY', 'RRULE:FREQ=SECO\r\n NDLY');
+  assert.equal(isBookableRecurrence({ rrule: null, icalData: folded }), false);
+  assert.equal(isBookableRecurrence({ rrule: 'FREQ=MINUTELY', icalData: 'BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n' }), false);
+  assert.equal(isBookableRecurrence({ rrule: null, icalData: 'BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n' }), true);
+});
+
+test('dense series: a request is declined without expansion, a stored one blocks its first slot only (bounded time)', async () => {
+  const old = series('dense', '2025-11-18T09:00:00Z', 'FREQ=MINUTELY');
+  const started = Date.now();
+  const row = { uid: 'dense', status: 'ACCEPTED', dtStart: old.dtStart, dtEnd: old.dtEnd, icalData: old.icalData };
+  assert.deepEqual(
+    bookingIntervals([row], d('2025-11-18T00:00:00Z'), d('2027-11-18T00:00:00Z')).map((b) => [b.start.toISOString(), b.end.toISOString()]),
+    [['2025-11-18T09:00:00.000Z', '2025-11-18T10:00:00.000Z']],
+  );
+  // a year after its start it blocks nothing (it was expanded minute by minute from the start before)
+  assert.deepEqual(bookingIntervals([row], NOW, d('2027-11-18T00:00:00Z')), []);
+  const meeting = series('m', '2026-12-01T09:00:00Z', 'FREQ=SECONDLY');
+  assert.equal(meetingOccurrences(meeting, { start: meeting.dtStart, end: d('2027-12-01T00:00:00Z') }).length, 1);
+  const tx = {
+    resourceCalendar: { update: async () => ({ id: 'rc' }) },
+    resourceBooking: { findMany: async () => [] },
+  } as unknown as Parameters<typeof checkResourceBooking>[0];
+  const result = await checkResourceBooking(tx, 'rc', ROOM, meeting, NOW);
+  assert.deepEqual(result.decision, { status: 'DECLINED', reason: 'recurring' });
+  assert.ok(Date.now() - started < 1000, 'no expansion from the series start');
 });

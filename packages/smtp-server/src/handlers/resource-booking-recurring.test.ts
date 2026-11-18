@@ -190,6 +190,56 @@ test('two concurrent requests for the same slot: exactly one gets the room', asy
   assert.deepEqual([booking('race-a').status, booking('race-b').status].sort(), ['ACCEPTED', 'DECLINED']);
 });
 
+test('review: two concurrent occurrence updates of one series are both kept (merged under the lock)', async () => {
+  await send(vcal('REQUEST', [WEEKLY]));
+  await Promise.all([
+    send(vcal('REQUEST', [event('series', '20261208T130000Z', '20261208T140000Z', ['RECURRENCE-ID:20261208T093000Z'])])),
+    send(vcal('REQUEST', [event('series', '20261215T130000Z', '20261215T140000Z', ['RECURRENCE-ID:20261215T093000Z'])])),
+  ]);
+  assert.match(booking('series').icalData, /RECURRENCE-ID:20261208T093000Z/);
+  assert.match(booking('series').icalData, /RECURRENCE-ID:20261215T093000Z/);
+});
+
+test('review: an unauthenticated request racing the organizer never takes over the booking', async () => {
+  await Promise.all([
+    send(vcal('REQUEST', [event('owned', '20261209T090000Z', '20261209T100000Z')])),
+    processResourceMailboxes(
+      mail(vcal('REQUEST', [[...event('owned', '20261209T150000Z', '20261209T160000Z'), 'SUMMARY:Spoofed']])),
+      ['room@corp.test'], ORG, null, NOW,
+    ),
+  ]);
+  assert.equal(bookings.filter((b) => b.uid === 'owned').length, 1);
+  assert.equal(booking('owned').status, 'ACCEPTED');
+  assert.equal(booking('owned').dtStart.toISOString(), '2026-12-09T09:00:00.000Z');
+});
+
+test('review: a series repeating more than daily is declined (no expansion from its start)', async () => {
+  await send(vcal('REQUEST', [event('dense', '20261201T090000Z', '20261201T093000Z', ['RRULE:FREQ=MINUTELY;INTERVAL=1'])]));
+  assert.equal(booking('dense').status, 'DECLINED');
+  await send(vcal('REQUEST', [event('hourly', '20261201T090000Z', '20261201T093000Z', ['RRULE:FREQ=DAILY;BYHOUR=9,10,11'])]));
+  assert.equal(booking('hourly').status, 'DECLINED');
+});
+
+test('review: CANCEL of single occurrences of a TZID series and of an all-day series frees those slots', async () => {
+  const tz = ['BEGIN:VTIMEZONE', 'TZID:Europe/Berlin', 'BEGIN:STANDARD', 'DTSTART:19701025T030000', 'TZOFFSETFROM:+0200', 'TZOFFSETTO:+0100', 'END:STANDARD', 'END:VTIMEZONE'];
+  const tzSeries = [`UID:tzs`, `ORGANIZER:mailto:${ORG}`, 'DTSTART;TZID=Europe/Berlin:20261201T100000', 'DTEND;TZID=Europe/Berlin:20261201T110000', 'RRULE:FREQ=WEEKLY;COUNT=4', 'SUMMARY:TZ'];
+  await send(vcal('REQUEST', [tzSeries], tz));
+  await send(vcal('CANCEL', [[`UID:tzs`, `ORGANIZER:mailto:${ORG}`, 'RECURRENCE-ID;TZID=Europe/Berlin:20261208T100000']], tz));
+  assert.equal(booking('tzs').status, 'ACCEPTED');
+  await send(vcal('REQUEST', [event('tz-free', '20261208T090000Z', '20261208T100000Z')]));
+  assert.equal(booking('tz-free').status, 'ACCEPTED', 'the cancelled 10:00 Berlin (09:00Z) slot is free');
+  await send(vcal('REQUEST', [event('tz-busy', '20261215T090000Z', '20261215T100000Z')]));
+  assert.equal(booking('tz-busy').status, 'DECLINED', 'the other occurrences stay booked');
+
+  await send(vcal('REQUEST', [[`UID:days`, `ORGANIZER:mailto:${ORG}`, 'DTSTART;VALUE=DATE:20261202', 'DTEND;VALUE=DATE:20261203', 'RRULE:FREQ=WEEKLY;COUNT=3', 'SUMMARY:Day']]));
+  assert.equal(booking('days').status, 'ACCEPTED');
+  await send(vcal('CANCEL', [[`UID:days`, `ORGANIZER:mailto:${ORG}`, 'RECURRENCE-ID;VALUE=DATE:20261209']]));
+  await send(vcal('REQUEST', [event('day-free', '20261209T120000Z', '20261209T130000Z')]));
+  assert.equal(booking('day-free').status, 'ACCEPTED');
+  await send(vcal('REQUEST', [event('day-busy', '20261216T120000Z', '20261216T130000Z')]));
+  assert.equal(booking('day-busy').status, 'DECLINED');
+});
+
 test('pure helpers: invitation parsing, occurrence merge and cancel', () => {
   const inv = parseInvitation(vcal('REQUEST', [WEEKLY]))!;
   assert.equal(inv.method, 'REQUEST');

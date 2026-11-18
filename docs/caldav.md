@@ -30,8 +30,10 @@ open while either module is on and lists only what is on.
 One task list per user, `/dav/calendars/<id>/tasks/` (display name "Aufgaben",
 `supported-calendar-component-set` VTODO, `max-resource-size` 1 MiB). Its tasks are the user's
 `Task` rows — the same tasks the webmail and `/api/v1/tasks` show. Apple Reminders, Thunderbird and
-DAVx⁵ (jtx Board, Tasks.org) list it next to the calendars. The path segment `tasks` is reserved:
-`MKCALENDAR` on it answers 405; no other task lists can be created.
+DAVx⁵ (jtx Board, Tasks.org) list it next to the calendars. The path segment `tasks` is reserved
+in every spelling (`Tasks`, percent-encoded): `MKCALENDAR` on it answers 405; no other task lists
+can be created. A calendar created over CalDAV under that name before 9.5 is no longer listed in
+the calendar home (its path is the task list now; it stays usable in the webmail).
 
 Code: `caldav-server/src/caldav/tasks.ts` (routes), `vtodo.ts` (mapping, pure),
 `storage/src/task-store.ts` (writes shared with REST), `auth.ts` `davFeatureGate` (module switch).
@@ -62,7 +64,9 @@ percentage starts the task. Dates the webmail sets are days (UTC midnight) and a
 All status changes go through the task rules ([tasks.md](tasks.md#status-rules-storagesrctask-rulests)):
 completing a recurring task — `STATUS:COMPLETED` on the task, or a `RECURRENCE-ID` override marked
 completed — closes it (its `RRULE` is removed) and creates the next task, a new resource with its
-own UID. One task is one occurrence: overrides are not stored.
+own UID. Sending the completed task again (a retry, or the client's copy that still has the
+`RRULE`) creates nothing and does not put the rule back; reopening it does. One task is one
+occurrence: overrides are not stored.
 
 ### Round trip
 

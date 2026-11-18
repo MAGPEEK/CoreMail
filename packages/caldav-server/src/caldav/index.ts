@@ -49,7 +49,7 @@ import {
   type XmlNode,
 } from '../dav-utils.js';
 import { compileCalendarFilter, UnsupportedFilterError } from '../dav-filter.js';
-import { appendTaskCollection } from './tasks.js';
+import { appendTaskCollection, isTaskCollectionSegment } from './tasks.js';
 
 const log = createLogger('caldav');
 
@@ -268,7 +268,14 @@ caldavRouter.all('/calendars/:userId', asyncHandler(async (req: Request, res: Re
     const entries: Array<{ cal: CalendarRow; permission: Permission }> = [
       ...owned.map((cal) => ({ cal, permission: 'OWNER' as const })),
       ...shares.map((s) => ({ cal: s.calendar, permission: (s.permission === 'WRITE' ? 'WRITE' : 'READ') as Permission })),
-    ];
+    ].filter(({ cal }) => {
+      // A calendar created over CalDAV before 9.5 under the reserved name sits behind the
+      // task list (its path is answered by caldav/tasks.ts): never list a second
+      // collection with the same href — it stays usable in the webmail
+      if (!isTaskCollectionSegment(cal.id)) return true;
+      log.warn({ userId, calendarId: cal.id }, 'Calendar id collides with the task list path — not listed over CalDAV');
+      return false;
+    });
     for (const { cal, permission } of entries) {
       const response = doc.ele('d:response');
       response.ele('d:href').txt(`${caldavBase(userId)}/${cal.id}/`);
@@ -416,6 +423,9 @@ async function handleCalendarProppatch(req: Request, res: Response, userId: stri
 
 // MKCALENDAR — create a new calendar (only OWNER under their own URL); RFC 4791 §5.3.1
 async function handleMkcalendar(req: Request, res: Response, userId: string, calendarId: string): Promise<void> {
+  // 9.5: the task list's name is reserved — also when the client percent-encodes it
+  // (Express routes on the raw path, so `%74asks` arrives here, decoded)
+  if (isTaskCollectionSegment(calendarId)) { res.status(405).send('Calendar already exists'); return; }
   const existing = await prisma.calendar.findUnique({ where: { id: calendarId }, select: { id: true, userId: true } });
   // RFC 4791 §5.3.1: MKCALENDAR on an existing resource of the caller → 405. Calendar IDs
   // are global keys: an ID taken by ANOTHER user gets a neutral 409 that does not say the

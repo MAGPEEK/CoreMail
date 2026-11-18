@@ -19,7 +19,8 @@ import { createLogger } from '@coremail/core';
 import { compileCalendarFilter, UnsupportedFilterError } from '../dav-filter.js';
 import { parseIcal, type IcalComponent } from '@coremail/core/calendar';
 import {
-  prisma, announceUserEvent, createTaskWithRules, updateTaskWithRules, type StoredTask as Task,
+  prisma, announceUserEvent, createTaskWithRules, normTaskStatus, updateTaskWithRules,
+  type StoredTask as Task, type TaskProgressPatch,
 } from '@coremail/storage';
 import {
   appendCurrentUserPrincipal,
@@ -47,8 +48,18 @@ import {
 
 const log = createLogger('caldav:tasks');
 
-/** Path segment of the task list inside the calendar home (reserved: no calendar can use it). */
+/**
+ * Path segment of the task list inside the calendar home. Reserved: Express routes
+ * case-insensitively, so this router answers every spelling (`Tasks`, `TASKS` …) — a
+ * MKCALENDAR there gets 405, and a calendar created under such a name before 9.5 is
+ * left out of the home listing (isTaskCollectionSegment).
+ */
 export const TASK_COLLECTION_ID = 'tasks';
+
+/** Is this calendar-home path segment the task list (in any spelling)? */
+export function isTaskCollectionSegment(segment: string): boolean {
+  return segment.toLowerCase() === TASK_COLLECTION_ID;
+}
 /** Display name of the task list (German UI text, like the shared-calendar prefix). */
 export const TASK_LIST_NAME = 'Aufgaben';
 const MAX_RESOURCE_NAME = 200;
@@ -235,6 +246,18 @@ caldavTasksRouter.get(RESOURCE, asyncHandler(async (req: Request, res: Response)
   res.set({ 'Content-Type': 'text/calendar; charset=utf-8', ETag: etag }).send(renderVTodo(task));
 }));
 
+/**
+ * A completed task that stays completed keeps its own rule: completing a recurring task
+ * handed the rule to the next task, so a client sending the completed task again (a
+ * retry, or its local copy with the RRULE) must not revive the series on it — reopened
+ * later, it would create a second next task.
+ */
+function keptRule(existing: Task | null, patch: TaskProgressPatch): { rrule?: string | null } {
+  const staysCompleted = existing !== null && normTaskStatus(existing.status) === 'COMPLETED'
+    && (patch.status === undefined || patch.status === 'COMPLETED');
+  return staysCompleted ? { rrule: existing.rrule } : {};
+}
+
 /** Another task of the user already carries this UID (its own, or its id when it has none)? */
 async function uidOwner(userId: string, uid: string): Promise<{ id: string } | null> {
   return prisma.task.findFirst({ where: { userId, OR: [{ uid }, { id: uid, uid: null }] }, select: { id: true } });
@@ -267,8 +290,8 @@ caldavTasksRouter.put(RESOURCE, asyncHandler(async (req: Request, res: Response)
   }
 
   const fields = { ...check.fields, uid };
-  const columns = columnsFromVTodo(fields, existing, body);
   const patch = progressFromVTodo(fields, existing);
+  const columns = { ...columnsFromVTodo(fields, existing, body), ...keptRule(existing, patch) };
   let saved: Task | null;
   let next: Task | null = null;
   try {

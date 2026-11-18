@@ -104,6 +104,11 @@ applied). The conflicting occurrences (up to 50) are stored with the booking
 (`ResourceBooking.conflicts`, 9.5) — the reason of a decline, or the list that comes with an
 acceptance when the room does not decline conflicts.
 
+A series that repeats more than once a day (`FREQ=HOURLY`/`MINUTELY`/`SECONDLY`, or several
+`BYHOUR`/`BYMINUTE`/`BYSECOND` values) is declined like a series the room does not allow
+(reason `recurring`); a stored booking with such a rule blocks its first slot only. Its expansion
+would run from the series start on every later check of the room and grow with time.
+
 The answer is the room's attendee entry (`ACCEPTED`, `DECLINED` with the reason, or
 `NEEDS-ACTION`) and is shown next to the room. Moving the meeting, changing its recurrence or
 moving a single occurrence re-checks the rooms against the meeting as it is stored afterwards;
@@ -131,7 +136,9 @@ status (`GET /api/v1/admin/resources/:id/bookings`, with `conflicts`).
 
 Conflict check and booking run in one transaction under the room's booking lock
 (storage `lockResourceCalendar`, row lock on `ResourceCalendar.bookingSeq`) on both paths: of
-two concurrent bookings of the same slot exactly one gets the room. Users only see and book the
+two concurrent bookings of the same slot exactly one gets the room. The mail path reads the
+existing booking, checks the organizer, merges or cancels occurrences and writes the answer inside
+that same transaction, so concurrent updates of one series never overwrite each other. Users only see and book the
 rooms of their own domain.
 
 ### Reminders

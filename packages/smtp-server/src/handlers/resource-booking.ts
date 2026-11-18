@@ -32,8 +32,8 @@ import {
 } from '@coremail/core/calendar';
 import { excludeOccurrence } from '@coremail/core/calendar-exceptions';
 import {
-  prisma, checkResourceBooking, conflictList, extractCalendarParts, isAttendeeAuthenticated,
-  type ResourceCheck, type SenderAuth,
+  prisma, checkLockedResourceBooking, conflictList, extractCalendarParts, isAttendeeAuthenticated, lockResourceCalendar,
+  type ResourceBookingTx, type ResourceCheck, type SenderAuth,
 } from '@coremail/storage';
 
 const log = createLogger('smtp:resource-booking');
@@ -189,7 +189,7 @@ export function meetingFromCalendar(uid: string, icalData: string): MeetingReque
 
 type Booking = NonNullable<Awaited<ReturnType<typeof prisma.resourceBooking.findUnique>>>;
 type Resource = NonNullable<Awaited<ReturnType<typeof findResource>>>;
-type BookingDb = Pick<typeof prisma, 'resourceBooking'>;
+type BookingTx = ResourceBookingTx;
 
 function findResource(email: string) {
   return prisma.resourceMailbox.findFirst({
@@ -198,25 +198,29 @@ function findResource(email: string) {
   });
 }
 
+/** What an invitation did to the resource's booking (for the log). */
+type Outcome =
+  | { kind: 'refused' }
+  | { kind: 'unusable' }
+  | { kind: 'cancelled'; occurrences: number }
+  | { kind: 'pending' }
+  | { kind: 'decided'; check: ResourceCheck };
+
 /** CANCEL: the whole booking, or only the cancelled occurrences of the stored series. */
-async function cancelBooking(existing: Booking, invite: Invitation): Promise<void> {
+async function cancelBooking(tx: BookingTx, existing: Booking, invite: Invitation): Promise<Outcome> {
   const remaining = invite.master ? null : cancelOccurrences(existing.icalData, invite.recurrenceIds);
   if (remaining) {
-    await prisma.resourceBooking.update({ where: { id: existing.id }, data: { icalData: remaining } });
-    log.info({ calendarId: existing.calendarId, uid: existing.uid, occurrences: invite.recurrenceIds.length }, 'Resource booking: occurrences cancelled');
-    return;
+    await tx.resourceBooking.update({ where: { id: existing.id }, data: { icalData: remaining } });
+    return { kind: 'cancelled', occurrences: invite.recurrenceIds.length };
   }
-  await prisma.resourceBooking.delete({ where: { id: existing.id } });
-  log.info({ calendarId: existing.calendarId, uid: existing.uid }, 'Resource booking cancelled');
+  await tx.resourceBooking.delete({ where: { id: existing.id } });
+  return { kind: 'cancelled', occurrences: 0 };
 }
 
-/**
- * Write the answer. The row is read again inside the transaction (after the lock), so a
- * booking created meanwhile is updated, not duplicated. A decline of an existing booking
- * keeps its previous slot data.
- */
+/** Write the answer to the booking read under the lock. A decline of an existing booking keeps its previous slot data. */
 async function writeBooking(
-  db: BookingDb,
+  tx: BookingTx,
+  existing: Booking | null,
   calendarId: string,
   meeting: MeetingRequest,
   organizer: string,
@@ -224,17 +228,16 @@ async function writeBooking(
   conflicts: ResourceCheck['conflicts'],
 ): Promise<void> {
   const listed = conflictList(conflicts);
-  const current = await db.resourceBooking.findUnique({ where: { calendarId_uid: { calendarId, uid: meeting.uid } } });
-  if (current) {
-    await db.resourceBooking.update({
-      where: { id: current.id },
+  if (existing) {
+    await tx.resourceBooking.update({
+      where: { id: existing.id },
       data: status === 'DECLINED'
         ? { status, conflicts: listed }
         : { dtStart: meeting.dtStart, dtEnd: meeting.dtEnd, summary: meeting.summary, status, icalData: meeting.icalData, conflicts: listed },
     });
     return;
   }
-  await db.resourceBooking.create({
+  await tx.resourceBooking.create({
     data: {
       calendarId, uid: meeting.uid, summary: meeting.summary, organizer, dtStart: meeting.dtStart, dtEnd: meeting.dtEnd,
       status, icalData: meeting.icalData, conflicts: listed,
@@ -243,32 +246,59 @@ async function writeBooking(
 }
 
 /**
- * REQUEST: an unauthenticated organizer's request waits for approval; otherwise the
- * resource rules decide under the resource's booking lock (conflict check + write in
- * one transaction — two requests for the same slot never both get the resource).
+ * One invitation for one resource, in one transaction under the resource's booking
+ * lock: the booking is read, the organizer checked, the series merged / cancelled,
+ * the rules applied and the answer written on the same row state — two invitations
+ * for the same slot never both get the resource, two occurrence updates of one series
+ * never overwrite each other, and a booking created meanwhile is never taken over.
+ * An unauthenticated organizer's new request waits for approval.
  */
-async function requestBooking(
+function handleInvitation(
   resource: Resource,
   calendarId: string,
-  meeting: MeetingRequest,
+  invite: Invitation,
+  icalData: string,
   organizer: string,
   authenticated: boolean,
   now: Date,
-): Promise<void> {
-  const logCtx = { resource: resource.email, uid: meeting.uid };
-  if (!authenticated) {
-    await writeBooking(prisma, calendarId, meeting, organizer, 'PENDING', []);
-    log.info(logCtx, 'Resource booking pending approval — organizer not authenticated');
-    return;
-  }
-  const { decision, conflicts } = await prisma.$transaction(async (tx) => {
-    const check = await checkResourceBooking(tx, calendarId, resource, meeting, now);
-    await writeBooking(tx, calendarId, meeting, organizer, check.decision.status, check.conflicts);
-    return check;
+): Promise<Outcome> {
+  return prisma.$transaction(async (tx): Promise<Outcome> => {
+    await lockResourceCalendar(tx, calendarId);
+    // v8.1: UIDs are unique per resource calendar — only this resource's booking is
+    // read, changed or deleted here.
+    const existing = await tx.resourceBooking.findUnique({ where: { calendarId_uid: { calendarId, uid: invite.uid } } });
+    if (existing && !(authenticated && bareAddress(existing.organizer) === organizer)) return { kind: 'refused' };
+    if (invite.method === 'CANCEL') return existing ? cancelBooking(tx, existing, invite) : { kind: 'unusable' };
+
+    // Occurrences only: they change the stored series (a new booking is just that occurrence)
+    const meetingIcal = !invite.master && existing ? applyOccurrenceUpdates(existing.icalData, icalData) : icalData;
+    const meeting = meetingIcal ? meetingFromCalendar(invite.uid, meetingIcal) : null;
+    if (!meeting) return { kind: 'unusable' };
+    if (!authenticated) {
+      await writeBooking(tx, null, calendarId, meeting, organizer, 'PENDING', []);
+      return { kind: 'pending' };
+    }
+    const check = await checkLockedResourceBooking(tx, calendarId, resource, meeting, now);
+    await writeBooking(tx, existing, calendarId, meeting, organizer, check.decision.status, check.conflicts);
+    return { kind: 'decided', check };
   });
-  const conflictDates = conflicts.map((c) => c.dtStart.toISOString());
-  if (decision.status === 'DECLINED') log.info({ ...logCtx, reason: decision.reason, conflicts: conflictDates }, 'Resource booking declined');
-  else log.info({ ...logCtx, status: decision.status, conflicts: conflictDates }, 'Resource booking decided');
+}
+
+function logOutcome(outcome: Outcome, ctx: Record<string, unknown>): void {
+  switch (outcome.kind) {
+    case 'refused': log.warn(ctx, 'Resource booking change refused — not the authenticated organizer'); return;
+    case 'unusable': log.info(ctx, 'Resource invitation without a usable VEVENT or booking — ignored'); return;
+    case 'pending': log.info(ctx, 'Resource booking pending approval — organizer not authenticated'); return;
+    case 'cancelled':
+      log.info({ ...ctx, occurrences: outcome.occurrences }, outcome.occurrences > 0 ? 'Resource booking: occurrences cancelled' : 'Resource booking cancelled');
+      return;
+    case 'decided': {
+      const { decision, conflicts } = outcome.check;
+      const conflictDates = conflicts.map((c) => c.dtStart.toISOString());
+      if (decision.status === 'DECLINED') log.info({ ...ctx, reason: decision.reason, conflicts: conflictDates }, 'Resource booking declined');
+      else log.info({ ...ctx, status: decision.status, conflicts: conflictDates }, 'Resource booking decided');
+    }
+  }
 }
 
 /**
@@ -298,37 +328,13 @@ export async function processResourceMailboxes(
       log.info({ resource: email, from: mailFrom }, 'Mail to a resource mailbox without a usable invitation — ignored');
       continue;
     }
-    const { uid } = invite;
     const { organizer, authenticated } = organizerIdentity(icalData, rawMessage, senderAuth);
     if (!organizer) {
-      log.warn({ resource: email, uid, from: mailFrom }, 'Resource invitation without ORGANIZER/From — ignored');
+      log.warn({ resource: email, uid: invite.uid, from: mailFrom }, 'Resource invitation without ORGANIZER/From — ignored');
       continue;
     }
-
-    // v8.1: UIDs are unique per resource calendar — a meeting that books two
-    // rooms gets one booking in each. Only this resource's booking is read,
-    // changed or deleted here.
-    const existing = await prisma.resourceBooking.findUnique({ where: { calendarId_uid: { calendarId, uid } } });
-    const isOrganizer = !!existing && authenticated && bareAddress(existing.organizer) === organizer;
-    if (existing && !isOrganizer) {
-      log.warn({ resource: email, uid, organizer, envelope: mailFrom, authenticated, method: invite.method },
-        'Resource booking change refused — not the authenticated organizer');
-      continue;
-    }
-
-    if (invite.method === 'CANCEL') {
-      if (existing) await cancelBooking(existing, invite);
-      continue;
-    }
-
-    // Occurrences only: they change the stored series (a new booking is just that occurrence)
-    const meetingIcal = !invite.master && existing ? applyOccurrenceUpdates(existing.icalData, icalData) : icalData;
-    const meeting = meetingIcal ? meetingFromCalendar(uid, meetingIcal) : null;
-    if (!meeting) {
-      log.info({ resource: email, uid }, 'Resource invitation without a usable VEVENT — ignored');
-      continue;
-    }
-    await requestBooking(resource, calendarId, meeting, organizer, authenticated, now);
+    const outcome = await handleInvitation(resource, calendarId, invite, icalData, organizer, authenticated, now);
+    logOutcome(outcome, { resource: resource.email, uid: invite.uid, organizer, envelope: mailFrom, authenticated, method: invite.method });
   }
   return handled;
 }
