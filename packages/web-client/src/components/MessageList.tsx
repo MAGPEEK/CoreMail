@@ -35,6 +35,8 @@ import { formatDate, formatListDate } from '../lib/regionalFormat.js';
 import { followUpStatusOf } from '../lib/followUp.js';
 import { useFollowUp } from '../hooks/useFollowUp.js';
 import { conversationKey, orderForDisplay, sortParams } from '../lib/conversationOrder.js';
+import { listTarget, tabStopIndex } from '../lib/rovingFocus.js';
+import { announce, selectionAnnouncement } from '../lib/announce.js';
 
 /** True when the query uses search operators / quotes / negation (typeahead stays for plain words). */
 function hasOperatorSyntax(q: string): boolean {
@@ -64,6 +66,7 @@ function MessageRow({
   density,
   folders,
   readOnly = false,
+  tabStop,
 }: {
   msg: MessageSummary;
   selected: boolean;
@@ -76,6 +79,8 @@ function MessageRow({
   folders: Folder[];
   /** 9.3: read-only foreign mailbox — no drag, write quick actions disabled */
   readOnly?: boolean;
+  /** Roving tabindex: only one row (and its buttons) is in the tab order */
+  tabStop: boolean;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: `msg:${msg.id}`,
@@ -119,11 +124,11 @@ function MessageRow({
       id={`msg-row-${msg.id}`}
       onClick={onClick}
       onKeyDown={(e) => {
-        // role="button": Enter opens the row like a click (shortcut manager leaves it alone)
+        // Enter opens the row like a click (shortcut manager leaves it alone)
         if (e.key === 'Enter' && e.target === e.currentTarget) onClick(e as unknown as React.MouseEvent);
       }}
       onContextMenu={onContextMenu}
-      aria-current={selected ? 'true' : undefined}
+      aria-selected={selected || checked}
       className={`w-full text-left px-3 ${py} border-b border-line transition-all duration-150 relative group cursor-pointer ${
         selected
           ? 'bg-accent/10 shadow-sm'
@@ -131,29 +136,40 @@ function MessageRow({
             ? 'bg-accent/5'
             : 'hover:bg-surface-2 hover:shadow-sm'
       } ${isUnread ? 'border-l-2 border-l-accent-fg' : 'border-l-2 border-l-transparent'} ${isDragging ? 'opacity-30' : ''}`}
-      role="button"
-      tabIndex={0}
+      role="row"
+      aria-roledescription={undefined}
+      aria-pressed={undefined}
+      aria-disabled={undefined}
+      tabIndex={tabStop ? 0 : -1}
     >
-      <div className="flex items-center gap-2.5">
-        {/* Checkbox / Unread-Dot */}
+      <div role="gridcell" className="flex items-center gap-2.5">
+        {/* Checkbox / Unread-Dot (24 px target around the 16 px box) */}
         <button
           onClick={onToggleCheck}
-          className={`w-4 h-4 rounded-sm border flex items-center justify-center shrink-0 transition-all duration-150 ${
-            checked
-              ? 'bg-accent border-accent-fg text-white animate-bounce-in'
-              : 'border-line-strong opacity-0 group-hover:opacity-100 hover:border-accent-fg hover:scale-110'
-          }`}
+          tabIndex={tabStop ? 0 : -1}
+          className="w-6 h-6 -mx-1 flex items-center justify-center shrink-0 group/check"
           aria-label="Auswählen"
+          aria-pressed={checked}
         >
-          {checked && <span className="text-[10px] leading-none">✓</span>}
+          <span
+            aria-hidden="true"
+            className={`w-4 h-4 rounded-sm border flex items-center justify-center transition-all duration-150 ${
+              checked
+                ? 'bg-accent border-accent-fg text-white animate-bounce-in'
+                : 'border-line-strong opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 group-hover/check:border-accent-fg group-hover/check:scale-110'
+            }`}
+          >
+            {checked && <span className="text-[10px] leading-none">✓</span>}
+          </span>
         </button>
 
-        {/* Flag icon (always visible; clickable) */}
+        {/* Flag icon (always visible; clickable; 24 px target) */}
         <button
           onClick={(e) => { e.stopPropagation(); onQuickAction('flag'); }}
           disabled={readOnly}
+          tabIndex={tabStop ? 0 : -1}
           title={roTitle(flagTitle)}
-          className="shrink-0 transition-transform duration-150 hover:scale-125 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
+          className="shrink-0 p-1 -m-1 transition-transform duration-150 hover:scale-125 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
           aria-label={flagTitle}
         >
           {followUp === 'complete'
@@ -225,8 +241,9 @@ function MessageRow({
         </div>
 
         {/* Hover quick actions (Gmail style) — fade-in with slight slide */}
-        <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5 bg-surface border border-line rounded shadow-md opacity-0 translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150 pointer-events-none group-hover:pointer-events-auto">
+        <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5 bg-surface border border-line rounded shadow-md opacity-0 translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 group-focus-within:opacity-100 group-focus-within:translate-x-0 transition-all duration-150 pointer-events-none group-hover:pointer-events-auto group-focus-within:pointer-events-auto">
           <button aria-label="Archivieren"
+            tabIndex={tabStop ? 0 : -1}
             aria-keyshortcuts={ariaKeys('mail.archive')}
             onClick={(e) => { e.stopPropagation(); onQuickAction('archive'); }}
             disabled={readOnly}
@@ -236,6 +253,7 @@ function MessageRow({
             <Archive size={13} />
           </button>
           <button aria-label="Löschen"
+            tabIndex={tabStop ? 0 : -1}
             aria-keyshortcuts={ariaKeys('mail.delete')}
             onClick={(e) => { e.stopPropagation(); onQuickAction('delete'); }}
             disabled={readOnly}
@@ -245,6 +263,7 @@ function MessageRow({
             <Trash2 size={13} />
           </button>
           <button aria-label={isUnread ? 'Als gelesen markieren' : 'Als ungelesen markieren'}
+            tabIndex={tabStop ? 0 : -1}
             onClick={(e) => { e.stopPropagation(); onQuickAction('read'); }}
             disabled={readOnly}
             className="p-1.5 hover:bg-surface-2 text-fg-muted transition-colors active:scale-90 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -410,6 +429,36 @@ export function MessageList({ folderId }: Props) {
   }, [hasNextPage, isFetchingNextPage, fetchNextPage, displayMessages.length]);
 
   const orderedIds = useMemo(() => displayMessages.map((m) => m.id), [displayMessages]);
+
+  // Roving tabindex of the grid: the row that last had focus, else the open one, else the first
+  const [focusedRowId, setFocusedRowId] = useState<string | null>(null);
+  const tabStopId = orderedIds[tabStopIndex(
+    orderedIds.length,
+    focusedRowId ? orderedIds.indexOf(focusedRowId) : -1,
+    selectedMessageId ? orderedIds.indexOf(selectedMessageId) : -1,
+  )];
+  const focusRow = (id: string | undefined) => {
+    if (!id) return;
+    setFocusedRowId(id);
+    document.getElementById(`msg-row-${id}`)?.focus();
+  };
+  const handleGridFocus = (e: React.FocusEvent) => {
+    if ((e.target as HTMLElement).getAttribute('role') === 'row') setFocusedRowId(e.target.id.replace('msg-row-', ''));
+  };
+  const handleGridKeyDown = (e: React.KeyboardEvent) => {
+    const row = e.target as HTMLElement;
+    if (row.getAttribute('role') !== 'row' || e.ctrlKey || e.metaKey || e.altKey) return;
+    const idx = orderedIds.indexOf(row.id.replace('msg-row-', ''));
+    const to = listTarget(e.key, idx, orderedIds.length);
+    if (to === null || to === idx) return;
+    e.preventDefault();
+    focusRow(orderedIds[to]);
+  };
+
+  // Screen readers hear the selection count of the checkbox selection
+  useEffect(() => {
+    if (selectedIds.size > 0) announce(selectionAnnouncement(selectedIds.size));
+  }, [selectedIds.size]);
   const allChecked = orderedIds.length > 0 && orderedIds.every((id) => selectedIds.has(id));
 
   const invalidate = () => {
@@ -445,12 +494,21 @@ export function MessageList({ folderId }: Props) {
   /** OWA: after the open mail leaves the list, the next one opens. */
   const selectAfterRemoval = (removed: string[]) => {
     const gone = new Set(removed);
-    if (selectedMessageId && gone.has(selectedMessageId)) {
-      const idx = orderedIds.indexOf(selectedMessageId);
-      const next = orderedIds.slice(idx + 1).find((id) => !gone.has(id))
-        ?? orderedIds.slice(0, Math.max(idx, 0)).reverse().find((id) => !gone.has(id))
+    const neighbourOf = (id: string) => {
+      const idx = orderedIds.indexOf(id);
+      return orderedIds.slice(idx + 1).find((o) => !gone.has(o))
+        ?? orderedIds.slice(0, Math.max(idx, 0)).reverse().find((o) => !gone.has(o))
         ?? null;
-      setSelectedMessage(next);
+    };
+    // Focus inside the list must not fall to <body> when its row disappears
+    const active = document.activeElement as HTMLElement | null;
+    const focusRowId = active && scrollRef.current?.contains(active) ? active.closest('[role="row"]')?.id.replace('msg-row-', '') : undefined;
+    if (focusRowId && gone.has(focusRowId)) {
+      const neighbour = neighbourOf(focusRowId);
+      if (neighbour) focusRow(neighbour);
+    }
+    if (selectedMessageId && gone.has(selectedMessageId)) {
+      setSelectedMessage(neighbourOf(selectedMessageId));
     }
     clearSelection();
   };
@@ -807,10 +865,19 @@ export function MessageList({ folderId }: Props) {
             ? <p role="alert" className="p-4 text-xs text-danger-fg">Nachrichten konnten nicht geladen werden.</p>
             : searching ? <EmptySearch /> : filter === 'all' ? <EmptyInbox /> : <EmptyFilter />
         ) : (
-          displayMessages.map((msg) => (
+          <div
+            role="grid"
+            aria-label="Nachrichtenliste"
+            aria-multiselectable="true"
+            aria-rowcount={totalCount}
+            onKeyDown={handleGridKeyDown}
+            onFocus={handleGridFocus}
+          >
+          {displayMessages.map((msg) => (
             <MessageRow
               key={msg.id}
               msg={msg}
+              tabStop={msg.id === tabStopId}
               selected={msg.id === selectedMessageId && selectedIds.size === 0}
               checked={selectedIds.has(msg.id)}
               onClick={handleRowClick(msg)}
@@ -821,7 +888,8 @@ export function MessageList({ folderId }: Props) {
               folders={folders}
               readOnly={readOnly}
             />
-          ))
+          ))}
+          </div>
         )}
         {hasNextPage && !isLoading && (
           isFetchingNextPage ? (

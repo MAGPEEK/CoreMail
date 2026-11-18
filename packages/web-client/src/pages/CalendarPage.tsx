@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useShortcutHandlers } from '../hooks/useShortcuts.js';
+import { useLayoutMode } from '../hooks/useLayoutMode.js';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
@@ -73,7 +74,10 @@ export function CalendarPage() {
   const [occurrenceChoice, setOccurrenceChoice] = useState<{ eventId: string; occurrence: string; summary: string } | null>(null);
   const [agendaOpen, setAgendaOpen] = useState(false);
   const [shareDialogOpen, setShareDialogOpen] = useState(false);
-  const [view, setView] = useState<CalendarView>('dayGridMonth');
+  // 9.5: a phone starts in the day view (the month grid does not fit 320 px)
+  const compactScreen = useLayoutMode() === 'single';
+  const [initialView] = useState<CalendarView>(() => (compactScreen ? 'timeGridDay' : 'dayGridMonth'));
+  const [view, setView] = useState<CalendarView>(initialView);
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   // v3.18.21: Filter state lifted to the page so fcEvents are actually filtered
   const [filters, setFilters] = useState<Record<FilterKey, boolean>>(() => ({ ...FILTER_DEFAULT }));
@@ -282,7 +286,7 @@ export function CalendarPage() {
           ref={calendarRef}
           plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin, luxonPlugin]}
           timeZone={fcTimeZone}
-          initialView="dayGridMonth"
+          initialView={initialView === 'split' ? 'dayGridMonth' : initialView === 'workWeek' ? 'timeGridWeek' : initialView}
           locale={fcLocale}
           weekNumbers={calendarShowWeekNumbers}
           weekNumberCalculation="ISO"
