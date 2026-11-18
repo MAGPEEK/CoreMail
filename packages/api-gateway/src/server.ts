@@ -70,7 +70,7 @@ import { auditMiddleware } from './lib/audit.js';
 import { syncServerUrlsFromHostname } from './lib/server-urls.js';
 import { initSetupToken } from './lib/setup-token.js';
 import { livenessHandler } from './lib/liveness.js';
-import { brandingApiRouter, brandingAssetsRouter, webManifestHandler } from './routes/branding.js';
+import { brandingApiRouter, brandingAssetsRouter, brandingAppIconsRouter, webManifestHandler } from './routes/branding.js';
 import { brandedIndexHtml, startBrandingSubscriber } from './lib/branding/state.js';
 
 const log = createLogger('api-gateway');
@@ -338,6 +338,7 @@ app.get('/api/v1/maintenance', async (_req, res) => {
 // (immutable, nosniff, sandbox CSP). Admin side: routes/admin/branding.ts.
 app.use('/api/v1/branding', brandingApiRouter);
 app.use('/branding/assets', brandingAssetsRouter);
+app.use('/branding/app-icons', brandingAppIconsRouter);
 // 9.4: web app manifest of the webmail (installable PWA), from the branding
 app.get('/manifest.webmanifest', webManifestHandler);
 

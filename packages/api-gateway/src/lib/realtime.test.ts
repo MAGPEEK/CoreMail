@@ -16,7 +16,7 @@ const published: Array<{ channel: string; message: unknown }> = [];
 globalThis.__realtimeRedis = { publish: async (channel, message) => { published.push({ channel, message: JSON.parse(message) }); return 1; } };
 
 const { announceOnWrite, settingsSectionOf, actionOf } = await import('./realtime.js');
-const { webManifest, BUILTIN_APP_ICON } = await import('./branding/manifest.js');
+const { webManifest, DEFAULT_APP_ICONS } = await import('./branding/manifest.js');
 
 /** Runs the middleware for one request and finishes the response with `status`. */
 async function write(mw: ReturnType<typeof announceOnWrite>, method: string, path: string, status: number, userId = 'u1') {
@@ -69,16 +69,31 @@ const branding = {
   assets: { logoLight: null, logoDark: null, favicon: null, loginBackground: null },
 };
 
-test('webManifest: name, colours and icons from the branding; built-in icon always present', () => {
+test('webManifest: name, colours and icons from the branding', () => {
   const m = webManifest(branding);
   assert.equal(m.name, 'Example Mail Service');
   assert.equal(m.short_name, 'Example Mail');
   assert.equal(m.start_url, '/mail');
   assert.equal(m.display, 'standalone');
   assert.equal(m.theme_color, '#123456');
-  assert.deepEqual(m.icons, [{ src: BUILTIN_APP_ICON, sizes: 'any', type: 'image/svg+xml', purpose: 'any' }]);
-  const withFav = webManifest({ ...branding, headerColor: '#abcdef', assets: { ...branding.assets, favicon: `/branding/assets/${'a'.repeat(64)}.png` } });
-  assert.equal(withFav.theme_color, '#abcdef');
-  assert.equal(withFav.icons[0]!.type, 'image/png');
-  assert.equal(withFav.icons.length, 2);
+  assert.deepEqual(m.icons.map((i) => [i.src, i.sizes, i.type, i.purpose]), [
+    ['/icons/app-192.png', '192x192', 'image/png', 'any'],
+    ['/icons/app-512.png', '512x512', 'image/png', 'any'],
+    ['/icons/app-maskable-192.png', '192x192', 'image/png', 'maskable'],
+    ['/icons/app-maskable-512.png', '512x512', 'image/png', 'maskable'],
+  ]);
+  assert.deepEqual(m.icons, [...DEFAULT_APP_ICONS]);
+  const sha = 'a'.repeat(64);
+  const custom = webManifest({ ...branding, headerColor: '#abcdef' }, sha);
+  assert.equal(custom.theme_color, '#abcdef');
+  assert.deepEqual(custom.icons.map((i) => [i.src, i.sizes, i.purpose]), [
+    [`/branding/app-icons/${sha}-192.png`, '192x192', 'any'],
+    [`/branding/app-icons/${sha}-512.png`, '512x512', 'any'],
+  ], 'a custom logo is never declared maskable');
+});
+
+test('webManifest: the short name never splits a character', () => {
+  const m = webManifest({ ...branding, productName: 'Mail 📬📬📬📬📬📬📬📬' });
+  assert.equal(m.short_name, 'Mail 📬📬📬📬📬📬📬');
+  assert.equal(JSON.parse(JSON.stringify(m)).name, 'Mail 📬📬📬📬📬📬📬📬');
 });
