@@ -13,7 +13,7 @@
  * 15 "Invalid Sequence". NotificationWait and PING run beside them.
  */
 import type { Request, RequestHandler, Response } from 'express';
-import { createLogger, PROTO_VERIFIED_HEADER } from '@coremail/core';
+import { createLogger, PROTO_VERIFIED_HEADER, type FixedWindowLimiter } from '@coremail/core';
 import { clientIpFromRequest, directoryIdFromLegacyDn, LEGACY_DN_PREFIX } from '@coremail/storage';
 import {
   clearCookie, CONTEXT_COOKIE, isCookieValue, readMapiHeaders, ResponseCode, SEQUENCE_COOKIE, setCookie,
@@ -47,6 +47,8 @@ export interface EmsmdbDeps {
   rops: RopRegistry;
   notifications: NotificationSource;
   authenticate: (header: string | undefined, transport: TransportInfo) => Promise<AuthOutcome>;
+  /** Requests per authenticated account (the gateway's per-IP limit skips /mapi). */
+  limiter: FixedWindowLimiter;
   config: EndpointConfig;
 }
 
@@ -81,19 +83,29 @@ export function refuseAuth(res: Response, h: MapiRequestHeaders, outcome: Extrac
   respondFailure(res, h, code, outcome.reason, outcome.status, extra);
 }
 
-/** Validation + authentication shared by both endpoints; null when the request was answered. */
+/**
+ * Validation, authentication and the per-account request limit, shared by both
+ * endpoints; null when the request was answered. Over the limit: HTTP 429 with
+ * Retry-After (X-ResponseCode 1) — the client retries later, the session stays.
+ */
 export async function admit(
   endpoint: Endpoint, req: Request, res: Response,
-  authenticate: EmsmdbDeps['authenticate'],
+  deps: Pick<EmsmdbDeps, 'authenticate' | 'limiter'>,
   onForbidden: (h: MapiRequestHeaders, userId: string) => Promise<void> = async () => undefined,
 ): Promise<{ h: MapiRequestHeaders; auth: Extract<AuthOutcome, { ok: true }> } | null> {
   const h = readMapiHeaders((n) => req.get(n));
   const bad = validateRequest(endpoint, req.method, req.get('content-type'), h);
   if (bad !== null) { respondFailure(res, h, bad, 'invalid request'); return null; }
-  const auth = await authenticate(req.get('authorization'), transportOf(req));
+  const auth = await deps.authenticate(req.get('authorization'), transportOf(req));
   if (!auth.ok) {
     if (auth.status === 403 && auth.userId) await onForbidden(h, auth.userId);
     refuseAuth(res, h, auth);
+    return null;
+  }
+  const rate = await deps.limiter.hit(auth.auth.user.userId);
+  if (!rate.allowed) {
+    if (rate.count === rate.limit + 1) log.warn({ userId: auth.auth.user.userId, limit: rate.limit }, 'MAPI request limit reached');
+    respondFailure(res, h, ResponseCode.UnknownFailure, 'too many requests', 429, { 'Retry-After': String(rate.retryAfterSec) });
     return null;
   }
   return { h, auth };
@@ -230,7 +242,7 @@ export function emsmdbHandler(deps: EmsmdbDeps): RequestHandler {
   }
 
   return async (req, res) => {
-    const admitted = await admit('emsmdb', req, res, deps.authenticate, dropSession);
+    const admitted = await admit('emsmdb', req, res, deps, dropSession);
     if (!admitted) return;
     const { h, auth } = admitted;
     if (h.requestType === 'Connect') { await connect(req, res, h, auth); return; }

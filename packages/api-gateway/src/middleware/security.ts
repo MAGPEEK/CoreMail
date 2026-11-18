@@ -5,7 +5,7 @@
  *   1. requestId          — correlation ID for every request (logging, tracing)
  *   2. helmetMiddleware   — complete HTTP security header stack
  *   3. suspiciousInput    — null bytes, CRLF injection, path traversal, header overflow
- *   4. generalRateLimit   — global IP-based throttling (500 req / 15 min)
+ *   4. generalRateLimit   — global IP-based throttling (500 req / 15 min; /mapi exempt)
  *   5. authRateLimit      — strict throttling on /auth (20 req / 15 min, brute force)
  *   6. setupRateLimit     — one-time setup endpoint (5 req / h)
  */
@@ -159,15 +159,25 @@ export function suspiciousInputGuard(req: Request, res: Response, next: NextFunc
 // ── 4. Rate Limiter ───────────────────────────────────────────────────────────
 
 /**
+ * MAPI over HTTP (9.4): classic Outlook sends many requests per minute and
+ * several clients often share one IP (NAT), so /mapi is not counted per IP.
+ * The MAPI server counts per authenticated mail account instead
+ * (MAPI_RATE_LIMIT / MAPI_RATE_WINDOW_SEC); unauthenticated guessing stays
+ * bounded by the shared mail-login lockout. Express mounts are
+ * case-insensitive, so the test is too.
+ */
+export const isMapiPath = (path: string): boolean => /^\/mapi(?:\/|$)/i.test(path);
+
+/**
  * Global throttling — 500 requests per 15 minutes per IP.
- * Loopback addresses (internal services) are exempt.
+ * Loopback addresses (internal services) and /mapi are exempt.
  */
 export const generalRateLimit = rateLimit({
   windowMs: 15 * 60 * 1_000,
   max: 500,
   standardHeaders: 'draft-7',
   legacyHeaders: false,
-  skip: isLoopback,
+  skip: (req) => isLoopback(req) || isMapiPath(req.path),
   message: { error: 'Too many requests. Please try again later.' },
   handler(req, res, _next, options) {
     log.warn({ ip: req.ip, path: req.path }, 'General rate limit exceeded');

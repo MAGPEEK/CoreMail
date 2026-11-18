@@ -5,12 +5,14 @@
  * Off by default: the per-account protocol switch `mapi` (docs/protocol-access.md).
  *
  * Environment: MAPI_PORT (3007), MAPI_SESSION_IDLE_MS (1 800 000),
- * MAPI_PENDING_MS (15 000), MAPI_ALLOW_PLAIN_HTTP (false).
+ * MAPI_PENDING_MS (15 000), MAPI_ALLOW_PLAIN_HTTP (false),
+ * MAPI_RATE_LIMIT (3000 requests per account and window, 0 = off),
+ * MAPI_RATE_WINDOW_SEC (300).
  */
 import { registerLdapMailVerifier } from '@coremail/auth-ldap';
 import {
-  createLogger, getRedisClient, installProcessGuards, initRuntimeLogLevel, LiveConnectionRegistry,
-  resolveBindHost, startAuthInvalidationSubscriber,
+  createFixedWindowLimiter, createLogger, envLimit, getRedisClient, installProcessGuards, initRuntimeLogLevel,
+  LiveConnectionRegistry, resolveBindHost, startAuthInvalidationSubscriber, type CounterStore,
 } from '@coremail/core';
 import { connectDatabase, waitForObjectStorage } from '@coremail/storage';
 import { createApp } from './app.js';
@@ -32,6 +34,8 @@ function envInt(name: string, fallback: number): number {
 const PORT = envInt('MAPI_PORT', 3007);
 const IDLE_MS = envInt('MAPI_SESSION_IDLE_MS', 30 * 60_000);
 const PENDING_MS = envInt('MAPI_PENDING_MS', 15_000);
+const RATE_LIMIT = envLimit('MAPI_RATE_LIMIT', 3000);
+const RATE_WINDOW_SEC = envInt('MAPI_RATE_WINDOW_SEC', 300);
 
 async function main(): Promise<void> {
   await connectDatabase();
@@ -51,6 +55,9 @@ async function main(): Promise<void> {
     rops: ROP_REGISTRY,
     notifications: timerNotificationSource(),
     authenticate,
+    limiter: createFixedWindowLimiter({
+      scope: 'mapi', limit: RATE_LIMIT, windowSec: RATE_WINDOW_SEC, store: () => getRedisClient() as unknown as CounterStore,
+    }),
     config: { pendingMs: PENDING_MS, idleMs: IDLE_MS },
   });
   const host = resolveBindHost();

@@ -1,5 +1,6 @@
 /**
- * Per-user fixed-window rate limiter (8.0.x).
+ * Per-user fixed-window rate limiter (8.0.x) — the Express side of
+ * createFixedWindowLimiter() (@coremail/core, 9.4: shared with the MAPI server).
  *
  * Counts in Redis (`ratelimit:<scope>:<userId>:<window>`, INCR + EXPIRE) so the
  * limit holds across gateway instances and restarts; when Redis is slow or
@@ -9,16 +10,9 @@
  * Test seam: `globalThis.__rateLimitRedis` replaces the Redis client.
  */
 import type { Request, Response, NextFunction } from 'express';
-import { getRedisClient, createLogger } from '@coremail/core';
+import { createFixedWindowLimiter, getRedisClient, type CounterStore, type RateDecision } from '@coremail/core';
 
-const log = createLogger('api:rate-limit');
-
-export interface CounterStore {
-  incr(key: string): Promise<number>;
-  expire(key: string, seconds: number): Promise<unknown>;
-}
-
-export interface RateDecision { allowed: boolean; count: number; limit: number; retryAfterSec: number }
+export type { CounterStore, RateDecision };
 
 export interface UserRateLimiterOptions {
   scope: string;
@@ -45,38 +39,7 @@ export function envInt(name: string, fallback: number, env: NodeJS.ProcessEnv = 
 }
 
 export function createUserRateLimiter(opts: UserRateLimiterOptions) {
-  const local = new Map<string, number>();
-  const now = opts.now ?? Date.now;
-  const store = opts.store ?? defaultStore;
-  const timeoutMs = opts.timeoutMs ?? 500;
-  const windowMs = opts.windowSec * 1000;
-
-  async function hit(userId: string): Promise<RateDecision> {
-    if (opts.limit <= 0) return { allowed: true, count: 0, limit: 0, retryAfterSec: 0 };
-    const t = now();
-    const window = Math.floor(t / windowMs);
-    const key = `ratelimit:${opts.scope}:${userId}:${window}`;
-    const retryAfterSec = Math.max(1, Math.ceil(((window + 1) * windowMs - t) / 1000));
-    let count: number;
-    try {
-      let timer: NodeJS.Timeout | undefined;
-      const s = store();
-      count = await Promise.race([
-        s.incr(key).then(async (n) => {
-          if (n === 1) await s.expire(key, opts.windowSec + 1);
-          return n;
-        }),
-        new Promise<number>((_, reject) => { timer = setTimeout(() => reject(new Error('rate-limit store timeout')), timeoutMs); }),
-      ]).finally(() => clearTimeout(timer));
-    } catch (err) {
-      log.warn({ err, scope: opts.scope }, 'Rate-limit store unavailable — using the in-process counter');
-      if (local.size > 50_000) local.clear();
-      for (const k of local.keys()) if (!k.endsWith(`:${window}`)) local.delete(k);
-      count = (local.get(key) ?? 0) + 1;
-      local.set(key, count);
-    }
-    return { allowed: count <= opts.limit, count, limit: opts.limit, retryAfterSec };
-  }
+  const { hit } = createFixedWindowLimiter({ ...opts, store: opts.store ?? defaultStore });
 
   /** Express middleware (after requireAuth): 429 + Retry-After when over the limit. */
   function middleware(req: Request, res: Response, next: NextFunction): void {

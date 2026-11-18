@@ -9,9 +9,9 @@ import { ResponseCode } from '../http/envelope.js';
 import { respondFailure, respondStreaming } from '../http/responder.js';
 import { admit, type EmsmdbDeps } from '../emsmdb/handler.js';
 
-export function nspiHandler(deps: Pick<EmsmdbDeps, 'authenticate' | 'config'>): RequestHandler {
+export function nspiHandler(deps: Pick<EmsmdbDeps, 'authenticate' | 'limiter' | 'config'>): RequestHandler {
   return async (req, res) => {
-    const admitted = await admit('nspi', req, res, deps.authenticate);
+    const admitted = await admit('nspi', req, res, deps);
     if (!admitted) return;
     const { h } = admitted;
     if (h.requestType === 'PING') {

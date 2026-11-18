@@ -8,7 +8,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
-import { LiveConnectionRegistry } from '@coremail/core';
+import { createFixedWindowLimiter, LiveConnectionRegistry, type CounterStore } from '@coremail/core';
 import { createApp } from './app.js';
 import { SessionRegistry, type SessionRedis } from './session/registry.js';
 import { ROP_REGISTRY } from './rop/registry.js';
@@ -22,6 +22,7 @@ import type { NotificationSource } from './emsmdb/notification-wait.js';
 const USERS: Record<string, { password: string; userId: string; mapi: boolean }> = {
   'alice@example.test': { password: 'pw-a', userId: 'ua', mapi: true },
   'bob@example.test': { password: 'pw-b', userId: 'ub', mapi: false },
+  'carol@example.test': { password: 'pw-c', userId: 'uc', mapi: true },
 };
 
 class MemoryRedis implements SessionRedis {
@@ -48,12 +49,19 @@ store.addMailbox({ mailboxId: 'mba', kind: 'own', email: 'alice@example.test', d
 store.addMessage(store.folderByName('mba', 'INBOX').id, { subject: 'Welcome' });
 const sessions = new SessionRegistry({ redis: new MemoryRedis(), live: new LiveConnectionRegistry('test'), idleMs: 60_000 });
 const instantNotify: NotificationSource = { wait: async () => false };
+
+function memoryCounter(): CounterStore {
+  const n = new Map<string, number>();
+  return { incr: async (k) => { const v = (n.get(k) ?? 0) + 1; n.set(k, v); return v; }, expire: async () => 1 };
+}
+const unlimitedCounter = memoryCounter();
+const unlimited = createFixedWindowLimiter({ scope: 't', limit: 0, windowSec: 60, store: () => unlimitedCounter });
 let server: Server;
 let base = '';
 
 before(async () => {
   const app = createApp({
-    sessions, store, rops: ROP_REGISTRY, notifications: instantNotify, authenticate: fakeAuthenticate,
+    sessions, store, rops: ROP_REGISTRY, notifications: instantNotify, authenticate: fakeAuthenticate, limiter: unlimited,
     config: { pendingMs: 15_000, idleMs: 60_000 },
   });
   server = await new Promise<Server>((resolve) => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
@@ -216,4 +224,32 @@ test('PING and NotificationWait on a live session; the address book answers PING
   assert.equal(wait.mapi!.body.readUInt32LE(8), 0, 'EventPending');
   assertOk(await c.request('nspi', 'PING', Buffer.alloc(0)));
   assert.equal((await c.request('nspi', 'Bind', Buffer.alloc(0))).responseCode, 16);
+});
+
+test('per-account request limit: over the limit → 429 + Retry-After (X-ResponseCode 1), other accounts unaffected', async () => {
+  const counter = memoryCounter();
+  const limited = createApp({
+    sessions, store, rops: ROP_REGISTRY, notifications: instantNotify, authenticate: fakeAuthenticate,
+    limiter: createFixedWindowLimiter({ scope: 'limited', limit: 3, windowSec: 60, store: () => counter }),
+    config: { pendingMs: 15_000, idleMs: 60_000 },
+  });
+  const s = await new Promise<Server>((resolve) => { const x = limited.listen(0, '127.0.0.1', () => resolve(x)); });
+  try {
+    const url = `http://127.0.0.1:${(s.address() as AddressInfo).port}`;
+    const c = new MapiHttpClient(url, 'alice@example.test', 'pw-a');
+    assertOk(await c.connect());
+    assertOk(await c.request('emsmdb', 'PING', Buffer.alloc(0)));
+    assertOk(await c.request('nspi', 'PING', Buffer.alloc(0)));
+    const over = await c.request('emsmdb', 'PING', Buffer.alloc(0));
+    assert.equal(over.status, 429);
+    assert.equal(over.responseCode, 1);
+    assert.ok(Number(over.headers.get('retry-after')) >= 1);
+    assert.equal(over.headers.get('www-authenticate'), null);
+    assertOk(await new MapiHttpClient(url, 'carol@example.test', 'pw-c').connect());
+    // Failed logins are not counted per account (the mail-login lockout covers them).
+    const wrong = new MapiHttpClient(url, 'carol@example.test', 'nope');
+    for (let i = 0; i < 5; i++) assert.equal((await wrong.connect()).status, 401);
+  } finally {
+    s.close();
+  }
 });
