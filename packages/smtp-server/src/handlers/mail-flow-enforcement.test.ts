@@ -49,7 +49,7 @@ const storage = await import('@coremail/storage');
 const { inboundHandlers, refusalForAllRecipients } = await import('../inbound/handler.js');
 const { submissionLimitReply } = await import('../submission/handler.js');
 const { storeInboundMessage, toLocalOutcome } = await import('./message.js');
-const { planAdminForward } = await import('./rule-forward.js');
+const { planAdminForward, adminForwardSource, enqueueRuleForward } = await import('./rule-forward.js');
 const { outcomesByOriginal, ledgerEntry, ledgerOutcome } = await import('./delivery.js');
 const { deliverOutboundJob, runForeignSendOnce } = await import('../outbound/queue.js');
 const { policyRefusedDsn, bouncePolicyLocal, POLICY_REFUSED_DIAGNOSTIC } = await import('./local-delivery.js');
@@ -69,7 +69,7 @@ test('port 25 RCPT TO: reject-from / accept-only-from refuse the envelope sender
   assert.equal(await inboundHandlers.onRcptTo('bob@corp.test', 'x@other.test', authUser), null);
   policyRow = { acceptFrom: ['partner.test'] };
   assert.match(String(await inboundHandlers.onRcptTo('bob@corp.test', 'x@ext.test', authUser)), /^550 5\.7\.1 /);
-  assert.match(String(await inboundHandlers.onRcptTo('bob@corp.test', '', authUser)), /^550 5\.7\.1 /, 'null sender to accept-only');
+  assert.equal(await inboundHandlers.onRcptTo('bob@corp.test', '', authUser), null, 'null sender: judged at DATA with the header From:');
   assert.equal(await inboundHandlers.onRcptTo('bob@corp.test', 'a@partner.test', authUser), null);
 });
 
@@ -158,6 +158,48 @@ test('foreign-send step runs once per job and only for marked jobs with a sender
   assert.equal(await runForeignSendOnce(job, Buffer.from('x'), run), false, 'a retry does not repeat it');
   assert.equal(runs.length, 1);
   assert.deepEqual((runs[0] as { source: string; userId: string }), { userId: 'u1', raw: Buffer.from('x'), source: 'webmail' });
+  const auditOnly = {
+    data: { messageId: 'm', from: 'a@x.test', to: ['b@y.test'], senderUserId: 'u1', foreignSendSource: 'jmap' as const, foreignSendAuditOnly: true },
+    updateData: async (d: never) => { auditOnly.data = d; },
+  };
+  assert.equal(await runForeignSendOnce(auditOnly, Buffer.from('x'), run), true);
+  assert.deepEqual(runs[1], { userId: 'u1', raw: Buffer.from('x'), source: 'jmap', sentCopy: false }, 'JMAP Shared Mailbox account: audit only');
   const unmarked = { data: { messageId: 'm', from: 'a@x.test', to: ['b@y.test'], senderUserId: 'u1' }, updateData: async () => undefined };
   assert.equal(await runForeignSendOnce(unmarked, Buffer.from('x'), run), false);
+});
+
+test('NDRs and dead-letter notices of this server reach a mailbox with accept-only-from / a receive limit', async () => {
+  const ndr = Buffer.from('From: Mail Delivery System <mailer-daemon@mail.corp.test>\r\nTo: bob@corp.test\r\nSubject: Undelivered\r\n\r\nx\r\n');
+  policyRow = { acceptFrom: ['partner.test'] };
+  assert.equal(await storeInboundMessage(ndr, { fromAddr: '', rcptTo: 'bob@corp.test', toJunk: false }), 'policy', 'an outside bounce is judged by its From:');
+  const own = await storeInboundMessage(ndr, { fromAddr: '', rcptTo: 'bob@corp.test', toJunk: false, systemNotice: true }).catch(() => 'past-the-policy-check');
+  assert.notEqual(own, 'policy', 'our own notice passes the sender list');
+});
+
+test('admin forwarding source: the S/MIME plaintext never leaves — the received message with header edits instead', () => {
+  const received = Buffer.from('From: a@x.test\r\nSubject: secret\r\nContent-Type: application/pkcs7-mime\r\n\r\nMIAGCSqG\r\n');
+  const stored = Buffer.from('From: a@x.test\r\nSubject: secret\r\n\r\nplain text\r\n');
+  assert.equal(adminForwardSource(stored, received, false, null), stored, 'not decrypted → as stored');
+  assert.equal(adminForwardSource(stored, received, true, null), received, 'decrypted → as received');
+  const edits = {
+    headerAdds: [{ name: 'X-Tag', value: 'ext' }], headerRemoves: [], subjectPrefix: '[EXT] ', subjectSuffix: '',
+    disclaimerHtml: '<p>disclaimer</p>',
+  } as unknown as Parameters<typeof adminForwardSource>[3];
+  const out = adminForwardSource(stored, received, true, edits).toString();
+  assert.match(out, /^Subject: \[EXT\] secret/m);
+  assert.match(out, /^X-Tag: ext/m);
+  assert.doesNotMatch(out, /plain text|disclaimer/, 'neither plaintext nor a disclaimer in the encrypted body');
+  assert.match(out, /MIAGCSqG/);
+});
+
+test('admin forwarding of a Shared Mailbox: envelope = the box, no senderUserId (the id is no user)', async () => {
+  const jobs: Array<Record<string, unknown>> = [];
+  const deps = { claim: async () => true, release: async () => undefined, enqueue: async (j: unknown) => { jobs.push(j as Record<string, unknown>); } };
+  const raw = Buffer.from('From: a@x.test\r\nSubject: s\r\n\r\nx\r\n');
+  await enqueueRuleForward({ rawBuffer: raw, toAddress: 'boss@ext.test', forwardingUser: { id: 'sm1', email: 'team@corp.test', shared: true }, mode: 'forward', originalFrom: 'a@x.test' }, deps);
+  await enqueueRuleForward({ rawBuffer: raw, toAddress: 'boss@ext.test', forwardingUser: { id: 'u1', email: 'bob@corp.test' }, mode: 'forward', originalFrom: 'a@x.test' }, deps);
+  assert.equal(jobs[0]!['from'], 'team@corp.test');
+  assert.equal('senderUserId' in jobs[0]!, false);
+  assert.equal(jobs[1]!['from'], 'bob@corp.test');
+  assert.equal(jobs[1]!['senderUserId'], 'u1');
 });

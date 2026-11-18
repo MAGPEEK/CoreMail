@@ -332,6 +332,7 @@ export async function sendDsnBounce(input: DsnOptions): Promise<void> {
       fromAddr: '',     // null sender for bounce (RFC 5321)
       rcptTo:   opts.originalFrom,
       toJunk:   false,
+      systemNotice: true, // 9.4: our own NDR passes the mailbox's sender lists / size limit
     });
     log.info(
       { to: opts.originalFrom, code: opts.smtpCode, originalMessageId: opts.originalMessageId, action: opts.action ?? 'failed' },

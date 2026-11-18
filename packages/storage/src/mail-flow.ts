@@ -157,11 +157,32 @@ export interface DeliveryFacts {
   envelopeFrom: string | null;
   headerFrom: string | null;
   sizeBytes: number;
+  /**
+   * A notice this server generates for the mailbox itself (delivery status
+   * notifications to a local sender, dead-letter notices to admins). Internal
+   * flag of the delivery call — never derived from the message.
+   */
+  systemNotice?: boolean;
 }
 
-/** Pure: why a local delivery is refused by the recipient's policy (SMTP reply), or null. */
+/**
+ * Pure: why a local delivery is refused by the recipient's policy (SMTP reply),
+ * or null. The server's own notices are never refused: a mailbox that accepts
+ * only some senders still gets the NDRs of its own mail.
+ */
 export function deliveryRefusal(policy: MailFlowSettings, facts: DeliveryFacts): string | null {
+  if (facts.systemNotice) return null;
   return senderRefusal(policy, [facts.envelopeFrom, facts.headerFrom]) ?? receiveSizeRefusal(policy, facts.sizeBytes);
+}
+
+/**
+ * Pure: the RCPT-stage refusal (envelope sender only). A null reverse-path is
+ * judged at DATA / delivery, where the header From: is known — accept-only-from
+ * refuses a message only when no sender at all (neither envelope nor From:) is
+ * on the list.
+ */
+export function rcptStageRefusal(policy: Pick<MailFlowSettings, 'acceptFrom' | 'rejectFrom'>, envelopeFrom: string | null): string | null {
+  return envelopeFrom ? senderRefusal(policy, [envelopeFrom]) : null;
 }
 
 export interface SendLimits { maxBytes: number; maxRecipients: number }
@@ -242,10 +263,11 @@ export async function mailFlowForRecipient(address: string): Promise<{ owner: Ma
   return { owner, policy: await loadMailFlowPolicy(owner) };
 }
 
-/** RCPT-stage check (envelope sender only): the refusal reply for this recipient, or null. */
+/** RCPT-stage check ({@link rcptStageRefusal}): the refusal reply for this recipient, or null. */
 export async function recipientSenderRefusal(recipient: string, envelopeFrom: string | null): Promise<string | null> {
+  if (!envelopeFrom) return null;
   const found = await mailFlowForRecipient(recipient);
-  return found ? senderRefusal(found.policy, [envelopeFrom]) : null;
+  return found ? rcptStageRefusal(found.policy, envelopeFrom) : null;
 }
 
 /**

@@ -184,6 +184,11 @@ export interface AfterForeignSendInput {
   raw: Buffer;
   source: MailboxAccessSource;
   ipAddress?: string;
+  /**
+   * false: audit only — the message is already stored in the Shared Mailbox
+   * (JMAP submission from the Shared Mailbox account). Default true.
+   */
+  sentCopy?: boolean;
 }
 
 export interface AfterForeignSendResult { mode: ForeignSendMode; sharedMailboxId: string; copyMessageId: string | null }
@@ -210,7 +215,7 @@ export async function afterForeignSend(input: AfterForeignSendInput): Promise<Af
       ...(input.ipAddress ? { ipAddress: input.ipAddress } : {}),
     });
     let copyMessageId: string | null = null;
-    if (wantsSentCopy(send) && grant.mailboxId) {
+    if (input.sentCopy !== false && wantsSentCopy(send) && grant.mailboxId) {
       copyMessageId = await storeRawInSentFolder(grant.mailboxId, input.raw);
       if (!copyMessageId) log.warn({ sharedMailboxId: grant.sharedMailboxId }, 'Shared mailbox has no Sent folder — no sent copy stored');
     }

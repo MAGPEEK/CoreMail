@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 
 const { foreignTarget, emailSetAccessEvents, mailboxSetAccessEvents } = await import('./access-audit.js');
 const { principalListed } = await import('./methods/principal.js');
-const { sendLimitSetError } = await import('./methods/submission.js');
+const { sendLimitSetError, foreignSendFields } = await import('./methods/submission.js');
 
 const base = { name: 'n', readOnly: false, maySend: true };
 const own = { ...base, accountId: 'u1', mailboxId: 'mb1', ownerUserId: 'u1', sharedMailboxId: null, email: 'me@x.test', isPersonal: true };
@@ -55,4 +55,11 @@ test('per-mailbox send limits map to tooLarge (maxSize) / tooManyRecipients (max
   const many = sendLimitSetError({ ok: false, kind: 'recipients', limit: 3 }) as unknown as Record<string, unknown>;
   assert.equal(many['type'], 'tooManyRecipients');
   assert.equal(many['maxRecipients'], 3);
+});
+
+test('EmailSubmission: send-as step from the personal account (audit + copy), audit only from a Shared Mailbox account', () => {
+  assert.deepEqual(foreignSendFields(own), { foreignSendSource: 'jmap' });
+  assert.deepEqual(foreignSendFields(shared), { foreignSendSource: 'jmap', foreignSendAuditOnly: true },
+    'the Email already lives in the shared mailbox — no second Sent copy, but the send is audited');
+  assert.deepEqual(foreignSendFields(delegated), {});
 });

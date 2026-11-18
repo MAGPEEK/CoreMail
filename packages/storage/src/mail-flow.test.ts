@@ -13,7 +13,7 @@ process.env['PEPPER'] ??= 'test-pepper-0123456789abcdef0123456789abcd';
 
 const {
   mailFlowFromRow, normalizeSenderPattern, parseSenderList, senderMatches, senderRefusal, receiveSizeRefusal,
-  deliveryRefusal, effectiveSendLimits, checkSendLimitsPure, headerFromAddress, DEFAULT_MAIL_FLOW,
+  deliveryRefusal, rcptStageRefusal, effectiveSendLimits, checkSendLimitsPure, headerFromAddress, DEFAULT_MAIL_FLOW,
   SENDER_REFUSED_REPLY, MAX_SENDER_LIST_ENTRIES,
 } = await import('./mail-flow.js');
 
@@ -74,6 +74,22 @@ test('receive size: per-mailbox limit refuses with 552 5.2.3; no limit passes', 
     SENDER_REFUSED_REPLY, 'sender check first',
   );
   assert.equal(deliveryRefusal(policy(), { envelopeFrom: null, headerFrom: null, sizeBytes: 1 }), null);
+});
+
+test('RCPT stage: envelope sender only; a null reverse-path is left to DATA, where From: is known', () => {
+  const p = policy({ acceptFrom: ['partner.test'], rejectFrom: ['spam.test'] });
+  assert.equal(rcptStageRefusal(p, 'x@other.test'), SENDER_REFUSED_REPLY);
+  assert.equal(rcptStageRefusal(p, 'x@spam.test'), SENDER_REFUSED_REPLY);
+  assert.equal(rcptStageRefusal(p, 'a@partner.test'), null);
+  assert.equal(rcptStageRefusal(p, null), null, 'judged with the header From: later');
+  assert.equal(rcptStageRefusal(p, ''), null);
+});
+
+test('the server own notices (NDRs, dead-letter notices) pass every sender list and the size limit', () => {
+  const p = policy({ acceptFrom: ['partner.test'], maxReceiveSizeMb: 1 });
+  const ndr = { envelopeFrom: null, headerFrom: 'mailer-daemon@mail.corp.test', sizeBytes: 5 * 1024 * 1024 };
+  assert.equal(deliveryRefusal(p, ndr), SENDER_REFUSED_REPLY, 'an outside bounce is judged by its From:');
+  assert.equal(deliveryRefusal(p, { ...ndr, systemNotice: true }), null);
 });
 
 test('send limits: a per-mailbox value replaces the global one (larger or smaller)', () => {

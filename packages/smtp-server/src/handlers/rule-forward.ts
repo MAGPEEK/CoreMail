@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'crypto';
 import { createLogger, getRedisClient } from '@coremail/core';
+import { applyOutcomeToBuffer, type TransportOutcome } from '@coremail/storage';
 import { enqueueOutbound, type OutboundJob } from '../outbound/queue.js';
 import { PARTIAL_DELIVERY_TTL_SEC } from './delivery.js';
 import { formatRfc5322Date, headerBounds } from './trace.js';
@@ -49,10 +50,31 @@ export function planAdminForward(
   return { to: policy.forwardTo, keepCopy: policy.forwardKeepCopy };
 }
 
+/**
+ * Pure (9.4): the message an admin forwarding sends. The S/MIME plaintext that
+ * was decrypted for storage never leaves the server: a decrypted message is
+ * forwarded as it was received (still encrypted) with the transport rules'
+ * header and subject changes — without a disclaimer, as the body is the
+ * encrypted entity. Anything else is forwarded as it is stored.
+ */
+export function adminForwardSource(
+  stored: Buffer,
+  received: Buffer,
+  decrypted: boolean,
+  transport: TransportOutcome | null,
+): Buffer {
+  if (!decrypted) return stored;
+  return transport ? applyOutcomeToBuffer(received, { ...transport, disclaimerHtml: '' }) : received;
+}
+
 export interface RuleForwardOpts {
   rawBuffer:      Buffer;
   toAddress:      string;        // target address (from the rule)
-  forwardingUser: { id: string; email: string };
+  /**
+   * The forwarding mailbox. `shared` (9.4 admin forwarding of a Shared
+   * Mailbox): `id` is a SharedMailbox id — the queue job gets no senderUserId.
+   */
+  forwardingUser: { id: string; email: string; shared?: boolean };
   mode:           'forward' | 'redirect';
   /** Envelope reverse-path of the original mail ('' = null sender). */
   originalFrom:   string;
@@ -139,7 +161,7 @@ export async function enqueueRuleForward(opts: RuleForwardOpts, deps: RuleForwar
       from:       envelopeFrom,
       to:         [opts.toAddress],
       rawMessage: raw.toString('base64'),
-      senderUserId: opts.forwardingUser.id,
+      ...(opts.forwardingUser.shared ? {} : { senderUserId: opts.forwardingUser.id }),
       ...(opts.mode === 'redirect' ? { ruleRedirect: true } : {}),
     });
   } catch (err) {

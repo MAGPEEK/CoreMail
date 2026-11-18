@@ -135,6 +135,11 @@ export interface OutboundJob {
    * real send time, so a cancelled scheduled / undone send leaves no trace.
    */
   foreignSendSource?: 'webmail' | 'jmap';
+  /**
+   * The sent message is already stored in the Shared Mailbox (JMAP submission
+   * from its account): audit only, no second Sent copy.
+   */
+  foreignSendAuditOnly?: boolean;
   /** Set once afterForeignSend ran for this job (retries do not repeat it). */
   foreignSendDone?: boolean;
 }
@@ -642,7 +647,10 @@ export async function runForeignSendOnce(
     log.warn({ err }, 'Could not mark the foreign send step — skipped');
     return false;
   }
-  await run({ userId: senderUserId, raw: buffer, source: foreignSendSource });
+  await run({
+    userId: senderUserId, raw: buffer, source: foreignSendSource,
+    ...(job.data.foreignSendAuditOnly ? { sentCopy: false } : {}),
+  });
   return true;
 }
 

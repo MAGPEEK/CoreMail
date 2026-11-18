@@ -1,8 +1,8 @@
-import { prisma, parseRawMessage, uploadBuffer, storeRawMessage, truncateBodyColumn, attachmentKey, applyMailRules, applyTransportRules, applyOutcomeToBuffer, processITipInbound, createMessage, createRulePatternBudget, ruleMessageStepBudget, checkReceiveQuota, recordDelivery, loadMailFlowPolicy, deliveryRefusal, headerFromAddress, type SenderAuth, type QuotaOwner, type MailFlowOwner } from '@coremail/storage';
+import { prisma, parseRawMessage, uploadBuffer, storeRawMessage, truncateBodyColumn, attachmentKey, applyMailRules, applyTransportRules, applyOutcomeToBuffer, processITipInbound, createMessage, createRulePatternBudget, ruleMessageStepBudget, checkReceiveQuota, recordDelivery, loadMailFlowPolicy, deliveryRefusal, headerFromAddress, type SenderAuth, type QuotaOwner, type MailFlowOwner, type TransportOutcome } from '@coremail/storage';
 import type { LocalOutcome } from './delivery.js';
 import { getRedisClient, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
 import { verifyIncomingSmime, decryptIncomingSmime } from '../smime/index.js';
-import { enqueueRuleForward, isRuleForwardedAlready, planAdminForward } from './rule-forward.js';
+import { enqueueRuleForward, isRuleForwardedAlready, planAdminForward, adminForwardSource } from './rule-forward.js';
 import { handleTransportOutcome } from './transport-actions.js';
 import { sendAutoReplyIfNeeded } from './auto-reply.js';
 import { withReturnPath } from './trace.js';
@@ -34,6 +34,12 @@ export interface StoreOptions {
    * local sender). Absent = unauthenticated: iTIP REPLYs are not applied.
    */
   senderAuth?: SenderAuth;
+  /**
+   * 9.4: a notice this server generates for the recipient (DSN / NDR to a local
+   * sender, dead-letter notice): the mailbox's sender lists and receive size
+   * limit do not apply. Internal callers only — never derived from a header.
+   */
+  systemNotice?: boolean;
 }
 
 /**
@@ -92,6 +98,7 @@ export async function storeInboundMessage(
   const flow = await loadMailFlowPolicy(flowOwner);
   const refusal = deliveryRefusal(flow, {
     envelopeFrom: opts.fromAddr || null, headerFrom: headerFromAddress(rawBuffer), sizeBytes: rawBuffer.length,
+    ...(opts.systemNotice ? { systemNotice: true } : {}),
   });
   if (refusal) {
     log.warn({ rcptTo: opts.rcptTo, from: opts.fromAddr, refusal }, 'Delivery refused by the mailbox mail flow policy');
@@ -204,6 +211,7 @@ export async function storeInboundMessage(
   // ── Transport rules (server-wide, admin-configured, v3.18.9) ─────────────────
   // Evaluated BEFORE user mail rules — modifies header/subject/body and
   // can reject the mail entirely or move it to quarantine.
+  let appliedTransport: TransportOutcome | null = null;
   if (!opts.skipTransportRules) try {
     const transportOutcome = await applyTransportRules(parsed, {
       envelopeRcpt: opts.rcptTo,
@@ -232,6 +240,7 @@ export async function storeInboundMessage(
     ) {
       effectiveBuffer = applyOutcomeToBuffer(effectiveBuffer, transportOutcome);
       parsed = await parseRawMessage(effectiveBuffer);
+      appliedTransport = transportOutcome;
     }
   } catch (err) {
     log.error({ err }, 'TransportRules evaluation failed — delivering mail unchanged');
@@ -241,16 +250,20 @@ export async function storeInboundMessage(
   // Queued before the local copy is committed, like rule forwards (a failure
   // defers the transaction; the claim keyed by the transaction prevents a second
   // forward on the retry). When the mailbox keeps no copy, delivery ends here.
+  // An S/MIME message decrypted for storage is forwarded still encrypted.
+  const forwardSource = adminForwardSource(effectiveBuffer, rawBuffer, smimeDecrypted, appliedTransport);
   const adminForward = planAdminForward(flow, {
-    envelopeFrom: opts.fromAddr, alreadyForwarded: isRuleForwardedAlready(effectiveBuffer),
+    envelopeFrom: opts.fromAddr, alreadyForwarded: isRuleForwardedAlready(forwardSource),
   });
   if (adminForward === 'skipped-loop') {
     log.warn({ rcptTo: opts.rcptTo, to: flow.forwardTo }, 'Admin forwarding skipped (already forwarded / bounce) — delivering locally');
   } else if (adminForward !== 'none') {
     await enqueueRuleForward({
-      rawBuffer:      effectiveBuffer,
+      rawBuffer:      forwardSource,
       toAddress:      adminForward.to,
-      forwardingUser: { id: user?.id ?? sharedMailbox!.id, email: opts.rcptTo.toLowerCase() },
+      forwardingUser: ownerType === 'user' && user
+        ? { id: user.id, email: user.email.toLowerCase() }
+        : { id: sharedMailbox!.id, email: sharedMailbox!.email.toLowerCase(), shared: true },
       mode:           'forward',
       originalFrom:   opts.fromAddr,
       dedupKey:       opts.deliveryKey,

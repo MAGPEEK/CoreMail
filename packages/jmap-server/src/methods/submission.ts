@@ -157,6 +157,18 @@ async function parseCreate(obj: JsonObject, account: AccountContext, ctx: Method
   };
 }
 
+/**
+ * Pure (9.4): the outbound job fields of the send-as / on-behalf step (audit +
+ * Shared Mailbox Sent copy in the worker). Personal account: audit + copy. A
+ * Shared Mailbox account keeps the sent Email in that mailbox itself
+ * (onSuccessUpdateEmail) — audit only. Delegated accounts cannot submit.
+ */
+export function foreignSendFields(account: Pick<AccountContext, 'isPersonal' | 'sharedMailboxId'>):
+  { foreignSendSource?: 'jmap'; foreignSendAuditOnly?: true } {
+  if (account.isPersonal) return { foreignSendSource: 'jmap' };
+  return account.sharedMailboxId ? { foreignSendSource: 'jmap', foreignSendAuditOnly: true } : {};
+}
+
 /** No global limit at submission time — only a per-mailbox value narrows it (9.4). */
 const UNLIMITED = { maxBytes: Number.POSITIVE_INFINITY, maxRecipients: Number.POSITIVE_INFINITY };
 
@@ -216,10 +228,7 @@ async function enqueue(account: AccountContext, ctx: MethodContext, c: CreateInp
     from: c.envelope.mailFrom.email,
     to: c.envelope.rcptTo.map((r) => r.email),
     senderUserId: account.ownerUserId ?? ctx.user.userId,
-    // 9.4: from the personal account, a send as / on behalf of a Shared Mailbox
-    // gets its audit + Sent copy in the worker. A Shared Mailbox account keeps
-    // the sent Email in that mailbox itself (onSuccessUpdateEmail).
-    ...(account.isPersonal ? { foreignSendSource: 'jmap' as const } : {}),
+    ...foreignSendFields(account),
     ...(domain?.dkimPrivateKey ? { dkimDomain: domain.name, dkimSelector: domain.dkimSelector, dkimPrivateKey: domain.dkimPrivateKey } : {}),
     rawMessage: stripBccHeader(c.raw).toString('base64'),
   }, { ...(await getOutboundJobOptions()), jobId, ...(delay > 0 ? { delay } : {}) });

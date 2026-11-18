@@ -103,7 +103,7 @@ const defaultDeps: DeadLetterDeps = {
   deliver: async (raw, rcpt) => {
     // local delivery straight into the admin mailbox — never leaves the server
     const { storeInboundMessage } = await import('../handlers/message.js');
-    await storeInboundMessage(raw, { fromAddr: '', rcptTo: rcpt, toJunk: false, skipTransportRules: true });
+    await storeInboundMessage(raw, { fromAddr: '', rcptTo: rcpt, toJunk: false, skipTransportRules: true, systemNotice: true });
   },
 };
 
