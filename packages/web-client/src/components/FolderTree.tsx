@@ -1,4 +1,5 @@
-import { useState, useMemo, type ReactNode } from 'react';
+import { useState, useMemo, useRef, type ReactNode } from 'react';
+import { useRovingFocus } from '../hooks/useRovingFocus.js';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Plus, Star, Pencil, FolderPlus, FolderMinus,
@@ -327,9 +328,11 @@ export function FolderTree() {
 
   // Make sure useT re-renders on language change
   void lang;
+  const navRef = useRef<HTMLElement>(null);
+  const roving = useRovingFocus(navRef);
 
   return (
-    <aside className="w-full h-full bg-surface-2 border-r border-line flex flex-col overflow-hidden">
+    <aside aria-label="Postfachbereich" className="w-full h-full bg-surface-2 border-r border-line flex flex-col overflow-hidden">
       {/* "Neue E-Mail" lives only in the mail command bar (split button) and on `n`/`c` */}
       <div className="p-3 flex items-center gap-2">
         <button
@@ -346,13 +349,19 @@ export function FolderTree() {
         </button>
       </div>
 
-      <nav className="flex-1 overflow-y-auto px-1 pb-3">
+      <nav
+        ref={navRef}
+        aria-label="Ordner"
+        onFocus={roving.onFocus}
+        onKeyDown={roving.onKeyDown}
+        className="flex-1 overflow-y-auto px-1 pb-3"
+      >
         {/* Favorites */}
         {favorites.length > 0 && (
           <>
             <SectionHeader label={t('favorites')} collapsed={favoritesCollapsed} onToggle={toggleFavorites} />
             {!favoritesCollapsed && (
-              <div className="space-y-0.5">
+              <div role="tree" aria-label={t('favorites')} className="space-y-0.5">
                 {favorites.map((f) => (
                   <FolderItem
                     key={`fav-${f.id}`}
@@ -392,7 +401,7 @@ export function FolderTree() {
           }
         />
         {!folderTreeCollapsed && (
-          <div className="space-y-0.5">
+          <div role="tree" aria-label={t('folders')} className="space-y-0.5">
             {systemFolders.map((f) => renderFolderTree(f, 0))}
           </div>
         )}

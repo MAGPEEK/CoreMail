@@ -795,7 +795,7 @@ function StorageSection() {
         {folders.length === 0 ? (
           <p className="text-sm text-fg-subtle py-4">Keine Daten verfügbar.</p>
         ) : (
-          <div className="border border-line rounded-lg overflow-hidden">
+          <div role="region" aria-label="Ordner und Speicher (scrollbar)" tabIndex={0} className="border border-line rounded-lg overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-surface-2 border-b border-line">
                 <tr>
@@ -2468,9 +2468,9 @@ export function SettingsPage() {
   const SectionComp = SECTION_MAP[shown];
 
   return (
-    <div className="flex flex-1 overflow-hidden bg-surface">
+    <div className="flex flex-col md:flex-row flex-1 min-w-0 overflow-hidden bg-surface">
       {/* Left navigation — OWA style */}
-      <aside className="w-56 shrink-0 border-r border-line pt-4 bg-surface overflow-y-auto">
+      <aside className="w-full md:w-56 shrink-0 max-md:max-h-[35%] md:border-r max-md:border-b border-line pt-4 bg-surface overflow-y-auto">
         {NAV.map(({ group, items }) => (
           <div key={group} className="mb-2">
             <p className="px-4 py-1 text-xs font-semibold text-fg-subtle uppercase tracking-wide">{t(group)}</p>
@@ -2485,7 +2485,7 @@ export function SettingsPage() {
       </aside>
 
       {/* Right content area — external clients needs more width for URLs */}
-      <div className="flex-1 overflow-y-auto p-8 bg-surface">
+      <div className="flex-1 min-w-0 overflow-y-auto p-4 md:p-8 bg-surface">
         <div className={shown === 'externalClients' ? 'max-w-5xl' : shown === 'recover' ? 'max-w-3xl' : 'max-w-xl'}>
           <SectionComp />
         </div>
