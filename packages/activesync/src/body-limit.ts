@@ -4,7 +4,7 @@
  * The cap follows the configured maximum message size (storage `maxOutgoingMessageBytes`,
  * the limit SendMail / SmartReply / SmartForward enforce) plus a protocol margin:
  *  - ×4/3 for base64 content and WBXML framing, so a message slightly above the limit still
- *    reaches the compose handler and gets the protocol answer (Status 115 / HTTP 413 in 12.1)
+ *    reaches the compose handler and gets the protocol answer (Status 122 / HTTP 413 in 12.1)
  *    instead of a bare body-parser refusal;
  *  - + 1 MB for the WBXML envelope and request line of small limits.
  * Upper bound 150 MB: the body is buffered in memory (and base64-encoded once more for the

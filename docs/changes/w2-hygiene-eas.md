@@ -46,7 +46,8 @@ release note are listed under "Changed"; none removes an endpoint or a setting.
   (HTTP 200, no body) as [MS-ASCMD] 2.2.1.17 specifies; before it returned `<Status>1</Status>`.
   Failures keep the `<Status>` body.
 - ActiveSync: a message above the configured maximum message size (including the original appended
-  by SmartReply / SmartForward) is refused with Status 115 (14.x) / HTTP 413 (12.1).
+  by SmartReply / SmartForward) is refused with Status 122 AttachmentIsTooLarge (14.x) / HTTP 413
+  (12.1) — the size status of [MS-ASCMD] 2.2.2 (115 SendQuotaExceeded is a quota).
 - ActiveSync: the request-body cap follows the maximum message size (× 4/3 + 1 MB protocol margin,
   at most 150 MB) instead of a fixed 25 MB; a larger configured size now works over ActiveSync, a
   smaller one also limits the request bodies. A settings save applies the size limit at once in

@@ -78,11 +78,11 @@ server failure (the device keeps the message and retries).
 - **Maximum message size**: the message as it will be sent — for SmartReply / SmartForward
   including the appended original — must not exceed the configured maximum message size (the
   stricter of BCP → SMTP and BCP → Settings → Mail; one storage helper shared with REST and JMAP,
-  cached 60 s). Too large: Status 115 (SendQuotaExceeded, [MS-ASCMD] 2.2.2) in 14.x, HTTP 413 in
-  12.1. A settings save applies at once (settings reload drops the cache).
+  cached 60 s). Too large: Status 122 (AttachmentIsTooLarge, the size status of [MS-ASCMD] 2.2.2;
+  115 SendQuotaExceeded is a quota) in 14.x, HTTP 413 in 12.1. A settings save applies at once (settings reload drops the cache).
 - **Request-body cap** (`src/body-limit.ts`): every ActiveSync request body is limited to the
   maximum message size × 4/3 + 1 MB (base64 / WBXML margin, so a message slightly above the
-  limit still gets Status 115 / HTTP 413 from the compose handler), at most 150 MB; larger
+  limit still gets Status 122 / HTTP 413 from the compose handler), at most 150 MB; larger
   bodies end with HTTP 413. Before 9.4 the cap was a fixed 25 MB, so a larger configured size
   could not be used over ActiveSync.
 - **Retries**: a 14.x request with a `ClientId` that was already sent gets Status 118
@@ -124,7 +124,7 @@ versions.
   Prisma fake: only the version's tags, version-specific content, byte fixtures for the 12.1
   GetItemEstimate and UserInformation responses and the RemoteWipe answer;
 * `src/commands/send-mail.test.ts` — the 12.1 compose form and its HTTP statuses, the empty 14.x
-  success response, the size limit (115 / 413) and the Message-ID retry detection;
+  success response, the size limits (122 / 413) and the Message-ID retry detection;
 * `src/device-policy.test.ts` — HTTP 449/403 for 12.1 (403 also for a pending wipe without policy
   key), WBXML status for 14.x, Ping without policy key;
 * e2e step `eas-legacy` (`scripts/e2e/steps/eas-legacy.mjs`, see [e2e.md](e2e.md)).

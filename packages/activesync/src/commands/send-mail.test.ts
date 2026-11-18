@@ -183,11 +183,11 @@ test('9.4: per-mailbox send limits refuse before queueing (recipients 120, size 
   assert.equal(legacySendHttpStatus('122'), 413);
 
   const ok = deps({ sendLimits: async () => ({ ok: true }), afterSend: async (_u, plan) => { after.push(plan); } });
-  assert.equal(status(await handleSendMail(composeReq('SendMail', MIME), 'u1', 'SendMail', ok.d)), '1');
+  assert.equal(status(await handleSendMail(composeReq('SendMail', MIME), 'u1', 'SendMail', ok.d)), SENT);
   assert.equal(ok.jobs.length, 1);
   assert.equal(after.length, 1, 'audit + shared Sent copy step after queueing');
   const failing = deps({ afterSend: async () => { throw new Error('db down'); } });
-  assert.equal(status(await handleSendMail(composeReq('SendMail', MIME), 'u1', 'SendMail', failing.d)), '1', 'never fails a sent mail');
+  assert.equal(status(await handleSendMail(composeReq('SendMail', MIME), 'u1', 'SendMail', failing.d)), SENT, 'never fails a sent mail');
 });
 
 test('12.1 SendMail: raw MIME body queued byte-exact, HTTP 200 without body; SaveInSent from the request line', async () => {
@@ -243,18 +243,18 @@ test('9.4: 14.x success is an empty response; failures keep <Command><Status>', 
   assert.equal(status(composeResponse('SmartForward', '150')), '150');
 });
 
-test('9.4: maximum message size — Status 115 (14.x) / HTTP 413 (12.1), the appended original counts', async () => {
+test('9.4: maximum message size — Status 122 AttachmentIsTooLarge (14.x) / HTTP 413 (12.1), the appended original counts', async () => {
   const small = deps({ maxMessageBytes: async () => MIME.length - 1 });
-  assert.equal(status(await handleSendMail(composeReq('SendMail', MIME), 'u1', 'SendMail', small.d)), '115');
+  assert.equal(status(await handleSendMail(composeReq('SendMail', MIME), 'u1', 'SendMail', small.d)), '122');
   assert.equal(await handleLegacySendMail(MIME, { saveInSent: false }, 'u1', 'SendMail', small.d), 413);
   assert.equal(small.jobs.length, 0, 'nothing queued');
 
   // the client part fits, but not with the original appended (SmartForward)
   const fwd = deps({ maxMessageBytes: async () => MIME.length + 100 });
   assert.equal(status(await handleSendMail(composeReq('SendMail', MIME), 'u1', 'SendMail', fwd.d)), SENT);
-  assert.equal(status(await handleSendMail(composeReq('SmartForward', MIME, source('orig')), 'u1', 'SmartForward', fwd.d)), '115');
+  assert.equal(status(await handleSendMail(composeReq('SmartForward', MIME, source('orig')), 'u1', 'SmartForward', fwd.d)), '122');
   assert.equal(fwd.jobs.length, 1);
-  assert.equal(legacySendHttpStatus('115'), 413);
+  assert.equal(legacySendHttpStatus('122'), 413);
 });
 
 test('9.4: 12.1 retry without ClientId — same Message-ID from the same device within the window is not sent twice', async () => {
