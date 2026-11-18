@@ -5,7 +5,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { Queue } from 'bullmq';
-import { checkSendQuota, checkUserSendLimits, listAllowedSenderAddresses, prisma, type SendLimitVerdict } from '@coremail/storage';
+import { checkSendQuota, checkSubmissionLimits, listAllowedSenderAddresses, prisma, type SendLimitVerdict } from '@coremail/storage';
 import { getOutboundJobOptions } from '@coremail/storage/queue-options';
 import { createBullMqConnection, getRedisClient, createLogger } from '@coremail/core';
 import { registerMethod } from '../dispatcher.js';
@@ -148,8 +148,9 @@ async function parseCreate(obj: JsonObject, account: AccountContext, ctx: Method
   if (!rcpt.length) throw setError('noRecipients');
   const bad = rcpt.filter((r) => !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(r));
   if (bad.length) throw setError('invalidRecipients', `invalid: ${bad.join(', ')}`);
-  // 9.4: per-mailbox send limits of the submitting user (RFC 8621 §7.5 tooLarge / tooManyRecipients).
-  const limitError = sendLimitSetError(await checkUserSendLimits(ctx.user.userId, UNLIMITED, raw.length, rcpt.length));
+  // 9.4: submission limits of the submitting user — global recipients, per-mailbox size /
+  // recipients (storage checkSubmissionLimits; RFC 8621 §7.5 tooLarge / tooManyRecipients).
+  const limitError = sendLimitSetError(await checkSubmissionLimits(ctx.user.userId, raw.length, rcpt.length));
   if (limitError) throw limitError;
 
   const sendAt = releaseTime(mailFromParams, new Date());
@@ -172,10 +173,7 @@ export function foreignSendFields(account: Pick<AccountContext, 'isPersonal' | '
   return account.sharedMailboxId ? { foreignSendSource: 'jmap', foreignSendAuditOnly: true } : {};
 }
 
-/** No global limit at submission time — only a per-mailbox value narrows it (9.4). */
-const UNLIMITED = { maxBytes: Number.POSITIVE_INFINITY, maxRecipients: Number.POSITIVE_INFINITY };
-
-/** Pure: the SetError of a per-mailbox send limit verdict, or null. */
+/** Pure: the SetError of a send limit verdict, or null. */
 export function sendLimitSetError(verdict: SendLimitVerdict): SetError | null {
   if (verdict.ok) return null;
   return verdict.kind === 'size'

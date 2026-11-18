@@ -271,14 +271,10 @@ export async function recipientSenderRefusal(recipient: string, envelopeFrom: st
 }
 
 /**
- * The send limits of an authenticated user: the per-mailbox values of the
- * user's own policy, else the given global limits.
+ * {@link checkSendLimitsPure} with the user's policy over the given global limits —
+ * for the SMTP listener, which enforces its own SIZE / RCPT limits. Every other
+ * submission path uses submission-limits.ts `checkSubmissionLimits` (global + policy).
  */
-export async function sendLimitsForUser(userId: string, global: SendLimits): Promise<SendLimits> {
-  return effectiveSendLimits(await loadMailFlowPolicy({ userId }), global);
-}
-
-/** {@link checkSendLimitsPure} with the user's policy. */
 export async function checkUserSendLimits(userId: string, global: SendLimits, sizeBytes: number, recipients: number): Promise<SendLimitVerdict> {
-  return checkSendLimitsPure(await sendLimitsForUser(userId, global), sizeBytes, recipients);
+  return checkSendLimitsPure(effectiveSendLimits(await loadMailFlowPolicy({ userId }), global), sizeBytes, recipients);
 }

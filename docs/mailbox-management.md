@@ -92,12 +92,18 @@ defaults). Logic in `packages/storage/src/mail-flow.ts`.
     receive size limit: a restricted mailbox still gets the NDRs of its own mail.
 * **Receive size** — `552 5.2.3 Message exceeds the size limit of the recipient (N MB)`
   at DATA / NDR at delivery.
-* **Send limits** — a per-mailbox value replaces the global one: webmail
-  (`413`, recipients `400`), SMTP submission (`552 5.3.4` / `550 5.5.3` at DATA),
+* **Send limits** — one helper for every client submission path (storage
+  `submission-limits.ts`: `submissionLimitsForUser` / `checkSubmissionLimits`):
+  global size = the stricter of the SMTP and the server max. message size, global
+  recipients = BCP SMTP *max. recipients*; a per-mailbox value replaces the global
+  one. Webmail (`413`, recipients `400`; `MAIL_SEND_MAX_RECIPIENTS` stays the
+  request's upper bound), SMTP submission (`552 5.3.4` / `550 5.5.3` at DATA; the
+  listener's own SIZE / RCPT limits are the global part),
   JMAP (`tooLarge` / `tooManyRecipients`), ActiveSync (size → Status 122
   AttachmentIsTooLarge, the only size status of the MS-ASCMD common status codes;
   recipients → 120 MailSubmissionFailed, as there is no specific code; protocol
-  12.1: HTTP 413 / 500). The
+  12.1: HTTP 413 / 500), MAPI (`ecMaxSubmissionExceeded` / `ecTooManyRecips` at
+  RopSubmitMessage; `PidTagMaximumSubmitMessageSize` of the logon). The
   listener-level message size (SMTP `SIZE`, the webmail request limit) stays the
   transport's upper bound: a per-mailbox value above it has no effect beyond it.
 * **Forwarding** — like a rule `forward`: `Resent-*` fields, envelope sender =

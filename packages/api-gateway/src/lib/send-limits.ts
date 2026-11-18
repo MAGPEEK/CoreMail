@@ -2,11 +2,13 @@
  * Limits for POST /api/v1/mail/send (8.0.x).
  *
  *  - request size: at most the configured max. message size (storage
- *    message-size-limit.ts, shared with JMAP and ActiveSync), enforced on Content-Length AND on the
+ *    submission-limits.ts, shared with JMAP, ActiveSync and MAPI), enforced on Content-Length AND on the
  *    bytes actually streamed (chunked uploads), so multer's memory storage
  *    never holds more than one message worth of data per request
- *  - recipients: at most MAIL_SEND_MAX_RECIPIENTS (default 500) in to+cc+bcc,
- *    each a syntactically valid address (`a@b.c` or `Name <a@b.c>`), no CR/LF
+ *  - recipients: at most MAIL_SEND_MAX_RECIPIENTS (default 500) in to+cc+bcc — the
+ *    request's upper bound; /mail/send also applies the submission limit of the
+ *    sender (storage submissionLimitsForUser) — each a syntactically valid address
+ *    (`a@b.c` or `Name <a@b.c>`), no CR/LF
  */
 import type { Request, Response, NextFunction } from 'express';
 import { maxOutgoingMessageBytes } from '@coremail/storage';
@@ -15,7 +17,7 @@ import { envInt } from './user-rate-limit.js';
 /** Attachments per message (was 20). */
 export const MAX_SEND_FILES = 10;
 
-/** Max. size of one outgoing message in bytes — the shared storage helper (9.4, 60 s cache). */
+/** Global max. size of one outgoing message in bytes — storage submission-limits.ts (9.4, 60 s cache). */
 export const maxMessageBytes = (): Promise<number> => maxOutgoingMessageBytes();
 
 export class BodyTooLargeError extends Error {

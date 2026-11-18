@@ -3,7 +3,7 @@ import { prisma } from '@coremail/storage/prisma';
 import {
   listAllowedSenderAddresses, createMessage, setFlags, loadRawMessage, parseRawMessage, storeRawMessage,
   truncateBodyColumn, uploadBuffer, attachmentKey, checkSendQuota, maxOutgoingMessageBytes, deferMailboxChanges,
-  checkUserSendLimits, afterForeignSend,
+  checkSubmissionLimits, afterForeignSend,
   type RawSourceMessage, type SendLimitVerdict,
 } from '@coremail/storage';
 import { createLogger, getRedisClient } from '@coremail/core';
@@ -42,15 +42,14 @@ export interface SendMailDeps {
   sendAllowed?: (userId: string) => Promise<boolean>;
   /** 9.4: maximum message size in octets. Default: storage maxOutgoingMessageBytes. */
   maxMessageBytes?: () => Promise<number>;
-  /** 9.4: per-mailbox send limits of the user. Default: storage checkUserSendLimits. */
+  /** 9.4: send limits of the user (global + per-mailbox). Default: storage checkSubmissionLimits. */
   sendLimits?: (userId: string, sizeBytes: number, recipients: number) => Promise<SendLimitVerdict>;
   /** 9.4: audit + Shared Mailbox Sent copy of a send as / on behalf. Default: storage afterForeignSend. */
   afterSend?: (userId: string, plan: EasSubmissionPlan) => Promise<unknown>;
 }
 
-const NO_GLOBAL_LIMIT = { maxBytes: Number.POSITIVE_INFINITY, maxRecipients: Number.POSITIVE_INFINITY };
 const defaultSendLimits = (userId: string, size: number, rcpts: number): Promise<SendLimitVerdict> =>
-  checkUserSendLimits(userId, NO_GLOBAL_LIMIT, size, rcpts);
+  checkSubmissionLimits(userId, size, rcpts);
 const defaultAfterSend = (userId: string, plan: EasSubmissionPlan): Promise<unknown> =>
   afterForeignSend({ userId, raw: plan.raw, source: 'activesync' });
 
@@ -296,10 +295,10 @@ export async function submitCompose(
     }
     const plan = result.plan;
 
-    // 9.4: per-mailbox send limits (size, recipients)
+    // 9.4: submission limits of the user (global recipients, per-mailbox size / recipients)
     const sendLimit = await (deps.sendLimits ?? defaultSendLimits)(userId, plan.raw.length, plan.recipients.length);
     if (!sendLimit.ok) {
-      log.info({ userId, command, kind: sendLimit.kind, limit: sendLimit.limit }, 'EAS send refused: per-mailbox send limit');
+      log.info({ userId, command, kind: sendLimit.kind, limit: sendLimit.limit }, 'EAS send refused: send limit');
       return sendLimitStatus(sendLimit.kind);
     }
 

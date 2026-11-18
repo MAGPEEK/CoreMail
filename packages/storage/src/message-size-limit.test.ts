@@ -1,5 +1,5 @@
 /**
- * 9.4: one maximum-message-size helper for REST, JMAP and ActiveSync — the stricter of
+ * 9.4: one maximum-message-size helper (submission-limits.ts) for REST, JMAP, ActiveSync and MAPI — the stricter of
  * the SMTP and the global setting, default 25 MB, 60 s cache.
  */
 import { test, beforeEach } from 'node:test';
@@ -26,7 +26,7 @@ const read = (mb: () => number | null) => async () => {
   serverSettings: { findUnique: read(() => serverMb) },
 };
 
-const m = await import('./message-size-limit.js');
+const m = await import('./submission-limits.js');
 const MB = 1024 * 1024;
 
 beforeEach(() => { smtpMb = 30; serverMb = 10; fail = false; reads = 0; m.clearMessageSizeLimitCache(); });

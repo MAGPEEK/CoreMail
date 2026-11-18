@@ -9,7 +9,7 @@ import {
   prisma, parseRawMessage, uploadBuffer, outboundAttachKey,
   createMessage, moveMessages, setFlags, touchMessages, expunge, nextModSeq,
   loadRawMessage, storeRawMessage, truncateBodyColumn, getObjectStream, getObjectStore, downloadBuffer,
-  checkSendQuota, reservedFolderPrefix, reservedFolderNameError, sendLimitsForUser,
+  checkSendQuota, reservedFolderPrefix, reservedFolderNameError, submissionLimitsForUser,
 } from '@coremail/storage';
 import { getOutboundJobOptions } from '@coremail/storage/queue-options';
 import {
@@ -19,7 +19,7 @@ import { getRedisClient, createBullMqConnection, CHANNEL_MAIL_NEW, createLogger 
 import { requireAuth } from '../middleware/auth.js';
 import { announceFolderListChange } from '@coremail/storage';
 import { checkFolderParent, type FolderLookup } from '../lib/folder-tree.js';
-import { withBodyLimit, checkRecipients, maxMessageBytes, maxRecipients, MAX_SEND_FILES } from '../lib/send-limits.js';
+import { withBodyLimit, checkRecipients, maxRecipients, MAX_SEND_FILES } from '../lib/send-limits.js';
 import { createUserRateLimiter, envInt } from '../lib/user-rate-limit.js';
 import { resolveReplyHeaders, prismaReplyLookup, parseClientReferences } from '../lib/reply-headers.js';
 import { rspamdControllerHeaders } from '../lib/rspamd-controller.js';
@@ -1060,10 +1060,12 @@ export async function performSend(userId: string, input: SendRequest): Promise<S
     const clientRefs = parseClientReferences(input.referencesRaw);
     if (!clientRefs.ok) return fail(400, { error: clientRefs.error });
     // 8.0.x: recipient count + syntax (header injection, envelope abuse)
-    // 9.4: a per-mailbox limit (MailFlowPolicy) replaces the global one; the
-    // request body guard (global size) stays the transport's upper bound.
-    const limits = await sendLimitsForUser(userId, { maxBytes: await maxMessageBytes(), maxRecipients: maxRecipients() });
-    const rcptCheck = checkRecipients([to, cc, bcc], limits.maxRecipients);
+    // 9.4: the submission limits shared with JMAP, ActiveSync and MAPI (storage
+    // submissionLimitsForUser: global size / SMTP recipient limit, a per-mailbox
+    // MailFlowPolicy value replaces them); MAIL_SEND_MAX_RECIPIENTS stays the request's
+    // upper bound and the body guard (global size) the transport's.
+    const limits = await submissionLimitsForUser(userId);
+    const rcptCheck = checkRecipients([to, cc, bcc], Math.min(limits.maxRecipients, maxRecipients()));
     if (!rcptCheck.ok) {
       return fail(400, { error: rcptCheck.error, ...(rcptCheck.invalid ? { invalid: rcptCheck.invalid } : {}) });
     }
