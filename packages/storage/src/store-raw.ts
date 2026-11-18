@@ -9,6 +9,10 @@
  *     parsed from the octets (Bcc can be given separately — it is not in the header);
  *  3. every MIME attachment becomes an attachment row with its own object;
  *  4. the folder counters follow.
+ *
+ * The realtime announcement (mailbox:changes) goes out once all of it is
+ * written (deferMailboxChanges). Also the writer of the Shared Mailbox Sent
+ * copy (shared-sent-copy.ts storeRawInSentFolder).
  */
 import type { Message } from '@prisma/client';
 import { prisma } from './prisma/index.js';
@@ -16,6 +20,7 @@ import { parseRawMessage } from './mime/index.js';
 import { storeRawMessage } from './raw-message-default.js';
 import { truncateBodyColumn } from './raw-message.js';
 import { createMessage } from './message-store.js';
+import { deferMailboxChanges } from './realtime/change-scope.js';
 import { attachmentKey, uploadBuffer } from './minio/index.js';
 
 export interface StoreRawOptions {
@@ -27,7 +32,11 @@ export interface StoreRawOptions {
   bccAddrs?: string[];
 }
 
-export async function storeRawInFolder(opts: StoreRawOptions): Promise<Message> {
+export function storeRawInFolder(opts: StoreRawOptions): Promise<Message> {
+  return deferMailboxChanges(() => store(opts));
+}
+
+async function store(opts: StoreRawOptions): Promise<Message> {
   const parsed = await parseRawMessage(opts.raw);
   const { storagePath } = await storeRawMessage(opts.raw);
   const msg = await prisma.$transaction((tx) => createMessage(tx, opts.mailboxId, opts.folderId, {
@@ -60,7 +69,7 @@ export async function storeRawInFolder(opts: StoreRawOptions): Promise<Message> 
   const unread = !opts.flags.includes('\\Seen');
   await prisma.folder.update({
     where: { id: opts.folderId },
-    data: { totalCount: { increment: 1 }, ...(unread ? { unreadCount: { increment: 1 } } : {}) },
+    data: { totalCount: { increment: 1 }, ...(unread ? { unreadCount: { increment: 1 } } : {}), changeKey: msg.modSeq.toString() },
   });
   return msg;
 }

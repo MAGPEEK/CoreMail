@@ -136,7 +136,7 @@ export interface OutboundJob {
    * of a send as / on behalf of a Shared Mailbox and its Sent copy — at the
    * real send time, so a cancelled scheduled / undone send leaves no trace.
    */
-  foreignSendSource?: 'webmail' | 'jmap';
+  foreignSendSource?: 'webmail' | 'jmap' | 'mapi';
   /**
    * The sent message is already stored in the Shared Mailbox (JMAP submission
    * from its account): audit only, no second Sent copy.

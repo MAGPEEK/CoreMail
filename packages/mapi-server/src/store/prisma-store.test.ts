@@ -3,7 +3,8 @@
  * fake (globalThis.__prisma seam) and the object-store seam: logon
  * resolution (own / shared / no access), message-store writes (read flag,
  * tombstones, move), drafts and sending (sender identity, quota, queue job,
- * Sent copy, draft removal).
+ * Sent copy, draft removal), realtime announcements (message store,
+ * folder list) and the mailbox access audit of foreign logons.
  */
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -27,14 +28,18 @@ const objects = new Map<string, Buffer>();
 };
 
 const { createPrismaStore } = await import('./prisma-store.js');
-const { resetMessageStoreCache, legacyDnFor } = await import('@coremail/storage');
+const { resetMessageStoreCache, legacyDnFor, setMailboxChangePublisher } = await import('@coremail/storage');
 const { MailboxFullError } = await import('./types.js');
-type Job = { messageId: string; from: string; to: string[]; senderUserId: string; rawMessage: string };
+type Job = { messageId: string; from: string; to: string[]; senderUserId: string; rawMessage: string; foreignSendSource?: string; foreignSendAuditOnly?: true };
 
 const USER = { userId: 'u1', email: 'alice@example.test', displayName: 'Alice', domainId: 'd1' };
 const OWN = { mailboxId: 'mb1', kind: 'own' as const, email: 'alice@example.test', displayName: 'Alice', readOnly: false, directoryId: 'u1' };
 const jobs: Job[] = [];
-const events: Array<{ channel: string; message: Record<string, unknown> }> = [];
+/** mailbox:changes events (message store + folder announcements). */
+const events: Array<Record<string, unknown>> = [];
+setMailboxChangePublisher(async (e) => { events.push(e as unknown as Record<string, unknown>); });
+const audits: Array<Record<string, unknown>> = [];
+const settle = () => new Promise((r) => setTimeout(r, 150));
 let writeBlocked = false;
 let sendAllowed = true;
 let limits = { maxMessageBytes: 1024 * 1024, maxRecipients: 10 };
@@ -45,13 +50,13 @@ const store = createPrismaStore({
   sendAllowed: async () => sendAllowed,
   allowedSenders: async () => ['alice@example.test', 'team@example.test'],
   writeBlocked: async () => writeBlocked,
-  publish: async (channel, message) => { events.push({ channel, message: JSON.parse(message) as Record<string, unknown> }); },
   limits: async () => limits,
+  audit: async (e) => { audits.push(e as unknown as Record<string, unknown>); },
 });
 
 beforeEach(() => {
   Object.assign(db, emptyDb());
-  perms.length = 0; jobs.length = 0; logs.length = 0; events.length = 0; objects.clear();
+  perms.length = 0; jobs.length = 0; logs.length = 0; events.length = 0; audits.length = 0; objects.clear();
   writeBlocked = false; sendAllowed = true;
   limits = { maxMessageBytes: 1024 * 1024, maxRecipients: 10 };
   resetMessageStoreCache();
@@ -85,8 +90,13 @@ test('resolveLogon: own mailbox (empty Essdn or own DN), shared mailbox with acc
   assert.deepEqual(await store.resolveLogon(USER, legacyDnFor('u1')), OWN);
   assert.equal(await store.resolveLogon(USER, legacyDnFor('sm1')), null);
   perms.push({ permission: 'READ_ONLY', sharedMailbox: { id: 'sm1', email: 'team@example.test', displayName: 'Team', active: true, mailbox: { id: 'mb2' } } });
-  assert.deepEqual(await store.resolveLogon(USER, legacyDnFor('sm1')),
-    { mailboxId: 'mb2', kind: 'shared', email: 'team@example.test', displayName: 'Team', readOnly: true, directoryId: 'sm1' });
+  assert.deepEqual(await store.resolveLogon(USER, legacyDnFor('sm1')), {
+    mailboxId: 'mb2', kind: 'shared', email: 'team@example.test', displayName: 'Team', readOnly: true, directoryId: 'sm1',
+    actor: { userId: 'u1', email: 'alice@example.test' },
+  });
+  await settle();
+  assert.deepEqual(audits.map((a) => [a['action'], a['source'], (a['target'] as Record<string, unknown>)['sharedMailboxId']]),
+    [['mailbox.foreign.open', 'mapi', 'sm1']], 'a foreign logon is audited, the own mailbox never');
   assert.equal(await store.resolveLogon(USER, '/o=Other/cn=u1'), null);
 });
 
@@ -115,10 +125,12 @@ test('setRead: \\Seen through the message store (new modSeq) and the unread coun
   assert.deepEqual(db.messages[0]!['flags'], ['\\Seen']);
   assert.equal(db.messages[0]!['modSeq'], 6n);
   assert.equal(db.folders[0]!['unreadCount'], 0);
-  assert.deepEqual(events, [{ channel: 'mail:update', message: { userId: 'u1', folderId: 'inbox', messageId: 'm1', source: 'mapi' } }]);
+  await settle();
+  assert.deepEqual(events.map((e) => [e['mailboxId'], e['kinds']]), [['mb1', ['flags']]], 'the message store announces the flag change');
   await store.setRead(OWN, { ...m, flags: ['\\Seen'] }, true);
   assert.equal(db.messages[0]!['modSeq'], 6n, 'an unchanged message keeps its modSeq');
   assert.equal(db.folders[0]!['unreadCount'], 0, 'no counter change without a flag change');
+  await settle();
   assert.equal(events.length, 1, 'no event without a change');
 });
 
@@ -132,6 +144,23 @@ test('deleteMessages tombstones (recoverable) and fixes the counters; moveOrCopy
   assert.equal(db.messages[1]!['folderId'], 'archive');
   assert.equal(db.messages[1]!['uid'], 10);
   assert.deepEqual([db.folders[0]!['totalCount'], db.folders.find((f) => f['id'] === 'archive')!['totalCount']], [0, 1]);
+  await settle();
+  assert.equal(audits.length, 0, 'nothing is audited in the own mailbox');
+});
+
+test('foreign mailbox (delegated): deletes and moves are audited with counts, copies are not', async () => {
+  addMessage('m1', 'inbox', 1);
+  addMessage('m2', 'inbox', 2);
+  addMessage('m3', 'inbox', 3);
+  const delegated = { ...OWN, kind: 'delegated' as const, directoryId: 'u9', actor: { userId: 'u2', email: 'bob@example.test' } };
+  assert.equal(await store.deleteMessages(delegated, 'inbox', [1]), 1);
+  assert.equal(await store.moveOrCopy({ mailbox: delegated, folderId: 'inbox' }, { mailbox: delegated, folderId: 'archive' }, [2], false), 1);
+  assert.equal(await store.moveOrCopy({ mailbox: delegated, folderId: 'inbox' }, { mailbox: delegated, folderId: 'archive' }, [3], true), 1);
+  await settle();
+  assert.deepEqual(audits.map((a) => [a['action'], a['actorId'], (a['target'] as Record<string, unknown>)['kind'], (a['changes'] as Record<string, unknown>)['count']]), [
+    ['mailbox.foreign.message.delete', 'u2', 'delegated', 1],
+    ['mailbox.foreign.message.move', 'u2', 'delegated', 1],
+  ]);
 });
 
 test('createFolder: subfolders get "Parent.Name", default names and duplicates are refused', async () => {
@@ -141,6 +170,8 @@ test('createFolder: subfolders get "Parent.Name", default names and duplicates a
   assert.equal(await store.createFolder(OWN, inbox, 'Projects'), 'exists');
   assert.equal(await store.createFolder(OWN, null, 'sent'), 'exists');
   assert.equal(typeof (await store.createFolder(OWN, null, 'Clients')), 'object');
+  await settle();
+  assert.ok(events.some((e) => e['mailboxId'] === 'mb1' && (e['kinds'] as string[]).includes('folders')), 'the folder list change is announced');
 });
 
 test('saveDraft: raw MIME stored, \\Draft row via the message store, the previous version tombstoned', async () => {
@@ -156,6 +187,9 @@ test('saveDraft: raw MIME stored, \\Draft row via the message store, the previou
   assert.ok(db.messages.find((m) => m['id'] === first.id)!['deletedAt'] instanceof Date);
   assert.equal(second.subject, 'Report v2');
   assert.equal(db.folders.find((f) => f['id'] === 'drafts')!['totalCount'], 1);
+  await settle();
+  assert.ok(events.every((e) => e['mailboxId'] === 'mb1'), 'draft writes are announced through the message store');
+  assert.ok(events.length >= 1);
   writeBlocked = true;
   await assert.rejects(store.saveDraft(OWN, 'drafts', composed(), null), MailboxFullError);
 });
@@ -170,7 +204,7 @@ test('submit: refused without recipients, over the send quota, for a foreign Fro
   assert.equal(jobs.length, 0);
 });
 
-test('submit: the SMTP submission limits apply (recipient count after de-duplication, raw size)', async () => {
+test('submit: the submission limits of the user apply (recipient count after de-duplication, raw size)', async () => {
   limits = { maxMessageBytes: 4096, maxRecipients: 2 };
   const three = composed({ to: ['a@example.test', 'b@example.test'], cc: ['c@example.test'], bcc: [] });
   assert.deepEqual(await store.submit(USER, OWN, three, { saveCopy: true, draft: null }), { ok: false, reason: 'too-many-recipients' });
@@ -179,7 +213,7 @@ test('submit: the SMTP submission limits apply (recipient count after de-duplica
   const big = composed({ bcc: [], bodyText: 'x'.repeat(5000) });
   assert.deepEqual(await store.submit(USER, OWN, big, { saveCopy: true, draft: null }), { ok: false, reason: 'too-large' });
   assert.equal(jobs.length, 1);
-  assert.deepEqual(await store.submissionLimits(), limits);
+  assert.deepEqual(await store.submissionLimits(USER), limits);
 });
 
 test('submit: queue job (envelope incl. Bcc, raw without Bcc), Sent copy, draft removed, MAIL_FLOW log', async () => {
@@ -192,6 +226,7 @@ test('submit: queue job (envelope incl. Bcc, raw without Bcc), Sent copy, draft 
   assert.equal(job.from, 'alice@example.test');
   assert.deepEqual(job.to.sort(), ['bob@example.test', 'carol@example.test', 'hidden@example.test']);
   assert.equal(job.senderUserId, 'u1');
+  assert.equal(job.foreignSendSource, undefined, 'own address: no foreign send step');
   const raw = Buffer.from(job.rawMessage, 'base64').toString();
   assert.match(raw, /^Subject: Report/m);
   assert.doesNotMatch(raw, /hidden@example\.test/);
@@ -208,6 +243,14 @@ test('submit with DeleteAfterSubmit (saveCopy false) files no Sent copy; send as
   assert.equal(jobs[0]!.from, 'team@example.test');
   assert.match(Buffer.from(jobs[0]!.rawMessage, 'base64').toString(), /^From: "Team" <team@example\.test>/m);
   assert.equal(db.messages.filter((m) => m['folderId'] === 'sent').length, 0);
+  // the worker audits the send as and files the Shared Mailbox Sent copy (none kept here)
+  assert.equal(jobs[0]!.foreignSendSource, 'mapi');
+  assert.equal(jobs[0]!.foreignSendAuditOnly, undefined);
+  assert.equal((await store.submit(USER, shared, composed(), { saveCopy: true, draft: null })).ok, true);
+  assert.equal(jobs[1]!.foreignSendAuditOnly, true, 'the logon box keeps the Sent copy itself: audit only');
+  // send as the shared mailbox from the own logon: full foreign send step
+  assert.equal((await store.submit(USER, OWN, composed({ from: 'team@example.test' }), { saveCopy: true, draft: null })).ok, true);
+  assert.deepEqual([jobs[2]!.foreignSendSource, jobs[2]!.foreignSendAuditOnly], ['mapi', undefined]);
 });
 
 test('loadContent: bodies from the raw original, Bcc from the row, attachment records', async () => {

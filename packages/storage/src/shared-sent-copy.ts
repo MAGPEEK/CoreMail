@@ -17,14 +17,9 @@
  */
 import { createLogger } from '@coremail/core';
 import { prisma } from './prisma/index.js';
-import { parseRawMessage } from './mime/index.js';
 import { findBodyStart, parseHeaderFields } from './mime/tree.js';
 import { addressesOf } from './mime/address.js';
-import { storeRawMessage } from './raw-message-default.js';
-import { truncateBodyColumn } from './raw-message.js';
-import { createMessage } from './message-store.js';
-import { deferMailboxChanges } from './realtime/change-scope.js';
-import { uploadBuffer, attachmentKey } from './minio/index.js';
+import { storeRawInFolder } from './store-raw.js';
 import { normalizeSenderAddress } from './sender-identity.js';
 import { recordMailboxAccess, type MailboxAccessSource } from './mailbox-access-audit.js';
 
@@ -144,46 +139,13 @@ async function loadSendContext(userId: string): Promise<{ email: string; own: st
  * The realtime announcement follows once the attachments and the folder
  * counter are written (deferMailboxChanges).
  */
-export function storeRawInSentFolder(mailboxId: string, raw: Buffer): Promise<string | null> {
-  return deferMailboxChanges(() => storeInSentFolder(mailboxId, raw));
+export async function storeRawInSentFolder(mailboxId: string, raw: Buffer): Promise<string | null> {
+  const sent = await prisma.folder.findFirst({ where: { mailboxId, name: 'Sent' }, select: { id: true } });
+  if (!sent) return null;
+  // UID + modSeq by the message store, raw original, attachment rows, counters (store-raw.ts)
+  return (await storeRawInFolder({ mailboxId, folderId: sent.id, raw, flags: ['\\Seen'] })).id;
 }
 
-async function storeInSentFolder(mailboxId: string, raw: Buffer): Promise<string | null> {
-  const sent =await prisma.folder.findFirst({ where: { mailboxId, name: 'Sent' }, select: { id: true } });
-  if (!sent) return null;
-  const parsed = await parseRawMessage(raw);
-  const { storagePath } = await storeRawMessage(raw);
-  // UID + modSeq are allocated atomically by the message store.
-  const msg = await prisma.$transaction((tx) => createMessage(tx, mailboxId, sent.id, {
-    flags: ['\\Seen'],
-    subject: parsed.subject,
-    fromAddr: parsed.fromAddr,
-    fromName: parsed.fromName,
-    toAddrs: parsed.toAddrs,
-    ccAddrs: parsed.ccAddrs,
-    bccAddrs: parsed.bccAddrs,
-    replyTo: parsed.replyTo,
-    messageId: parsed.messageId,
-    inReplyTo: parsed.inReplyTo,
-    date: parsed.date,
-    bodyText: truncateBodyColumn(parsed.bodyText),
-    bodyHtml: truncateBodyColumn(parsed.bodyHtml),
-    rawSize: raw.length,
-    storagePath,
-  }));
-  for (const [index, att] of parsed.attachments.entries()) {
-    const key = attachmentKey(msg.id, `${index}-${att.sha256.slice(0, 16)}`);
-    await uploadBuffer(key, att.buffer, att.mimeType);
-    await prisma.attachment.create({
-      data: {
-        messageId: msg.id, contentId: att.contentId, filename: att.filename, mimeType: att.mimeType,
-        size: att.size, sha256: att.sha256, storagePath: key, inline: att.inline,
-      },
-    });
-  }
-  await prisma.folder.update({ where: { id: sent.id }, data: { totalCount: { increment: 1 }, changeKey: msg.modSeq.toString() } });
-  return msg.id;
-}
 
 export interface AfterForeignSendInput {
   userId: string;

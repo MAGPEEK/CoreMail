@@ -1,7 +1,7 @@
 /**
  * Mailbox access audit (9.4): what delegates and Shared Mailbox users do in a
  * mailbox that is not their own — from every client (webmail, IMAP, JMAP,
- * ActiveSync, SMTP submission).
+ * ActiveSync, SMTP submission, MAPI).
  *
  * Every entry is an AuditLog row with an action under `mailbox.foreign.`:
  *
@@ -37,7 +37,7 @@ const log = createLogger('storage:mailbox-access-audit');
 
 export const MAILBOX_ACCESS_ACTION_PREFIX = 'mailbox.foreign.';
 
-export type MailboxAccessSource = 'webmail' | 'imap' | 'jmap' | 'activesync' | 'smtp';
+export type MailboxAccessSource = 'webmail' | 'imap' | 'jmap' | 'activesync' | 'smtp' | 'mapi';
 
 export type MailboxAccessAction =
   | 'mailbox.foreign.open'

@@ -22,10 +22,20 @@
     429 + Retry-After), memory of the open objects per session (`MAPI_SESSION_MEMORY_MB`, 64), 1000
     recipients and 250 attachments per message, 1024 restriction nodes per table filter.
   - `/mapi/nspi` is routed and authenticated (`PING`); the address book follows.
-- Storage helper `loadSubmissionLimits()` (SMTP max. recipients and the stricter max. message size,
-  60 s cache) — used by the MAPI server and the api-gateway send size check.
+- One storage helper for the limits of a submitted message (`submission-limits.ts`, replaces
+  `message-size-limit.ts`): `loadSubmissionLimits()` (global: the stricter max. message size, SMTP
+  max. recipients; 60 s cache), `submissionLimitsForUser()` / `checkSubmissionLimits()` (global +
+  the user's per-mailbox mail flow values) — used by REST `/mail/send`, JMAP EmailSubmission,
+  ActiveSync SendMail / SmartReply / SmartForward and MAPI RopSubmitMessage. JMAP and ActiveSync now
+  also refuse more recipients than BCP SMTP *max. recipients* (as SMTP submission already did); the
+  webmail applies it below `MAIL_SEND_MAX_RECIPIENTS`.
+- MAPI writes announce themselves like every other writer (message store `mailbox:changes`, folder
+  list changes) and logons to shared / delegated mailboxes are in the mailbox access audit
+  (source `mapi`: open, folder create / delete, message move / delete); a send as / on behalf of
+  a Shared Mailbox gets the outbound worker's audit + the box's Sent copy.
 - `@coremail/core` `createFixedWindowLimiter()`: the per-key fixed-window counter (Redis with in-process
-  fallback) of the api-gateway's per-user limits, now shared with the MAPI server.
+  fallback) of the api-gateway's per-user limits, now shared with the MAPI server; its in-process
+  counter `FixedWindowCounter` is also the counter of the api-gateway's global API limit.
 - Storage helpers `storeRawInFolder()` (file raw MIME into a folder: raw object, message-store row,
   attachment rows, counters) and `legacyDnFor()` / `directoryIdFromLegacyDn()` (shared with
   Autodiscover).
@@ -35,5 +45,5 @@
 
 - `/mapi/*` is no longer answered 404 by the api-gateway: it is forwarded to the MAPI server (which
   answers 403 for every account until the `mapi` switch is turned on).
-- The api-gateway's general per-IP rate limit (500 / 15 min) no longer counts `/mapi`; the MAPI server
+- The api-gateway's global API rate limit (per user / per IP) does not count `/mapi`; the MAPI server
   limits per authenticated account instead.

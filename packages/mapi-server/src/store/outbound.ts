@@ -16,6 +16,13 @@ export interface RawOutboundJob {
   to: string[];
   senderUserId: string;
   rawMessage: string;
+  /**
+   * 9.4: the worker runs storage afterForeignSend (mailbox access audit + the Shared
+   * Mailbox's Sent copy) for a message sent as / on behalf of a Shared Mailbox.
+   */
+  foreignSendSource?: 'mapi';
+  /** Audit only: the Sent copy is already in the Shared Mailbox (logon to that box). */
+  foreignSendAuditOnly?: true;
 }
 
 let queue: Queue | null = null;

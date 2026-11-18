@@ -3,19 +3,27 @@
  * every write), raw-always storage, the object store and the outbound queue.
  * Same rules as the other protocol servers:
  *  - deleting messages tombstones them (recoverable, IMAP EXPUNGE semantics);
- *  - sending: the SMTP submission limits (recipients, size), send quota,
- *    sender identity (own address, aliases, shared mailboxes with Send As /
- *    Full Access), queue, Sent copy;
+ *  - sending: the submission limits shared with REST, JMAP and ActiveSync
+ *    (storage submissionLimitsForUser: global size / recipients, per-mailbox
+ *    MailFlowPolicy values), send quota, sender identity (own address, aliases,
+ *    shared mailboxes with Send As / Full Access), queue, Sent copy; a send as /
+ *    on behalf of a Shared Mailbox gets the worker's afterForeignSend step;
+ *  - realtime: every message write goes through the message store (mailbox:changes
+ *    after the commit), folder list changes are announced; units that finish
+ *    rows after the message transaction run in deferMailboxChanges;
+ *  - mailbox access audit for logons to shared / delegated mailboxes (open,
+ *    folder create / delete, message move / delete), source `mapi`;
  *  - drafts are stored as raw MIME with \Draft (visible to every client).
  */
 import { randomUUID } from 'node:crypto';
-import { createLogger, getRedisClient, CHANNEL_MAIL_NEW, CHANNEL_MAIL_UPDATE } from '@coremail/core';
+import { createLogger } from '@coremail/core';
 import {
   prisma, listAccessibleMailboxes, ensureMailboxProvisioned, directoryIdFromLegacyDn, reservedFolderPrefix,
   DEFAULT_FOLDERS, deleteFolderMovingMail, loadRawMessage, parseRawMessage, downloadBuffer, storeRawInFolder,
   expunge, modifyFlags, moveMessages, copyMessages, isMailboxWriteBlocked, checkSendQuota,
-  listAllowedSenderAddresses, isSenderAddressAllowed, normalizeSenderAddress, buildRfc822FromFields, loadSubmissionLimits,
-  type RawSourceMessage,
+  listAllowedSenderAddresses, isSenderAddressAllowed, normalizeSenderAddress, buildRfc822FromFields, submissionLimitsForUser,
+  announceFolderListChange, deferMailboxChanges, recordMailboxAccess,
+  type RawSourceMessage, type MailboxAccessEvent, type MailboxAccessAction,
 } from '@coremail/storage';
 import { enqueueRawOutbound, type RawOutboundJob } from './outbound.js';
 import {
@@ -87,10 +95,10 @@ export interface PrismaStoreDeps {
   allowedSenders: (userId: string) => Promise<string[]>;
   /** Hard quota reached: nothing may be added to the mailbox. */
   writeBlocked: (mailboxId: string) => Promise<boolean>;
-  /** Mailbox change events (Redis pub/sub: webmail event stream, IMAP IDLE). */
-  publish: (channel: string, message: string) => Promise<unknown>;
-  /** SMTP submission limits (storage loadSubmissionLimits). */
-  limits: () => Promise<SubmissionLimits>;
+  /** Submission limits of a user (storage submissionLimitsForUser: global + per mailbox). */
+  limits: (userId: string) => Promise<SubmissionLimits>;
+  /** Mailbox access audit entry (storage recordMailboxAccess; never throws). */
+  audit: (event: MailboxAccessEvent) => Promise<unknown>;
 }
 
 export const defaultStoreDeps: PrismaStoreDeps = {
@@ -99,22 +107,32 @@ export const defaultStoreDeps: PrismaStoreDeps = {
   sendAllowed: async (userId) => (await checkSendQuota(userId)).allowed,
   allowedSenders: listAllowedSenderAddresses,
   writeBlocked: isMailboxWriteBlocked,
-  publish: (channel, message) => getRedisClient().publish(channel, message),
-  limits: () => loadSubmissionLimits(),
+  limits: async (userId) => {
+    const l = await submissionLimitsForUser(userId);
+    return { maxMessageBytes: l.maxBytes, maxRecipients: l.maxRecipients };
+  },
+  audit: recordMailboxAccess,
 };
 
 export function createPrismaStore(deps: PrismaStoreDeps = defaultStoreDeps): MailStore {
-  /** Mailbox change event; the owner (own / delegated mailbox) receives it on the webmail stream. */
-  async function notify(mailbox: MailboxRef, channel: string, payload: Record<string, unknown>): Promise<void> {
-    try {
-      await deps.publish(channel, JSON.stringify({
-        ...(mailbox.kind !== 'shared' ? { userId: mailbox.directoryId } : {}),
-        ...payload,
+  /** Mailbox access audit of an open / write in a shared or delegated mailbox (fire-and-forget). */
+  function audit(mailbox: MailboxRef, action: MailboxAccessAction, changes?: Record<string, unknown>): void {
+    if (mailbox.kind === 'own' || !mailbox.actor) return;
+    void Promise.resolve()
+      .then(() => deps.audit({
+        actorId: mailbox.actor!.userId,
+        actorEmail: mailbox.actor!.email,
+        target: {
+          kind: mailbox.kind === 'shared' ? 'shared' : 'delegated',
+          sharedMailboxId: mailbox.kind === 'shared' ? mailbox.directoryId : null,
+          mailboxId: mailbox.mailboxId,
+          email: mailbox.email,
+        },
+        action,
         source: 'mapi',
-      }));
-    } catch (err) {
-      log.warn({ err }, 'Redis publish failed');
-    }
+        ...(changes ? { changes } : {}),
+      }))
+      .catch((err: unknown) => log.warn({ err }, 'Mailbox access audit failed'));
   }
 
   async function ownMailboxId(user: MapiUser): Promise<string> {
@@ -160,10 +178,13 @@ export function createPrismaStore(deps: PrismaStoreDeps = defaultStoreDeps): Mai
       }
       const accessible = await listAccessibleMailboxes(prisma, user.userId);
       const hit = accessible.find((a) => a.ownerUserId === directoryId || a.sharedMailboxId === directoryId);
-      return hit ? {
+      if (!hit) return null;
+      const mailbox: MailboxRef = {
         mailboxId: hit.mailboxId, kind: hit.kind, email: hit.email, displayName: hit.displayName,
-        readOnly: hit.readOnly, directoryId,
-      } : null;
+        readOnly: hit.readOnly, directoryId, actor: { userId: user.userId, email: user.email },
+      };
+      audit(mailbox, 'mailbox.foreign.open');
+      return mailbox;
     },
 
     async resolveLegacyDn(dn) {
@@ -189,13 +210,15 @@ export function createPrismaStore(deps: PrismaStoreDeps = defaultStoreDeps): Mai
         data: { mailboxId: mailbox.mailboxId, name, displayName, ...(parent ? { parentId: parent.id } : {}) },
         select: FOLDER_SELECT,
       });
-      await notify(mailbox, CHANNEL_MAIL_UPDATE, { type: 'folders' });
+      announceFolderListChange(mailbox.mailboxId);
+      audit(mailbox, 'mailbox.foreign.folder.create', { count: 1 });
       return created;
     },
 
     async deleteFolder(mailbox, folderId, recursive) {
       const r = await deleteFolderMovingMail(prisma, { id: folderId, mailboxId: mailbox.mailboxId }, recursive ? 'recursive' : 'reparent');
-      if (r.ok) await notify(mailbox, CHANNEL_MAIL_UPDATE, { type: 'folders' });
+      // deleteFolderMovingMail announces the folder list itself
+      if (r.ok) audit(mailbox, 'mailbox.foreign.folder.delete', { count: 1 });
       return r.ok ? 'ok' : r.reason === 'no-trash' ? 'no-trash' : 'not-found';
     },
 
@@ -245,13 +268,12 @@ export function createPrismaStore(deps: PrismaStoreDeps = defaultStoreDeps): Mai
         }
         return rows.length > 0;
       });
-      if (changed) await notify(mailbox, CHANNEL_MAIL_UPDATE, { folderId: message.folderId, messageId: message.id });
     },
 
     async deleteMessages(mailbox, folderId, uids) {
       const rows = await liveRows(folderId, uids);
       await tombstone(mailbox, folderId, rows);
-      if (rows.length > 0) await notify(mailbox, CHANNEL_MAIL_UPDATE, { folderId });
+      if (rows.length > 0) audit(mailbox, 'mailbox.foreign.message.delete', { count: rows.length });
       return rows.length;
     },
 
@@ -277,29 +299,31 @@ export function createPrismaStore(deps: PrismaStoreDeps = defaultStoreDeps): Mai
           data: { totalCount: { increment: rows.length }, ...(unread ? { unreadCount: { increment: unread } } : {}) },
         });
       });
-      await notify(target.mailbox, CHANNEL_MAIL_NEW, { folderId: target.folderId });
-      if (!copy) await notify(source.mailbox, CHANNEL_MAIL_UPDATE, { folderId: source.folderId });
+      if (!copy) audit(source.mailbox, 'mailbox.foreign.message.move', { count: rows.length });
       return rows.length;
     },
 
     async saveDraft(mailbox, folderId, message, replaces) {
       if (await deps.writeBlocked(mailbox.mailboxId)) throw new MailboxFullError();
       const raw = buildMime(message, { address: message.from ?? mailbox.email, name: message.from ? '' : mailbox.displayName }, deps.now());
-      const row = await storeRawInFolder({
-        mailboxId: mailbox.mailboxId, folderId, raw, flags: [DRAFT, SEEN], bccAddrs: unique(message.bcc),
+      // one announcement once the new draft is complete and the replaced one is gone
+      const row = await deferMailboxChanges(async () => {
+        const stored = await storeRawInFolder({
+          mailboxId: mailbox.mailboxId, folderId, raw, flags: [DRAFT, SEEN], bccAddrs: unique(message.bcc),
+        });
+        if (replaces) await tombstone(mailbox, replaces.folderId, [{ id: replaces.id, flags: replaces.flags }]);
+        return stored;
       });
-      if (replaces) await tombstone(mailbox, replaces.folderId, [{ id: replaces.id, flags: replaces.flags }]);
-      await notify(mailbox, CHANNEL_MAIL_NEW, { folderId, messageId: row.id, uid: row.uid, subject: row.subject });
       return toSummary(row, await attachmentOwners([row.id]));
     },
 
-    submissionLimits: () => deps.limits(),
+    submissionLimits: (user) => deps.limits(user.userId),
 
     async submit(user, mailbox, message, opts): Promise<SubmitResult> {
       if (mailbox.readOnly) return { ok: false, reason: 'read-only' };
       const recipients = unique([...message.to, ...message.cc, ...message.bcc]);
       if (recipients.length === 0) return { ok: false, reason: 'no-recipients' };
-      const limits = await deps.limits();
+      const limits = await deps.limits(user.userId);
       if (recipients.length > limits.maxRecipients) return { ok: false, reason: 'too-many-recipients' };
       if (!(await deps.sendAllowed(user.userId))) return { ok: false, reason: 'over-quota' };
       const from = normalizeSenderAddress(message.from ?? mailbox.email);
@@ -312,7 +336,13 @@ export function createPrismaStore(deps: PrismaStoreDeps = defaultStoreDeps): Mai
       const raw = buildMime(message, { address: from, name }, deps.now());
       if (raw.length > limits.maxMessageBytes) return { ok: false, reason: 'too-large' };
       const jobId = `mapi-${randomUUID()}`;
-      await deps.enqueue({ messageId: jobId, from, to: recipients, senderUserId: user.userId, rawMessage: raw.toString('base64') });
+      // A From: other than the user's own address may be a send as / on behalf of a
+      // Shared Mailbox: the worker audits it and files the box's Sent copy — audit
+      // only when this logon is that box and keeps the copy itself.
+      const foreign = from !== normalizeSenderAddress(user.email)
+        ? { foreignSendSource: 'mapi' as const, ...(mailbox.kind === 'shared' && opts.saveCopy ? { foreignSendAuditOnly: true as const } : {}) }
+        : {};
+      await deps.enqueue({ messageId: jobId, from, to: recipients, senderUserId: user.userId, rawMessage: raw.toString('base64'), ...foreign });
       log.info({ userId: user.userId, jobId, rcpt: recipients.length }, 'MAPI mail enqueued');
       void prisma.systemLog.create({
         data: {
@@ -324,12 +354,13 @@ export function createPrismaStore(deps: PrismaStoreDeps = defaultStoreDeps): Mai
 
       // The mail is queued: failures below must not make the client send it again.
       try {
-        const sentId = opts.saveCopy ? await sentFolderId(mailbox.mailboxId) : null;
-        if (sentId) {
-          const row = await storeRawInFolder({ mailboxId: mailbox.mailboxId, folderId: sentId, raw, flags: [SEEN], bccAddrs: unique(message.bcc) });
-          await notify(mailbox, CHANNEL_MAIL_NEW, { folderId: sentId, messageId: row.id, uid: row.uid, subject: row.subject });
-        }
-        if (opts.draft) await tombstone(mailbox, opts.draft.folderId, [{ id: opts.draft.id, flags: opts.draft.flags }]);
+        await deferMailboxChanges(async () => {
+          const sentId = opts.saveCopy ? await sentFolderId(mailbox.mailboxId) : null;
+          if (sentId) {
+            await storeRawInFolder({ mailboxId: mailbox.mailboxId, folderId: sentId, raw, flags: [SEEN], bccAddrs: unique(message.bcc) });
+          }
+          if (opts.draft) await tombstone(mailbox, opts.draft.folderId, [{ id: opts.draft.id, flags: opts.draft.flags }]);
+        });
       } catch (err) {
         log.error({ err, userId: user.userId, jobId }, 'Sent copy / draft cleanup failed (mail was sent)');
       }

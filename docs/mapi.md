@@ -43,7 +43,7 @@ as on every mail protocol.
 | Messages | Open (recipients, subject), properties (specific/all, large values via streams), read flag, delete (tombstones, recoverable 30 days), move/copy (also between logons), attachments (table, open, create, save) |
 | Streams | Read the plain-text and HTML body and attachment data; write bodies and attachment data of new messages |
 | Composing | `CreateMessage` in Drafts (saved as a draft, visible to every client) or in the Outbox (kept in the session), `SetProperties`, `ModifyRecipients` (SMTP addresses, X500 DNs of CoreMail accounts), `SaveChangesMessage`, `SubmitMessage` |
-| Sending | Same rules as SMTP submission and JMAP: the SMTP limits (recipients: BCP SMTP *max. recipients* → `ecTooManyRecips`; size: the stricter max. message size → `ecMaxSubmissionExceeded`, also reported as `PidTagMaximumSubmitMessageSize`), send quota, sender identity (own address, aliases, shared mailboxes with Send As / Full Access), queue `smtp-outbound`, copy in Sent Items unless `PidTagDeleteAfterSubmit`, the draft is removed; folder associated messages are never sent |
+| Sending | Same rules as webmail, SMTP submission, JMAP and ActiveSync: the submission limits of the user (storage `submissionLimitsForUser` — recipients: BCP SMTP *max. recipients* → `ecTooManyRecips`; size: the stricter max. message size → `ecMaxSubmissionExceeded`, also reported as `PidTagMaximumSubmitMessageSize`; a per-mailbox value of the user's mail flow policy replaces either), send quota, sender identity (own address, aliases, shared mailboxes with Send As / Full Access), queue `smtp-outbound`, copy in Sent Items unless `PidTagDeleteAfterSubmit`, the draft is removed; folder associated messages are never sent |
 | Named properties | `GetPropertyIdsFromNames` / `GetNamesFromPropertyIds` (registered IDs from 0x8001, stable per mailbox while the service runs; PS_MAPI LIDs are the property ID; only internet header names are case-insensitive; a read-only mailbox registers nothing; no names on the store object lists every ID) |
 
 ## Limits
@@ -59,8 +59,8 @@ as on every mail protocol.
   accepted but not stored; saving an opened received message does not change it.
 - Named property IDs are kept in memory (per mailbox, per service process).
 - Requests are limited per mail account (`MAPI_RATE_LIMIT` requests per `MAPI_RATE_WINDOW_SEC`, default
-  3000 per 5 minutes; above it HTTP 429 with `Retry-After`). The api-gateway's general per-IP limit does
-  not count `/mapi` (Outlook is chatty and clients often share a NAT address); password guessing stays
+  3000 per 5 minutes; above it HTTP 429 with `Retry-After`). The api-gateway's global API limit (per user / per IP,
+  [api-gateway-security.md](api-gateway-security.md)) does not count `/mapi` (Outlook is chatty and clients often share a NAT address); password guessing stays
   bounded by the shared mail-login lockout.
 - Each session holds its open messages, attachments and streams in memory, at most
   `MAPI_SESSION_MEMORY_MB` (64) — beyond it writes fail (`STG_E_MEDIUMFULL` / `ecMAPIOOM`); a single
