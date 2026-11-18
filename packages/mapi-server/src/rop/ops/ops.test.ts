@@ -591,3 +591,14 @@ test('named properties (MS-OXCPRPT): a read-only logon never registers names; no
   const all = Array.from({ length: r.u16() }, () => r.u16());
   assert.ok(all.includes(a) && all.includes(b) && a > 0x8000);
 });
+
+test('folders of a read-only mailbox: PidTagRights ReadAny | FolderVisible, PidTagAccess read', async () => {
+  const h = new Harness();
+  h.store.addMailbox({ mailboxId: 'mb2', kind: 'shared', email: 'team@example.test', displayName: 'Team', readOnly: true, directoryId: 'sm1' });
+  h.store.access.set('u1', [h.store.mailboxes.get('mb2')!]);
+  const ids = decodeLogon(await h.run(rop.logon(0, '/o=CoreMail/ou=X/cn=Recipients/cn=sm1'))).folderIds;
+  const r = await h.run(rop.openFolder(0, 1, ids[4]!), rop.getPropertiesSpecific(1, [Tag.Rights, Tag.Access]));
+  ok(r, RopId.OpenFolder); r.u8(); r.u8();
+  ok(r, RopId.GetPropertiesSpecific);
+  assert.deepEqual(readRow(r, [Tag.Rights, Tag.Access]), [0x401, 0x02]);
+});

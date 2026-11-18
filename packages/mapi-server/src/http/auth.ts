@@ -23,11 +23,6 @@ export const BASIC_CHALLENGE = 'Basic realm="CoreMail"';
 const cache = new CredentialCache<SessionAuth>({ ttlMs: 60_000, maxEntries: 5000 });
 cache.attachInvalidation();
 
-/** Test helper. */
-export function clearAuthCache(): void {
-  cache.clear();
-}
-
 export interface TransportInfo {
   ip: string;
   /** The gateway verified that the client connection was plain HTTP. */

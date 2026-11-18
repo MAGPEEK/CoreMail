@@ -43,7 +43,6 @@ export function tag(id: number, type: number): number {
 }
 export const propIdOf = (t: number): number => (t >>> 16) & 0xffff;
 export const propTypeOf = (t: number): number => t & 0xffff;
-export const withType = (t: number, type: number): number => tag(propIdOf(t), type);
 
 const T = PropType;
 

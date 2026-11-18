@@ -43,7 +43,6 @@ export const RopId = {
 
 export const Ec = {
   Success: 0x00000000,
-  UnknownUser: 0x000003eb,
   LoginPerm: 0x000003f2,
   BufferTooSmall: 0x0000047d,
   RpcFormat: 0x000004b6,
@@ -60,11 +59,8 @@ export const Ec = {
   StreamSizeError: 0x80030070,
   NotSupported: 0x80040102,
   InvalidObject: 0x80040108,
-  ObjectDeleted: 0x8004010a,
   NotFound: 0x8004010f,
-  LogonFailed: 0x80040111,
   TooComplex: 0x80040117,
-  NotInitialized: 0x80040605,
   CollidingNames: 0x80040604,
   NoRecipients: 0x80040607,
   HasFolders: 0x80040609,

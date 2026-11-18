@@ -24,8 +24,9 @@ const STORE_SUPPORT_MASK = 0x00000001 | 0x00000004 | 0x00000008 | 0x00000010 | 0
 /** PidTagAccess bits (MS-OXCPRPT 2.2.1.1). */
 const ACCESS_READ = 0x02;
 const ACCESS_FULL = 0x01 | 0x02 | 0x04 | 0x08 | 0x10 | 0x20;
-/** PidTagRights for the owner (MS-OXCPERM). */
+/** PidTagRights (MS-OXCPERM PidTagMemberRights bits): owner, and read-only access (ReadAny | FolderVisible). */
 const RIGHTS_OWNER = 0x000007fb;
+const RIGHTS_READ_ONLY = 0x00000001 | 0x00000400;
 
 const FOLDER_TYPE_ROOT = 0;
 const FOLDER_TYPE_GENERIC = 1;
@@ -79,7 +80,7 @@ export function folderBag(logon: LogonState, node: FolderNode): PropertyBag {
   bag.set(Tag.AttributeHidden, node.hidden);
   bag.set(Tag.Access, mailbox.readOnly ? ACCESS_READ : ACCESS_FULL);
   bag.set(Tag.AccessLevel, mailbox.readOnly ? 0 : 1);
-  bag.set(Tag.Rights, mailbox.readOnly ? 0x1 : RIGHTS_OWNER);
+  bag.set(Tag.Rights, mailbox.readOnly ? RIGHTS_READ_ONLY : RIGHTS_OWNER);
   bag.set(Tag.HierarchyChangeNumber, children.length);
   if (node.containerClass) bag.set(Tag.ContainerClass, node.containerClass);
   if (node.record) {

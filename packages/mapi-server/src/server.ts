@@ -7,7 +7,7 @@
  * Environment: MAPI_PORT (3007), MAPI_SESSION_IDLE_MS (1 800 000),
  * MAPI_PENDING_MS (15 000), MAPI_ALLOW_PLAIN_HTTP (false),
  * MAPI_RATE_LIMIT (3000 requests per account and window, 0 = off),
- * MAPI_RATE_WINDOW_SEC (300).
+ * MAPI_RATE_WINDOW_SEC (300), MAPI_SESSION_MEMORY_MB (64, open objects per session).
  */
 import { registerLdapMailVerifier } from '@coremail/auth-ldap';
 import {
@@ -36,6 +36,7 @@ const IDLE_MS = envInt('MAPI_SESSION_IDLE_MS', 30 * 60_000);
 const PENDING_MS = envInt('MAPI_PENDING_MS', 15_000);
 const RATE_LIMIT = envLimit('MAPI_RATE_LIMIT', 3000);
 const RATE_WINDOW_SEC = envInt('MAPI_RATE_WINDOW_SEC', 300);
+const SESSION_MEMORY_BYTES = envInt('MAPI_SESSION_MEMORY_MB', 64) * 1024 * 1024;
 
 async function main(): Promise<void> {
   await connectDatabase();
@@ -46,7 +47,9 @@ async function main(): Promise<void> {
   live.attachInvalidation();
   startAuthInvalidationSubscriber();
 
-  const sessions = new SessionRegistry({ redis: getRedisClient() as unknown as SessionRedis, live, idleMs: IDLE_MS });
+  const sessions = new SessionRegistry({
+    redis: getRedisClient() as unknown as SessionRedis, live, idleMs: IDLE_MS, memoryLimitBytes: SESSION_MEMORY_BYTES,
+  });
   setInterval(() => { void sessions.sweep(); }, 60_000).unref();
 
   const app = createApp({
