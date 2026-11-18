@@ -6,7 +6,8 @@
  * public host name and reports subject, issuer, expiry, SHA-256 fingerprint,
  * whether it is self-signed, whether it matches the host name and whether Node's
  * CA bundle trusts it. Every probe is bounded (connect + protocol + handshake);
- * nothing is authenticated and no mail is sent.
+ * nothing is authenticated and no mail is sent. The integrated HTTPS server is
+ * probed the same way (implicit TLS, handshake only, no HTTP request).
  */
 import net from 'node:net';
 import os from 'node:os';
@@ -14,11 +15,13 @@ import tls from 'node:tls';
 import { X509Certificate } from 'node:crypto';
 
 export type MailProtocol = 'smtp' | 'imap' | 'pop3';
+/** 'https' = the integrated HTTPS server (implicit TLS only). */
+export type ProbeProtocol = MailProtocol | 'https';
 
 export interface ProbeTarget {
-  protocol: MailProtocol;
+  protocol: ProbeProtocol;
   port: number;
-  /** true = implicit TLS (465/993/995), false = STARTTLS/STLS upgrade. */
+  /** true = implicit TLS (465/993/995/443), false = STARTTLS/STLS upgrade (mail only). */
   implicitTls: boolean;
   host?: string;
 }
@@ -197,12 +200,14 @@ export async function probeServedCert(
       if (target.implicitTls) {
         secure = tls.connect({ host, port: target.port, ...tlsOpts });
       } else {
+        if (target.protocol === 'https') throw new Error('HTTPS has no STARTTLS upgrade');
+        const protocol = target.protocol;
         plain = net.connect({ host, port: target.port });
         await new Promise<void>((resolve, reject) => {
           plain!.once('connect', () => resolve());
           plain!.once('error', reject);
         });
-        await negotiateStartTls(plain, target.protocol);
+        await negotiateStartTls(plain, protocol);
         secure = tls.connect({ socket: plain, ...tlsOpts });
       }
       await new Promise<void>((resolve, reject) => {
@@ -232,6 +237,15 @@ export const DEFAULT_PROBE_TARGETS: ProbeTarget[] = [
   { protocol: 'pop3', port: 995, implicitTls: true },
   { protocol: 'pop3', port: 110, implicitTls: false },
 ];
+
+/**
+ * The integrated HTTPS server as a probe target, or null while it does not
+ * listen (no certificate marked for HTTPS, or TLS terminated outside CoreMail).
+ */
+export function httpsProbeTarget(state: { active: boolean; port: number }): ProbeTarget | null {
+  if (!state.active || !Number.isInteger(state.port) || state.port <= 0 || state.port >= 65536) return null;
+  return { protocol: 'https', port: state.port, implicitTls: true };
+}
 
 /** A probe result that should be shown as a warning (self-signed, name mismatch, expired). */
 export function servedCertProblem(r: ProbeResult): 'self-signed' | 'hostname-mismatch' | 'expired' | null {

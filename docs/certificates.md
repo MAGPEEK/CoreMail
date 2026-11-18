@@ -84,10 +84,18 @@ and reports subject, issuer, expiry, SHA-256 fingerprint, the matching certifica
 is self-signed, matches the host name and is trusted by the CA bundle. Each probe is bounded
 (`SERVED_CERT_PROBE_TIMEOUT_MS`, default 4 s, at most 16 listeners). Only wildcard, loopback and
 the server's own interface addresses are connected to — a listener row with any other address
-(or a host name) is reported as not probed. The SSL/TLS page shows the result per port; the
-SSL/TLS page and the dashboard show a warning when a mail port serves a self-signed,
-name-mismatched or expired certificate, with **Jetzt zuweisen** (assigns the newest trusted
-certificate covering the public host name).
+(or a host name) is reported as not probed. The integrated HTTPS server is probed the same way
+(implicit TLS on `HTTPS_PORT`, handshake only) and reported as `https` — `null` while it does not
+listen; the top-level `problem` flag keeps covering the mail ports only.
+
+In the certificate list of the SSL/TLS page the row that holds a service shows a status chip per
+service (SMTP, IMAP, POP3, HTTPS): **OK** when every reachable port of the service serves this
+certificate, a warning when a port serves another, self-signed, name-mismatched or expired
+certificate (or the HTTPS server does not run) — the chip's tooltip lists the ports. Unreachable
+ports are listed but do not turn a chip into a warning. The SSL/TLS page and the dashboard show a
+warning banner only when a mail port serves a self-signed, name-mismatched or expired certificate,
+with **Jetzt zuweisen** (assigns the newest trusted certificate covering the public host name);
+the same action appears next to a warning chip.
 
 ## Private keys at rest
 

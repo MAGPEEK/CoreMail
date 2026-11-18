@@ -1,21 +1,24 @@
 /**
- * 9.3: what the mail ports really serve.
+ * 9.3: what the mail ports (and, since w2b, the integrated HTTPS server) really serve.
  *
  * ServedCertWarning — banner (SSL/TLS page + dashboard) when a mail port serves
  *   a self-signed, name-mismatched or expired certificate, with "Jetzt zuweisen"
  *   (activates the suggested trusted certificate for SMTP/IMAP/POP3); also when
  *   the private key of a certificate in use cannot be read (w1).
- * ServedCertTable  — per port: served certificate, issuer, expiry, status.
+ * CertServiceChips  — w2b: per service a certificate holds (SMTP, IMAP, POP3,
+ *   HTTPS) a status chip in the certificate overview; the tooltip lists the ports.
  */
+import { useEffect, useId, useRef, useState, type CSSProperties } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { AlertTriangle, CheckCircle2, Loader2, RefreshCw, XCircle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, HelpCircle, Loader2, type LucideIcon } from 'lucide-react';
 import { api } from '../api/client.js';
 import { usePermissions } from '../hooks/usePermissions.js';
 import { Can } from './Can.js';
 import {
-  portLabel, problemText, unreadableKeyText, warningSummary, type ServedReport, type UnreadableKeyCert,
+  certServiceChips, chipLabel, mailFixSuggestion, unreadableKeyText, warningSummary,
+  type ChipCert, type ChipState, type ServedReport, type ServiceChip, type UnreadableKeyCert,
 } from '../lib/servedCert.js';
 
 export const SERVED_CERT_QUERY_KEY = ['admin-certificates-served'] as const;
@@ -29,15 +32,21 @@ export function useServedCert(enabled = true) {
   });
 }
 
+/** Re-probes the ports shortly after a certificate change (the servers reload within a second). */
+export function useRecheckServedSoon(): () => void {
+  const qc = useQueryClient();
+  return () => { setTimeout(() => void qc.invalidateQueries({ queryKey: SERVED_CERT_QUERY_KEY }), 2_000); };
+}
+
 function useAssignSuggested() {
   const qc = useQueryClient();
+  const recheck = useRecheckServedSoon();
   return useMutation({
     mutationFn: (id: string) => api.post(`/admin/certificates/${id}/activate-protocol`),
     onSuccess: () => {
       toast.success('Zertifikat wird jetzt für SMTP/IMAP/POP3 verwendet');
       void qc.invalidateQueries({ queryKey: ['admin-certificates'] });
-      // the servers reload within a second — check the ports again shortly after
-      setTimeout(() => void qc.invalidateQueries({ queryKey: SERVED_CERT_QUERY_KEY }), 2_000);
+      recheck();
     },
     onError: (err: unknown) => toast.error((err as { message?: string })?.message ?? 'Zuweisung fehlgeschlagen'),
   });
@@ -105,60 +114,87 @@ function ServedPortsWarning({ data, linkToCertificates }: { data: ServedReport; 
   );
 }
 
-/** Per mail port: the certificate actually served (subject, issuer, expiry, status). */
-export function ServedCertTable() {
-  const qc = useQueryClient();
-  const { data, isLoading, isFetching } = useServedCert();
+const CHIP_LOOK: Record<ChipState, { Icon: LucideIcon; className: string }> = {
+  ok:      { Icon: CheckCircle2,  className: 'bg-success-bg text-success-fg border-success-line' },
+  warning: { Icon: AlertTriangle, className: 'bg-warning-bg text-warning-fg border-warning-line' },
+  unknown: { Icon: HelpCircle,    className: 'bg-surface-2 text-fg-muted border-line' },
+};
+
+/**
+ * One service chip: icon + name (state not by colour alone). The tooltip opens
+ * on hover, keyboard focus and click, stays open while hovered, closes with
+ * Escape; it is positioned fixed so the scrolling table does not clip it.
+ */
+function ServiceStatusChip({ chip }: { chip: ServiceChip }) {
+  const tipId = useId();
+  const chipRef = useRef<HTMLButtonElement>(null);
+  const [pos, setPos] = useState<CSSProperties | null>(null);
+  const open = () => {
+    const r = chipRef.current?.getBoundingClientRect();
+    if (r) setPos({ top: r.bottom, left: r.left });
+  };
+  const close = () => setPos(null);
+
+  useEffect(() => {
+    if (!pos) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setPos(null); };
+    const onScroll = () => setPos(null);
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('scroll', onScroll, true);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('scroll', onScroll, true);
+    };
+  }, [pos]);
+
+  const { Icon, className } = CHIP_LOOK[chip.state];
   return (
-    <section className="mb-6 border border-line rounded-xl overflow-hidden" aria-labelledby="served-cert-title">
-      <div className="flex items-center justify-between px-4 py-2 bg-surface-2 border-b border-line">
-        <h2 id="served-cert-title" className="text-sm font-semibold text-fg">
-          Tatsächlich ausgeliefert (Mail-Ports{data ? `, SNI ${data.hostname}` : ''})
-        </h2>
-        <button type="button" className="btn-secondary text-xs flex items-center gap-1.5"
-          onClick={() => void qc.invalidateQueries({ queryKey: SERVED_CERT_QUERY_KEY })}>
-          <RefreshCw size={13} className={isFetching ? 'animate-spin' : ''} aria-hidden="true" /> Prüfen
-        </button>
-      </div>
-      {isLoading ? (
-        <p className="px-4 py-3 text-sm text-fg-subtle flex items-center gap-2"><Loader2 size={14} className="animate-spin" aria-hidden="true" /> Verbinde mit den Mail-Ports…</p>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-xs text-fg-subtle">
-                <th scope="col" className="px-4 py-2 font-medium">Port</th>
-                <th scope="col" className="px-4 py-2 font-medium">Zertifikat</th>
-                <th scope="col" className="px-4 py-2 font-medium">Aussteller</th>
-                <th scope="col" className="px-4 py-2 font-medium">Gültig bis</th>
-                <th scope="col" className="px-4 py-2 font-medium">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(data?.ports ?? []).map((p) => (
-                <tr key={`${p.protocol}-${p.port}`} className="border-t border-line">
-                  <td className="px-4 py-2 font-mono text-xs whitespace-nowrap">{portLabel(p)}</td>
-                  <td className="px-4 py-2 text-xs">
-                    {p.cert ? <>
-                      <span className="font-mono">{p.cert.commonName ?? p.cert.subject}</span>
-                      {p.certName && <span className="block text-fg-subtle">{p.certName}</span>}
-                    </> : <span className="text-fg-subtle">–</span>}
-                  </td>
-                  <td className="px-4 py-2 text-xs text-fg-muted">{p.cert ? (p.cert.selfSigned ? 'selbstsigniert' : p.cert.issuer.replace(/^.*CN=/, '')) : '–'}</td>
-                  <td className="px-4 py-2 text-xs text-fg-muted whitespace-nowrap">{p.cert ? new Date(p.cert.validTo).toLocaleDateString('de-DE') : '–'}</td>
-                  <td className="px-4 py-2 text-xs">
-                    {!p.ok
-                      ? <span className="inline-flex items-center gap-1 text-fg-subtle"><XCircle size={12} aria-hidden="true" /> {p.error ?? 'nicht erreichbar'}</span>
-                      : p.problem
-                        ? <span className="inline-flex items-center gap-1 text-warning-fg"><AlertTriangle size={12} aria-hidden="true" /> {problemText(p.problem, data?.hostname ?? '')}</span>
-                        : <span className="inline-flex items-center gap-1 text-success-fg"><CheckCircle2 size={12} aria-hidden="true" /> OK</span>}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+    <span className="inline-flex" onMouseEnter={open} onMouseLeave={close}>
+      <button ref={chipRef} type="button" aria-label={chipLabel(chip)} aria-describedby={tipId}
+        onFocus={open} onBlur={close} onClick={open}
+        className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-xs font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-fg ${className}`}>
+        <Icon size={12} aria-hidden="true" />
+        {chip.service}
+      </button>
+      {/* pt-1: the gap below the chip belongs to the tooltip, so it stays open while the pointer moves onto it */}
+      <div id={tipId} role="tooltip" hidden={!pos} style={pos ?? undefined} className="fixed z-50 pt-1">
+        <div className="max-w-sm px-3 py-2 bg-surface border border-line rounded-lg shadow-lg text-xs text-fg text-left">
+          <p className="font-semibold mb-1">{chipLabel(chip)}</p>
+          <ul className="space-y-0.5">
+            {chip.details.map((d) => <li key={d}>{d}</li>)}
+          </ul>
         </div>
+      </div>
+    </span>
+  );
+}
+
+/**
+ * The services column of a certificate row: a chip per held service from the
+ * served-certificate probe, plus "Jetzt zuweisen" when a mail protocol does not
+ * serve a trusted, matching certificate and a suitable one exists.
+ */
+export function CertServiceChips({ cert }: { cert: ChipCert }) {
+  const { can } = usePermissions();
+  const { data } = useServedCert(can('servers', 'read'));
+  const assign = useAssignSuggested();
+  const chips = certServiceChips(cert, data);
+  if (chips.length === 0) return <span className="text-xs text-fg-subtle">–</span>;
+  const fix = mailFixSuggestion(chips, data);
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      {chips.map((c) => <ServiceStatusChip key={c.service} chip={c} />)}
+      {fix && (
+        <Can area="servers" access="write">
+          <button type="button" className="btn-secondary text-xs flex items-center gap-1 disabled:opacity-40"
+            aria-label={`Jetzt zuweisen: „${fix.name}“ für SMTP/IMAP/POP3 verwenden`}
+            title={`„${fix.name}“ für SMTP/IMAP/POP3 verwenden`}
+            disabled={assign.isPending} onClick={() => assign.mutate(fix.id)}>
+            {assign.isPending && <Loader2 size={12} className="animate-spin" aria-hidden="true" />}
+            Jetzt zuweisen
+          </button>
+        </Can>
       )}
-    </section>
+    </div>
   );
 }

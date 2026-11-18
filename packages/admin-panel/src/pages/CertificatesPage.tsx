@@ -26,9 +26,10 @@ import {
   acmeActionLabel, acmeErrorHint, canStartAcme, CHECK_LABELS, parseDomainList,
   type CertStatus, type CheckStatus, type PreflightReport,
 } from '../lib/certStatus.js';
-import { SERVED_CERT_QUERY_KEY, ServedCertTable, ServedCertWarning } from '../components/ServedCert.js';
+import { CertServiceChips, ServedCertWarning, useRecheckServedSoon } from '../components/ServedCert.js';
 import { Toggle } from '../components/Toggle.js';
 import { hasMailProtocols, mailProtocolHolder, mailServicesFor, MAIL_PROTOCOLS_LABEL } from '../lib/mailProtocols.js';
+import { httpsSwitchLabel, httpsSwitchName, mailSwitchLabel } from '../lib/servedCert.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -96,13 +97,6 @@ function TypeBadge({ type, staging }: { type: CertType; staging?: boolean | unde
   return <span className={`${base} bg-surface-2 text-fg-muted`}>Self-Signed</span>;
 }
 
-// Mail protocols only — HTTPS is activated via the lock icon, not via services
-const SERVICE_COLORS: Record<string, string> = {
-  SMTP: 'bg-success-bg text-success-fg',
-  IMAP: 'bg-success-bg text-success-fg',
-  POP3: 'bg-success-bg text-success-fg',
-};
-
 /**
  * 9.3: SMTP, IMAP and POP3 always share one certificate — one switch
  * (lib/mailProtocols.ts). Shows which certificate currently holds the mail
@@ -165,6 +159,8 @@ export function CertificatesPage() {
     queryFn: () => api.get<TlsProxyInfo>('/admin/certificates/tls-proxy-info'),
     refetchInterval: 15_000,
   });
+  const httpsPort = tlsInfo?.port ?? 443;
+  const recheckServed = useRecheckServedSoon();
 
   const renewMutation = useMutation({
     mutationFn: (id: string) => api.post(`/admin/certificates/${id}/renew`),
@@ -182,7 +178,8 @@ export function CertificatesPage() {
     mutationFn: (id: string) => api.post(`/admin/certificates/${id}/activate-https`),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['admin-certificates'] });
-      toast.success('HTTPS-Proxy (Port 443) aktiviert');
+      recheckServed();
+      toast.success(`${httpsSwitchName(httpsPort)} eingeschaltet`);
     },
     onError: (err: unknown) => {
       const msg = (err as { message?: string })?.message ?? 'Aktivierung fehlgeschlagen';
@@ -194,7 +191,7 @@ export function CertificatesPage() {
     mutationFn: (id: string) => api.post(`/admin/certificates/${id}/activate-protocol`),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['admin-certificates'] });
-      setTimeout(() => void qc.invalidateQueries({ queryKey: SERVED_CERT_QUERY_KEY }), 2_000);
+      recheckServed();
       toast.success('Zertifikat wird jetzt für SMTP/IMAP/POP3 verwendet');
     },
     onError: (err: unknown) => {
@@ -207,15 +204,16 @@ export function CertificatesPage() {
     mutationFn: (id: string) => api.delete(`/admin/certificates/${id}/activate-https`),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['admin-certificates'] });
-      toast.success('HTTPS-Proxy deaktiviert — Mail-Protokolle nutzen Cert weiterhin');
+      recheckServed();
+      toast.success(`${httpsSwitchName(httpsPort)} ausgeschaltet — die Mail-Protokolle sind davon nicht betroffen`);
     },
     onError: (err: Error) => toast.error(err.message || 'Deaktivierung fehlgeschlagen'),
   });
 
   function confirmDelete(cert: Certificate) {
     const activeFor: string[] = [];
-    if (cert.isActiveHttps)    activeFor.push('HTTPS-Proxy (Port 443)');
-    if (cert.isActiveProtocol) activeFor.push('Protokoll-TLS (SMTP/IMAP/POP3)');
+    if (cert.isActiveHttps)    activeFor.push(httpsSwitchName(httpsPort));
+    if (cert.isActiveProtocol) activeFor.push(MAIL_PROTOCOLS_LABEL);
     const warning = activeFor.length > 0
       ? `\n\n⚠️ Aktiv für: ${activeFor.join(', ')}.\nDie betroffenen Dienste nutzen danach wieder das selbstsignierte Zertifikat.`
       : '';
@@ -248,52 +246,44 @@ export function CertificatesPage() {
     },
     {
       key: 'services', header: t('cert_col_services'),
-      cell: (cert) => (
-        <div className="flex flex-wrap gap-1">
-          {cert.services.length === 0
-            ? <span className="text-xs text-fg-subtle">–</span>
-            : cert.services.map(s => (
-                <span key={s} className={`px-1.5 py-0.5 rounded text-xs font-medium ${SERVICE_COLORS[s] ?? 'bg-surface-2 text-fg-muted'}`}>{s}</span>
-              ))}
-        </div>
-      ),
+      // w2b: per service the status of what the ports really serve
+      cell: (cert) => <CertServiceChips cert={cert} />,
     },
     {
       key: 'actions', header: t('mbox_col_actions'), srOnlyHeader: true, className: 'text-right',
       cell: (cert) => (
         <Can area="servers" access="write">
           <div className="flex items-center justify-end gap-1">
-                        {/* ── HTTPS proxy lock ── */}
+                        {/* ── HTTPS switch (integrated HTTPS server; aria-pressed = on) ── */}
                         {cert.isActiveHttps ? (
-                          <button
+                          <button type="button" aria-pressed={true} aria-label={httpsSwitchLabel(httpsPort)}
                             onClick={() => deactivateHttpsMutation.mutate(cert.id)}
                             disabled={deactivateHttpsMutation.isPending}
-                            title="HTTPS-Proxy deaktivieren"
-                            aria-label="HTTPS-Proxy deaktivieren"
+                            title={`${httpsSwitchLabel(httpsPort)} — eingeschaltet, klicken zum Ausschalten`}
                             className="p-1.5 text-success-fg hover:text-fg-subtle hover:bg-surface-2 rounded transition-colors disabled:opacity-40">
-                            <Lock size={14} />
+                            <Lock size={14} aria-hidden="true" />
                           </button>
                         ) : isCertUsable(cert.status, cert.expiresAt) ? (
-                          <button aria-label="HTTPS-Proxy (Port 443) aktivieren"
+                          <button type="button" aria-pressed={false} aria-label={httpsSwitchLabel(httpsPort)}
                             onClick={() => activateHttpsMutation.mutate(cert.id)}
                             disabled={activateHttpsMutation.isPending}
-                            title="HTTPS-Proxy (Port 443) aktivieren"
+                            title={`${httpsSwitchLabel(httpsPort)} — ausgeschaltet, klicken zum Einschalten`}
                             className="p-1.5 text-fg-subtle hover:text-success-fg hover:bg-success-bg rounded transition-colors disabled:opacity-40">
-                            <LockOpen size={14} />
+                            <LockOpen size={14} aria-hidden="true" />
                           </button>
                         ) : null}
-                        {/* ── Protocol TLS (SMTP/IMAP/POP3) — independent of HTTPS ── */}
+                        {/* ── Mail protocols (SMTP · IMAP · POP3) — independent of HTTPS ── */}
                         {cert.isActiveProtocol ? (
-                          <span title="SMTP/IMAP/POP3 nutzen dieses Cert" role="img" aria-label="SMTP/IMAP/POP3 nutzen dieses Cert" className="p-1.5 text-info-fg cursor-default">
-                            <Server size={14} />
+                          <span title={mailSwitchLabel(true)} role="img" aria-label={mailSwitchLabel(true)} className="p-1.5 text-info-fg cursor-default">
+                            <Server size={14} aria-hidden="true" />
                           </span>
                         ) : isCertUsable(cert.status, cert.expiresAt) ? (
-                          <button aria-label="Sofort für SMTP/IMAP/POP3 verwenden"
+                          <button type="button" aria-label={mailSwitchLabel(false)}
                             onClick={() => activateProtocolMutation.mutate(cert.id)}
                             disabled={activateProtocolMutation.isPending || (cert.type === 'LETSENCRYPT' && !!cert.acmeStaging)}
-                            title={cert.type === 'LETSENCRYPT' && cert.acmeStaging ? 'Staging-Zertifikate werden nie für SMTP/IMAP/POP3 verwendet' : 'Sofort für SMTP/IMAP/POP3 verwenden'}
+                            title={cert.type === 'LETSENCRYPT' && cert.acmeStaging ? 'Staging-Zertifikate werden nie für SMTP/IMAP/POP3 verwendet' : mailSwitchLabel(false)}
                             className="p-1.5 text-fg-subtle hover:text-info-fg hover:bg-info-bg rounded transition-colors disabled:opacity-40">
-                            <Server size={14} />
+                            <Server size={14} aria-hidden="true" />
                           </button>
                         ) : null}
                         {cert.type === 'LETSENCRYPT' && (() => {
@@ -356,14 +346,13 @@ export function CertificatesPage() {
             {tlsInfo.activeCert.domains[0] && (
               <> für <span className="font-mono">{tlsInfo.activeCert.domains[0]}</span></>
             )}
-            {' '}· Zum Deaktivieren: grünes Schloss-Symbol klicken.
+            {' '}· Ausschalten: Schalter „{httpsSwitchName(tlsInfo.port)}“ (Schloss-Symbol) in der Zeile des Zertifikats.
           </span>
         </div>
       )}
 
-      {/* 9.3: what the mail ports really serve */}
+      {/* 9.3: warnings only when a port serves the wrong certificate; per-service status in the list (w2b) */}
       <ServedCertWarning />
-      <ServedCertTable />
 
       {/* Status banners */}
       {certs.some(c => (c.status === 'PENDING' || c.status === 'RENEWING') && !canStartAcme(c)) && (
@@ -433,9 +422,9 @@ export function CertificatesPage() {
                               <p className="text-xs text-fg-subtle">Auto-Renew</p>
                               <p className="text-fg-muted">{cert.autoRenew ? 'Ja' : 'Nein'}</p>
                             </div>
-                            {/* HTTPS-Proxy Status */}
+                            {/* HTTPS switch status */}
                             <div>
-                              <p className="text-xs text-fg-subtle">HTTPS-Proxy (Port 443)</p>
+                              <p className="text-xs text-fg-subtle">{httpsSwitchName(httpsPort)} — Webmail/BCP/ActiveSync/Autodiscover</p>
                               <p className="flex items-center gap-1 text-fg-muted">
                                 {cert.isActiveHttps
                                   ? <><Lock size={12} className="text-success-fg" /> <span className="text-success-fg font-medium">Aktiv</span></>
@@ -443,9 +432,9 @@ export function CertificatesPage() {
                                 }
                               </p>
                             </div>
-                            {/* Protocol TLS status — independent of HTTPS proxy */}
+                            {/* Mail-protocol status — independent of HTTPS */}
                             <div>
-                              <p className="text-xs text-fg-subtle">Protokoll-TLS (SMTP/IMAP/POP3)</p>
+                              <p className="text-xs text-fg-subtle">{MAIL_PROTOCOLS_LABEL}</p>
                               <p className="flex items-center gap-1 text-fg-muted">
                                 {cert.isActiveProtocol
                                   ? <><Server size={12} className="text-success-fg" /> <span className="text-success-fg font-medium">Aktiv — SMTP/IMAP/POP3 verwenden dieses Zertifikat</span></>
@@ -533,6 +522,7 @@ export function CertificatesPage() {
         <EditCertModal
           cert={editingCert}
           allCerts={certs}
+          httpsPort={httpsPort}
           onClose={() => setEditingCert(null)}
         />
       )}
@@ -857,12 +847,14 @@ function SelfSignedModal({ onClose, allCerts }: { onClose: () => void; allCerts:
 
 // ── Edit Cert Modal ───────────────────────────────────────────────────────────
 
-function EditCertModal({ cert, allCerts, onClose }: {
-  cert:     Certificate;
-  allCerts: Certificate[];
-  onClose:  () => void;
+function EditCertModal({ cert, allCerts, httpsPort, onClose }: {
+  cert:      Certificate;
+  allCerts:  Certificate[];
+  httpsPort: number;
+  onClose:   () => void;
 }) {
   const qc = useQueryClient();
+  const recheckServed = useRecheckServedSoon();
   const [name, setName]         = useState(cert.name);
   const [mail, setMail]         = useState(hasMailProtocols(cert.services));
   const [autoRenew, setAutoRenew] = useState(cert.autoRenew);
@@ -877,7 +869,7 @@ function EditCertModal({ cert, allCerts, onClose }: {
     onSuccess: (res) => {
       void qc.invalidateQueries({ queryKey: ['admin-certificates'] });
       // 9.3: the assignment is applied right away — re-check what the ports serve
-      setTimeout(() => void qc.invalidateQueries({ queryKey: SERVED_CERT_QUERY_KEY }), 2_000);
+      recheckServed();
       toast.success(res?.protocolApplied
         ? 'Gespeichert — SMTP/IMAP/POP3 verwenden jetzt dieses Zertifikat'
         : 'Zertifikat aktualisiert');
@@ -908,7 +900,7 @@ function EditCertModal({ cert, allCerts, onClose }: {
         {/* Read-only: activation status */}
         <div className="grid grid-cols-2 gap-3 p-3 bg-surface-2 rounded-lg border border-line text-sm">
           <div>
-            <p className="text-xs text-fg-subtle mb-0.5">HTTPS-Proxy (Port 443)</p>
+            <p className="text-xs text-fg-subtle mb-0.5">{httpsSwitchName(httpsPort)} — Webmail/BCP/ActiveSync/Autodiscover</p>
             <p className="flex items-center gap-1">
               {cert.isActiveHttps
                 ? <><Lock size={12} className="text-success-fg" /><span className="text-success-fg font-medium">Aktiv</span></>
@@ -916,7 +908,7 @@ function EditCertModal({ cert, allCerts, onClose }: {
             </p>
           </div>
           <div>
-            <p className="text-xs text-fg-subtle mb-0.5">Protokoll-TLS (SMTP/IMAP/POP3)</p>
+            <p className="text-xs text-fg-subtle mb-0.5">{MAIL_PROTOCOLS_LABEL}</p>
             <p className="flex items-center gap-1">
               {cert.isActiveProtocol
                 ? <><Server size={12} className="text-info-fg" /><span className="text-info-fg font-medium">Aktiv</span></>

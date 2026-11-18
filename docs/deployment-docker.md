@@ -119,7 +119,7 @@ PEPPER=$(openssl rand -hex 32)
 
 CoreMail terminates TLS itself on port 443. Port `"443:443"` is already mapped in `docker-compose.yml`. After startup, upload and activate a certificate in the BCP under **Server → SSL/TLS**. Hot reload without restart.
 
-**Mail ports (SMTP/IMAP/POP3):** assigning the services SMTP/IMAP/POP3 to a certificate in BCP → SSL/TLS applies it to 25/465/587/993/143/995/110 immediately (9.3); the SSL/TLS page shows per port which certificate is really served. A Let's Encrypt certificate for the public host name is assigned automatically while the mail ports still use the self-signed default. Details: [certificates.md](certificates.md).
+**Mail ports (SMTP/IMAP/POP3):** assigning the services SMTP/IMAP/POP3 to a certificate in BCP → SSL/TLS applies it to 25/465/587/993/143/995/110 immediately (9.3); the SSL/TLS page shows per service whether the certificate is really served. A Let's Encrypt certificate for the public host name is assigned automatically while the mail ports still use the self-signed default. Details: [certificates.md](certificates.md).
 
 ```env
 # .env — default, can be omitted
@@ -543,7 +543,7 @@ docker exec coremail ss -tlnp
 | `supervisorctl status` shows FATAL | Process crashed | Read the logs: `docker exec coremail supervisorctl tail smtp-server` |
 | SMTP: "Connection refused" on port 25 | Port blocked by the provider | Contact the hosting provider and have port 25 unblocked |
 | Redis connection error | Wrong `REDIS_PASSWORD` | Check `.env`, restart the stack |
-| Outlook / iPhone: "certificate unknown" on IMAP/SMTP | A mail port serves the self-signed default or a certificate for another name | BCP → SSL/TLS → "Tatsächlich ausgeliefert" shows the certificate per port; assign SMTP/IMAP/POP3 to the trusted certificate for the public host name (**Jetzt zuweisen**). The client IP and the hint `client does not trust the served certificate` appear in the IMAP/SMTP/POP3 logs. See [certificates.md](certificates.md) |
+| Outlook / iPhone: "certificate unknown" on IMAP/SMTP | A mail port serves the self-signed default or a certificate for another name | BCP → SSL/TLS → the status chips SMTP/IMAP/POP3 in the certificate list show (tooltip) which ports serve another certificate; assign SMTP/IMAP/POP3 to the trusted certificate for the public host name (**Jetzt zuweisen**). The client IP and the hint `client does not trust the served certificate` appear in the IMAP/SMTP/POP3 logs. See [certificates.md](certificates.md) |
 | Let's Encrypt certificate ends in "Error" | DNS, port 80, CAA or a rate limit — the message in BCP → SSL/TLS (expand the row) is what Let's Encrypt reported | BCP → SSL/TLS → Let's Encrypt → **Check prerequisites** (DNS, CAA, local token check and a real validation by the Let's Encrypt staging environment), fix the cause, then **Retry**. Host port 80 must be forwarded to the container's HTTP port (3000). The server does not need to reach its own public address. Use the staging switch for tests — production allows only 5 failed validations per host name and hour |
 
 ---
