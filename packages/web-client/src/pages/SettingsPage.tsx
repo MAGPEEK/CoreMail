@@ -30,6 +30,7 @@ import {
 import { externalClientSections, type ClientProtocols } from '../lib/externalClients.js';
 import { PasswordPromptDialog, type ReauthKind } from '../components/PasswordPromptDialog.js';
 import { apiErrorFromBody } from '../lib/errors.js';
+import { settingsNavClass, settingsNavIconSize } from '../lib/settingsNav.js';
 import { webauthnRegister, webauthnErrorMessage, webauthnSupported } from '../lib/webauthn.js';
 import { useThemeStore, ACCENT_COLORS, useUiPrefs, type ThemeMode, type Density, type ReadingPane } from '../store/ui.js';
 import { useAuthStore } from '../store/auth.js';
@@ -2385,7 +2386,7 @@ function ExternalClientsSection() {
   );
 }
 
-const NAV: { group: TranslationKey; items: { id: Section; label: TranslationKey; icon: React.ElementType }[] }[] = [
+const NAV: { group: TranslationKey; items: { id: Section; label: TranslationKey; icon: React.ElementType; indent?: true }[] }[] = [
   {
     group: 'section_account',
     items: [
@@ -2399,7 +2400,8 @@ const NAV: { group: TranslationKey; items: { id: Section; label: TranslationKey;
       { id: 'categories',      label: 'categories',               icon: Tag        },
       { id: 'retention',       label: 'retention_section_title',  icon: Clock      },
       { id: 'storage',         label: 'section_storage',          icon: HardDrive  },
-      { id: 'recover',         label: 'recover_title',            icon: RotateCcw  },
+      // 9.4: sub-entry of Speicher
+      { id: 'recover',         label: 'settings_nav_recover',     icon: RotateCcw, indent: true },
     ],
   },
   {
@@ -2461,14 +2463,9 @@ export function SettingsPage() {
         {NAV.map(({ group, items }) => (
           <div key={group} className="mb-2">
             <p className="px-4 py-1 text-xs font-semibold text-fg-subtle uppercase tracking-wide">{t(group)}</p>
-            {items.map(({ id, label, icon: Icon }) => (
-              <button key={id} onClick={() => setSection(id)}
-                className={`w-full flex items-center gap-2.5 px-4 py-2 text-sm transition-colors ${
-                  section === id
-                    ? 'bg-accent/10 text-accent-fg font-semibold border-l-2 border-accent'
-                    : 'text-fg-muted hover:bg-surface-2 border-l-2 border-transparent'
-                }`}>
-                <Icon size={14} />
+            {items.map(({ id, label, icon: Icon, indent }) => (
+              <button key={id} onClick={() => setSection(id)} className={settingsNavClass({ active: section === id, indent })}>
+                <Icon size={settingsNavIconSize(indent)} />
                 {t(label)}
               </button>
             ))}
