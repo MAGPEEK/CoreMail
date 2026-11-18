@@ -9,8 +9,10 @@
  *
  * Pure: buildProtocolOverview() takes what the loader read and returns one row
  * per access protocol (server switch, ports, overriding domains / mailboxes,
- * consistency warnings) plus the inbound transport (SMTP port 25 etc., which is
- * no user access). Warnings carry a code and data only; the BCP and the CLI word them.
+ * consistency warnings, softer notices) plus the inbound transport (SMTP port 25
+ * etc., which is no user access). Warnings and notices carry a code and data only;
+ * the BCP and the CLI word them. redactOverrideNames() hides the names a role may
+ * not read (the counts stay).
  */
 import {
   ACCESS_PROTOCOLS, resolveProtocolAccess, inheritAll,
@@ -72,8 +74,10 @@ export interface OverrideGroup {
   total: number;
   /** Explicit settings that differ from what the level would inherit. */
   differing: number;
-  /** Sorted by name, at most OVERRIDE_LIST_LIMIT. */
+  /** Sorted by name, at most OVERRIDE_LIST_LIMIT; empty when namesHidden. */
   entries: OverrideEntry[];
+  /** The caller may not read the domains / mailboxes of this level: counts only (redactOverrideNames). */
+  namesHidden?: true;
 }
 
 export type OverviewWarningCode =
@@ -91,6 +95,18 @@ export interface OverviewWarning {
   ports?: number[];
 }
 
+/** Softer than a warning: consistent, but worth knowing. */
+export type OverviewNoticeCode =
+  /** A port listens and the protocol is off on the server, but some domains / mailboxes switch it on. */
+  'port-open-access-limited';
+
+export interface OverviewNotice {
+  code: OverviewNoticeCode;
+  protocol: AccessProtocol;
+  /** The listening ports. */
+  ports: number[];
+}
+
 export interface ProtocolOverviewRow {
   protocol: AccessProtocol;
   /** `listener` = own ports (BCP → Dienste), `http` = served by the HTTP/HTTPS server. */
@@ -106,6 +122,7 @@ export interface ProtocolOverviewRow {
   /** On at the server level or switched on for any domain / mailbox. */
   enabledAnywhere: boolean;
   warnings: OverviewWarning[];
+  notices: OverviewNotice[];
 }
 
 export interface ProtocolOverview {
@@ -115,6 +132,8 @@ export interface ProtocolOverview {
   https: HttpsState;
   /** Every warning of every protocol, in protocol order. */
   warnings: OverviewWarning[];
+  /** Every notice of every protocol, in protocol order. */
+  notices: OverviewNotice[];
 }
 
 export interface OverviewInput {
@@ -191,6 +210,20 @@ export function protocolWarnings(
   return out;
 }
 
+/**
+ * Pure: the notices of one protocol row — a listening port while the server
+ * switch is off is fine when some domains / mailboxes switch the protocol on
+ * (the others are refused after the login), so it is no warning, but it is said.
+ */
+export function protocolNotices(
+  row: Pick<ProtocolOverviewRow, 'protocol' | 'transport' | 'server' | 'activePorts' | 'enabledAnywhere'>,
+): OverviewNotice[] {
+  if (row.transport === 'listener' && row.server === 'off' && row.enabledAnywhere && row.activePorts.length > 0) {
+    return [{ code: 'port-open-access-limited', protocol: row.protocol, ports: row.activePorts }];
+  }
+  return [];
+}
+
 /** Pure: the combined model (see the module comment). */
 export function buildProtocolOverview(input: OverviewInput): ProtocolOverview {
   const server = resolveProtocolAccess([input.overrides.server]);
@@ -209,7 +242,7 @@ export function buildProtocolOverview(input: OverviewInput): ProtocolOverview {
       overrides,
       enabledAnywhere,
     };
-    return { ...base, warnings: protocolWarnings(base, input.https) };
+    return { ...base, warnings: protocolWarnings(base, input.https), notices: protocolNotices(base) };
   });
   const inbound = input.listeners
     .filter((l) => l.service === 'SMTP_RECEIVE' && !input.submissionPorts.includes(l.port))
@@ -220,6 +253,28 @@ export function buildProtocolOverview(input: OverviewInput): ProtocolOverview {
     smtpInbound: { ports: inbound, activePorts: activePortsOf(inbound) },
     https: input.https,
     warnings: protocols.flatMap((p) => p.warnings),
+    notices: protocols.flatMap((p) => p.notices),
+  };
+}
+
+const hidden = (g: OverrideGroup): OverrideGroup => ({ total: g.total, differing: g.differing, entries: [], namesHidden: true });
+
+/**
+ * Pure: the overview for a caller who may not read every name — domain names
+ * need read access to the domains, mailbox addresses to the recipients. The
+ * counts stay (they reveal no name); the lists are emptied and marked.
+ */
+export function redactOverrideNames(o: ProtocolOverview, may: { domains: boolean; users: boolean }): ProtocolOverview {
+  if (may.domains && may.users) return o;
+  return {
+    ...o,
+    protocols: o.protocols.map((p) => ({
+      ...p,
+      overrides: {
+        domains: may.domains ? p.overrides.domains : hidden(p.overrides.domains),
+        users: may.users ? p.overrides.users : hidden(p.overrides.users),
+      },
+    })),
   };
 }
 

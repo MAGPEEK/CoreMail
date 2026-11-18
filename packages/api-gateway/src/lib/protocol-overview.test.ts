@@ -6,11 +6,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import forge from 'node-forge';
-import { setTestEnv } from '../test-support/fake-prisma.js';
+import { installFakePrisma, setTestEnv } from '../test-support/fake-prisma.js';
 
 setTestEnv();
+installFakePrisma(); // pure module under test; the seam keeps @coremail/storage from opening a real client
 const { inheritAll } = await import('@coremail/storage');
-const { buildProtocolOverview, protocolWarnings, isTrustedHttpsCert, submissionPorts, OVERRIDE_LIST_LIMIT } = await import('./protocol-overview.js');
+const {
+  buildProtocolOverview, protocolWarnings, protocolNotices, redactOverrideNames, isTrustedHttpsCert, submissionPorts, OVERRIDE_LIST_LIMIT,
+} = await import('./protocol-overview.js');
 type Input = Parameters<typeof buildProtocolOverview>[0];
 
 const SERVER = { imap: 'on', pop3: 'on', smtp: 'on', activesync: 'on', jmap: 'on', dav: 'on', webmail: 'on', mapi: 'off' } as const;
@@ -50,6 +53,26 @@ test('one row per access protocol; mail protocols own their ports, the others ru
   }
   assert.equal(row(o, 'mapi').server, 'off');
   assert.deepEqual(o.warnings, [], 'the defaults are consistent');
+});
+
+test('custom ports: by service for IMAP/POP3, by submission port for SMTP; duplicate ports on two addresses count once', () => {
+  const listeners = [
+    ...DEFAULT_LISTENERS,
+    listener('l2525', 'SMTP_RECEIVE', 2525, false),
+    listener('l1993', 'IMAP', 1993, true),
+    { ...listener('l993b', 'IMAP', 993, true), address: '10.0.0.1' },
+    listener('l1995', 'POP3', 1995, true, false),
+  ];
+  const o = buildProtocolOverview(input({ listeners }));
+  assert.deepEqual(o.smtpInbound.activePorts, [25, 2525], 'a non-submission SMTP port is inbound, as in smtp-server');
+  assert.deepEqual(row(o, 'smtp').activePorts, [465, 587]);
+  assert.deepEqual(row(o, 'imap').activePorts, [143, 993, 1993]);
+  assert.equal(row(o, 'imap').ports.length, 4);
+  assert.deepEqual(row(o, 'pop3').activePorts, [110, 995], 'inactive custom port is listed but not active');
+  assert.equal(row(o, 'pop3').ports.length, 3);
+  const custom = buildProtocolOverview(input({ listeners: [listener('s', 'SMTP_RECEIVE', 2587, false)], submissionPorts: [2465, 2587] }));
+  assert.deepEqual(row(custom, 'smtp').activePorts, [2587], 'SMTP_PORT_587 moved: the moved port is submission');
+  assert.deepEqual(custom.smtpInbound.activePorts, []);
 });
 
 test('overrides: counts per level, "differs" against what the level inherits, user rows see their domain', () => {
@@ -102,6 +125,10 @@ test('warning: port open while nobody may log in; an override switching it on cl
   }));
   assert.equal(row(withUser, 'pop3').enabledAnywhere, true);
   assert.deepEqual(withUser.warnings, []);
+  assert.deepEqual(withUser.notices, [{ code: 'port-open-access-limited', protocol: 'pop3', ports: [110, 995] }],
+    'not silent: a softer notice says only the differing domains / mailboxes may log in');
+  assert.deepEqual(row(withUser, 'pop3').notices, withUser.notices);
+  assert.deepEqual(o.notices, [], 'off for everyone is a warning, not a notice');
   const noPorts = buildProtocolOverview(input({ listeners: DEFAULT_LISTENERS.filter((l) => l.service !== 'POP3') }, { server }));
   assert.deepEqual(noPorts.warnings, [], 'off and no port is consistent');
 });
@@ -125,6 +152,31 @@ test('warning: MAPI on without an active, trusted HTTPS certificate', () => {
 
 test('protocolWarnings: HTTP-based protocols never get port warnings', () => {
   assert.deepEqual(protocolWarnings({ protocol: 'jmap', transport: 'http', activePorts: [], enabledAnywhere: true }, HTTPS_OK), []);
+});
+
+test('protocolNotices: only listener protocols, server off, switched on below, a port listening', () => {
+  const base = { protocol: 'imap' as const, transport: 'listener' as const, server: 'off' as const, activePorts: [993], enabledAnywhere: true };
+  assert.deepEqual(protocolNotices(base), [{ code: 'port-open-access-limited', protocol: 'imap', ports: [993] }]);
+  assert.deepEqual(protocolNotices({ ...base, server: 'on' }), [], 'server on: nothing to say');
+  assert.deepEqual(protocolNotices({ ...base, activePorts: [] }), [], 'no port: the no-active-port warning applies');
+  assert.deepEqual(protocolNotices({ ...base, enabledAnywhere: false }), [], 'nobody: the port-open-access-off warning applies');
+  assert.deepEqual(protocolNotices({ ...base, protocol: 'jmap', transport: 'http' as const, activePorts: [] }), []);
+});
+
+test('redactOverrideNames: counts stay, names only for readers of domains / recipients', () => {
+  const o = buildProtocolOverview(input({}, {
+    domains: [{ id: 'd1', name: 'one.test', settings: { ...inheritAll(), imap: 'off' } }],
+    users: [{ id: 'u1', email: 'a@one.test', domainId: 'd1', settings: { ...inheritAll(), imap: 'on' } }],
+  }));
+  assert.equal(redactOverrideNames(o, { domains: true, users: true }), o);
+  const r = redactOverrideNames(o, { domains: true, users: false });
+  const imap = row(r, 'imap').overrides;
+  assert.equal(imap.domains.entries[0]!.name, 'one.test');
+  assert.deepEqual(imap.users, { total: 1, differing: 1, entries: [], namesHidden: true });
+  assert.ok(!JSON.stringify(r).includes('a@one.test'), 'no mailbox address anywhere in the answer');
+  const none = redactOverrideNames(o, { domains: false, users: false });
+  assert.ok(!JSON.stringify(none).includes('one.test'));
+  assert.equal(row(none, 'imap').overrides.domains.namesHidden, true);
 });
 
 test('submission ports follow SMTP_PORT_465 / SMTP_PORT_587', () => {

@@ -162,7 +162,17 @@ test('overview (w2b): ports, overrides and warnings in one answer; servers area 
   const codes = (r.body['warnings'] as Array<Record<string, string>>).map((w) => `${w['protocol']}:${w['code']}`);
   assert.ok(codes.includes('pop3:no-active-port'), codes.join(', '));
 
-  assert.equal((await call('GET', '/overview', 'org')).status, 200);
+  // SERVER_MANAGEMENT reads domains but not recipients: mailbox addresses stay hidden, counts stay.
+  assert.deepEqual(row('imap')['overrides'].users.entries, []);
+  assert.equal(row('imap')['overrides'].users.namesHidden, true);
+  assert.equal(row('imap')['overrides'].domains.entries[0].name, 'one.test');
+  assert.ok(!JSON.stringify(r.body).includes('bob@one.test'), 'no mailbox address for SERVER_MANAGEMENT');
+
+  const org = await call('GET', '/overview', 'org');
+  assert.equal(org.status, 200);
+  const orgImap = (org.body['protocols'] as Array<Record<string, any>>).find((x) => x['protocol'] === 'imap')!;
+  assert.equal(orgImap['overrides'].users.entries[0].name, 'bob@one.test');
+  assert.equal(orgImap['overrides'].users.namesHidden, undefined);
   assert.equal((await call('GET', '/overview', 'rcp')).status, 403, 'recipients admins do not read the server view');
   assert.equal((await call('GET', '/overview', 'help')).status, 403);
   assert.equal((await call('GET', '/overview', 'bob')).status, 403);

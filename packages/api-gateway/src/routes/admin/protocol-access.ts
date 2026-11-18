@@ -10,8 +10,9 @@
  *   PUT /api/v1/admin/protocol-access/users/:id
  *   GET /api/v1/admin/protocol-access/overview        w2b: combined model — per protocol the
  *       server switch, its ports (listeners), overriding domains / mailboxes and
- *       consistency warnings (lib/protocol-overview.ts); read-only, writes use the
- *       level routes above and /admin/services/listeners
+ *       consistency warnings / notices (lib/protocol-overview.ts); read-only, writes use
+ *       the level routes above and /admin/services/listeners. Domain names need read
+ *       on `domains`, mailbox addresses read on `recipients` (else counts only).
  *
  * Every level answer: { level, id?, protocols, settings, inherited, inheritedFrom, effective, changedUsers? }
  * (`inherited` = what `inherit` resolves to on that level, `inheritedFrom` = from
@@ -34,7 +35,7 @@ import { requireArea } from '../../middleware/auth.js';
 import { canAccess, canManageAccount, isReadMethod } from '../../lib/rbac.js';
 import { audit, auditContext } from '../../lib/audit.js';
 import {
-  buildProtocolOverview, isTrustedHttpsCert, submissionPorts, type HttpsState, type ProtocolOverview,
+  buildProtocolOverview, isTrustedHttpsCert, redactOverrideNames, submissionPorts, type HttpsState, type ProtocolOverview,
 } from '../../lib/protocol-overview.js';
 import { httpsRedirectState } from '../../tls-proxy.js';
 
@@ -146,8 +147,13 @@ export async function loadProtocolOverview(): Promise<ProtocolOverview> {
   return buildProtocolOverview({ overrides, listeners, https, submissionPorts: submissionPorts() });
 }
 
-adminProtocolAccessRouter.get('/overview', serversArea, async (_req: Request, res: Response) => {
-  res.json(await loadProtocolOverview());
+/** Readers of the servers area get the counts; the names only with read access to domains / recipients. */
+adminProtocolAccessRouter.get('/overview', serversArea, async (req: Request, res: Response) => {
+  const role = req.apiUser!.role;
+  res.json(redactOverrideNames(await loadProtocolOverview(), {
+    domains: canAccess(role, 'domains', 'GET'),
+    users: canAccess(role, 'recipients', 'GET'),
+  }));
 });
 
 // ── Domain level ──────────────────────────────────────────────────────────────
