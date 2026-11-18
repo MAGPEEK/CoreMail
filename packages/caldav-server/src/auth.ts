@@ -95,8 +95,13 @@ export async function davAuthMiddleware(
   res.status(401).send('Unauthorized');
 }
 
-/** 9.4 webmail policy: the module a DAV path belongs to (pure; path relative to /dav). */
-export function davFeatureOf(path: string): 'calendar' | 'contacts' | null {
+/**
+ * 9.4 webmail policy: the module a DAV path belongs to (pure; path relative to
+ * /dav). Compared lower-case: Express routes case-insensitively, so
+ * `/Calendars/…` reaches the CalDAV router as well.
+ */
+export function davFeatureOf(rawPath: string): 'calendar' | 'contacts' | null {
+  const path = rawPath.toLowerCase();
   if (path === '/calendars' || path.startsWith('/calendars/')) return 'calendar';
   if (path === '/addressbooks' || path.startsWith('/addressbooks/')) return 'contacts';
   return null;

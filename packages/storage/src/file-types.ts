@@ -30,9 +30,14 @@ export function normalizeExtensionList(list: readonly string[]): string[] {
   return [...out];
 }
 
-/** Extension of a filename after stripping trailing dots/spaces (Windows ignores them: "a.exe. " runs as .exe). */
+/**
+ * Extension of a filename after stripping trailing dots/spaces (Windows ignores them: "a.exe. " runs as .exe).
+ * Compatibility forms are folded (NFKC: full-width "ｅｘｅ" → "exe") and invisible format / control characters
+ * (bidi overrides, zero-width spaces, NUL) are dropped first, so "a.ex​e" or "a.exe‬" cannot hide an
+ * extension that a client or a save dialog may restore.
+ */
 export function fileExtension(filename: string): string {
-  const name = filename.replace(/[\s.]+$/, '');
+  const name = filename.normalize('NFKC').replace(/[\p{Cf}\p{Cc}]/gu, '').replace(/[\s.]+$/, '');
   const dot = name.lastIndexOf('.');
   return dot >= 0 ? name.slice(dot + 1).toLowerCase() : '';
 }

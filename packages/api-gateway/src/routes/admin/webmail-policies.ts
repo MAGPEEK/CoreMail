@@ -100,7 +100,7 @@ async function update(req: Request, res: Response, scope: PolicyScope, targetNam
     targetType: scope.level === 'global' ? 'settings' : scope.level === 'domain' ? 'domain' : 'mailbox',
     targetId: scope.level === 'domain' ? scope.domainId : scope.level === 'user' ? scope.userId : 'webmail-policy',
     targetName,
-    changes: { values: changes, users: r.users },
+    changes: { values: changes, users: r.users, appPasswordsDisabled: r.appPasswordsDisabled },
     ...auditContext(req),
   });
   log.info({ level: scope.level, target: targetName, changes, users: r.users }, 'Webmail policy changed');

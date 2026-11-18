@@ -174,6 +174,9 @@ test('9.4 webmail policy: calendar / contacts modules gate their DAV collections
   assert.equal(davFeatureOf('/addressbooks/u1/default'), 'contacts');
   assert.equal(davFeatureOf('/principals/u1/'), null);
   assert.equal(davFeatureOf('/calendarsx'), null);
+  // review: Express routes case-insensitively — /Calendars/… reaches the CalDAV router
+  assert.equal(davFeatureOf('/Calendars/u1/c1/'), 'calendar');
+  assert.equal(davFeatureOf('/ADDRESSBOOKS/u1/default'), 'contacts');
   const gate = async (path: string) => {
     const outcome = { status: null as number | null, next: false };
     const res = {
@@ -191,6 +194,7 @@ test('9.4 webmail policy: calendar / contacts modules gate their DAV collections
   storage.invalidateWebmailPolicyCache();
   try {
     assert.deepEqual(await gate('/calendars/alice/'), { status: 403, next: false });
+    assert.deepEqual(await gate('/CALENDARS/alice/'), { status: 403, next: false });
     assert.deepEqual(await gate('/addressbooks/alice/default'), { status: null, next: true });
     assert.deepEqual(await gate('/principals/alice/'), { status: null, next: true });
     model.findMany = async () => { throw new Error('db down'); };

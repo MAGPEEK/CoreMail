@@ -43,12 +43,26 @@ deleted with the domain or user) and `trusted_image_senders`. The schema change 
 | `changePassword`  | settings section (also hidden for LDAP / SSO accounts) | `/api/v1/user/change-password`                                     |
 | `themes`          | settings section; the default design applies        | the `theme` section of `PUT/PATCH /api/v1/user/preferences`; `GET` returns the default design |
 | `externalClients` | settings section                                    | `/api/v1/user/client-config`, `/api/v1/user/apple-profile`            |
-| `appPasswords`    | settings section                                    | `GET`/`POST /auth/app-passwords` (revoking stays possible; existing app passwords keep working on the enabled protocols) |
+| `appPasswords`    | settings section                                    | `GET`/`POST /auth/app-passwords` (revoking stays possible); **existing app passwords stop working on every mail protocol** — see below |
 | `sharedMailboxes` | shared / delegated mailboxes in the folder pane     | `/api/v1/user/shared-mailboxes/*`, `/api/v1/mail/shared-mailboxes/*`, `/api/v1/mail/delegated-mailboxes/*`, `/api/v1/user/accessible-mailboxes/*` |
 
 A request to a module that is off answers **403** `{ "code": "FEATURE_DISABLED", "feature": "<switch>" }`
 (checked in `requireAuth` after the webmail protocol switch; a policy that cannot be read is a 503,
-never "allowed"). The admin API and the event stream are never affected.
+never "allowed"). The admin API and the event stream are never affected (its calendar / task /
+contact events carry ids only, no content). The path is compared case-insensitively — Express
+routes `/api/v1/Calendar/…` to the calendar router, so the gate treats it as `/api/v1/calendar/…`
+(the same for the DAV collections).
+
+**App passwords off**: `verifyMailCredentials()` (storage `mail-auth.ts`) refuses a login with an
+app password of such an account on every mail protocol (IMAP, POP3, SMTP submission, ActiveSync,
+JMAP, CalDAV / CardDAV, MAPI). The answer is the one of a wrong password (`invalid`) — checked
+before the protocol switch, so the reply never reveals that the app password itself is right; a
+policy that cannot be read is a temporary failure. The primary password (accounts without MFA) and
+web sessions keep working; accounts with MFA have no mail-protocol access while the module is off.
+Every account whose module goes from on to off gets the auth event `app-password-revoked` (without
+an app-password id): live mail connections that logged in with an app password end at once,
+credential caches drop the account. Switching the module on again makes the stored app passwords
+work again (they are not deleted).
 
 Mail data only: ActiveSync and JMAP serve the Email class only (FolderSync announces mail folders,
 JMAP has no calendar / contact capabilities), so there is nothing else to filter there. Sending as a
@@ -70,12 +84,25 @@ executables, ELF, Mach-O, scripts, ZIP / OLE containers, shortcuts, archives, PD
 SVG, ISO) are checked: a file matches every extension it may really be. A name that fits the
 detected container keeps its own extension (`report.docx` with ZIP bytes is a `.docx`); a name
 that does not fit gets every extension of the format (`photo.jpg` with ZIP bytes may be a `.jar`).
+Before the extension is taken, the name is NFKC-folded (full-width `ｅｘｅ` → `exe`) and invisible
+format / control characters (bidi overrides, zero-width spaces, NUL) are removed. The contents of
+archives are **not** inspected (block `zip`, `7z`, `rar`, … themselves to keep them out). The block
+list is a webmail rule: it applies to the attachment download of the webmail
+(`/api/v1/mail/attachments/:id`, own / shared / delegated mailboxes), not to the mail protocols
+(IMAP, POP3, ActiveSync, JMAP) nor to the message source (`…/raw`); inbound filtering of file types
+is `SecuritySettings.attachmentBlockedExt`.
 Shared code: `packages/storage/src/file-types.ts`.
 
 **External images per mail**: the message API (own, shared and delegated mailboxes) returns
 `externalImages: 'load' | 'ask' | 'block'` for the reader. **Trusted senders** (an address or
 `@domain`, at most 500 per user, stored server-side) load without asking unless the mode is
 `block`: banner button "Immer von diesem Absender" or Settings → Lesen → Externe Bilder.
+Matching (trusted senders and the `contacts` mode) uses the stored `From` address of the message,
+which a sender can forge; inbound DMARC / local-spoof enforcement limits that, but a forged mail
+that passes can make the reader's webmail load its images. The effect is limited to what loading
+images does: the images are fetched through the image proxy (the reader's IP address is not
+revealed), the sender learns that the mail was opened. Entries are per user, read and changed only
+by their owner.
 
 ```
 GET    /api/v1/user/trusted-senders            → { senders, max }

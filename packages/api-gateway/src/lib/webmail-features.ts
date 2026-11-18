@@ -54,9 +54,13 @@ const FOREIGN_RECOVERABLE = /^\/api\/v1\/(user\/shared-mailboxes|mail\/delegated
  * The modules a request needs (pure; empty = none). `query` matters for one
  * exception: GET /api/v1/contacts with a search term is the compose
  * autocomplete, which works without the contacts module.
+ *
+ * The path is compared lower-case: Express routes case-insensitively, so
+ * `/api/v1/Calendar/events` reaches the calendar router and must need the
+ * calendar module too.
  */
 export function featuresForRequest(method: string, originalUrl: string | undefined, query: Record<string, unknown> = {}): WebmailFeature[] {
-  const path = ((originalUrl ?? '').split('?')[0] ?? '').replace(/\/+$/, '') || '/';
+  const path = ((originalUrl ?? '').split('?')[0] ?? '').toLowerCase().replace(/\/+$/, '') || '/';
   const out: WebmailFeature[] = [];
   const hit = PREFIXES.find(([prefix]) => under(path, prefix));
   const autocomplete = method === 'GET' && path === '/api/v1/contacts' && String(query['q'] ?? '').trim().length >= 2;

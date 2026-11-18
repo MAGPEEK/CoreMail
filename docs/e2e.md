@@ -173,7 +173,9 @@ calendar and tasks modules off for B (`PUT /api/v1/admin/webmail-policies/users/
 reports them off, mail keeps working, CalDAV `PROPFIND /dav/calendars/<id>/` → 403; the blocked
 extension `bin` → the attachment download answers 403 `ATTACHMENT_BLOCKED`; `bin` as "save only" →
 `?inline=1` 403 `INLINE_PREVIEW_DISABLED`, the plain download 200; external images "always block" →
-the image proxy 403 `EXTERNAL_IMAGES_BLOCKED`. Everything is reset to inherit at the end. See
+the image proxy 403 `EXTERNAL_IMAGES_BLOCKED`; the module "App-Passwörter" off for B → B's existing
+app password fails on IMAP (`NO`) and JMAP (401) while the primary password works, back to inherit
+→ the app password works again. Everything is reset to inherit at the end. See
 [webmail-policies.md](webmail-policies.md).
 `mapi` (9.4): MAPI over HTTP is off by default (Connect → 403 without a password prompt; GET →
 X-ResponseCode 2; no credentials → 401). The admin turns the switch on for A, B sends A a mail over

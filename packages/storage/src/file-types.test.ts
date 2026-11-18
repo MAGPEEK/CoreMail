@@ -19,6 +19,17 @@ test('extensions: case, leading dots, trailing dots and spaces', () => {
   assert.deepEqual(normalizeExtensionList(['EXE', '.exe', 'js', '', 'a/b', '..', 'x'.repeat(30)]), ['exe', 'js']);
 });
 
+test('review: invisible and compatibility characters cannot hide an extension', () => {
+  assert.equal(fileExtension('invoice.ex​e'), 'exe', 'zero-width space inside');
+  assert.equal(fileExtension('invoice.exe‬'), 'exe', 'trailing bidi control');
+  assert.equal(fileExtension('photo‮gpj.exe'), 'exe', 'RTL override: the real (last) extension counts');
+  assert.equal(fileExtension('invoice.ｅｘｅ'), 'exe', 'full-width letters');
+  assert.equal(fileExtension('invoice．exe'), 'exe', 'full-width dot');
+  assert.equal(fileExtension('invoice.exe\u0000'), 'exe', 'trailing NUL');
+  assert.equal(fileExtension('invoice.EXE '), 'exe', 'trailing no-break space');
+  assert.equal(matchExtensionList(candidateExtensions({ filename: 'a.j‍s' }), ['js']), 'js');
+});
+
 test('sniffing: executables, archives, documents, markup', () => {
   assert.equal(sniffFileType(text('MZ\x90\x00'))?.format, 'windows-executable');
   assert.equal(sniffFileType(bytes(0x7f, 0x45, 0x4c, 0x46, 2))?.format, 'elf');

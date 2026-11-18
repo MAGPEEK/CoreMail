@@ -204,6 +204,9 @@ function enforceWebmailSwitch(req: Request, res: Response, next: NextFunction): 
     .then((refusal) => {
       if (!refusal) { next(); return; }
       if (!res.headersSent) res.status(refusal.status).json(refusal.body);
+    }, () => {
+      // an unexpected failure of the checks is never "allowed" (and never a hanging request)
+      if (!res.headersSent) res.status(503).json({ error: 'Service temporarily unavailable' });
     });
 }
 

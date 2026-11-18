@@ -101,8 +101,20 @@ test('audit: settings.webmail-policy.update with the changed values only', async
     tasks: { before: 'inherit', after: 'off' },
     downloadOnlyExtensions: { before: null, after: ['pdf'] },
   });
+  assert.equal((row['changes'] as Record<string, any>)['appPasswordsDisabled'], 0);
   const level = storage.inheritAllPolicy();
   assert.deepEqual(policyDiff(level, level), {});
+});
+
+test('review: switching app passwords off records how many accounts lost them', async () => {
+  const before = (db['auditLog'] as InstanceType<typeof FakeTable>).rows.length;
+  assert.equal((await call('PUT', '/domains/d1', 'srv', { features: { appPasswords: 'off' } })).status, 200);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const rows = (db['auditLog'] as InstanceType<typeof FakeTable>).rows;
+  assert.equal(rows.length, before + 1);
+  const changes = rows.at(-1)!['changes'] as Record<string, any>;
+  assert.ok(changes['appPasswordsDisabled'] > 0, 'accounts of the domain lose their app passwords');
+  assert.equal((await call('PUT', '/domains/d1', 'srv', { features: { appPasswords: 'inherit' } })).status, 200);
 });
 
 test('RBAC and validation', async () => {

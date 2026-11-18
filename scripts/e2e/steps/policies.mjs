@@ -4,8 +4,11 @@
 // reports them off (the webmail hides them), CalDAV refuses B's calendars.
 // A blocked file type (by extension) cannot be downloaded (403
 // ATTACHMENT_BLOCKED), a "save only" type is refused for inline display, and
-// "always block" refuses the image proxy. Everything back to inherit at the end.
-import { check, assert, creds, http, session } from '../lib.mjs';
+// "always block" refuses the image proxy. With the module "App-Passwörter" off
+// an existing app password of B fails on IMAP / JMAP (the primary password
+// works). Everything back to inherit at the end.
+import { check, assert, basic, creds, http, session } from '../lib.mjs';
+import { imapLogin } from './imap.mjs';
 
 const ADMIN_PATH = '/api/v1/admin/webmail-policies';
 
@@ -92,6 +95,30 @@ export async function run(state) {
       content: { blockedExtensions: null, downloadOnlyExtensions: null, externalImages: null },
     });
   }
+
+  await check('policies: module "App-Passwörter" off → B\'s existing app password stops working on IMAP and JMAP, back on → works', async () => {
+    const ap = await http('POST', '/auth/app-passwords', { token: tokB, body: { name: 'e2e policy', currentPassword: c.userB } });
+    assert(ap.status === 201 && ap.json?.password, `create ${ap.status} ${ap.text.slice(0, 200)}`);
+    const imapStatus = async (pass) => { const im = await imapLogin(B, pass); const s = im.loginResult.status; im.close(); return s; };
+    const jmapStatus = async () => (await http('GET', '/jmap/session', { headers: { Authorization: basic(B, ap.json.password) } })).status;
+    try {
+      assert(await imapStatus(ap.json.password) === 'OK' && await jmapStatus() === 200, 'app password works while the module is on');
+      const off = await setB({ features: { appPasswords: 'off' } });
+      assert(off.status === 200 && off.json.effective.features.appPasswords === false, `${off.status} ${off.text.slice(0, 200)}`);
+      const imapOff = await imapStatus(ap.json.password);
+      const jmapOff = await jmapStatus();
+      assert(imapOff === 'NO' && jmapOff === 401, `module off: IMAP ${imapOff}, JMAP ${jmapOff}`);
+      assert(await imapStatus(c.userB) === 'OK', 'the primary password still works');
+      const list = await http('GET', '/auth/app-passwords', { token: tokB });
+      assert(list.status === 403 && list.json?.code === 'FEATURE_DISABLED', `list ${list.status}`);
+      await setB({ features: { appPasswords: 'inherit' } });
+      assert(await imapStatus(ap.json.password) === 'OK', 'works again after inherit');
+      return `off: IMAP ${imapOff}, JMAP ${jmapOff}, password OK; inherit: OK`;
+    } finally {
+      await setB({ features: { appPasswords: 'inherit' } });
+      await http('DELETE', `/auth/app-passwords/${ap.json.id}`, { token: tokB });
+    }
+  });
 
   await check('policies: back to inherit → calendar and the attachment work again', async () => {
     const cal = await http('GET', '/api/v1/calendar', { token: tokB });

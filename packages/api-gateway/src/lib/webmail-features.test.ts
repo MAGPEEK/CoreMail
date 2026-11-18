@@ -113,6 +113,14 @@ test('path → module: every switchable area, nothing for mail, admin and events
   assert.deepEqual(featuresForRequest('GET', undefined), []);
 });
 
+test('review: the path is matched case-insensitively like Express routes it (no bypass via /Calendar)', () => {
+  assert.deepEqual(featuresForRequest('GET', '/api/v1/CALENDAR/events'), ['calendar']);
+  assert.deepEqual(featuresForRequest('GET', '/API/v1/Tasks'), ['tasks']);
+  assert.deepEqual(featuresForRequest('PUT', '/api/v1/User/Rules/r1'), ['rules']);
+  assert.deepEqual(featuresForRequest('GET', '/api/v1/user/Shared-Mailboxes/s1/Recoverable'), ['sharedMailboxes', 'recoverItems']);
+  assert.deepEqual(featuresForRequest('GET', '/api/v1/Contacts', { q: 'an' }), [], 'autocomplete exception unchanged');
+});
+
 test('featureRefusal: 403 for a module that is off, 503 when the policy cannot be read', async () => {
   const req = { method: 'GET', originalUrl: '/api/v1/tasks', query: {} };
   const off = { features: { ...storage.FEATURE_DEFAULTS, tasks: false }, content: { ...storage.CONTENT_DEFAULTS } };
@@ -136,6 +144,13 @@ test('requireAuth refuses the routes of a module that is off and lets the others
   await setPolicy('user', { features: { calendar: 'on', rules: 'off' } });
   assert.equal((await call('GET', '/api/v1/calendar/events')).status, 200, 'the user level wins');
   assert.equal((await call('PUT', '/api/v1/user/rules/r1')).status, 403);
+});
+
+test('review: a differently cased path that Express still routes to the module is refused too', async () => {
+  await setPolicy('global', { features: { calendar: 'off' } });
+  const r = await call('GET', '/api/v1/Calendar/events');
+  assert.equal(r.status, 403, 'Express routes /Calendar to the calendar router — the gate must see it');
+  assert.equal(r.body['feature'], 'calendar');
 });
 
 // ── GET /user/features ────────────────────────────────────────────────────────

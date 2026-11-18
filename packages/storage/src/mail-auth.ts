@@ -8,7 +8,9 @@
  *
  * 9.4: after a successful check the protocol switch of the account is applied
  * (protocol-access.ts): `protocol_disabled` when the protocol is off. A wrong
- * password never gets that answer — it is `invalid` as before.
+ * password never gets that answer — it is `invalid` as before. An app password
+ * of an account whose webmail module "App-Passwörter" is off (webmail-policy.ts)
+ * is `invalid` too, indistinguishable from a wrong one.
  *
  * Environment (optional):
  *   MAIL_AUTH_IP_MAX_FAILURES (50)   MAIL_AUTH_IP_WINDOW_SEC (900)   MAIL_AUTH_IP_LOCK_SEC (900)
@@ -25,6 +27,7 @@ import { createLogger, getRedisClient, hashPassword, verifyPassword } from '@cor
 import { prisma } from './prisma/index.js';
 import { recordLastLogin } from './auth/last-login.js';
 import { isProtocolAllowed, type AccessProtocol } from './protocol-access.js';
+import { isWebmailFeatureEnabled } from './webmail-policy.js';
 import {
   createLoginLockout, createMailCredentialVerifier, createExemptIpMatcher,
   type LoginLockout, type MailAuthContext, type MailAuthDeps, type MailAuthLimits, type MailAuthPrisma,
@@ -112,9 +115,18 @@ export async function verifyMailCredentials(
   try {
     const result = await getVerifier().verify(login, password, ctx);
     if (result.status !== 'ok') return result;
+    const subject = { id: result.user.id, domainId: result.user.domainId };
+    // 9.4 webmail policy: with the module "App-Passwörter" off, app passwords do
+    // not work on any protocol. Answered exactly like a wrong password (`invalid`,
+    // no oracle — checked before the protocol switch, whose answer would reveal
+    // that the credential is right); an unreadable policy is `error` (temporary).
+    if (result.method === 'app_password' && !(await isWebmailFeatureEnabled(subject, 'appPasswords'))) {
+      log.warn({ userId: result.user.id, protocol: ctx.protocol, ip: ctx.ip }, 'mail-auth: app passwords are switched off for this account');
+      return { status: 'invalid' };
+    }
     // 9.4: only after the credentials were verified (a wrong password stays `invalid`).
     const protocol = MAIL_PROTOCOL_ACCESS[ctx.protocol];
-    if (protocol && !(await isProtocolAllowed({ id: result.user.id, domainId: result.user.domainId }, protocol))) {
+    if (protocol && !(await isProtocolAllowed(subject, protocol))) {
       log.warn({ userId: result.user.id, protocol, ip: ctx.ip }, 'mail-auth: protocol disabled for this account');
       return { status: 'protocol_disabled', userId: result.user.id, protocol };
     }

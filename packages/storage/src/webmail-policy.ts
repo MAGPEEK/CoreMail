@@ -15,6 +15,10 @@
  * caches in every service are dropped (CHANNEL_SETTINGS_RELOAD
  * `{type:'webmail-policy'}`) and every user in scope gets the user event
  * `settings` / `policies`, so open webmail tabs re-read GET /user/features.
+ * Accounts whose module "App-Passwörter" goes from on to off also get the auth
+ * event APP_PASSWORDS_DISABLED_REASON: their app passwords stop working on the
+ * mail protocols (verifyMailCredentials, mail-auth.ts) and live connections
+ * that logged in with one end.
  *
  * Cache: effective policy per user (30 s), dropped on the reload signal
  * (invalidateWebmailPolicyCache) and on every auth invalidation of the user.
@@ -23,6 +27,7 @@ import { createLogger, getRedisClient, onAuthInvalidation, CHANNEL_SETTINGS_RELO
 import { Prisma } from '@prisma/client';
 import { prisma } from './prisma/index.js';
 import { authRedis } from './auth/redis.js';
+import { publishUserAuthChange } from './auth/invalidation.js';
 import { announceUserEvent } from './realtime/announce.js';
 import { normalizeExtensionList } from './file-types.js';
 import {
@@ -219,22 +224,43 @@ function concreteServerLevel(effective: WebmailPolicy): WebmailPolicyLevel {
   };
 }
 
-/** Server, domain and user level as stored (missing rows / values = inherit). */
-async function loadLevels(domainId: string | null, userId: string | null): Promise<WebmailPolicyLevel[]> {
-  const rows = await prisma.webmailPolicy.findMany({
+/** Server, domain and user level of one account from loaded rows (missing rows / values = inherit). */
+function levelsFromRows(rows: readonly PolicyRow[], domainId: string | null, userId: string | null): WebmailPolicyLevel[] {
+  return [
+    levelOf(rows.find((r) => r.id === GLOBAL_WEBMAIL_POLICY_ID)),
+    levelOf(domainId ? rows.find((r) => r.domainId === domainId && !r.userId) : undefined),
+    levelOf(userId ? rows.find((r) => r.userId === userId) : undefined),
+  ];
+}
+
+/** Above this many users every policy row is loaded instead of an IN list. */
+const LOAD_ALL_ROWS_ABOVE = 500;
+
+/** The rows that decide the policy of `accounts` (the server row, their domains, their own rows). */
+async function loadRows(accounts: ReadonlyArray<{ id: string | null; domainId: string | null }>): Promise<PolicyRow[]> {
+  if (accounts.length > LOAD_ALL_ROWS_ABOVE) return await prisma.webmailPolicy.findMany() as unknown as PolicyRow[];
+  const domainIds = [...new Set(accounts.map((a) => a.domainId).filter((d): d is string => !!d))];
+  const userIds = accounts.map((a) => a.id).filter((u): u is string => !!u);
+  return await prisma.webmailPolicy.findMany({
     where: {
       OR: [
         { id: GLOBAL_WEBMAIL_POLICY_ID },
-        ...(domainId ? [{ domainId }] : []),
-        ...(userId ? [{ userId }] : []),
+        ...(domainIds.length ? [{ domainId: { in: domainIds } }] : []),
+        ...(userIds.length ? [{ userId: { in: userIds } }] : []),
       ],
     },
   }) as unknown as PolicyRow[];
-  return [
-    levelOf(rows.find((r) => r.id === GLOBAL_WEBMAIL_POLICY_ID)),
-    levelOf(domainId ? rows.find((r) => r.domainId === domainId) : undefined),
-    levelOf(userId ? rows.find((r) => r.userId === userId) : undefined),
-  ];
+}
+
+/** Server, domain and user level as stored (missing rows / values = inherit). */
+async function loadLevels(domainId: string | null, userId: string | null): Promise<WebmailPolicyLevel[]> {
+  return levelsFromRows(await loadRows([{ id: userId, domainId }]), domainId, userId);
+}
+
+/** Effective policy of many accounts with one query (policy changes). */
+async function effectiveForUsers(users: ReadonlyArray<{ id: string; domainId: string }>): Promise<Map<string, WebmailPolicy>> {
+  const rows = await loadRows(users);
+  return new Map(users.map((u) => [u.id, resolveWebmailPolicy(levelsFromRows(rows, u.domainId, u.id)).effective]));
 }
 
 // ─── Effective policy (cached) ────────────────────────────────────────────────
@@ -250,7 +276,9 @@ export function invalidateWebmailPolicyCache(): void {
   generation++;
 }
 
-onAuthInvalidation((e) => { cache.delete(e.userId); });
+// A load that is in flight while a user is invalidated must not be cached
+// either (it may predate the change): bumping the generation skips that write.
+onAuthInvalidation((e) => { cache.delete(e.userId); generation++; });
 
 /** Reload signal of a webmail policy change on CHANNEL_SETTINGS_RELOAD. */
 export const WEBMAIL_POLICY_RELOAD = 'webmail-policy';
@@ -365,9 +393,29 @@ export async function readWebmailPolicyLevel(scope: PolicyScope): Promise<Webmai
   };
 }
 
-async function usersInScope(scope: PolicyScope): Promise<string[]> {
+async function usersInScope(scope: PolicyScope): Promise<Array<{ id: string; domainId: string }>> {
   const where = scope.level === 'global' ? {} : scope.level === 'domain' ? { domainId: scope.domainId } : { id: scope.userId };
-  return (await prisma.user.findMany({ where, select: { id: true } })).map((u) => u.id);
+  return prisma.user.findMany({ where, select: { id: true, domainId: true } });
+}
+
+/**
+ * Reason of the auth event sent to an account whose module "App-Passwörter"
+ * was switched off: live mail-protocol connections that logged in with an app
+ * password end (core connectionAffected: no `appPasswordId` = every app
+ * password of the user), credential caches drop the account. Password and
+ * web-session connections are not affected.
+ */
+export const APP_PASSWORDS_DISABLED_REASON = 'app-password-revoked';
+
+/** The accounts of `users` for which the app-password module went from on to off (pure). */
+export function appPasswordsSwitchedOff(
+  users: ReadonlyArray<{ id: string }>,
+  before: ReadonlyMap<string, WebmailPolicy>,
+  after: ReadonlyMap<string, WebmailPolicy>,
+): string[] {
+  return users
+    .filter((u) => before.get(u.id)?.features.appPasswords === true && after.get(u.id)?.features.appPasswords === false)
+    .map((u) => u.id);
 }
 
 function jsonColumn(v: string[] | null): Prisma.InputJsonValue | typeof Prisma.DbNull {
@@ -400,33 +448,39 @@ export interface WebmailPolicyUpdateResult {
   after: WebmailPolicyView;
   /** Users in scope (each got the `settings` / `policies` event). */
   users: number;
+  /** Users whose app passwords stopped working (module "App-Passwörter" switched off for them). */
+  appPasswordsDisabled: number;
 }
 
 /**
  * Changes values of one level (values missing in `patch` keep theirs). Returns
  * null when the domain / user does not exist; throws a RangeError for a value
- * the level does not accept (assertPolicyPatch).
+ * the level does not accept (assertPolicyPatch). An account for which the
+ * app-password module goes from on to off gets APP_PASSWORDS_DISABLED_REASON
+ * (its live app-password connections end).
  */
 export async function updateWebmailPolicy(scope: PolicyScope, patch: WebmailPolicyPatch): Promise<WebmailPolicyUpdateResult | null> {
   assertPolicyPatch(scope.level, patch);
   const current = await readWebmailPolicyLevel(scope);
   if (!current) return null;
+  const users = await usersInScope(scope);
+  const tracksAppPasswords = patch.features?.appPasswords !== undefined;
+  const before = tracksAppPasswords ? await effectiveForUsers(users) : null;
   const data = rowData(patch);
   if (Object.keys(data).length > 0) {
-    const owner = scope.level === 'domain' ? { domainId: scope.domainId }
+    const key = scope.level === 'domain' ? { domainId: scope.domainId }
       : scope.level === 'user' ? { userId: scope.userId } : { id: GLOBAL_WEBMAIL_POLICY_ID };
-    const where = scope.level === 'domain' ? { domainId: scope.domainId }
-      : scope.level === 'user' ? { userId: scope.userId } : { id: GLOBAL_WEBMAIL_POLICY_ID };
-    await prisma.webmailPolicy.upsert({ where, create: { ...owner, ...data } as never, update: data as never });
+    await prisma.webmailPolicy.upsert({ where: key, create: { ...key, ...data } as never, update: data as never });
   }
   invalidateWebmailPolicyCache();
+  const switchedOff = before ? appPasswordsSwitchedOff(users, before, await effectiveForUsers(users)) : [];
+  for (const userId of switchedOff) await publishUserAuthChange(userId, APP_PASSWORDS_DISABLED_REASON);
   await publishPolicyReload();
-  const users = await usersInScope(scope);
-  if (users.length > 0) announceUserEvent(users, { type: 'settings', section: 'policies' });
+  if (users.length > 0) announceUserEvent(users.map((u) => u.id), { type: 'settings', section: 'policies' });
   const after = await readWebmailPolicyLevel(scope);
   if (!after) return null;
-  log.info({ scope, users: users.length }, 'Webmail policy changed');
-  return { before: current.settings, after, users: users.length };
+  log.info({ scope, users: users.length, appPasswordsDisabled: switchedOff.length }, 'Webmail policy changed');
+  return { before: current.settings, after, users: users.length, appPasswordsDisabled: switchedOff.length };
 }
 
 // ─── External images: trusted senders ────────────────────────────────────────
