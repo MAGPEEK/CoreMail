@@ -49,3 +49,4 @@ export * from './submission-limits.js';
 export * from './importance.js';
 export * from './idn.js';
 export * from './mime/crlf.js';
+export * from './sensitivity.js';

@@ -381,6 +381,8 @@ async function deliverInbound(rawBuffer: Buffer, opts: StoreOptions): Promise<St
     // 9.4: Importance / X-Priority (the webmail shows a badge); an inbox rule's
     // "set importance" replaces the header value (main message and rule copies)
     ...(messageImportance ? { importance: messageImportance } : {}),
+    // 9.4: Sensitivity header (the webmail shows a badge for personal / private / confidential)
+    ...(parsed.sensitivity ? { sensitivity: parsed.sensitivity } : {}),
     date: parsed.date,
     bodyText: truncateBodyColumn(parsed.bodyText),
     bodyHtml: truncateBodyColumn(parsed.bodyHtml),

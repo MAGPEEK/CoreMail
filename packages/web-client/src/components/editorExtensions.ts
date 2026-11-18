@@ -1,4 +1,4 @@
-import { Extension, Node, mergeAttributes, type Editor } from '@tiptap/react';
+import { Extension, Mark, Node, mergeAttributes, type Editor } from '@tiptap/react';
 import ImageExt from '@tiptap/extension-image';
 import { SIGNATURE_BLOCK_ATTR, signatureBlockHtml } from '../lib/signaturePick.js';
 import { QUOTE_ATTR } from '../lib/composeQuote.js';
@@ -26,6 +26,47 @@ export const FontSizeExt = Extension.create({
           renderHTML: (attrs: Record<string, unknown>) => attrs['fontSize']
             ? { style: `font-size: ${attrs['fontSize']}` }
             : {},
+        },
+      },
+    }];
+  },
+});
+
+/**
+ * 9.4: superscript / subscript (`<sup>` / `<sub>`), mutually exclusive. No
+ * command augmentation (see FontSizeExt): callers use toggleMark / unsetMark.
+ */
+export const SuperscriptExt = Mark.create({
+  name: 'superscript',
+  excludes: 'subscript',
+  parseHTML: () => [{ tag: 'sup' }, { style: 'vertical-align=super' }],
+  renderHTML: ({ HTMLAttributes }) => ['sup', mergeAttributes(HTMLAttributes), 0],
+});
+
+export const SubscriptExt = Mark.create({
+  name: 'subscript',
+  excludes: 'superscript',
+  parseHTML: () => [{ tag: 'sub' }, { style: 'vertical-align=sub' }],
+  renderHTML: ({ HTMLAttributes }) => ['sub', mergeAttributes(HTMLAttributes), 0],
+});
+
+/** Text blocks that carry a text direction. */
+export const TEXT_DIRECTION_TYPES = ['paragraph', 'heading'] as const;
+
+/**
+ * 9.4: text direction of a block (`dir="rtl"`; left to right is the default and
+ * writes nothing). Set with updateAttributes(type, { dir }).
+ */
+export const TextDirectionExt = Extension.create({
+  name: 'textDirection',
+  addGlobalAttributes() {
+    return [{
+      types: [...TEXT_DIRECTION_TYPES],
+      attributes: {
+        dir: {
+          default: null,
+          parseHTML: (el: HTMLElement) => (el.getAttribute('dir') === 'rtl' ? 'rtl' : null),
+          renderHTML: (attrs: Record<string, unknown>) => (attrs['dir'] === 'rtl' ? { dir: 'rtl' } : {}),
         },
       },
     }];

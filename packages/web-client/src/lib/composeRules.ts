@@ -1,7 +1,7 @@
 /**
  * 9.4: rules of the compose area — which fields show, attachment and inline
- * image limits, the schedule presets, the ribbon in plain-text format, the save
- * status line, where focus goes. Pure — unit-tested with `node --test`.
+ * image limits, the schedule presets, the save status line, where focus goes
+ * (the bars: lib/composeToolbar.ts). Pure — unit-tested with `node --test`.
  */
 import { rasterImageType } from './imageTypes.ts';
 import { isReplyMode, type ComposeMode } from './composeQuote.ts';
@@ -12,6 +12,8 @@ import type { SaveStatus } from './draft-autosave.ts';
 export interface FieldVisibilityInput {
   /** Sender options of the compose mailbox (own address, send as, on behalf). */
   senderCount: number;
+  /** "…" → Absender anzeigen chosen. */
+  showFrom: boolean;
   showCc: boolean;
   showBcc: boolean;
   ccCount: number;
@@ -20,6 +22,8 @@ export interface FieldVisibilityInput {
 
 export interface FieldVisibility {
   from: boolean;
+  /** Von is shown because there is a choice ("Absender anzeigen" cannot hide it). */
+  fromAutomatic: boolean;
   cc: boolean;
   bcc: boolean;
   /** "Cc" / "Bcc" buttons right of the An row (only while the row is hidden). */
@@ -27,11 +31,15 @@ export interface FieldVisibility {
   bccToggle: boolean;
 }
 
-/** Von only with a choice; Cc / Bcc when asked for or filled (Bcc hidden by default). */
+/**
+ * Von always with a choice of senders (send as / on behalf), else only after
+ * "…" → Absender anzeigen; Cc / Bcc when asked for or filled (Bcc hidden by default).
+ */
 export function composeFieldVisibility(i: FieldVisibilityInput): FieldVisibility {
   const cc = i.showCc || i.ccCount > 0;
   const bcc = i.showBcc || i.bccCount > 0;
-  return { from: i.senderCount > 1, cc, bcc, ccToggle: !cc, bccToggle: !bcc };
+  const fromAutomatic = i.senderCount > 1;
+  return { from: fromAutomatic || i.showFrom, fromAutomatic, cc, bcc, ccToggle: !cc, bccToggle: !bcc };
 }
 
 /** Where the cursor goes when a compose opens: An while it is empty (new mail, forward), else the body. */
@@ -109,30 +117,6 @@ export function scheduleProblem(value: string, now: Date): 'invalid' | 'tooSoon'
   if (!value || Number.isNaN(d.getTime())) return 'invalid';
   if (d.getTime() < now.getTime() + MIN_SCHEDULE_LEAD_MS) return 'tooSoon';
   return null;
-}
-
-// ── Ribbon ──────────────────────────────────────────────────────────────────
-
-export type RibbonTabId = 'message' | 'insert' | 'format';
-export type InsertCommandId = 'file' | 'image' | 'table' | 'link' | 'emoji' | 'signature' | 'datetime' | 'rule';
-
-/** Plain-text format has nothing to format: only Einfügen remains. */
-export function ribbonTabs(plain: boolean): RibbonTabId[] {
-  return plain ? ['insert'] : ['message', 'insert', 'format'];
-}
-
-/** Einfügen commands; images, tables, links and lines need HTML. */
-export function insertCommands(plain: boolean, hasSignatures: boolean): InsertCommandId[] {
-  const all: InsertCommandId[] = plain
-    ? ['file', 'emoji', 'signature', 'datetime']
-    : ['file', 'image', 'table', 'link', 'emoji', 'signature', 'datetime', 'rule'];
-  return hasSignatures ? all : all.filter((c) => c !== 'signature');
-}
-
-/** The tab to show after the format changed (the chosen one if it still exists). */
-export function visibleRibbonTab(current: RibbonTabId, plain: boolean): RibbonTabId {
-  const tabs = ribbonTabs(plain);
-  return tabs.includes(current) ? current : tabs[0]!;
 }
 
 // ── Status line / closing ───────────────────────────────────────────────────

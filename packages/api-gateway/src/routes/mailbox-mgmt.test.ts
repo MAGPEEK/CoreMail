@@ -226,6 +226,11 @@ test('own Sent copy of a send as: From is the Shared Mailbox (as sent), Bcc kept
   assert.equal(new Date(h['date'] ?? '').toISOString(), '2026-11-20T08:00:00.000Z');
 });
 
+test('9.4: own Sent copy carries the Sensitivity header as sent (none for normal)', async () => {
+  assert.equal(headersOf(await buildRawMime(sentCopyMailOptions({ ...outgoing, sensitivity: 'personal' })))['sensitivity'], 'Personal');
+  assert.equal(headersOf(await buildRawMime(sentCopyMailOptions(outgoing)))['sensitivity'], undefined);
+});
+
 test('own Sent copy of a send on behalf: From = Shared Mailbox, Sender = the user; reply fields as the worker sets them', async () => {
   const h = headersOf(await buildRawMime(sentCopyMailOptions({
     ...outgoing, bcc: [], sender: '"Bob" <bob@ex.com>', inReplyTo: '<p1@ext.example>',

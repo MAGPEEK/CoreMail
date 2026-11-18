@@ -11,6 +11,7 @@ import { simpleParser, type AddressObject, type ParsedMail } from 'mailparser';
 import { capHeaderSection } from './mime/index.js';
 import { importanceOfRaw, type Importance } from './importance.js';
 import { DRAFT_PENDING_HEADER } from './internal-headers.js';
+import { sensitivityOfRaw, type Sensitivity } from './sensitivity.js';
 
 export const DRAFTS_FOLDER = 'Drafts';
 export const DRAFT_FLAG = '\\Draft';
@@ -32,6 +33,8 @@ export interface DraftFields {
   references: string[];
   /** 9.4: importance chosen in compose (Importance / X-Priority headers). */
   importance: Importance;
+  /** 9.4: sensitivity chosen in compose (Sensitivity header). */
+  sensitivity: Sensitivity;
 }
 
 /** `Name <a@b>` (display name kept when present), the bare address, or the name alone. */
@@ -115,6 +118,7 @@ export async function parseDraftFields(raw: Buffer): Promise<DraftFields> {
     inReplyTo: parsed.inReplyTo ?? null,
     references: msgIdList(parsed.references),
     importance: importanceOfRaw(raw),
+    sensitivity: sensitivityOfRaw(raw),
   };
 }
 

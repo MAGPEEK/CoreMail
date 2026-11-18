@@ -6,6 +6,7 @@ import {
   prisma, downloadBuffer, deleteObject, buildOutboundJobOptions, getOutboundJobOptions, loadQueueSettings, isExpiredInQueue,
   outboundRetryDelay, queueStartMs, receiptAddressOf, afterForeignSend, importanceMailOption, normalizeImportance,
   CRLF_STREAM_TRANSPORT, RULE_FORWARDED_HEADER,
+  normalizeSensitivity, sensitivityHeaders,
 } from '@coremail/storage';
 import { relayMessage, type RecipientFailure, type RelayResult, type DkimOptions, type RelayOptions } from './relay.js';
 import { extractSmtpCode, sendDsnBounce, sendSuccessDsn, rawSubjectAndId, type DsnOptions } from './dsn.js';
@@ -79,6 +80,8 @@ export interface StructuredMessage {
   dispositionNotificationTo?: string;
   /** 9.4: importance chosen in compose; anything but high / low writes no header. */
   importance?: string;
+  /** 9.4: sensitivity chosen in compose; anything but personal / private / confidential writes no header. */
+  sensitivity?: string;
   attachments: StructuredAttachment[];
 }
 
@@ -204,7 +207,11 @@ export async function buildRawFromMessage(
     ...(attachments.length    ? { attachments }                               : {}),
     // 9.4: X-Priority / X-MSMail-Priority / Importance from a validated level only
     ...importanceMailOption(normalizeImportance(msg.importance)),
-    ...(receiptTo             ? { headers: { 'Disposition-Notification-To': receiptTo } } : {}),
+    headers: {
+      ...(receiptTo ? { 'Disposition-Notification-To': receiptTo } : {}),
+      // 9.4: Sensitivity from a validated level only
+      ...sensitivityHeaders(normalizeSensitivity(msg.sensitivity)),
+    },
   });
 
   const stream = info.message as Readable;

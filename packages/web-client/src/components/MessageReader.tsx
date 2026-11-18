@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Reply, ReplyAll, Forward, Trash2, Archive, Paperclip, Download, Printer, ListFilter, Mail,
   AlertOctagon, ShieldOff, Code, Pin, Flag, FolderInput, Clock, X,
-  ShieldAlert, ShieldCheck, CalendarClock, CheckCircle, AlertCircle, RefreshCw, ArrowDown,
+  ShieldAlert, ShieldCheck, CalendarClock, CheckCircle, AlertCircle, RefreshCw, ArrowDown, Lock,
 } from 'lucide-react';
 import { useRef, useState, type ReactNode } from 'react';
 import { textToQuotedHtml } from '../lib/mailHtml.js';
@@ -28,6 +28,7 @@ import { useAutoMarkRead, useReadReceipt } from '../hooks/useReadBehaviour.js';
 import { useRegional } from '../store/preferences.js';
 import { formatLongDateTime } from '../lib/regionalFormat.js';
 import { importanceBadge } from '../lib/importance.js';
+import { sensitivityBadge } from '../lib/sensitivity.js';
 
 interface Props {
   messageId: string;
@@ -81,6 +82,19 @@ function ImportanceBadge({ value }: { value: string | null | undefined }) {
       high ? 'bg-danger-bg border-danger-line text-danger-fg' : 'bg-surface-2 border-line text-fg-muted'}`}>
       {high ? <AlertCircle size={12} aria-hidden="true" /> : <ArrowDown size={12} aria-hidden="true" />}
       {t(high ? 'reader_importance_high' : 'reader_importance_low')}
+    </span>
+  );
+}
+
+/** 9.4: "Vertraulichkeit: persönlich / privat / vertraulich" next to the subject (normal: nothing). */
+function SensitivityBadge({ value }: { value: string | null | undefined }) {
+  const t = useT();
+  const badge = sensitivityBadge(value);
+  if (!badge) return null;
+  return (
+    <span className="inline-flex items-center gap-1 shrink-0 mt-1 px-1.5 py-0.5 rounded border text-xs font-medium bg-warning-bg border-warning-line text-warning-fg">
+      <Lock size={12} aria-hidden="true" />
+      {t(`reader_sensitivity_${badge}`)}
     </span>
   );
 }
@@ -369,6 +383,7 @@ export function MessageReader({ messageId }: Props) {
         <div className="flex items-start gap-2 mb-3">
           <h2 className="text-lg font-semibold text-fg flex-1">{msg.subject || '(kein Betreff)'}</h2>
           <ImportanceBadge value={msg.importance} />
+          <SensitivityBadge value={msg.sensitivity} />
           {isFlagged && <Flag size={16} className="fill-danger-fg text-danger-fg shrink-0 mt-1" />}
           {isPinned && <Pin size={16} className="text-accent-fg shrink-0 mt-1" />}
         </div>

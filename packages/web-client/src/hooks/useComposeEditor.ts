@@ -3,7 +3,9 @@
  * (formatting, colours, fonts, sizes, links, inline images incl. data: URIs,
  * the signature block) plus the quote marker and tables (also those of a
  * quoted original, which were flattened before). Pasting an image file inserts
- * it (raster images only, lib/composeRules.ts inlineImageProblem).
+ * it (raster images only, lib/composeRules.ts inlineImageProblem). 9.4 refine:
+ * superscript / subscript and the text direction of a block; the placeholder
+ * of the empty body is announced through aria-placeholder.
  */
 import { useRef } from 'react';
 import { useEditor } from '@tiptap/react';
@@ -20,7 +22,9 @@ import TableRow from '@tiptap/extension-table-row';
 import TableHeader from '@tiptap/extension-table-header';
 import TableCell from '@tiptap/extension-table-cell';
 import { TABLE_CELL_STYLE, TABLE_STYLE } from '../lib/composeFormat.js';
-import { FontSizeExt, InlineImageExt, QuoteMarkerExt, SignatureBlockExt } from '../components/editorExtensions.js';
+import {
+  FontSizeExt, InlineImageExt, QuoteMarkerExt, SignatureBlockExt, SubscriptExt, SuperscriptExt, TextDirectionExt,
+} from '../components/editorExtensions.js';
 
 /** Editor area classes: headings, quotes (the quoted original without italics), lists, code, links. */
 export const COMPOSE_EDITOR_CLASS = [
@@ -44,7 +48,7 @@ export const COMPOSE_EDITOR_CLASS = [
 /** Folds the quoted original (still part of the mail). */
 export const QUOTE_FOLDED_CLASS = '[&_.ProseMirror_blockquote[data-cm-quote]]:hidden';
 
-export function useComposeEditor(o: { label: string; onPasteImage: (file: File) => void }) {
+export function useComposeEditor(o: { label: string; placeholder: string; onPasteImage: (file: File) => void }) {
   const paste = useRef(o.onPasteImage);
   paste.current = o.onPasteImage;
   return useEditor({
@@ -66,6 +70,9 @@ export function useComposeEditor(o: { label: string; onPasteImage: (file: File) 
       TableRow,
       TableHeader.configure({ HTMLAttributes: { style: TABLE_CELL_STYLE } }),
       TableCell.configure({ HTMLAttributes: { style: TABLE_CELL_STYLE } }),
+      SuperscriptExt,
+      SubscriptExt,
+      TextDirectionExt,
     ],
     content: '',
     editorProps: {
@@ -74,6 +81,7 @@ export function useComposeEditor(o: { label: string; onPasteImage: (file: File) 
         role: 'textbox',
         'aria-multiline': 'true',
         'aria-label': o.label,
+        'aria-placeholder': o.placeholder,
       },
       handlePaste: (_view, event) => {
         const files = Array.from(event.clipboardData?.files ?? []).filter((f) => f.type.startsWith('image/'));

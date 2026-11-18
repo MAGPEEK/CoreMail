@@ -421,6 +421,7 @@ export async function runRuleOnExisting(
       references: [],
       dispositionNotificationTo: null,
       importance: m.importance === 'high' || m.importance === 'low' ? m.importance : null,
+      sensitivity: null,   // no rule condition reads it
       date:      m.date,
       bodyText:  m.bodyText,
       bodyHtml:  m.bodyHtml,

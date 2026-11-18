@@ -36,6 +36,8 @@ export interface CommandItem {
   /** pinned = never in "…", overflow = always in "…", auto (default) = while it fits */
   placement?: CommandPlacement;
   tone?: 'primary' | 'danger';
+  /** Inline bars: the icon alone (the label is the accessible name and the tooltip; a dropdown shows no extra arrow). */
+  iconOnly?: boolean;
 }
 
 export interface CommandGroup {
@@ -86,6 +88,9 @@ const SHAPE: Record<CommandBarVariant, { main: string; arrow: string; group: str
   },
 };
 
+/** Icon-only buttons of inline bars: the icon centred, at least 32 px wide (WCAG 2.2 target size). */
+const ICON_ONLY = 'min-w-8 justify-center';
+
 // ── Pieces (module level: never define components inside components) ─────────
 interface ButtonProps {
   item: CommandItem;
@@ -98,7 +103,7 @@ interface ButtonProps {
   onOpenMenu?: (key: string, el: HTMLElement, items: ContextMenuItem[]) => void;
 }
 
-function Label({ item, variant, arrow }: { item: CommandItem; variant: CommandBarVariant; arrow: boolean }) {
+function Label({ item, variant, arrow, iconOnly }: { item: CommandItem; variant: CommandBarVariant; arrow: boolean; iconOnly: boolean }) {
   if (variant === 'ribbon') {
     return (
       <>
@@ -113,7 +118,7 @@ function Label({ item, variant, arrow }: { item: CommandItem; variant: CommandBa
   return (
     <>
       {item.icon && <span className="inline-flex shrink-0" aria-hidden="true">{item.icon}</span>}
-      <span>{item.label}</span>
+      <span className={iconOnly ? 'sr-only' : undefined}>{item.label}</span>
       {arrow && <ChevronDown size={12} className="opacity-70 shrink-0" aria-hidden="true" />}
     </>
   );
@@ -128,7 +133,8 @@ function CommandButton({ item, variant, measure = false, tabStop, openKey, descI
   const disabledProps = item.disabled
     ? { 'aria-disabled': true as const, ...(descId ? { 'aria-describedby': descId } : {}) }
     : {};
-  const title = item.tooltip && item.tooltip !== item.label ? item.tooltip : undefined;
+  const iconOnly = !!(item.iconOnly && item.icon) && variant === 'inline';
+  const title = item.tooltip && item.tooltip !== item.label ? item.tooltip : (iconOnly ? item.label : undefined);
   const menuKey = split ? `${item.id}:menu` : item.id;
 
   const openMenu = (el: HTMLElement) => {
@@ -154,9 +160,9 @@ function CommandButton({ item, variant, measure = false, tabStop, openKey, descI
         if (dropdownOnly) openMenu(e.currentTarget);
         else item.onClick?.(e.currentTarget);
       }}
-      className={`${shape.main} ${common} ${split ? 'rounded-r-none' : ''}`}
+      className={`${shape.main} ${iconOnly ? ICON_ONLY : ''} ${common} ${split ? 'rounded-r-none' : ''}`}
     >
-      <Label item={item} variant={variant} arrow={dropdownOnly} />
+      <Label item={item} variant={variant} arrow={dropdownOnly && !iconOnly} iconOnly={iconOnly} />
     </button>
   );
   if (!split) return main;
@@ -220,8 +226,8 @@ function GroupBox({ group, variant, first, children }: { group: CommandGroup; va
   );
 }
 
-/** An overflowed command as a "…" menu entry (split buttons: main action first). */
-function toMenuItem(item: CommandItem, anchor: () => HTMLElement): ContextMenuItem {
+/** A command as a menu entry ("…" overflow, or a menu of other commands; split buttons: main action first). */
+export function commandMenuItem(item: CommandItem, anchor: () => HTMLElement): ContextMenuItem {
   const icon = item.icon ? <span className="inline-flex [&>svg]:size-4">{item.icon}</span> : undefined;
   const sub = item.menu?.();
   const children = sub && item.onClick
@@ -320,7 +326,7 @@ export function CommandBar({ label, groups, variant = 'inline', end, className =
     const anchor = () => trigger;
     const items = overflowGroups.flatMap((g, gi) => [
       ...(gi > 0 ? [{ type: 'divider' as const }] : []),
-      ...g.items.map((i) => toMenuItem(i, anchor)),
+      ...g.items.map((i) => commandMenuItem(i, anchor)),
     ]);
     openMenu(MORE_KEY, trigger, items);
   };

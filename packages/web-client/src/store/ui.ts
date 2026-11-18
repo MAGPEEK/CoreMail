@@ -12,6 +12,7 @@ import {
 } from '../lib/composeTabs.js';
 import { subjectFor, type ComposeMode } from '../lib/composeQuote.js';
 import type { Importance } from '../lib/importance.js';
+import type { Sensitivity } from '../lib/sensitivity.js';
 
 export type { ComposeMode };
 /** A local file, or an attachment already stored with the server draft. */
@@ -37,6 +38,10 @@ export interface ComposeSnapshot {
   deliveryReceipt?: boolean;
   /** 9.4: Wichtigkeit hoch / normal / niedrig */
   importance?: Importance;
+  /** 9.4: Vertraulichkeit (Nachrichtenoptionen) */
+  sensitivity?: Sensitivity;
+  /** 9.4: Von shown via "Absender anzeigen" */
+  showFrom?: boolean;
   plainText?: boolean;
   quoteFolded?: boolean;
   /** Identity whose signature was placed, and the block as placed (undefined = unknown). */

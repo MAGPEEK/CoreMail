@@ -91,6 +91,8 @@ export interface Message extends MessageSummary {
   dispositionNotificationTo?: string | null;
   /** 9.4: importance of the mail ('high' | 'low'), null / absent = normal */
   importance?: string | null;
+  /** 9.4: Sensitivity header ('personal' | 'private' | 'confidential'), null / absent = normal */
+  sensitivity?: string | null;
 }
 
 export interface MessagesResponse {
