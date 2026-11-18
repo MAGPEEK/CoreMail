@@ -32,7 +32,8 @@ export function useGlobalShortcuts(): void {
   };
 
   useShortcutHandlers({
-    'compose.new': () => { if (useUiStore.getState().composeOpen) return false; openCompose(); return true; },
+    // 9.4: another new mail while one is shown puts that one into the draft tab strip
+    'compose.new': () => { openCompose(); },
     help: () => { setShortcutHelpOpen(true); },
     // A mail still waiting in the send delay is the most urgent thing to undo
     undo: () => { if (!undoLatestSend()) triggerLatestUndo(); },

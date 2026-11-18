@@ -11,6 +11,8 @@ import { MessageList } from '../components/MessageList.js';
 import { MessageReader } from '../components/MessageReader.js';
 import { MailCommandBar } from '../components/MailCommandBar.js';
 import { PageShell } from '../components/PageShell.js';
+import { ComposePane } from '../components/compose/ComposePane.js';
+import { DraftTabStrip } from '../components/compose/DraftTabStrip.js';
 import { useUiStore, useUiPrefs } from '../store/ui.js';
 import { api } from '../api/client.js';
 import type { Folder } from '../api/types.js';
@@ -22,7 +24,7 @@ import {
   mailApiBase, foldersQueryKey, parseMailboxKey, isReadOnlyMailbox, READ_ONLY_HINT,
   type AccessibleMailboxEntry,
 } from '../lib/mailboxContext.js';
-import { MAIL_VIEW_ROOT_CLASS } from '../lib/mailLayout.js';
+import { MAIL_VIEW_COLUMN_CLASS, MAIL_VIEW_ROOT_CLASS } from '../lib/mailLayout.js';
 
 // ── Persistent panel widths ───────────────────────────────────────────────────
 const PANEL_STORAGE_KEY = 'coremail:panel-widths';
@@ -96,6 +98,7 @@ export function MailPage() {
   const { selectedFolderId, selectedMessageId, selectedIds, setSelectedFolder, clearSelection } = useUiStore();
   const mailbox = useActiveMailbox();
   const { readingPane } = useUiPrefs();
+  const composeKey = useUiStore((s) => s.compose.activeKey);
   const [activeDrag, setActiveDrag] = useState<ActiveDrag | null>(null);
 
   // ── Panel widths (resizable) ─────────────────────────────────────────────────
@@ -217,8 +220,9 @@ export function MailPage() {
     }
   };
 
-  // ── Reader-Panel ─────────────────────────────────────────────────────────────
-  const readerPanel = selectedMessageId && selectedIds.size === 0 ? (
+  // ── Reader-Panel (9.4: or the compose area of the shown draft) ────────────────
+  const composePanel = composeKey ? <ComposePane key={composeKey} tabKey={composeKey} variant="inline" /> : null;
+  const readerPanel = composePanel ?? (selectedMessageId && selectedIds.size === 0 ? (
     <div key={selectedMessageId} className="flex-1 animate-page-in flex flex-col overflow-hidden min-w-0 min-h-0">
       <MessageReader messageId={selectedMessageId} />
     </div>
@@ -228,11 +232,12 @@ export function MailPage() {
         ? <div className="flex-1 flex items-center justify-center text-fg-subtle text-sm">{selectedIds.size} Nachrichten ausgewählt</div>
         : readingPane !== 'off' ? <EmptyReader /> : null}
     </div>
-  );
+  ));
 
   return (
     <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd} onDragCancel={() => setActiveDrag(null)}>
       <PageShell title="Mail" commandBar={<MailCommandBar />}>
+        <div className={MAIL_VIEW_COLUMN_CLASS}>
         <div className={MAIL_VIEW_ROOT_CLASS}>
 
           {/* ── Folder tree ─────────────────────────────────────────────────── */}
@@ -242,8 +247,8 @@ export function MailPage() {
 
           <ResizeHandle onResize={resizeFolder} />
 
-          {/* ── Message list + reader ────────────────────────────────────────── */}
-          {selectedFolderId ? (
+          {/* ── Message list + reader (a draft without reading pane / folder: the whole area) ── */}
+          {composePanel && (readingPane === 'off' || !selectedFolderId) ? composePanel : selectedFolderId ? (
             readingPane === 'bottom' ? (
               /* Reading pane at the bottom: list on top, reader below */
               <div className="flex flex-col flex-1 overflow-hidden min-w-0">
@@ -272,6 +277,8 @@ export function MailPage() {
               Ordner auswählen
             </div>
           )}
+        </div>
+        <DraftTabStrip />
         </div>
       </PageShell>
 

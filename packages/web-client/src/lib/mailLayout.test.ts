@@ -9,13 +9,15 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { MAIL_VIEW_ROOT_CLASS, fillsFlexRow } from './mailLayout.ts';
+import { MAIL_VIEW_COLUMN_CLASS, MAIL_VIEW_ROOT_CLASS, fillsFlexRow } from './mailLayout.ts';
 
 const src = join(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (p: string) => readFileSync(join(src, p), 'utf8');
 
 test('mail view root fills the horizontal <main> and may shrink', () => {
   assert.ok(fillsFlexRow(MAIL_VIEW_ROOT_CLASS));
+  assert.ok(fillsFlexRow(MAIL_VIEW_COLUMN_CLASS), '9.4: the column holding the view + draft tab strip');
+  assert.match(read('pages/MailPage.tsx'), /className=\{MAIL_VIEW_COLUMN_CLASS\}[\s\S]*<DraftTabStrip \/>/);
   assert.equal(fillsFlexRow('h-full flex flex-col bg-surface-2'), false, 'the 9.2 shared-mailbox root');
   assert.equal(fillsFlexRow('flex-1 overflow-hidden'), false, 'flex-1 alone keeps min-width:auto');
   // <main> is a horizontal flex row (App.tsx)

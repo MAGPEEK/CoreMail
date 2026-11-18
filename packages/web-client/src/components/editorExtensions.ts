@@ -1,6 +1,7 @@
 import { Extension, Node, mergeAttributes, type Editor } from '@tiptap/react';
 import ImageExt from '@tiptap/extension-image';
 import { SIGNATURE_BLOCK_ATTR, signatureBlockHtml } from '../lib/signaturePick.js';
+import { QUOTE_ATTR } from '../lib/composeQuote.js';
 
 /**
  * Custom font-size extension (TipTap has no standard extension for this):
@@ -56,7 +57,39 @@ export const SignatureBlockExt = Node.create({
   },
 });
 
+/**
+ * 9.4: marks the quoted original of a reply / forward (`<blockquote data-cm-quote>`,
+ * lib/composeQuote.ts) so it survives editing and reopened drafts — the compose
+ * area folds a long quote by this marker.
+ */
+export const QuoteMarkerExt = Extension.create({
+  name: 'quoteMarker',
+  addGlobalAttributes() {
+    return [{
+      types: ['blockquote'],
+      attributes: {
+        quote: {
+          default: null,
+          parseHTML: (el: HTMLElement) => (el.hasAttribute(QUOTE_ATTR) ? '' : null),
+          renderHTML: (attrs: Record<string, unknown>) => (attrs['quote'] === '' ? { [QUOTE_ATTR]: '' } : {}),
+        },
+      },
+    }];
+  },
+});
+
 type Doc = Editor['state']['doc'];
+
+/** The body has the marked quote of a reply / forward (top level). */
+export function hasQuotedOriginal(editor: Editor | null): boolean {
+  const doc = editor?.state.doc;
+  if (!doc) return false;
+  for (let i = 0; i < doc.childCount; i++) {
+    const child = doc.child(i);
+    if (child.type.name === 'blockquote' && child.attrs['quote'] === '') return true;
+  }
+  return false;
+}
 
 /** The own signature: a top-level block (a quoted original's signature sits inside its blockquote). */
 function findSignatureBlock(doc: Doc): { pos: number; size: number; json: string } | null {

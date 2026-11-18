@@ -2,8 +2,8 @@ import { Routes, Route, Navigate, useLocation, useNavigate, useParams } from 're
 import { useEffect, useLayoutEffect, useState } from 'react';
 import { TopBar } from './components/TopBar.js';
 import { AppRail } from './components/AppRail.js';
-import { ComposeWindow } from './components/ComposeWindow.js';
 import { LoginPage } from './pages/LoginPage.js';
+import { ComposePopoutPage } from './pages/ComposePopoutPage.js';
 import { SsoCallbackPage } from './pages/SsoCallbackPage.js';
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage.js';
 import { ResetPasswordPage } from './pages/ResetPasswordPage.js';
@@ -16,7 +16,7 @@ import { NotesPage } from './pages/NotesPage.js';
 import { SettingsPage } from './pages/SettingsPage.js';
 import { useAuthStore } from './store/auth.js';
 import { useSessionChecked } from './api/client.js';
-import { useUiStore, useThemeStore, resolveIsDark } from './store/ui.js';
+import { useThemeStore, resolveIsDark } from './store/ui.js';
 import { useMailEvents } from './hooks/useMailEvents.js';
 import { usePreferencesSync } from './hooks/usePreferencesSync.js';
 import { useInactivityLogout } from './hooks/useInactivityLogout.js';
@@ -25,6 +25,9 @@ import { ErrorBoundary } from './components/ErrorBoundary.js';
 import { ShortcutHelpDialog } from './components/ShortcutHelpDialog.js';
 import { useGlobalShortcuts } from './hooks/useGlobalShortcuts.js';
 import { useSendGuard } from './components/DelayedSendToast.js';
+import { useComposeRouting } from './hooks/useComposeRouting.js';
+import { usePopoutBridge } from './hooks/usePopoutBridge.js';
+import { POPOUT_ROUTE } from './lib/composePopout.js';
 import { brandCssVars, headerHex, resolveAccentChannels } from './lib/branding.js';
 import { useBranding, useBrandingSync } from './hooks/useBranding.js';
 import { mailPageUrl, parseMailboxKey } from './lib/mailboxContext.js';
@@ -87,7 +90,6 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
 function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
   const navigate = useNavigate();
-  const { composeOpen } = useUiStore();
   // 9.4: roaming preferences (server copy, debounced writes)
   usePreferencesSync();
   useMailEvents();
@@ -97,6 +99,9 @@ function Layout({ children }: { children: React.ReactNode }) {
   // Keyboard shortcuts (Settings → View) + undo-send unload guard
   useGlobalShortcuts();
   useSendGuard();
+  // 9.4: compose opens inline in the mail view; drafts in their own windows talk back here
+  useComposeRouting();
+  usePopoutBridge();
 
   // MessageList picks up ?q= and runs a mailbox-wide server search
   const handleSearch = (q: string) => {
@@ -114,7 +119,6 @@ function Layout({ children }: { children: React.ReactNode }) {
           <ErrorBoundary resetKey={pageKey(location.pathname)}>{children}</ErrorBoundary>
         </main>
       </div>
-      {composeOpen && <ComposeWindow />}
       <ShortcutHelpDialog />
     </div>
   );
@@ -171,6 +175,8 @@ export function App() {
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
         {/* OAuth2 consent route removed in v5.6.0 (OAuth2 dropped entirely) */}
+        {/* 9.4: a draft in its own window (no app frame) */}
+        <Route path={POPOUT_ROUTE} element={<AuthGuard><ComposePopoutPage /></AuthGuard>} />
         <Route path="/*" element={
           <AuthGuard>
             <Layout>
