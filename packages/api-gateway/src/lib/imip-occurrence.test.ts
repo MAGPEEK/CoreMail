@@ -5,7 +5,13 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildCancelIcs, buildRequestIcs, recurrenceLines, type EventData } from './imip.js';
+process.env['DATABASE_URL'] ??= 'postgresql://test:test@localhost:5432/test';
+process.env['JWT_SECRET'] ??= 'test-secret-test-secret-test-secret-1234';
+process.env['PEPPER'] ??= 'test-pepper-test-pepper-test-pepper-1234';
+
+import type { EventData } from './imip.js';
+// imip.js pulls in @coremail/core, which validates the env at import time
+const { buildCancelIcs, buildRequestIcs, recurrenceLines } = await import('./imip.js');
 
 const unfold = (ics: string): string => ics.replace(/\r?\n[ \t]/g, '');
 
