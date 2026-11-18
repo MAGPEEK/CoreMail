@@ -43,6 +43,12 @@ export interface EventData {
   allDay?: boolean;
   /** RECUR value (without "RRULE:") for recurring invitations. */
   rrule?: string | null;
+  /** 9.4: deleted occurrences of the series (EXDATE). */
+  exdates?: Date[];
+  /** 9.4: the invitation concerns one occurrence only (RECURRENCE-ID = its original start). */
+  recurrenceId?: Date;
+  /** 9.4: show-as of the organizer's event (default BUSY). */
+  showAs?: 'FREE' | 'TENTATIVE' | 'BUSY' | 'OOF';
   organizer: { email: string; cn?: string };
   attendees: AttendeeData[];
   publicHostname: string;  // for UID domain fallback
@@ -105,22 +111,22 @@ function buildIcs(ev: EventData, method: ICalCalendarMethod, status: ICalEventSt
     start: ev.dtStart,
     end: ev.dtEnd,
     ...(ev.allDay ? { allDay: true } : {}),
-    ...(ev.rrule ? { repeating: `RRULE:${ev.rrule.replace(/^RRULE:/i, '')}` } : {}),
+    ...(ev.rrule && !ev.recurrenceId ? { repeating: recurrenceLines(ev) } : {}),
+    ...(ev.recurrenceId ? { recurrenceId: ev.recurrenceId } : {}),
     summary: ev.summary,
     ...(ev.description ? { description: ev.description } : {}),
     ...(ev.location ? { location: ev.location } : {}),
     stamp: new Date(),
     status,
-    busystatus: ICalEventBusyStatus.BUSY,
-    transparency: ICalEventTransparency.OPAQUE,
+    busystatus: BUSY_STATUS[ev.showAs ?? 'BUSY'],
+    transparency: ev.showAs === 'FREE' ? ICalEventTransparency.TRANSPARENT : ICalEventTransparency.OPAQUE,
     organizer: { name: ev.organizer.cn ?? ev.organizer.email, email: ev.organizer.email },
   });
 
   // Outlook quirks — improves free/busy status + force-inspector
   // (see research v3.18.24, MS-OXCICAL)
   e.x([
-    { key: 'X-MICROSOFT-CDO-BUSYSTATUS', value: 'BUSY' },
-    { key: 'X-MICROSOFT-CDO-INTENDEDSTATUS', value: 'BUSY' },
+    { key: 'X-MICROSOFT-CDO-INTENDEDSTATUS', value: ev.showAs ?? 'BUSY' },
     { key: 'X-MICROSOFT-CDO-IMPORTANCE', value: '1' },
     { key: 'X-MS-OLK-FORCEINSPECTOROPEN', value: 'TRUE' },
   ]);
@@ -139,6 +145,27 @@ function buildIcs(ev: EventData, method: ICalCalendarMethod, status: ICalEventSt
   }
 
   return cal.toString();
+}
+
+const BUSY_STATUS: Record<NonNullable<EventData['showAs']>, ICalEventBusyStatus> = {
+  FREE: ICalEventBusyStatus.FREE,
+  TENTATIVE: ICalEventBusyStatus.TENTATIVE,
+  BUSY: ICalEventBusyStatus.BUSY,
+  OOF: ICalEventBusyStatus.OOF,
+};
+
+const pad2 = (n: number): string => String(n).padStart(2, '0');
+
+/** RRULE plus one EXDATE line per deleted occurrence (UTC, or dates for all-day series). */
+export function recurrenceLines(ev: Pick<EventData, 'rrule' | 'exdates' | 'allDay'>): string {
+  const lines = [`RRULE:${(ev.rrule ?? '').replace(/^RRULE:/i, '')}`];
+  for (const d of ev.exdates ?? []) {
+    const date = `${d.getUTCFullYear()}${pad2(d.getUTCMonth() + 1)}${pad2(d.getUTCDate())}`;
+    lines.push(ev.allDay
+      ? `EXDATE;VALUE=DATE:${date}`
+      : `EXDATE:${date}T${pad2(d.getUTCHours())}${pad2(d.getUTCMinutes())}${pad2(d.getUTCSeconds())}Z`);
+  }
+  return lines.join('\n');
 }
 
 function mapPartstatToStatus(p: AttendeeStatus): ICalAttendeeStatus {

@@ -275,6 +275,47 @@ test('modifyFlags computes from the flags read after the modSeq lock; null leave
   assert.equal(mailbox()['highestModSeq'], 4n);
 });
 
+test('9.4 follow-up: setFollowUp writes the flag + \\Flagged with one modSeq; IMAP/JMAP keyword writes keep it in step', async () => {
+  const due = new Date('2026-03-06T00:00:00Z');
+  const out = await prisma.$transaction((tx) => store.setFollowUp(tx, ['a'], { status: 'flagged', dueAt: due }, { mailboxId: 'mb1' }));
+  assert.deepEqual(out, [{ id: 'a', flags: ['\\Flagged'], modSeq: 4n }]);
+  assert.equal(byId('a')['flagStatus'], 'flagged');
+  assert.equal(byId('a')['flagDueAt'], due);
+  assert.equal(mailbox()['highestModSeq'], 4n);
+
+  // complete clears \Flagged, keeps the due date, records the completion time
+  const at = new Date('2026-03-05T12:00:00Z');
+  await prisma.$transaction((tx) => store.setFollowUp(tx, ['a'], { status: 'complete', dueAt: due }, { now: at }));
+  assert.deepEqual(byId('a')['flags'], []);
+  assert.equal(byId('a')['flagStatus'], 'complete');
+  assert.equal(byId('a')['flagCompletedAt'], at);
+
+  // IMAP STORE +FLAGS \Flagged (modifyFlags) re-flags the message
+  await prisma.$transaction((tx) => store.modifyFlags(tx, ['a'], (f) => [...f, '\\Flagged'], { mailboxId: 'mb1' }));
+  assert.equal(byId('a')['flagStatus'], 'flagged');
+  assert.equal(byId('a')['flagCompletedAt'], null);
+  assert.equal(byId('a')['flagDueAt'], due, 'dates survive a keyword re-flag');
+
+  // JMAP keywords / REST toggle (setFlags) without \Flagged clears the flag and its dates
+  await prisma.$transaction((tx) => store.setFlags(tx, [{ id: 'a', flags: ['\\Seen'] }], { mailboxId: 'mb1' }));
+  assert.equal(byId('a')['flagStatus'], 'none');
+  assert.equal(byId('a')['flagDueAt'], null);
+  assert.equal(byId('a')['modSeq'], 7n);
+});
+
+test('9.4 follow-up: a message created with \\Flagged (mail rule) is flagged; copies with new keywords follow them', async () => {
+  const [created] = await prisma.$transaction((tx) => store.createMessages(tx, 'mb1', 'inbox', [
+    { subject: 'r', date: new Date(), flags: ['\\Flagged'] },
+  ] as never));
+  assert.equal(created!.flagStatus, 'flagged');
+  byId('b')['flagStatus'] = 'flagged';
+  byId('b')['flags'] = ['\\Flagged'];
+  const { mapping } = await prisma.$transaction((tx) => store.copyMessages(tx, ['b'], 'archive', { data: { flags: [] } }));
+  const copy = byId(mapping[0]!.newId);
+  assert.equal(copy['flagStatus'], 'none');
+  assert.deepEqual(copy['flags'], []);
+});
+
 test('touchMessages and expunge give changed rows a fresh modSeq', async () => {
   await prisma.$transaction((tx) => store.touchMessages(tx, ['c'], { pinnedAt: new Date(0) }));
   assert.equal(byId('c')['modSeq'], 4n);

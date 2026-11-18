@@ -154,6 +154,54 @@ const mailUiEn: Record<keyof typeof mailUiDe, string> = {
   reader_as_junk_tip:                'Move to Junk (trains the filter)',
 };
 
+// ── 9.4: follow-up flags ("Kennzeichnen" menu, flag dialog, list) ─────────────
+// Spanish and Italian fall back to the English texts of this block.
+const followUpUiDe = {
+  flag_today:                        'Heute',
+  flag_tomorrow:                     'Morgen',
+  flag_this_week:                    'Diese Woche',
+  flag_next_week:                    'Nächste Woche',
+  flag_no_date:                      'Kein Datum',
+  flag_custom:                       'Benutzerdefiniert …',
+  flag_add_reminder:                 'Erinnerung hinzufügen …',
+  flag_mark_complete:                'Als erledigt markieren',
+  flag_clear:                        'Kennzeichnung löschen',
+  flag_dialog_title:                 'Zur Nachverfolgung kennzeichnen',
+  flag_start:                        'Startdatum',
+  flag_due:                          'Fälligkeitsdatum',
+  flag_reminder:                     'Erinnerung',
+  flag_due_on:                       'Fällig: {date}',
+  flag_due_today:                    'Heute fällig',
+  flag_due_tomorrow:                 'Morgen fällig',
+  flag_overdue:                      'Überfällig: {date}',
+  flag_completed:                    'Erledigt',
+  flag_flagged:                      'Gekennzeichnet',
+  flag_saved:                        'Kennzeichnung gespeichert',
+} as const;
+
+const followUpUiEn: Record<keyof typeof followUpUiDe, string> = {
+  flag_today:                        'Today',
+  flag_tomorrow:                     'Tomorrow',
+  flag_this_week:                    'This week',
+  flag_next_week:                    'Next week',
+  flag_no_date:                      'No date',
+  flag_custom:                       'Custom …',
+  flag_add_reminder:                 'Add reminder …',
+  flag_mark_complete:                'Mark complete',
+  flag_clear:                        'Clear flag',
+  flag_dialog_title:                 'Flag for follow-up',
+  flag_start:                        'Start date',
+  flag_due:                          'Due date',
+  flag_reminder:                     'Reminder',
+  flag_due_on:                       'Due {date}',
+  flag_due_today:                    'Due today',
+  flag_due_tomorrow:                 'Due tomorrow',
+  flag_overdue:                      'Overdue: {date}',
+  flag_completed:                    'Completed',
+  flag_flagged:                      'Flagged',
+  flag_saved:                        'Flag saved',
+};
+
 // ── Compose (9.4: inline compose, ribbon, tab strip, own window) ─────────────
 // Spanish and Italian fall back to the English texts of this block.
 const composeUiDe = {
@@ -498,6 +546,7 @@ const composeUiEn: Record<keyof typeof composeUiDe, string> = {
 const de = {
   ...mailUiDe,
   ...composeUiDe,
+  ...followUpUiDe,
   // General
   language:                'Sprache',
   language_de:             'Deutsch',
@@ -888,6 +937,7 @@ export type TranslationKey = keyof typeof de;
 const en: Record<TranslationKey, string> = {
   ...mailUiEn,
   ...composeUiEn,
+  ...followUpUiEn,
   language:                'Language',
   language_de:             'German',
   language_en:             'English',
@@ -1264,6 +1314,7 @@ const en: Record<TranslationKey, string> = {
 const es: Record<TranslationKey, string> = {
   ...mailUiEn,
   ...composeUiEn,
+  ...followUpUiEn,
   language:                'Idioma',
   language_de:             'Alemán',
   language_en:             'Inglés',
@@ -1639,6 +1690,7 @@ const es: Record<TranslationKey, string> = {
 const it: Record<TranslationKey, string> = {
   ...mailUiEn,
   ...composeUiEn,
+  ...followUpUiEn,
   language:                'Lingua',
   language_de:             'Tedesco',
   language_en:             'Inglese',

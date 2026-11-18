@@ -65,6 +65,7 @@ const SELECT = {
   id: true, modSeq: true, flags: true, subject: true, fromAddr: true, fromName: true,
   toAddrs: true, ccAddrs: true, replyTo: true, messageId: true, inReplyTo: true, threadId: true,
   date: true, bodyText: true, bodyHtml: true, storagePath: true, smimeMeta: true,
+  flagStatus: true, flagStartAt: true, flagDueAt: true, flagReminderAt: true, flagCompletedAt: true,
 } as const;
 
 /** airsync:WindowSize → window size (default SYNC_WINDOW_SIZE, capped at MAX_WINDOW_SIZE). */

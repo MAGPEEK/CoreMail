@@ -10,6 +10,10 @@ const T = {
   Provision: [14, 0x05], Policies: [14, 0x06], Policy: [14, 0x07], PolicyType: [14, 0x08], PolicyKey: [14, 0x09], PStatus: [14, 0x0b],
   FolderSync: [7, 0x16], FSyncKey: [7, 0x12],
   Sync: [0, 0x05], Collections: [0, 0x1c], Collection: [0, 0x0f], SyncKey: [0, 0x0b], CollectionId: [0, 0x12], GetChanges: [0, 0x13], WindowSize: [0, 0x15],
+  // 9.4: client Change with email:Flag (Email page 2, tasks:* dates on the Tasks page 9)
+  Commands: [0, 0x16], Change: [0, 0x08], ServerId: [0, 0x0d], ApplicationData: [0, 0x1d],
+  Flag: [2, 0x3a], FlagStatus: [2, 0x3b], FlagType: [2, 0x3d],
+  TStartDate: [9, 0x1e], TUtcStartDate: [9, 0x1f], TDueDate: [9, 0x0c], TUtcDueDate: [9, 0x0d],
 };
 function encode(node) {
   const out = [0x03, 0x01, 0x6a, 0x00];
@@ -122,6 +126,7 @@ export async function run(state) {
     return 'all tags on page 7';
   });
 
+  let syncKey, easItem;
   await check('eas: Sync INBOX returns messages', async () => {
     const s0 = await post('Sync', encode(['Sync', [['Collections', [['Collection', [['SyncKey', '0'], ['CollectionId', inboxId]]]]]]]), { 'X-MS-PolicyKey': policyKey });
     assert(s0.status === 200, `initial ${s0.status}`);
@@ -132,7 +137,10 @@ export async function run(state) {
     assert(key && find(t0, 'Status')?.text === '1', `no SyncKey / Status!=1: ${col0.slice(0, 300)}`);
     const s1 = await post('Sync', encode(['Sync', [['Collections', [['Collection', [['SyncKey', key], ['CollectionId', inboxId], ['GetChanges'], ['WindowSize', '100']]]]]]]), { 'X-MS-PolicyKey': policyKey });
     assert(s1.status === 200, `${s1.status}`);
-    const t1 = JSON.stringify(decodeWbxml(Buffer.from(await s1.arrayBuffer())));
+    const tree1 = decodeWbxml(Buffer.from(await s1.arrayBuffer()));
+    const t1 = JSON.stringify(tree1);
+    syncKey = find(tree1, 'SyncKey')?.text;
+    easItem = find(find(tree1, 'Add') ?? {}, 'ServerId')?.text;
     const adds0 = (col0.match(/"name":"Add"/g) ?? []).length;
     const adds = (t1.match(/"name":"Add"/g) ?? []).length;
     // [MS-ASCMD] 2.2.3.166.4: the SyncKey=0 response only primes the sync state (no Commands);
@@ -140,6 +148,41 @@ export async function run(state) {
     assert(adds0 === 0, `SyncKey=0 response already carried ${adds0} Add commands (and the follow-up Sync ${adds}) — devices that follow the spec never receive these messages`);
     assert(adds > 0, `no Add in sync response: ${t1.slice(0, 300)}`);
     return `${adds} messages`;
+  });
+
+  // 9.4: follow-up flag both directions — device → server (Change with email:Flag) and
+  // server → device (a flag completed in the webmail arrives as a Change with Flag Status 1)
+  await check('eas: Sync Change with email:Flag (start/due) → follow-up flag in REST', async () => {
+    assert(syncKey && easItem, 'no synced item from the previous step');
+    const dates = [['TStartDate', '2026-12-07T00:00:00.000Z'], ['TUtcStartDate', '2026-12-07T00:00:00.000Z'], ['TDueDate', '2026-12-09T00:00:00.000Z'], ['TUtcDueDate', '2026-12-09T00:00:00.000Z']];
+    const flag = ['Flag', [['FlagStatus', '2'], ['FlagType', 'Flag for follow up'], ...dates]];
+    const r = await post('Sync', encode(['Sync', [['Collections', [['Collection', [['SyncKey', syncKey], ['CollectionId', inboxId], ['Commands', [['Change', [['ServerId', easItem], ['ApplicationData', [flag]]]]]]]]]]]]), { 'X-MS-PolicyKey': policyKey });
+    assert(r.status === 200, `${r.status}`);
+    const tree = decodeWbxml(Buffer.from(await r.arrayBuffer()));
+    const find = (n, name) => (n.name === name ? n : (n.children ?? []).map((c) => (typeof c === 'string' ? null : find(c, name))).find(Boolean));
+    assert(!find(tree, 'Responses'), `change refused: ${JSON.stringify(tree).slice(0, 300)}`);
+    syncKey = find(tree, 'SyncKey')?.text;
+    const tok = await session(state, 'b', B, c.userB);
+    const list = await http('GET', '/api/v1/mail/follow-up?status=flagged', { token: tok });
+    const item = (list.json ?? []).find((m) => m.id === easItem);
+    assert(item && item.flagDueAt === '2026-12-09T00:00:00.000Z', `REST: ${JSON.stringify(item ?? list.json).slice(0, 300)}`);
+    return `flagged, due ${item.flagDueAt}`;
+  });
+
+  await check('eas: flag completed in REST reaches the device as Change with Flag Status 1', async () => {
+    const tok = await session(state, 'b', B, c.userB);
+    const done = await http('PUT', '/api/v1/mail/follow-up', { token: tok, body: { ids: [easItem], status: 'complete' } });
+    assert(done.status === 200, `${done.status} ${done.text}`);
+    const r = await post('Sync', encode(['Sync', [['Collections', [['Collection', [['SyncKey', syncKey], ['CollectionId', inboxId], ['GetChanges'], ['WindowSize', '100']]]]]]]), { 'X-MS-PolicyKey': policyKey });
+    assert(r.status === 200, `${r.status}`);
+    const tree = decodeWbxml(Buffer.from(await r.arrayBuffer()));
+    const all = (n, name, acc = []) => { if (n.name === name) acc.push(n); for (const ch of n.children ?? []) if (typeof ch !== 'string') all(ch, name, acc); return acc; };
+    const change = all(tree, 'Change').find((ch) => all(ch, 'ServerId')[0]?.text === easItem);
+    assert(change, `no Change for the item: ${JSON.stringify(tree).slice(0, 400)}`);
+    const status = all(change, 'FlagStatus')[0]?.text;
+    assert(status === '1' && all(change, 'CompleteTime').length === 1, `Flag: ${JSON.stringify(all(change, 'Flag'))}`);
+    syncKey = all(tree, 'SyncKey')[0]?.text;
+    return 'Change with Flag Status 1 + CompleteTime';
   });
 
   await check('eas: GetAttachment returns the attachment bytes', async () => {

@@ -458,6 +458,88 @@ export function normalizeAllDayRange(start: string | Date, end: string | Date): 
   return { start: s, end: e };
 }
 
+// ─── Show as (free/busy) and alarms ──────────────────────────────────────────
+
+/**
+ * 9.4: how an event blocks time ("Anzeigen als"). Stored as TRANSP (FREE =
+ * TRANSPARENT, everything else OPAQUE) plus X-MICROSOFT-CDO-BUSYSTATUS, which
+ * the common desktop clients read and write; reading falls back to TRANSP.
+ */
+export type ShowAs = 'FREE' | 'TENTATIVE' | 'BUSY' | 'OOF';
+export const SHOW_AS_VALUES: readonly ShowAs[] = ['FREE', 'TENTATIVE', 'BUSY', 'OOF'];
+const BUSY_STATUS_PROP = 'X-MICROSOFT-CDO-BUSYSTATUS';
+
+export function normShowAs(v: string | null | undefined): ShowAs {
+  const s = (v ?? '').trim().toUpperCase();
+  if (s === 'WORKINGELSEWHERE') return 'BUSY';
+  return (SHOW_AS_VALUES as readonly string[]).includes(s) ? (s as ShowAs) : 'BUSY';
+}
+
+function componentShowAs(ev: IcalComponent): ShowAs {
+  const cdo = getProperty(ev, BUSY_STATUS_PROP)?.value;
+  if (cdo) return normShowAs(cdo);
+  return (getProperty(ev, 'TRANSP')?.value ?? '').trim().toUpperCase() === 'TRANSPARENT' ? 'FREE' : 'BUSY';
+}
+
+function showAsProps(showAs: ShowAs): IcalProperty[] {
+  return [
+    { name: 'TRANSP', params: {}, value: showAs === 'FREE' ? 'TRANSPARENT' : 'OPAQUE' },
+    { name: BUSY_STATUS_PROP, params: {}, value: showAs },
+  ];
+}
+
+/**
+ * 9.4: the reminder of an event — minutes before the start, and whether an
+ * e-mail reminder (VALARM ACTION:EMAIL to `mailTo`) accompanies the display alarm.
+ */
+export interface AlarmSpec {
+  minutes: number;
+  byMail?: boolean;
+  /** Recipient of the e-mail alarm (the calendar owner). */
+  mailTo?: string;
+}
+
+function triggerMinutes(alarm: IcalComponent): number | null {
+  const trigger = getProperty(alarm, 'TRIGGER');
+  if (!trigger || (trigger.params['VALUE'] ?? '').toUpperCase() === 'DATE-TIME') return null;
+  const ms = parseDuration(trigger.value);
+  return ms === null ? null : Math.max(0, Math.round(-ms / 60_000));
+}
+
+/** First display/audio alarm (else the e-mail alarm) of a component; null without alarms. */
+function componentAlarm(ev: IcalComponent): AlarmSpec | null {
+  const alarms = ev.components.filter((c) => c.name === 'VALARM');
+  const action = (a: IcalComponent): string => (getProperty(a, 'ACTION')?.value ?? '').trim().toUpperCase();
+  const mail = alarms.find((a) => action(a) === 'EMAIL');
+  const shown = alarms.find((a) => action(a) !== 'EMAIL' && triggerMinutes(a) !== null);
+  const minutes = shown ? triggerMinutes(shown) : mail ? triggerMinutes(mail) : null;
+  if (minutes === null) return null;
+  return { minutes, byMail: mail !== undefined };
+}
+
+function alarmComponents(alarm: AlarmSpec, summary: string): IcalComponent[] {
+  const trigger: IcalProperty = { name: 'TRIGGER', params: {}, value: `-PT${Math.max(0, Math.floor(alarm.minutes))}M` };
+  const out: IcalComponent[] = [{
+    name: 'VALARM',
+    properties: [{ name: 'ACTION', params: {}, value: 'DISPLAY' }, trigger, textProp('DESCRIPTION', summary)],
+    components: [],
+  }];
+  if (alarm.byMail) {
+    out.push({
+      name: 'VALARM',
+      properties: [
+        { name: 'ACTION', params: {}, value: 'EMAIL' },
+        { ...trigger },
+        textProp('SUMMARY', summary),
+        textProp('DESCRIPTION', summary),
+        ...(alarm.mailTo ? [{ name: 'ATTENDEE', params: {}, value: `mailto:${alarm.mailTo.replace(/[\s"]/g, '')}` }] : []),
+      ],
+      components: [],
+    });
+  }
+  return out;
+}
+
 // ─── Parsed VEVENT ───────────────────────────────────────────────────────────
 
 export interface ParsedAttendee {
@@ -466,6 +548,8 @@ export interface ParsedAttendee {
   partstat: string;
   role: string;
   rsvp: boolean;
+  /** CUTYPE (INDIVIDUAL, ROOM, RESOURCE, …), upper case; INDIVIDUAL when absent. */
+  cutype: string;
 }
 
 export interface ParsedVEvent {
@@ -487,6 +571,8 @@ export interface ParsedVEvent {
   sequence: number | null;
   organizer: string | null;
   attendees: ParsedAttendee[];
+  showAs: ShowAs;
+  alarm: AlarmSpec | null;
 }
 
 function mailto(v: string): string {
@@ -548,7 +634,10 @@ export function parseVEventComponent(ev: IcalComponent, root: IcalComponent | nu
       partstat: (a.params['PARTSTAT'] ?? 'NEEDS-ACTION').toUpperCase(),
       role: (a.params['ROLE'] ?? 'REQ-PARTICIPANT').toUpperCase(),
       rsvp: (a.params['RSVP'] ?? '').toUpperCase() === 'TRUE',
+      cutype: (a.params['CUTYPE'] ?? 'INDIVIDUAL').toUpperCase(),
     })).filter((a) => a.email.includes('@')),
+    showAs: componentShowAs(ev),
+    alarm: componentAlarm(ev),
   };
 }
 
@@ -575,6 +664,8 @@ export interface AttendeeInput {
   partstat?: string;
   role?: string;
   rsvp?: boolean;
+  /** CUTYPE parameter (ROOM / RESOURCE for booked rooms); omitted = individual. */
+  cutype?: string;
 }
 
 export interface VEventFields {
@@ -592,6 +683,10 @@ export interface VEventFields {
   sequence?: number;
   organizer?: { email: string; cn?: string } | null;
   attendees?: AttendeeInput[];
+  /** 9.4: free/busy status (TRANSP + X-MICROSOFT-CDO-BUSYSTATUS). */
+  showAs?: ShowAs;
+  /** 9.4: replaces every VALARM of the component; null removes the reminder. */
+  alarm?: AlarmSpec | null;
 }
 
 function textProp(name: string, value: string): IcalProperty {
@@ -609,6 +704,7 @@ function attendeeProp(a: AttendeeInput): IcalProperty {
   params['ROLE'] = (a.role ?? 'REQ-PARTICIPANT').toUpperCase();
   params['PARTSTAT'] = (a.partstat ?? 'NEEDS-ACTION').toUpperCase();
   params['RSVP'] = a.rsvp === false ? 'FALSE' : 'TRUE';
+  if (a.cutype) params['CUTYPE'] = a.cutype.toUpperCase().replace(/[^A-Z-]/g, '');
   return { name: 'ATTENDEE', params, value: `mailto:${a.email.replace(/[\s"]/g, '')}` };
 }
 
@@ -652,7 +748,7 @@ export function buildVCalendar(opts: VEventFields & {
   method?: string;
   /** RECURRENCE-ID of a single instance (iTIP replies for one occurrence, RFC 5546 §3.2.3). */
   recurrenceId?: { date: Date; dateOnly: boolean };
-  /** 9.4: display alarm this many minutes before the start (VALARM). */
+  /** 9.4: display alarm this many minutes before the start (VALARM); `alarm` wins when both are set. */
   alarmMinutes?: number;
 }): string {
   const ev: IcalComponent = { name: 'VEVENT', properties: [], components: [] };
@@ -681,17 +777,13 @@ export function buildVCalendar(opts: VEventFields & {
     });
   }
   for (const a of opts.attendees ?? []) ev.properties.push(attendeeProp(a));
-  if (opts.alarmMinutes !== undefined && Number.isFinite(opts.alarmMinutes) && opts.alarmMinutes >= 0) {
-    ev.components.push({
-      name: 'VALARM',
-      properties: [
-        { name: 'ACTION', params: {}, value: 'DISPLAY' },
-        { name: 'TRIGGER', params: {}, value: `-PT${Math.floor(opts.alarmMinutes)}M` },
-        textProp('DESCRIPTION', opts.summary),
-      ],
-      components: [],
-    });
-  }
+  if (opts.showAs) ev.properties.push(...showAsProps(opts.showAs));
+  const alarm = opts.alarm !== undefined
+    ? opts.alarm
+    : opts.alarmMinutes !== undefined && Number.isFinite(opts.alarmMinutes) && opts.alarmMinutes >= 0
+      ? { minutes: opts.alarmMinutes }
+      : null;
+  if (alarm) ev.components.push(...alarmComponents(alarm, opts.summary));
 
   const cal: IcalComponent = {
     name: 'VCALENDAR',
@@ -718,6 +810,16 @@ export function patchVEvent(icalText: string, patch: VEventFields & { dtstamp?: 
   if (!root) return null;
   const ev = findMainVEvent(root);
   if (!ev) return null;
+  patchComponent(ev, root, patch);
+  return serializeComponent(root) + '\r\n';
+}
+
+/**
+ * Apply `patch` to one VEVENT component in place (the master in patchVEvent, a
+ * RECURRENCE-ID override in calendar/exceptions.ts). Untouched properties and
+ * sub-components are kept verbatim.
+ */
+export function patchComponent(ev: IcalComponent, root: IcalComponent, patch: VEventFields & { dtstamp?: Date }): void {
   const current = parseVEventComponent(ev, root);
 
   const setSingle = (name: string, prop: IcalProperty | null): void => {
@@ -763,11 +865,18 @@ export function patchVEvent(icalText: string, patch: VEventFields & { dtstamp?: 
       ev.properties.push(prev ? { ...prev, params: { ...prev.params, ...fresh.params } } : fresh);
     }
   }
+  if (patch.showAs !== undefined) {
+    const [transp, busy] = showAsProps(patch.showAs);
+    setSingle('TRANSP', transp ?? null);
+    setSingle(BUSY_STATUS_PROP, busy ?? null);
+  }
+  if (patch.alarm !== undefined) {
+    ev.components = ev.components.filter((c) => c.name !== 'VALARM');
+    if (patch.alarm) ev.components.push(...alarmComponents(patch.alarm, patch.summary ?? current?.summary ?? ''));
+  }
   if (!getProperty(ev, 'UID')) ev.properties.unshift({ name: 'UID', params: {}, value: `${Date.now()}@coremail` });
   setSingle('DTSTAMP', { name: 'DTSTAMP', params: {}, value: formatUtcDateTime(patch.dtstamp ?? new Date()) });
   setSingle('LAST-MODIFIED', { name: 'LAST-MODIFIED', params: {}, value: formatUtcDateTime(patch.dtstamp ?? new Date()) });
-
-  return serializeComponent(root) + '\r\n';
 }
 
 // ─── Grantee privacy (CLASS, RFC 5545 §3.8.1.3) ──────────────────────────────

@@ -18,6 +18,7 @@ import { useUiStore, useUiPrefs, type Density, type ReadingPane } from '../store
 import { useActiveMailbox } from '../hooks/useActiveMailbox.js';
 import { useMailActions } from '../hooks/useMailActions.js';
 import { useTargetMessages } from '../hooks/useTargetMessages.js';
+import { useFollowUp } from '../hooks/useFollowUp.js';
 import { dispatchShortcut, useAriaKeys } from '../hooks/useShortcuts.js';
 import { toastError } from '../lib/errors.js';
 import { OWN_MAILBOX } from '../lib/mailboxContext.js';
@@ -77,6 +78,7 @@ export function MailCommandBar() {
 
   const targets = commandTargets(selectedIds, selectedMessageId);
   const known = useTargetMessages(targets);
+  const followUp = useFollowUp();
 
   const { data: folders = [] } = useQuery({
     queryKey: mailbox.foldersKey,
@@ -161,7 +163,11 @@ export function MailCommandBar() {
         : cmd('junk', <AlertOctagon size={16} />, viaShortcut('mail.spam')),
     ] },
     { id: 'mark', title: t('mail_group_mark'), items: [
-      cmd('flag', selection.allFlagged ? <FlagOff size={16} /> : <Flag size={16} />, viaShortcut('mail.flag')),
+      // 9.4: split button — click toggles, the menu sets due dates / reminder / complete (own mailbox)
+      cmd('flag', selection.allFlagged ? <FlagOff size={16} /> : <Flag size={16} />, {
+        ...viaShortcut('mail.flag'),
+        ...(!mailbox.foreign && known.length > 0 ? { menu: () => followUp.menu(known) } : {}),
+      }),
       readToggle(selection) === 'read'
         ? cmd('read', <MailOpen size={16} />, viaShortcut('mail.markRead'))
         : cmd('read', <Mail size={16} />, viaShortcut('mail.markUnread')),
@@ -177,11 +183,14 @@ export function MailCommandBar() {
   ];
 
   return (
-    <CommandBar
-      label={t('mail_commands_label')}
-      groups={groups}
-      className="flex-1"
-      end={selectedIds.size > 0 ? <SelectionInfo count={selectedIds.size} onClear={clearSelection} /> : null}
-    />
+    <>
+      <CommandBar
+        label={t('mail_commands_label')}
+        groups={groups}
+        className="flex-1"
+        end={selectedIds.size > 0 ? <SelectionInfo count={selectedIds.size} onClear={clearSelection} /> : null}
+      />
+      {followUp.dialog}
+    </>
   );
 }

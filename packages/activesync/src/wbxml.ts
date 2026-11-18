@@ -72,6 +72,17 @@ const CODE_PAGES: Record<number, Record<number, string>> = {
     0x0c: 'UserResponse', 0x0e: 'InstanceId',
     0x10: 'ProposedStartTime', 0x11: 'ProposedEndTime', 0x12: 'SendResponse',
   },
+  // Code page 9: Tasks ([MS-ASWBXML] 2.1.2.1.10) — 9.4: the tasks:* children of email:Flag
+  9: {
+    0x08: 'Categories', 0x09: 'Category', 0x0a: 'Complete', 0x0b: 'DateCompleted',
+    0x0c: 'DueDate', 0x0d: 'UtcDueDate', 0x0e: 'Importance', 0x0f: 'Recurrence',
+    0x10: 'Type', 0x11: 'Start', 0x12: 'Until', 0x13: 'Occurrences', 0x14: 'Interval',
+    0x15: 'DayOfMonth', 0x16: 'DayOfWeek', 0x17: 'WeekOfMonth', 0x18: 'MonthOfYear',
+    0x19: 'Regenerate', 0x1a: 'DeadOccur', 0x1b: 'ReminderSet', 0x1c: 'ReminderTime',
+    0x1d: 'Sensitivity', 0x1e: 'StartDate', 0x1f: 'UtcStartDate', 0x20: 'Subject',
+    0x22: 'OrdinalDate', 0x23: 'SubOrdinalDate', 0x24: 'CalendarType', 0x25: 'IsLeapMonth',
+    0x26: 'FirstDayOfWeek',
+  },
   // Code page 10: ResolveRecipients
   10: {
     0x05: 'ResolveRecipients', 0x06: 'Response', 0x07: 'Status', 0x08: 'Type',
@@ -188,7 +199,7 @@ const CODE_PAGES: Record<number, Record<number, string>> = {
  * (`pel(CP.AirSyncBase, 'Body')`) or a qualified name (`el('AirSyncBase:Body')`).
  */
 export const CP = {
-  AirSync: 0, Email: 2, Move: 5, GetItemEstimate: 6, FolderHierarchy: 7, MeetingResponse: 8,
+  AirSync: 0, Email: 2, Move: 5, GetItemEstimate: 6, FolderHierarchy: 7, MeetingResponse: 8, Tasks: 9,
   ResolveRecipients: 10, Ping: 13, Provision: 14, Search: 15, GAL: 16, AirSyncBase: 17,
   Settings: 18, ItemOperations: 20, ComposeMail: 21, Email2: 22,
 } as const;
@@ -222,6 +233,7 @@ const TOKEN_SINCE: Record<number, Record<number, string>> = {
   2: { 0x1b: '14.0', 0x1c: '14.0', 0x3f: '14.0' }, // 2.1.2.1.3: Categories, Category, DisallowNewTimeProposal
   // 2.1.2.1.9: InstanceId (14.1), SendResponse (16.0), ProposedStartTime / ProposedEndTime (16.1)
   8: { 0x0e: '14.1', 0x10: '16.1', 0x11: '16.1', 0x12: '16.0' },
+  9: { 0x24: '14.0', 0x25: '14.0', 0x26: '14.1' }, // 2.1.2.1.10: CalendarType, IsLeapMonth, FirstDayOfWeek
   10: { // 2.1.2.1.11: Availability … MergedFreeBusy (14.0), Picture, MaxSize, Data, MaxPictures (14.1)
     0x16: '14.0', 0x17: '14.0', 0x18: '14.0', 0x19: '14.0', 0x1a: '14.1', 0x1b: '14.1', 0x1c: '14.1', 0x1d: '14.1',
   },

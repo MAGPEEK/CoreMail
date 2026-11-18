@@ -33,7 +33,9 @@ import { PAGE_CONTENT_PAD } from '../lib/pageShell.js';
 import { usePreferences, useRegional } from '../store/preferences.js';
 import { calendarTimeZone, eventFetchRange, localDay } from '../lib/zonedTime.js';
 import { businessHours, hiddenDaysForWorkWeek, slotDuration } from '../lib/calendarPrefs.js';
-import { calendarEventPath, itemIdFromPath } from '../lib/mailLinks.js';
+import { calendarEventPath, calendarOccurrencePath, itemIdFromPath, occurrenceFromSearch } from '../lib/mailLinks.js';
+import { DayAgenda } from '../components/calendar/DayAgenda.js';
+import { OccurrenceChoice } from '../components/calendar/OccurrenceChoice.js';
 import { SAFETY_REFETCH_MS } from '../lib/realtimeEvents.js';
 
 const LOCALE_MAP = { de: deLocale, en: enLocale, es: esLocale, it: itLocale };
@@ -45,7 +47,7 @@ const LOCALE_MAP = { de: deLocale, en: enLocale, es: esLocale, it: itLocale };
 type EventDialogState =
   | null
   | { mode: 'create'; defaults: { calendarId?: string; dtStart?: string; dtEnd?: string; allDay?: boolean } }
-  | { mode: 'edit'; eventId: string };
+  | { mode: 'edit'; eventId: string; occurrence: string | null };
 
 export function CalendarPage() {
   const t = useT();
@@ -55,15 +57,21 @@ export function CalendarPage() {
   // 9.4: Settings → Kalender (work week, week start, time grid)
   const calPrefs = usePreferences((s) => s.prefs.calendar);
   // 9.4: the grid shows wall-clock times of the chosen zone (Settings → Region)
-  const fcTimeZone = calendarTimeZone(useRegional().timeZone);
+  const regionalTimeZone = useRegional().timeZone;
+  const fcTimeZone = calendarTimeZone(regionalTimeZone);
   // 9.4: /calendar/event/<id> opens the event (shareable, back/forward)
   const location = useLocation();
   const navigate = useNavigate();
   const linkedEventId = itemIdFromPath(location.pathname, '/calendar/event/');
+  // 9.4: ?occurrence= opens one occurrence of a series
+  const linkedOccurrence = occurrenceFromSearch(location.search);
   useEffect(() => {
-    if (linkedEventId) setEventDialog({ mode: 'edit', eventId: linkedEventId });
+    if (linkedEventId) setEventDialog({ mode: 'edit', eventId: linkedEventId, occurrence: linkedOccurrence });
     else setEventDialog((d) => (d?.mode === 'edit' ? null : d));
-  }, [linkedEventId]);
+  }, [linkedEventId, linkedOccurrence]);
+  // 9.4: a click on an occurrence asks "only this one / the whole series"
+  const [occurrenceChoice, setOccurrenceChoice] = useState<{ eventId: string; occurrence: string; summary: string } | null>(null);
+  const [agendaOpen, setAgendaOpen] = useState(false);
   const [shareDialogOpen, setShareDialogOpen] = useState(false);
   const [view, setView] = useState<CalendarView>('dayGridMonth');
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
@@ -161,7 +169,13 @@ export function CalendarPage() {
       toast(`Aufgabe: ${info.event.title.replace(/^[✓📋] /, '')}`, { icon: '📋' });
       return;
     }
-    navigate(calendarEventPath(info.event.id));
+    const recurrenceId = info.event.extendedProps['recurrenceId'] as string | null | undefined;
+    openEvent(info.event.id, recurrenceId ?? null, info.event.title);
+  };
+
+  const openEvent = (eventId: string, recurrenceId: string | null, summary: string) => {
+    if (recurrenceId) setOccurrenceChoice({ eventId, occurrence: recurrenceId, summary });
+    else navigate(calendarEventPath(eventId));
   };
 
   // v3.18.21: Tasks only when the "Aufgaben" (tasks) filter is active
@@ -212,7 +226,7 @@ export function CalendarPage() {
           editable: !isReadOnly,
           startEditable: !isReadOnly,
           durationEditable: !isReadOnly,
-          extendedProps: { calendarId: ev.calendarId, isReadOnly },
+          extendedProps: { calendarId: ev.calendarId, isReadOnly, recurrenceId: ev.recurrenceId ?? null },
         };
       }),
     ...taskEvents,
@@ -250,6 +264,9 @@ export function CalendarPage() {
           }}
           filters={filters}
           onFiltersChange={setFilters}
+          onToday={() => handleSelectDate(new Date())}
+          agendaOpen={agendaOpen}
+          onToggleAgenda={() => setAgendaOpen((o) => !o)}
         />
       }
     >
@@ -285,11 +302,37 @@ export function CalendarPage() {
         />
       </div>
 
+      {/* 9.4: day agenda of the selected day */}
+      {agendaOpen && (
+        <DayAgenda
+          date={selectedDate}
+          events={(events ?? []).filter((ev) => !hiddenCalendarIds.includes(ev.calendarId))}
+          calendars={calendars ?? []}
+          timeZone={regionalTimeZone}
+          onOpen={(ev) => openEvent(ev.id, ev.recurrenceId ?? null, ev.summary)}
+          onClose={() => setAgendaOpen(false)}
+        />
+      )}
+
+      {occurrenceChoice && (
+        <OccurrenceChoice
+          summary={occurrenceChoice.summary}
+          onClose={() => setOccurrenceChoice(null)}
+          onChoose={(scope) => {
+            const { eventId, occurrence } = occurrenceChoice;
+            setOccurrenceChoice(null);
+            navigate(scope === 'occurrence' ? calendarOccurrencePath(eventId, occurrence) : calendarEventPath(eventId));
+          }}
+        />
+      )}
+
       {/* New event dialog */}
       {/* v3.18.27: Outlook-style event dialog for create & edit */}
       {eventDialog && (
         <EventEditDialog
+          key={eventDialog.mode === 'edit' ? `${eventDialog.eventId}:${eventDialog.occurrence ?? ''}` : 'new'}
           eventId={eventDialog.mode === 'edit' ? eventDialog.eventId : null}
+          occurrence={eventDialog.mode === 'edit' ? eventDialog.occurrence : null}
           defaults={eventDialog.mode === 'create' ? eventDialog.defaults : undefined}
           calendars={calendars ?? []}
           defaultWritableCalendarId={defaultWritableCalId}

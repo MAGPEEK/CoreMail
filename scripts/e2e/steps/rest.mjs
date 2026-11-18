@@ -188,4 +188,45 @@ export async function run(state) {
     assert(m.json.flags.includes('$MDNSent'), 'flag not set');
     return `send ${send.json?.code}; ignore → $MDNSent`;
   });
+
+  // ── 9.4: follow-up flags, task form, scheduling assistant ─────────────────
+  await check('rest: follow-up flag with due date (\\Flagged set), complete clears \\Flagged and keeps the due date', async () => {
+    const list = await http('GET', `/api/v1/mail/folders/${inbox.id}/messages?limit=1`, { token: tok });
+    const id = list.json.messages[0].id;
+    const flag = await http('PUT', '/api/v1/mail/follow-up', { token: tok, body: { ids: [id], status: 'flagged', startAt: '2026-12-01T00:00:00.000Z', dueAt: '2026-12-04T00:00:00.000Z' } });
+    assert(flag.status === 200 && flag.json.count === 1, `${flag.status} ${flag.text}`);
+    const m1 = await http('GET', `/api/v1/mail/messages/${id}?markRead=false`, { token: tok });
+    assert(m1.json.flags.includes('\\Flagged') && m1.json.flagStatus === 'flagged', `flags ${m1.json.flags} status ${m1.json.flagStatus}`);
+    const done = await http('PUT', '/api/v1/mail/follow-up', { token: tok, body: { ids: [id], status: 'complete' } });
+    assert(done.status === 200, `${done.status}`);
+    const m2 = await http('GET', `/api/v1/mail/messages/${id}?markRead=false`, { token: tok });
+    assert(!m2.json.flags.includes('\\Flagged') && m2.json.flagStatus === 'complete' && m2.json.flagDueAt === '2026-12-04T00:00:00.000Z', JSON.stringify({ flags: m2.json.flags, s: m2.json.flagStatus, due: m2.json.flagDueAt }));
+    await http('PUT', '/api/v1/mail/follow-up', { token: tok, body: { ids: [id], status: 'none' } });
+    return 'flagged → complete → cleared';
+  });
+
+  await check('rest: task form — percent drives the status, completing a recurring task creates the next one', async () => {
+    const r = await http('POST', '/api/v1/tasks', { token: tok, body: {
+      subject: 'E2E Wochenbericht', dueDate: '2026-12-04T00:00:00.000Z', startDate: '2026-12-01T00:00:00.000Z',
+      rrule: 'FREQ=WEEKLY;BYDAY=FR;COUNT=3', percentComplete: 50, totalWorkMinutes: 90, companies: 'Beispiel GmbH',
+    } });
+    assert(r.status === 201 && r.json.status === 'IN_PROGRESS', `${r.status} ${r.text}`);
+    const done = await http('PUT', `/api/v1/tasks/${r.json.id}`, { token: tok, body: { status: 'COMPLETED' } });
+    assert(done.status === 200 && done.json.percentComplete === 100 && done.json.next?.dueDate === '2026-12-11T00:00:00.000Z', done.text);
+    assert(done.json.next.rrule === 'FREQ=WEEKLY;BYDAY=FR;COUNT=2', done.json.next.rrule);
+    for (const id of [r.json.id, done.json.next.id]) await http('DELETE', `/api/v1/tasks/${id}`, { token: tok });
+    return `next due ${done.json.next.dueDate}`;
+  });
+
+  await check('rest: scheduling assistant — rooms list and meeting-time suggestions answer', async () => {
+    const rooms = await http('GET', '/api/v1/calendar/rooms?start=2026-12-07T08:00:00.000Z&end=2026-12-07T09:00:00.000Z', { token: tok });
+    assert(rooms.status === 200 && Array.isArray(rooms.json), `${rooms.status} ${rooms.text}`);
+    const s = await http('POST', '/api/v1/calendar/schedule-suggestions', { token: tok, body: {
+      attendees: [], start: '2026-12-07T00:00:00.000Z', end: '2026-12-12T00:00:00.000Z', durationMinutes: 30,
+    } });
+    assert(s.status === 200 && Array.isArray(s.json.suggestions), `${s.status} ${s.text}`);
+    const tooLong = await http('GET', '/api/v1/calendar/rooms?start=2026-12-01T00:00:00.000Z&end=2027-03-01T00:00:00.000Z', { token: tok });
+    assert(tooLong.status === 400, `window > 31 days → ${tooLong.status}`);
+    return `${rooms.json.length} rooms, ${s.json.suggestions.length} suggestions`;
+  });
 }

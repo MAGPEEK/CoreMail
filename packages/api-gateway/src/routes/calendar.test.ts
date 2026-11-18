@@ -263,3 +263,80 @@ test('9.4: POST without reminderMinutes adds the default reminder; null = none; 
   assert.doesNotMatch(String(events.find((e) => e['id'] === off.json.id)!['icalData']), /VALARM/);
   alicePrefs = {};
 });
+
+// ─── 9.4: occurrences, show-as, reminders, free/busy ─────────────────────────
+
+test('9.4: PUT/DELETE ?occurrence= change or remove one instance; the series stays', async () => {
+  const created = await call('POST', '/events', {
+    calendarId: 'cal1', summary: 'Daily', dtStart: '2026-08-03T07:00:00.000Z', dtEnd: '2026-08-03T07:15:00.000Z',
+    rrule: 'FREQ=DAILY;COUNT=5', reminderMinutes: null,
+  });
+  assert.equal(created.status, 201);
+  const id = created.json.id as string;
+
+  const moved = await call('PUT', `/events/${id}?occurrence=2026-08-04T07:00:00.000Z`, {
+    summary: 'Daily (später)', dtStart: '2026-08-04T09:00:00.000Z', dtEnd: '2026-08-04T09:15:00.000Z', showAs: 'TENTATIVE',
+  });
+  assert.equal(moved.status, 200);
+  assert.equal(moved.json.dtStart, '2026-08-04T09:00:00.000Z');
+  assert.equal((await call('DELETE', `/events/${id}?occurrence=2026-08-06T07:00:00.000Z`)).status, 200);
+  assert.equal((await call('DELETE', `/events/${id}?occurrence=2026-08-06T08:00:00.000Z`)).status, 404, 'not an occurrence');
+  assert.equal((await call('PUT', `/events/${id}?occurrence=nonsense`, { summary: 'x' })).status, 400);
+
+  const list = await call('GET', '/events?start=2026-08-01T00:00:00.000Z&end=2026-08-10T00:00:00.000Z');
+  const daily = (list.json as any[]).filter((e) => e.id === id);
+  assert.deepEqual(daily.map((e) => [e.dtStart, e.summary]), [
+    ['2026-08-03T07:00:00.000Z', 'Daily'],
+    ['2026-08-04T09:00:00.000Z', 'Daily (später)'],
+    ['2026-08-05T07:00:00.000Z', 'Daily'],
+    ['2026-08-07T07:00:00.000Z', 'Daily'],
+  ]);
+  const one = await call('GET', `/events/${id}?occurrence=2026-08-04T07:00:00.000Z`);
+  assert.equal(one.status, 200);
+  assert.equal(one.json.summary, 'Daily (später)');
+  assert.equal(one.json.recurrenceId, '2026-08-04T07:00:00.000Z');
+  assert.equal(one.json.showAs, 'TENTATIVE');
+  const row = events.find((e) => e['id'] === id)!;
+  assert.equal(row['summary'], 'Daily', 'master unchanged');
+  assert.match(String(row['icalData']), /EXDATE:20260806T070000Z/);
+  assert.match(String(row['icalData']), /RECURRENCE-ID:20260804T070000Z/);
+});
+
+test('9.4: show-as and reminder (incl. e-mail) are written to the iCal and returned to the owner', async () => {
+  const created = await call('POST', '/events', {
+    calendarId: 'cal1', summary: 'Urlaub', dtStart: '2026-09-01', dtEnd: '2026-09-05', allDay: true,
+    showAs: 'OOF', reminderMinutes: 1440, reminderByMail: true,
+  });
+  assert.equal(created.status, 201);
+  assert.equal(created.json.showAs, 'OOF');
+  const row = events.find((e) => e['id'] === created.json.id)!;
+  assert.match(String(row['icalData']), /X-MICROSOFT-CDO-BUSYSTATUS:OOF/);
+  assert.match(String(row['icalData']), /ACTION:EMAIL/);
+  const detail = await call('GET', `/events/${created.json.id}`);
+  assert.equal(detail.json.reminderMinutes, 1440);
+  assert.equal(detail.json.reminderByMail, true);
+  assert.equal(detail.json.icalData, undefined, 'raw iCal not in the detail view');
+
+  const put = await call('PUT', `/events/${created.json.id}`, { showAs: 'FREE', reminderByMail: false });
+  assert.equal(put.status, 200);
+  assert.equal(row['showAs'], 'FREE');
+  assert.match(String(row['icalData']), /TRANSP:TRANSPARENT/);
+  assert.doesNotMatch(String(row['icalData']), /ACTION:EMAIL/);
+  assert.match(String(row['icalData']), /TRIGGER:-PT1440M/, 'minutes kept when only the e-mail flag changes');
+  const list = await call('GET', '/events?start=2026-08-31T00:00:00.000Z&end=2026-09-10T00:00:00.000Z');
+  const ev = (list.json as any[]).find((e) => e.id === created.json.id);
+  assert.deepEqual(ev.reminder, { minutes: 1440, byMail: false });
+});
+
+test('9.4: free/busy — FREE events do not block, tentative/out-of-office are typed', async () => {
+  (globalThis as any).__prisma.user.findMany = async () => [{ id: 'alice', email: 'alice@example.com', displayName: 'Alice' }];
+  await call('POST', '/events', { calendarId: 'cal1', summary: 'Busy', dtStart: '2026-10-07T08:00:00.000Z', dtEnd: '2026-10-07T09:00:00.000Z', reminderMinutes: null });
+  await call('POST', '/events', { calendarId: 'cal1', summary: 'Focus', dtStart: '2026-10-07T09:00:00.000Z', dtEnd: '2026-10-07T10:00:00.000Z', showAs: 'FREE', reminderMinutes: null });
+  await call('POST', '/events', { calendarId: 'cal1', summary: 'Maybe', dtStart: '2026-10-07T10:00:00.000Z', dtEnd: '2026-10-07T11:00:00.000Z', showAs: 'TENTATIVE', reminderMinutes: null });
+  const r = await call('POST', '/freebusy', { userEmails: ['alice@example.com', 'nobody@example.com'], start: '2026-10-07T00:00:00.000Z', end: '2026-10-08T00:00:00.000Z' });
+  assert.equal(r.status, 200);
+  const alice = r.json.users[0];
+  assert.equal(alice.visible, true);
+  assert.deepEqual(alice.busy.map((b: any) => [b.start.slice(11, 16), b.type, b.subject]), [['08:00', 'busy', 'Busy'], ['10:00', 'tentative', 'Maybe']]);
+  assert.deepEqual(r.json.users[1], { email: 'nobody@example.com', displayName: null, found: false, visible: false, busy: [] });
+});

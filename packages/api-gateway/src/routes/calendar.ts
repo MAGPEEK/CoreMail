@@ -21,8 +21,15 @@ import {
   type EventData,
   type AttendeeData,
 } from '../lib/imip.js';
-import { buildVCalendar, patchVEvent, normalizeAllDayRange, granteeMayWrite } from '@coremail/core/calendar';
+import {
+  buildVCalendar, patchVEvent, normalizeAllDayRange, granteeMayWrite, parseCalendarObject, SHOW_AS_VALUES,
+  type AlarmSpec, type ShowAs, type VEventFields,
+} from '@coremail/core/calendar';
+import { excludeOccurrence, isSeriesOccurrence, upsertOccurrence } from '@coremail/core/calendar-exceptions';
 import { expandStoredEvent } from '../lib/recurrence.js';
+import { busyForUser } from '../lib/calendar-busy.js';
+import { bookRooms, isRoomAttendee, releaseRooms, type BookedRoom } from '../lib/room-booking.js';
+import { calendarSchedulingRouter } from './calendar-scheduling.js';
 
 /**
  * Grantees only write events they see unmasked — the same rule as CalDAV (8.0.0,
@@ -56,6 +63,54 @@ function resolveEventRange(
   }
 }
 
+/** 9.4: reminder of the stored master VEVENT (owner views only — alarms are private). */
+function eventReminder(icalData: string): { minutes: number; byMail: boolean } | null {
+  const alarm = parseCalendarObject(icalData)?.main.alarm ?? null;
+  return alarm ? { minutes: alarm.minutes, byMail: alarm.byMail === true } : null;
+}
+
+/** 9.4: VALARM spec from the REST fields (null = no reminder). */
+function alarmFrom(minutes: number | null, byMail: boolean, ownerEmail: string): AlarmSpec | null {
+  return minutes === null ? null : { minutes, ...(byMail ? { byMail: true, mailTo: ownerEmail } : {}) };
+}
+
+/** `?occurrence=<ISO>` of an occurrence-scoped request; undefined = the whole event, null = invalid. */
+function occurrenceParam(req: Request): Date | null | undefined {
+  const raw = req.query['occurrence'];
+  if (raw === undefined) return undefined;
+  const d = new Date(String(raw));
+  return isNaN(d.getTime()) ? null : d;
+}
+
+/** Stored attendee list → people and rooms (rooms carry CUTYPE ROOM/RESOURCE). */
+function splitAttendees(list: unknown): { people: Array<Record<string, unknown>>; rooms: Array<Record<string, unknown>> } {
+  const all = (Array.isArray(list) ? list : []).filter((a): a is Record<string, unknown> => typeof a === 'object' && a !== null);
+  return { people: all.filter((a) => !isRoomAttendee(a)), rooms: all.filter((a) => isRoomAttendee(a)) };
+}
+
+const roomEmail = (a: Record<string, unknown>): string => String(a['email'] ?? '').toLowerCase();
+
+interface OccurrenceView {
+  dtStart: Date;
+  dtEnd: Date;
+  recurrenceId: string;
+  override: { summary: string; description: string; location: string; showAs: ShowAs } | null;
+}
+
+/** 9.4: one occurrence of a stored series as it is now (moved/changed by its override, if any). */
+function occurrenceView(
+  stored: { dtStart: Date; dtEnd: Date; allDay: boolean; recurring: boolean; rrule: string | null; icalData: string },
+  occurrence: Date,
+): OccurrenceView | null {
+  const duration = stored.dtEnd.getTime() - stored.dtStart.getTime();
+  // overrides may move the instance: search generously around the original start
+  const ws = new Date(occurrence.getTime() - 62 * 86_400_000);
+  const we = new Date(occurrence.getTime() + duration + 62 * 86_400_000);
+  const inst = expandStoredEvent(stored, ws, we)
+    .find((i) => i.recurrenceId !== null && new Date(i.recurrenceId).getTime() === occurrence.getTime());
+  return inst ? { dtStart: inst.dtStart, dtEnd: inst.dtEnd, recurrenceId: inst.recurrenceId!, override: inst.override } : null;
+}
+
 /** Max. list window — protects the recurrence expansion (per event capped separately). */
 const MAX_LIST_WINDOW_MS = 4 * 366 * 24 * 60 * 60 * 1000;
 
@@ -78,6 +133,8 @@ calendarRouter.use(announceOnWrite(({ method, path }) =>
   (method === 'POST' && (path === '/' || path === '/reorder')) || path.startsWith('/mine-shares/')
     ? { type: 'calendar', action: method === 'POST' && path === '/' ? 'create' : 'update' }
     : null));
+// 9.4: rooms + meeting-time suggestions of the scheduling assistant
+calendarRouter.use(calendarSchedulingRouter);
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -112,14 +169,19 @@ async function organizerTimeZone(email: string): Promise<string> {
 async function sendInvitations(opts: {
   ev: { id: string; uid: string; summary: string; description: string;
         location: string; dtStart: Date; dtEnd: Date; sequence: number;
-        attendees: unknown; allDay?: boolean; rrule?: string | null };
+        attendees: unknown; allDay?: boolean; rrule?: string | null;
+        icalData?: string; showAs?: string };
   organizerEmail: string;
   organizerName: string;
   method: 'REQUEST' | 'CANCEL';
+  /** 9.4: only this occurrence (its original start) changed / was cancelled. */
+  recurrenceId?: Date;
 }): Promise<void> {
   const rawAttendees = Array.isArray(opts.ev.attendees) ? opts.ev.attendees : [];
   const attendees: AttendeeData[] = rawAttendees
     .filter((a): a is Record<string, unknown> => typeof a === 'object' && a !== null)
+    // rooms are booked directly (lib/room-booking.ts) — no invitation mail to them
+    .filter((a) => !isRoomAttendee(a))
     .filter((a) => typeof a['email'] === 'string' && a['email'].includes('@'))
     .map((a): AttendeeData => ({
       email: a['email'] as string,
@@ -137,6 +199,8 @@ async function sendInvitations(opts: {
   });
   const publicHostname = settings?.publicHostname ?? 'coremail.local';
   const timeZone = await organizerTimeZone(opts.organizerEmail);
+  const exdates = opts.ev.icalData && opts.ev.rrule ? (parseCalendarObject(opts.ev.icalData)?.main.exdates ?? []).map((x) => x.date) : [];
+  const showAs = opts.ev.showAs && (SHOW_AS_VALUES as readonly string[]).includes(opts.ev.showAs) ? opts.ev.showAs as ShowAs : undefined;
 
   const eventData: EventData = {
     uid: opts.ev.uid.includes('@') ? opts.ev.uid : buildEventUid(opts.ev.id, publicHostname),
@@ -148,6 +212,9 @@ async function sendInvitations(opts: {
     dtEnd: opts.ev.dtEnd,
     ...(opts.ev.allDay ? { allDay: true } : {}),
     ...(opts.ev.rrule ? { rrule: opts.ev.rrule } : {}),
+    ...(exdates.length > 0 ? { exdates } : {}),
+    ...(opts.recurrenceId ? { recurrenceId: opts.recurrenceId } : {}),
+    ...(showAs ? { showAs } : {}),
     organizer: { email: opts.organizerEmail, cn: opts.organizerName },
     attendees,
     publicHostname,
@@ -159,7 +226,7 @@ async function sendInvitations(opts: {
       ev: eventData,
       method: opts.method,
       queue: getOutboundQueue(),
-      trackingId: `imip-${opts.method}-${opts.ev.id}`,
+      trackingId: `imip-${opts.method}-${opts.ev.id}${opts.recurrenceId ? `-${opts.recurrenceId.getTime()}` : ''}`,
     });
   } catch (err) {
     // Fail-safe: the event already exists in the DB, only the invitation failed at queue/SMTP
@@ -696,81 +763,27 @@ calendarRouter.post('/freebusy', async (req: Request, res: Response) => {
     email: string;
     displayName: string | null;
     found: boolean;
-    busy: Array<{ start: string; end: string; type: 'busy' | 'tentative'; subject?: string }>;
+    /** 9.4: false = no access to this user's calendars (availability unknown, not free). */
+    visible: boolean;
+    busy: Array<{ start: string; end: string; type: 'busy' | 'tentative' | 'oof'; subject?: string }>;
   }> = [];
 
   for (const requestedEmail of parsed.data.userEmails) {
     const targetUser = usersByEmail.get(requestedEmail.toLowerCase());
     if (!targetUser) {
-      result.push({ email: requestedEmail, displayName: null, found: false, busy: [] });
+      result.push({ email: requestedEmail, displayName: null, found: false, visible: false, busy: [] });
       continue;
     }
-
-    // Which calendars of the target user may the caller see?
-    // - The caller's own calendars (when querying themselves)
-    // - Calendars shared by the target user with the caller
-    const targetCalendars = await prisma.calendar.findMany({
-      where: {
-        userId: targetUser.id,
-        OR: [
-          // Caller queries themselves → all own calendars
-          ...(targetUser.id === callerId ? [{ userId: callerId }] : []),
-          // Caller has a share from the target user
-          { shares: { some: { granteeId: callerId } } },
-        ],
-      },
-      select: { id: true },
-    });
-
-    if (targetCalendars.length === 0) {
-      // Caller has no access to target calendars → empty busy list
-      result.push({
-        email: requestedEmail,
-        displayName: targetUser.displayName ?? null,
-        found: true,
-        busy: [],
-      });
-      continue;
-    }
-
-    const events = await prisma.calendarEvent.findMany({
-      where: {
-        calendarId: { in: targetCalendars.map((c) => c.id) },
-        dtStart: { lt: end },
-        // Overlap (event.dtEnd > start) — recurring series are expanded below
-        OR: [{ dtEnd: { gt: start } }, { recurring: true }, { rrule: { not: null } }],
-      },
-      select: {
-        dtStart: true, dtEnd: true, allDay: true, recurring: true, rrule: true, icalData: true,
-        summary: true, classification: true, status: true,
-      },
-    });
-
-    const busy = events
-      .filter((e) => {
-        const cls = (e.classification ?? 'PUBLIC').toUpperCase();
-        // CONFIDENTIAL → hide from caller (unless caller is owner = self-query)
-        if (cls === 'CONFIDENTIAL' && targetUser.id !== callerId) return false;
-        return (e.status ?? '').toUpperCase() !== 'CANCELLED';
-      })
-      .flatMap((e) => {
-        const cls = (e.classification ?? 'PUBLIC').toUpperCase();
-        const isPrivateForCaller = cls === 'PRIVATE' && targetUser.id !== callerId;
-        return expandStoredEvent(e, start, end).map((inst) => ({
-          start: inst.dtStart.toISOString(),
-          end: inst.dtEnd.toISOString(),
-          type: ((e.status ?? '').toUpperCase() === 'TENTATIVE' ? 'tentative' : 'busy') as 'busy' | 'tentative',
-          // PRIVATE for foreign caller → no subject
-          ...(isPrivateForCaller ? {} : { subject: inst.override?.summary ?? e.summary }),
-        }));
-      })
-      .sort((a, b) => a.start.localeCompare(b.start));
-
+    const info = await busyForUser(callerId, targetUser.id, start, end);
     result.push({
       email: requestedEmail,
       displayName: targetUser.displayName ?? null,
       found: true,
-      busy,
+      visible: info.visible,
+      busy: info.slots.map((s) => ({
+        start: s.start.toISOString(), end: s.end.toISOString(), type: s.kind,
+        ...(s.subject !== undefined ? { subject: s.subject } : {}),
+      })),
     });
   }
 
@@ -841,13 +854,18 @@ calendarRouter.get('/events', async (req: Request, res: Response) => {
   );
   instances.sort((a, b) => a.dtStart.getTime() - b.dtStart.getTime());
 
+  // 9.4: reminders (for the webmail's reminder popups) — owners only, one parse per event
+  const reminders = new Map(events
+    .filter((ev) => ownerByCalendar.get(ev.calendarId) === true)
+    .map((ev) => [ev.id, eventReminder(ev.icalData)] as const));
+
   // Masking: PRIVATE → details replaced by "Beschäftigt"; CONFIDENTIAL → hidden
   // The raw iCal is only returned to the owner (it would leak masked PRIVATE details).
   const masked = instances
     .map((ev) => {
       const isOwner = ownerByCalendar.get(ev.calendarId) === true;
       const { icalData, ...rest } = ev;
-      return maskEventForViewer(isOwner ? { ...rest, icalData } : rest, isOwner);
+      return maskEventForViewer(isOwner ? { ...rest, icalData, reminder: reminders.get(ev.id) ?? null } : rest, isOwner);
     })
     .filter((ev): ev is NonNullable<typeof ev> => ev !== null);
 
@@ -859,32 +877,49 @@ calendarRouter.get('/events/:id', async (req: Request, res: Response) => {
   const userId = req.apiUser!.userId;
   const { id } = req.params as { id: string };
 
-  const event = await prisma.calendarEvent.findUnique({
+  const occurrence = occurrenceParam(req);
+  if (occurrence === null) { res.status(400).json({ error: 'Invalid occurrence' }); return; }
+  const stored = await prisma.calendarEvent.findUnique({
     where: { id },
     select: {
       id: true, uid: true, calendarId: true, summary: true, description: true,
       location: true, dtStart: true, dtEnd: true, allDay: true,
       recurring: true, rrule: true, classification: true, sequence: true,
-      organizer: true, attendees: true, status: true,
+      organizer: true, attendees: true, status: true, showAs: true, icalData: true,
     },
   });
-  if (!event) { res.status(404).json({ error: 'Event not found' }); return; }
+  if (!stored) { res.status(404).json({ error: 'Event not found' }); return; }
 
-  const access = await canAccessCalendar(userId, event.calendarId, 'READ');
+  const access = await canAccessCalendar(userId, stored.calendarId, 'READ');
   if (!access) { res.status(403).json({ error: 'Keine Leserechte' }); return; }
 
-  // Masking for PRIVATE/CONFIDENTIAL for grantees
+  // 9.4: ?occurrence= → the occurrence's own data (override or master at that time)
+  const { icalData, ...master } = stored;
+  let event = { ...master, recurrenceId: null as string | null };
+  if (occurrence) {
+    const view = isSeriesOccurrence(icalData, occurrence) ? occurrenceView(stored, occurrence) : null;
+    if (!view) { res.status(404).json({ error: 'Occurrence not found' }); return; }
+    event = { ...event, ...(view.override ?? {}), dtStart: view.dtStart, dtEnd: view.dtEnd, recurrenceId: view.recurrenceId };
+  }
+  const reminder = access.isOwner ? eventReminder(icalData) : null;
+  const extras = {
+    reminderMinutes: reminder?.minutes ?? null,
+    reminderByMail: reminder?.byMail ?? false,
+  };
+
+  // Masking for PRIVATE/CONFIDENTIAL for grantees (incl. a private override of a public series)
   if (!access.isOwner) {
-    const cls = (event.classification ?? 'PUBLIC').toUpperCase();
+    const cls = (stored.classification ?? 'PUBLIC').toUpperCase();
     if (cls === 'CONFIDENTIAL') {
       res.status(404).json({ error: 'Event not found' });
       return;
     }
-    if (cls === 'PRIVATE') {
+    if (cls === 'PRIVATE' || (occurrence && isProtectedForGrantee(stored))) {
       res.json({
         ...event,
         summary: 'Beschäftigt', description: '', location: '',
         attendees: [], organizer: null,
+        ...extras,
         readOnly: true, canWrite: false,
       });
       return;
@@ -893,6 +928,7 @@ calendarRouter.get('/events/:id', async (req: Request, res: Response) => {
 
   res.json({
     ...event,
+    ...extras,
     canWrite: access.permission === 'OWNER' || access.permission === 'WRITE',
     readOnly: access.permission === 'READ',
   });
@@ -923,6 +959,12 @@ const EventSchema = z.object({
   // 9.4: reminder (VALARM) minutes before the start; null = none; omitted on create =
   // the user's default reminder (Settings → Kalender). PUT keeps the stored alarms.
   reminderMinutes: z.number().int().min(0).max(40320).nullable().optional(),
+  // 9.4: the reminder also as an e-mail to the owner (VALARM ACTION:EMAIL)
+  reminderByMail: z.boolean().optional(),
+  // 9.4: "Anzeigen als"
+  showAs: z.enum(['FREE', 'TENTATIVE', 'BUSY', 'OOF']).optional(),
+  // 9.4: rooms/resources to book (resource mailbox addresses of the user's domain)
+  rooms: z.array(z.string().email()).max(10).optional(),
 });
 
 calendarRouter.post('/events', async (req: Request, res: Response) => {
@@ -959,23 +1001,31 @@ calendarRouter.post('/events', async (req: Request, res: Response) => {
   const uid = buildEventUid(rawEventId, settings?.publicHostname ?? 'coremail.local');
 
   // Store attendees as a JSON array
-  const attendeesJson = attendees.map((a) => ({
+  const peopleJson = attendees.map((a) => ({
     email: a.email,
     cn: a.cn ?? a.email,
     partstat: a.partstat ?? 'NEEDS-ACTION',
     role: 'REQ-PARTICIPANT',
     rsvp: true,
   }));
+  const showAs: ShowAs = parsed.data.showAs ?? 'BUSY';
 
-  const icalData = buildVCalendar({
-    uid, summary, description, location, allDay, classification,
+  const fields = {
+    uid, summary, description, location, allDay, classification, showAs,
     start: range.start, end: range.end,
     sequence: 0,
     ...(rruleValue ? { rrule: rruleValue } : {}),
     organizer: { email: organizer.email, ...(organizer.displayName ? { cn: organizer.displayName } : {}) },
-    attendees: attendeesJson,
-    ...(reminderMinutes !== null ? { alarmMinutes: reminderMinutes } : {}),
-  });
+    alarm: alarmFrom(reminderMinutes, parsed.data.reminderByMail === true, organizer.email),
+  };
+  const draft = buildVCalendar({ ...fields, attendees: peopleJson });
+  // 9.4: rooms are booked right away; their answer becomes their attendee entry
+  const roomJson = await bookRooms(
+    { uid, summary, organizer: organizer.email, dtStart: range.start, dtEnd: range.end, allDay, rrule: rruleValue, icalData: draft },
+    parsed.data.rooms ?? [], req.apiUser!.domainId,
+  );
+  const attendeesJson = [...peopleJson, ...roomJson];
+  const icalData = roomJson.length > 0 ? buildVCalendar({ ...fields, attendees: attendeesJson }) : draft;
 
   const event = await prisma.calendarEvent.create({
     data: {
@@ -991,8 +1041,9 @@ calendarRouter.post('/events', async (req: Request, res: Response) => {
       rrule: rruleValue,
       icalData,
       classification,
+      showAs,
       organizer: organizer.email,
-      attendees: attendeesJson,
+      attendees: attendeesJson as object[],
       sequence: 0,
     },
   });
@@ -1018,11 +1069,12 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
   const parsed = patchSchema(EventSchema).safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
 
+  const occurrence = occurrenceParam(req);
+  if (occurrence === null) { res.status(400).json({ error: 'Invalid occurrence' }); return; }
+
   const event = await prisma.calendarEvent.findUnique({
     where: { id },
-    select: { id: true, calendarId: true, summary: true, description: true, location: true,
-              uid: true, dtStart: true, dtEnd: true, allDay: true, recurring: true, rrule: true,
-              classification: true, sequence: true, organizer: true, attendees: true, icalData: true },
+    select: EVENT_WRITE_SELECT,
   });
   if (!event) { res.status(404).json({ error: 'Event not found' }); return; }
 
@@ -1032,6 +1084,10 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
   // saving that copy would overwrite the owner's real data, so it may not write them.
   if (!access.isOwner && isProtectedForGrantee(event)) {
     res.status(403).json({ error: 'Private Termine kann nur der Eigentümer ändern' });
+    return;
+  }
+  if (occurrence) {
+    await updateOccurrence(res, event, occurrence, parsed.data);
     return;
   }
 
@@ -1057,7 +1113,8 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
     ? event.rrule
     : (rrule ? rrule.replace(/^RRULE:/i, '').toUpperCase() : null);
 
-  const newAttendeesJson = attendees
+  const stored = splitAttendees(event.attendees);
+  const newPeople: Array<Record<string, unknown>> = attendees
     ? attendees.map((a) => ({
         email: a.email,
         cn: a.cn ?? a.email,
@@ -1065,7 +1122,7 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
         role: 'REQ-PARTICIPANT',
         rsvp: true,
       }))
-    : event.attendees;
+    : stored.people;
 
   const attendeeKey = (list: unknown): string => JSON.stringify(
     (Array.isArray(list) ? list : [])
@@ -1083,19 +1140,48 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
     effectiveAllDay !== event.allDay ||
     effectiveRrule !== event.rrule ||
     (location !== undefined && location !== event.location) ||
-    (attendees !== undefined && attendeeKey(newAttendeesJson) !== attendeeKey(event.attendees));
+    (attendees !== undefined && attendeeKey(newPeople) !== attendeeKey(stored.people));
   const newSequence = event.sequence + (willSendUpdate ? 1 : 0);
+
+  // 9.4: rooms are (re)booked when they, the time or the recurrence changed; removed rooms are released
+  const wantedRooms = parsed.data.rooms?.map((e) => e.toLowerCase()) ?? stored.rooms.map(roomEmail);
+  const roomsTouched = (stored.rooms.length > 0 || wantedRooms.length > 0)
+    && (parsed.data.rooms !== undefined || datesTouched || rrule !== undefined);
+  let roomJson: Array<Record<string, unknown> | BookedRoom> = stored.rooms;
+  if (roomsTouched) {
+    await releaseRooms(event.uid, stored.rooms.map(roomEmail).filter((e) => !wantedRooms.includes(e)));
+    roomJson = await bookRooms(
+      { uid: event.uid, summary: summary ?? event.summary, organizer: event.organizer ?? req.apiUser!.email,
+        dtStart: range.start, dtEnd: range.end, allDay: effectiveAllDay, rrule: effectiveRrule, icalData: event.icalData },
+      wantedRooms, req.apiUser!.domainId,
+    );
+  }
+  const newAttendeesJson = [...newPeople, ...roomJson];
+  const attendeesChanged = attendees !== undefined || roomsTouched;
+
+  // 9.4: reminder (owner only — alarms are the calendar owner's) and show-as
+  const currentAlarm = eventReminder(event.icalData);
+  const alarmTouched = access.isOwner && (parsed.data.reminderMinutes !== undefined || parsed.data.reminderByMail !== undefined);
+  const alarm = alarmTouched
+    ? alarmFrom(
+        parsed.data.reminderMinutes === undefined ? currentAlarm?.minutes ?? null : parsed.data.reminderMinutes,
+        parsed.data.reminderByMail ?? currentAlarm?.byMail ?? false,
+        req.apiUser!.email,
+      )
+    : undefined;
 
   // Patch the stored iCal instead of regenerating it: RRULE/EXDATE/VALARM/TZID/
   // X-properties written by CalDAV clients survive a REST edit.
-  const patch = {
+  const patch: VEventFields = {
     ...(summary !== undefined ? { summary } : {}),
     ...(description !== undefined ? { description } : {}),
     ...(location !== undefined ? { location } : {}),
     ...(datesTouched ? { start: range.start, end: range.end, allDay: effectiveAllDay } : {}),
     ...(rrule !== undefined ? { rrule: effectiveRrule } : {}),
     ...(classification !== undefined ? { classification: effectiveClass } : {}),
-    ...(attendees !== undefined ? { attendees: newAttendeesJson as Array<{ email: string; cn?: string; partstat?: string }> } : {}),
+    ...(attendeesChanged ? { attendees: newAttendeesJson as Array<{ email: string; cn?: string; partstat?: string }> } : {}),
+    ...(parsed.data.showAs !== undefined ? { showAs: parsed.data.showAs } : {}),
+    ...(alarm !== undefined ? { alarm } : {}),
     sequence: newSequence,
   };
   const icalData = patchVEvent(event.icalData, patch) ?? buildVCalendar({
@@ -1110,7 +1196,9 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
     sequence: newSequence,
     ...(effectiveRrule ? { rrule: effectiveRrule } : {}),
     ...(event.organizer ? { organizer: { email: event.organizer } } : {}),
-    attendees: (Array.isArray(newAttendeesJson) ? newAttendeesJson : []) as Array<{ email: string; cn?: string; partstat?: string }>,
+    attendees: newAttendeesJson as Array<{ email: string; cn?: string; partstat?: string }>,
+    ...(parsed.data.showAs !== undefined ? { showAs: parsed.data.showAs } : {}),
+    ...(alarm ? { alarm } : {}),
   });
 
   const updated = await prisma.calendarEvent.update({
@@ -1126,7 +1214,8 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
       recurring: effectiveRrule !== null || (rrule === undefined && event.recurring),
       icalData,
       classification: effectiveClass,
-      ...(attendees !== undefined ? { attendees: newAttendeesJson as object } : {}),
+      ...(parsed.data.showAs !== undefined ? { showAs: parsed.data.showAs } : {}),
+      ...(attendeesChanged ? { attendees: newAttendeesJson as object[] } : {}),
       sequence: newSequence,
     },
   });
@@ -1155,13 +1244,11 @@ calendarRouter.delete('/events/:id', async (req: Request, res: Response) => {
   const userId = req.apiUser!.userId;
   const { id } = req.params as { id: string };
 
+  const occurrence = occurrenceParam(req);
+  if (occurrence === null) { res.status(400).json({ error: 'Invalid occurrence' }); return; }
+
   // v3.18.25 A5: load full event data for the CANCEL mail BEFORE delete
-  const event = await prisma.calendarEvent.findUnique({
-    where: { id },
-    select: { id: true, calendarId: true, uid: true, summary: true, description: true,
-              location: true, dtStart: true, dtEnd: true, sequence: true,
-              allDay: true, rrule: true, organizer: true, attendees: true, classification: true, icalData: true },
-  });
+  const event = await prisma.calendarEvent.findUnique({ where: { id }, select: EVENT_WRITE_SELECT });
   if (!event) { res.status(404).json({ error: 'Event not found' }); return; }
 
   const access = await canAccessCalendar(userId, event.calendarId, 'WRITE');
@@ -1171,24 +1258,103 @@ calendarRouter.delete('/events/:id', async (req: Request, res: Response) => {
     return;
   }
 
+  // 9.4: "only this occurrence" → EXDATE on the series, CANCEL for that occurrence
+  if (occurrence) {
+    const view = isSeriesOccurrence(event.icalData, occurrence) ? occurrenceView(event, occurrence) : null;
+    const icalData = view ? excludeOccurrence(event.icalData, occurrence) : null;
+    if (!view || !icalData) { res.status(404).json({ error: 'Occurrence not found' }); return; }
+    const updated = await prisma.calendarEvent.update({ where: { id }, data: { icalData, sequence: event.sequence + 1 } });
+    announceCalendarChange([event.calendarId], { action: 'update', ids: [id] });
+    void notifyAttendees(updated, 'CANCEL', { ...occurrenceFields(view, event), recurrenceId: occurrence });
+    res.json({ ok: true });
+    return;
+  }
+
   await prisma.calendarEvent.delete({ where: { id } });
   announceCalendarChange([event.calendarId], { action: 'delete', ids: [id] });
+  await releaseRooms(event.uid, splitAttendees(event.attendees).rooms.map(roomEmail));
 
   // v3.18.25 A5: CANCEL mails to all attendees (with sequence+1)
-  const attList = Array.isArray(event.attendees) ? event.attendees : [];
-  if (attList.length > 0 && event.organizer) {
-    const organizerUser = await prisma.user.findFirst({
-      where: { email: event.organizer },
-      select: { displayName: true },
-    });
-    void sendInvitations({
-      ev: { ...event, sequence: event.sequence + 1 },
-      organizerEmail: event.organizer,
-      organizerName: organizerUser?.displayName ?? event.organizer,
-      method: 'CANCEL',
-    });
-  }
+  void notifyAttendees({ ...event, sequence: event.sequence + 1 }, 'CANCEL');
 
   res.json({ ok: true });
 });
+
+const EVENT_WRITE_SELECT = {
+  id: true, calendarId: true, summary: true, description: true, location: true,
+  uid: true, dtStart: true, dtEnd: true, allDay: true, recurring: true, rrule: true,
+  classification: true, sequence: true, organizer: true, attendees: true, icalData: true, showAs: true,
+} as const;
+
+type StoredEvent = {
+  id: string; calendarId: string; summary: string; description: string; location: string; uid: string;
+  dtStart: Date; dtEnd: Date; allDay: boolean; recurring: boolean; rrule: string | null; classification: string;
+  sequence: number; organizer: string | null; attendees: unknown; icalData: string; showAs: string;
+};
+
+/** iMIP to the people of a meeting (rooms are skipped in sendInvitations); no-op without attendees. */
+async function notifyAttendees(
+  ev: StoredEvent,
+  method: 'REQUEST' | 'CANCEL',
+  occurrence?: Pick<StoredEvent, 'summary' | 'description' | 'location' | 'dtStart' | 'dtEnd'> & { recurrenceId: Date },
+): Promise<void> {
+  if (!ev.organizer || splitAttendees(ev.attendees).people.length === 0) return;
+  const organizerUser = await prisma.user.findFirst({ where: { email: ev.organizer }, select: { displayName: true } });
+  await sendInvitations({
+    ev: occurrence ? { ...ev, ...occurrence } : ev,
+    organizerEmail: ev.organizer,
+    organizerName: organizerUser?.displayName ?? ev.organizer,
+    method,
+    ...(occurrence ? { recurrenceId: occurrence.recurrenceId } : {}),
+  });
+}
+
+/** Text + time fields of one occurrence (override values, else the master's). */
+function occurrenceFields(view: OccurrenceView, master: StoredEvent) {
+  return {
+    summary: view.override?.summary ?? master.summary,
+    description: view.override?.description ?? master.description,
+    location: view.override?.location ?? master.location,
+    dtStart: view.dtStart,
+    dtEnd: view.dtEnd,
+  };
+}
+
+/**
+ * 9.4: PUT ?occurrence= — change one occurrence (override with RECURRENCE-ID).
+ * Text, time, show-as and classification of the occurrence; recurrence, attendees,
+ * rooms and the reminder belong to the series and are not changed here.
+ */
+async function updateOccurrence(
+  res: Response,
+  event: StoredEvent,
+  occurrence: Date,
+  data: { [K in keyof z.infer<typeof EventSchema>]?: z.infer<typeof EventSchema>[K] | undefined },
+): Promise<void> {
+  const view = isSeriesOccurrence(event.icalData, occurrence) ? occurrenceView(event, occurrence) : null;
+  if (!view) { res.status(404).json({ error: 'Occurrence not found' }); return; }
+  const allDay = data.allDay ?? event.allDay;
+  const datesTouched = data.dtStart !== undefined || data.dtEnd !== undefined || data.allDay !== undefined;
+  const range = datesTouched
+    ? resolveEventRange(data.dtStart ?? view.dtStart.toISOString(), data.dtEnd ?? view.dtEnd.toISOString(), allDay)
+    : { start: view.dtStart, end: view.dtEnd };
+  if (!range) { res.status(400).json({ error: 'Invalid date range' }); return; }
+
+  const sequence = event.sequence + 1;
+  const icalData = upsertOccurrence(event.icalData, occurrence, {
+    ...(data.summary !== undefined ? { summary: data.summary } : {}),
+    ...(data.description !== undefined ? { description: data.description } : {}),
+    ...(data.location !== undefined ? { location: data.location } : {}),
+    ...(datesTouched ? { start: allDay ? range.start.toISOString().slice(0, 10) : range.start, end: allDay ? range.end.toISOString().slice(0, 10) : range.end, allDay } : {}),
+    ...(data.showAs !== undefined ? { showAs: data.showAs } : {}),
+    ...(data.classification !== undefined ? { classification: data.classification } : {}),
+    sequence,
+  });
+  if (!icalData) { res.status(404).json({ error: 'Occurrence not found' }); return; }
+  const updated = await prisma.calendarEvent.update({ where: { id: event.id }, data: { icalData, sequence } });
+  const changed = occurrenceView(updated, occurrence) ?? view;
+  announceCalendarChange([event.calendarId], { action: 'update', ids: [event.id] });
+  void notifyAttendees(updated, 'REQUEST', { ...occurrenceFields(changed, updated), recurrenceId: occurrence });
+  res.json({ ...updated, recurrenceId: occurrence.toISOString(), dtStart: changed.dtStart, dtEnd: changed.dtEnd });
+}
 

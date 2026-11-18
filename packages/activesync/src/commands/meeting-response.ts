@@ -127,6 +127,7 @@ async function respond(req: WbxmlElement, userId: string, deps: MeetingResponseD
       attendees: attendeesWithResponse(ev, responder, partstat),
       status: partstat === 'TENTATIVE' ? 'TENTATIVE' : 'CONFIRMED',
       classification: ev.classification,
+      showAs: partstat === 'TENTATIVE' ? 'TENTATIVE' : ev.showAs,
       sequence: ev.sequence ?? 0,
       changeKey: Date.now().toString(36),
     };

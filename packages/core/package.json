@@ -13,6 +13,8 @@
     "./calendar": "./dist/calendar/ical.js",
     "./vcard": "./dist/calendar/vcard.js",
     "./recurrence": "./dist/calendar/recurrence.js",
+    "./calendar-exceptions": "./dist/calendar/exceptions.js",
+    "./free-busy": "./dist/calendar/free-busy.js",
     "./http": "./dist/http/index.js",
     "./ssrf": "./dist/net/ssrf.js",
     "./tls-errors": "./dist/tls/tls-errors.js",

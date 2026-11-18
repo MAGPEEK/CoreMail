@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Plus, Calendar as CalDay, Briefcase, CalendarRange, LayoutGrid,
-  Columns3, Filter, Share2, Printer, X,
+  Columns3, Filter, Share2, Printer, X, CalendarCheck, ListTodo,
 } from 'lucide-react';
 import { CommandBar, type CommandGroup } from './CommandBar.js';
 
@@ -35,11 +35,16 @@ interface Props {
   // and applied to fcEvents
   filters: Record<FilterKey, boolean>;
   onFiltersChange: (next: Record<FilterKey, boolean>) => void;
+  /** 9.4: jump to today */
+  onToday: () => void;
+  /** 9.4: day agenda side panel */
+  agendaOpen: boolean;
+  onToggleAgenda: () => void;
 }
 
 /** Calendar ribbon on the shared command bar (components/CommandBar.tsx). */
 export function CalendarToolbar({
-  view, onChangeView, onNewEvent, onPrint, onShare, filters, onFiltersChange,
+  view, onChangeView, onNewEvent, onPrint, onShare, filters, onFiltersChange, onToday, agendaOpen, onToggleAgenda,
 }: Props) {
   const [filterOpen, setFilterOpen] = useState<{ x: number; y: number; trigger: HTMLElement } | null>(null);
   const filterRef = useRef<HTMLDivElement>(null);
@@ -79,12 +84,16 @@ export function CalendarToolbar({
         { label: 'Ganztägiges Ereignis', icon: <Plus size={14} />, onClick: onNewEvent },
       ],
     }] },
+    { id: 'goto', title: 'Gehe zu', items: [
+      { id: 'today', label: 'Heute', icon: <CalendarCheck size={20} />, onClick: onToday },
+    ] },
     { id: 'arrange', title: 'Anordnen', items: [
       viewItem('timeGridDay', 'Tag', <CalDay size={20} />),
       viewItem('workWeek', 'Arbeitswoche', <Briefcase size={20} />),
       viewItem('timeGridWeek', 'Woche', <Columns3 size={20} />),
       viewItem('dayGridMonth', 'Monat', <LayoutGrid size={20} />),
       { id: 'split', label: 'Geteilte Ansicht', icon: <CalendarRange size={20} />, disabled: true, tooltip: 'Noch nicht verfügbar' },
+      { id: 'agenda', label: 'Tagesagenda', icon: <ListTodo size={20} />, pressed: agendaOpen, onClick: onToggleAgenda },
     ] },
     { id: 'filter', title: 'Filter', items: [{
       id: 'filter',

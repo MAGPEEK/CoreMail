@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { check, assert, creds, PORTS, STATE_DIR, imapOpen, imapCmd, imapQuote, waitFor } from '../lib.mjs';
+import { check, assert, creds, PORTS, STATE_DIR, imapOpen, imapCmd, imapQuote, waitFor, http, session } from '../lib.mjs';
 
 export async function imapLogin(user, pass, { implicitTls = false } = {}) {
   const c = await imapOpen(implicitTls ? PORTS.imaps : PORTS.imap, { implicitTls });
@@ -95,6 +95,18 @@ export async function run(state) {
       const line = f.lines.find((l) => /FETCH/.test(l)) ?? '';
       assert(/\\Flagged/.test(line), line);
       return line;
+    });
+
+    // 9.4: \Flagged is the boolean view of the follow-up flag — set via IMAP, visible in REST
+    await check('imap→rest: \\Flagged set via IMAP is a follow-up flag in /api/v1/mail/follow-up', async () => {
+      const tok = await session(state, 'b', B, c.userB);
+      const r = await waitFor(async () => {
+        const x = await http('GET', '/api/v1/mail/follow-up?status=flagged', { token: tok });
+        return x.status === 200 && x.json.some((m) => m.subject === state.a2b.subject) ? x : null;
+      }, { what: 'IMAP flag in REST follow-up list' });
+      const item = r.json.find((m) => m.subject === state.a2b.subject);
+      assert(item.flagStatus === 'flagged', JSON.stringify(item));
+      return `flagStatus=${item.flagStatus} (${item.folderName})`;
     });
 
     await check('imap: SEARCH FLAGGED / UNSEEN / FROM / BODY / LARGER', async () => {

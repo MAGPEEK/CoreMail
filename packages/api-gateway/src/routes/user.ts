@@ -263,11 +263,11 @@ userRouter.put('/oof', async (req: Request, res: Response) => {
         if (existing) {
           await prisma.calendarEvent.update({
             where: { id: existing.id },
-            data: { icalData: ical, summary: 'Abwesenheit', dtStart: oofStart, dtEnd: oofEnd },
+            data: { icalData: ical, summary: 'Abwesenheit', dtStart: oofStart, dtEnd: oofEnd, showAs: 'FREE' },
           });
         } else {
           await prisma.calendarEvent.create({
-            data: { calendarId: calendar.id, uid, icalData: ical, summary: 'Abwesenheit', dtStart: oofStart, dtEnd: oofEnd },
+            data: { calendarId: calendar.id, uid, icalData: ical, summary: 'Abwesenheit', dtStart: oofStart, dtEnd: oofEnd, showAs: 'FREE' },
           });
         }
       }

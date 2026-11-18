@@ -92,6 +92,43 @@ export async function run(state) {
     return `5 instances at 08:00Z`;
   });
 
+  // 9.4: single occurrences — written by a CalDAV client, then by the webmail (REST)
+  const withException = ics('E2E weekly (updated)')
+    .replace('RRULE:FREQ=WEEKLY;BYDAY=TU;COUNT=10', 'RRULE:FREQ=WEEKLY;BYDAY=TU;COUNT=10\r\nEXDATE;TZID=Europe/Berlin:20261215T090000')
+    .replace('END:VEVENT', ['END:VEVENT', 'BEGIN:VEVENT', `UID:${evUid}`, 'DTSTAMP:20261101T120000Z',
+      'RECURRENCE-ID;TZID=Europe/Berlin:20261208T090000', 'DTSTART;TZID=Europe/Berlin:20261208T140000',
+      'DTEND;TZID=Europe/Berlin:20261208T150000', 'SUMMARY:E2E moved', 'END:VEVENT'].join('\r\n'));
+  let seriesId;
+  await check('caldav→REST: series exception (RECURRENCE-ID override + EXDATE) shows in /api/v1/calendar/events', async () => {
+    const put = await http('PUT', evPath, { headers: H({ 'Content-Type': 'text/calendar; charset=utf-8' }), body: withException });
+    assert(put.status === 204 || put.status === 200 || put.status === 201, `${put.status} ${put.text.slice(0, 200)}`);
+    const tok = await session(state, 'b', B, c.userB);
+    const r = await http('GET', '/api/v1/calendar/events?start=2026-11-30T00:00:00Z&end=2027-01-01T00:00:00Z', { token: tok });
+    const inst = (r.json ?? []).filter((e) => e.uid === evUid);
+    seriesId = inst[0]?.id;
+    const view = inst.map((e) => `${e.dtStart.slice(0, 16)} ${e.summary}`);
+    assert(inst.length === 4, `4 instances expected (EXDATE 15.12.): ${view.join(' | ')}`);
+    assert(inst.some((e) => e.summary === 'E2E moved' && e.dtStart.startsWith('2026-12-08T13:00')), `override missing: ${view.join(' | ')}`);
+    assert(!inst.some((e) => e.dtStart.startsWith('2026-12-15')), 'EXDATE ignored');
+    return view.join(' | ');
+  });
+
+  await check('REST→caldav: occurrence changed / deleted in the webmail is RECURRENCE-ID / EXDATE in CalDAV', async () => {
+    assert(seriesId, 'no series id from the previous check');
+    const tok = await session(state, 'b', B, c.userB);
+    const put = await http('PUT', `/api/v1/calendar/events/${seriesId}?occurrence=2026-12-22T08:00:00.000Z`, { token: tok, body: { summary: 'E2E REST occurrence', showAs: 'TENTATIVE' } });
+    assert(put.status === 200, `${put.status} ${put.text}`);
+    const del = await http('DELETE', `/api/v1/calendar/events/${seriesId}?occurrence=2026-12-29T08:00:00.000Z`, { token: tok });
+    assert(del.status === 200, `${del.status} ${del.text}`);
+    const g = await http('GET', evPath, { headers: H() });
+    assert(g.status === 200, `${g.status}`);
+    const unfolded = g.text.replace(/\r?\n[ \t]/g, '');
+    assert(/RECURRENCE-ID;TZID=Europe\/Berlin:20261222T090000/.test(unfolded) && /SUMMARY:E2E REST occurrence/.test(unfolded), `override not in CalDAV:\n${unfolded}`);
+    assert(/EXDATE;TZID=Europe\/Berlin:20261229T090000/.test(unfolded), `EXDATE not in CalDAV:\n${unfolded}`);
+    assert(/RECURRENCE-ID;TZID=Europe\/Berlin:20261208T090000/.test(unfolded), 'the CalDAV override was lost');
+    return 'override + EXDATE written in the series TZID';
+  });
+
   // ── CardDAV ────────────────────────────────────────────────────────────────
   const cUid = `e2e-${randomUUID()}`;
   const cPath = `/dav/addressbooks/${uid}/default/${cUid}.vcf`;

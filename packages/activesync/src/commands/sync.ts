@@ -1,5 +1,6 @@
 import { prisma } from '@coremail/storage/prisma';
-import { setFlags, expunge, moveMessages, ensureCounterFloor, loadRawMessage } from '@coremail/storage';
+import { setFlags, setFollowUp, expunge, moveMessages, ensureCounterFloor, loadRawMessage } from '@coremail/storage';
+import { FLAG_CONVERSION_ERROR, flagOfMessage, parseClientFlag } from './flag.js';
 import { encodeWbxml, el, pel, getText, getChild, CP, type WbxmlElement } from '../wbxml.js';
 import { loadSyncWindow, isPrimingSyncKey, parseWindowSize, PRIMING_SYNC_KEY, type SyncWindowDb } from './sync-window.js';
 import {
@@ -125,13 +126,20 @@ interface ClientCommandContext {
   deletesAsMoves: boolean;
 }
 
+/** airsync:Responses entry for a client Change that failed ([MS-ASCMD] 2.2.3.24). */
+function changeResponse(serverId: string, status: string): WbxmlElement {
+  return el('Change', undefined, [el('ServerId', serverId), el('Status', status)]);
+}
+
 /**
- * Client Change (Read flag) and Delete. Every change bumps the mailbox modSeq through the
- * message store, so IMAP CONDSTORE / JMAP clients see it too; the device's item state is
- * updated so the change is not echoed back in the response.
+ * Client Change (Read state, 9.4: follow-up Flag) and Delete. Every change bumps the
+ * mailbox modSeq through the message store, so IMAP CONDSTORE / JMAP clients see it too;
+ * the device's item state is updated so the change is not echoed back in the response.
+ * Returns the airsync:Responses entries for changes that were refused.
  */
-async function applyClientCommands(commands: WbxmlElement, ctx: ClientCommandContext): Promise<void> {
+async function applyClientCommands(commands: WbxmlElement, ctx: ClientCommandContext): Promise<WbxmlElement[]> {
   const { deviceRowId, collectionId, mailboxId } = ctx;
+  const responses: WbxmlElement[] = [];
   for (const cmd of commands.children ?? []) {
     if (typeof cmd === 'string') continue;
     const serverId = getText(cmd, 'ServerId');
@@ -140,14 +148,25 @@ async function applyClientCommands(commands: WbxmlElement, ctx: ClientCommandCon
     if (cmd.name === 'Change') {
       const appData = getChild(cmd, 'ApplicationData');
       const readEl = appData ? getChild(appData, 'Read') : undefined;
-      if (!readEl) continue;
+      const flagEl = appData ? getChild(appData, 'Flag') : undefined;
+      if (!readEl && !flagEl) continue;
       const msg = await prisma.message.findFirst({ where: { id: serverId, folderId: collectionId, deletedAt: null } });
       if (!msg) continue;
-      const flags = readEl.text === '1'
-        ? [...msg.flags.filter((f: string) => f !== '\\Seen'), '\\Seen']
-        : msg.flags.filter((f: string) => f !== '\\Seen');
-      const updated = await prisma.$transaction((tx) => setFlags(tx, [{ id: serverId, flags }], { mailboxId }));
-      const modSeq = Array.isArray(updated) ? updated[0]?.modSeq : undefined;
+      // 9.4: an invalid Flag rejects the whole Change of this item ([MS-ASEMAIL] 3.2.5.4.2)
+      const flag = flagEl ? parseClientFlag(flagEl) : null;
+      if (flag && !flag.ok) { responses.push(changeResponse(serverId, FLAG_CONVERSION_ERROR)); continue; }
+      let modSeq: bigint | undefined;
+      if (readEl) {
+        const flags = readEl.text === '1'
+          ? [...msg.flags.filter((f: string) => f !== '\\Seen'), '\\Seen']
+          : msg.flags.filter((f: string) => f !== '\\Seen');
+        const updated = await prisma.$transaction((tx) => setFlags(tx, [{ id: serverId, flags }], { mailboxId }));
+        modSeq = updated[0]?.modSeq;
+      }
+      if (flag?.ok) {
+        const updated = await prisma.$transaction((tx) => setFollowUp(tx, [serverId], flag.state, { mailboxId }));
+        modSeq = updated[0]?.modSeq ?? modSeq;
+      }
       if (deviceRowId && modSeq !== undefined) await markKnown(deviceRowId, collectionId, [{ serverId, modSeq }]);
     } else if (cmd.name === 'Delete') {
       const msg = await prisma.message.findFirst({ where: { id: serverId, folderId: collectionId, deletedAt: null } });
@@ -164,6 +183,7 @@ async function applyClientCommands(commands: WbxmlElement, ctx: ClientCommandCon
       if (deviceRowId) await forgetItems(deviceRowId, collectionId, [serverId]);
     }
   }
+  return responses;
 }
 
 /**
@@ -297,12 +317,10 @@ export async function handleSync(
     }
 
     const mailboxId = folder.mailboxId;
-    if (commands) {
-      await applyClientCommands(commands, {
-        deviceRowId, collectionId, mailboxId, folderName: folder.name,
-        deletesAsMoves: getText(child, 'DeletesAsMoves') !== '0',
-      });
-    }
+    const clientResponses = !commands ? [] : await applyClientCommands(commands, {
+      deviceRowId, collectionId, mailboxId, folderName: folder.name,
+      deletesAsMoves: getText(child, 'DeletesAsMoves') !== '0',
+    });
 
     // Legacy rows may carry Date.now()-sized modSeqs: lift the counter first so the
     // window bound below covers them (one-time per mailbox and process).
@@ -351,7 +369,10 @@ export async function handleSync(
     for (const row of changes) {
       serverCommands.push(el('Change', undefined, [
         el('ServerId', row.id),
-        el('ApplicationData', undefined, [pel(CP.Email, 'Read', row.flags.includes('\\Seen') ? '1' : '0')]),
+        el('ApplicationData', undefined, [
+          pel(CP.Email, 'Read', row.flags.includes('\\Seen') ? '1' : '0'),
+          flagOfMessage(row), // 9.4: follow-up flag
+        ]),
       ]));
     }
     for (const id of deletes) serverCommands.push(el('Delete', undefined, [el('ServerId', id)]));
@@ -371,6 +392,7 @@ export async function handleSync(
       el('Status', SYNC_STATUS.SUCCESS),
       ...(moreAvailable ? [el('MoreAvailable', '')] : []),
       ...(serverCommands.length > 0 ? [el('Commands', undefined, serverCommands)] : []),
+      ...(clientResponses.length > 0 ? [el('Responses', undefined, clientResponses)] : []),
     ]));
   }
 

@@ -6,16 +6,25 @@
 import { useCallback, useMemo, useSyncExternalStore } from 'react';
 import { useQueryClient, type InfiniteData, type QueryClient } from '@tanstack/react-query';
 import type { Message, MessagesResponse, MessageSummary } from '../api/types.js';
+import { followUpStatusOf, type FollowUpStatus } from '../lib/followUp.js';
 
 export interface TargetMessage {
   id: string;
   flags: string[];
   pinnedAt: string | null;
   categoryIds: string[];
+  /** 9.4: follow-up flag (Kennzeichnen menu) */
+  flagStatus: FollowUpStatus;
+  flagStartAt: string | null;
+  flagDueAt: string | null;
+  flagReminderAt: string | null;
 }
 
 function toTarget(m: MessageSummary): TargetMessage {
-  return { id: m.id, flags: m.flags, pinnedAt: m.pinnedAt ?? null, categoryIds: (m.categories ?? []).map((c) => c.id) };
+  return {
+    id: m.id, flags: m.flags, pinnedAt: m.pinnedAt ?? null, categoryIds: (m.categories ?? []).map((c) => c.id),
+    flagStatus: followUpStatusOf(m), flagStartAt: m.flagStartAt ?? null, flagDueAt: m.flagDueAt ?? null, flagReminderAt: m.flagReminderAt ?? null,
+  };
 }
 
 /** Targets found in the cached folder pages / search results, else the open message. */
