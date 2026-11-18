@@ -39,7 +39,7 @@ import { replyThreading, safeLinkUrl } from '../../lib/compose.js';
 import {
   buildQuoteHtml, isLongQuote, isReplyMode, quoteStartsFolded, quotedPart, subjectFor, textToParagraphsHtml,
 } from '../../lib/composeQuote.js';
-import { fromList, initialRecipients, recipientList, sendBlockers, type RecipientValue } from '../../lib/recipients.js';
+import { commitText, fromList, initialRecipients, recipientList, sendBlockers, type RecipientValue } from '../../lib/recipients.js';
 import {
   addAttachments, composeFieldVisibility, dragHasFiles, draftStatusText, hasPendingChanges, initialFocus,
   inlineImageProblem, MAX_ATTACHMENTS,
@@ -47,7 +47,7 @@ import {
 import { formatBarVisible } from '../../lib/composeToolbar.js';
 import { checkAccessibility, collectA11yItems, jumpTarget, type A11yIssue } from '../../lib/composeA11y.js';
 import {
-  MAX_NAME_CHECKS, applyNameCheck, nameCheckQuery, needsNameCheck, resolveRecipient,
+  MAX_NAME_CHECKS, applyNameCheck, mergeNameCheck, nameCheckQuery, nameCheckReplacements, needsNameCheck, resolveRecipient,
   type DirectoryEntry, type NameCheckResult, type UnresolvedReason,
 } from '../../lib/nameCheck.js';
 import { dateTimeInsertOptions } from '../../lib/composeFormat.js';
@@ -547,13 +547,16 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
 
   /**
    * "Namen prüfen": every entry that is not yet "Name <address>" is looked up
-   * in the address book (lib/nameCheck.ts); unresolved ones are marked.
+   * in the address book (lib/nameCheck.ts); unresolved ones are marked. The
+   * result is merged into the fields as they are by then: whatever the user
+   * types or changes while the lookups run is kept.
    */
   const checkNames = async () => {
     const fields = [[to, setTo], [cc, setCc], [bcc, setBcc]] as const;
     const lists = fields.map(([v]) => recipientList(v));
     const pending = [...new Set(lists.flat().filter(needsNameCheck))].slice(0, MAX_NAME_CHECKS);
     setCheckingNames(true);
+    fields.forEach(([v, set]) => set(commitText(v)));   // typed text is checked as a recipient, new text starts empty
     try {
       const found = new Map(await Promise.all(pending.map(async (e) => [e, await lookupRecipient(e)] as const)));
       const marked: Record<string, UnresolvedReason> = {};
@@ -564,7 +567,8 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
         });
         const r = applyNameCheck(results);
         Object.assign(marked, r.unresolved);
-        set(fromList(r.entries));
+        const replacements = nameCheckReplacements(lists[i]!, results);
+        set((current) => mergeNameCheck(current, replacements));
       });
       setUnresolved(marked);
       recipientsTouched.current = true;
@@ -583,6 +587,19 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
   const openAccessibilityCheck = () => {
     if (!editor) return;
     setDialog({ kind: 'a11y', issues: checkAccessibility(collectA11yItems(editor.state.doc)) });
+  };
+
+  /** "Übernehmen" / "Dekorativ": sets the picture's alt attribute through the editor, then checks again. */
+  const applyImageAlt = (pos: number, alt: string) => {
+    if (!editor) return;
+    editor.chain().command(({ tr, state }) => {
+      const node = state.doc.nodeAt(pos);
+      if (node?.type.name !== 'image') return false;
+      tr.setNodeMarkup(pos, undefined, { ...node.attrs, alt });
+      return true;
+    }).run();
+    touch();
+    openAccessibilityCheck();
   };
 
   /** "Anzeigen" of an accessibility issue: the dialog closes, the cursor goes there. */
@@ -772,7 +789,7 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
         />
       )}
       {dialog?.kind === 'a11y' && (
-        <AccessibilityDialog issues={dialog.issues} onShow={showIssue} onClose={() => setDialog(null)} />
+        <AccessibilityDialog issues={dialog.issues} onShow={showIssue} onApplyAlt={applyImageAlt} onClose={() => setDialog(null)} />
       )}
     </section>
   );

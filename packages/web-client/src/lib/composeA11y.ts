@@ -1,7 +1,8 @@
 /**
  * 9.4: "Auf Barrierefreiheitsprobleme prüfen" of the compose area — a local
  * check of the body (nothing leaves the browser):
- *  - pictures without alternative text,
+ *  - pictures without alternative text (an explicit empty `alt=""` marks a
+ *    decorative picture and counts as resolved),
  *  - tables without a header row,
  *  - text colours with too little contrast (below 4.5:1 against the
  *    highlight, else the white a mail is usually shown on; theme contrast helper),
@@ -72,13 +73,28 @@ function contrastIssue(item: Extract<A11yItem, { kind: 'colored' }>): A11yIssue 
   return { kind: 'contrast', pos: item.pos, excerpt: excerpt(item.text), ratio: Math.floor(ratio * 10) / 10 };
 }
 
+/** A picture is fine with alternative text or an explicit empty `alt` (decorative). */
+export function isImageAltResolved(alt: string | null): boolean {
+  return alt !== null && (alt === '' || alt.trim() !== '');
+}
+
+/**
+ * The `alt` value to set from the dialog inputs: '' for a decorative picture,
+ * the trimmed text otherwise, null while neither is given (nothing to apply).
+ */
+export function altTextToApply(text: string, decorative: boolean): string | null {
+  if (decorative) return '';
+  const t = text.trim();
+  return t ? t : null;
+}
+
 /** Issues of the collected items, in document order. */
 export function checkAccessibility(items: readonly A11yItem[]): A11yIssue[] {
   const issues: A11yIssue[] = [];
   for (const item of items) {
     switch (item.kind) {
       case 'image':
-        if (!item.alt?.trim()) issues.push({ kind: 'imageAlt', pos: item.pos, excerpt: '' });
+        if (!isImageAltResolved(item.alt)) issues.push({ kind: 'imageAlt', pos: item.pos, excerpt: '' });
         break;
       case 'table':
         if (!item.headerRow) issues.push({ kind: 'tableHeader', pos: item.pos, excerpt: '' });

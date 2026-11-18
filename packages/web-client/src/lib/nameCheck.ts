@@ -9,7 +9,7 @@
  *    still stops the send as an invalid address).
  * Pure — unit-tested with `node --test`.
  */
-import { addEntries, formatRecipient, parseRecipient } from './recipients.ts';
+import { addEntries, formatRecipient, parseRecipient, type RecipientValue } from './recipients.ts';
 
 export interface DirectoryEntry { displayName: string; email: string }
 
@@ -77,4 +77,23 @@ export function applyNameCheck(results: readonly NameCheckResult[]): { entries: 
     return r.entry;
   });
   return { entries: addEntries([], entries), unresolved };
+}
+
+/** Original entry → checked entry, for the entries the check changed. */
+export function nameCheckReplacements(originals: readonly string[], results: readonly NameCheckResult[]): Map<string, string> {
+  const map = new Map<string, string>();
+  originals.forEach((original, i) => {
+    const result = results[i];
+    if (result && result.entry !== original) map.set(original, result.entry);
+  });
+  return map;
+}
+
+/**
+ * The check result merged into the field's current value: only the checked
+ * entries are replaced; entries added, removed or typed while the lookups ran
+ * stay as the user left them.
+ */
+export function mergeNameCheck(current: RecipientValue, replacements: ReadonlyMap<string, string>): RecipientValue {
+  return { entries: addEntries([], current.entries.map((e) => replacements.get(e) ?? e)), text: current.text };
 }

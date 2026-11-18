@@ -47,3 +47,23 @@ change for released versions.
   Übermittlungsbestätigung to "Nachrichtenoptionen".
 - Webmail: icon-only commands of the shared command bar (formatting toolbar, action bar) show their
   name as tooltip and keep it as accessible name.
+
+### Fixed
+- Webmail "Namen prüfen": text typed or pills added while the lookups run are no longer overwritten;
+  the result is merged into the current field value.
+
+### Added
+- Webmail accessibility check: pictures without alternative text get an "Alternativtext" input with
+  "Übernehmen" and a "Dekorativ" option (empty `alt`, counts as resolved).
+
+## Review notes (independent review)
+
+- Header safety verified: Sensitivity is a fixed level everywhere (zod enum on API input,
+  `normalizeSensitivity` on the job, `sensitivityHeaders` writes one of three constants, inbound
+  parse maps unknown values to normal); the column is additive and nullable.
+- Feature inventory against docs/compose.md still reachable (send, schedule, undo, attachments,
+  inline images, signatures, importance, receipts, From, Cc/Bcc, drafts, popout, plain text, Esc /
+  Ctrl+Enter); no ribbon leftovers; no hard-coded colours (theme guard green).
+- Alt text: `altTextToApply` / `isImageAltResolved` in lib/composeA11y.ts; the attribute is set by an
+  editor transaction (`setNodeMarkup`), the check re-runs, focus moves to the dialog summary.
+- Name check: `nameCheckReplacements` / `mergeNameCheck` in lib/nameCheck.ts.

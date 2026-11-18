@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { applyNameCheck, needsNameCheck, nameCheckQuery, resolveRecipient } from './nameCheck.ts';
+import { applyNameCheck, mergeNameCheck, nameCheckReplacements, needsNameCheck, nameCheckQuery, resolveRecipient } from './nameCheck.ts';
 
 const book = [
   { displayName: 'Bob Builder', email: 'bob@example.test' },
@@ -44,4 +44,23 @@ test('applyNameCheck: replaced in place, duplicates dropped, unresolved entries 
   ]);
   assert.deepEqual(r.entries, ['Bob Builder <bob@example.test>', 'x@ext.test', 'bo', 'dave']);
   assert.deepEqual(r.unresolved, { bo: 'ambiguous', dave: 'notFound' });
+});
+
+test('merging the result keeps what the user typed or added while the check ran', () => {
+  const started = ['carol', 'Bob Builder <bob@example.test>'];
+  const results = started.map((e) => resolveRecipient(e, book));
+  const replacements = nameCheckReplacements(started, results);
+  assert.deepEqual([...replacements], [['carol', 'Carol <carol@example.test>']]);
+  // meanwhile: a pill was added, one removed, and text is being typed
+  const current = { entries: ['carol', 'dave@ext.test'], text: 'er' };
+  assert.deepEqual(mergeNameCheck(current, replacements), { entries: ['Carol <carol@example.test>', 'dave@ext.test'], text: 'er' });
+});
+
+test('merging drops a duplicate that the replacement creates and ignores unchanged fields', () => {
+  const replacements = new Map([['carol', 'Carol <carol@example.test>']]);
+  assert.deepEqual(
+    mergeNameCheck({ entries: ['carol', 'carol@example.test'], text: '' }, replacements).entries,
+    ['Carol <carol@example.test>'],
+  );
+  assert.deepEqual(mergeNameCheck({ entries: ['x@ext.test'], text: 't' }, new Map()), { entries: ['x@ext.test'], text: 't' });
 });

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { checkAccessibility, collectA11yItems, jumpTarget, parseCssColor, type A11yItem, type DocLike, type NodeLike } from './composeA11y.ts';
+import { altTextToApply, checkAccessibility, collectA11yItems, jumpTarget, parseCssColor, type A11yItem, type DocLike, type NodeLike } from './composeA11y.ts';
 import { TEXT_COLORS } from './composeFormat.ts';
 
 test('jump target: pictures and tables selected whole, a paragraph at its first character, text at its start', () => {
@@ -115,7 +115,7 @@ test('collectA11yItems: pictures, tables, blocks, coloured text, links merged ac
     { type: 'paragraph', children: [
       { type: 'text', text: 'Grau', marks: [['textStyle', { color: '#999999' }]] },
       link('Mehr '), link('Info', [['bold', {}]]),
-      { type: 'image', attrs: { alt: '' } },
+      { type: 'image', attrs: { alt: null } },
     ] },
     { type: 'table', children: [
       { type: 'tableRow', children: [{ type: 'tableCell', children: [{ type: 'paragraph', children: [{ type: 'text', text: 'a' }] }] }] },
@@ -134,5 +134,27 @@ test('collectA11yItems: pictures, tables, blocks, coloured text, links merged ac
 test('collectA11yItems: a table whose first row has header cells passes', () => {
   const cell = (type: string): Spec => ({ type, children: [{ type: 'paragraph', children: [{ type: 'text', text: 'x' }] }] });
   const items = collectA11yItems(doc([{ type: 'table', children: [{ type: 'tableRow', children: [cell('tableHeader'), cell('tableHeader')] }] }]));
+  assert.deepEqual(checkAccessibility(items), []);
+});
+
+test('alt text: an explicit empty alt (decorative) is resolved, whitespace or a missing alt is not', () => {
+  const issues = checkAccessibility([
+    { kind: 'image', pos: 1, alt: '' },
+    { kind: 'image', pos: 2, alt: null },
+    { kind: 'image', pos: 3, alt: ' ' },
+    { kind: 'image', pos: 4, alt: 'Logo' },
+  ]);
+  assert.deepEqual(issues.map((i) => i.pos), [2, 3]);
+});
+
+test('alt text to apply: decorative gives an empty alt, text is trimmed, nothing given applies nothing', () => {
+  assert.equal(altTextToApply('', true), '');
+  assert.equal(altTextToApply('Logo', true), '');
+  assert.equal(altTextToApply('  Firmenlogo ', false), 'Firmenlogo');
+  assert.equal(altTextToApply('   ', false), null);
+});
+
+test('collectA11yItems: a picture with alt="" is decorative and passes', () => {
+  const items = collectA11yItems(doc([{ type: 'paragraph', children: [{ type: 'image', attrs: { alt: '' } }] }]));
   assert.deepEqual(checkAccessibility(items), []);
 });
