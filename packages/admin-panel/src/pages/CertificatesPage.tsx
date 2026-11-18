@@ -336,22 +336,8 @@ export function CertificatesPage() {
         </div>
       </div>
 
-      {/* HTTPS status banner — only when active */}
-      {tlsInfo?.activeCert && (
-        <div className="mb-4 flex items-center gap-3 px-4 py-3 bg-success-bg border border-success-line rounded-xl text-sm text-success-fg">
-          <Lock size={16} className="text-success-fg shrink-0" />
-          <span>
-            <strong>HTTPS aktiv</strong> — Port {tlsInfo.port} verwendet{' '}
-            <span className="font-mono font-medium">{tlsInfo.activeCert.name}</span>
-            {tlsInfo.activeCert.domains[0] && (
-              <> für <span className="font-mono">{tlsInfo.activeCert.domains[0]}</span></>
-            )}
-            {' '}· Ausschalten: Schalter „{httpsSwitchName(tlsInfo.port)}“ (Schloss-Symbol) in der Zeile des Zertifikats.
-          </span>
-        </div>
-      )}
-
-      {/* 9.3: warnings only when a port serves the wrong certificate; per-service status in the list (w2b) */}
+      {/* 9.3: warnings only when a port (w2b: also HTTPS) serves the wrong certificate; the
+          per-service status (incl. "HTTPS aktiv") is the chip in the list */}
       <ServedCertWarning />
 
       {/* Status banners */}

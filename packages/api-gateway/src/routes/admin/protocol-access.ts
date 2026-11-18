@@ -8,9 +8,14 @@
  *   PUT /api/v1/admin/protocol-access/domains/:id     { imap?: 'inherit'|'on'|'off', … }
  *   GET /api/v1/admin/protocol-access/users/:id       user level
  *   PUT /api/v1/admin/protocol-access/users/:id
+ *   GET /api/v1/admin/protocol-access/overview        w2b: combined model — per protocol the
+ *       server switch, its ports (listeners), overriding domains / mailboxes and
+ *       consistency warnings (lib/protocol-overview.ts); read-only, writes use the
+ *       level routes above and /admin/services/listeners
  *
- * Every answer: { level, id?, protocols, settings, inherited, effective, changedUsers? }
- * (`inherited` = what `inherit` resolves to on that level).
+ * Every level answer: { level, id?, protocols, settings, inherited, inheritedFrom, effective, changedUsers? }
+ * (`inherited` = what `inherit` resolves to on that level, `inheritedFrom` = from
+ * which level: default | server | domain).
  *
  * RBAC: server + domain level write = area `servers` (SERVER_MANAGEMENT,
  * ORGANIZATION_MANAGEMENT); domain level read also for `domains` readers (the
@@ -22,12 +27,16 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { z } from 'zod';
 import { createLogger } from '@coremail/core';
 import {
-  prisma, readProtocolLevel, updateProtocolSettings, ACCESS_PROTOCOLS, PROTOCOL_SETTINGS, SERVER_PROTOCOL_SETTINGS,
-  type ProtocolLevelView, type ProtocolScope, type ProtocolSettings,
+  prisma, readProtocolLevel, readProtocolOverrides, updateProtocolSettings, ACCESS_PROTOCOLS, PROTOCOL_SETTINGS,
+  SERVER_PROTOCOL_SETTINGS, type ProtocolLevelView, type ProtocolScope, type ProtocolSettings,
 } from '@coremail/storage';
 import { requireArea } from '../../middleware/auth.js';
 import { canAccess, canManageAccount, isReadMethod } from '../../lib/rbac.js';
 import { audit, auditContext } from '../../lib/audit.js';
+import {
+  buildProtocolOverview, isTrustedHttpsCert, submissionPorts, type HttpsState, type ProtocolOverview,
+} from '../../lib/protocol-overview.js';
+import { httpsRedirectState } from '../../tls-proxy.js';
 
 const log = createLogger('admin:protocol-access');
 export const adminProtocolAccessRouter: RouterType = Router();
@@ -102,6 +111,43 @@ adminProtocolAccessRouter.get('/', serversArea, async (_req: Request, res: Respo
 
 adminProtocolAccessRouter.put('/', serversArea, async (req: Request, res: Response) => {
   await update(req, res, { level: 'global' }, 'server');
+});
+
+// ── Combined overview (w2b) ───────────────────────────────────────────────────
+
+/** The integrated HTTPS server: listening state from the proxy, trust from the active HTTPS certificate. */
+async function loadHttpsState(): Promise<HttpsState> {
+  const state = httpsRedirectState();
+  const [settings, cert] = await Promise.all([
+    prisma.serverSettings.findUnique({ where: { id: 'singleton' }, select: { publicHostname: true } }),
+    prisma.certificate.findFirst({
+      where: { isActiveHttps: true },
+      select: { id: true, name: true, type: true, acmeStaging: true, certPem: true, status: true },
+    }),
+  ]);
+  const hostname = (settings?.publicHostname ?? '').trim().toLowerCase() || 'localhost';
+  return {
+    active: state.active,
+    port: state.port,
+    cert: cert ? { id: cert.id, name: cert.name, trusted: isTrustedHttpsCert(cert, hostname) } : null,
+  };
+}
+
+/** Reads ports, switches and the HTTPS state and builds the combined model (lib/protocol-overview.ts). */
+export async function loadProtocolOverview(): Promise<ProtocolOverview> {
+  const [overrides, listeners, https] = await Promise.all([
+    readProtocolOverrides(),
+    prisma.serviceListener.findMany({
+      where: { service: { in: ['SMTP_RECEIVE', 'IMAP', 'POP3'] } },
+      select: { id: true, service: true, address: true, port: true, ssl: true, active: true, allowLegacyTls: true },
+    }),
+    loadHttpsState(),
+  ]);
+  return buildProtocolOverview({ overrides, listeners, https, submissionPorts: submissionPorts() });
+}
+
+adminProtocolAccessRouter.get('/overview', serversArea, async (_req: Request, res: Response) => {
+  res.json(await loadProtocolOverview());
 });
 
 // ── Domain level ──────────────────────────────────────────────────────────────

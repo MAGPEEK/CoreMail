@@ -42,8 +42,12 @@ export interface DataTableProps<T> {
   /**
    * Search box. Client-side: give `text(row)` (strings searched).
    * Server-side: give `value` + `onChange` (the page sends `search`/`q` to the API).
+   * `initial`: client-side start text (e.g. from a `?q=` link).
    */
-  search?: { placeholder?: string; text?: (row: T) => ReadonlyArray<string | null | undefined>; value?: string; onChange?: (q: string) => void };
+  search?: {
+    placeholder?: string; text?: (row: T) => ReadonlyArray<string | null | undefined>;
+    value?: string; onChange?: (q: string) => void; initial?: string;
+  };
   /** Server-side paging (API supports page/limit). Without it, paging is client-side. */
   server?: ServerPaging;
   /** Client-side page size (default 25). */
@@ -79,7 +83,7 @@ export function DataTable<T>(props: DataTableProps<T>) {
     selectable, toolbar, filters, onActivate, activeKey, rowClassName, emptyText, renderExpanded,
   } = props;
   const t = useT();
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState(search?.initial ?? '');
   const [sort, setSort] = useState<SortState | null>(initialSort ?? null);
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<Set<string>>(new Set());

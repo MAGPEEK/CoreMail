@@ -310,6 +310,9 @@ export async function protocolEnabledAnywhere(protocol: AccessProtocol): Promise
 
 // ─── Admin view + changes ─────────────────────────────────────────────────────
 
+/** The level `inherit` takes its value from: the built-in defaults, the server or the domain. */
+export type ProtocolSource = 'default' | 'server' | 'domain';
+
 export interface ProtocolLevelView {
   /** The switches of this level (server level: always `on` / `off`). */
   settings: ProtocolSettings;
@@ -318,14 +321,35 @@ export interface ProtocolLevelView {
    * server level the built-in defaults.
    */
   inherited: ProtocolAccess;
+  /** Where `inherited` comes from, per protocol (server level: `default`). */
+  inheritedFrom: Record<AccessProtocol, ProtocolSource>;
   /** The effective access of this level (settings over inherited). */
   effective: ProtocolAccess;
+}
+
+/**
+ * Pure: where `inherit` takes its value from on a level — the server level
+ * from the built-in defaults, the domain level from the server, the user level
+ * from its domain when the domain sets the protocol, else from the server.
+ */
+export function inheritedSources(
+  level: ProtocolScope['level'],
+  domainLevel: ProtocolSettings = inherit,
+): Record<AccessProtocol, ProtocolSource> {
+  if (level === 'global') return mapProtocols(() => 'default');
+  if (level === 'domain') return mapProtocols(() => 'server');
+  return mapProtocols((p) => (domainLevel[p] !== 'inherit' ? 'domain' : 'server'));
 }
 
 /** Server level view: two-state — a never-written switch shows its built-in default. */
 function serverLevelView(global: ProtocolSettings): ProtocolLevelView {
   const effective = resolveProtocolAccess([global]);
-  return { settings: mapProtocols((p) => (effective[p] ? 'on' : 'off')), inherited: { ...PROTOCOL_DEFAULTS }, effective };
+  return {
+    settings: mapProtocols((p) => (effective[p] ? 'on' : 'off')),
+    inherited: { ...PROTOCOL_DEFAULTS },
+    inheritedFrom: inheritedSources('global'),
+    effective,
+  };
 }
 
 /** The switches of one level plus what they resolve to; null when the domain / user does not exist. */
@@ -350,7 +374,59 @@ export async function readProtocolLevel(scope: ProtocolScope): Promise<ProtocolL
   return {
     settings,
     inherited: resolveProtocolAccess(levels),
+    inheritedFrom: inheritedSources(scope.level, domainLevel),
     effective: resolveProtocolAccess([...levels, settings]),
+  };
+}
+
+/** Pure: true when a level sets at least one protocol (not every switch `inherit`). */
+export function hasExplicitSetting(settings: ProtocolSettings): boolean {
+  return ACCESS_PROTOCOLS.some((p) => settings[p] !== 'inherit');
+}
+
+export interface ProtocolOverrides {
+  /** The server level (two-state, a never-written switch shows its default). */
+  server: ProtocolSettings;
+  /** Every domain that sets at least one protocol. */
+  domains: Array<{ id: string; name: string; settings: ProtocolSettings }>;
+  /** Every mailbox that sets at least one protocol, with its domain (for what it inherits). */
+  users: Array<{ id: string; email: string; domainId: string; settings: ProtocolSettings }>;
+}
+
+/**
+ * The server level and every switch below it that sets something, with domain
+ * names and mailbox addresses — the input of the combined protocol overview
+ * (admin API GET /protocol-access/overview). Rows whose switches are all
+ * `inherit` are left out.
+ */
+export async function readProtocolOverrides(): Promise<ProtocolOverrides> {
+  const [snap, rows] = await Promise.all([
+    loadSnapshot([]),
+    prisma.protocolPolicy.findMany({ where: { NOT: { id: GLOBAL_POLICY_ID } } }),
+  ]);
+  const explicit = (rows as PolicyRow[]).filter((r) => hasExplicitSetting(settingsOf(r)));
+  const domainRows = explicit.filter((r) => !r.userId && r.domainId);
+  const userRows = explicit.filter((r) => r.userId);
+  const [domains, users] = await Promise.all([
+    domainRows.length > 0
+      ? prisma.domain.findMany({ where: { id: { in: domainRows.map((r) => r.domainId!) } }, select: { id: true, name: true } })
+      : Promise.resolve([]),
+    userRows.length > 0
+      ? prisma.user.findMany({ where: { id: { in: userRows.map((r) => r.userId!) } }, select: { id: true, email: true, domainId: true } })
+      : Promise.resolve([]),
+  ]);
+  const domainName = new Map(domains.map((d) => [d.id, d.name]));
+  const userById = new Map(users.map((u) => [u.id, u]));
+  return {
+    server: serverLevelView(snap.global).settings,
+    domains: domainRows.flatMap((r) => {
+      const name = domainName.get(r.domainId!);
+      return name !== undefined ? [{ id: r.domainId!, name, settings: settingsOf(r) }] : [];
+    }),
+    users: userRows.flatMap((r) => {
+      const u = userById.get(r.userId!);
+      return u ? [{ id: u.id, email: u.email, domainId: u.domainId, settings: settingsOf(r) }] : [];
+    }),
   };
 }
 

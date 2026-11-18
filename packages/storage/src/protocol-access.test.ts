@@ -226,6 +226,36 @@ test('readProtocolLevel: domain view inherits the server level; unknown scopes �
   assert.equal(await pa.updateProtocolSettings({ level: 'user', userId: 'nope' }, off('imap')), null);
 });
 
+test('readProtocolLevel: inheritedFrom names the level inherit takes its value from', async () => {
+  const u = await addUser('a@one.test', 'd1');
+  await db.protocolPolicy.create({ data: { domainId: 'd1', pop3: 'OFF' } });
+  const server = await pa.readProtocolLevel({ level: 'global' });
+  assert.equal(server?.inheritedFrom.imap, 'default');
+  const domain = await pa.readProtocolLevel({ level: 'domain', domainId: 'd1' });
+  assert.equal(domain?.inheritedFrom.pop3, 'server', 'the domain level always inherits from the server');
+  const user = await pa.readProtocolLevel({ level: 'user', userId: String(u['id']) });
+  assert.equal(user?.inheritedFrom.pop3, 'domain', 'the domain sets POP3');
+  assert.equal(user?.inheritedFrom.imap, 'server', 'the domain inherits IMAP');
+  assert.deepEqual(pa.inheritedSources('user', { ...pa.inheritAll(), mapi: 'on' }).mapi, 'domain');
+});
+
+test('readProtocolOverrides: server level plus every domain / mailbox that sets something', async () => {
+  const a = await addUser('a@one.test', 'd1');
+  const b = await addUser('b@two.test', 'd2');
+  await db.protocolPolicy.create({ data: { id: 'global', pop3: 'OFF' } });
+  await db.protocolPolicy.create({ data: { domainId: 'd1', imap: 'OFF' } });
+  await db.protocolPolicy.create({ data: { domainId: 'd2' } });
+  await db.protocolPolicy.create({ data: { userId: String(a['id']), imap: 'ON' } });
+  await db.protocolPolicy.create({ data: { userId: String(b['id']) } });
+  const o = await pa.readProtocolOverrides();
+  assert.equal(o.server.pop3, 'off');
+  assert.equal(o.server.mapi, 'off', 'never-written server switches show their default');
+  assert.deepEqual(o.domains, [{ id: 'd1', name: 'one.test', settings: { ...pa.inheritAll(), imap: 'off' } }],
+    'a domain row with every switch inherited is no override');
+  assert.deepEqual(o.users, [{ id: a['id'], email: 'a@one.test', domainId: 'd1', settings: { ...pa.inheritAll(), imap: 'on' } }]);
+  assert.equal(pa.hasExplicitSetting(pa.inheritAll()), false);
+});
+
 // ── Mail-protocol enforcement ─────────────────────────────────────────────────
 
 test('verifyMailCredentials: protocol_disabled only with correct credentials, other protocols unaffected', async () => {

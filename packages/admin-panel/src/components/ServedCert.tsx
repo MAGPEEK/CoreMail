@@ -4,7 +4,8 @@
  * ServedCertWarning — banner (SSL/TLS page + dashboard) when a mail port serves
  *   a self-signed, name-mismatched or expired certificate, with "Jetzt zuweisen"
  *   (activates the suggested trusted certificate for SMTP/IMAP/POP3); also when
- *   the private key of a certificate in use cannot be read (w1).
+ *   the private key of a certificate in use cannot be read (w1), and when the
+ *   integrated HTTPS server serves a wrong certificate (w2b).
  * CertServiceChips  — w2b: per service a certificate holds (SMTP, IMAP, POP3,
  *   HTTPS) a status chip in the certificate overview; the tooltip lists the ports.
  */
@@ -17,8 +18,8 @@ import { api } from '../api/client.js';
 import { usePermissions } from '../hooks/usePermissions.js';
 import { Can } from './Can.js';
 import {
-  certServiceChips, chipLabel, mailFixSuggestion, unreadableKeyText, warningSummary,
-  type ChipCert, type ChipState, type ServedReport, type ServiceChip, type UnreadableKeyCert,
+  certServiceChips, chipLabel, httpsServedProblem, httpsSwitchName, httpsWarningText, mailFixSuggestion, unreadableKeyText,
+  warningSummary, type ChipCert, type ChipState, type ServedPort, type ServedReport, type ServiceChip, type UnreadableKeyCert,
 } from '../lib/servedCert.js';
 
 export const SERVED_CERT_QUERY_KEY = ['admin-certificates-served'] as const;
@@ -72,11 +73,35 @@ export function ServedCertWarning({ linkToCertificates = false }: { linkToCertif
   const { can } = usePermissions();
   const { data } = useServedCert(can('servers', 'read'));
   const unreadable = data?.unreadableKeys ?? [];
+  const https = httpsServedProblem(data);
   return (
     <>
       {unreadable.length > 0 && <UnreadableKeyWarning certs={unreadable} linkToCertificates={linkToCertificates} />}
       {data?.problem && <ServedPortsWarning data={data} linkToCertificates={linkToCertificates} />}
+      {data && https && <HttpsServedWarning data={data} https={https} linkToCertificates={linkToCertificates} />}
     </>
+  );
+}
+
+/** w2b: the integrated HTTPS server serves a self-signed / name-mismatched / expired certificate. */
+function HttpsServedWarning({ data, https, linkToCertificates }: { data: ServedReport; https: ServedPort; linkToCertificates: boolean }) {
+  return (
+    <div className="mb-4 px-4 py-3 bg-warning-bg border border-warning-line rounded-xl flex items-start gap-3 text-sm text-warning-fg" role="alert">
+      <AlertTriangle size={16} className="shrink-0 mt-0.5" aria-hidden="true" />
+      <div className="flex-1 space-y-1">
+        <p>
+          <strong>{httpsSwitchName(https.port)} liefert kein passendes Zertifikat für {data.hostname}.</strong>{' '}
+          Browser, Outlook und Mobilgeräte warnen oder verbinden sich nicht (Webmail, ActiveSync, Autodiscover, MAPI).
+        </p>
+        <p className="text-xs">{httpsWarningText(data, https)}</p>
+        {data.suggestedCert
+          ? <p className="text-xs">Passendes Zertifikat vorhanden: <span className="font-mono">{data.suggestedCert.name}</span> — mit dem Schloss-Schalter in seiner Zeile für HTTPS einschalten.</p>
+          : <p className="text-xs">Kein vertrauenswürdiges Zertifikat für {data.hostname} vorhanden — bitte ein Let's Encrypt-Zertifikat anfordern.</p>}
+      </div>
+      {linkToCertificates && (
+        <Link to="/certificates" className="btn-secondary text-xs text-center shrink-0">SSL/TLS öffnen</Link>
+      )}
+    </div>
   );
 }
 

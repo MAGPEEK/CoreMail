@@ -1,6 +1,9 @@
 /**
  * `coremail protocol …` — per-protocol access switches (9.4, /api/v1/admin/protocol-access):
- *   coremail protocol show                                  server level
+ *   coremail protocol show                                  w2b: combined view — per protocol the
+ *                                                           server switch, active ports, overriding
+ *                                                           domains / mailboxes, warnings
+ *   coremail protocol show --scope global                   server level switches only
  *   coremail protocol show --scope domain example.com       domain level
  *   coremail protocol set  --scope user alice@example.com --imap off --webmail inherit
  * Switches: --imap --pop3 --smtp --activesync --jmap --dav --webmail --mapi, each
@@ -78,13 +81,71 @@ function print(view: ProtocolView, json: boolean): void {
   if (view.changedUsers !== undefined) process.stdout.write(`Accounts with changed access: ${view.changedUsers}\n`);
 }
 
+// ── Combined view (w2b, GET /api/v1/admin/protocol-access/overview) ──────────
+
+interface OverrideGroup { total: number; differing: number; entries: Array<{ name: string; setting: 'on' | 'off'; differs: boolean }> }
+interface OverviewWarning { code: 'no-active-port' | 'port-open-access-off' | 'mapi-https'; protocol: Protocol; ports?: number[] }
+interface HttpsState { active: boolean; port: number; cert: { name: string; trusted: boolean } | null }
+export interface ProtocolOverview {
+  protocols: Array<{
+    protocol: Protocol;
+    transport: 'listener' | 'http';
+    server: 'on' | 'off';
+    activePorts: number[];
+    overrides: { domains: OverrideGroup; users: OverrideGroup };
+    warnings: OverviewWarning[];
+  }>;
+  smtpInbound: { activePorts: number[] };
+  https: HttpsState;
+  warnings: OverviewWarning[];
+}
+
+const httpsLabel = (https: HttpsState) => `HTTPS ${https.port}${https.active ? '' : ' (off)'}`;
+
+/** One row per protocol: server-wide access, where it listens, how many domains / mailboxes differ. */
+export function overviewRows(o: ProtocolOverview): Array<Record<string, unknown>> {
+  return o.protocols.map((p) => ({
+    protocol: p.protocol,
+    access: p.server,
+    ports: p.transport === 'http' ? httpsLabel(o.https) : p.activePorts.join(', ') || 'none active',
+    domains: p.overrides.domains.differing > 0 ? `${p.overrides.domains.differing} differ` : '-',
+    mailboxes: p.overrides.users.differing > 0 ? `${p.overrides.users.differing} differ` : '-',
+  }));
+}
+
+/** One line per warning. */
+export function warningLine(w: OverviewWarning, https: HttpsState): string {
+  switch (w.code) {
+    case 'no-active-port': return `${w.protocol}: allowed, but no port is active — clients cannot connect`;
+    case 'port-open-access-off': return `${w.protocol}: port open (${(w.ports ?? []).join(', ')}), login refused for everyone`;
+    case 'mapi-https': return `mapi: on, but HTTPS (port ${https.port}) is not active or has no trusted certificate`;
+  }
+}
+
+function printOverview(o: ProtocolOverview, json: boolean): void {
+  if (json) { printJson(o); return; }
+  printTable(overviewRows(o), [
+    { key: 'protocol', label: 'Protocol' }, { key: 'access', label: 'Access' }, { key: 'ports', label: 'Ports' },
+    { key: 'domains', label: 'Domains' }, { key: 'mailboxes', label: 'Mailboxes' },
+  ]);
+  const cert = o.https.cert ? `certificate "${o.https.cert.name}"${o.https.cert.trusted ? '' : ' (not trusted)'}` : 'no certificate';
+  process.stdout.write(`SMTP inbound (transport, no login): ${o.smtpInbound.activePorts.join(', ') || 'no port active'}\n`);
+  process.stdout.write(`HTTPS (port ${o.https.port}): ${o.https.active ? 'active' : 'not active'}, ${cert}\n`);
+  for (const w of o.warnings) process.stdout.write(`Warning: ${warningLine(w, o.https)}\n`);
+}
+
 export function registerProtocol(program: Command, api: () => CoreMailClient, json: () => boolean): void {
   const c = program.command('protocol').description('Per-protocol access switches (server, domain, mailbox)');
   const scopeOption = ['--scope <scope>', 'global | domain | user', 'global'] as const;
 
-  c.command('show [target]').description('Show the switches of a level (target: domain name or mailbox address)')
-    .option(...scopeOption)
-    .action(async (target: string | undefined, opts: { scope: string }) => {
+  c.command('show [target]')
+    .description('Without --scope: ports, server-wide access and overrides per protocol; with --scope: the switches of a level (target: domain name or mailbox address)')
+    .option('--scope <scope>', 'global | domain | user')
+    .action(async (target: string | undefined, opts: { scope?: string }) => {
+      if (opts.scope === undefined && target === undefined) {
+        printOverview(await api().get<ProtocolOverview>('/api/v1/admin/protocol-access/overview'), json());
+        return;
+      }
       const path = await levelPath(api(), parseScope(opts.scope), target);
       print(await api().get<ProtocolView>(path), json());
     });

@@ -26,6 +26,8 @@ export interface ProtocolLevelView {
   settings: ProtocolSettings;
   /** What `inherit` resolves to on this level (server level: the built-in defaults). */
   inherited: Record<Protocol, boolean>;
+  /** w2b: where `inherited` comes from (absent on older servers). */
+  inheritedFrom?: Record<Protocol, 'default' | 'server' | 'domain'>;
   effective: Record<Protocol, boolean>;
   /** PUT only: users whose effective access changed. */
   changedUsers?: number;
@@ -41,6 +43,27 @@ export function changedSettings(saved: ProtocolSettings, draft: ProtocolSettings
   const out: Partial<ProtocolSettings> = {};
   for (const p of PROTOCOLS) if (draft[p] !== saved[p]) out[p] = draft[p];
   return out;
+}
+
+/** The level that decides a switch: the server, the domain or the mailbox itself. */
+export type EffectiveReason = 'server' | 'domain' | 'user';
+
+/**
+ * Which level decides the effective value of one switch in the editor (w2b:
+ * "aus (Domain)", "an (serverweit)"): an explicit on/off decides on its own
+ * level, `inherit` on the level it inherits from. Null when an older server
+ * does not say where a mailbox inherits from.
+ */
+export function effectiveReason(
+  view: Pick<ProtocolLevelView, 'level' | 'inheritedFrom'>,
+  protocol: Protocol,
+  setting: ProtocolSetting,
+): EffectiveReason | null {
+  if (setting !== 'inherit' || view.level === 'global') return view.level === 'global' ? 'server' : view.level;
+  if (view.level === 'domain') return 'server';
+  const from = view.inheritedFrom?.[protocol];
+  if (from === undefined) return null;
+  return from === 'domain' ? 'domain' : 'server';
 }
 
 /** Turning off Webmail on the server or a domain level locks out every account without an admin role. */
