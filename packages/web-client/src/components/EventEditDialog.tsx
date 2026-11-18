@@ -9,6 +9,7 @@ import { Modal } from './Modal.js';
 import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
 import type { Calendar, CalendarEvent, EventAttendee } from '../api/types.js';
+import { currentPreferences } from '../store/preferences.js';
 
 /**
  * v3.18.27 — Outlook-style event dialog for the calendar (create & edit).
@@ -173,7 +174,8 @@ export function EventEditDialog({
         setEndDate(r.endDate);
       } else {
         const start = defaults?.dtStart ?? new Date(Date.now() + 60 * 60 * 1000).toISOString();
-        const end = defaults?.dtEnd ?? addMinutes(start, 30);
+        // 9.4: default meeting duration (Settings → Kalender)
+        const end = defaults?.dtEnd ?? addMinutes(start, currentPreferences().calendar.defaultEventMinutes);
         const s = isoToParts(start);
         const e = isoToParts(end);
         setStartDate(s.date); if (s.time) setStartTime(s.time);

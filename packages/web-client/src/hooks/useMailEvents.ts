@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
+import { currentPreferences } from '../store/preferences.js';
 import { useAuthStore } from '../store/auth.js';
 import { fetchEventTicket } from '../api/client.js';
 import { openReconnectingEventSource, eventStreamUrl } from '../lib/reconnectingEventSource.js';
@@ -18,6 +19,29 @@ import { openReconnectingEventSource, eventStreamUrl } from '../lib/reconnecting
  *
  * A subtle toast is shown on new mail.
  */
+/** 9.4: short two-tone chime for "new mail: sound" (Web Audio, no asset; silent when blocked). */
+function playChime(): void {
+  try {
+    const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.08, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.5);
+    gain.connect(ctx.destination);
+    [880, 1320].forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      osc.frequency.value = freq;
+      osc.connect(gain);
+      osc.start(ctx.currentTime + i * 0.12);
+      osc.stop(ctx.currentTime + 0.5);
+    });
+    setTimeout(() => { void ctx.close(); }, 800);
+  } catch {
+    // audio blocked (autoplay policy) — nothing to do
+  }
+}
+
 export function useMailEvents() {
   const loggedIn = useAuthStore((s) => !!s.accessToken);
   const qc = useQueryClient();
@@ -35,6 +59,10 @@ export function useMailEvents() {
           // Reload caches immediately — invalidate triggers a background refetch
           void qc.invalidateQueries({ queryKey: ['folders'] });
           void qc.invalidateQueries({ queryKey: ['messages'] });
+          // 9.4: notification style (Settings → Ansicht): toast, sound or none
+          const style = currentPreferences().view.newMailNotification;
+          if (style === 'sound') { playChime(); return; }
+          if (style === 'none') return;
           // Subtle toast with sender + subject (if present)
           try {
             const data = JSON.parse(String(ev.data)) as {

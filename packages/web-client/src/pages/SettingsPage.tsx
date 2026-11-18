@@ -13,7 +13,13 @@ import { RulesSection } from '../components/RulesSection.js';
 import { RecoverDeletedItemsPanel } from '../components/RecoverDeletedItems.js';
 import { QuotaIndicator } from '../components/QuotaIndicator.js';
 import { quotaColor, type QuotaLevel } from '../lib/quota.js';
-import { SignatureSection } from '../components/SignatureSection.js';
+import { SignatureSettings } from '../components/settings/SignatureSettings.js';
+import { ReadingSettings } from '../components/settings/ReadingSettings.js';
+import { ComposeSettings } from '../components/settings/ComposeSettings.js';
+import { RegionalSettings } from '../components/settings/RegionalSettings.js';
+import { CalendarSettings } from '../components/settings/CalendarSettings.js';
+import { MailSortSettings } from '../components/settings/MailSortSettings.js';
+import { SessionsPanel, DevicesPanel, SmimeSettingsPanel } from '../components/settings/SecurityPanels.js';
 import { ViewKeyboardSettings } from '../components/ViewKeyboardSettings.js';
 import { format as fmtDate } from 'date-fns';
 import { api, apiFetch, fetchBlob, saveBlob } from '../api/client.js';
@@ -37,7 +43,7 @@ import { copyToClipboard } from '../api/clipboard.js';
 import toast from 'react-hot-toast';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
-type Section = 'profile' | 'oof' | 'signature' | 'storage' | 'recover' | 'security' | 'password' | 'theme' | 'language' | 'calendar' | 'categories' | 'appPasswords' | 'inactivity' | 'view' | 'retention' | 'rules' | 'externalClients';
+type Section = 'profile' | 'oof' | 'signature' | 'storage' | 'recover' | 'security' | 'password' | 'theme' | 'language' | 'calendar' | 'categories' | 'appPasswords' | 'inactivity' | 'view' | 'retention' | 'rules' | 'externalClients' | 'reading' | 'compose' | 'regional';
 
 interface RetentionTagDto {
   id: string;
@@ -1278,6 +1284,13 @@ function SecuritySection() {
         )}
       </div>
 
+      {/* 9.4: sessions, mobile devices, S/MIME */}
+      <div className="space-y-8 border-t border-line pt-6">
+        <SessionsPanel />
+        <DevicesPanel />
+        <SmimeSettingsPanel />
+      </div>
+
       {reauth && (
         <PasswordPromptDialog
           title={reauth.title}
@@ -1657,37 +1670,6 @@ function CategoryEditRow({
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// CALENDAR SECTION
-// ═══════════════════════════════════════════════════════════════════════════════
-function CalendarSection() {
-  const t = useT();
-  const { calendarShowWeekNumbers, setCalendarShowWeekNumbers } = useUiPrefs();
-
-  return (
-    <section>
-      <h2 className="text-xl font-semibold text-fg mb-1">{t('calendar')}</h2>
-      <p className="text-sm text-fg-muted mb-6">Einstellungen für die Kalender-Ansicht.</p>
-
-      <label className="flex items-start gap-3 p-4 rounded-md border border-line hover:border-line-strong transition-colors cursor-pointer">
-        <input
-          type="checkbox"
-          checked={calendarShowWeekNumbers}
-          onChange={(e) => setCalendarShowWeekNumbers(e.target.checked)}
-          className="mt-0.5 rounded border-line-strong text-accent-fg focus:ring-accent-fg"
-        />
-        <div className="flex-1">
-          <div className="flex items-center gap-2">
-            <CalendarDays size={16} className="text-fg-subtle" />
-            <span className="text-sm font-medium text-fg">{t('show_week_numbers')}</span>
-          </div>
-          <p className="text-xs text-fg-subtle mt-0.5">Zeigt eine zusätzliche Spalte mit der ISO-Kalenderwoche im Kalender an.</p>
-        </div>
-      </label>
-    </section>
-  );
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
 // LANGUAGE SECTION
 // ═══════════════════════════════════════════════════════════════════════════════
 function LanguageSection() {
@@ -2001,6 +1983,9 @@ function ViewSection() {
         />
         <p className="text-xs text-fg-subtle mt-2 ml-14">Zusammengehörige Nachrichten (gleicher Betreff) werden gebündelt angezeigt.</p>
       </div>
+
+      {/* ── 9.4: sort order ─────────────────────────────────────────────────── */}
+      <MailSortSettings />
 
       {/* ── Keyboard shortcuts + undo send ───────────────────────────────────── */}
       <ViewKeyboardSettings />
@@ -2421,8 +2406,11 @@ const NAV: { group: TranslationKey; items: { id: Section; label: TranslationKey;
     group: 'section_general',
     items: [
       { id: 'view',       label: 'view_settings',      icon: Layout       },
+      { id: 'reading',    label: 'section_reading',    icon: MailIcon     },
+      { id: 'compose',    label: 'section_compose',    icon: PenLine      },
       { id: 'theme',      label: 'section_theme',      icon: Palette      },
       { id: 'language',   label: 'section_language',   icon: Globe        },
+      { id: 'regional',   label: 'section_regional',   icon: Clock        },
       { id: 'calendar',   label: 'calendar',           icon: CalendarDays },
       { id: 'inactivity', label: 'section_inactivity', icon: Shield       },
       { id: 'security',   label: 'section_security',   icon: ShieldCheck  },
@@ -2434,13 +2422,16 @@ const SECTION_MAP: Record<Section, React.ComponentType> = {
   profile:      ProfileSection,
   password:     PasswordSection,
   oof:          OofSection,
-  signature:    SignatureSection,
+  signature:    SignatureSettings,
   storage:      StorageSection,
   recover:      RecoverSection,
   theme:        ThemeSection,
   security:     SecuritySection,
   language:     LanguageSection,
-  calendar:     CalendarSection,
+  calendar:     CalendarSettings,
+  reading:      ReadingSettings,
+  compose:      ComposeSettings,
+  regional:     RegionalSettings,
   categories:   CategoriesSection,
   retention:    RetentionSection,
   appPasswords:    AppPasswordsSection,

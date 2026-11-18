@@ -124,6 +124,7 @@ model User {
   sessions        Session[]
   mfa             UserMfa?
   appPasswords    AppPassword[]
+  signatures      UserSignature[]
   sharedPerms     SharedMailboxPerm[]
   delegatedAccess MailboxDelegate[]    @relation("MailboxDelegateGrantee")
   calendarSharesGranted  CalendarShare[] @relation("CalendarShareOwner")
@@ -410,6 +411,10 @@ model Message {
   // v5.7.1: JMAP thread assignment (RFC 8621 §3). Set lazily by the jmap-server:
   // reply (inReplyTo) to a known message → its threadId, otherwise own id.
   threadId         String?
+  // 9.4: address of the Disposition-Notification-To header at delivery (read
+  // receipt requested); null = none, or delivered before 9.4. The receipt route
+  // re-reads the raw header before it answers.
+  dispositionNotificationTo String?
   attachments  Attachment[]
   categories   MessageCategory[]
   createdAt    DateTime    @default(now())
@@ -749,9 +754,32 @@ model UserSettings {
   // 9.3: shared / delegated mailboxes the user hid from the webmail folder pane
   // ("shared:<sharedMailboxId>" / "delegated:<mailboxId>"; access itself is unchanged)
   hiddenSharedMailboxes   String[]  @default([])
+  // 9.4: roaming webmail preferences (view, theme, regional, reading, compose,
+  // calendar, signature defaults) as versioned JSON — validated and defaulted by
+  // api-gateway lib/user-preferences.ts. '{}' = never written (the webmail then
+  // imports its browser values once).
+  preferences             Json      @default("{}")
   updatedAt               DateTime  @updatedAt
 
   @@map("user_settings")
+}
+
+// 9.4: named signatures (several per user). Which one is inserted for new mails /
+// replies per identity (own mailbox, shared mailbox) lives in
+// UserSettings.preferences (signatures.defaults). UserSettings.signature mirrors
+// the own default for new mails (JMAP Identity, pre-9.4 /user/signature clients).
+model UserSignature {
+  id        String   @id @default(cuid())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  name      String
+  html      String   @default("")
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@map("user_signatures")
 }
 
 model MailRule {

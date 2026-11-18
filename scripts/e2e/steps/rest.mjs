@@ -109,4 +109,80 @@ export async function run(state) {
     assert(r.status === 200 && r.json?.email === B, `${r.status} ${r.text.slice(0, 200)}`);
     return Object.keys(r.json).join(',');
   });
+
+  // ── 9.4: roaming preferences, markRead=false, sort, sessions, read receipts ──
+  await check('rest: preferences round trip (PATCH partial, strict validation, server copy wins)', async () => {
+    const before = await http('GET', '/api/v1/user/preferences', { token: tok });
+    assert(before.status === 200 && before.json?.preferences?.view, `GET ${before.status} ${before.text.slice(0, 200)}`);
+    const prev = before.json.preferences;
+    const p = await http('PATCH', '/api/v1/user/preferences', { token: tok, body: { preferences: { view: { density: 'compact', sortBy: 'subject' }, regional: { timeZone: 'Europe/Berlin' } } } });
+    assert(p.status === 200 && p.json.preferences.view.density === 'compact' && p.json.preferences.regional.timeZone === 'Europe/Berlin', `PATCH ${p.status}`);
+    assert(p.json.preferences.view.readingPane === prev.view.readingPane, 'unrelated field changed');
+    const g = await http('GET', '/api/v1/user/preferences', { token: tok });
+    assert(g.json.preferences.view.sortBy === 'subject' && g.json.preferences.migratedAt, 'not persisted');
+    const bad = await http('PATCH', '/api/v1/user/preferences', { token: tok, body: { preferences: { view: { density: 'huge' } } } });
+    assert(bad.status === 400, `invalid value → ${bad.status}`);
+    const mig = await http('PATCH', '/api/v1/user/preferences', { token: tok, body: { migrateFromLocal: true, preferences: { view: { density: 'comfortable' } } } });
+    assert(mig.status === 200 && mig.json.applied === false && mig.json.preferences.view.density === 'compact', 'browser import overwrote the server copy');
+    await http('PATCH', '/api/v1/user/preferences', { token: tok, body: { preferences: { view: { density: prev.view.density, sortBy: prev.view.sortBy }, regional: { timeZone: prev.regional.timeZone } } } });
+    return 'partial PATCH, 400 on invalid, migrateFromLocal ignored after the first write';
+  });
+
+  await check('rest: GET message ?markRead=false leaves it unread; default marks read', async () => {
+    const list = await http('GET', `/api/v1/mail/folders/${inbox.id}/messages?limit=1`, { token: tok });
+    const id = list.json.messages[0].id;
+    await http('PATCH', `/api/v1/mail/messages/${id}`, { token: tok, body: { read: false } });
+    const quiet = await http('GET', `/api/v1/mail/messages/${id}?markRead=false`, { token: tok });
+    assert(quiet.status === 200 && !quiet.json.flags.includes('\\Seen'), `markRead=false set \\Seen (${quiet.json?.flags})`);
+    const still = await http('GET', `/api/v1/mail/messages/${id}?markRead=false`, { token: tok });
+    assert(!still.json.flags.includes('\\Seen'), 'unread flag lost');
+    await http('GET', `/api/v1/mail/messages/${id}`, { token: tok });
+    const after = await http('GET', `/api/v1/mail/messages/${id}?markRead=false`, { token: tok });
+    assert(after.json.flags.includes('\\Seen'), 'default GET no longer marks read (compat)');
+    return 'markRead=false keeps unread; plain GET marks read';
+  });
+
+  await check('rest: message list ?sort=subject&dir=asc (same total, other order allowed)', async () => {
+    const a = await http('GET', `/api/v1/mail/folders/${inbox.id}/messages?limit=50&sort=subject&dir=asc`, { token: tok });
+    const d = await http('GET', `/api/v1/mail/folders/${inbox.id}/messages?limit=50`, { token: tok });
+    assert(a.status === 200 && a.json.total === d.json.total, `sort ${a.status} total ${a.json?.total}/${d.json?.total}`);
+    const unpinned = a.json.messages.filter((m) => !m.pinnedAt).map((m) => m.subject.toLowerCase());
+    const sorted = [...unpinned].sort((x, y) => x.localeCompare(y));
+    return `total ${a.json.total}; first ${unpinned[0] ?? '-'}; locale-sorted first ${sorted[0] ?? '-'}`;
+  });
+
+  await check('rest: /auth/sessions marks the current session; another one is ended; revoke-others', async () => {
+    const other = await http('POST', '/auth/login', { body: { email: B, password: c.userB } });
+    assert(other.status === 200, `second login ${other.status}`);
+    const list = await http('GET', '/auth/sessions', { token: tok });
+    assert(list.status === 200 && Array.isArray(list.json) && list.json.length >= 2, `list ${list.status} ${list.json?.length}`);
+    const current = list.json.find((s) => s.current);
+    assert(current && !('tokenHash' in current), 'current session not marked / token hash leaked');
+    const mine = await http('GET', '/auth/sessions', { token: other.json.accessToken });
+    const otherId = mine.json.find((s) => s.current)?.id;
+    assert(otherId && otherId !== current.id, 'second session not found');
+    const del = await http('DELETE', `/auth/sessions/${otherId}`, { token: tok });
+    assert(del.status === 200, `revoke ${del.status}`);
+    const dead = await http('GET', '/api/v1/user/me', { token: other.json.accessToken });
+    assert(dead.status === 401, `access token of the revoked session → ${dead.status}`);
+    const third = await http('POST', '/auth/login', { body: { email: B, password: c.userB } });
+    const ro = await http('POST', '/auth/sessions/revoke-others', { token: tok, body: {} });
+    assert(ro.status === 200 && ro.json?.revoked >= 1, `revoke-others ${ro.status} ${ro.text.slice(0, 200)}`);
+    const thirdDead = await http('GET', '/api/v1/user/me', { token: third.json.accessToken });
+    const meOk = await http('GET', '/api/v1/user/me', { token: tok });
+    assert(thirdDead.status === 401 && meOk.status === 200, `revoke-others: other ${thirdDead.status}, own ${meOk.status}`);
+    return `${list.json.length} sessions; other revoked (401); revoke-others ended ${ro.json.revoked}, own session kept`;
+  });
+
+  await check('rest: read receipt route — no request in the original → 409; ignore sets $MDNSent', async () => {
+    const list = await http('GET', `/api/v1/mail/folders/${inbox.id}/messages?limit=1`, { token: tok });
+    const id = list.json.messages[0].id;
+    const send = await http('POST', `/api/v1/mail/messages/${id}/receipt`, { token: tok, body: { action: 'send' } });
+    assert(send.status === 409, `send without request → ${send.status} ${send.json?.code}`);
+    const ign = await http('POST', `/api/v1/mail/messages/${id}/receipt`, { token: tok, body: { action: 'ignore' } });
+    assert(ign.status === 200 || (ign.status === 409 && ign.json?.code === 'RECEIPT_HANDLED'), `ignore → ${ign.status}`);
+    const m = await http('GET', `/api/v1/mail/messages/${id}?markRead=false`, { token: tok });
+    assert(m.json.flags.includes('$MDNSent'), 'flag not set');
+    return `send ${send.json?.code}; ignore → $MDNSent`;
+  });
 }

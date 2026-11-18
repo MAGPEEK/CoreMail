@@ -439,6 +439,8 @@ draftsRouter.delete('/:id', async (req: Request, res: Response) => {
 const SendDraftSchema = z.object({
   undoDelaySec: z.number().int().min(0).max(MAX_SEND_HOLD_MS / 1000).optional(),
   scheduledAt: isoDateTime().optional(),
+  /** 9.4: ask the recipients for a read receipt */
+  requestReceipt: z.boolean().optional(),
 });
 
 /**
@@ -533,6 +535,7 @@ draftsRouter.post('/:id/send', sendRateLimiter.middleware, async (req: Request, 
       holdMs: (parsedBody.data.undoDelaySec ?? 0) * 1000,
       sendAs: mode.sendAs,
       sendOnBehalfOf: mode.sendOnBehalfOf,
+      requestReceipt: parsedBody.data.requestReceipt === true,
       messageId: f.messageId,
       // 8.1: inline images keep their Content-ID (cid without angle brackets)
       attachments: draft.attachments.map((a) => ({

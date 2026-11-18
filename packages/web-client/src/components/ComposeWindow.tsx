@@ -22,6 +22,10 @@ import type { Message } from '../api/types.js';
 import { escapeHtml, quoteMailHtml, textToQuotedHtml } from '../lib/mailHtml.js';
 import { replyThreading, safeLinkUrl, splitRecipients } from '../lib/compose.js';
 import { FontSizeExt, InlineImageExt } from './editorExtensions.js';
+import { usePreferences } from '../store/preferences.js';
+import { defaultSignatureHtml, signatureIdentity, type NamedSignature, type SignatureDefaults } from '../lib/signaturePick.js';
+import { needsAttachmentReminder } from '../lib/attachmentReminder.js';
+import { receiptRequestOption } from '../lib/readBehaviour.js';
 import { toLocalInput } from '../lib/datetime.js';
 import { useUiStore, useUiPrefs, type ComposeAttachment, type ComposeContext } from '../store/ui.js';
 import toast from 'react-hot-toast';
@@ -489,7 +493,7 @@ export function ComposeWindow() {
   const originalId = (isReplyMode || isForwardMode) ? composeCtx?.id : undefined;
   const originalQuery = useQuery({
     queryKey: ['message', originalId],
-    queryFn: () => api.get<Message>(`${mailApiBase(composeMailbox)}/messages/${originalId}`),
+    queryFn: () => api.get<Message>(`${mailApiBase(composeMailbox)}/messages/${originalId}?markRead=false`),
     enabled: !!originalId,
     retry: false,
   });
@@ -534,10 +538,16 @@ export function ComposeWindow() {
   const [showTextColor,  setShowTextColor]  = useState(false);
   const [showHighlight,  setShowHighlight]  = useState(false);
 
+  // 9.4: named signatures with defaults per identity (Settings → Signatur)
   const { data: sigData } = useQuery({
-    queryKey: ['user', 'signature'],
-    queryFn: () => api.get<{ signature: string; autoNew: boolean; autoReply: boolean }>('/user/signature'),
+    queryKey: ['user', 'signatures'],
+    queryFn: () => api.get<{ signatures: NamedSignature[]; defaults: Record<string, SignatureDefaults> }>('/user/signatures'),
   });
+  // 9.4: compose defaults + read receipts (Settings → Verfassen / Lesen)
+  const composePrefs = usePreferences((s) => s.prefs.compose);
+  const plainText = composePrefs.format === 'plain';
+  const receiptOption = receiptRequestOption(usePreferences((s) => s.prefs.reading.requestReceipts));
+  const [requestReceipt, setRequestReceipt] = useState(receiptOption.checked);
 
   const editor = useEditor({
     extensions: [
@@ -575,11 +585,13 @@ export function ComposeWindow() {
     // A reopened draft brings its own body (loaded below)
     if (loadDraftFromServer) return;
     if (!sigData || waitForOriginal) return;
+    // a shared mailbox's sender choice (→ its signature) needs the mailbox list
+    if (composeMailbox.kind !== 'own' && !accessibleMailboxes) return;
     signatureInserted.current = true;
     const isReply   = isReplyMode;
     const isForward = isForwardMode;
-    const shouldInsert = (isReply || isForward) ? sigData.autoReply : sigData.autoNew;
-    const sig = shouldInsert && sigData.signature ? sigData.signature : '';
+    const identity = signatureIdentity(composeMailbox, !!selectedSender && selectedSender.mode !== 'self');
+    const sig = defaultSignatureHtml(sigData.signatures, sigData.defaults, identity, isReply || isForward);
 
     const sourceBody = composeCtx?.bodyHtml
       || (original ? (original.bodyHtml || textToQuotedHtml(original.bodyText ?? '')) : '');
@@ -596,10 +608,15 @@ export function ComposeWindow() {
       </blockquote>`;
     }
 
-    if (!sig && !quoted) return;
-    editor.commands.setContent(`<p></p>${sig}${quoted ? `<p></p>${quoted}` : ''}`);
-    editor.commands.focus('start');
-  }, [editor, sigData, composeCtx, original, waitForOriginal, isReplyMode, isForwardMode, restore, loadDraftFromServer]);
+    if (sig || quoted) editor.commands.setContent(`<p></p>${sig}${quoted ? `<p></p>${quoted}` : ''}`);
+    // default font / size for what the user types (Settings → Verfassen)
+    const style = {
+      ...(composePrefs.fontFamily ? { fontFamily: composePrefs.fontFamily } : {}),
+      ...(composePrefs.fontSize ? { fontSize: composePrefs.fontSize } : {}),
+    };
+    const chain = editor.chain().focus('start');
+    (Object.keys(style).length > 0 ? chain.setMark('textStyle', style) : chain).run();
+  }, [editor, sigData, composeCtx, original, waitForOriginal, isReplyMode, isForwardMode, restore, loadDraftFromServer, composeMailbox, selectedSender, composePrefs, accessibleMailboxes]);
 
   // ── Server draft: autosave (3 s idle + close/minimise), reopen, discard ────
   /** Reads the current compose state (refs: the saver outlives renders). */
@@ -618,7 +635,8 @@ export function ComposeWindow() {
       cc: splitRecipients(cc),
       bcc: splitRecipients(bcc),
       subject,
-      bodyHtml: editor?.getHTML() ?? '',
+      // 9.4: plain-text format sends the text only
+      bodyHtml: plainText ? '' : (editor?.getHTML() ?? ''),
       bodyText: editor?.getText() ?? '',
       ...(threading.inReplyTo ? { inReplyTo: threading.inReplyTo } : {}),
       ...(threading.references ? { references: threading.references } : {}),
@@ -810,6 +828,8 @@ export function ComposeWindow() {
    */
   const handleSend = () => {
     if (busy || !to.trim() || finishedRef.current) return;
+    const forgotten = needsAttachmentReminder(composePrefs.attachmentReminder, attachments.length, subject, editor?.getHTML() ?? '');
+    if (forgotten && !window.confirm(`Die Nachricht erwähnt „${forgotten}“, hat aber keinen Anhang. Trotzdem senden?`)) return;
     finishedRef.current = true;
     const restoreSnapshot = { to, cc, bcc, subject, bodyHtml: editor?.getHTML() ?? '', attachments: [...attachments] };
     const baseCtx: ComposeContext = composeCtx ?? { mode: 'new' };
@@ -817,7 +837,7 @@ export function ComposeWindow() {
       delaySec: sendDelaySec,
       start: async () => {
         const id = await saveNow();
-        await sendDraft(id, { undoDelaySec: sendDelaySec });
+        await sendDraft(id, { undoDelaySec: sendDelaySec, ...(requestReceipt && receiptOption.visible ? { requestReceipt: true } : {}) });
         return id;
       },
       undo: (id) => unsendDraft(id),
@@ -842,7 +862,7 @@ export function ComposeWindow() {
     setScheduling(true);
     try {
       const id = await saveNow();
-      await sendDraft(id, { scheduledAt: date.toISOString() });
+      await sendDraft(id, { scheduledAt: date.toISOString(), ...(requestReceipt && receiptOption.visible ? { requestReceipt: true } : {}) });
       toast.success(`Versand geplant für ${date.toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' })}`);
       invalidateMail();
       closeCompose();
@@ -963,8 +983,8 @@ export function ComposeWindow() {
         </div>
       </div>
 
-      {/* ── Formatting toolbar ───────────────────────────────────────────────── */}
-      <div className="flex items-center flex-wrap gap-0.5 px-2 py-1.5 border-b border-line shrink-0 bg-surface-2/60">
+      {/* ── Formatting toolbar (not in plain-text format) ────────────────────── */}
+      <div className={`${plainText ? 'hidden' : 'flex'} items-center flex-wrap gap-0.5 px-2 py-1.5 border-b border-line shrink-0 bg-surface-2/60`}>
 
         {/* Undo / Redo */}
         <ToolBtn
@@ -1302,6 +1322,12 @@ export function ComposeWindow() {
               </span>
             )}
           </button>
+          {receiptOption.visible && (
+            <label className="flex items-center gap-1 text-xs text-fg-muted px-1 cursor-pointer">
+              <input type="checkbox" checked={requestReceipt} onChange={(e) => setRequestReceipt(e.target.checked)} />
+              Lesebestätigung
+            </label>
+          )}
           <button
             type="button"
             className="btn-ghost text-xs text-fg-subtle hover:text-danger-fg"

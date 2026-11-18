@@ -46,6 +46,8 @@ export interface EventData {
   organizer: { email: string; cn?: string };
   attendees: AttendeeData[];
   publicHostname: string;  // for UID domain fallback
+  /** 9.4: organizer's time zone (Settings → Region) for the times in the mail text; '' = server zone. */
+  timeZone?: string;
 }
 
 /**
@@ -261,20 +263,31 @@ export async function enqueueInvitation(opts: QueueInvitationOpts): Promise<void
   }, await getOutboundJobOptions());
 }
 
-function fmtDateTime(d: Date): string {
-  return d.toLocaleString('de-DE', { dateStyle: 'full', timeStyle: 'short' });
+/**
+ * Time shown in the invitation text. Timed events in the organizer's zone (9.4),
+ * all-day events as the date only (stored as UTC midnight).
+ */
+export function formatInvitationTime(d: Date, allDay: boolean, timeZone?: string): string {
+  if (allDay) return d.toLocaleDateString('de-DE', { dateStyle: 'full', timeZone: 'UTC' });
+  const text = d.toLocaleString('de-DE', { dateStyle: 'full', timeStyle: 'short', ...(timeZone ? { timeZone } : {}) });
+  return timeZone ? `${text} (${timeZone})` : text;
+}
+
+function fmtRange(ev: EventData): string {
+  const allDay = ev.allDay === true;
+  return `${formatInvitationTime(ev.dtStart, allDay, ev.timeZone)} – ${formatInvitationTime(ev.dtEnd, allDay, ev.timeZone)}`;
 }
 
 function buildPlainBody(ev: EventData, method: 'REQUEST' | 'CANCEL'): string {
   if (method === 'CANCEL') {
     return `Der Termin „${ev.summary}" wurde abgesagt.\n\n` +
-           `Ursprünglicher Zeitpunkt: ${fmtDateTime(ev.dtStart)} – ${fmtDateTime(ev.dtEnd)}\n` +
+           `Ursprünglicher Zeitpunkt: ${fmtRange(ev)}\n` +
            (ev.location ? `Ort: ${ev.location}\n` : '') +
            `\nOrganisator: ${ev.organizer.cn ?? ev.organizer.email} <${ev.organizer.email}>\n`;
   }
   return `Du bist zu einem Termin eingeladen.\n\n` +
          `Titel:  ${ev.summary}\n` +
-         `Wann:   ${fmtDateTime(ev.dtStart)} – ${fmtDateTime(ev.dtEnd)}\n` +
+         `Wann:   ${fmtRange(ev)}\n` +
          (ev.location ? `Ort:    ${ev.location}\n` : '') +
          `Wer:    ${ev.organizer.cn ?? ev.organizer.email} <${ev.organizer.email}>\n` +
          (ev.description ? `\n${ev.description}\n` : '') +
@@ -287,7 +300,7 @@ function buildHtmlBody(ev: EventData, method: 'REQUEST' | 'CANCEL'): string {
   if (method === 'CANCEL') {
     return `<div style="font-family:system-ui,sans-serif">
       <p style="color:#c33"><strong>Termin abgesagt:</strong> ${esc(ev.summary)}</p>
-      <p>Ursprünglicher Zeitpunkt: ${esc(fmtDateTime(ev.dtStart))} – ${esc(fmtDateTime(ev.dtEnd))}</p>
+      <p>Ursprünglicher Zeitpunkt: ${esc(fmtRange(ev))}</p>
       ${ev.location ? `<p>Ort: ${esc(ev.location)}</p>` : ''}
       <p style="color:#888;font-size:12px">— gesendet von CoreMail</p>
     </div>`;
@@ -295,7 +308,7 @@ function buildHtmlBody(ev: EventData, method: 'REQUEST' | 'CANCEL'): string {
   return `<div style="font-family:system-ui,sans-serif">
     <h2 style="margin:0 0 8px;color:#0078D4">📅 ${esc(ev.summary)}</h2>
     <table style="border-collapse:collapse">
-      <tr><td style="padding:4px 8px;color:#666">Wann</td><td><strong>${esc(fmtDateTime(ev.dtStart))} – ${esc(fmtDateTime(ev.dtEnd))}</strong></td></tr>
+      <tr><td style="padding:4px 8px;color:#666">Wann</td><td><strong>${esc(fmtRange(ev))}</strong></td></tr>
       ${ev.location ? `<tr><td style="padding:4px 8px;color:#666">Ort</td><td>${esc(ev.location)}</td></tr>` : ''}
       <tr><td style="padding:4px 8px;color:#666">Wer</td><td>${esc(ev.organizer.cn ?? ev.organizer.email)}</td></tr>
     </table>

@@ -4,7 +4,7 @@ import nodemailer, { type SendMailOptions } from 'nodemailer';
 import { createBullMqConnection, createLogger } from '@coremail/core';
 import {
   prisma, downloadBuffer, deleteObject, buildOutboundJobOptions, getOutboundJobOptions, loadQueueSettings, isExpiredInQueue,
-  outboundRetryDelay, queueStartMs,
+  outboundRetryDelay, queueStartMs, receiptAddressOf,
 } from '@coremail/storage';
 import { relayMessage, type RecipientFailure, type RelayResult, type DkimOptions, type RelayOptions } from './relay.js';
 import { extractSmtpCode, sendDsnBounce, sendSuccessDsn, rawSubjectAndId, type DsnOptions } from './dsn.js';
@@ -73,6 +73,8 @@ export interface StructuredMessage {
   date:       string;    // ISO string
   inReplyTo?:  string;
   references?: string;
+  /** 9.4: read receipt requested — Disposition-Notification-To header (an address). */
+  dispositionNotificationTo?: string;
   attachments: StructuredAttachment[];
 }
 
@@ -132,6 +134,13 @@ export interface OutboundJob {
 
 // ── Build RFC 5322 buffer from structured message ─────────────────────────────
 
+/** 9.4: validated Disposition-Notification-To address of a job, or null (never raw job text). */
+export function receiptHeader(msg: Pick<StructuredMessage, 'dispositionNotificationTo'>): string | null {
+  const value = msg.dispositionNotificationTo?.trim().toLowerCase();
+  // producers set a bare address; anything else (display names, groups, folding) is dropped
+  return value && receiptAddressOf(value) === value ? value : null;
+}
+
 export async function buildRawFromMessage(
   msg: StructuredMessage,
   download: (key: string) => Promise<Buffer> = downloadBuffer,
@@ -155,6 +164,7 @@ export async function buildRawFromMessage(
     ? { name: msg.fromName, address: msg.from }
     : msg.from;
 
+  const receiptTo = receiptHeader(msg);
   const info = await transport.sendMail({
     messageId: msg.messageId,
     from:      fromField,
@@ -170,6 +180,7 @@ export async function buildRawFromMessage(
     ...(msg.inReplyTo         ? { inReplyTo:  msg.inReplyTo,
                                   references: msg.references ?? msg.inReplyTo } : {}),
     ...(attachments.length    ? { attachments }                               : {}),
+    ...(receiptTo             ? { headers: { 'Disposition-Notification-To': receiptTo } } : {}),
   });
 
   const stream = info.message as Readable;

@@ -34,6 +34,8 @@ function matches(row: Row, where: Row | undefined): boolean {
 
 const events: Row[] = [];
 let seq = 0;
+// 9.4: alice's stored preferences (default reminder)
+let alicePrefs: Row = {};
 (globalThis as Record<string, unknown>)['__prisma'] = {
   $on: () => undefined,
   ...noProtocolPolicies(),
@@ -52,6 +54,7 @@ let seq = 0;
   },
   user: { findUnique: async () => ({ email: 'alice@example.com', displayName: 'Alice' }) },
   serverSettings: { findUnique: async () => ({ publicHostname: 'mail.example.com' }) },
+  userSettings: { findUnique: async () => ({ preferences: alicePrefs }) },
   calendarEvent: {
     create: async (a: { data: Row }) => {
       const row = { id: `ev${++seq}`, description: '', location: '', allDay: false, recurring: false, rrule: null,
@@ -241,4 +244,22 @@ test('8.0.0: WRITE grantee cannot PUT/DELETE a PUBLIC series with a PRIVATE over
   assert.equal((await call('DELETE', '/events/bobSeries')).status, 403);
   const row = events.find((e) => e['id'] === 'bobSeries')!;
   assert.match(String(row['icalData']), /DESCRIPTION:raise/, 'private override untouched');
+});
+
+test('9.4: POST without reminderMinutes adds the default reminder; null = none; explicit value wins', async () => {
+  const body = { calendarId: 'cal1', summary: 'Sync', dtStart: '2026-06-01T08:00:00.000Z', dtEnd: '2026-06-01T08:30:00.000Z' };
+  const def = await call('POST', '/events', body);
+  assert.equal(def.status, 201);
+  assert.match(String(events.find((e) => e['id'] === def.json.id)!['icalData']), /BEGIN:VALARM\r\nACTION:DISPLAY\r\nTRIGGER:-PT15M/);
+  alicePrefs = { calendar: { defaultReminderMinutes: 60 } };
+  const own = await call('POST', '/events', body);
+  assert.match(String(events.find((e) => e['id'] === own.json.id)!['icalData']), /TRIGGER:-PT60M/);
+  const none = await call('POST', '/events', { ...body, reminderMinutes: null });
+  assert.doesNotMatch(String(events.find((e) => e['id'] === none.json.id)!['icalData']), /VALARM/);
+  const explicit = await call('POST', '/events', { ...body, reminderMinutes: 5 });
+  assert.match(String(events.find((e) => e['id'] === explicit.json.id)!['icalData']), /TRIGGER:-PT5M/);
+  alicePrefs = { calendar: { defaultReminderMinutes: null } };
+  const off = await call('POST', '/events', body);
+  assert.doesNotMatch(String(events.find((e) => e['id'] === off.json.id)!['icalData']), /VALARM/);
+  alicePrefs = {};
 });

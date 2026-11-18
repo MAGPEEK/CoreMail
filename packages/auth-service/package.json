@@ -9,7 +9,7 @@
     "dev": "tsx watch src/server.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/server.js",
-    "test": "node --import tsx --test src/router/mfa.test.ts src/router/app-passwords.test.ts"
+    "test": "node --import tsx --test src/router/mfa.test.ts src/router/app-passwords.test.ts src/router/sessions.test.ts"
   },
   "dependencies": {
     "@coremail/auth-ldap": "workspace:*",

@@ -33,7 +33,7 @@ test('API base, folder query key and page URL per mailbox kind', () => {
   assert.deepEqual(foldersQueryKey(OWN_MAILBOX), ['folders'], 'own key unchanged (prefix of all folder keys)');
   assert.deepEqual(foldersQueryKey({ kind: 'shared', id: 'sm1' }), ['folders', 'shared:sm1']);
   assert.equal(mailPageUrl(OWN_MAILBOX), '/mail');
-  assert.equal(mailPageUrl({ kind: 'shared', id: 'sm1' }), '/mail?mailbox=shared%3Asm1');
+  assert.equal(mailPageUrl({ kind: 'shared', id: 'sm1' }), '/mail/shared%3Asm1');
   // recover deleted items: delegated mailboxes use the 9.1 delegated route
   assert.equal(recoverableApiBase({ kind: 'delegated', id: 'mb1' }), '/mail/delegated-mailboxes/mb1/recoverable');
   assert.deepEqual(recoverableQueryKey({ kind: 'delegated', id: 'mb1' }), ['recoverable', 'delegated', 'mb1']);

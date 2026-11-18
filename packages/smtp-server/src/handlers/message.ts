@@ -315,6 +315,8 @@ export async function storeInboundMessage(
     replyTo: parsed.replyTo,
     messageId: parsed.messageId,
     inReplyTo: parsed.inReplyTo,
+    // 9.4: read receipt requested — the webmail asks / answers per the user's setting
+    ...(parsed.dispositionNotificationTo ? { dispositionNotificationTo: parsed.dispositionNotificationTo } : {}),
     date: parsed.date,
     bodyText: truncateBodyColumn(parsed.bodyText),
     bodyHtml: truncateBodyColumn(parsed.bodyHtml),

@@ -60,9 +60,9 @@ export function foldersQueryKey(ref: MailboxRef): readonly unknown[] {
   return ref.kind === 'own' ? ['folders'] : ['folders', mailboxKey(ref)];
 }
 
-/** Webmail URL that opens the mailbox (the /shared-mailbox/:id redirect target). */
+/** Webmail URL that opens the mailbox (9.4 deep-link form, lib/mailLinks.ts; the /shared-mailbox/:id redirect target). */
 export function mailPageUrl(ref: MailboxRef): string {
-  return ref.kind === 'own' ? '/mail' : `/mail?mailbox=${encodeURIComponent(mailboxKey(ref))}`;
+  return ref.kind === 'own' ? '/mail' : `/mail/${encodeURIComponent(mailboxKey(ref))}`;
 }
 
 // ── Permissions (German UI labels) ──────────────────────────────────────────

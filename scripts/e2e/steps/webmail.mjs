@@ -157,4 +157,27 @@ export async function run(state) {
     }
     return 'revoked → 403; test folder removed';
   });
+
+  // 9.4: named signatures with defaults per identity (own + shared mailbox)
+  await check('webmail: signatures — create, defaults per identity, legacy /user/signature mirror, delete', async () => {
+    const mk = await http('POST', '/api/v1/user/signatures', { token: A, body: { name: `E2E-${Date.now()}`, html: '<p>E2E Gruß</p>' } });
+    assert(mk.status === 201 && mk.json?.id, `create ${mk.status} ${mk.text.slice(0, 200)}`);
+    const id = mk.json.id;
+    try {
+      const d = await http('PATCH', '/api/v1/user/preferences', { token: A, body: { preferences: { signatures: { defaults: { own: { newId: id, replyId: null }, [sharedRef]: { newId: id, replyId: id } } } } } });
+      assert(d.status === 200, `defaults ${d.status} ${d.text.slice(0, 200)}`);
+      const list = await http('GET', '/api/v1/user/signatures', { token: A });
+      assert(list.json.signatures.some((s) => s.id === id) && list.json.defaults[sharedRef]?.replyId === id, 'defaults not stored');
+      const legacy = await http('GET', '/api/v1/user/signature', { token: A });
+      assert(legacy.json.signature === '<p>E2E Gruß</p>' && legacy.json.autoNew === true, `legacy mirror ${JSON.stringify(legacy.json).slice(0, 200)}`);
+      const foreign = await http('PUT', `/api/v1/user/signatures/${id}`, { token: B, body: { name: 'x' } });
+      assert(foreign.status === 404, `other user edits → ${foreign.status}`);
+    } finally {
+      const del = await http('DELETE', `/api/v1/user/signatures/${id}`, { token: A });
+      assert(del.status === 200, `delete ${del.status}`);
+    }
+    const after = await http('GET', '/api/v1/user/signatures', { token: A });
+    assert(!after.json.defaults[sharedRef], 'defaults still point at the deleted signature');
+    return 'created, defaults own + shared, legacy mirror, 404 for others, deleted + defaults cleared';
+  });
 }

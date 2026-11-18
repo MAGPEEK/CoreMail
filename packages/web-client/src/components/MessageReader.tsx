@@ -4,7 +4,6 @@ import {
   AlertOctagon, ShieldOff, Code, Pin, Flag, FolderInput, Clock, X,
   ShieldAlert, ShieldCheck, CalendarClock, CheckCircle, AlertCircle, RefreshCw,
 } from 'lucide-react';
-import { format } from 'date-fns';
 import { useRef, useState, type ReactNode } from 'react';
 import { textToQuotedHtml } from '../lib/mailHtml.js';
 import { api, downloadFile, fetchText } from '../api/client.js';
@@ -25,6 +24,9 @@ import { Modal } from './Modal.js';
 import { translate, useT } from '../i18n/useT.js';
 import { useActiveMailbox } from '../hooks/useActiveMailbox.js';
 import { readerOverflowActions, type ReaderAction, type ReaderActionId } from '../lib/mailCommands.js';
+import { useAutoMarkRead, useReadReceipt } from '../hooks/useReadBehaviour.js';
+import { useRegional } from '../store/preferences.js';
+import { formatLongDateTime } from '../lib/regionalFormat.js';
 
 interface Props {
   messageId: string;
@@ -83,12 +85,19 @@ export function MessageReader({ messageId }: Props) {
 
   const { data: msg, isLoading, isError, error, refetch, isFetching } = useQuery({
     queryKey: ['message', messageId],
-    queryFn: () => api.get<Message>(`${base}/messages/${messageId}`),
+    // 9.4: the reader marks read itself (immediately / after a delay / manually)
+    queryFn: () => api.get<Message>(`${base}/messages/${messageId}?markRead=false`),
   });
 
   const { data: folders = [] } = useQuery({
     queryKey: mailbox.foldersKey,
     queryFn: () => api.get<Folder[]>(`${base}/folders`),
+  });
+  const regional = useRegional();
+  useAutoMarkRead(msg, base, readOnly);
+  const receipt = useReadReceipt(msg, {
+    ownMailbox: !foreign,
+    inJunk: folders.find((f) => f.id === selectedFolderId)?.name === 'Junk',
   });
 
   const invalidate = () => {
@@ -281,6 +290,15 @@ export function MessageReader({ messageId }: Props) {
         );
       })()}
 
+      {/* 9.4: read receipt requested (Settings → Lesen: "fragen") */}
+      {receipt.action === 'ask' && (
+        <div className="px-4 py-2.5 border-b border-line shrink-0 flex items-center gap-2.5 text-sm bg-surface-2 text-fg">
+          <span className="flex-1">{msg.dispositionNotificationTo} hat eine Lesebestätigung angefordert.</span>
+          <button type="button" className="btn-primary text-xs" disabled={receipt.pending} onClick={receipt.send}>Senden</button>
+          <button type="button" className="btn-secondary text-xs" disabled={receipt.pending} onClick={receipt.ignore}>Nicht senden</button>
+        </div>
+      )}
+
       {/* Draft (own Drafts folder): continue editing in compose (server draft) */}
       {!foreign && currentFolder?.name === 'Drafts' && !msg.scheduledStatus && (
         <div className="px-4 py-2.5 border-b shrink-0 flex items-center gap-2.5 text-sm bg-warning-bg border-warning-line text-warning-fg">
@@ -359,7 +377,7 @@ export function MessageReader({ messageId }: Props) {
                 <> · CC: <span className="text-fg-muted">{msg.ccAddrs.join(', ')}</span></>
               )}
             </p>
-            <p className="text-xs text-fg-subtle">{format(new Date(msg.date), 'EEEE, dd.MM.yyyy HH:mm')}</p>
+            <p className="text-xs text-fg-subtle">{formatLongDateTime(new Date(msg.date), regional)}</p>
           </div>
         </div>
         {showAvatarCard && (

@@ -652,6 +652,8 @@ export function buildVCalendar(opts: VEventFields & {
   method?: string;
   /** RECURRENCE-ID of a single instance (iTIP replies for one occurrence, RFC 5546 §3.2.3). */
   recurrenceId?: { date: Date; dateOnly: boolean };
+  /** 9.4: display alarm this many minutes before the start (VALARM). */
+  alarmMinutes?: number;
 }): string {
   const ev: IcalComponent = { name: 'VEVENT', properties: [], components: [] };
   const now = opts.dtstamp ?? new Date();
@@ -679,6 +681,17 @@ export function buildVCalendar(opts: VEventFields & {
     });
   }
   for (const a of opts.attendees ?? []) ev.properties.push(attendeeProp(a));
+  if (opts.alarmMinutes !== undefined && Number.isFinite(opts.alarmMinutes) && opts.alarmMinutes >= 0) {
+    ev.components.push({
+      name: 'VALARM',
+      properties: [
+        { name: 'ACTION', params: {}, value: 'DISPLAY' },
+        { name: 'TRIGGER', params: {}, value: `-PT${Math.floor(opts.alarmMinutes)}M` },
+        textProp('DESCRIPTION', opts.summary),
+      ],
+      components: [],
+    });
+  }
 
   const cal: IcalComponent = {
     name: 'VCALENDAR',

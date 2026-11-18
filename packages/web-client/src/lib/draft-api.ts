@@ -89,7 +89,7 @@ export const deleteDraft = (id: string) => api.delete<{ ok: boolean }>(`/mail/dr
  * state could not be stored — that is a success for the caller (never resend);
  * `stateUnsaved` lets the UI mention it.
  */
-export async function sendDraft(id: string, body: { undoDelaySec?: number; scheduledAt?: string }) {
+export async function sendDraft(id: string, body: { undoDelaySec?: number; scheduledAt?: string; requestReceipt?: boolean }) {
   try {
     return await api.post<{ ok: boolean; jobId: string; scheduled: boolean; sendAt?: string; stateUnsaved?: boolean }>(
       `/mail/drafts/${encodeURIComponent(id)}/send`, body);
