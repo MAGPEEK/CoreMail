@@ -127,7 +127,11 @@ export async function run(state) {
     assert(tlsPorts.length >= 6, `only ${tlsPorts.length} ports probed: ${JSON.stringify(ports.map((p) => [p.port, p.error]))}`);
     const wrong = tlsPorts.filter((p) => p.certId !== certId || p.problem);
     assert(wrong.length === 0, `mismatch: ${JSON.stringify(wrong.map((p) => [p.port, p.certId, p.problem]))}`);
-    return `${tlsPorts.length} ports, problem=${r.json.problem}`;
+    // w2b: the integrated HTTPS server is probed too (null while it does not listen)
+    const https = r.json.https;
+    assert(https === null || (https.protocol === 'https' && https.mode === 'tls' && typeof https.ok === 'boolean'),
+      `https entry: ${JSON.stringify(https)?.slice(0, 200)}`);
+    return `${tlsPorts.length} ports, problem=${r.json.problem}, https=${https ? (https.ok ? https.problem ?? 'ok' : https.error) : 'not listening'}`;
   });
 
   await check('tls: private keys are stored encrypted (enc:v1) and never returned by the API', async () => {

@@ -7,7 +7,7 @@
  * POST   /api/v1/admin/certificates/upload       — upload own certificate (PEM)
  * POST   /api/v1/admin/certificates/self-signed  — generate self-signed certificate
  * PUT    /api/v1/admin/certificates/:id          — edit name, services (SMTP/IMAP/POP3 = applied immediately), autoRenew
- * GET    /api/v1/admin/certificates/served       — certificate each mail port really serves (9.3)
+ * GET    /api/v1/admin/certificates/served       — certificate each mail port (and the HTTPS server) really serves (9.3)
  * GET    /api/v1/admin/certificates/acme-suggestions — defaults for an order for the public host name (9.3)
  * POST   /api/v1/admin/certificates/:id/renew    — renew certificate immediately
  * DELETE /api/v1/admin/certificates/:id          — delete certificate
@@ -36,7 +36,10 @@ import {
   assignProtocolCert, claimServices, createSelfSignedPem, fallbackToSelfSigned, hasMailService, holdsTrustedPem,
   isStagingCert, MAIL_SERVICES, protocolBlocker, withMailServices, type AssignResult, type ProtocolActor,
 } from '../../lib/protocol-cert-assign.js';
-import { DEFAULT_PROBE_TARGETS, probeServedCert, servedCertProblem, type ProbeTarget } from '../../lib/served-cert.js';
+import {
+  DEFAULT_PROBE_TARGETS, httpsProbeTarget, probeServedCert, servedCertProblem, type ProbeResult, type ProbeTarget,
+} from '../../lib/served-cert.js';
+import { httpsRedirectState } from '../../tls-proxy.js';
 import { auditContext } from '../../lib/audit.js';
 
 // Re-exported for server.ts (ACME HTTP-01 challenge endpoint) and older imports.
@@ -140,6 +143,8 @@ adminCertificatesRouter.get('/tls-proxy-info', async (_req: Request, res: Respon
 // w1: `unreadableKeys` (additive) lists the certificates in use whose stored
 // private key cannot be read — the mail servers then serve the self-signed
 // replacement (and HTTPS skips the certificate) until it is re-issued or uploaded.
+// w2b: `https` (additive) — the same probe against the integrated HTTPS server,
+// null while it does not listen; `problem` keeps meaning "a mail port".
 const MAX_PROBE_TARGETS = 16;
 async function servedProbeTargets(): Promise<ProbeTarget[]> {
   const rows = await prisma.serviceListener.findMany({
@@ -166,7 +171,11 @@ adminCertificatesRouter.get('/served', async (_req: Request, res: Response) => {
   const hostname = (settings?.publicHostname ?? '').trim().toLowerCase() || 'localhost';
   const targets = await servedProbeTargets();
   const timeoutMs = Math.min(Math.max(parseInt(process.env['SERVED_CERT_PROBE_TIMEOUT_MS'] ?? '4000', 10) || 4000, 500), 15_000);
-  const results = await Promise.all(targets.map((t) => probeServedCert(t, hostname, { timeoutMs })));
+  const httpsTarget = httpsProbeTarget(httpsRedirectState());
+  const [results, httpsResult] = await Promise.all([
+    Promise.all(targets.map((t) => probeServedCert(t, hostname, { timeoutMs }))),
+    httpsTarget ? probeServedCert(httpsTarget, hostname, { timeoutMs }) : Promise.resolve(null),
+  ]);
 
   const certs = await prisma.certificate.findMany({
     select: {
@@ -179,10 +188,11 @@ adminCertificatesRouter.get('/served', async (_req: Request, res: Response) => {
     if (!c.certPem) continue;
     try { byFingerprint.set(new X509Certificate(c.certPem).fingerprint256, { id: c.id, name: c.name }); } catch { /* unparsable */ }
   }
-  const ports = results.map((r) => {
+  const withCertRow = (r: ProbeResult) => {
     const match = r.cert ? byFingerprint.get(r.cert.fingerprint256) : undefined;
     return { ...r, problem: servedCertProblem(r), certId: match?.id ?? null, certName: match?.name ?? null };
-  });
+  };
+  const ports = results.map(withCertRow);
   const problem = ports.some((p) => p.problem !== null);
   // The mail servers / HTTPS proxy log the unreadable key; this only reports it.
   const unreadableKeys = await unreadableInUseCertKeys();
@@ -205,6 +215,7 @@ adminCertificatesRouter.get('/served', async (_req: Request, res: Response) => {
     problem,
     suggestedCert: suggestion ? { id: suggestion.id, name: suggestion.name } : null,
     unreadableKeys,
+    https: httpsResult ? withCertRow(httpsResult) : null,
   });
 });
 

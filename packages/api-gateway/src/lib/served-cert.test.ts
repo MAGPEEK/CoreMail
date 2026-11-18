@@ -28,7 +28,7 @@ installFakePrisma({
   serverSettings: { findUnique: () => ({ publicHostname: 'mail.example.com' }) },
 });
 
-const { probeServedCert, describeCert, servedCertProblem, localProbeHost } = await import('./served-cert.js');
+const { probeServedCert, describeCert, servedCertProblem, localProbeHost, httpsProbeTarget } = await import('./served-cert.js');
 const { createSelfSignedPem } = await import('./protocol-cert-assign.js');
 
 const good = await createSelfSignedPem(['mail.example.com']);
@@ -118,6 +118,20 @@ test('STARTTLS dialogues: SMTP EHLO/STARTTLS, IMAP STARTTLS, POP3 STLS', async (
   assert.equal(pop3.cert!.fingerprint256, fp(good.certPem));
 });
 
+test('HTTPS server: probed with implicit TLS only, and only while it listens', async () => {
+  const r = await probeServedCert({ protocol: 'https', port: ports['implicit']!, implicitTls: true }, 'mail.example.com');
+  assert.equal(r.ok, true, r.error);
+  assert.equal(r.cert!.fingerprint256, fp(good.certPem));
+  const upgrade = await probeServedCert({ protocol: 'https', port: ports['silent']!, implicitTls: false }, 'mail.example.com', { timeoutMs: 400 });
+  assert.equal(upgrade.ok, false);
+  assert.match(upgrade.error!, /no STARTTLS/);
+
+  assert.deepEqual(httpsProbeTarget({ active: true, port: 443 }), { protocol: 'https', port: 443, implicitTls: true });
+  assert.equal(httpsProbeTarget({ active: false, port: 443 }), null, 'TLS terminated elsewhere / no HTTPS certificate');
+  assert.equal(httpsProbeTarget({ active: true, port: Number.NaN }), null);
+  assert.equal(httpsProbeTarget({ active: true, port: 70_000 }), null);
+});
+
 test('failures are reported, never thrown: STARTTLS not offered, timeout, refused', async () => {
   const noTls = await probeServedCert({ protocol: 'smtp', port: ports['smtpNoTls']!, implicitTls: false }, 'mail.example.com');
   assert.equal(noTls.ok, false);
@@ -192,7 +206,8 @@ test('GET /served probes the configured listeners, matches the cert row and sugg
       headers: { authorization: `Bearer ${tok}` },
     });
     assert.equal(r.status, 200);
-    const body = await r.json() as { hostname: string; problem: boolean; ports: Row[]; suggestedCert: Row | null; unreadableKeys: Row[] };
+    const body = await r.json() as { hostname: string; problem: boolean; ports: Row[]; suggestedCert: Row | null; unreadableKeys: Row[]; https: Row | null };
+    assert.equal(body.https, null, 'the integrated HTTPS server is not running in this test');
     assert.equal(body.hostname, 'mail.example.com');
     assert.equal(body.problem, true);
     assert.equal(body.ports.length, 2);

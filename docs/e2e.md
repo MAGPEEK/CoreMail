@@ -115,7 +115,8 @@ route. See [user-settings.md](user-settings.md).
 container and uploads it WITHOUT services (the mail ports must not change), then assigns
 SMTP/IMAP/POP3 with `PUT /api/v1/admin/certificates/:id` only and expects 993 / 465 / 995 (TLS) and
 143 / 587 (STARTTLS) / 110 (STLS) to serve exactly that certificate (SHA-256 fingerprint, the
-intermediate is sent) and `GET /api/v1/admin/certificates/served` to agree; removing the services
+intermediate is sent) and `GET /api/v1/admin/certificates/served` to agree (its `https` entry is
+`null` or a well-formed probe of the integrated HTTPS server); removing the services
 must bring every port back to the self-signed default for `mail.<E2E_DOMAIN>` (one certificate on
 all ports, visible as the SELF_SIGNED protocol certificate). The uploaded certificate is deleted.
 See [certificates.md](certificates.md).
