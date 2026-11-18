@@ -59,3 +59,11 @@ test('clickTarget + pickClient: focused window first, then a visible one, else t
   assert.equal(sw.pickClient([w]), null);
   assert.equal(sw.pickClient([]), null);
 });
+
+test('clickTarget: whitespace and control characters cannot smuggle a foreign host', () => {
+  // URL parsing drops tab / CR / LF — "/<TAB>/host" would become "//host"
+  for (const url of ['/\t/evil.example', '/\n/evil.example', '/\r/evil.example', '/ /evil.example', '/mail\u0000', '/a\b', '/\u007f']) {
+    assert.equal(sw.clickTarget({ url }), '/mail', JSON.stringify(url));
+  }
+  assert.equal(sw.clickTarget({ url: '/mail?mailbox=shared%3Asb1&folder=f&message=m' }), '/mail?mailbox=shared%3Asb1&folder=f&message=m');
+});

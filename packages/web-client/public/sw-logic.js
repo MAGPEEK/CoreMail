@@ -10,11 +10,20 @@
   var FALLBACK_URL = '/mail';
   var DEFAULT_ICON = '/favicon.svg';
 
-  /** A same-origin path ("/…", never "//host" or "/\host")? */
+  /**
+   * A same-origin path ("/…")? Never "//host" or "/\host", and no whitespace,
+   * control characters or backslashes anywhere: URL parsing drops tabs and line
+   * breaks, so "/<TAB>/host" would otherwise turn into "//host".
+   */
+  var BACKSLASH = 0x5c;
+
   function isSafePath(url) {
-    if (typeof url !== 'string' || url.charAt(0) !== '/') return false;
-    var second = url.charAt(1);
-    return second !== '/' && second !== '\\';
+    if (typeof url !== 'string' || url.length > 2048 || url.charAt(0) !== '/' || url.charAt(1) === '/') return false;
+    for (var i = 0; i < url.length; i++) {
+      var c = url.charCodeAt(i);
+      if (c <= 0x20 || c === 0x7f || c === BACKSLASH) return false; // whitespace, control, backslash
+    }
+    return true;
   }
 
   function safePath(url) {

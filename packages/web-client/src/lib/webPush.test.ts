@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   pushAvailability, availabilityHint, urlBase64ToUint8Array, subscribeBody, openMessageTarget, mailDeepLinkTarget,
-  SW_OPEN_MESSAGE_TYPE,
+  SW_OPEN_MESSAGE_TYPE, endsSession,
 } from './webPush.ts';
 
 const env = { serviceWorker: true, pushManager: true, notification: true, secureContext: true, permission: 'default' as const };
@@ -43,4 +43,11 @@ test('mailDeepLinkTarget: folder + message ids, anything else is ignored', () =>
   assert.deepEqual(mailDeepLinkTarget(new URLSearchParams('folder=f1&message=m1&mailbox=shared:s1')), { folderId: 'f1', messageId: 'm1' });
   assert.equal(mailDeepLinkTarget(new URLSearchParams('folder=f1')), null);
   assert.equal(mailDeepLinkTarget(new URLSearchParams('folder=../x&message=m1')), null);
+});
+
+test('endsSession: only a signed-in → signed-out change ends the push subscription', () => {
+  assert.equal(endsSession('tok', null), true);
+  assert.equal(endsSession('tok', 'tok2'), false, 'a token refresh keeps it');
+  assert.equal(endsSession(null, 'tok'), false, 'a login keeps it');
+  assert.equal(endsSession(null, null), false);
 });

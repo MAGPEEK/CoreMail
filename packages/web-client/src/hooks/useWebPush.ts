@@ -2,14 +2,16 @@
  * 9.4 Web Push + service worker of the webmail (pure parts: lib/webPush.ts).
  *
  *   registerServiceWorker()       once at start-up (main.tsx): /sw.js, no caching
+ *   dropPushOnLogout()            once at start-up: a logout ends this browser's subscription
  *   useServiceWorkerNavigation()  a notification click routes an open window
  *   useWebPush()                  opt-in state for Settings → Benachrichtigungen
  */
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, apiFetch } from '../api/client.js';
+import { useAuthStore } from '../store/auth.js';
 import {
-  openMessageTarget, pushAvailability, subscribeBody, urlBase64ToUint8Array, type PushAvailability,
+  endsSession, openMessageTarget, pushAvailability, subscribeBody, urlBase64ToUint8Array, type PushAvailability,
 } from '../lib/webPush.js';
 
 const SW_URL = '/sw.js';
@@ -24,6 +26,25 @@ export function registerServiceWorker(): void {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register(SW_URL).catch(() => undefined);
   }, { once: true });
+}
+
+/**
+ * 9.4: when the session of this browser ends (any tab, expiry, revocation) the
+ * push subscription of the browser is cancelled — notifications (with sender
+ * and subject when previews are on) must not keep arriving on a signed-out,
+ * possibly shared device. The push service then answers the gateway with 410
+ * and the gateway deletes the row (lib/push.ts). Turning push on again after
+ * the next login is the user's choice.
+ */
+export function dropPushOnLogout(): void {
+  if (!hasServiceWorker()) return;
+  useAuthStore.subscribe((s, prev) => {
+    if (!endsSession(prev.accessToken, s.accessToken)) return;
+    void navigator.serviceWorker.getRegistration(SW_URL)
+      .then((reg) => reg?.pushManager.getSubscription())
+      .then((sub) => sub?.unsubscribe())
+      .catch(() => undefined); // no registration / push service unreachable: the row expires on its 410
+  });
 }
 
 /** A click on a new-mail notification opens the message in this window. */

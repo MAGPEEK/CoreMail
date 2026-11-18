@@ -7,6 +7,7 @@ import { refreshBranding } from './useBranding.js';
 import { openReconnectingEventSource, eventStreamUrl } from '../lib/reconnectingEventSource.js';
 import { startTabLeader, type AppMessage, type ChannelLike } from '../lib/tabLeader.js';
 import { InvalidationBatch, REALTIME_EVENTS, parseEventData, realtimePlan } from '../lib/realtimeEvents.js';
+import { tabRole } from '../lib/tabRole.js';
 
 const CHANNEL_NAME = 'coremail-realtime';
 
@@ -55,6 +56,8 @@ function logoutHere(): void {
  *  - Invalidations of a burst are coalesced (one refetch per query).
  *  - A logout in one tab, or the end of the session announced by the server
  *    (`session-ended`), logs out every tab.
+ *  - The election is shared with one-tab-per-browser features (lib/tabRole.ts:
+ *    task reminders); their messages travel over the same channel.
  */
 export function useRealtime() {
   const loggedIn = useAuthStore((s) => !!s.accessToken);
@@ -90,12 +93,14 @@ export function useRealtime() {
     const onMessage = (m: AppMessage) => {
       if (m.t === 'event' && typeof m['name'] === 'string') apply(m['name'], m['data']);
       else if (m.t === 'logout') { remoteLogout = true; logoutHere(); }
+      else tabRole.received(m);
     };
     const leader = startTabLeader({
       id: tabId(),
       channel: openChannel(),
       onMessage,
       onLeaderChange: (isLeader) => {
+        tabRole.leaderChanged(isLeader);
         closeStream?.();
         closeStream = isLeader
           ? openReconnectingEventSource({
@@ -109,6 +114,8 @@ export function useRealtime() {
       },
     });
 
+    tabRole.attach(leader);
+
     // A logout of this tab (button, expired session, session-ended) reaches the others
     // before this effect is torn down — zustand notifies synchronously.
     const unsubscribe = useAuthStore.subscribe((s, prev) => {
@@ -121,6 +128,7 @@ export function useRealtime() {
     return () => {
       window.removeEventListener('pagehide', onUnload);
       unsubscribe();
+      tabRole.attach(null);
       leader.stop();
       closeStream?.();
       batch.dispose();

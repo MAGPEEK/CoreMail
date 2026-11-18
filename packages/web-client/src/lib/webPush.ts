@@ -78,3 +78,12 @@ export function mailDeepLinkTarget(params: URLSearchParams): { folderId: string;
   const id = /^[A-Za-z0-9_-]{1,64}$/;
   return folderId && messageId && id.test(folderId) && id.test(messageId) ? { folderId, messageId } : null;
 }
+
+/**
+ * 9.4: does this auth-store change end the session of this browser (logout
+ * button, another tab's logout, expired or revoked session)? Then its push
+ * subscription goes too — a signed-out device shows no mail notifications.
+ */
+export function endsSession(prevAccessToken: string | null, nextAccessToken: string | null): boolean {
+  return !!prevAccessToken && !nextAccessToken;
+}
