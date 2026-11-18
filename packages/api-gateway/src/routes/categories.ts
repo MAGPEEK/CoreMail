@@ -1,6 +1,6 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { prisma } from '@coremail/storage';
+import { prisma, touchMessages } from '@coremail/storage';
 import { requireAuth } from '../middleware/auth.js';
 import { announceOnWrite } from '../lib/realtime.js';
 
@@ -119,14 +119,14 @@ categoriesRouter.post('/messages/:messageId', async (req: Request, res: Response
   const ownedIds = new Set(owned.map((c) => c.id));
   const validIds = parsed.data.categoryIds.filter((id) => ownedIds.has(id));
 
-  await prisma.$transaction([
-    prisma.messageCategory.deleteMany({ where: { messageId } }),
-    ...(validIds.length
-      ? [prisma.messageCategory.createMany({
-          data: validIds.map((categoryId) => ({ messageId, categoryId })),
-        })]
-      : []),
-  ]);
+  await prisma.$transaction(async (tx) => {
+    await tx.messageCategory.deleteMany({ where: { messageId } });
+    if (validIds.length) {
+      await tx.messageCategory.createMany({ data: validIds.map((categoryId) => ({ messageId, categoryId })) });
+    }
+    // 9.4: categories are message metadata — new modSeq and a message change event
+    await touchMessages(tx, [messageId]);
+  });
 
   res.json({ ok: true, count: validIds.length });
 });
@@ -161,15 +161,19 @@ categoriesRouter.post('/messages/bulk', async (req: Request, res: Response) => {
     return;
   }
 
-  if (action === 'set' || action === 'remove') {
-    await prisma.messageCategory.deleteMany({
-      where: { messageId: { in: ownedMsgIds }, ...(action === 'remove' ? { categoryId: { in: ownedCatIds } } : {}) },
-    });
-  }
-  if (action === 'set' || action === 'add') {
-    const rows = ownedMsgIds.flatMap((mid) => ownedCatIds.map((cid) => ({ messageId: mid, categoryId: cid })));
-    await prisma.messageCategory.createMany({ data: rows, skipDuplicates: true });
-  }
+  await prisma.$transaction(async (tx) => {
+    if (action === 'set' || action === 'remove') {
+      await tx.messageCategory.deleteMany({
+        where: { messageId: { in: ownedMsgIds }, ...(action === 'remove' ? { categoryId: { in: ownedCatIds } } : {}) },
+      });
+    }
+    if (action === 'set' || action === 'add') {
+      const rows = ownedMsgIds.flatMap((mid) => ownedCatIds.map((cid) => ({ messageId: mid, categoryId: cid })));
+      await tx.messageCategory.createMany({ data: rows, skipDuplicates: true });
+    }
+    // 9.4: categories are message metadata — new modSeq and a message change event
+    await touchMessages(tx, ownedMsgIds);
+  });
 
   res.json({ ok: true, affected: ownedMsgIds.length });
 });
