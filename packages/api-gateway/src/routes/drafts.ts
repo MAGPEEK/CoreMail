@@ -2,7 +2,7 @@
  * Server drafts for the webmail (v8.x) — mounted at /api/v1/mail/drafts.
  *
  *   POST   /                create a draft                → { id, savedAt, attachments }
- *   GET    /:id             load a draft (compose fields + attachments)
+ *   GET    /:id             load a draft (compose fields incl. importance + attachments)
  *   PUT    /:id             replace a draft (new message) → { id, savedAt, attachments }
  *   DELETE /:id             discard a draft
  *   POST   /:id/send        send it like POST /mail/send (same checks, rate limit),
@@ -43,7 +43,7 @@ import {
   prisma, parseRawMessage, storeRawMessage, truncateBodyColumn, attachmentKey, uploadBuffer,
   downloadBuffer, deleteObject, loadRawMessage, createMessage, expunge, moveMessages, touchMessages,
   nextModSeq, parseDraftFields, draftSenderMode, encodeDraftPending, DRAFTS_FOLDER, DRAFT_FLAG, DRAFT_PENDING_HEADER,
-  supersedeDraftVersion, releaseUnreferencedObjects, checkReceiveQuota,
+  supersedeDraftVersion, releaseUnreferencedObjects, checkReceiveQuota, importanceMailOption,
 } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import { requireAuth } from '../middleware/auth.js';
@@ -102,6 +102,8 @@ const DraftSchema = z.object({
   sendAs: z.string().email().optional(),
   sendOnBehalfOf: z.string().email().optional(),
   keepAttachmentIds: z.array(z.string().max(100)).max(MAX_SEND_FILES).default([]),
+  /** 9.4: Importance / X-Priority headers of the draft (and of the mail sent from it). */
+  importance: z.enum(['high', 'normal', 'low']).default('normal'),
 });
 type DraftInput = z.infer<typeof DraftSchema>;
 
@@ -256,6 +258,7 @@ async function writeDraft(
     ...(input.bodyText || !input.bodyHtml ? { text: input.bodyText } : {}),
     ...(reply.inReplyTo ? { inReplyTo: reply.inReplyTo } : {}),
     ...(replyRefs ? { references: replyRefs } : {}),
+    ...importanceMailOption(input.importance),
     ...(attachments.length ? { attachments } : {}),
   });
   const limit = await maxMessageBytes();
@@ -302,6 +305,7 @@ async function writeDraft(
         replyTo: parsed.replyTo,
         messageId: parsed.messageId,
         inReplyTo: parsed.inReplyTo,
+        ...(parsed.importance ? { importance: parsed.importance } : {}),
         date: parsed.date,
         bodyText: truncateBodyColumn(parsed.bodyText),
         bodyHtml: truncateBodyColumn(parsed.bodyHtml),
@@ -396,6 +400,7 @@ draftsRouter.get('/:id', async (req: Request, res: Response) => {
     references: f.references,
     sendAs: mode.sendAs,
     sendOnBehalfOf: mode.sendOnBehalfOf,
+    importance: f.importance,
     attachments: draft.attachments.map(attachmentView),
   });
 });
@@ -536,6 +541,7 @@ draftsRouter.post('/:id/send', sendRateLimiter.middleware, async (req: Request, 
       sendAs: mode.sendAs,
       sendOnBehalfOf: mode.sendOnBehalfOf,
       requestReceipt: parsedBody.data.requestReceipt === true,
+      importance: f.importance,
       messageId: f.messageId,
       // 8.1: inline images keep their Content-ID (cid without angle brackets)
       attachments: draft.attachments.map((a) => ({

@@ -2,6 +2,7 @@ import { simpleParser, type ParsedMail, type Attachment } from 'mailparser';
 import { createHash } from 'crypto';
 import { extractReferences } from '../references.js';
 import { receiptAddressOfRaw } from '../mdn.js';
+import { importanceOfRaw, storedImportance } from '../importance.js';
 
 export interface ParsedMessage {
   subject: string;
@@ -17,6 +18,8 @@ export interface ParsedMessage {
   references: string[];
   /** 9.4: Disposition-Notification-To address (read receipt requested), or null. */
   dispositionNotificationTo: string | null;
+  /** 9.4: Importance / X-Priority / Priority header (null = normal). */
+  importance: 'high' | 'low' | null;
   date: Date;
   bodyText: string;
   bodyHtml: string;
@@ -114,6 +117,7 @@ export async function parseRawMessage(rawBuffer: Buffer): Promise<ParsedMessage>
     inReplyTo: parsed.inReplyTo ?? null,
     references: extractReferences(capped),
     dispositionNotificationTo: receiptAddressOfRaw(capped),
+    importance: storedImportance(importanceOfRaw(capped)),
     date: parsed.date ?? new Date(),
     bodyText: parsed.text ?? '',
     bodyHtml: parsed.html !== false ? (parsed.html ?? '') : '',

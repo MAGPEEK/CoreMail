@@ -37,3 +37,4 @@ export * from './references-backfill.js';
 export * from './branding.js';
 export * from './protocol-access.js';
 export * from './mdn.js';
+export * from './importance.js';

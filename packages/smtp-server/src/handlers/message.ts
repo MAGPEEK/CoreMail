@@ -317,6 +317,8 @@ export async function storeInboundMessage(
     inReplyTo: parsed.inReplyTo,
     // 9.4: read receipt requested — the webmail asks / answers per the user's setting
     ...(parsed.dispositionNotificationTo ? { dispositionNotificationTo: parsed.dispositionNotificationTo } : {}),
+    // 9.4: Importance / X-Priority (the webmail shows a badge)
+    ...(parsed.importance ? { importance: parsed.importance } : {}),
     date: parsed.date,
     bodyText: truncateBodyColumn(parsed.bodyText),
     bodyHtml: truncateBodyColumn(parsed.bodyHtml),

@@ -10,6 +10,7 @@ import {
   createMessage, moveMessages, setFlags, touchMessages, expunge, nextModSeq,
   loadRawMessage, storeRawMessage, truncateBodyColumn, getObjectStream, getObjectStore, downloadBuffer,
   checkSendQuota, reservedFolderPrefix, reservedFolderNameError,
+  importanceMailOption, normalizeImportance, type Importance,
 } from '@coremail/storage';
 import { getOutboundJobOptions } from '@coremail/storage/queue-options';
 import {
@@ -112,12 +113,13 @@ export function getOutboundQueue(): Queue {
 }
 
 // ── Nodemailer: build raw MIME message ────────────────────────────────────────
-// IMPORTANT: newline: 'crlf' — the SMTP protocol (RFC 5321) requires CRLF (\r\n).
+// IMPORTANT: CRLF line ends — the SMTP protocol (RFC 5321) requires CRLF (\r\n);
+// nodemailer's value for that is 'windows' ('crlf' is no valid value: it left LF).
 // nodemailer's smtp-connection does NOT normalize Buffer content automatically
 // (only string content). With 'unix' (LF-only) the receiving MTA cannot detect
 // the header/body separator (\r\n\r\n) → raw MIME text in the body.
 export async function buildRawMime(options: SendMailOptions): Promise<Buffer> {
-  const transport = nodemailer.createTransport({ streamTransport: true, newline: 'crlf' });
+  const transport = nodemailer.createTransport({ streamTransport: true, newline: 'windows' });
   const info = await transport.sendMail(options);
   const stream = info.message as Readable;
   const chunks: Buffer[] = [];
@@ -822,6 +824,7 @@ mailRouter.post(
     let sendAsAddress: string | null = null;     // shared mailbox address as sender (SEND_AS)
     let sendOnBehalfOf: string | null = null;    // shared mailbox address as „on behalf of" (SEND_ON_BEHALF)
     let requestReceipt = false;                  // 9.4: Disposition-Notification-To
+    let importance: Importance = 'normal';       // 9.4: Importance / X-Priority
 
     const ct = req.headers['content-type'] ?? '';
     if (ct.startsWith('application/json')) {
@@ -838,6 +841,7 @@ mailRouter.post(
         sendAs:        z.string().email().optional(),
         sendOnBehalfOf: z.string().email().optional(),
         requestReceipt: z.boolean().optional(),
+        importance: z.enum(['high', 'normal', 'low']).optional(),
       });
       const parsed = schema.safeParse(req.body);
       if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
@@ -853,6 +857,7 @@ mailRouter.post(
       if (parsed.data.sendAs)         sendAsAddress  = parsed.data.sendAs.toLowerCase();
       if (parsed.data.sendOnBehalfOf) sendOnBehalfOf = parsed.data.sendOnBehalfOf.toLowerCase();
       requestReceipt = parsed.data.requestReceipt === true;
+      importance = normalizeImportance(parsed.data.importance);
     } else {
       // multipart — fields arrive as strings (arrays as comma-separated list)
       to       = parseAddrs(req.body['to'] as unknown);
@@ -870,12 +875,13 @@ mailRouter.post(
       if (req.body['sendAs'])         sendAsAddress  = String(req.body['sendAs']).toLowerCase();
       if (req.body['sendOnBehalfOf']) sendOnBehalfOf = String(req.body['sendOnBehalfOf']).toLowerCase();
       requestReceipt = String(req.body['requestReceipt'] ?? '') === 'true';
+      importance = normalizeImportance(req.body['importance']);
     }
 
     const files = (req.files as Express.Multer.File[] | undefined) ?? [];
     const out = await performSend(req.apiUser!.userId, {
       to, cc, bcc, subject, bodyHtml, bodyText, inReplyTo, referencesRaw, scheduledAt,
-      sendAs: sendAsAddress, sendOnBehalfOf, requestReceipt,
+      sendAs: sendAsAddress, sendOnBehalfOf, requestReceipt, importance,
       attachments: files.map((f) => ({ filename: f.originalname, contentType: f.mimetype, size: f.size, buffer: f.buffer })),
     });
     res.status(out.status).json(out.body);
@@ -931,6 +937,8 @@ export interface SendRequest {
   sendOnBehalfOf?: string | null;
   /** 9.4: ask for a read receipt (Disposition-Notification-To: the From address). */
   requestReceipt?: boolean;
+  /** 9.4: Importance / X-Priority of the mail (normal: no header). */
+  importance?: Importance;
   attachments: SendAttachment[];
   /** Message-ID header to use (a draft keeps its own); default: a new one. */
   messageId?: string | null;
@@ -1135,6 +1143,7 @@ export async function performSend(userId: string, input: SendRequest): Promise<S
           date:      (scheduledAt ?? sendDate).toISOString(),
           ...replyHeaders,
           ...(input.requestReceipt ? { dispositionNotificationTo: effectiveFromEmail } : {}),
+          ...(input.importance && input.importance !== 'normal' ? { importance: input.importance } : {}),
           attachments: queueAttachments,
         },
       }, jobOptions);
@@ -1210,6 +1219,7 @@ export async function performSend(userId: string, input: SendRequest): Promise<S
           ...(bodyHtml              ? { html: bodyHtml }                      : {}),
           ...(bodyText              ? { text: bodyText }                      : {}),
           ...replyHeaders,
+          ...importanceMailOption(input.importance ?? 'normal'),
           ...(sentAttachments.length ? { attachments: sentAttachments }        : {}),
         });
 
@@ -1230,6 +1240,7 @@ export async function performSend(userId: string, input: SendRequest): Promise<S
             replyTo:   parsed.replyTo,
             messageId: parsed.messageId,
             inReplyTo: parsed.inReplyTo,
+            ...(parsed.importance ? { importance: parsed.importance } : {}),
             date:      parsed.date,
             bodyText:  truncateBodyColumn(parsed.bodyText),
             bodyHtml:  truncateBodyColumn(parsed.bodyHtml),

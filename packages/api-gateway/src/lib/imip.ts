@@ -181,7 +181,7 @@ export async function buildInvitationMime(args: {
   htmlBody?: string;
 }): Promise<Buffer> {
   const methodLower = args.method.toLowerCase();
-  const transport = nodemailer.createTransport({ streamTransport: true, newline: 'crlf' });
+  const transport = nodemailer.createTransport({ streamTransport: true, newline: 'windows' }); // CRLF
   const info = await transport.sendMail({
     from: args.from.name
       ? { name: args.from.name, address: args.from.email }

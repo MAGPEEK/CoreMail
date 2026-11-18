@@ -582,6 +582,33 @@ test('post-enqueue failure: queued draft is marked SENT/PENDING, never re-sendab
   assert.equal(jobs.size, n, 'never re-sent');
 });
 
+test('9.4 importance: stored in the draft (headers + column), loaded back, carried to the outbound job; CRLF only', async () => {
+  const created = await call('POST', '/drafts', { user: 'u1', body: { to: ['imp@x.test'], subject: 'Wichtig', bodyText: 'a\nb\n', importance: 'high' } });
+  assert.equal(created.status, 201);
+  const id = String(created.json['id']);
+  const raw = rawOf(id);
+  assert.match(raw, /^Importance: High\r$/m);
+  assert.match(raw, /^X-Priority: 1 \(Highest\)\r$/m);
+  assert.doesNotMatch(raw, /(^|[^\r])\n/, 'generated MIME uses CRLF line ends only');
+  assert.equal(messages.get(id)!['importance'], 'high');
+  assert.equal((await call('GET', `/drafts/${id}`, { user: 'u1' })).json['importance'], 'high');
+
+  const low = await call('PUT', `/drafts/${id}`, { user: 'u1', body: { to: ['imp@x.test'], subject: 'Wichtig', importance: 'low' } });
+  const lowId = String(low.json['id']);
+  assert.equal((await call('GET', `/drafts/${lowId}`, { user: 'u1' })).json['importance'], 'low');
+  const sent = await call('POST', `/drafts/${lowId}/send`, { user: 'u1', body: {} });
+  assert.equal(sent.status, 200);
+  assert.equal(([...jobs.values()].at(-1)!.data['message'] as Row)['importance'], 'low');
+
+  const normal = await call('POST', '/drafts', { user: 'u1', body: { to: ['imp@x.test'], subject: 'Normal' } });
+  const nid = String(normal.json['id']);
+  assert.doesNotMatch(rawOf(nid), /Importance|X-Priority/i);
+  assert.equal(messages.get(nid)!['importance'] ?? null, null);
+  assert.equal((await call('GET', `/drafts/${nid}`, { user: 'u1' })).json['importance'], 'normal');
+  assert.equal((await call('POST', '/drafts', { user: 'u1', body: { to: [], importance: 'urgent' } })).status, 400);
+  await call('DELETE', `/drafts/${nid}`, { user: 'u1' });
+});
+
 test('draft writes: refused at ProhibitSendReceive; per-user rate limit', async () => {
   Object.assign(users['u2']!, { quotaBytes: 1000n, usedBytes: 0n, quotaWarningBytes: null, quotaProhibitSendBytes: null, mailbox: { id: 'mb2' } });
   usage['u2'] = 2000;

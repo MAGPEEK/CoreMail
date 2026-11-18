@@ -4,7 +4,7 @@ import nodemailer, { type SendMailOptions } from 'nodemailer';
 import { createBullMqConnection, createLogger } from '@coremail/core';
 import {
   prisma, downloadBuffer, deleteObject, buildOutboundJobOptions, getOutboundJobOptions, loadQueueSettings, isExpiredInQueue,
-  outboundRetryDelay, queueStartMs, receiptAddressOf,
+  outboundRetryDelay, queueStartMs, receiptAddressOf, importanceMailOption, normalizeImportance,
 } from '@coremail/storage';
 import { relayMessage, type RecipientFailure, type RelayResult, type DkimOptions, type RelayOptions } from './relay.js';
 import { extractSmtpCode, sendDsnBounce, sendSuccessDsn, rawSubjectAndId, type DsnOptions } from './dsn.js';
@@ -75,6 +75,8 @@ export interface StructuredMessage {
   references?: string;
   /** 9.4: read receipt requested — Disposition-Notification-To header (an address). */
   dispositionNotificationTo?: string;
+  /** 9.4: importance chosen in compose; anything but high / low writes no header. */
+  importance?: string;
   attachments: StructuredAttachment[];
 }
 
@@ -157,7 +159,9 @@ export async function buildRawFromMessage(
 
   const transport = nodemailer.createTransport({
     streamTransport: true,
-    newline: 'crlf',   // RFC 5321: SMTP requires CRLF line endings
+    // RFC 5321: SMTP requires CRLF. nodemailer knows 'windows' — 'crlf' is no
+    // valid value and left bare LF line ends in the generated message.
+    newline: 'windows',
   });
 
   const fromField: SendMailOptions['from'] = msg.fromName
@@ -180,6 +184,8 @@ export async function buildRawFromMessage(
     ...(msg.inReplyTo         ? { inReplyTo:  msg.inReplyTo,
                                   references: msg.references ?? msg.inReplyTo } : {}),
     ...(attachments.length    ? { attachments }                               : {}),
+    // 9.4: X-Priority / X-MSMail-Priority / Importance from a validated level only
+    ...importanceMailOption(normalizeImportance(msg.importance)),
     ...(receiptTo             ? { headers: { 'Disposition-Notification-To': receiptTo } } : {}),
   });
 
