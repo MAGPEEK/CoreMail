@@ -16,18 +16,26 @@ export interface NotificationSource {
   wait(session: MapiSession, signal: AbortSignal): Promise<boolean>;
 }
 
-/** Waits for the timer, the session's end or the client going away. */
+/**
+ * Waits for the timer, the session's end or the signal (client gone, a newer
+ * NotificationWait of the same session, session ended) — the signal ends the
+ * wait at once.
+ */
 export function timerNotificationSource(waitMs = NOTIFICATION_WAIT_MS, pollMs = 1000): NotificationSource {
   return {
     wait(session, signal) {
       return new Promise((resolve) => {
+        if (signal.aborted || session.closed) { resolve(false); return; }
         const deadline = Date.now() + waitMs;
+        const finish = (): void => {
+          clearInterval(tick);
+          signal.removeEventListener('abort', finish);
+          resolve(false);
+        };
         const tick = setInterval(() => {
-          if (session.closed || signal.aborted || Date.now() >= deadline) {
-            clearInterval(tick);
-            resolve(false);
-          }
+          if (session.closed || Date.now() >= deadline) finish();
         }, Math.min(pollMs, waitMs));
+        signal.addEventListener('abort', finish, { once: true });
       });
     },
   };

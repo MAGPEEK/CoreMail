@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { LiveConnectionRegistry, PROTOCOL_ACCESS_CHANGE } from '@coremail/core';
 import { SessionRegistry, MAX_SESSIONS_PER_USER, type SessionRedis } from './registry.js';
 import { cookieDigest, MapiSession, type SessionAuth } from './session.js';
+import { timerNotificationSource } from '../emsmdb/notification-wait.js';
 
 class MemoryRedis implements SessionRedis {
   store = new Map<string, { value: string; expires: number }>();
@@ -118,4 +119,33 @@ test('at most MAX_SESSIONS_PER_USER sessions per account: the least recently use
   await new Promise((r) => setImmediate(r));
   assert.equal(first.session.closed, true);
   assert.equal(registry.size, MAX_SESSIONS_PER_USER);
+});
+
+test('lookup with a refusing predicate returns null and does not refresh the session', async () => {
+  const { registry, tick } = setup();
+  const { session, context } = await registry.create(auth('u1'), 1_000);
+  tick(800);
+  assert.equal(await registry.lookup(context, (s) => s.user.userId === 'u2'), null);
+  assert.equal(session.lastUsed, 1_000, 'not refreshed for a foreign caller');
+  tick(400);
+  assert.equal(await registry.lookup(context), null, 'idle timeout counted from the last own use');
+});
+
+test('NotificationWait timer: the signal ends the wait at once; ending the session aborts it', async () => {
+  const source = timerNotificationSource(60_000, 60_000);
+  const { registry } = setup();
+  const { session } = await registry.create(auth(), 1_000);
+  const abort = new AbortController();
+  const started = Date.now();
+  const waiting = source.wait(session, abort.signal);
+  abort.abort();
+  assert.equal(await waiting, false);
+  assert.ok(Date.now() - started < 1000, 'not held until the next poll');
+
+  const second = new AbortController();
+  session.notificationWait = second;
+  const held = source.wait(session, second.signal);
+  await registry.end(session);
+  assert.equal(await held, false);
+  assert.equal(await source.wait(session, new AbortController().signal), false, 'a closed session never waits');
 });

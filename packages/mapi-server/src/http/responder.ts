@@ -4,12 +4,19 @@
  * meta-tag (chunked, Nagle off), PENDING every X-PendingPeriod while the work
  * runs, then DONE with the final X-ResponseCode, timing headers and the body.
  * Requests refused before processing get a plain response whose X-ResponseCode
- * header carries the failure and a short diagnostic text.
+ * header carries the failure and a short diagnostic text. A failure after the
+ * PROCESSING meta-tag still ends the response properly: DONE with
+ * X-ResponseCode 1 and an empty body (MS-OXCMAPIHTTP "Responding to All
+ * Request Type Requests": the additional X-ResponseCode after DONE reports a
+ * failure that occurs after the initial response).
  */
 import type { Response } from 'express';
+import { createLogger } from '@coremail/core';
 import {
-  doneSection, META_PENDING, META_PROCESSING, responseHeaders, type MapiRequestHeaders,
+  doneSection, META_PENDING, META_PROCESSING, ResponseCode, responseHeaders, type MapiRequestHeaders,
 } from './envelope.js';
+
+const log = createLogger('mapi:http');
 
 export interface StreamOptions {
   pendingMs: number;
@@ -33,12 +40,16 @@ export async function respondStreaming(
   if (opts.setCookies?.length) res.setHeader('Set-Cookie', opts.setCookies);
   res.write(META_PROCESSING);
   const timer = setInterval(() => { if (!res.writableEnded) res.write(META_PENDING); }, opts.pendingMs);
+  let result: WorkResult;
   try {
-    const result = await work();
-    res.end(doneSection(result.responseCode, Date.now() - startedAt.getTime(), startedAt, result.body));
+    result = await work();
+  } catch (err) {
+    log.error({ err, requestType: h.requestType }, 'MAPI request failed after PROCESSING');
+    result = { responseCode: ResponseCode.UnknownFailure, body: Buffer.alloc(0) };
   } finally {
     clearInterval(timer);
   }
+  if (!res.writableEnded) res.end(doneSection(result.responseCode, Date.now() - startedAt.getTime(), startedAt, result.body));
 }
 
 /** A request refused before processing (non-zero X-ResponseCode, diagnostic text body). */

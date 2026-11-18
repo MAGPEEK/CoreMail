@@ -123,8 +123,8 @@ export function emsmdbHandler(deps: EmsmdbDeps): RequestHandler {
     const cookie = h.cookies[CONTEXT_COOKIE];
     if (cookie === undefined) { respondFailure(res, h, ResponseCode.MissingCookie, 'session cookie missing'); return null; }
     if (!isCookieValue(cookie)) { respondFailure(res, h, ResponseCode.InvalidContextCookie, 'invalid session cookie'); return null; }
-    const session = await deps.sessions.lookup(cookie);
-    if (!session || !sameContext(session, auth)) {
+    const session = await deps.sessions.lookup(cookie, (s) => sameContext(s, auth));
+    if (!session) {
       const secure = secureCookies(req);
       res.setHeader('Set-Cookie', [clearCookie(CONTEXT_COOKIE, secure), clearCookie(SEQUENCE_COOKIE, secure)]);
       respondFailure(res, h, ResponseCode.ContextNotFound, 'session not found');
@@ -150,8 +150,8 @@ export function emsmdbHandler(deps: EmsmdbDeps): RequestHandler {
     }
     const previous = h.cookies[CONTEXT_COOKIE];
     if (isCookieValue(previous)) {
-      const old = await deps.sessions.lookup(previous);
-      if (old && old.user.userId === user.userId) await deps.sessions.end(old);
+      const old = await deps.sessions.lookup(previous, (s) => s.user.userId === user.userId);
+      if (old) await deps.sessions.end(old);
     }
     const created = await deps.sessions.create(auth.auth, auth.startedAt);
     const secure = secureCookies(req);
@@ -224,21 +224,29 @@ export function emsmdbHandler(deps: EmsmdbDeps): RequestHandler {
     try { parseNotificationWaitRequest(bodyOf(req)); } catch {
       respondFailure(res, h, ResponseCode.InvalidRequestBody, 'invalid NotificationWait body'); return;
     }
+    // One outstanding NotificationWait per session: a newer one ends the older
+    // (EventPending 0), so a client cannot pile up held requests.
+    session.notificationWait?.abort();
     const abort = new AbortController();
+    session.notificationWait = abort;
     res.on('close', () => abort.abort());
-    await stream(res, h, [], async () => {
-      const pending = await deps.notifications.wait(session, abort.signal);
-      session.lastUsed = Date.now();
-      return { responseCode: ResponseCode.Success, body: buildNotificationWaitResponse(pending) };
-    });
+    try {
+      await stream(res, h, [], async () => {
+        const pending = await deps.notifications.wait(session, abort.signal);
+        session.lastUsed = Date.now();
+        return { responseCode: ResponseCode.Success, body: buildNotificationWaitResponse(pending) };
+      });
+    } finally {
+      if (session.notificationWait === abort) session.notificationWait = null;
+    }
   }
 
   /** A refused account (MAPI switched off) loses the session its cookie names. */
   async function dropSession(h: MapiRequestHeaders, userId: string): Promise<void> {
     const cookie = h.cookies[CONTEXT_COOKIE];
     if (!isCookieValue(cookie)) return;
-    const session = await deps.sessions.lookup(cookie);
-    if (session && session.user.userId === userId) await deps.sessions.end(session);
+    const session = await deps.sessions.lookup(cookie, (s) => s.user.userId === userId);
+    if (session) await deps.sessions.end(session);
   }
 
   return async (req, res) => {
@@ -247,8 +255,9 @@ export function emsmdbHandler(deps: EmsmdbDeps): RequestHandler {
     const { h, auth } = admitted;
     if (h.requestType === 'Connect') { await connect(req, res, h, auth); return; }
     if (h.requestType === 'PING') {
+      // Refreshes the idle timer of the caller's own session only.
       const cookie = h.cookies[CONTEXT_COOKIE];
-      if (isCookieValue(cookie)) await deps.sessions.lookup(cookie);
+      if (isCookieValue(cookie)) await deps.sessions.lookup(cookie, (s) => sameContext(s, auth.auth));
       await stream(res, h, [], async () => ({ responseCode: ResponseCode.Success, body: Buffer.alloc(0) }));
       return;
     }

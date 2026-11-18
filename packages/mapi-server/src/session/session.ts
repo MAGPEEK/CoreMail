@@ -38,6 +38,8 @@ export class MapiSession {
   busy = false;
   lastUsed: number;
   closed = false;
+  /** The outstanding NotificationWait (at most one per session; a new one ends it). */
+  notificationWait: AbortController | null = null;
   private draftCounter = DRAFT_COUNTER_BASE;
 
   constructor(id: string, auth: SessionAuth, sequence: string, now: number) {

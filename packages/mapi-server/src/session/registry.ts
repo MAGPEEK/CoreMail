@@ -70,11 +70,15 @@ export class SessionRegistry {
     return { session, context, sequence };
   }
 
-  /** The live session of a context cookie (refreshes its idle timer), or null. */
-  async lookup(contextCookie: string): Promise<MapiSession | null> {
+  /**
+   * The live session of a context cookie (refreshes its idle timer), or null.
+   * `accept` decides whether the caller may use it (same account/credentials);
+   * a session it refuses is returned as null and not refreshed.
+   */
+  async lookup(contextCookie: string, accept: (s: MapiSession) => boolean = () => true): Promise<MapiSession | null> {
     const digest = cookieDigest(contextCookie);
     const entry = this.byDigest.get(digest);
-    if (!entry || entry.session.closed) return null;
+    if (!entry || entry.session.closed || !accept(entry.session)) return null;
     if (this.now() - entry.session.lastUsed > this.deps.idleMs) { await this.end(entry.session); return null; }
     const alive = await this.deps.redis.pexpire(KEY_PREFIX + digest, this.deps.idleMs);
     if (alive !== 1) { await this.end(entry.session); return null; }
@@ -86,6 +90,7 @@ export class SessionRegistry {
   async end(session: MapiSession): Promise<void> {
     const entry = this.byDigest.get(session.id);
     session.closed = true;
+    session.notificationWait?.abort();
     this.byDigest.delete(session.id);
     entry?.unregister();
     await this.deps.redis.del(KEY_PREFIX + session.id).catch((err: unknown) => log.warn({ err }, 'MAPI context record not deleted'));

@@ -56,3 +56,23 @@ test('response headers echo the request id, type and client info', () => {
   assert.equal(r['Content-Type'], 'application/mapi-http');
   assert.equal(r['X-PendingPeriod'], '15000');
 });
+
+test('respondStreaming: a failure after PROCESSING still ends with DONE and X-ResponseCode 1', async () => {
+  const express = (await import('express')).default;
+  const { respondStreaming } = await import('./responder.js');
+  const app = express();
+  app.post('/x', (req, res) => {
+    void respondStreaming(res, headers(base), { pendingMs: 60_000, expirationMs: 1000 }, async () => { throw new Error('boom'); });
+  });
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise((r) => server.once('listening', r));
+  try {
+    const { port } = server.address() as import('node:net').AddressInfo;
+    const r = await fetch(`http://127.0.0.1:${port}/x`, { method: 'POST' });
+    assert.equal(r.headers.get('x-responsecode'), '0', 'the request was accepted');
+    const text = await r.text();
+    assert.match(text, /^PROCESSING\r\nDONE\r\nX-ResponseCode: 1\r\nX-ElapsedTime: \d+\r\nX-StartTime: .+GMT\r\n\r\n$/);
+  } finally {
+    server.close();
+  }
+});

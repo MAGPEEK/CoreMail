@@ -17,7 +17,7 @@ import {
   MapiHttpClient, rop, decodeLogon, decodeQueryRows, responseHead, TAG, HANDLE_UNUSED, connectBody, type ClientResult,
 } from './testing/mapi-client.js';
 import type { AuthOutcome } from './http/auth.js';
-import type { NotificationSource } from './emsmdb/notification-wait.js';
+import { timerNotificationSource, type NotificationSource } from './emsmdb/notification-wait.js';
 
 const USERS: Record<string, { password: string; userId: string; mapi: boolean }> = {
   'alice@example.test': { password: 'pw-a', userId: 'ua', mapi: true },
@@ -249,6 +249,31 @@ test('per-account request limit: over the limit → 429 + Retry-After (X-Respons
     // Failed logins are not counted per account (the mail-login lockout covers them).
     const wrong = new MapiHttpClient(url, 'carol@example.test', 'nope');
     for (let i = 0; i < 5; i++) assert.equal((await wrong.connect()).status, 401);
+  } finally {
+    s.close();
+  }
+});
+
+test('NotificationWait: a newer wait of the same session ends the older one; Disconnect ends the last', async () => {
+  const held = createApp({
+    sessions, store, rops: ROP_REGISTRY, notifications: timerNotificationSource(30_000, 30_000), authenticate: fakeAuthenticate,
+    limiter: unlimited, config: { pendingMs: 15_000, idleMs: 60_000 },
+  });
+  const s = await new Promise<Server>((resolve) => { const x = held.listen(0, '127.0.0.1', () => resolve(x)); });
+  try {
+    const c = new MapiHttpClient(`http://127.0.0.1:${(s.address() as AddressInfo).port}`, 'alice@example.test', 'pw-a');
+    assertOk(await c.connect());
+    const started = Date.now();
+    const first = c.request('emsmdb', 'NotificationWait', Buffer.alloc(8));
+    await new Promise((r) => setTimeout(r, 50));
+    const second = c.request('emsmdb', 'NotificationWait', Buffer.alloc(8));
+    const r1 = await first;
+    assertOk(r1);
+    assert.equal(r1.mapi!.body.readUInt32LE(8), 0, 'EventPending 0 for the replaced wait');
+    assert.ok(Date.now() - started < 5000, 'the older wait ended at once');
+    await new Promise((r) => setTimeout(r, 50));
+    assertOk(await c.disconnect());
+    assertOk(await second);
   } finally {
     s.close();
   }
