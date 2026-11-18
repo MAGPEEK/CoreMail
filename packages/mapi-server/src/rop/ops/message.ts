@@ -345,7 +345,7 @@ export const ropGetAttachmentTable = defineRop<TableReq>({
     const { logon, message } = objectOf(ctx, req.inputIndex, 'message');
     await ensureContent(ctx.store, message);
     const table: TableState = {
-      source: { kind: 'attachments', message }, columns: [], sort: [], restriction: null, position: 0, rows: null,
+      source: { kind: 'attachments', message }, columns: [], sort: [], restriction: null, position: 0, rows: null, notify: false,
     };
     putObject(ctx, req.outputIndex, { kind: 'table', logon, table }, req.logonId);
     return okResponse(RopId.GetAttachmentTable, req.outputIndex).toBuffer();

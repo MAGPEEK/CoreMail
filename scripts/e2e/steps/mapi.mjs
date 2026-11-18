@@ -1,17 +1,49 @@
 // Step: MAPI over HTTP (classic Outlook, docs/mapi.md). The MAPI switch is off by
-// default; the admin turns it on for A. B sends A a mail (SMTP submission); A
-// connects over MAPI (Connect → Execute Logon → Inbox → contents table) and sees
-// it, opens it and reads the body through a stream, then composes a message in
-// the Outbox and submits it to B (checked over IMAP). With the switch off again,
-// a running MAPI session is refused (403) and a new Connect as well.
+// default (Autodiscover announces no mapiHttp block); the admin turns it on for
+// A and Autodiscover announces the mailbox and address book URLs. B sends A a
+// mail (SMTP submission); A connects over MAPI (Connect → Execute Logon → Inbox
+// → contents table) and sees it, opens it and reads the body through a stream,
+// then composes a message in the Outbox and submits it to B (checked over IMAP).
+// The address book (Bind, GetSpecialTable, QueryRows, ResolveNames) lists and
+// resolves B; a NotificationWait wakes within 3 s of a new mail and the next
+// Execute carries RopNotify NewMail. With the switch off again, a running MAPI
+// session is refused (403), a new Connect as well, and Autodiscover drops the
+// mapiHttp block. (The e2e stack sets MAPI_HTTPS_TRUSTED: its test runner talks
+// plain HTTP, so no CA certificate is served.)
 import {
-  check, assert, creds, http, session, waitFor, BASE, PORTS, buildMime, smtpOpen, smtpStartTls, smtpAuthPlain, smtpSend,
+  check, assert, basic, creds, http, session, waitFor, BASE, PORTS, buildMime, smtpOpen, smtpStartTls, smtpAuthPlain, smtpSend,
   imapCmd, imapQuote,
 } from '../lib.mjs';
 import { imapLogin } from './imap.mjs';
 import {
   MapiHttpClient, rop, decodeLogon, decodeQueryRows, decodeOpenMessage, responseHead, TAG, HANDLE_UNUSED,
+  nspiBody, nspiDecode, parseExecuteResponse, readNotifications, ropOutput,
 } from '../../../packages/mapi-server/src/testing/mapi-client.ts';
+
+const SMTP_ADDRESS = 0x39fe001f;
+
+/** Autodiscover v1 (Outlook schema) as classic Outlook asks for it (X-MapiHttpCapability). */
+async function autodiscover(email, password) {
+  const body = `<?xml version="1.0" encoding="utf-8"?><Autodiscover xmlns="http://schemas.microsoft.com/exchange/autodiscover/outlook/requestschema/2006"><Request><EMailAddress>${email}</EMailAddress><AcceptableResponseSchema>http://schemas.microsoft.com/exchange/autodiscover/outlook/responseschema/2006a</AcceptableResponseSchema></Request></Autodiscover>`;
+  const r = await http('POST', '/autodiscover/autodiscover.xml', {
+    body, headers: { 'Content-Type': 'text/xml', 'X-MapiHttpCapability': '1', 'X-AnchorMailbox': email, Authorization: basic(email, password) },
+  });
+  assert(r.status === 200, `Autodiscover ${r.status}`);
+  return r.text;
+}
+
+/** Sends B → A over SMTP submission; resolves when the server accepted it. */
+async function sendBtoA(B, passB, A, subject, text) {
+  const s = await smtpOpen(PORTS.submission);
+  try {
+    await smtpStartTls(s);
+    const auth = await smtpAuthPlain(s, B, passB);
+    assert(auth.code === 235, `AUTH ${auth.text}`);
+    const r = await smtpSend(s, B, [A], buildMime({ from: `Bob E2E <${B}>`, to: A, subject, text }));
+    assert(r.code === 250, `${r.stage}: ${r.text}`);
+    return r.text.split('\n').at(-1);
+  } finally { s.close(); }
+}
 
 const LEGACY_DN = '/o=CoreMail/ou=Exchange Administrative Group (FYDIBOHF23SPDLT)/cn=Recipients/cn=';
 const U = HANDLE_UNUSED;
@@ -65,23 +97,40 @@ export async function run(state) {
     return 'GET code 2, anonymous 401';
   });
 
+  await check('mapi: auth — a Negotiate / NTLM header gets the Basic challenge only (no NTLM offered)', async () => {
+    const nego = new MapiHttpClient(BASE, A, passA);
+    nego.authorization = 'NTLM TlRMTVNTUAABAAAAB4IIog==';
+    const r = await nego.request('nspi', 'PING', Buffer.alloc(0));
+    const challenge = r.headers.get('www-authenticate') ?? '';
+    assert(r.status === 401 && /^Basic /.test(challenge) && !/NTLM|Negotiate/i.test(challenge), `${r.status} ${challenge}`);
+    return challenge;
+  });
+
+  await check('mapi: Autodiscover while the switch is off → no mapiHttp block', async () => {
+    const xml = await autodiscover(A, passA);
+    assert(!/mapiHttp/.test(xml), 'mapiHttp announced although MAPI is off');
+    return 'IMAP/SMTP only';
+  });
+
   try {
     await check('mapi: switch on for A (user level)', async () => {
       assert(await setMapi(admin, state.users.a.id, 'on') === true, 'mapi not effective');
       return 'effective on';
     });
 
-    await check('mapi: B → A mail over SMTP submission', async () => {
-      const s = await smtpOpen(PORTS.submission);
-      try {
-        await smtpStartTls(s);
-        const auth = await smtpAuthPlain(s, B, c.userB);
-        assert(auth.code === 235, `AUTH ${auth.text}`);
-        const r = await smtpSend(s, B, [A], buildMime({ from: `Bob E2E <${B}>`, to: A, subject, text: 'Body read over MAPI.' }));
-        assert(r.code === 250, `${r.stage}: ${r.text}`);
-        return r.text.split('\n').at(-1);
-      } finally { s.close(); }
+    await check('mapi: Autodiscover announces mapiHttp (MailStore + AddressBook), never EXCH/EXPR', async () => {
+      const xml = await waitFor(async () => {
+        const x = await autodiscover(A, passA);
+        return /<Protocol Type="mapiHttp" Version="1">/.test(x) ? x : null;
+      }, { timeout: 45_000, interval: 2000, what: 'the mapiHttp block (protocol switch caches)' });
+      assert(/<MailStore>\s*<InternalUrl>https:\/\/[^<]+\/mapi\/emsmdb\/<\/InternalUrl>/.test(xml), 'MailStore URL');
+      assert(/<AddressBook>\s*<InternalUrl>https:\/\/[^<]+\/mapi\/nspi\/<\/InternalUrl>/.test(xml), 'AddressBook URL');
+      assert(xml.includes(`<LegacyDN>${LEGACY_DN}${state.users.a.id}</LegacyDN>`), 'LegacyDN of the account');
+      assert(!/<Type>(EXCH|EXPR)<\/Type>/.test(xml), 'no RPC blocks');
+      return 'mapiHttp version 1';
     });
+
+    await check('mapi: B → A mail over SMTP submission', () => sendBtoA(B, c.userB, A, subject, 'Body read over MAPI.'));
 
     const client = new MapiHttpClient(BASE, A, passA);
     let found;
@@ -149,6 +198,58 @@ export async function run(state) {
       } finally { imap.close(); }
     });
 
+    const book = new MapiHttpClient(BASE, A, passA);
+    await check('mapi: address book — Bind, GetSpecialTable, QueryRows lists A and B', async () => {
+      const bind = await book.request('nspi', 'Bind', nspiBody.bind());
+      assert(bind.status === 200 && bind.responseCode === 0, `Bind ${bind.status} code ${bind.responseCode}`);
+      assert(nspiDecode.bind(bind.mapi.body).errorCode === 0 && book.cookies.has('NspiContext'), 'Bind ErrorCode / cookie');
+      const special = await book.request('nspi', 'GetSpecialTable', nspiBody.getSpecialTable());
+      assert(special.responseCode === 0 && special.mapi.body.readUInt32LE(4) === 0, 'GetSpecialTable');
+      const rows = [];
+      let stat = {};
+      for (let page = 0; page < 20; page++) {
+        const r = nspiDecode.table((await book.request('nspi', 'QueryRows', nspiBody.queryRows(stat, 200, [TAG.DisplayName, SMTP_ADDRESS]))).mapi.body);
+        assert(r.errorCode === 0, `QueryRows 0x${r.errorCode.toString(16)}`);
+        rows.push(...(r.rowSet?.rows ?? []));
+        stat = r.stat;
+        if (stat.currentRec === 2 || (r.rowSet?.rows.length ?? 0) === 0) break;
+      }
+      const emails = rows.map((row) => row[1]);
+      assert(emails.includes(A.toLowerCase()) && emails.includes(B.toLowerCase()), `A/B missing among ${emails.length} rows`);
+      return `${rows.length} entries, TotalRecs ${stat.totalRecs}`;
+    });
+
+    await check('mapi: address book — ResolveNames finds B by address, an unknown name stays unresolved', async () => {
+      const r = nspiDecode.resolveNames((await book.request('nspi', 'ResolveNames', nspiBody.resolveNames([B, `nobody-${Date.now()}@nowhere.invalid`], [SMTP_ADDRESS]))).mapi.body);
+      assert(r.errorCode === 0, `ResolveNames 0x${r.errorCode.toString(16)}`);
+      assert(r.mids[0] >= 0x10 && r.mids[1] === 0, `MIDs ${r.mids.join(',')}`);
+      assert(r.rowSet.rows[0][0] === B.toLowerCase(), `row ${JSON.stringify(r.rowSet.rows[0])}`);
+      const dn = nspiDecode.dnToMId((await book.request('nspi', 'DNToMId', nspiBody.dnToMId([LEGACY_DN + state.users.a.id]))).mapi.body);
+      assert(dn.mids[0] >= 0x10, 'own legacy DN → MID');
+      const unbind = await book.request('nspi', 'Unbind', nspiBody.unbind());
+      assert(unbind.responseCode === 0 && !book.cookies.has('NspiContext'), 'Unbind');
+      return `B → MID 0x${r.mids[0].toString(16)}`;
+    });
+
+    await check('mapi: NotificationWait wakes within 3 s of a new mail; the next Execute carries RopNotify NewMail', async () => {
+      const logon = await client.execute([rop.logon(0)], [U]);
+      const reg = await client.execute([rop.registerNotification(0, 1, 0x0002)], [logon.rop.handles[0], U]);
+      assert(reg.responseCode === 0 && responseHead(reg.rop.responses).returnValue === 0, 'RegisterNotification');
+      const waiting = client.request('emsmdb', 'NotificationWait', Buffer.alloc(8));
+      await new Promise((r) => setTimeout(r, 500));
+      await sendBtoA(B, c.userB, A, `E2E mapi notify ${Date.now()}`, 'Wakes the NotificationWait.');
+      const accepted = Date.now();
+      const woke = await waiting;
+      const elapsed = Date.now() - accepted;
+      assert(woke.responseCode === 0 && woke.mapi.body.readUInt32LE(8) === 1, `EventPending ${woke.mapi?.body.readUInt32LE(8)}`);
+      assert(elapsed < 3000, `woken after ${elapsed} ms`);
+      const events = await client.request('emsmdb', 'Execute', Buffer.alloc(0));
+      const exec = parseExecuteResponse(events.mapi.body);
+      const { notifications } = readNotifications(ropOutput(exec.ropBuffer).responses);
+      assert(notifications.some((x) => (x.flags & 0x0fff) === 0x0002 && x.handle === reg.rop.handles[1]), 'RopNotify NewMail on the subscription');
+      return `woken after ${elapsed} ms, ${notifications.length} notification(s)`;
+    });
+
     await check('mapi: switch off → the running session is refused (403) and a new Connect too', async () => {
       assert(await setMapi(admin, state.users.a.id, 'off') === false, 'mapi still effective');
       const r = await client.execute([rop.logon(0)], [U]);
@@ -156,6 +257,11 @@ export async function run(state) {
       const again = await new MapiHttpClient(BASE, A, passA).connect(LEGACY_DN + state.users.a.id);
       assert(again.status === 403, `Connect → ${again.status}`);
       return 'Execute 403, Connect 403';
+    });
+
+    await check('mapi: switch off → Autodiscover drops the mapiHttp block', async () => {
+      await waitFor(async () => !/mapiHttp/.test(await autodiscover(A, passA)), { timeout: 45_000, interval: 2000, what: 'mapiHttp gone' });
+      return 'IMAP/SMTP only';
     });
   } finally {
     await setMapi(admin, state.users.a.id, 'inherit').catch(() => undefined);

@@ -4,8 +4,8 @@
  * queueing it.
  */
 import type {
-  AttachmentRecord, ComposedMessage, FolderRecord, MailboxRef, MailStore, MapiUser, MessageContent,
-  MessageSummary, SubmissionLimits, SubmitResult,
+  AttachmentRecord, ComposedMessage, DirectoryRecord, DirectoryStore, FolderRecord, MailboxRef, MailStore, MapiUser,
+  MessageContent, MessageSummary, NewMessage, SubmissionLimits, SubmitResult,
 } from '../store/types.js';
 
 export interface MemoryMessage {
@@ -13,6 +13,8 @@ export interface MemoryMessage {
   content: MessageContent;
   attachmentData: Map<string, Buffer>;
   deleted: boolean;
+  /** Mailbox modSeq at which the message appeared in its folder. */
+  createdModSeq: bigint;
 }
 
 export interface SentRecord { user: MapiUser; mailbox: MailboxRef; message: ComposedMessage; saveCopy: boolean }
@@ -28,6 +30,7 @@ export class MemoryStore implements MailStore {
   limits: SubmissionLimits = { maxMessageBytes: 25 * 1024 * 1024, maxRecipients: 100 };
   private seq = 0;
   private uid = 100;
+  private modSeq = 0n;
 
   addMailbox(ref: MailboxRef, folders: string[] = ['INBOX', 'Drafts', 'Sent', 'Trash', 'Junk', 'Archive']): void {
     this.mailboxes.set(ref.mailboxId, ref);
@@ -62,6 +65,7 @@ export class MemoryStore implements MailStore {
       },
       attachmentData: new Map(atts.map((a) => [a.id, a.data])),
       deleted: false,
+      createdModSeq: ++this.modSeq,
     };
     this.messages.push(msg);
     this.recount(folderId);
@@ -147,8 +151,8 @@ export class MemoryStore implements MailStore {
   async moveOrCopy(source: { folderId: string }, target: { folderId: string }, uids: number[], copy: boolean): Promise<number> {
     const hit = this.live(source.folderId).filter((m) => uids.includes(m.summary.uid));
     for (const m of hit) {
-      if (copy) this.messages.push({ ...m, summary: { ...m.summary, id: `m${++this.seq}`, uid: ++this.uid, folderId: target.folderId } });
-      else { m.summary.folderId = target.folderId; m.summary.uid = ++this.uid; }
+      if (copy) this.messages.push({ ...m, summary: { ...m.summary, id: `m${++this.seq}`, uid: ++this.uid, folderId: target.folderId }, createdModSeq: ++this.modSeq });
+      else { m.summary.folderId = target.folderId; m.summary.uid = ++this.uid; m.createdModSeq = ++this.modSeq; }
     }
     this.recount(source.folderId);
     this.recount(target.folderId);
@@ -178,5 +182,28 @@ export class MemoryStore implements MailStore {
     this.sent.push({ user, mailbox, message, saveCopy: opts.saveCopy });
     if (opts.draft) await this.deleteMessages(mailbox, opts.draft.folderId, [opts.draft.uid]);
     return { ok: true, jobId: `job-${this.sent.length}` };
+  }
+
+  async highestModSeq(): Promise<bigint> {
+    return this.modSeq;
+  }
+
+  async messagesCreatedSince(folderIds: readonly string[], sinceModSeq: bigint, limit: number): Promise<NewMessage[]> {
+    return this.messages
+      .filter((m) => !m.deleted && folderIds.includes(m.summary.folderId) && m.createdModSeq > sinceModSeq)
+      .sort((a, b) => Number(a.createdModSeq - b.createdModSeq))
+      .slice(0, limit)
+      .map((m) => ({ folderId: m.summary.folderId, uid: m.summary.uid, read: m.summary.flags.includes('\\Seen'), createdModSeq: m.createdModSeq }));
+  }
+}
+
+/** In-memory address book source (test-only): the same records for every user. */
+export class MemoryDirectory implements DirectoryStore {
+  records: DirectoryRecord[] = [];
+  loads = 0;
+
+  async listDirectory(): Promise<DirectoryRecord[]> {
+    this.loads += 1;
+    return this.records;
   }
 }

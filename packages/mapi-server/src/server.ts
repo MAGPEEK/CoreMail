@@ -18,8 +18,10 @@ import { connectDatabase, waitForObjectStorage } from '@coremail/storage';
 import { createApp } from './app.js';
 import { authenticate } from './http/auth.js';
 import { SessionRegistry, type SessionRedis } from './session/registry.js';
-import { timerNotificationSource } from './emsmdb/notification-wait.js';
+import { queueNotificationSource } from './emsmdb/notification-wait.js';
+import { startNotificationBus } from './emsmdb/notify/bus.js';
 import { createPrismaStore } from './store/prisma-store.js';
+import { createEndpointProvider, createPrismaDirectory } from './store/prisma-directory.js';
 import { ROP_REGISTRY } from './rop/registry.js';
 
 const log = createLogger('mapi-server');
@@ -52,11 +54,15 @@ async function main(): Promise<void> {
   });
   setInterval(() => { void sessions.sweep(); }, 60_000).unref();
 
+  const store = createPrismaStore();
+  startNotificationBus({ sessions, store });
   const app = createApp({
     sessions,
-    store: createPrismaStore(),
+    store,
     rops: ROP_REGISTRY,
-    notifications: timerNotificationSource(),
+    notifications: queueNotificationSource(),
+    directory: createPrismaDirectory(),
+    endpoints: createEndpointProvider(),
     authenticate,
     limiter: createFixedWindowLimiter({
       scope: 'mapi', limit: RATE_LIMIT, windowSec: RATE_WINDOW_SEC, store: () => getRedisClient() as unknown as CounterStore,

@@ -55,6 +55,12 @@ export interface ExecuteDeps {
   store: MailStore;
   registry: RopRegistry;
   now?: () => Date;
+  /**
+   * Responses appended after the last ROP response (RopNotify / RopPending,
+   * MS-OXCROPS 3.2.4.1), given the bytes left; not called when the buffer
+   * ended with RopBufferTooSmall.
+   */
+  tail?: (room: number) => Buffer;
 }
 
 /** Output buffer for an input buffer; `maxOut` = largest ROP output buffer allowed. */
@@ -78,10 +84,11 @@ export async function executeRopBuffer(input: Buffer, deps: ExecuteDeps, maxOut:
   // Processing RopQueryRows: at least one row or ecBufferTooSmall).
   const neverFits = (needed: number): boolean => needed > MAX_EXTENDED_PAYLOAD - outputOverhead(handles.length) - TOO_SMALL_HEADER;
 
+  let endedTooSmall = false;
   for (let i = 0; i < rops.length; i++) {
     const { def, req } = rops[i]!;
     const budget = available - out.length - TOO_SMALL_HEADER - restSize(i + 1);
-    if (budget < MIN_ROP_SPACE) { tooSmall(i, MIN_ROP_SPACE); break; }
+    if (budget < MIN_ROP_SPACE) { tooSmall(i, MIN_ROP_SPACE); endedTooSmall = true; break; }
     const ctx: RopContext = {
       session: deps.session, store: deps.store, handles, budget, now: deps.now ?? (() => new Date()),
     };
@@ -102,11 +109,12 @@ export async function executeRopBuffer(input: Buffer, deps: ExecuteDeps, maxOut:
     }
     if (response !== null && response.length > budget) needed = response.length;
     if (needed > 0) {
-      if (!neverFits(needed)) { tooSmall(i, needed); break; }
+      if (!neverFits(needed)) { tooSmall(i, needed); endedTooSmall = true; break; }
       response = failureResponse(def, req, Ec.BufferTooSmall);
     }
     if (response === null) continue;
     out.bytes(response);
   }
+  if (!endedTooSmall && deps.tail) out.bytes(deps.tail(available - out.length));
   return buildRopOutput(out.toBuffer(), handles);
 }

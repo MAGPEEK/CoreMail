@@ -366,5 +366,21 @@ export function createPrismaStore(deps: PrismaStoreDeps = defaultStoreDeps): Mai
       }
       return { ok: true, jobId };
     },
+
+    async highestModSeq(mailboxId) {
+      const row = await prisma.mailbox.findUnique({ where: { id: mailboxId }, select: { highestModSeq: true } });
+      return row?.highestModSeq ?? 0n;
+    },
+
+    async messagesCreatedSince(folderIds, sinceModSeq, limit) {
+      if (folderIds.length === 0) return [];
+      const rows = await prisma.message.findMany({
+        where: { folderId: { in: [...folderIds] }, createdModSeq: { gt: sinceModSeq }, deletedAt: null, softDeletedAt: null },
+        select: { folderId: true, uid: true, flags: true, createdModSeq: true },
+        orderBy: { createdModSeq: 'asc' },
+        take: limit,
+      });
+      return rows.map((r) => ({ folderId: r.folderId, uid: r.uid, read: r.flags.includes(SEEN), createdModSeq: r.createdModSeq ?? 0n }));
+    },
   };
 }

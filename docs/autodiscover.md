@@ -72,9 +72,15 @@ The body is read as text whatever the `Content-Type` says (some device clients s
   for the primary account, no `redirectAddr` round trip), `SSL` plus an explicit `<Encryption>`
   (`SSL` = implicit TLS, `TLS` = STARTTLS; CoreMail refuses a login before TLS, so plain is never
   announced for IMAP).
-* No `EXCH`, `EXPR`, `EXHTTP`, MAPI or EWS blocks — those would make Outlook attempt an Exchange
-  RPC connection. CoreMail never sends `redirectUrl` either (single server, no foreign Autodiscover
-  endpoint to point at).
+* 9.4: a `<Protocol Type="mapiHttp" Version="1">` block (MAPI over HTTP: `MailStore` and
+  `AddressBook` with internal and external URL, MS-OXDSCLI 3.2.5.1) before the IMAP / SMTP blocks
+  when the client sends `X-MapiHttpCapability` ≥ 1, the account's `mapi` switch is on, a public host
+  name is configured and HTTPS has a trusted certificate (a Let's Encrypt production or uploaded
+  certificate active for HTTPS, or `MAPI_HTTPS_TRUSTED=true` behind an external TLS terminator).
+  With it Outlook creates an account of the "Exchange" type; see [mapi.md](mapi.md).
+* No `EXCH`, `EXPR`, `EXHTTP` or EWS blocks — those would make Outlook attempt an Exchange RPC
+  connection (and MS-OXDSCLI forbids `EXCH` / `EXPR` next to `mapiHttp`). CoreMail never sends
+  `redirectUrl` either (single server, no foreign Autodiscover endpoint to point at).
 
 ### Endpoints follow the enabled listeners
 
@@ -94,6 +100,8 @@ table cannot be read, the configured values are announced.
 
 Anonymous by design and identical for every address (no account disclosure).
 `Protocol=AutodiscoverV1` → the v1 URL; `IMAP`, `SMTP` → host/port/`SSL`; `ActiveSync` → URL;
+`MapiHttp` (9.4) → `{ "Protocol": "MapiHttp", "Url": "<mailbox endpoint URL>" }` while `mapi` is on
+for the mail domain and HTTPS is trusted (as above), else `404 NoSuchProtocol`;
 `EWS` and unknown protocols → `404 NoSuchProtocol`.
 
 ## Client matrix (tests)

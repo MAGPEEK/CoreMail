@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { LiveConnectionRegistry, PROTOCOL_ACCESS_CHANGE } from '@coremail/core';
 import { SessionRegistry, MAX_SESSIONS_PER_USER, type SessionRedis } from './registry.js';
 import { cookieDigest, MapiSession, type SessionAuth } from './session.js';
-import { timerNotificationSource } from '../emsmdb/notification-wait.js';
+import { queueNotificationSource } from '../emsmdb/notification-wait.js';
 
 class MemoryRedis implements SessionRedis {
   store = new Map<string, { value: string; expires: number }>();
@@ -131,8 +131,33 @@ test('lookup with a refusing predicate returns null and does not refresh the ses
   assert.equal(await registry.lookup(context), null, 'idle timeout counted from the last own use');
 });
 
-test('NotificationWait timer: the signal ends the wait at once; ending the session aborts it', async () => {
-  const source = timerNotificationSource(60_000, 60_000);
+test('NotificationWait: a queued notification wakes the wait at once; one queued before the wait answers immediately', async () => {
+  const source = queueNotificationSource(60_000);
+  const { registry } = setup();
+  const { session } = await registry.create(auth(), 1_000);
+  const started = Date.now();
+  const waiting = source.wait(session, new AbortController().signal);
+  setTimeout(() => session.notifications.push([{ key: 'k', handle: 7, logonId: 0, data: Buffer.from([2, 0x80]) }]), 20);
+  assert.equal(await waiting, true);
+  assert.ok(Date.now() - started < 1000);
+  assert.equal(await source.wait(session, new AbortController().signal), true, 'still queued (not taken yet)');
+  session.notifications.take(1024);
+  const timedOut = await queueNotificationSource(30).wait(session, new AbortController().signal);
+  assert.equal(timedOut, false, 'the timer ends a wait without events');
+});
+
+test('sessionsOf(endpoint) lists the live sessions of one endpoint', async () => {
+  const { registry } = setup();
+  const mailbox = await registry.create(auth('u1'), 1_000);
+  const book = await registry.create(auth('u1'), 1_000, 'nspi');
+  assert.deepEqual(registry.sessionsOf('emsmdb'), [mailbox.session]);
+  assert.deepEqual(registry.sessionsOf('nspi'), [book.session]);
+  await registry.end(mailbox.session);
+  assert.deepEqual(registry.sessionsOf('emsmdb'), []);
+});
+
+test('NotificationWait: the signal ends the wait at once; ending the session aborts it', async () => {
+  const source = queueNotificationSource(60_000);
   const { registry } = setup();
   const { session } = await registry.create(auth(), 1_000);
   const abort = new AbortController();

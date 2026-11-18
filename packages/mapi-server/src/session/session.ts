@@ -1,11 +1,15 @@
 /**
  * In-memory state of one MAPI session context (MS-OXCMAPIHTTP 3.2.1): the
- * authenticated user, the request sequence cookie, the open server objects and
- * logons. The cookie values themselves are never stored — only their hashes.
+ * endpoint it belongs to (mailbox: Connect; address book: Bind), the
+ * authenticated user, the request sequence cookie, the open server objects,
+ * logons and queued notifications. The cookie values themselves are never
+ * stored — only their hashes.
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { ServerObjectTable } from '../rop/handles.js';
 import { DRAFT_COUNTER_BASE } from '../ids.js';
+import { NotificationQueue } from '../emsmdb/notify/queue.js';
+import type { Endpoint } from '../http/envelope.js';
 import type { LogonState } from '../objects/state.js';
 import type { MapiUser } from '../store/types.js';
 
@@ -41,19 +45,26 @@ export class MapiSession {
   busy = false;
   lastUsed: number;
   closed = false;
-  /** The outstanding NotificationWait (at most one per session; a new one ends it). */
+  /** The outstanding NotificationWait (at most one per session; a second one is rejected). */
   notificationWait: AbortController | null = null;
+  /** Notifications for the client's subscriptions and open tables (emsmdb/notify). */
+  readonly notifications = new NotificationQueue();
   /** Byte budget of the open server objects (messages, attachments, streams). */
   readonly memoryLimit: number;
+  readonly endpoint: Endpoint;
   private draftCounter = DRAFT_COUNTER_BASE;
 
-  constructor(id: string, auth: SessionAuth, sequence: string, now: number, memoryLimit = DEFAULT_SESSION_MEMORY_BYTES) {
+  constructor(
+    id: string, auth: SessionAuth, sequence: string, now: number,
+    memoryLimit = DEFAULT_SESSION_MEMORY_BYTES, endpoint: Endpoint = 'emsmdb',
+  ) {
     this.id = id;
     this.auth = auth;
     this.sequenceDigest = cookieDigest(sequence);
     this.createdAt = now;
     this.lastUsed = now;
     this.memoryLimit = memoryLimit;
+    this.endpoint = endpoint;
   }
 
   get user(): MapiUser { return this.auth.user; }

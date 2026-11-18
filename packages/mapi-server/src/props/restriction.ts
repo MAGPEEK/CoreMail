@@ -1,6 +1,8 @@
 /**
- * Restrictions (MS-OXCDATA 2.12) as sent in RopRestrict: parsing (counts are
- * 16 bits in ROP buffers) and in-memory evaluation against a row's properties.
+ * Restrictions (MS-OXCDATA 2.12): parsing and in-memory evaluation against a
+ * row's properties. In ROP buffers (RopRestrict) the count fields are 16 bits;
+ * the address book filter of MAPI over HTTP (GetMatches) is read with 32-bit
+ * counts and 32-bit binary value counts (WIDE_RESTRICTION).
  * Nesting is capped so a hostile request cannot exhaust the stack.
  * Unsupported tests (regular expressions, distribution-list membership,
  * sub-object restrictions over recipients/attachments) evaluate to false.
@@ -30,39 +32,46 @@ const FL_LOOSE = 0x0004;
 
 const MAX_DEPTH = 32;
 
-export function parseRestriction(r: BufferReader, depth = 0): Restriction {
+/** Serialization variant (MS-OXCDATA 2.12): count width and binary value count width. */
+export interface RestrictionFormat { readonly wide: boolean }
+export const ROP_RESTRICTION: RestrictionFormat = { wide: false };
+export const WIDE_RESTRICTION: RestrictionFormat = { wide: true };
+
+export function parseRestriction(r: BufferReader, format: RestrictionFormat = ROP_RESTRICTION, depth = 0): Restriction {
   if (depth > MAX_DEPTH) throw new WireFormatError('restriction nested too deeply');
   const kind = r.u8();
+  const sub = (): Restriction => parseRestriction(r, format, depth + 1);
   switch (kind) {
     case 0x00: case 0x01: {
-      const n = r.u16();
+      const n = format.wide ? r.u32() : r.u16();
+      if (n > r.remaining) throw new WireFormatError(`restriction count ${n} exceeds the buffer`);
       const items: Restriction[] = [];
-      for (let i = 0; i < n; i++) items.push(parseRestriction(r, depth + 1));
+      for (let i = 0; i < n; i++) items.push(sub());
       return { type: kind === 0 ? 'and' : 'or', items };
     }
-    case 0x02: return { type: 'not', item: parseRestriction(r, depth + 1) };
+    case 0x02: return { type: 'not', item: sub() };
     case 0x03: {
       const fuzzyLow = r.u16();
       const fuzzyHigh = r.u16();
-      return { type: 'content', fuzzyLow, fuzzyHigh, tag: r.u32(), value: readTaggedValue(r) };
+      return { type: 'content', fuzzyLow, fuzzyHigh, tag: r.u32(), value: readTaggedValue(r, format.wide) };
     }
     case 0x04: {
       const relop = r.u8();
-      return { type: 'property', relop, tag: r.u32(), value: readTaggedValue(r) };
+      return { type: 'property', relop, tag: r.u32(), value: readTaggedValue(r, format.wide) };
     }
     case 0x05: { const relop = r.u8(); const tag1 = r.u32(); return { type: 'compare', relop, tag1, tag2: r.u32() }; }
     case 0x06: { const mode = r.u8(); const tag = r.u32(); return { type: 'bitmask', mode, tag, mask: r.u32() }; }
     case 0x07: { const relop = r.u8(); const tag = r.u32(); return { type: 'size', relop, tag, size: r.u32() }; }
     case 0x08: return { type: 'exist', tag: r.u32() };
-    case 0x09: { const subobject = r.u32(); return { type: 'sub', subobject, item: parseRestriction(r, depth + 1) }; }
+    case 0x09: { const subobject = r.u32(); return { type: 'sub', subobject, item: sub() }; }
     case 0x0a: {
       const n = r.u8();
       const values: TaggedValue[] = [];
-      for (let i = 0; i < n; i++) values.push(readTaggedValue(r));
+      for (let i = 0; i < n; i++) values.push(readTaggedValue(r, format.wide));
       const present = r.u8();
-      return { type: 'comment', values, item: present ? parseRestriction(r, depth + 1) : null };
+      return { type: 'comment', values, item: present ? sub() : null };
     }
-    case 0x0b: { const count = r.u32(); return { type: 'count', count, item: parseRestriction(r, depth + 1) }; }
+    case 0x0b: { const count = r.u32(); return { type: 'count', count, item: sub() }; }
     default: throw new WireFormatError(`unknown restriction type 0x${kind.toString(16)}`);
   }
 }
@@ -130,11 +139,20 @@ function sizeOf(v: PropValue): number {
   return 8;
 }
 
-export function evaluateRestriction(res: Restriction, get: PropertyGetter): boolean {
+/**
+ * Evaluates a node the caller decides itself (e.g. ambiguous name resolution
+ * on PidTagAnr in the address book); undefined = evaluate normally.
+ */
+export type RestrictionOverride = (node: Restriction) => boolean | undefined;
+
+export function evaluateRestriction(res: Restriction, get: PropertyGetter, override?: RestrictionOverride): boolean {
+  const decided = override?.(res);
+  if (decided !== undefined) return decided;
+  const sub = (item: Restriction): boolean => evaluateRestriction(item, get, override);
   switch (res.type) {
-    case 'and': return res.items.every((i) => evaluateRestriction(i, get));
-    case 'or': return res.items.some((i) => evaluateRestriction(i, get));
-    case 'not': return !evaluateRestriction(res.item, get);
+    case 'and': return res.items.every(sub);
+    case 'or': return res.items.some(sub);
+    case 'not': return !sub(res.item);
     case 'exist': return get(res.tag).found;
     case 'content': {
       const v = valueOf(get, res.tag);
@@ -163,8 +181,8 @@ export function evaluateRestriction(res: Restriction, get: PropertyGetter): bool
       const v = valueOf(get, res.tag);
       return v !== undefined && relopHolds(res.relop, Math.sign(sizeOf(v) - res.size));
     }
-    case 'comment': return res.item ? evaluateRestriction(res.item, get) : true;
-    case 'count': return evaluateRestriction(res.item, get);
+    case 'comment': return res.item ? sub(res.item) : true;
+    case 'count': return sub(res.item);
     case 'sub': return false;
   }
 }

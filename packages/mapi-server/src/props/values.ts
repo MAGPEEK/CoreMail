@@ -92,7 +92,7 @@ export function writeTaggedValue(w: BufferWriter, tv: TaggedValue): void {
 
 // ── Reading ──────────────────────────────────────────────────────────────────
 
-function readSingle(r: BufferReader, type: number): PropValue {
+function readSingle(r: BufferReader, type: number, wide: boolean): PropValue {
   switch (type) {
     case PropType.Integer16: return r.u16();
     case PropType.Integer32: case PropType.ErrorCode: return r.u32();
@@ -104,7 +104,8 @@ function readSingle(r: BufferReader, type: number): PropValue {
     case PropType.String8: return r.asciiZ();
     case PropType.Time: return fromFileTime(r.u64());
     case PropType.Guid: return r.bytes(16);
-    case PropType.Binary: case PropType.ServerId: return r.bytes(r.u16());
+    case PropType.Binary: return r.bytes(wide ? r.u32() : r.u16());
+    case PropType.ServerId: return r.bytes(r.u16());
     case PropType.Null: return null;
     default: throw new WireFormatError(`unsupported property type 0x${type.toString(16)}`);
   }
@@ -117,20 +118,24 @@ function checkedCount(r: BufferReader): number {
   return n;
 }
 
-export function readPropValue(r: BufferReader, type: number): PropValue {
+/**
+ * A PropertyValue. `wide`: PtypBinary counts are 32 bits (the address book
+ * context of MAPI over HTTP, MS-OXCDATA 2.11.1); ROP buffers use 16 bits.
+ */
+export function readPropValue(r: BufferReader, type: number, wide = false): PropValue {
   if (type & 0x1000) {
     const single = type & ~0x1000;
     const n = checkedCount(r);
     const out: unknown[] = [];
-    for (let i = 0; i < n; i++) out.push(readSingle(r, single));
+    for (let i = 0; i < n; i++) out.push(readSingle(r, single, wide));
     return out as PropValue;
   }
-  return readSingle(r, type);
+  return readSingle(r, type, wide);
 }
 
-export function readTaggedValue(r: BufferReader): TaggedValue {
+export function readTaggedValue(r: BufferReader, wide = false): TaggedValue {
   const t = r.u32();
-  return { tag: t, value: readPropValue(r, propTypeOf(t)) };
+  return { tag: t, value: readPropValue(r, propTypeOf(t), wide) };
 }
 
 /** Bytes a value occupies on the wire (used for size limits). */

@@ -168,12 +168,19 @@ closed, a new login with the correct password gets `NO [AUTHORIZATIONFAILED]`, a
 `/api/v1/mail/folders` answer 403 `PROTOCOL_DISABLED`; back to inherit → web login and IMAP work.
 B's switches are reset to inherit at the end. See [protocol-access.md](protocol-access.md).
 `mapi` (9.4): MAPI over HTTP is off by default (Connect → 403 without a password prompt; GET →
-X-ResponseCode 2; no credentials → 401). The admin turns the switch on for A, B sends A a mail over
-SMTP submission; A connects (`Connect`, cookies, PROCESSING/DONE), logs on, finds the mail in the
-Inbox contents table, opens it and reads the body through a stream, then creates a message in the
-Outbox (`SetProperties`, `ModifyRecipients`, `SubmitMessage`) that reaches B (IMAP search). Switch off
-→ the running session and a new Connect get 403. A's switch is reset to inherit. The compose override
-sets `MAPI_ALLOW_PLAIN_HTTP=true` (the runner uses plain HTTP). See [mapi.md](mapi.md).
+X-ResponseCode 2; no credentials → 401; an NTLM header gets the Basic challenge only; Autodiscover
+with `X-MapiHttpCapability: 1` announces no mapiHttp block). The admin turns the switch on for A:
+Autodiscover now announces the mapiHttp block (MailStore + AddressBook URLs, A's LegacyDN, no
+EXCH/EXPR). B sends A a mail over SMTP submission; A connects (`Connect`, cookies, PROCESSING/DONE),
+logs on, finds the mail in the Inbox contents table, opens it and reads the body through a stream,
+then creates a message in the Outbox (`SetProperties`, `ModifyRecipients`, `SubmitMessage`) that
+reaches B (IMAP search). The address book: `Bind`, `GetSpecialTable`, `QueryRows` (paged) lists A and
+B, `ResolveNames` finds B by address (an unknown address stays unresolved), `DNToMId` maps A's DN,
+`Unbind`. A `NotificationWait` after `RopRegisterNotification` wakes within 3 s of a new mail and the
+following empty `Execute` carries a RopNotify NewMail. Switch off → the running session and a new
+Connect get 403 and Autodiscover drops the mapiHttp block. A's switch is reset to inherit. The
+compose override sets `MAPI_ALLOW_PLAIN_HTTP=true` (the runner uses plain HTTP) and
+`MAPI_HTTPS_TRUSTED=true` (no CA certificate in the stack). See [mapi.md](mapi.md).
 `setup` reads the one-time setup token from `docker logs coremail-e2e`. Each run prints
 `[PASS]/[FAIL]` lines and writes `$E2E_STATE_DIR/results-<steps>.json`; the exit code is
 non-zero when a check failed.

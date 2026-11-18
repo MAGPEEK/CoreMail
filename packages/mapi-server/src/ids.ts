@@ -127,11 +127,16 @@ export function parseEntryId(g: StoreGuids, entryId: Buffer): ParsedEntryId | nu
   return message === null ? null : { kind: 'message', folder, message };
 }
 
-/** Address book EntryID (MS-OXCDATA 2.2.5.2) of a directory object (X500 DN). */
-const ADDRESS_BOOK_PROVIDER = Buffer.from('dca740c8c042101ab4b908002b2fe182', 'hex');
-export function addressBookEntryId(legacyDn: string): Buffer {
+/** GUID_NSPI, the provider UID of permanent address book EntryIDs. */
+export const ADDRESS_BOOK_PROVIDER = Buffer.from('dca740c8c042101ab4b908002b2fe182', 'hex');
+
+/**
+ * Permanent address book EntryID (MS-OXCDATA 2.2.5.2, MS-OXNSPI 2.2.9.3) of a
+ * directory object (X500 DN): flags 0, GUID_NSPI, version 1, display type, DN.
+ */
+export function addressBookEntryId(legacyDn: string, displayType = 0): Buffer {
   return new BufferWriter(32 + legacyDn.length)
-    .u32(0).bytes(ADDRESS_BOOK_PROVIDER).u32(1).u32(0).asciiZ(legacyDn, 'ascii')
+    .u32(0).bytes(ADDRESS_BOOK_PROVIDER).u32(1).u32(displayType).asciiZ(legacyDn, 'ascii')
     .toBuffer();
 }
 

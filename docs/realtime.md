@@ -108,6 +108,15 @@ protocol switch are already gone and are never woken.
 built 300 ms later from the current states) and JMAP Web Push subscriptions
 (batched 1 s, only users with JMAP switched on).
 
+### MAPI notifications
+
+`mapi-server` (`emsmdb/notify/bus.ts`) routes `mailbox:changes` to the mailbox
+sessions with a logon on that mailbox: their notification subscriptions and open
+tables get NewMail, folder counts and TableChanged notifications (planned in
+`notify/planner.ts`), which wake a waiting `NotificationWait`; the next `Execute`
+carries them as RopNotify. Sessions ended by a credential change or the `mapi`
+switch are gone and get nothing. See [mapi.md](mapi.md).
+
 ## Web Push in the webmail
 
 Settings → **Benachrichtigungen**: opt-in per browser. The webmail registers
