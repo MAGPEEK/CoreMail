@@ -9,7 +9,7 @@ import {
 import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
 import { useT } from '../i18n/useT.js';
-import { API_RATE_LIMIT_FORM_DEFAULTS, rateLimitForm, rateLimitEnvNote } from '../lib/apiRateLimit.js';
+import { API_RATE_LIMIT_FORM_DEFAULTS, rateLimitForm, rateLimitEnvNote, rateLimitLocked } from '../lib/apiRateLimit.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface GlobalSettings {
@@ -70,13 +70,13 @@ function TextInput({ value, onChange, placeholder = '', type = 'text', maxLength
   );
 }
 
-function NumberInput({ value, onChange, min, max, unit }: {
-  value: number; onChange: (v: number) => void; min: number; max: number; unit?: string;
+function NumberInput({ value, onChange, min, max, unit, disabled = false, label }: {
+  value: number; onChange: (v: number) => void; min: number; max: number; unit?: string; disabled?: boolean; label?: string;
 }) {
   return (
     <div className="flex items-center gap-2">
       <input type="number" value={value} onChange={(e) => onChange(parseInt(e.target.value, 10) || min)}
-        min={min} max={max} className="input w-28" />
+        min={min} max={max} disabled={disabled} aria-label={label} className="input w-28 disabled:opacity-50" />
       {unit && <span className="text-sm text-fg-subtle">{unit}</span>}
     </div>
   );
@@ -91,10 +91,12 @@ function Textarea({ value, onChange, placeholder = '', rows = 3 }: {
   );
 }
 
-function Toggle({ value, onChange, label }: { value: boolean; onChange: (v: boolean) => void; label?: string }) {
+function Toggle({ value, onChange, label, disabled = false }: {
+  value: boolean; onChange: (v: boolean) => void; label?: string; disabled?: boolean;
+}) {
   return (
-    <button type="button" onClick={() => onChange(!value)}
-      className={`flex items-center gap-2 text-sm transition-colors ${value ? 'text-accent-fg' : 'text-fg-subtle'}`}>
+    <button type="button" onClick={() => onChange(!value)} disabled={disabled}
+      className={`flex items-center gap-2 text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${value ? 'text-accent-fg' : 'text-fg-subtle'}`}>
       {value ? <ToggleRight size={26} className="text-accent-fg" /> : <ToggleLeft size={26} className="text-fg-subtle" />}
       {label && <span>{label}</span>}
     </button>
@@ -362,18 +364,22 @@ export function SettingsPage() {
 
         <FieldGroup
           label="API-Ratenbegrenzung"
-          hint="Begrenzt Anfragen an Webmail-, Verwaltungs- und Protokoll-Schnittstellen je Zeitfenster: angemeldete Benutzer einzeln, anonyme Anfragen je IP-Adresse. Statische Dateien und der Live-Ereignisstrom zählen nicht."
+          hint="Begrenzt die Anfragen je Zeitfenster. Angemeldete Webmail- und Verwaltungssitzungen zählen je Benutzer, alle übrigen Anfragen – auch Mailprogramme über ActiveSync, CalDAV/CardDAV oder JMAP – je IP-Adresse. Statische Dateien und der Live-Ereignisstrom zählen nicht."
         >
           <Toggle value={sec.apiRateLimitEnabled} onChange={(v) => updSec('apiRateLimitEnabled', v)}
-            label={sec.apiRateLimitEnabled ? 'Aktiviert' : 'Deaktiviert — keine globale Begrenzung (Anmelde-Schutz bleibt aktiv)'} />
+            disabled={rateLimitLocked(cfg?.apiRateLimitEnvOverrides, 'apiRateLimitEnabled')}
+            label={sec.apiRateLimitEnabled ? 'Aktiviert' : 'Deaktiviert — keine globale Begrenzung (der Anmeldeschutz bleibt aktiv)'} />
           {sec.apiRateLimitEnabled && (
             <div className="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-2 mt-2 text-sm text-fg-muted">
               <span>Zeitfenster</span>
-              <NumberInput value={sec.apiRateLimitWindowMin} onChange={(v) => updSec('apiRateLimitWindowMin', v)} min={1} max={1440} unit={t('unit_minutes')} />
+              <NumberInput value={sec.apiRateLimitWindowMin} onChange={(v) => updSec('apiRateLimitWindowMin', v)} min={1} max={1440} unit={t('unit_minutes')}
+                label="Zeitfenster" disabled={rateLimitLocked(cfg?.apiRateLimitEnvOverrides, 'apiRateLimitWindowMin')} />
               <span>Je Benutzer</span>
-              <NumberInput value={sec.apiRateLimitPerUser} onChange={(v) => updSec('apiRateLimitPerUser', v)} min={10} max={1000000} unit="Anfragen" />
-              <span>Je IP-Adresse (anonym)</span>
-              <NumberInput value={sec.apiRateLimitPerIp} onChange={(v) => updSec('apiRateLimitPerIp', v)} min={10} max={1000000} unit="Anfragen" />
+              <NumberInput value={sec.apiRateLimitPerUser} onChange={(v) => updSec('apiRateLimitPerUser', v)} min={10} max={1000000} unit="Anfragen"
+                label="Anfragen je Benutzer" disabled={rateLimitLocked(cfg?.apiRateLimitEnvOverrides, 'apiRateLimitPerUser')} />
+              <span>Je IP-Adresse (übrige Anfragen)</span>
+              <NumberInput value={sec.apiRateLimitPerIp} onChange={(v) => updSec('apiRateLimitPerIp', v)} min={10} max={1000000} unit="Anfragen"
+                label="Anfragen je IP-Adresse" disabled={rateLimitLocked(cfg?.apiRateLimitEnvOverrides, 'apiRateLimitPerIp')} />
             </div>
           )}
           {rateLimitEnvNote(cfg?.apiRateLimitEnvOverrides) && (

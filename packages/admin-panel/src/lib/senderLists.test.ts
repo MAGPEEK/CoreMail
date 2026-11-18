@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  filterEntries, importErrorText, linesToList, envOverrideNote, dnsblActionOptions, patternPlaceholder,
+  filterEntries, importErrorText, linesToList, envOverrideNote, dnsblActionOptions, patternPlaceholder, spoofFormFrom, spoofPayload,
   type SenderListEntry,
 } from './senderLists.ts';
 
@@ -47,4 +47,19 @@ test('DNSBL action options: Score disabled without rspamd, kept in the list', ()
 test('pattern placeholders per type', () => {
   assert.match(patternPlaceholder('WILDCARD'), /^\*@/);
   assert.match(patternPlaceholder('EXACT'), /@/);
+});
+
+test('spoofing form: environment-set fields show the value in effect and are not saved', () => {
+  const view = {
+    localSpoofAction: 'junk' as const, localSpoofAllow: ['198.51.100.1'], arcTrustedSealers: ['a.example'],
+    effective: { action: 'reject' as const, allow: ['198.51.100.1'], arcTrustedSealers: ['b.example', 'c.example'] },
+    envOverrides: [{ field: 'localSpoofAction' as const, variable: 'LOCAL_SPOOF_ACTION' }, { field: 'arcTrustedSealers' as const, variable: 'ARC_TRUSTED_SEALERS' }],
+  };
+  const form = spoofFormFrom(view);
+  assert.deepEqual(form, { action: 'reject', allow: '198.51.100.1', sealers: 'b.example\nc.example' });
+  assert.deepEqual(spoofPayload({ ...form, allow: '198.51.100.1\n203.0.113.0/24' }, ['localSpoofAction', 'arcTrustedSealers']),
+    { localSpoofAllow: ['198.51.100.1', '203.0.113.0/24'] });
+  assert.deepEqual(spoofPayload(form, []), {
+    localSpoofAction: 'reject', localSpoofAllow: ['198.51.100.1'], arcTrustedSealers: ['b.example', 'c.example'],
+  });
 });

@@ -90,9 +90,10 @@ export function SenderListsSection() {
       </div>
 
       <p className="text-xs text-fg-subtle">
-        Einträge der Sperrliste weisen Absender beim Empfang ab (je Empfänger). Einträge der Zulassungsliste heben
-        eine Sperre auf und überspringen die Spam-Bewertung — nur wenn die Absenderdomain per SPF/DKIM authentifiziert ist.
-        Der genaueste Geltungsbereich entscheidet (Postfach vor Domain vor Global). Virenscan und Anhänge-Filter gelten immer.
+        Einträge der Sperrliste weisen den Absender beim Empfang ab (je Empfänger). Einträge der Zulassungsliste heben
+        eine Sperre auf; die Spam-Bewertung entfällt nur, wenn die Absenderdomain per SPF oder DKIM bestätigt ist.
+        Der genaueste Geltungsbereich entscheidet (Postfach vor Domain vor Global), innerhalb eines Bereichs hat die
+        Zulassungsliste Vorrang. SPF-, DKIM- und DMARC-Prüfung, Virenscan und Anhänge-Filter gelten immer.
       </p>
 
       <div className="flex gap-1 border-b border-line" role="tablist">
@@ -155,7 +156,7 @@ export function SenderListsSection() {
       </div>
 
       <div className="card overflow-hidden">
-        {isLoading && <p className="p-4 text-sm text-fg-subtle">Lade …</p>}
+        {isLoading && <p className="p-4 text-sm text-fg-subtle">Lade Einträge…</p>}
         {!isLoading && shown.length === 0 && <p className="p-4 text-sm text-fg-subtle">Keine Einträge</p>}
         {shown.length > 0 && (
           <table className="w-full text-sm">

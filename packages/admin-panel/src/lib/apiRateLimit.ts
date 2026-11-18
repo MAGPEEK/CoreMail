@@ -35,6 +35,11 @@ const FIELD_LABEL: Record<string, string> = {
   apiRateLimitPerUser: 'je Benutzer (API_RATE_LIMIT_PER_USER)',
 };
 
+/** Pure: is the field set by an API_RATE_LIMIT_* environment variable (shown read-only)? */
+export function rateLimitLocked(overrides: readonly string[] | undefined, field: keyof RateLimitForm): boolean {
+  return (overrides ?? []).includes(field);
+}
+
 /** Pure: note for the fields an environment variable overrides, or null. */
 export function rateLimitEnvNote(overrides: readonly string[] | undefined): string | null {
   const labels = (overrides ?? []).map((f) => FIELD_LABEL[f]).filter((l): l is string => !!l);

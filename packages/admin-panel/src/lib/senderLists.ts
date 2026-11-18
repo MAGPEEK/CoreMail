@@ -51,7 +51,7 @@ export type SpoofAction = 'policy' | 'junk' | 'reject';
 
 export const SPOOF_ACTION_LABEL: Record<SpoofAction, { title: string; desc: string }> = {
   policy: { title: 'Nach eigener Richtlinie', desc: 'Die veröffentlichte DMARC-/SPF-Richtlinie der eigenen Domain entscheidet (Standard).' },
-  junk:   { title: 'Immer Junk-Ordner',       desc: 'Nicht authentifizierte Mails mit eigener Domain werden in den Junk-Ordner zugestellt.' },
+  junk:   { title: 'Immer in den Junk-Ordner', desc: 'Nicht authentifizierte Mails mit eigener Domain werden in den Junk-Ordner zugestellt.' },
   reject: { title: 'Immer ablehnen',          desc: 'Nicht authentifizierte Mails mit eigener Domain werden abgewiesen.' },
 };
 
@@ -60,9 +60,44 @@ export function linesToList(text: string): string[] {
   return [...new Set(text.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean))];
 }
 
+export type SpoofField = 'localSpoofAction' | 'localSpoofAllow' | 'arcTrustedSealers';
+
+/** GET /admin/security/spoofing. */
+export interface SpoofingView {
+  localSpoofAction: SpoofAction;
+  localSpoofAllow: string[];
+  arcTrustedSealers: string[];
+  effective: { action: SpoofAction; allow: string[]; arcTrustedSealers: string[] };
+  envOverrides: Array<{ field: SpoofField; variable: string }>;
+}
+
+export interface SpoofForm { action: SpoofAction; allow: string; sealers: string }
+
+/**
+ * Pure: form values — a field set by an environment variable shows the value in effect
+ * (read-only), the others the stored value.
+ */
+export function spoofFormFrom(view: SpoofingView): SpoofForm {
+  const env = (f: SpoofField) => view.envOverrides.some((o) => o.field === f);
+  return {
+    action: env('localSpoofAction') ? view.effective.action : view.localSpoofAction,
+    allow: (env('localSpoofAllow') ? view.effective.allow : view.localSpoofAllow).join('\n'),
+    sealers: (env('arcTrustedSealers') ? view.effective.arcTrustedSealers : view.arcTrustedSealers).join('\n'),
+  };
+}
+
+/** Pure: PUT body — fields set by an environment variable are not sent (their stored value stays). */
+export function spoofPayload(form: SpoofForm, envFields: readonly SpoofField[]): Partial<Record<SpoofField, unknown>> {
+  const body: Partial<Record<SpoofField, unknown>> = {
+    localSpoofAction: form.action, localSpoofAllow: linesToList(form.allow), arcTrustedSealers: linesToList(form.sealers),
+  };
+  for (const f of envFields) delete body[f];
+  return body;
+}
+
 /** Pure: note for a field set by an environment variable (null = not overridden). */
 export function envOverrideNote(variable: string | undefined): string | null {
-  return variable ? `Per Umgebungsvariable ${variable} festgelegt — diese gilt statt des hier gespeicherten Werts.` : null;
+  return variable ? `Per Umgebungsvariable ${variable} festgelegt — angezeigt wird der wirksame Wert, ändern lässt er sich nur über die Variable.` : null;
 }
 
 // ── DNSBL actions ────────────────────────────────────────────────────────────

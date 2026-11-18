@@ -631,7 +631,7 @@ function DnsblSection({ settings, onSave, rspamdAbsent }: {
           </div>
           <p className="text-xs text-fg-subtle">
             „Ablehnen“ weist die Verbindung ab, ein DNSWL-Treffer überspringt die übrigen Verbindungsprüfungen.
-            „Score“ addiert das Score-Gewicht der Zone zum Spam-Score der Nachricht{rspamdAbsent ? ' (nur mit Rspamd verfügbar)' : ''}.
+            „Score“ addiert das Score-Gewicht der Zone zum Spam-Score der Nachricht – nur wenn Rspamd aktiv ist{rspamdAbsent ? ' (Rspamd ist in dieser Installation nicht bereitgestellt)' : ''}; angemeldete Absender (SMTP AUTH) erhalten keinen DNSBL-Score.
             „Markieren“ wird derzeit nur in der Statistik erfasst und beeinflusst die Zustellung nicht.
           </p>
 

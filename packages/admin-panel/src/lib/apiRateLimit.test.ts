@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { rateLimitForm, rateLimitEnvNote, API_RATE_LIMIT_FORM_DEFAULTS } from './apiRateLimit.ts';
+import { rateLimitForm, rateLimitEnvNote, rateLimitLocked, API_RATE_LIMIT_FORM_DEFAULTS } from './apiRateLimit.ts';
 
 test('rateLimitForm: stored values, missing fields fall back to the schema defaults', () => {
   assert.deepEqual(rateLimitForm({}), API_RATE_LIMIT_FORM_DEFAULTS);
@@ -15,4 +15,10 @@ test('rateLimitEnvNote lists the overridden fields with their variables', () => 
   const note = rateLimitEnvNote(['apiRateLimitPerUser', 'unknown']);
   assert.match(note!, /API_RATE_LIMIT_PER_USER/);
   assert.doesNotMatch(note!, /unknown/);
+});
+
+test('rateLimitLocked: fields set by an environment variable are read-only', () => {
+  assert.equal(rateLimitLocked(undefined, 'apiRateLimitPerIp'), false);
+  assert.equal(rateLimitLocked(['apiRateLimitPerIp'], 'apiRateLimitPerIp'), true);
+  assert.equal(rateLimitLocked(['apiRateLimitPerIp'], 'apiRateLimitPerUser'), false);
 });
