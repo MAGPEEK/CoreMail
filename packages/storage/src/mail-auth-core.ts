@@ -36,7 +36,7 @@ import { BlockList, isIP } from 'node:net';
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export type MailProtocol =
-  | 'smtp' | 'imap' | 'pop3' | 'activesync' | 'autodiscover' | 'jmap' | 'caldav';
+  | 'smtp' | 'imap' | 'pop3' | 'activesync' | 'autodiscover' | 'jmap' | 'caldav' | 'mapi';
 
 export interface MailAuthContext {
   /** Client IP address (IPv4-mapped IPv6 is normalised). */

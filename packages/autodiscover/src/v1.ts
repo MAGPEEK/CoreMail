@@ -1,7 +1,8 @@
 import type { Request, Response } from 'express';
 import { createLogger, PROTO_VERIFIED_HEADER } from '@coremail/core';
 import {
-  prisma, verifyMailCredentials, clientIpFromRequest, effectiveProtocolAccess, type MailAuthUser, type ProtocolAccess,
+  prisma, verifyMailCredentials, clientIpFromRequest, effectiveProtocolAccess, legacyDnFor,
+  type MailAuthUser, type ProtocolAccess,
 } from '@coremail/storage';
 import { getServerConfig, ServerConfigUnavailableError, type ServerConfig } from './settings.js';
 import { SMTPS_PORT } from './v2.js';
@@ -36,8 +37,6 @@ const REALM_CHALLENGE = 'Basic realm="CoreMail Autodiscover"';
 const NS_RESPONSE = 'http://schemas.microsoft.com/exchange/autodiscover/responseschema/2006';
 export const NS_OUTLOOK = 'http://schemas.microsoft.com/exchange/autodiscover/outlook/responseschema/2006a';
 export const NS_MOBILESYNC = 'http://schemas.microsoft.com/exchange/autodiscover/mobilesync/responseschema/2006';
-/** Organisation part of the X.500 LegacyDN (Outlook expects the Exchange 2007+ format). */
-const LEGACY_DN_PREFIX = '/o=CoreMail/ou=Exchange Administrative Group (FYDIBOHF23SPDLT)/cn=Recipients/cn=';
 
 /** MS-OXDSCLI §2.2.4.2.1 error codes. */
 const ERROR = {
@@ -200,7 +199,7 @@ function buildOutlookResponse(user: MailAuthUser, cfg: ServerConfig, protocols: 
   <Response xmlns="${NS_OUTLOOK}">
     <User>
       <DisplayName>${escapeXml(user.displayName || email)}</DisplayName>
-      <LegacyDN>${escapeXml(LEGACY_DN_PREFIX + user.id)}</LegacyDN>
+      <LegacyDN>${escapeXml(legacyDnFor(user.id))}</LegacyDN>
       <AutoDiscoverSMTPAddress>${escapeXml(email)}</AutoDiscoverSMTPAddress>
     </User>
     <Account>
