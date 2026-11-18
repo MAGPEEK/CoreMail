@@ -4,7 +4,8 @@
  * GET/POST/PUT/DELETE /api/v1/admin/organisation/sharing-policies
  * GET/POST/PUT/DELETE /api/v1/admin/organisation/address-lists
  * GET                 /api/v1/admin/organisation/gal            — global address list (live query)
- * GET                 /api/v1/admin/organisation/role-assignments — users + roles (RBAC page)
+ * GET                 /api/v1/admin/organisation/role-assignments — users + roles + scopes (RBAC page)
+ * PUT                 /api/v1/admin/organisation/role-assignments/:id/scope — 9.5 management scope
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
@@ -12,6 +13,10 @@ import { patchSchema } from '../../lib/zod-compat.js';
 import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import { requireArea } from '../../middleware/auth.js';
+import { revokeAllSessions } from '@coremail/storage/auth';
+import { scopeAssignmentError } from '../../lib/rbac.js';
+import { scopeFromRows, scopeView } from '../../lib/admin-scope.js';
+import { audit, auditContext } from '../../lib/audit.js';
 
 const log = createLogger('admin:organisation');
 export const adminOrganisationRouter: RouterType = Router();
@@ -23,12 +28,69 @@ adminOrganisationRouter.use(requireArea('organisation'));
 // recipients), so SERVER_MANAGEMENT could open the page but never load it. Only the
 // fields the page needs (no quota/usage/login data). Role changes still go through
 // PUT /mailboxes/:id (ORGANIZATION_MANAGEMENT only, audited as user.role).
+// 9.5: every row carries the account's management scope (`scope`, lib/admin-scope.ts).
 adminOrganisationRouter.get('/role-assignments', async (_req: Request, res: Response) => {
   const users = await prisma.user.findMany({
-    select: { id: true, email: true, displayName: true, role: true, active: true, domainId: true },
+    select: {
+      id: true, email: true, displayName: true, role: true, active: true, domainId: true,
+      adminScopes: { select: { domain: { select: { id: true, name: true } } } },
+    },
     orderBy: { email: 'asc' },
   });
-  res.json(users);
+  res.json(users.map(({ adminScopes, ...u }) => ({
+    ...u,
+    scope: scopeView(scopeFromRows(String(u.role), (adminScopes ?? []).map((s) => s.domain))),
+  })));
+});
+
+// ─── Management scopes (9.5) ──────────────────────────────────────────────────
+// PUT /api/v1/admin/organisation/role-assignments/:id/scope  { domainIds: string[] }
+// Limits the admin role of the account to these domains; [] = organisation-wide.
+// ORGANIZATION_MANAGEMENT only (organisation write + scopeAssignmentError) — it is
+// organisation-wide itself, so no admin can hand out more than it holds. A scope
+// change is audited (`user.role.scope`, always logged) and revokes the account's
+// web/API sessions like a role change (publishUserAuthChange).
+const ScopeSchema = z.object({ domainIds: z.array(z.string().min(1).max(64)).max(500) }).strict();
+
+adminOrganisationRouter.put('/role-assignments/:id/scope', async (req: Request, res: Response) => {
+  const id = req.params['id'] ?? '';
+  const parsed = ScopeSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: 'Invalid input', details: parsed.error.issues }); return; }
+  const domainIds = [...new Set(parsed.data.domainIds)];
+  const user = await prisma.user.findUnique({ where: { id }, select: { id: true, email: true, role: true } });
+  if (!user) { res.status(404).json({ error: 'User not found' }); return; }
+  const actor = req.apiUser!;
+  const refusal = scopeAssignmentError(actor.role, String(user.role), domainIds);
+  if (refusal === 'FORBIDDEN_ROLE') {
+    res.status(403).json({ error: 'Only Organization Management may assign management scopes', code: refusal }); return;
+  }
+  if (refusal === 'ROLE_NOT_SCOPABLE') {
+    res.status(400).json({ error: 'This role cannot be limited to domains', code: refusal }); return;
+  }
+  const domains = await prisma.domain.findMany({ where: { id: { in: domainIds } }, select: { id: true, name: true } });
+  if (domains.length !== domainIds.length) { res.status(400).json({ error: 'Unknown domain', code: 'UNKNOWN_DOMAIN' }); return; }
+
+  const before = await prisma.adminScope.findMany({ where: { userId: id }, select: { domain: { select: { id: true, name: true } } } });
+  const beforeNames = before.map((s) => s.domain.name).sort();
+  const afterNames = domains.map((d) => d.name).sort();
+  const changed = beforeNames.join() !== afterNames.join();
+  if (changed) {
+    await prisma.$transaction([
+      prisma.adminScope.deleteMany({ where: { userId: id } }),
+      prisma.adminScope.createMany({ data: domainIds.map((domainId) => ({ userId: id, domainId, grantedBy: actor.userId })) }),
+    ]);
+    audit({
+      actorId: actor.userId, actorEmail: actor.email,
+      action: 'user.role.scope', targetType: 'user', targetId: id, targetName: user.email,
+      changes: { role: user.role, before: { domains: beforeNames }, after: { domains: afterNames } },
+      ...auditContext(req),
+    });
+    // the scope travels with every admin check (cached per user): end the sessions
+    // and drop the caches like a role change does
+    await revokeAllSessions(id, { reason: 'scope-change' });
+    log.info({ userId: id, before: beforeNames, after: afterNames }, 'Admin management scope changed');
+  }
+  res.json({ id, role: user.role, scope: scopeView(scopeFromRows(String(user.role), domains)), changed });
 });
 
 // ─── Sharing Policies ─────────────────────────────────────────────────────────

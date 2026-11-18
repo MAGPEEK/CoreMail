@@ -17,10 +17,14 @@ import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import { requireArea } from '../../middleware/auth.js';
+import { scopeOf, scopeParam } from '../../middleware/admin-scope.js';
+import { domainIdWhere, isScoped } from '../../lib/admin-scope.js';
 
 const log = createLogger('admin:mobile');
 export const adminMobileRouter: RouterType = Router();
 adminMobileRouter.use(requireArea('recipients'));
+// 9.5: a device of a user outside the admin's management scope is "not found".
+adminMobileRouter.param('id', scopeParam('device'));
 
 const SELECT = {
   id: true, deviceId: true, deviceType: true, deviceFriendlyName: true,
@@ -34,6 +38,8 @@ adminMobileRouter.get('/devices', async (req: Request, res: Response) => {
   const skip = (parseInt(page) - 1) * parseInt(limit);
 
   const where: Record<string, unknown> = {};
+  const scope = scopeOf(req);
+  if (isScoped(scope)) where['user'] = domainIdWhere(scope); // 9.5: management scope
   if (status) where['status'] = status;
   if (search) {
     where['OR'] = [

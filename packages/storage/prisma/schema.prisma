@@ -87,6 +87,8 @@ model Domain {
   protocolPolicy     ProtocolPolicy?
   // 9.4: webmail feature switches + attachment/content policy of the domain
   webmailPolicy      WebmailPolicy?
+  // 9.5: admin role assignments limited to this domain (AdminScope)
+  adminScopes        AdminScope[]
   createdAt          DateTime             @default(now())
 
   @@map("domains")
@@ -147,12 +149,39 @@ model User {
   trustedImageSenders TrustedImageSender[]
   // 9.4: per-mailbox mail flow (GAL visibility, forwarding, sender lists, limits)
   mailFlowPolicy      MailFlowPolicy?
+  // 9.5: management scope of an admin role (none = organisation-wide)
+  adminScopes         AdminScope[]
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt
 
   @@index([domainId])
   @@index([externalId])
   @@map("users")
+}
+
+// ─────────────────────────────────────────────
+// Admin management scopes (9.5)
+// ─────────────────────────────────────────────
+
+// Limits the admin role of a user to domains: one row per (admin, domain). An
+// admin without rows manages the whole organisation (backward compatible);
+// ORGANIZATION_MANAGEMENT is always organisation-wide (rows are ignored).
+// Written only through the api-gateway (organisation role-assignment routes,
+// audited, the admin's sessions are revoked). Deleting a domain that still
+// scopes an admin is refused (Restrict): a vanished last row would widen the
+// admin to the whole organisation.
+model AdminScope {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  domainId  String
+  domain    Domain   @relation(fields: [domainId], references: [id], onDelete: Restrict)
+  grantedBy String?
+  createdAt DateTime @default(now())
+
+  @@unique([userId, domainId])
+  @@index([domainId])
+  @@map("admin_scopes")
 }
 
 // ─────────────────────────────────────────────

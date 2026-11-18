@@ -27,7 +27,8 @@ import {
   type PolicyScope, type WebmailPolicyLevel, type WebmailPolicyPatch, type WebmailPolicyView,
 } from '@coremail/storage';
 import { requireArea } from '../../middleware/auth.js';
-import { canAccess, canManageAccount, isReadMethod } from '../../lib/rbac.js';
+import { canAccess, canManageAccount } from '../../lib/rbac.js';
+import { requireInScope } from '../../middleware/admin-scope.js';
 import { audit, auditContext } from '../../lib/audit.js';
 
 const log = createLogger('admin:webmail-policies');
@@ -51,8 +52,16 @@ export const WebmailPolicyPatchSchema = z.object({
 );
 
 const serversArea = requireArea('servers');
-const domainArea = requireArea('servers', (role, req) => isReadMethod(req.method) && canAccess(role, 'domains', 'GET'));
-const recipientsArea = requireArea('recipients');
+/**
+ * Domain level: write = servers; read also for `domains` readers. 9.5: guarded
+ * as the domains area (+ servers access) so a scoped domains reader keeps the
+ * read — for the domains of its scope only.
+ */
+const domainArea = [
+  requireArea('domains', (role, req, scoped) => canAccess(role, 'servers', req.method, scoped)),
+  requireInScope('domain'),
+];
+const recipientsArea = [requireArea('recipients'), requireInScope('user')];
 
 function viewBody(scope: PolicyScope, view: WebmailPolicyView, users?: number): Record<string, unknown> {
   const id = scope.level === 'domain' ? scope.domainId : scope.level === 'user' ? scope.userId : undefined;

@@ -236,6 +236,21 @@ Only the given ones change. The table shows the setting, the effective value and
 (`default`, `global`, `domain`, `user`). RBAC as for `protocol`. Details:
 [webmail-policies.md](webmail-policies.md).
 
+## Admin roles and management scopes (`role`, v9.5)
+
+```bash
+coremail role list --admins                                    # accounts with role and scope
+coremail role set helpdesk@example.com HELP_DESK               # = user update --role
+coremail role scope helpdesk@example.com example.com           # limit the role to domains
+coremail role scope helpdesk@example.com --organisation        # organisation-wide again
+coremail role me                                               # own role, areas and scope
+```
+
+`role set` and `role scope` are ORGANIZATION_MANAGEMENT only (the API refuses everyone else); a
+change is audited and ends the web sessions of that account. Scopable roles: HELP_DESK,
+RECIPIENT_MANAGEMENT, COMPLIANCE_MANAGEMENT, HYGIENE_MANAGEMENT, VIEW_ONLY_ORG. A scoped admin's CLI
+sees only its domains. Details: [rbac.md](rbac.md).
+
 ## Behavior and exit codes
 
 - Destructive commands ask for confirmation unless `--yes` is given; without a terminal (script) `--yes` is mandatory.

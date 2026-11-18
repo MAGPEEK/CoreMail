@@ -9,13 +9,15 @@
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { prisma, downloadBuffer } from '@coremail/storage';
+import { prisma, downloadBuffer, quarantineEnvelope } from '@coremail/storage';
 import { getOutboundJobOptions } from '@coremail/storage/queue-options';
 import { createLogger, createBullMqConnection } from '@coremail/core';
 import { Queue } from 'bullmq';
 import { requireArea } from '../../middleware/auth.js';
 import { audit, auditContext } from '../../lib/audit.js';
 import { releaseQuarantine, ReleaseError, type ReleaseDeps, type ReleaseJob } from '../../lib/quarantine-release.js';
+import { requireUnscoped, scopeOf, scopeParam } from '../../middleware/admin-scope.js';
+import { OUT_OF_SCOPE_REFUSAL, addressWhere, allAddressesInScope, andWhere, isScoped } from '../../lib/admin-scope.js';
 
 const log = createLogger('admin:quarantine');
 
@@ -59,15 +61,34 @@ const releaseDeps: ReleaseDeps = {
 };
 export const adminQuarantineRouter: RouterType = Router();
 adminQuarantineRouter.use(requireArea('hygiene'));
+// 9.5: management scope. An item is visible when its first recipient (toAddr) is
+// in the admin's domains; release / delete need EVERY envelope recipient in scope
+// (a release delivers to all of them).
+adminQuarantineRouter.param('id', scopeParam('quarantine'));
+
+/** Prisma `where` of the items the admin may see (9.5). */
+const visibleWhere = (req: Request): Record<string, unknown> => addressWhere(scopeOf(req), 'toAddr');
+
+/** 403 OUT_OF_SCOPE unless every recipient of the item is inside the scope; true = go on. */
+async function allowAllRecipients(req: Request, res: Response, id: string): Promise<boolean> {
+  const scope = scopeOf(req);
+  if (!isScoped(scope)) return true;
+  const item = await prisma.quarantine.findUnique({ where: { id } });
+  if (item && allAddressesInScope(scope, quarantineEnvelope(item).recipients)) return true;
+  res.status(403).json(OUT_OF_SCOPE_REFUSAL);
+  return false;
+}
 
 // ── GET /stats ────────────────────────────────────────────────────────────────
-adminQuarantineRouter.get('/stats', async (_req: Request, res: Response) => {
+adminQuarantineRouter.get('/stats', async (req: Request, res: Response) => {
+  const scope = visibleWhere(req);
+  const count = (where: Record<string, unknown> = {}) => prisma.quarantine.count({ where: andWhere(scope, where) });
   const [total, virus, spam, policy, released] = await Promise.all([
-    prisma.quarantine.count(),
-    prisma.quarantine.count({ where: { reason: 'VIRUS' } }),
-    prisma.quarantine.count({ where: { reason: 'SPAM' } }),
-    prisma.quarantine.count({ where: { reason: 'POLICY' } }),
-    prisma.quarantine.count({ where: { released: true } }),
+    count(),
+    count({ reason: 'VIRUS' }),
+    count({ reason: 'SPAM' }),
+    count({ reason: 'POLICY' }),
+    count({ released: true }),
   ]);
   res.json({ total, virus, spam, policy, released, pending: total - released });
 });
@@ -95,9 +116,10 @@ adminQuarantineRouter.get('/', async (req: Request, res: Response) => {
     ];
   }
 
+  const scoped = andWhere(visibleWhere(req), where);
   const [items, total] = await Promise.all([
     prisma.quarantine.findMany({
-      where,
+      where: scoped,
       orderBy: { createdAt: 'desc' },
       skip, take: limit,
       select: {
@@ -106,7 +128,7 @@ adminQuarantineRouter.get('/', async (req: Request, res: Response) => {
         released: true, releasedAt: true, releasedBy: true, createdAt: true,
       },
     }),
-    prisma.quarantine.count({ where }),
+    prisma.quarantine.count({ where: scoped }),
   ]);
   res.json({ items, total, page, limit });
 });
@@ -155,6 +177,7 @@ adminQuarantineRouter.post('/:id/release', async (req: Request, res: Response) =
   const id = req.params['id'] ?? '';
   const actorId = req.apiUser?.userId ?? 'system';
   const actorEmail = req.apiUser?.email;
+  if (!(await allowAllRecipients(req, res, id))) return;
 
   try {
     const result = await releaseQuarantine(id, actorId, releaseDeps);
@@ -184,6 +207,7 @@ adminQuarantineRouter.post('/:id/release', async (req: Request, res: Response) =
 // ── DELETE /:id ───────────────────────────────────────────────────────────────
 adminQuarantineRouter.delete('/:id', async (req: Request, res: Response) => {
   const id = req.params['id'] ?? '';
+  if (!(await allowAllRecipients(req, res, id))) return;
   try {
     await prisma.quarantine.delete({ where: { id } });
     log.info({ id }, 'Quarantine item deleted');
@@ -192,7 +216,8 @@ adminQuarantineRouter.delete('/:id', async (req: Request, res: Response) => {
 });
 
 // ── DELETE / (bulk cleanup) ───────────────────────────────────────────────────
-adminQuarantineRouter.delete('/', async (req: Request, res: Response) => {
+// 9.5: purges across every recipient — organisation-wide admins only.
+adminQuarantineRouter.delete('/', requireUnscoped, async (req: Request, res: Response) => {
   const schema = z.object({
     olderThanDays: z.number().int().min(1).max(365).optional(),
     onlyReleased:  z.boolean().default(false),

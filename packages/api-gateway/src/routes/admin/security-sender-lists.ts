@@ -13,17 +13,25 @@
  *
  * Every change is audited with the entry data (`security.sender-list.*`). The security
  * filter reads the table per message — no reload needed.
+ *
+ * 9.5 management scopes: a scoped admin lists, exports, creates, imports and
+ * changes only DOMAIN entries of its domains and USER entries of mailboxes in
+ * them; GLOBAL entries are organisation-wide (not listed, creating one → 403).
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { prisma, addressVariants, domainVariants } from '@coremail/storage';
 import { audit, auditContext } from '../../lib/audit.js';
+import { scopeOf, scopeParam } from '../../middleware/admin-scope.js';
+import { OUT_OF_SCOPE_REFUSAL, inScope, scopeDomainIds, type AdminScope } from '../../lib/admin-scope.js';
 import {
   normalizeEntry, entryKey, toCsv, parseSenderListCsv, LIST_TYPES, PATTERN_TYPES, patternError, storedPattern,
   type SenderListInput,
 } from '../../lib/sender-lists.js';
 
 export const adminSenderListsRouter: RouterType = Router();
+// 9.5: an entry outside the admin's management scope is "not found".
+adminSenderListsRouter.param('id', scopeParam('senderList'));
 
 const SCOPES = ['GLOBAL', 'DOMAIN', 'USER'];
 
@@ -47,17 +55,34 @@ async function withTargets(rows: Row[]): Promise<Array<Row & { target: string }>
 }
 
 /**
- * scopeId for a target, or an error text (unknown domain / mailbox). An
- * internationalized domain is found in either spelling (A-label / U-label).
+ * scopeId (and the domain it belongs to) for a target, or an error text
+ * (unknown domain / mailbox). An internationalized domain is found in either
+ * spelling (A-label / U-label).
  */
-async function resolveTarget(scope: string, target: string): Promise<{ scopeId: string | null } | { error: string }> {
-  if (scope === 'GLOBAL') return { scopeId: null };
+async function resolveTarget(scope: string, target: string): Promise<{ scopeId: string | null; domainId: string | null } | { error: string }> {
+  if (scope === 'GLOBAL') return { scopeId: null, domainId: null };
   if (scope === 'DOMAIN') {
     const d = await prisma.domain.findFirst({ where: { name: { in: domainVariants(target) } }, select: { id: true } });
-    return d ? { scopeId: d.id } : { error: `unknown domain ${target}` };
+    return d ? { scopeId: d.id, domainId: d.id } : { error: `unknown domain ${target}` };
   }
-  const u = await prisma.user.findFirst({ where: { email: { in: addressVariants(target) } }, select: { id: true } });
-  return u ? { scopeId: u.id } : { error: `unknown mailbox ${target}` };
+  const u = await prisma.user.findFirst({ where: { email: { in: addressVariants(target) } }, select: { id: true, domainId: true } });
+  return u ? { scopeId: u.id, domainId: u.domainId } : { error: `unknown mailbox ${target}` };
+}
+
+/**
+ * 9.5: Prisma `where` of the entries inside a management scope — DOMAIN entries
+ * of its domains, USER entries of mailboxes in them ({} = organisation-wide).
+ */
+async function scopeEntriesWhere(scope: AdminScope): Promise<Record<string, unknown>> {
+  const domainIds = scopeDomainIds(scope);
+  if (!domainIds) return {};
+  const users = await prisma.user.findMany({ where: { domainId: { in: domainIds } }, select: { id: true } });
+  return {
+    OR: [
+      { scope: 'DOMAIN', scopeId: { in: domainIds } },
+      { scope: 'USER', scopeId: { in: users.map((u) => u.id) } },
+    ],
+  };
 }
 
 function auditEntry(req: Request, action: string, targetId: string, changes: Record<string, unknown>): void {
@@ -75,20 +100,21 @@ function auditEntry(req: Request, action: string, targetId: string, changes: Rec
 const describe = (e: Pick<SenderListInput, 'listType' | 'scope' | 'target' | 'patternType' | 'pattern'>) =>
   ({ listType: e.listType, scope: e.scope, target: e.target, patternType: e.patternType, pattern: e.pattern });
 
-async function listRows(): Promise<Row[]> {
+/** Entries (all, or those matching `scopeWhere` — see scopeEntriesWhere). */
+async function listRows(scopeWhere: Record<string, unknown> = {}): Promise<Row[]> {
   return prisma.blacklist.findMany({
-    where: { scope: { in: SCOPES } },
+    where: { scope: { in: SCOPES }, ...scopeWhere },
     orderBy: [{ listType: 'asc' }, { scope: 'asc' }, { pattern: 'asc' }],
     select: { id: true, pattern: true, patternType: true, scope: true, scopeId: true, listType: true, comment: true, active: true, createdAt: true },
   });
 }
 
-adminSenderListsRouter.get('/', async (_req: Request, res: Response) => {
-  res.json(await withTargets(await listRows()));
+adminSenderListsRouter.get('/', async (req: Request, res: Response) => {
+  res.json(await withTargets(await listRows(await scopeEntriesWhere(scopeOf(req)))));
 });
 
-adminSenderListsRouter.get('/export.csv', async (_req: Request, res: Response) => {
-  const rows = await withTargets(await listRows());
+adminSenderListsRouter.get('/export.csv', async (req: Request, res: Response) => {
+  const rows = await withTargets(await listRows(await scopeEntriesWhere(scopeOf(req))));
   const csv = toCsv(rows.map((r) => ({
     listType: r.listType as SenderListInput['listType'], scope: r.scope as SenderListInput['scope'], target: r.target,
     patternType: r.patternType as SenderListInput['patternType'], pattern: r.pattern, comment: r.comment, active: r.active,
@@ -104,6 +130,8 @@ adminSenderListsRouter.post('/', async (req: Request, res: Response) => {
   const e = parsed.entry;
   const target = await resolveTarget(e.scope, e.target);
   if ('error' in target) { res.status(400).json({ error: target.error }); return; }
+  // 9.5: GLOBAL entries and targets of other domains are outside a management scope
+  if (!inScope(scopeOf(req), target.domainId)) { res.status(403).json(OUT_OF_SCOPE_REFUSAL); return; }
   const dup = await prisma.blacklist.findFirst({
     where: { listType: e.listType, scope: e.scope, scopeId: target.scopeId, patternType: e.patternType, pattern: e.pattern },
     select: { id: true },
@@ -177,11 +205,14 @@ adminSenderListsRouter.post('/import', async (req: Request, res: Response) => {
   // targets → ids (unknown domain / mailbox is a row error)
   const resolved: Array<SenderListInput & { scopeId: string | null }> = [];
   const cache = new Map<string, Awaited<ReturnType<typeof resolveTarget>>>();
+  const scope = scopeOf(req);
   for (const e of entries) {
     const key = `${e.scope}:${e.target}`;
     if (!cache.has(key)) cache.set(key, await resolveTarget(e.scope, e.target));
     const t = cache.get(key)!;
     if ('error' in t) errors.push({ line: e.line, error: t.error });
+    // 9.5: every row must lie inside the admin's management scope
+    else if (!inScope(scope, t.domainId)) errors.push({ line: e.line, error: OUT_OF_SCOPE_REFUSAL.error });
     else resolved.push({ ...e, scopeId: t.scopeId });
   }
   if (errors.length) {

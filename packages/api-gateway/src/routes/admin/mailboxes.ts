@@ -11,6 +11,8 @@ import { quotaLevelError, quotaLevelPatchError } from '../../lib/quota-levels.js
 import { publishPermissionChange } from '../../lib/permission-events.js';
 import { addressCollision } from '../../lib/address-collision.js';
 import { getMailFlowHandler, putMailFlowHandler } from '../../lib/mail-flow-admin.js';
+import { allowDomain, requireUnscoped, scopeOf, scopeParam, targetInScope } from '../../middleware/admin-scope.js';
+import { domainIdWhere } from '../../lib/admin-scope.js';
 
 export const adminMailboxesRouter: RouterType = Router();
 // v6 RBAC: area 'recipients'. HELP_DESK may additionally PUT /:id (password
@@ -36,7 +38,10 @@ export const isHelpDeskReset = (role: string, req: Request): boolean =>
 adminMailboxesRouter.use(requireArea('recipients', isHelpDeskReset));
 // Route-level guard for the fixed paths: recipients write only, no extras
 // (defence in depth should the router-level predicate ever widen again).
-const requireRecipientsWrite = requireArea('recipients');
+// 9.5: they act on every mailbox / the server defaults — organisation-wide admins only.
+const requireRecipientsWrite = [requireArea('recipients'), requireUnscoped];
+// 9.5: a mailbox outside the admin's management scope is "not found" on every /:id route.
+adminMailboxesRouter.param('id', scopeParam('user'));
 
 // Fields of a user that may be returned to admins (never passwordHash).
 const PUBLIC_USER_SELECT = {
@@ -127,10 +132,12 @@ async function calcUsedBytes(userId: string): Promise<number> {
 }
 
 // GET /api/v1/admin/mailboxes
-// Returns all users. usedBytes is computed live from the messages and
-// updated in the user record at the same time (lazy sync).
-adminMailboxesRouter.get('/', async (_req: Request, res: Response) => {
+// Returns all users (9.5: of the admin's management scope). usedBytes is
+// computed live from the messages and updated in the user record at the same
+// time (lazy sync).
+adminMailboxesRouter.get('/', async (req: Request, res: Response) => {
   const users = await prisma.user.findMany({
+    where: domainIdWhere(scopeOf(req)),
     select: {
       id: true, email: true, displayName: true, role: true, active: true, quotaBytes: true, usedBytes: true, domainId: true, createdAt: true,
       lastLoginAt: true, quotaWarningBytes: true, quotaProhibitSendBytes: true,
@@ -258,6 +265,8 @@ adminMailboxesRouter.post('/', async (req: Request, res: Response) => {
     const collision = await addressCollision(email);
     if (collision) { res.status(409).json({ error: collision }); return; }
 
+    // 9.5: a scoped admin creates mailboxes only in its own domains
+    if (!allowDomain(req, res, domainId)) return;
     const domain = await prisma.domain.findUnique({ where: { id: domainId } });
     if (!domain) { res.status(404).json({ error: 'Domain not found' }); return; }
     // The address must belong to the chosen domain (domain-scoped settings, LDAP/SSO
@@ -506,9 +515,10 @@ adminMailboxesRouter.post('/:id/delegates', async (req: Request, res: Response) 
   const mailbox = await prisma.mailbox.findUnique({ where: { userId: id } });
   if (!mailbox) { res.status(404).json({ error: 'Mailbox not found' }); return; }
 
-  // v6: unknown grantee used to crash with a Prisma FK error
+  // v6: unknown grantee used to crash with a Prisma FK error.
+  // 9.5: a grantee outside the admin's scope is "not found" as well.
   const grantee = await prisma.user.findUnique({ where: { id: parsed.data.granteeId }, select: { id: true, email: true } });
-  if (!grantee) { res.status(404).json({ error: 'Grantee not found' }); return; }
+  if (!grantee || !(await targetInScope(req, 'user', grantee.id))) { res.status(404).json({ error: 'Grantee not found' }); return; }
 
   // Upsert: update if exists, create if not
   const delegate = await prisma.mailboxDelegate.upsert({

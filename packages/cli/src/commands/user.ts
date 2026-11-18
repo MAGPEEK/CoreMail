@@ -3,7 +3,9 @@ import { Command } from 'commander';
 import { listUsers, resolveDomain, resolveUser, type CoreMailClient, type UserRow } from '../client.js';
 import { confirm, fail, formatBytes, formatDate, parseBytes, printJson, printTable, promptHidden } from '../output.js';
 
-const ROLES = ['USER', 'HELP_DESK', 'RECIPIENT_MANAGEMENT', 'COMPLIANCE_MANAGEMENT', 'HYGIENE_MANAGEMENT', 'SERVER_MANAGEMENT', 'VIEW_ONLY_ORG', 'ORGANIZATION_MANAGEMENT'];
+import { ROLES as ROLE_LIST } from './role.js';
+
+const ROLES: readonly string[] = ROLE_LIST;
 
 export function registerUser(program: Command, api: () => CoreMailClient, json: () => boolean): void {
   const user = program.command('user').description('Show, create, update and delete user accounts');

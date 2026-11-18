@@ -205,7 +205,8 @@ test('RBAC page data: role-assignments readable by every organisation-area role,
     assert.equal(r.status, 200, role);
     const rows = r.json as unknown as Row[];
     assert.ok(Array.isArray(rows) && rows.length > 0, role);
-    assert.deepEqual(Object.keys(rows[0]!).sort(), ['active', 'displayName', 'domainId', 'email', 'id', 'role']);
+    // 9.5: + the management scope of the account
+    assert.deepEqual(Object.keys(rows[0]!).sort(), ['active', 'displayName', 'domainId', 'email', 'id', 'role', 'scope']);
   }
   for (const role of ['RECIPIENT_MANAGEMENT', 'HELP_DESK', 'USER']) {
     assert.equal((await call('GET', '/api/v1/admin/organisation/role-assignments', undefined, role)).status, 403, role);

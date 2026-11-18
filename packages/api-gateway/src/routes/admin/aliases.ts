@@ -20,6 +20,8 @@ import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import { requireArea } from '../../middleware/auth.js';
 import { addressCollision } from '../../lib/address-collision.js';
+import { allowDomain, requireInScope, scopeOf, scopeParam } from '../../middleware/admin-scope.js';
+import { aliasWhere } from '../../lib/admin-scope.js';
 
 const log = createLogger('admin:aliases');
 export const adminAliasesRouter: RouterType = Router();
@@ -28,6 +30,11 @@ export const adminAliasesRouter: RouterType = Router();
 // (e.g. /security) and apply the wrong area to them.
 export const ALIAS_PATHS = ['/aliases', '/mailboxes/:id/aliases', '/shared-mailboxes/:id/aliases'];
 adminAliasesRouter.use(ALIAS_PATHS, requireArea('recipients'));
+// 9.5: management scope — the owner mailbox (`:id`, per route: user or shared
+// mailbox) and the alias (`:aliasId`: its domain and its target) must be inside it.
+adminAliasesRouter.param('aliasId', scopeParam('alias'));
+const userInScope = requireInScope('user');
+const sharedInScope = requireInScope('shared');
 
 const LOCAL_PART_RE = /^[a-z0-9._+-]+$/;
 
@@ -84,8 +91,9 @@ const ALIAS_SELECT = {
 
 // ── GET /admin/aliases — all ─────────────────────────────────────────────────
 
-adminAliasesRouter.get('/aliases', async (_req: Request, res: Response) => {
+adminAliasesRouter.get('/aliases', async (req: Request, res: Response) => {
   const aliases = await prisma.emailAlias.findMany({
+    where: aliasWhere(scopeOf(req)),
     select: ALIAS_SELECT,
     orderBy: { address: 'asc' },
   });
@@ -94,17 +102,17 @@ adminAliasesRouter.get('/aliases', async (_req: Request, res: Response) => {
 
 // ── User aliases ─────────────────────────────────────────────────────────────
 
-adminAliasesRouter.get('/mailboxes/:id/aliases', async (req: Request, res: Response) => {
+adminAliasesRouter.get('/mailboxes/:id/aliases', userInScope, async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
   const aliases = await prisma.emailAlias.findMany({
-    where: { targetUserId: id },
+    where: { targetUserId: id, ...aliasWhere(scopeOf(req)) },
     select: ALIAS_SELECT,
     orderBy: { address: 'asc' },
   });
   res.json(aliases);
 });
 
-adminAliasesRouter.post('/mailboxes/:id/aliases', async (req: Request, res: Response) => {
+adminAliasesRouter.post('/mailboxes/:id/aliases', userInScope, async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
   const p = CreateBody.safeParse(req.body);
   if (!p.success) { res.status(400).json({ error: 'Invalid input', details: p.error.issues }); return; }
@@ -116,6 +124,7 @@ adminAliasesRouter.post('/mailboxes/:id/aliases', async (req: Request, res: Resp
   const input = { ...p.data, domainId: p.data.domainId ?? user.domainId };
   const resolved = await resolveAliasInput(input);
   if (!resolved.ok) { res.status(400).json({ error: resolved.error }); return; }
+  if (!allowDomain(req, res, resolved.domainId)) return; // 9.5: alias address in the admin's own domains
 
   const collision = await addressCollision(resolved.address);
   if (collision) { res.status(409).json({ error: collision }); return; }
@@ -137,17 +146,17 @@ adminAliasesRouter.post('/mailboxes/:id/aliases', async (req: Request, res: Resp
 
 // ── SharedMailbox aliases ────────────────────────────────────────────────────
 
-adminAliasesRouter.get('/shared-mailboxes/:id/aliases', async (req: Request, res: Response) => {
+adminAliasesRouter.get('/shared-mailboxes/:id/aliases', sharedInScope, async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
   const aliases = await prisma.emailAlias.findMany({
-    where: { targetSharedId: id },
+    where: { targetSharedId: id, ...aliasWhere(scopeOf(req)) },
     select: ALIAS_SELECT,
     orderBy: { address: 'asc' },
   });
   res.json(aliases);
 });
 
-adminAliasesRouter.post('/shared-mailboxes/:id/aliases', async (req: Request, res: Response) => {
+adminAliasesRouter.post('/shared-mailboxes/:id/aliases', sharedInScope, async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
   const p = CreateBody.safeParse(req.body);
   if (!p.success) { res.status(400).json({ error: 'Invalid input', details: p.error.issues }); return; }
@@ -158,6 +167,7 @@ adminAliasesRouter.post('/shared-mailboxes/:id/aliases', async (req: Request, re
   const input = { ...p.data, domainId: p.data.domainId ?? sm.domainId };
   const resolved = await resolveAliasInput(input);
   if (!resolved.ok) { res.status(400).json({ error: resolved.error }); return; }
+  if (!allowDomain(req, res, resolved.domainId)) return; // 9.5: alias address in the admin's own domains
 
   const collision = await addressCollision(resolved.address);
   if (collision) { res.status(409).json({ error: collision }); return; }

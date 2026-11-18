@@ -31,9 +31,17 @@
  *  - Only ORGANIZATION_MANAGEMENT may assign/change roles, and modify, reset the
  *    password of, or delete another admin account (role ≠ USER) — 9.4: this
  *    includes the protocol switches of an admin account.
+ *  - 9.5: only ORGANIZATION_MANAGEMENT assigns management scopes (canAssignScope).
+ *
+ * Management scopes (9.5, lib/admin-scope.ts): every admin role except
+ * ORGANIZATION_MANAGEMENT may be limited to domains (AdminScope rows; none =
+ * organisation-wide). A SCOPED admin keeps the role's matrix minus
+ * UNSCOPED_ONLY_AREAS (server-wide: organisation, identity, servers) and sees /
+ * changes only objects of its domains — docs/rbac.md lists the decision of every
+ * admin route. The functions below take `scoped` (default false = organisation-wide).
  *
  * The caller's areas are exposed via GET /api/v1/admin/me/permissions
- * (`{ role, areas: { "<area>": "write" | "read" }, mfaVerified }`) and, for
+ * (`{ role, areas: { "<area>": "write" | "read" }, scope, mfaVerified }`) and, for
  * older clients, GET /api/v1/user/me → `adminAreas`, so the BCP can hide pages
  * and render read-only forms. ROLE_PERMISSIONS (below) is the per-role view of
  * this matrix and the one the guards consult.
@@ -53,6 +61,30 @@ export const ADMIN_AREAS = [
 export type AdminArea = typeof ADMIN_AREAS[number];
 
 export type AreaAccess = 'write' | 'read';
+
+/**
+ * Server-wide areas (9.5): only organisation-wide admins reach them — a scoped
+ * admin (AdminScope rows) never does, whatever its role grants.
+ */
+export const UNSCOPED_ONLY_AREAS: readonly AdminArea[] = ['organisation', 'identity', 'servers'];
+
+/**
+ * Roles that may be limited to domains (9.5). ORGANIZATION_MANAGEMENT is always
+ * organisation-wide; SERVER_MANAGEMENT works on server-wide areas only (a
+ * scope would leave it nothing to write); USER has no admin role to limit.
+ */
+export const SCOPABLE_ROLES: readonly UserRoleName[] = [
+  'HELP_DESK', 'RECIPIENT_MANAGEMENT', 'COMPLIANCE_MANAGEMENT', 'HYGIENE_MANAGEMENT', 'VIEW_ONLY_ORG',
+];
+
+export function isScopableRole(role: string | undefined): boolean {
+  return !!role && (SCOPABLE_ROLES as readonly string[]).includes(role);
+}
+
+/** Is `area` closed to a scoped admin? */
+export function isUnscopedOnlyArea(area: AdminArea): boolean {
+  return UNSCOPED_ONLY_AREAS.includes(area);
+}
 
 export const AREA_MATRIX: Record<AdminArea, { write: readonly UserRoleName[]; read: readonly UserRoleName[] }> = {
   dashboard:    { write: [],                         read: ADMIN_ROLES },
@@ -155,42 +187,44 @@ export function isReadMethod(method: string): boolean {
   return method === 'GET' || method === 'HEAD';
 }
 
-/** Access level of `role` on `area`, or null. */
-export function areaAccess(role: string | undefined, area: AdminArea): AreaAccess | null {
+/** Access level of `role` on `area`, or null. A scoped admin never reaches UNSCOPED_ONLY_AREAS. */
+export function areaAccess(role: string | undefined, area: AdminArea, scoped = false): AreaAccess | null {
   if (!role || !isUserRole(role)) return null;
+  if (scoped && isUnscopedOnlyArea(area)) return null;
   return ROLE_PERMISSIONS[role].find((p) => p.area === area)?.access ?? null;
 }
 
-export function canAccess(role: string | undefined, area: AdminArea, method: string): boolean {
-  const a = areaAccess(role, area);
+export function canAccess(role: string | undefined, area: AdminArea, method: string, scoped = false): boolean {
+  const a = areaAccess(role, area, scoped);
   if (a === 'write') return true;
   return a === 'read' && isReadMethod(method.toUpperCase());
 }
 
 /** `{ area: 'write' | 'read' }` for every area the role can reach (empty for USER). */
-export function allowedAreas(role: string | undefined): Partial<Record<AdminArea, AreaAccess>> {
+export function allowedAreas(role: string | undefined, scoped = false): Partial<Record<AdminArea, AreaAccess>> {
   const out: Partial<Record<AdminArea, AreaAccess>> = {};
   for (const area of ADMIN_AREAS) {
-    const a = areaAccess(role, area);
+    const a = areaAccess(role, area, scoped);
     if (a) out[area] = a;
   }
   return out;
 }
 
-/** May `role` perform the narrow admin `action` (see ADMIN_ACTIONS)? */
-export function hasAdminAction(role: string | undefined, action: AdminAction): boolean {
+/** May `role` perform the narrow admin `action` (see ADMIN_ACTIONS)? Scoped: not on UNSCOPED_ONLY_AREAS. */
+export function hasAdminAction(role: string | undefined, action: AdminAction, scoped = false): boolean {
   if (!role || !isUserRole(role) || role === 'USER') return false;
-  if (role === 'ORGANIZATION_MANAGEMENT') return true;
   const def = ADMIN_ACTIONS[action];
+  if (scoped && isUnscopedOnlyArea(def.area)) return false;
+  if (role === 'ORGANIZATION_MANAGEMENT') return true;
   if (def.impliedByWrite && areaAccess(role, def.area) === 'write') return true;
   return (ROLE_ACTION_GRANTS[role] ?? []).includes(action);
 }
 
 /** `{ <area>: AdminAction[] }` for every action the role may perform (empty for USER). */
-export function allowedActions(role: string | undefined): Partial<Record<AdminArea, AdminAction[]>> {
+export function allowedActions(role: string | undefined, scoped = false): Partial<Record<AdminArea, AdminAction[]>> {
   const out: Partial<Record<AdminArea, AdminAction[]>> = {};
   for (const action of Object.keys(ADMIN_ACTIONS) as AdminAction[]) {
-    if (!hasAdminAction(role, action)) continue;
+    if (!hasAdminAction(role, action, scoped)) continue;
     (out[ADMIN_ACTIONS[action].area] ??= []).push(action);
   }
   return out;
@@ -227,4 +261,18 @@ export function canAssignRole(actorRole: string | undefined, newRole: string | u
   if (newRole === undefined) return true;
   if (currentRole === undefined) return newRole === 'USER';
   return newRole === currentRole;
+}
+
+/**
+ * Why `actorRole` may not give an account with `targetRole` the management
+ * scope `domainIds` (empty = organisation-wide), or null when it may (9.5).
+ * Only ORGANIZATION_MANAGEMENT assigns scopes: it is organisation-wide itself,
+ * so nobody can hand out more than it holds. A scope needs a scopable role.
+ */
+export function scopeAssignmentError(
+  actorRole: string | undefined, targetRole: string | undefined, domainIds: readonly string[],
+): 'FORBIDDEN_ROLE' | 'ROLE_NOT_SCOPABLE' | null {
+  if (actorRole !== 'ORGANIZATION_MANAGEMENT') return 'FORBIDDEN_ROLE';
+  if (domainIds.length > 0 && !isScopableRole(targetRole)) return 'ROLE_NOT_SCOPABLE';
+  return null;
 }

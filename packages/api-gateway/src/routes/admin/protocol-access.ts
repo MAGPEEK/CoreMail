@@ -32,7 +32,8 @@ import {
   SERVER_PROTOCOL_SETTINGS, type ProtocolLevelView, type ProtocolScope, type ProtocolSettings,
 } from '@coremail/storage';
 import { requireArea } from '../../middleware/auth.js';
-import { canAccess, canManageAccount, isReadMethod } from '../../lib/rbac.js';
+import { canAccess, canManageAccount } from '../../lib/rbac.js';
+import { requireInScope } from '../../middleware/admin-scope.js';
 import { audit, auditContext } from '../../lib/audit.js';
 import {
   buildProtocolOverview, isTrustedHttpsCert, redactOverrideNames, submissionPorts, type HttpsState, type ProtocolOverview,
@@ -55,9 +56,16 @@ export const ProtocolPatchSchema = patchSchema(PROTOCOL_SETTINGS);
 export const ServerProtocolPatchSchema = patchSchema(SERVER_PROTOCOL_SETTINGS);
 
 const serversArea = requireArea('servers');
-/** Domain level: write = servers; read also for `domains` readers (BCP domain dialog). */
-const domainArea = requireArea('servers', (role, req) => isReadMethod(req.method) && canAccess(role, 'domains', 'GET'));
-const recipientsArea = requireArea('recipients');
+/**
+ * Domain level: write = servers; read also for `domains` readers (BCP domain
+ * dialog). 9.5: guarded as the domains area (+ servers access) so a scoped
+ * domains reader keeps the read — for the domains of its scope only.
+ */
+const domainArea = [
+  requireArea('domains', (role, req, scoped) => canAccess(role, 'servers', req.method, scoped)),
+  requireInScope('domain'),
+];
+const recipientsArea = [requireArea('recipients'), requireInScope('user')];
 
 function viewBody(scope: ProtocolScope, view: ProtocolLevelView, changedUsers?: number): Record<string, unknown> {
   const id = scope.level === 'domain' ? scope.domainId : scope.level === 'user' ? scope.userId : undefined;
