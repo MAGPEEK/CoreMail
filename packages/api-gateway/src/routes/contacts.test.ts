@@ -68,7 +68,9 @@ function userMatches(u: Row, where: Row): boolean {
 const express = (await import('express')).default;
 const { signAccessToken } = await import('@coremail/core');
 const { contactsRouter } = await import('./contacts.js');
-const { vcardFields, vcardUid } = await import('@coremail/core/vcard');
+const { vcardUid } = await import('@coremail/core/vcard');
+const { contactCardFromVcard, flatContactColumns } = await import('@coremail/storage');
+const vcardFields = (card: string) => flatContactColumns(contactCardFromVcard(card));
 
 const token = signAccessToken({ sub: 'alice', email: 'alice@example.com', role: 'USER', domainId: 'd1', sessionId: 's1', mfaVerified: false });
 

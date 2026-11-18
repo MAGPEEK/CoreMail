@@ -1,27 +1,28 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
-import { z } from 'zod';
-import { prisma, GAL_VISIBLE_WHERE, isWebmailFeatureEnabled } from '@coremail/storage';
 import {
-  buildVcard,
-  patchVcard,
-  vcardFields,
-  VCARD_FIELD_NAMES,
-  type VcardFields,
-  type VcardPatch,
-} from '@coremail/core/vcard';
+  prisma, GAL_VISIBLE_WHERE, isWebmailFeatureEnabled,
+  applyContactCard, applyContactPatch, contactCardFromVcard, contactColumnsFromVcard, contactRowData, detachCardFromGroups,
+  emptyContactCard, flatContactColumns, isGroupVcard, membersFromJson, sameContactCard, vcardUidKey,
+} from '@coremail/storage';
+import { parseVcard } from '@coremail/core/vcard';
 import { protocolSubject, requireAuth } from '../middleware/auth.js';
 import { announceOnWrite } from '../lib/realtime.js';
+import { ContactCreateSchema, ContactUpdateSchema, contactPatchFromInput, firstIssue } from '../lib/contact-input.js';
+import { contactGroupsRouter } from './contact-groups.js';
 
 export const contactsRouter: RouterType = Router();
 contactsRouter.use(requireAuth);
-// 9.4: contact writes reach the user's other tabs and devices
+// 9.4: contact writes reach the user's other tabs and devices (9.5: groups too)
 contactsRouter.use(announceOnWrite({ type: 'contacts' }));
 
 /** Columns returned for the user's own contacts (address book view + autocomplete). */
 const CONTACT_LIST_SELECT = {
   id: true, displayName: true, email: true, email2: true, phone: true, mobile: true,
-  company: true, department: true, jobTitle: true, notes: true,
+  company: true, department: true, jobTitle: true, notes: true, fileAs: true, categories: true,
 } as const;
+
+/** Groups offered by the compose autocomplete (`?groups=1`). */
+const GROUP_SUGGESTIONS = 10;
 
 /**
  * Domain of the caller — the GAL boundary (8.0.0). A server may host several
@@ -43,6 +44,9 @@ const GAL_MAX_PAGE = 500;
 //   2. Global address list (all active users except hiddenFromGal)
 //   (ExternalMailContact removed in v3.18.33, DistributionGroup in v5.6.1)
 // If `q` is empty, only private contacts are returned (fallback as before).
+// 9.5: the search covers every contact field (searchText: names, nickname, all
+// e-mails, phones, addresses, URLs, IM, categories); `groups=1` adds the user's
+// contact groups (kind "group", id "group-<id>") for the compose autocomplete.
 contactsRouter.get('/', async (req: Request, res: Response) => {
   const q = String(req.query['q'] ?? '').trim();
   const userId = req.apiUser!.userId;
@@ -55,6 +59,7 @@ contactsRouter.get('/', async (req: Request, res: Response) => {
           { displayName: { contains: q, mode: 'insensitive' as const } },
           { email:       { contains: q, mode: 'insensitive' as const } },
           { company:     { contains: q, mode: 'insensitive' as const } },
+          { searchText:  { contains: q.toLowerCase() } },
         ],
       }
     : { userId };
@@ -91,10 +96,18 @@ contactsRouter.get('/', async (req: Request, res: Response) => {
     take: 30,
   })).filter((u) => u.domainId === domainId); // defence in depth: the domain is the boundary
 
+  const groups = !ownContacts || req.query['groups'] !== '1' ? [] : await prisma.contactGroup.findMany({
+    where: { userId, name: { contains: q, mode: 'insensitive' } },
+    orderBy: { name: 'asc' },
+    select: { id: true, name: true, members: true },
+    take: GROUP_SUGGESTIONS,
+  });
+
   // Unified format. Dedup by email.
   const seen = new Set<string>(privateContacts.map((c) => c.email.toLowerCase()));
-  const merged: Array<{ id: string; displayName: string; email: string; company?: string }> = [
+  const merged: Array<{ id: string; displayName: string; email: string; company?: string; kind?: 'group'; memberCount?: number }> = [
     ...privateContacts,
+    ...groups.map((g) => ({ id: `group-${g.id}`, kind: 'group' as const, displayName: g.name, email: '', memberCount: membersFromJson(g.members).length })),
   ];
   for (const u of galUsers) {
     const key = u.email.toLowerCase();
@@ -167,96 +180,87 @@ contactsRouter.get('/gal', async (req: Request, res: Response) => {
   res.json({ entries, total, limit, offset });
 });
 
-// GET /api/v1/contacts/:id
-contactsRouter.get('/:id', async (req: Request, res: Response) => {
-  const { id } = req.params as { id: string };
-  const contact = await prisma.contact.findFirst({ where: { id, userId: req.apiUser!.userId } });
-  if (!contact) { res.status(404).json({ error: 'Contact not found' }); return; }
-  res.json(contact);
-});
+// 9.5: contact groups ("Kontaktlisten") — registered BEFORE `/:id`
+contactsRouter.use('/groups', contactGroupsRouter);
 
-/** An optional e-mail field: empty string (= none/remove) or a valid address. */
-const optionalEmail = z.union([z.literal(''), z.string().trim().email()]);
+type ContactRow = { vcardData: string; searchText?: string } & Record<string, unknown>;
 
-// Every field the webmail edits (v7.1.0: phone/mobile/email2/department/jobTitle/notes
-// were silently dropped by the schema before).
-const ContactSchema = z.object({
-  displayName: z.string().trim().min(1).max(500),
-  email: optionalEmail.optional(),
-  email2: optionalEmail.optional(),
-  phone: z.string().max(100).optional(),
-  mobile: z.string().max(100).optional(),
-  company: z.string().max(500).optional(),
-  department: z.string().max(500).optional(),
-  jobTitle: z.string().max(500).optional(),
-  notes: z.string().max(10_000).optional(),
-  vcardData: z.string().max(1_000_000).optional(),
-});
-
-function fieldPatch(data: { [K in keyof VcardFields]?: string | undefined }): VcardPatch {
-  const patch: VcardPatch = {};
-  for (const k of VCARD_FIELD_NAMES) {
-    const v = data[k];
-    if (v !== undefined) patch[k] = v;
-  }
-  return patch;
+/**
+ * A contact as the API returns it: the row plus the structured fields read
+ * from its vCard (rows stored before 9.5 have empty structured columns until
+ * their next write). The internal search text is left out.
+ */
+function contactView(row: ContactRow): Record<string, unknown> {
+  const { searchText: _searchText, ...rest } = row;
+  if (!parseVcard(row.vcardData)) return rest;
+  const card = contactCardFromVcard(row.vcardData);
+  return { ...rest, ...card, ...flatContactColumns(card) };
 }
 
-// POST /api/v1/contacts
-contactsRouter.post('/', async (req: Request, res: Response) => {
-  const parsed = ContactSchema.safeParse(req.body);
-  if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
+const findOwnContact = (userId: string, id: string) => prisma.contact.findFirst({ where: { id, userId } });
 
-  const fields = fieldPatch(parsed.data);
-  // A supplied vCard is kept as-is and only the explicit fields are applied on top
-  const vcardData = parsed.data.vcardData
-    ? patchVcard(parsed.data.vcardData, fields)
-    : buildVcard({ ...fields, displayName: parsed.data.displayName });
-  const columns: VcardFields = vcardFields(vcardData);
-
-  const contact = await prisma.contact.create({
-    data: { userId: req.apiUser!.userId, vcardData, ...columns },
-  });
-  res.status(201).json(contact);
+// GET /api/v1/contacts/:id
+contactsRouter.get('/:id', async (req: Request, res: Response) => {
+  const contact = await findOwnContact(req.apiUser!.userId, String(req.params['id']));
+  if (!contact) { res.status(404).json({ error: 'Contact not found' }); return; }
+  res.json(contactView(contact));
 });
 
-// PUT /api/v1/contacts/:id
-// v7.1.0: the stored vCard is PATCHED, not rebuilt — TEL/ADR/PHOTO/UID/X-… and every
-// other property a CardDAV client stored survive a webmail edit (RFC 6352 §6.3.2).
-// Only fields whose value differs from the stored vCard are rewritten.
-contactsRouter.put('/:id', async (req: Request, res: Response) => {
-  const { id } = req.params as { id: string };
-  const parsed = ContactSchema.partial().safeParse(req.body);
-  if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
-
-  const contact = await prisma.contact.findFirst({ where: { id, userId: req.apiUser!.userId } });
-  if (!contact) { res.status(404).json({ error: 'Contact not found' }); return; }
-
-  const current = vcardFields(contact.vcardData);
-  const requested = fieldPatch(parsed.data);
-  const changed: VcardPatch = {};
-  for (const k of VCARD_FIELD_NAMES) {
-    const v = requested[k];
-    if (v !== undefined && v.trim() !== current[k]) changed[k] = v;
-  }
-  if (Object.keys(changed).length === 0 && /^UID[:;]/im.test(contact.vcardData)) {
-    res.json(contact);
+// POST /api/v1/contacts — structured fields (9.5) or the legacy flat ones.
+// A supplied vCard is kept as-is and the fields are applied on top.
+contactsRouter.post('/', async (req: Request, res: Response) => {
+  const parsed = ContactCreateSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: 'Invalid request', ...firstIssue(parsed.error) }); return; }
+  const source = parsed.data.vcardData ?? '';
+  if (source && isGroupVcard(source)) {
+    res.status(400).json({ error: 'Invalid request', field: 'vcardData', message: 'Kontaktlisten über /contacts/groups anlegen' });
     return;
   }
 
-  const vcardData = patchVcard(contact.vcardData, changed);
-  const updated = await prisma.contact.update({
-    where: { id },
-    data: { vcardData, ...vcardFields(vcardData) },
+  const base = source ? contactCardFromVcard(source) : emptyContactCard();
+  const card = applyContactPatch(base, contactPatchFromInput(parsed.data));
+  if (!card.displayName) { res.status(400).json({ error: 'Invalid request', field: 'displayName', message: 'Name fehlt' }); return; }
+
+  const vcardData = applyContactCard(source, card);
+  const contact = await prisma.contact.create({
+    data: { userId: req.apiUser!.userId, vcardData, ...contactRowData(contactColumnsFromVcard(vcardData)) },
   });
-  res.json(updated);
+  res.status(201).json(contactView(contact));
 });
 
-// DELETE /api/v1/contacts/:id
-contactsRouter.delete('/:id', async (req: Request, res: Response) => {
-  const { id } = req.params as { id: string };
-  const contact = await prisma.contact.findFirst({ where: { id, userId: req.apiUser!.userId } });
+// PUT /api/v1/contacts/:id — partial update.
+// v7.1.0: the stored vCard is PATCHED, not rebuilt — PHOTO/UID/X-… and every other
+// property a CardDAV client stored survive a webmail edit (RFC 6352 §6.3.2).
+// 9.5: only the properties whose field changed are rewritten (storage contact-vcard.ts).
+contactsRouter.put('/:id', async (req: Request, res: Response) => {
+  const parsed = ContactUpdateSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: 'Invalid request', ...firstIssue(parsed.error) }); return; }
+
+  const contact = await findOwnContact(req.apiUser!.userId, String(req.params['id']));
   if (!contact) { res.status(404).json({ error: 'Contact not found' }); return; }
-  await prisma.contact.delete({ where: { id } });
+
+  const current = contactCardFromVcard(contact.vcardData);
+  const card = applyContactPatch(current, contactPatchFromInput(parsed.data));
+  if (!card.displayName) { res.status(400).json({ error: 'Invalid request', field: 'displayName', message: 'Name fehlt' }); return; }
+  if (sameContactCard(card, current) && vcardUidKey(contact.vcardData)) {
+    res.json(contactView(contact));
+    return;
+  }
+
+  const vcardData = applyContactCard(contact.vcardData, card);
+  const updated = await prisma.contact.update({
+    where: { id: contact.id },
+    data: { vcardData, ...contactRowData(contactColumnsFromVcard(vcardData)) },
+  });
+  res.json(contactView(updated));
+});
+
+// DELETE /api/v1/contacts/:id — 9.5: the contact also leaves every contact group
+contactsRouter.delete('/:id', async (req: Request, res: Response) => {
+  const userId = req.apiUser!.userId;
+  const contact = await findOwnContact(userId, String(req.params['id']));
+  if (!contact) { res.status(404).json({ error: 'Contact not found' }); return; }
+  await prisma.contact.delete({ where: { id: contact.id } });
+  await detachCardFromGroups(userId, contact.uid || vcardUidKey(contact.vcardData));
   res.json({ ok: true });
 });

@@ -1,438 +1,242 @@
 import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { contactPath, itemIdFromPath } from '../lib/mailLinks.js';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import {
-  Search, Plus, Mail, Phone, Building2, X, Pencil, Trash2,
-  Briefcase, MessageSquare, Smartphone, AtSign, User,
-} from 'lucide-react';
+import { Search, Plus, Users } from 'lucide-react';
+import toast from 'react-hot-toast';
+import { contactPath, itemIdFromPath } from '../lib/mailLinks.js';
 import { api } from '../api/client.js';
 import type { Contact } from '../api/types.js';
-import toast from 'react-hot-toast';
 import { PageShell } from '../components/PageShell.js';
+import { useUiStore } from '../store/ui.js';
+import { formatRecipient } from '../lib/recipients.js';
+import { emptyContactForm, formFromContact, type ContactDetail } from '../lib/contactForm.js';
+import {
+  expansionNotice, memberInput, recipientEntries,
+  type ContactGroupDetail, type ContactGroupSummary, type GroupExpansion, type GroupMember,
+} from '../lib/contactGroups.js';
+import { ContactEditor } from '../components/contacts/ContactEditor.js';
+import { ContactDetails, initials } from '../components/contacts/ContactDetails.js';
+import { ContactGroupDetails, ContactGroupEditor } from '../components/contacts/ContactGroupPanel.js';
 
-type FormFields = {
-  displayName: string;
-  email: string;
-  email2: string;
-  company: string;
-  phone: string;
-  mobile: string;
-  department: string;
-  jobTitle: string;
-  notes: string;
-};
+type Tab = 'contacts' | 'groups';
+type Selection = { kind: 'contact'; id: string } | { kind: 'group'; id: string } | null;
+type Mode = 'view' | 'edit' | 'new';
 
-const emptyForm = (): FormFields => ({
-  displayName: '',
-  email: '',
-  email2: '',
-  company: '',
-  phone: '',
-  mobile: '',
-  department: '',
-  jobTitle: '',
-  notes: '',
-});
+const TABS: Array<{ id: Tab; label: string }> = [
+  { id: 'contacts', label: 'Kontakte' },
+  { id: 'groups', label: 'Kontaktlisten' },
+];
 
 export function ContactsPage() {
   const qc = useQueryClient();
-  const [search, setSearch] = useState('');
-  const [selected, setSelected] = useState<Contact | null>(null);
-  const [editMode, setEditMode] = useState(false);
-  const [formData, setFormData] = useState<FormFields>(emptyForm());
-  // 9.4: /contacts/<id> shows the contact (shareable, back/forward)
-  const location = useLocation();
   const navigate = useNavigate();
+  const location = useLocation();
+  const openCompose = useUiStore((s) => s.openCompose);
+  const [tab, setTab] = useState<Tab>('contacts');
+  const [search, setSearch] = useState('');
+  const [selection, setSelection] = useState<Selection>(null);
+  const [mode, setMode] = useState<Mode>('view');
+
+  // 9.4: /contacts/<id> shows the contact (shareable, back/forward)
   const linkedId = itemIdFromPath(location.pathname, '/contacts/');
-  const { data: linkedContact } = useQuery({
-    queryKey: ['contact', linkedId],
-    queryFn: () => api.get<Contact>(`/contacts/${linkedId}`),
-    enabled: !!linkedId,
+  useEffect(() => {
+    if (linkedId) { setSelection({ kind: 'contact', id: linkedId }); setTab('contacts'); setMode('view'); }
+  }, [linkedId]);
+
+  const { data: contacts } = useQuery({
+    queryKey: ['contacts', 'list', search],
+    queryFn: () => api.get<Contact[]>(`/contacts${search.length >= 2 ? `?q=${encodeURIComponent(search)}` : ''}`),
+    staleTime: 10_000,
+  });
+  const { data: groups } = useQuery({
+    queryKey: ['contacts', 'groups'],
+    queryFn: () => api.get<ContactGroupSummary[]>('/contacts/groups'),
+    staleTime: 10_000,
+  });
+  const contactId = selection?.kind === 'contact' ? selection.id : null;
+  const groupId = selection?.kind === 'group' ? selection.id : null;
+  const { data: contact } = useQuery({
+    queryKey: ['contacts', 'detail', contactId],
+    queryFn: () => api.get<ContactDetail>(`/contacts/${contactId!}`),
+    enabled: !!contactId,
     retry: false,
     meta: { silentError: true }, // a deleted / foreign contact just shows nothing
   });
-  useEffect(() => {
-    if (linkedContact && linkedContact.id === linkedId) { setSelected(linkedContact); setEditMode(false); }
-  }, [linkedContact, linkedId]);
-
-  // Personal contacts
-  const { data: contacts } = useQuery({
-    queryKey: ['contacts', search],
-    queryFn: () =>
-      api.get<Contact[]>(`/contacts${search.length >= 2 ? `?q=${encodeURIComponent(search)}` : ''}`),
-    staleTime: 10_000,
+  const { data: group } = useQuery({
+    queryKey: ['contacts', 'group', groupId],
+    queryFn: () => api.get<ContactGroupDetail>(`/contacts/groups/${groupId!}`),
+    enabled: !!groupId,
+    retry: false,
+    meta: { silentError: true },
   });
 
-  const createMutation = useMutation({
-    mutationFn: (data: Partial<Contact>) => api.post<Contact>('/contacts', data),
+  const refresh = () => qc.invalidateQueries({ queryKey: ['contacts'] });
+  const fail = (err: Error) => toast.error(err.message);
+
+  const saveContact = useMutation({
+    mutationFn: (payload: Record<string, unknown>) => (mode === 'new'
+      ? api.post<ContactDetail>('/contacts', payload)
+      : api.put<ContactDetail>(`/contacts/${contactId!}`, payload)),
     onSuccess: (c) => {
-      toast.success('Kontakt erstellt');
-      qc.invalidateQueries({ queryKey: ['contacts'] });
-      setSelected(c);
-      setEditMode(false);
+      toast.success(mode === 'new' ? 'Kontakt erstellt' : 'Kontakt gespeichert');
+      void refresh();
+      setSelection({ kind: 'contact', id: c.id });
+      setMode('view');
     },
-    onError: (err: Error) => toast.error(err.message),
+    onError: fail,
   });
-
-  const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: Partial<Contact> }) =>
-      api.put<Contact>(`/contacts/${id}`, data),
-    onSuccess: (c) => {
-      toast.success('Kontakt gespeichert');
-      qc.invalidateQueries({ queryKey: ['contacts'] });
-      setSelected(c);
-      setEditMode(false);
-    },
-    onError: (err: Error) => toast.error(err.message),
-  });
-
-  const deleteMutation = useMutation({
+  const deleteContact = useMutation({
     mutationFn: (id: string) => api.delete(`/contacts/${id}`),
-    onSuccess: () => {
-      toast.success('Kontakt gelöscht');
-      qc.invalidateQueries({ queryKey: ['contacts'] });
-      setSelected(null);
+    onSuccess: () => { toast.success('Kontakt gelöscht'); void refresh(); setSelection(null); },
+    onError: fail,
+  });
+  const saveGroup = useMutation({
+    mutationFn: ({ name, members }: { name: string; members: GroupMember[] }) => {
+      const body = { name, members: members.map(memberInput) };
+      return mode === 'new'
+        ? api.post<ContactGroupDetail>('/contacts/groups', body)
+        : api.put<ContactGroupDetail>(`/contacts/groups/${groupId!}`, body);
     },
+    onSuccess: (g) => {
+      toast.success(mode === 'new' ? 'Kontaktliste erstellt' : 'Kontaktliste gespeichert');
+      void refresh();
+      setSelection({ kind: 'group', id: g.id });
+      setMode('view');
+    },
+    onError: fail,
+  });
+  const deleteGroup = useMutation({
+    mutationFn: (id: string) => api.delete(`/contacts/groups/${id}`),
+    onSuccess: () => { toast.success('Kontaktliste gelöscht'); void refresh(); setSelection(null); },
+    onError: fail,
+  });
+  const sendToGroup = useMutation({
+    mutationFn: (id: string) => api.get<GroupExpansion>(`/contacts/groups/${id}/expand`),
+    onSuccess: (exp) => {
+      const entries = recipientEntries(exp);
+      if (entries.length === 0) { toast.error('Die Kontaktliste enthält keine E-Mail-Adressen.'); return; }
+      openCompose({ mode: 'new', toAddrs: entries });
+      navigate('/mail');
+      const notice = expansionNotice(exp);
+      if (notice) toast(notice);
+    },
+    onError: fail,
   });
 
-  const startNew = () => {
-    setSelected(null);
-    setFormData(emptyForm());
-    setEditMode(true);
+  const mailTo = (name: string, address: string) => {
+    openCompose({ mode: 'new', toAddrs: [formatRecipient(name, address)] });
+    navigate('/mail');
   };
 
-  const startEdit = (c: Contact) => {
-    setFormData({
-      displayName: c.displayName,
-      email:       c.email,
-      email2:      c.email2,
-      company:     c.company,
-      phone:       c.phone,
-      mobile:      c.mobile,
-      department:  c.department,
-      jobTitle:    c.jobTitle,
-      notes:       c.notes,
-    });
-    setEditMode(true);
-  };
+  const startNew = () => { setSelection(null); setMode('new'); };
+  const selectContact = (id: string) => { setSelection({ kind: 'contact', id }); setMode('view'); navigate(contactPath(id)); };
+  const selectGroup = (id: string) => { setSelection({ kind: 'group', id }); setMode('view'); if (linkedId) navigate('/contacts'); };
+  const cancel = () => setMode('view');
 
-  const handleSave = () => {
-    if (selected) {
-      updateMutation.mutate({ id: selected.id, data: formData });
-    } else {
-      createMutation.mutate(formData);
+  const q = search.trim().toLowerCase();
+  const shownGroups = (groups ?? []).filter((g) => q.length < 2 || g.name.toLowerCase().includes(q));
+
+  const renderPanel = () => {
+    if (tab === 'contacts' && mode === 'new') {
+      return <ContactEditor key="new" title="Neuer Kontakt" initial={emptyContactForm()} saving={saveContact.isPending} onSave={(p) => saveContact.mutate(p)} onCancel={cancel} />;
     }
+    if (tab === 'groups' && mode === 'new') {
+      return <ContactGroupEditor key="new-group" initial={null} saving={saveGroup.isPending} onSave={(name, members) => saveGroup.mutate({ name, members })} onCancel={cancel} />;
+    }
+    if (contactId && contact && contact.id === contactId) {
+      return mode === 'edit'
+        ? <ContactEditor key={contact.id} title="Kontakt bearbeiten" initial={formFromContact(contact)} saving={saveContact.isPending} onSave={(p) => saveContact.mutate(p)} onCancel={cancel} />
+        : <ContactDetails contact={contact} onEdit={() => setMode('edit')} onDelete={() => deleteContact.mutate(contact.id)} onMail={(a) => mailTo(contact.displayName, a)} />;
+    }
+    if (groupId && group && group.id === groupId) {
+      return mode === 'edit'
+        ? <ContactGroupEditor key={group.id} initial={group} saving={saveGroup.isPending} onSave={(name, members) => saveGroup.mutate({ name, members })} onCancel={cancel} />
+        : <ContactGroupDetails group={group} sending={sendToGroup.isPending} onSend={() => sendToGroup.mutate(group.id)} onEdit={() => setMode('edit')} onDelete={() => deleteGroup.mutate(group.id)} />;
+    }
+    return (
+      <div className="flex-1 flex items-center justify-center text-fg-subtle text-sm h-full">
+        {tab === 'contacts' ? 'Kontakt auswählen oder neu erstellen' : 'Kontaktliste auswählen oder neu erstellen'}
+      </div>
+    );
   };
 
-  const field = (key: keyof FormFields) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
-    setFormData((prev) => ({ ...prev, [key]: e.target.value }));
-
-  const initials = (name: string) =>
-    name.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase();
-
+  const newLabel = tab === 'contacts' ? 'Neuer Kontakt' : 'Neue Kontaktliste';
   return (
     <PageShell title="Kontakte">
-      {/* ── Sidebar (personal contacts only) ──────────────────────────── */}
+      {/* ── Sidebar: contacts / contact groups ─────────────────────────── */}
       <div className="w-80 shrink-0 border-r border-line bg-surface flex flex-col">
-        {/* Search bar + add button */}
+        <div role="tablist" aria-label="Ansicht" className="flex border-b border-line">
+          {TABS.map((t) => (
+            <button
+              key={t.id} type="button" role="tab" aria-selected={tab === t.id} id={`contacts-tab-${t.id}`} aria-controls="contacts-list"
+              onClick={() => { setTab(t.id); setMode('view'); }}
+              className={`flex-1 px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
+                tab === t.id ? 'border-accent-fg text-fg' : 'border-transparent text-fg-muted hover:text-fg'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
         <div className="p-3 border-b border-line flex gap-2">
           <div className="relative flex-1">
-            <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-fg-subtle" />
+            <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-fg-subtle" aria-hidden="true" />
             <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="input pl-8 text-xs"
-              placeholder="Kontakt suchen…"
+              value={search} onChange={(e) => setSearch(e.target.value)} className="input pl-8 text-xs"
+              aria-label={tab === 'contacts' ? 'Kontakte durchsuchen' : 'Kontaktlisten durchsuchen'}
+              placeholder={tab === 'contacts' ? 'Kontakt suchen…' : 'Liste suchen…'}
             />
           </div>
-          <button aria-label="Neuer Kontakt" onClick={startNew} className="btn-primary text-xs shrink-0" title="Neuer Kontakt">
-            <Plus size={14} />
+          <button type="button" aria-label={newLabel} title={newLabel} onClick={startNew} className="btn-primary text-xs shrink-0">
+            <Plus size={14} aria-hidden="true" />
           </button>
         </div>
 
-        {/* List */}
-        <div className="flex-1 overflow-y-auto">
-          {(contacts ?? []).map((c) => (
-            <button
-              key={c.id}
-              onClick={() => { setSelected(c); setEditMode(false); navigate(contactPath(c.id)); }}
-              className={`w-full text-left flex items-center gap-3 px-3 py-2.5 border-b border-line hover:bg-surface-2 transition-colors ${selected?.id === c.id ? 'bg-accent/5' : ''}`}
-            >
-              <div className="w-9 h-9 rounded-full bg-accent flex items-center justify-center text-white text-xs font-bold shrink-0">
-                {initials(c.displayName)}
-              </div>
-              <div className="min-w-0">
-                <p className="text-sm font-medium text-fg truncate">{c.displayName}</p>
-                <p className="text-xs text-fg-subtle truncate">{c.jobTitle || c.email}</p>
-              </div>
-            </button>
-          ))}
-          {contacts?.length === 0 && (
-            <div className="py-8 text-center text-fg-subtle text-sm">Keine Kontakte gefunden</div>
+        <div id="contacts-list" role="tabpanel" aria-labelledby={`contacts-tab-${tab}`} className="flex-1 overflow-y-auto">
+          {tab === 'contacts' ? (
+            <>
+              {(contacts ?? []).map((c) => (
+                <button
+                  key={c.id} type="button" onClick={() => selectContact(c.id)}
+                  aria-current={contactId === c.id ? 'true' : undefined}
+                  className={`w-full text-left flex items-center gap-3 px-3 py-2.5 border-b border-line hover:bg-surface-2 transition-colors ${contactId === c.id ? 'bg-accent/5' : ''}`}
+                >
+                  <div className="w-9 h-9 rounded-full bg-accent flex items-center justify-center text-white text-xs font-bold shrink-0" aria-hidden="true">
+                    {initials(c.displayName)}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-fg truncate">{c.displayName}</p>
+                    <p className="text-xs text-fg-subtle truncate">{c.jobTitle || c.email}</p>
+                  </div>
+                </button>
+              ))}
+              {contacts?.length === 0 && <div className="py-8 text-center text-fg-subtle text-sm">Keine Kontakte gefunden</div>}
+            </>
+          ) : (
+            <>
+              {shownGroups.map((g) => (
+                <button
+                  key={g.id} type="button" onClick={() => selectGroup(g.id)}
+                  aria-current={groupId === g.id ? 'true' : undefined}
+                  className={`w-full text-left flex items-center gap-3 px-3 py-2.5 border-b border-line hover:bg-surface-2 transition-colors ${groupId === g.id ? 'bg-accent/5' : ''}`}
+                >
+                  <div className="w-9 h-9 rounded-full bg-accent flex items-center justify-center text-white shrink-0" aria-hidden="true">
+                    <Users size={15} />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-fg truncate">{g.name}</p>
+                    <p className="text-xs text-fg-subtle">{g.memberCount} {g.memberCount === 1 ? 'Mitglied' : 'Mitglieder'}</p>
+                  </div>
+                </button>
+              ))}
+              {groups && shownGroups.length === 0 && <div className="py-8 text-center text-fg-subtle text-sm">Keine Kontaktlisten</div>}
+            </>
           )}
         </div>
       </div>
 
-      {/* ── Detail / Edit panel ─────────────────────────────────────── */}
-      <div className="flex-1 overflow-y-auto bg-surface">
-        {/* ── Edit form ── */}
-        {editMode ? (
-          <div className="max-w-2xl p-6">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-base font-semibold text-fg">
-                {selected ? 'Kontakt bearbeiten' : 'Neuer Kontakt'}
-              </h2>
-              <button aria-label="Bearbeiten abbrechen"
-                onClick={() => { setEditMode(false); setFormData(emptyForm()); }}
-                className="btn-ghost p-1"
-              >
-                <X size={16} />
-              </button>
-            </div>
-
-            {/* Section: General */}
-            <div className="mb-6">
-              <p className="text-xs font-semibold text-fg-subtle uppercase tracking-wider mb-3">
-                Allgemein
-              </p>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="col-span-2">
-                  <label className="block text-sm font-medium text-fg-muted mb-1">
-                    Name <span className="text-danger-fg">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    className="input"
-                    value={formData.displayName}
-                    onChange={field('displayName')}
-                    placeholder="Vollständiger Name"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-fg-muted mb-1">Position</label>
-                  <input
-                    type="text"
-                    className="input"
-                    value={formData.jobTitle}
-                    onChange={field('jobTitle')}
-                    placeholder="z. B. Projektleiter"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-fg-muted mb-1">Abteilung</label>
-                  <input
-                    type="text"
-                    className="input"
-                    value={formData.department}
-                    onChange={field('department')}
-                    placeholder="z. B. Vertrieb"
-                  />
-                </div>
-                <div className="col-span-2">
-                  <label className="block text-sm font-medium text-fg-muted mb-1">Firma</label>
-                  <input
-                    type="text"
-                    className="input"
-                    value={formData.company}
-                    onChange={field('company')}
-                    placeholder="Firmenname"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Section: Email & phone */}
-            <div className="mb-6">
-              <p className="text-xs font-semibold text-fg-subtle uppercase tracking-wider mb-3">
-                E-Mail &amp; Telefon
-              </p>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm font-medium text-fg-muted mb-1">E-Mail (primär)</label>
-                  <input
-                    type="email"
-                    className="input"
-                    value={formData.email}
-                    onChange={field('email')}
-                    placeholder="name@firma.de"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-fg-muted mb-1">E-Mail (2)</label>
-                  <input
-                    type="email"
-                    className="input"
-                    value={formData.email2}
-                    onChange={field('email2')}
-                    placeholder="privat@beispiel.de"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-fg-muted mb-1">Telefon</label>
-                  <input
-                    type="tel"
-                    className="input"
-                    value={formData.phone}
-                    onChange={field('phone')}
-                    placeholder="+49 30 123456"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-fg-muted mb-1">Mobil</label>
-                  <input
-                    type="tel"
-                    className="input"
-                    value={formData.mobile}
-                    onChange={field('mobile')}
-                    placeholder="+49 170 9876543"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Section: Notes */}
-            <div className="mb-6">
-              <p className="text-xs font-semibold text-fg-subtle uppercase tracking-wider mb-3">
-                Notizen
-              </p>
-              <textarea
-                className="input resize-none"
-                rows={4}
-                value={formData.notes}
-                onChange={field('notes')}
-                placeholder="Interne Notizen zum Kontakt..."
-              />
-            </div>
-
-            <div className="flex gap-2">
-              <button
-                onClick={() => { setEditMode(false); setFormData(emptyForm()); }}
-                className="btn-secondary"
-              >
-                Abbrechen
-              </button>
-              <button
-                onClick={handleSave}
-                disabled={!formData.displayName || createMutation.isPending || updateMutation.isPending}
-                className="btn-primary disabled:opacity-50"
-              >
-                Speichern
-              </button>
-            </div>
-          </div>
-
-        /* ── Detail view ── */
-        ) : selected ? (
-          <div className="p-6 max-w-2xl">
-            {/* Header */}
-            <div className="flex items-start gap-4 mb-6">
-              <div className="w-16 h-16 rounded-full bg-accent flex items-center justify-center text-white text-xl font-bold shrink-0">
-                {initials(selected.displayName)}
-              </div>
-              <div className="flex-1 min-w-0">
-                <h2 className="text-xl font-semibold text-fg leading-tight">{selected.displayName}</h2>
-                {(selected.jobTitle || selected.department) && (
-                  <p className="text-sm text-fg-subtle mt-0.5">
-                    {[selected.jobTitle, selected.department].filter(Boolean).join(' · ')}
-                  </p>
-                )}
-                {selected.company && (
-                  <p className="text-sm text-fg-subtle">{selected.company}</p>
-                )}
-              </div>
-              <div className="flex gap-1 shrink-0">
-                <button onClick={() => startEdit(selected)} className="btn-secondary text-xs flex items-center gap-1">
-                  <Pencil size={13} /> Bearbeiten
-                </button>
-                <button
-                  onClick={() => deleteMutation.mutate(selected.id)}
-                  className="btn-ghost text-xs text-danger-fg flex items-center gap-1"
-                >
-                  <Trash2 size={13} /> Löschen
-                </button>
-              </div>
-            </div>
-
-            {/* Detail rows */}
-            <div className="border border-line rounded-lg divide-y divide-line">
-
-              {selected.email && (
-                <div className="flex items-center gap-3 px-4 py-3 text-sm">
-                  <Mail size={15} className="text-fg-subtle shrink-0" />
-                  <span className="text-xs text-fg-subtle w-28 shrink-0">E-Mail (primär)</span>
-                  <a href={`mailto:${selected.email}`} className="text-accent-fg hover:underline truncate">
-                    {selected.email}
-                  </a>
-                </div>
-              )}
-
-              {selected.email2 && (
-                <div className="flex items-center gap-3 px-4 py-3 text-sm">
-                  <AtSign size={15} className="text-fg-subtle shrink-0" />
-                  <span className="text-xs text-fg-subtle w-28 shrink-0">E-Mail (2)</span>
-                  <a href={`mailto:${selected.email2}`} className="text-accent-fg hover:underline truncate">
-                    {selected.email2}
-                  </a>
-                </div>
-              )}
-
-              {selected.phone && (
-                <div className="flex items-center gap-3 px-4 py-3 text-sm">
-                  <Phone size={15} className="text-fg-subtle shrink-0" />
-                  <span className="text-xs text-fg-subtle w-28 shrink-0">Telefon</span>
-                  <a href={`tel:${selected.phone}`} className="hover:underline">{selected.phone}</a>
-                </div>
-              )}
-
-              {selected.mobile && (
-                <div className="flex items-center gap-3 px-4 py-3 text-sm">
-                  <Smartphone size={15} className="text-fg-subtle shrink-0" />
-                  <span className="text-xs text-fg-subtle w-28 shrink-0">Mobil</span>
-                  <a href={`tel:${selected.mobile}`} className="hover:underline">{selected.mobile}</a>
-                </div>
-              )}
-
-              {selected.company && (
-                <div className="flex items-center gap-3 px-4 py-3 text-sm">
-                  <Building2 size={15} className="text-fg-subtle shrink-0" />
-                  <span className="text-xs text-fg-subtle w-28 shrink-0">Firma</span>
-                  <span>{selected.company}</span>
-                </div>
-              )}
-
-              {selected.department && (
-                <div className="flex items-center gap-3 px-4 py-3 text-sm">
-                  <User size={15} className="text-fg-subtle shrink-0" />
-                  <span className="text-xs text-fg-subtle w-28 shrink-0">Abteilung</span>
-                  <span>{selected.department}</span>
-                </div>
-              )}
-
-              {selected.jobTitle && (
-                <div className="flex items-center gap-3 px-4 py-3 text-sm">
-                  <Briefcase size={15} className="text-fg-subtle shrink-0" />
-                  <span className="text-xs text-fg-subtle w-28 shrink-0">Position</span>
-                  <span>{selected.jobTitle}</span>
-                </div>
-              )}
-
-              {selected.notes && (
-                <div className="flex items-start gap-3 px-4 py-3 text-sm">
-                  <MessageSquare size={15} className="text-fg-subtle shrink-0 mt-0.5" />
-                  <span className="text-xs text-fg-subtle w-28 shrink-0 mt-0.5">Notizen</span>
-                  <p className="text-fg-muted whitespace-pre-wrap leading-relaxed">{selected.notes}</p>
-                </div>
-              )}
-            </div>
-          </div>
-
-        ) : (
-          <div className="flex-1 flex items-center justify-center text-fg-subtle text-sm h-full">
-            Kontakt auswählen oder neu erstellen
-          </div>
-        )}
-      </div>
+      {/* ── Detail / edit panel ─────────────────────────────────────── */}
+      <div className="flex-1 overflow-y-auto bg-surface">{renderPanel()}</div>
     </PageShell>
   );
 }

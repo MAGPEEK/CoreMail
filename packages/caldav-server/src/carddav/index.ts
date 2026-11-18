@@ -1,7 +1,6 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
-import { prisma, announceUserEvent } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
-import { countVcards, parseVcard, vcardFields, vcardUid, type VcardFields } from '@coremail/core/vcard';
+import { countVcards, parseVcard, vcardUid } from '@coremail/core/vcard';
 import {
   DAV_ALLOW,
   DAV_COMPLIANCE,
@@ -9,7 +8,6 @@ import {
   appendPropResults,
   asyncHandler,
   checkPreconditions,
-  collectionTag,
   etagFor,
   newMultistatus,
   parseProppatch,
@@ -24,6 +22,10 @@ import {
   type XmlNode,
 } from '../dav-utils.js';
 import { compileAddressbookFilter, UnsupportedFilterError } from '../dav-filter.js';
+import {
+  addressbookTag, deleteAddressObject, findAddressObject, findAnyObject, findUidOwner, listAddressObjects, putAddressObject,
+  type AddressObject,
+} from './address-objects.js';
 
 const log = createLogger('carddav');
 
@@ -38,25 +40,6 @@ function addressbookBase(userId: string): string {
 
 function contactHref(userId: string, id: string): string {
   return `${addressbookBase(userId)}/default/${id}.vcf`;
-}
-
-/** CTag / sync-token of the default address book: contact count + newest updatedAt. */
-async function addressbookTag(userId: string): Promise<string> {
-  const agg = await prisma.contact.aggregate({
-    where: { userId },
-    _count: { _all: true },
-    _max: { updatedAt: true },
-  });
-  return collectionTag(agg._count._all, agg._max.updatedAt ?? null);
-}
-
-/**
- * Extract the indexed fields from a vCard (folded lines, groups, parameters, escaping).
- * v7.1.0: all `contacts` columns (phone, mobile, email2, department, title, notes)
- * are indexed, not only name/email/company.
- */
-export function parseVcardFields(vcard: string): VcardFields {
-  return vcardFields(vcard);
 }
 
 // OPTIONS — the CalDAV router answers first for /dav/*; identical header set
@@ -148,9 +131,9 @@ carddavRouter.all('/addressbooks/:userId/default', asyncHandler(async (req: Requ
     selfStat.ele('d:status').txt('HTTP/1.1 200 OK');
 
     if (req.get('Depth') !== '0') {
-      const contacts = await prisma.contact.findMany({ where: { userId }, select: { id: true, updatedAt: true } });
-      for (const contact of contacts) {
-        appendContactResponse(doc, req, contactHref(userId, contact.id), etagFor(contact.id, contact.updatedAt));
+      // 9.5: contacts and contact groups
+      for (const obj of await listAddressObjects(userId)) {
+        appendContactResponse(doc, req, contactHref(userId, obj.id), etagFor(obj.id, obj.updatedAt));
       }
     }
     sendMultistatus(res, doc);
@@ -162,8 +145,7 @@ carddavRouter.all('/addressbooks/:userId/default', asyncHandler(async (req: Requ
   if (req.method === 'REPORT') {
     const report = parseReportRequest(req.body);
     const doc = newMultistatus();
-    const select = { id: true, vcardData: true, updatedAt: true } as const;
-    const append = (c: { id: string; vcardData: string; updatedAt: Date }): void => {
+    const append = (c: AddressObject): void => {
       const r = doc.ele('d:response');
       r.ele('d:href').txt(contactHref(userId, c.id));
       const ps = r.ele('d:propstat');
@@ -175,7 +157,7 @@ carddavRouter.all('/addressbooks/:userId/default', asyncHandler(async (req: Requ
 
     if (report.kind === 'addressbook-multiget') {
       const ids = report.hrefs.map((h) => resourceIdFromHref(h, '.vcf'));
-      const rows = await prisma.contact.findMany({ where: { userId, id: { in: ids } }, select });
+      const rows = await listAddressObjects(userId, ids);
       const byId = new Map(rows.map((c) => [c.id, c]));
       report.hrefs.forEach((href, i) => {
         const row = byId.get(ids[i] ?? '');
@@ -190,7 +172,7 @@ carddavRouter.all('/addressbooks/:userId/default', asyncHandler(async (req: Requ
         sendDavError(res, 403, 'd:valid-sync-token');
         return;
       }
-      if (!report.syncToken) (await prisma.contact.findMany({ where: { userId }, select })).forEach(append);
+      if (!report.syncToken) (await listAddressObjects(userId)).forEach(append);
       doc.ele('d:sync-token').txt(current);
     } else if (report.kind === 'addressbook-query') {
       // RFC 6352 §8.6: the filter is evaluated (v7.1.0 — previously every card was returned)
@@ -201,7 +183,7 @@ carddavRouter.all('/addressbooks/:userId/default', asyncHandler(async (req: Requ
         if (err instanceof UnsupportedFilterError) { sendDavError(res, 403, `ab:${err.precondition}`); return; }
         throw err;
       }
-      const hits = (await prisma.contact.findMany({ where: { userId }, select })).filter((c) => matches(c.vcardData));
+      const hits = (await listAddressObjects(userId)).filter((c) => matches(c.vcardData));
       const limit = report.limit;
       (limit !== null ? hits.slice(0, limit) : hits).forEach(append);
       if (limit !== null && hits.length > limit) {
@@ -228,27 +210,19 @@ carddavRouter.get('/addressbooks/:userId/default/:contactId', asyncHandler(async
   const { userId, contactId } = req.params as { userId: string; contactId: string };
 
   const id = contactId.replace(/\.vcf$/, '');
-  const contact = await prisma.contact.findFirst({ where: { id, userId } });
-  if (!contact) { res.status(404).send('Not Found'); return; }
+  const obj = await findAddressObject(userId, id);
+  if (!obj) { res.status(404).send('Not Found'); return; }
 
-  const etag = etagFor(contact.id, contact.updatedAt);
+  const etag = etagFor(obj.id, obj.updatedAt);
   const pre = checkPreconditions('GET', preconditionHeaders(req), etag);
   if (pre !== null) { res.set('ETag', etag).status(pre).send(); return; }
 
   res.set({ 'Content-Type': 'text/vcard; charset=utf-8', ETag: etag });
-  res.send(contact.vcardData);
+  res.send(obj.vcardData);
 }));
 
-/** UID of another contact of the user that already uses `uid` (null when unique). */
-async function findUidOwner(userId: string, uid: string, selfId: string): Promise<string | null> {
-  const candidates = await prisma.contact.findMany({
-    where: { userId, vcardData: { contains: uid } },
-    select: { id: true, vcardData: true },
-  });
-  return candidates.find((c) => c.id !== selfId && vcardUid(c.vcardData) === uid)?.id ?? null;
-}
-
-// PUT /addressbooks/:userId/default/:contactId.vcf — create or update contact
+// PUT /addressbooks/:userId/default/:contactId.vcf — create or update a contact
+// or (9.5) a contact group (vCard 4 KIND:group or X-ADDRESSBOOKSERVER-KIND:group)
 carddavRouter.put('/addressbooks/:userId/default/:contactId', asyncHandler(async (req: Request, res: Response) => {
   if (!requireOwnPath(req, res)) return;
   const { userId, contactId } = req.params as { userId: string; contactId: string };
@@ -259,7 +233,7 @@ carddavRouter.put('/addressbooks/:userId/default/:contactId', asyncHandler(async
   // RFC 6352 §5.1 / §6.3.2.1 valid-address-data: exactly one vCard per resource
   if (countVcards(vcardData) !== 1 || !parseVcard(vcardData)) { sendDavError(res, 403, 'ab:valid-address-data'); return; }
 
-  const existing = await prisma.contact.findFirst({ where: { id }, select: { id: true, userId: true, updatedAt: true } });
+  const existing = await findAnyObject(id);
   if (existing && existing.userId !== userId) { res.status(403).send('Forbidden'); return; }
 
   const pre = checkPreconditions('PUT', preconditionHeaders(req), existing ? etagFor(existing.id, existing.updatedAt) : null);
@@ -276,25 +250,13 @@ carddavRouter.put('/addressbooks/:userId/default/:contactId', asyncHandler(async
     }
   }
 
-  const fields = vcardFields(vcardData);
-  if (existing) {
-    const saved = await prisma.contact.update({
-      where: { id },
-      data: { vcardData, ...fields },
-      select: { id: true, updatedAt: true },
-    });
-    log.info({ userId, contactId: id }, 'CardDAV contact updated');
-    announceUserEvent(userId, { type: 'contacts', action: 'update', ids: [id] });
-    res.set('ETag', etagFor(saved.id, saved.updatedAt)).status(204).send();
-  } else {
-    const saved = await prisma.contact.create({
-      data: { id, userId, vcardData, ...fields },
-      select: { id: true, updatedAt: true },
-    });
-    log.info({ userId, contactId: id }, 'CardDAV contact created');
-    announceUserEvent(userId, { type: 'contacts', action: 'create', ids: [id] });
-    res.set('ETag', etagFor(saved.id, saved.updatedAt)).status(201).send();
+  const outcome = await putAddressObject(userId, id, vcardData, existing);
+  if (outcome.status === 'kindChanged') {
+    res.status(409).type('text/plain').send('Conflict: a contact cannot become a group (or back) — use a new resource');
+    return;
   }
+  log.info({ userId, contactId: id, kind: existing?.kind ?? 'new' }, `CardDAV address object ${outcome.status}`);
+  res.set('ETag', etagFor(outcome.id, outcome.updatedAt)).status(outcome.status === 'created' ? 201 : 204).send();
 }));
 
 // DELETE /addressbooks/:userId/default/:contactId.vcf — delete contact
@@ -303,17 +265,16 @@ carddavRouter.delete('/addressbooks/:userId/default/:contactId', asyncHandler(as
   const { userId, contactId } = req.params as { userId: string; contactId: string };
 
   const id = contactId.replace(/\.vcf$/, '');
-  const contact = await prisma.contact.findFirst({ where: { id, userId }, select: { id: true, updatedAt: true } });
-  if (!contact) { res.status(404).send('Not Found'); return; }
+  const obj = await findAddressObject(userId, id);
+  if (!obj) { res.status(404).send('Not Found'); return; }
 
-  if (checkPreconditions('DELETE', preconditionHeaders(req), etagFor(contact.id, contact.updatedAt)) !== null) {
+  if (checkPreconditions('DELETE', preconditionHeaders(req), etagFor(obj.id, obj.updatedAt)) !== null) {
     res.status(412).send('Precondition Failed');
     return;
   }
 
-  await prisma.contact.delete({ where: { id } });
-  log.info({ userId, contactId: id }, 'CardDAV contact deleted');
-  announceUserEvent(userId, { type: 'contacts', action: 'delete', ids: [id] });
+  await deleteAddressObject(userId, obj);
+  log.info({ userId, contactId: id, kind: obj.kind }, 'CardDAV address object deleted');
   res.status(204).send();
 }));
 
@@ -326,10 +287,10 @@ carddavRouter.all('/addressbooks/:userId/default/:contactId', asyncHandler(async
     res.set('Allow', 'OPTIONS, GET, HEAD, PUT, DELETE, PROPFIND, PROPPATCH').status(405).send('Method Not Allowed');
     return;
   }
-  const contact = await prisma.contact.findFirst({ where: { id, userId }, select: { id: true, updatedAt: true } });
-  if (!contact) { res.status(404).send('Not Found'); return; }
+  const obj = await findAddressObject(userId, id);
+  if (!obj) { res.status(404).send('Not Found'); return; }
   if (req.method === 'PROPPATCH') { sendReadOnlyProppatch(req, res, contactHref(userId, id)); return; }
   const doc = newMultistatus();
-  appendContactResponse(doc, req, contactHref(userId, id), etagFor(contact.id, contact.updatedAt));
+  appendContactResponse(doc, req, contactHref(userId, id), etagFor(obj.id, obj.updatedAt));
   sendMultistatus(res, doc);
 }));

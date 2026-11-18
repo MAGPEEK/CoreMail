@@ -80,7 +80,7 @@ node scripts/e2e/run.mjs imap pop3       # single steps (state is kept in state.
 node --test scripts/e2e/repo-hygiene.test.mjs   # static regression checks (no stack needed)
 ```
 
-Steps: `setup users smtp imap pop3 jmap dav eas eas-body eas-commands eas-legacy rest webmail admin tls legacy-clients backup branding mfa live protocols policies mapi lockout restart storage schema-upgrade`.
+Steps: `setup users smtp imap pop3 jmap dav contacts eas eas-body eas-commands eas-legacy rest webmail admin tls legacy-clients backup branding mfa live protocols policies mapi lockout restart storage schema-upgrade`.
 `eas-legacy`: OPTIONS announces `12.1,14.0,14.1` and an unannounced version (2.5) is served as 14.1
 (Status 142 in WBXML for the unprovisioned device); a 12.1
 device gets HTTP 449 without a policy key, provisions, syncs (no Email2 / 14.x tags in any

@@ -56,3 +56,4 @@ export * from './sensitivity.js';
 export * from './follow-up.js';
 export * from './task-rules.js';
 export * from './resource-lock.js';
+export * from './contacts/index.js';
