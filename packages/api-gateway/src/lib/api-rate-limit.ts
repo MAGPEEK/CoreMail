@@ -4,7 +4,9 @@
  *
  *  - Signed-in requests (valid Bearer access token) count per USER, anonymous ones per
  *    client IP (IPv6 per /56) — an office behind one address no longer shares a budget.
- *  - Exempt: loopback peers (internal services), static assets / SPA pages (GET/HEAD
+ *  - Exempt: loopback peers (internal services), MAPI over HTTP (/mapi: classic Outlook is
+ *    chatty and many clients share a NAT address — the MAPI server limits per authenticated
+ *    mail account, MAPI_RATE_LIMIT), static assets / SPA pages (GET/HEAD
  *    outside the API and protocol paths) and the live-event stream GET /api/v1/events
  *    (counted per IP only when its ticket/token is refused). The ticket request
  *    POST /api/v1/events/ticket counts like any API request (per user): every stream
@@ -19,6 +21,10 @@
  */
 import type { Request, Response, NextFunction, RequestHandler } from 'express';
 import { ipKeyGenerator } from 'express-rate-limit';
+import { FixedWindowCounter } from '@coremail/core';
+
+/** The in-process counter (shared implementation in @coremail/core, 9.4). */
+export { FixedWindowCounter };
 
 export interface ApiRateLimitConfig {
   enabled: boolean;
@@ -93,6 +99,13 @@ const API_PATHS = [
   '/mail/config-v1.1.xml', '/ews', '/oab', '/mapi',
 ];
 
+/**
+ * MAPI over HTTP (9.4): not counted here — the MAPI server counts per
+ * authenticated mail account; unauthenticated guessing stays bounded by the
+ * shared mail-login lockout. Express mounts are case-insensitive, so the test is too.
+ */
+export const isMapiPath = (path: string): boolean => /^\/mapi(?:\/|$)/i.test(path);
+
 export type RateLimitClass =
   | { kind: 'exempt' }
   | { kind: 'user'; userId: string }
@@ -108,6 +121,7 @@ export interface ClassifyInput {
 
 /** Pure: bucket of a request; `verify` maps an access token to its user id (null = invalid). */
 export function classifyRequest(req: ClassifyInput, verify: (token: string) => string | null): RateLimitClass {
+  if (isMapiPath(req.path)) return { kind: 'exempt' };
   const path = req.path.toLowerCase();
   const isApi = API_PATHS.some((p) => path === p.replace(/\/$/, '') || path.startsWith(p));
   if (!isApi && (req.method === 'GET' || req.method === 'HEAD')) return { kind: 'exempt' };
@@ -115,40 +129,6 @@ export function classifyRequest(req: ClassifyInput, verify: (token: string) => s
   const m = /^Bearer\s+(\S+)$/i.exec(req.authorization ?? '');
   const userId = m ? verify(m[1]!) : null;
   return userId ? { kind: 'user', userId } : { kind: 'ip' };
-}
-
-// ── counter ──────────────────────────────────────────────────────────────────
-
-/** Fixed-window counters per key (in memory; expired windows are pruned). */
-export class FixedWindowCounter {
-  private readonly windows = new Map<string, { count: number; resetAt: number }>();
-  private lastPrune = 0;
-
-  hit(key: string, windowMs: number, now: number): { count: number; resetAt: number } {
-    this.prune(now, windowMs);
-    let w = this.windows.get(key);
-    if (!w || w.resetAt <= now) {
-      w = { count: 0, resetAt: now + windowMs };
-      this.windows.set(key, w);
-    }
-    w.count++;
-    return w;
-  }
-
-  /** Current count of a key without counting (0 when no window is open). */
-  peek(key: string, now: number): number {
-    const w = this.windows.get(key);
-    return w && w.resetAt > now ? w.count : 0;
-  }
-
-  /** Remove expired windows at most once per window length. */
-  private prune(now: number, windowMs: number): void {
-    if (now - this.lastPrune < windowMs) return;
-    this.lastPrune = now;
-    for (const [k, w] of this.windows) if (w.resetAt <= now) this.windows.delete(k);
-  }
-
-  get size(): number { return this.windows.size; }
 }
 
 // ── middleware ───────────────────────────────────────────────────────────────

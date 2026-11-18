@@ -6,6 +6,9 @@
  * slow or unavailable it falls back to an in-process counter (never fails open
  * to "unlimited", never blocks the caller on the store). Used by the
  * api-gateway per-user limits and the MAPI server (9.4).
+ *
+ * {@link FixedWindowCounter} is the in-process counter: the fallback above and
+ * the api-gateway's global per-user / per-IP API limit (one process, synchronous).
  */
 import { createLogger } from '../logger/index.js';
 
@@ -35,8 +38,44 @@ export interface FixedWindowLimiter {
 
 const MAX_LOCAL_KEYS = 50_000;
 
+/** Fixed-window counters per key, in process memory (expired windows are pruned). */
+export class FixedWindowCounter {
+  private readonly windows = new Map<string, { count: number; resetAt: number }>();
+  private lastPrune = 0;
+
+  /** Counts one event; a key's window starts with its first event and lasts `windowMs`. */
+  hit(key: string, windowMs: number, now: number): { count: number; resetAt: number } {
+    this.prune(now, windowMs);
+    let w = this.windows.get(key);
+    if (!w || w.resetAt <= now) {
+      w = { count: 0, resetAt: now + windowMs };
+      this.windows.set(key, w);
+    }
+    w.count++;
+    return w;
+  }
+
+  /** Current count of a key without counting (0 when no window is open). */
+  peek(key: string, now: number): number {
+    const w = this.windows.get(key);
+    return w && w.resetAt > now ? w.count : 0;
+  }
+
+  /** Forget every window (memory bound of the fallback). */
+  clear(): void { this.windows.clear(); }
+
+  /** Remove expired windows at most once per window length. */
+  private prune(now: number, windowMs: number): void {
+    if (now - this.lastPrune < windowMs) return;
+    this.lastPrune = now;
+    for (const [k, w] of this.windows) if (w.resetAt <= now) this.windows.delete(k);
+  }
+
+  get size(): number { return this.windows.size; }
+}
+
 export function createFixedWindowLimiter(opts: FixedWindowLimiterOptions): FixedWindowLimiter {
-  const local = new Map<string, number>();
+  const local = new FixedWindowCounter();
   const now = opts.now ?? Date.now;
   const timeoutMs = opts.timeoutMs ?? 500;
   const windowMs = opts.windowSec * 1000;
@@ -53,12 +92,10 @@ export function createFixedWindowLimiter(opts: FixedWindowLimiterOptions): Fixed
     ]).finally(() => clearTimeout(timer));
   }
 
-  function localCount(key: string, window: number): number {
+  /** In-process count; `key` carries the window number, so a new window is a new key. */
+  function localCount(key: string, t: number): number {
     if (local.size > MAX_LOCAL_KEYS) local.clear();
-    for (const k of local.keys()) if (!k.endsWith(`:${window}`)) local.delete(k);
-    const count = (local.get(key) ?? 0) + 1;
-    local.set(key, count);
-    return count;
+    return local.hit(key, windowMs, t).count;
   }
 
   return {
@@ -73,7 +110,7 @@ export function createFixedWindowLimiter(opts: FixedWindowLimiterOptions): Fixed
         count = await storeCount(key);
       } catch (err) {
         log.warn({ err, scope: opts.scope }, 'Rate-limit store unavailable — using the in-process counter');
-        count = localCount(key, window);
+        count = localCount(key, t);
       }
       return { allowed: count <= opts.limit, count, limit: opts.limit, retryAfterSec };
     },

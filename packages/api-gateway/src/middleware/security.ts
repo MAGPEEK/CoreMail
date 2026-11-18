@@ -5,7 +5,7 @@
  *   1. requestId          — correlation ID for every request (logging, tracing)
  *   2. helmetMiddleware   — complete HTTP security header stack
  *   3. suspiciousInput    — null bytes, CRLF injection, path traversal, header overflow
- *   4. API rate limit     — per user / per IP, configurable (lib/api-rate-limit.ts, 9.4)
+ *   4. API rate limit     — per user / per IP, configurable (lib/api-rate-limit.ts, 9.4; /mapi exempt)
  *   5. authRateLimit      — strict throttling on /auth (20 req / 15 min, brute force)
  *   6. setupRateLimit     — one-time setup endpoint (5 req / h)
  */
@@ -158,7 +158,8 @@ export function suspiciousInputGuard(req: Request, res: Response, next: NextFunc
 
 // ── 4. Rate Limiter ───────────────────────────────────────────────────────────
 
-// The global API limiter (per user / per IP, configurable) lives in lib/api-rate-limit.ts (9.4).
+// The global API limiter (per user / per IP, configurable; /mapi exempt — the MAPI server
+// limits per mail account) lives in lib/api-rate-limit.ts (9.4).
 
 /**
  * Auth endpoints — max. 20 attempts per 15 minutes per IP.

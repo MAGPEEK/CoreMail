@@ -37,6 +37,10 @@ test('classification: static assets exempt, Bearer → user, anonymous → IP, S
   assert.deepEqual(c('GET', '/api/v1/mail/folders', 'Bearer ok-u1'), { kind: 'user', userId: 'u1' });
   assert.deepEqual(c('GET', '/api/v1/mail/folders', 'Bearer forged'), { kind: 'ip' });
   assert.deepEqual(c('POST', '/auth/login'), { kind: 'ip' });
+  // MAPI over HTTP: limited per mail account by the MAPI server, never per IP here
+  assert.deepEqual(c('POST', '/mapi/emsmdb/'), { kind: 'exempt' });
+  assert.deepEqual(c('POST', '/MAPI/nspi'), { kind: 'exempt' });
+  assert.deepEqual(c('POST', '/mapix'), { kind: 'ip' });
   assert.deepEqual(c('GET', '/jmap/session'), { kind: 'ip' });
   assert.deepEqual(c('GET', '/Microsoft-Server-ActiveSync'), { kind: 'ip' });
   assert.deepEqual(c('GET', '/api/v1/events'), { kind: 'sse' });

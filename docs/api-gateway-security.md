@@ -85,7 +85,9 @@ IP — the users of an office behind one NAT address exhausted it together. Sinc
   **user**, anonymous requests per **client IP** (IPv6 per /56; the IP follows
   `TRUST_PROXY`). Protocol clients with Basic authentication (ActiveSync, CalDAV,
   JMAP) count per IP as before — their services have their own lockouts.
-- **Exempt**: loopback peers (internal services); static files and SPA pages (GET/HEAD
+- **Exempt**: loopback peers (internal services); MAPI over HTTP (`/mapi`, any case — the
+  MAPI server limits per authenticated mail account, `MAPI_RATE_LIMIT`, see [mapi.md](mapi.md));
+  static files and SPA pages (GET/HEAD
   outside `/api/`, `/auth/`, `/jmap`, `/dav`, `/.well-known/`, Autodiscover and
   ActiveSync); the live-event stream `GET /api/v1/events` (only refused tickets or
   tokens count against the IP budget, and an address whose budget is used up gets no
@@ -176,8 +178,10 @@ GET /api/v1/mail/image-proxy?url=<encoded http(s) URL>     Authorization: Bearer
   streamed. Over the cap: `413 { error, maxBytes }`.
 - At most 10 attachments per message.
 - Recipients: each must be `a@b.c` or `Name <a@b.c>`, with no CR/LF, and there
-  can be at most `MAIL_SEND_MAX_RECIPIENTS` of them. Otherwise:
-  `400 { error, invalid? }`.
+  can be at most the sender's submission limit (9.4: BCP SMTP *max. recipients*, or the
+  mailbox's own value — storage `submissionLimitsForUser`, shared with JMAP, ActiveSync
+  and MAPI) and never more than `MAIL_SEND_MAX_RECIPIENTS` (the request's upper bound).
+  Otherwise: `400 { error, invalid? }`.
 - `inReplyTo` may be a Message-ID or the internal id of the replied-to message.
   - An internal id is resolved within the mailboxes the caller can read. The
     headers then carry the parent's Message-ID and its References chain.
