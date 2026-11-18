@@ -1,6 +1,6 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { prisma, resetQuotaCache, purgeRecoverableItems, getQuotaStatus } from '@coremail/storage';
+import { prisma, resetQuotaCache, purgeRecoverableItems, getQuotaStatus, announceUserEvent } from '@coremail/storage';
 import { hashPassword } from '@coremail/core';
 import { checkPasswordPolicy, publishUserAuthChange, revokeAllSessions } from '@coremail/storage/auth';
 import { requireArea } from '../../middleware/auth.js';
@@ -366,7 +366,12 @@ adminMailboxesRouter.put('/:id', async (req: Request, res: Response) => {
       ...(password ? { passwordHash: await hashPassword(password) } : {}),
     },
     select: { id: true, email: true, displayName: true, role: true, active: true },
-  });  // v7.0.0: an admin password reset or a deactivation ends all web/API sessions
+  });
+  // 9.4: a quota change reaches the user's open webmail
+  if (quotaBytes !== undefined || quotaWarningBytes !== undefined || quotaProhibitSendBytes !== undefined) {
+    announceUserEvent(id, { type: 'quota' });
+  }
+  // v7.0.0: an admin password reset or a deactivation ends all web/API sessions
   // (app passwords are kept unless revokeAppPasswords is set; inactive users
   // cannot use them anyway).
   const roleChanged = !!role && role !== user.role;

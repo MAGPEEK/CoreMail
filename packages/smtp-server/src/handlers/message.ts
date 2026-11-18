@@ -435,6 +435,8 @@ export async function storeInboundMessage(
       CHANNEL_MAIL_NEW,
       JSON.stringify({
         userId: notifyUserId,
+        // 9.4: webmail mailbox key — the notification deep link opens the right mailbox
+        mailbox: ownerType === 'shared' && sharedMailbox ? `shared:${sharedMailbox.id}` : 'own',
         folderId: ruleFolderId,
         messageId: message.id,
         uid,

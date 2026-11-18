@@ -15,6 +15,7 @@ import { createLogger } from '@coremail/core';
 import { currentBranding } from '../lib/branding/state.js';
 import { EXT_CONTENT_TYPE } from '../lib/branding/image.js';
 import { brandingAssetCache } from '../lib/branding/asset-cache.js';
+import { webManifest } from '../lib/branding/manifest.js';
 
 const log = createLogger('branding');
 
@@ -26,6 +27,12 @@ brandingApiRouter.get('/', async (_req: Request, res: Response) => {
   res.set('Cache-Control', 'no-cache');
   res.json(await currentBranding());
 });
+
+/** 9.4: GET /manifest.webmanifest — installable webmail, named and coloured by the branding. */
+export async function webManifestHandler(_req: Request, res: Response): Promise<void> {
+  res.set('Cache-Control', 'no-cache');
+  res.type('application/manifest+json').send(JSON.stringify(webManifest(await currentBranding())));
+}
 
 export const brandingAssetsRouter: RouterType = Router();
 

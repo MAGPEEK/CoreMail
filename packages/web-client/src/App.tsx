@@ -17,7 +17,8 @@ import { SettingsPage } from './pages/SettingsPage.js';
 import { useAuthStore } from './store/auth.js';
 import { useSessionChecked } from './api/client.js';
 import { useUiStore, useThemeStore, resolveIsDark } from './store/ui.js';
-import { useMailEvents } from './hooks/useMailEvents.js';
+import { useRealtime } from './hooks/useRealtime.js';
+import { useServiceWorkerNavigation } from './hooks/useWebPush.js';
 import { useInactivityLogout } from './hooks/useInactivityLogout.js';
 import { useTaskReminders } from './hooks/useTaskReminders.js';
 import { ErrorBoundary } from './components/ErrorBoundary.js';
@@ -82,7 +83,8 @@ function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
   const navigate = useNavigate();
   const { composeOpen } = useUiStore();
-  useMailEvents();
+  useRealtime();
+  useServiceWorkerNavigation();
   useInactivityLogout();
   // Task reminders fire on every page, not only while /tasks is open
   useTaskReminders();

@@ -20,6 +20,7 @@ import { confirmFolderDelete } from './folderDeleteConfirm.js';
 import { isStaleSubfolderRefusal } from '../lib/folderDelete.js';
 import { useT } from '../i18n/useT.js';
 import { useLanguageStore } from '../store/language.js';
+import { SAFETY_REFETCH_MS } from '../lib/realtimeEvents.js';
 
 type DialogState =
   | { kind: 'createRoot' }
@@ -48,7 +49,7 @@ export function FolderTree() {
   const { data: folders } = useQuery({
     queryKey: ['folders'],
     queryFn: () => api.get<FolderType[]>('/mail/folders'),
-    refetchInterval: 60_000,
+    refetchInterval: SAFETY_REFETCH_MS, // 9.4: live via mailbox events (hooks/useRealtime.ts)
   });
 
   // Available PERSONAL retention tags (configured by the admin)

@@ -1,14 +1,15 @@
 /**
  * Write paths: create a message from raw data (Email/set create, Email/import,
  * Email/copy), change flags/folder, delete — incl. folder counters,
- * mailbox UID/ModSeq and Redis notification (MWA SSE + JMAP push).
+ * mailbox UID/ModSeq. The message store announces every change (mailbox:changes →
+ * webmail, IMAP IDLE, JMAP push).
  */
 import {
   prisma, parseRawMessage, uploadBuffer, storeRawMessage, truncateBodyColumn, attachmentKey,
   createMessage, moveMessages, setFlags, expunge, isMailboxWriteBlocked, OVER_QUOTA_MESSAGE,
 } from '@coremail/storage';
 import { setError, type SetError } from '../errors.js';
-import { getRedisClient, CHANNEL_MAIL_NEW, CHANNEL_MAIL_UPDATE, createLogger } from '@coremail/core';
+import { createLogger } from '@coremail/core';
 import type { AccountContext } from '../types.js';
 import { resolveThreadId } from './thread.js';
 
@@ -94,7 +95,6 @@ export async function storeEmailFromRaw(
   }).catch((err: unknown) => log.warn({ err, folderId }, 'folder counter update failed'));
 
   const threadId = msg.threadId ?? msg.id;
-  await notify(account, folderId, msg.id, 'new');
   return { id: msg.id, folderId, threadId, size: raw.length };
 }
 
@@ -138,7 +138,6 @@ export async function applyEmailChange(
       }
     }
   });
-  await notify(account, newFolder, msg.id, 'update');
 }
 
 export async function destroyEmail(account: AccountContext, msg: { id: string; folderId: string; flags: string[] }): Promise<void> {
@@ -153,33 +152,4 @@ export async function destroyEmail(account: AccountContext, msg: { id: string; f
       data: { totalCount: { decrement: 1 }, ...(msg.flags.includes('\\Seen') ? {} : { unreadCount: { decrement: 1 } }) },
     });
   });
-  await notify(account, msg.folderId, msg.id, 'update');
-}
-
-/** Redis signal: MWA SSE (mail:new/mail:update) + JMAP push bus. */
-export async function notify(account: AccountContext, folderId: string, messageId: string, kind: 'new' | 'update'): Promise<void> {
-  try {
-    await getRedisClient().publish(kind === 'new' ? CHANNEL_MAIL_NEW : CHANNEL_MAIL_UPDATE, JSON.stringify({
-      ...(account.ownerUserId ? { userId: account.ownerUserId } : {}),
-      accountId: account.accountId,
-      folderId,
-      messageId,
-      source: 'jmap',
-    }));
-  } catch (err) {
-    log.warn({ err }, 'Redis publish failed');
-  }
-}
-
-export async function notifyMailboxChange(account: AccountContext): Promise<void> {
-  try {
-    await getRedisClient().publish(CHANNEL_MAIL_UPDATE, JSON.stringify({
-      ...(account.ownerUserId ? { userId: account.ownerUserId } : {}),
-      accountId: account.accountId,
-      type: 'folders',
-      source: 'jmap',
-    }));
-  } catch (err) {
-    log.warn({ err }, 'Redis publish failed');
-  }
 }

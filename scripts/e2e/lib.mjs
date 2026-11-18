@@ -319,6 +319,57 @@ export async function session(state, key, email, password) {
 }
 export const basic = (u, p) => 'Basic ' + Buffer.from(`${u}:${p}`, 'utf8').toString('base64');
 
+/**
+ * 9.4: the webmail live stream (GET /api/v1/events via a single-use ticket).
+ * `next(name, { timeout, match })` resolves with the data of the next event of
+ * that name (events received before the call are searched first).
+ */
+export async function openSse(token) {
+  const t = await http('POST', '/api/v1/events/ticket', { token, body: {} });
+  if (t.status !== 200 || !t.json?.ticket) throw new Error(`SSE ticket: ${t.status} ${t.text.slice(0, 200)}`);
+  const ctrl = new AbortController();
+  const res = await fetch(`${BASE}/api/v1/events?ticket=${encodeURIComponent(t.json.ticket)}`, { signal: ctrl.signal });
+  if (res.status !== 200) throw new Error(`SSE stream: ${res.status}`);
+  const events = [];
+  const waiters = new Set();
+  const settle = () => {
+    for (const w of [...waiters]) {
+      const i = events.findIndex((e) => e.name === w.name && w.match(e.data));
+      if (i >= 0) { const [e] = events.splice(i, 1); waiters.delete(w); w.resolve(e.data); }
+    }
+  };
+  void (async () => {
+    const decoder = new TextDecoder();
+    let buf = '';
+    try {
+      for await (const chunk of res.body) {
+        buf += decoder.decode(chunk, { stream: true });
+        let cut;
+        while ((cut = buf.indexOf('\n\n')) >= 0) {
+          const block = buf.slice(0, cut); buf = buf.slice(cut + 2);
+          const name = /^event: (.*)$/m.exec(block)?.[1];
+          const data = /^data: (.*)$/m.exec(block)?.[1];
+          if (!name) continue;
+          let parsed; try { parsed = data ? JSON.parse(data) : null; } catch { parsed = data; }
+          events.push({ name, data: parsed });
+        }
+        settle();
+      }
+    } catch { /* aborted */ }
+  })();
+  return {
+    next(name, { timeout = 10_000, match = () => true } = {}) {
+      return new Promise((resolve, reject) => {
+        const w = { name, match, resolve };
+        waiters.add(w);
+        settle();
+        setTimeout(() => { if (waiters.delete(w)) reject(new Error(`no SSE '${name}' event within ${timeout} ms`)); }, timeout).unref();
+      });
+    },
+    close() { ctrl.abort(); },
+  };
+}
+
 // ── TOTP (RFC 6238, SHA1, 6 digits, 30 s) ────────────────────────────────────
 function base32Decode(s) {
   const alpha = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';

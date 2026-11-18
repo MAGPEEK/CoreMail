@@ -47,6 +47,7 @@ import {
 } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import { requireAuth } from '../middleware/auth.js';
+import { announceFolderListChange } from '@coremail/storage';
 import { getForeignMailbox } from '../lib/mailbox-access.js';
 import { checkFolderParent, type FolderLookup } from '../lib/folder-tree.js';
 import { contentDisposition } from '../lib/attachment-download.js';
@@ -183,6 +184,7 @@ export function createForeignMailboxRouter(kind: Kind): RouterType {
       select: FOLDER_SELECT,
     });
     auditWrite(kind, req, access, 'mailbox.foreign.folder.create', { folderId: folder.id, name, parentId: parsed.data.parentId ?? null });
+    announceFolderListChange(access.mailboxId);
     res.status(201).json({ ...folder, isSystem: false });
   });
 
@@ -234,6 +236,7 @@ export function createForeignMailboxRouter(kind: Kind): RouterType {
         folderId, from: before, to: { name: updated.name, parentId: updated.parentId },
       });
     }
+    announceFolderListChange(access.mailboxId);
     res.json({ ...updated, isSystem });
   });
 

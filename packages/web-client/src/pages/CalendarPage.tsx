@@ -28,6 +28,7 @@ import toast from 'react-hot-toast';
 import { readableTextOn } from '../lib/readableText.js';
 import { PageShell } from '../components/PageShell.js';
 import { PAGE_CONTENT_PAD } from '../lib/pageShell.js';
+import { SAFETY_REFETCH_MS } from '../lib/realtimeEvents.js';
 
 const LOCALE_MAP = { de: deLocale, en: enLocale, es: esLocale, it: itLocale };
 
@@ -92,11 +93,11 @@ export function CalendarPage() {
   const { data: calendars } = useQuery({
     queryKey: ['calendars'],
     queryFn: () => api.get<Calendar[]>('/calendar'),
-    // v3.18.17: SSE push via useMailEvents() invalidates the cache live —
-    // 60s polling as a safety fallback (in case the SSE connection is dead)
+    // 9.4: calendar events (hooks/useRealtime.ts) invalidate the cache live —
+    // a long safety refetch covers a dead connection
     staleTime: 30_000,
     refetchOnWindowFocus: true,
-    refetchInterval: 5 * 60_000,
+    refetchInterval: SAFETY_REFETCH_MS,
   });
 
   const { data: events } = useQuery({

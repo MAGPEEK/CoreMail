@@ -6,6 +6,7 @@ import { Toaster } from 'react-hot-toast';
 import { App } from './App.js';
 import { ErrorBoundary } from './components/ErrorBoundary.js';
 import { toastError } from './lib/errors.js';
+import { registerServiceWorker } from './hooks/useWebPush.js';
 import './index.css';
 
 const queryClient = new QueryClient({
@@ -31,6 +32,9 @@ const queryClient = new QueryClient({
     },
   },
 });
+
+// 9.4: installable webmail + Web Push (public/sw.js; no offline caching)
+registerServiceWorker();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

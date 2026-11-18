@@ -4,13 +4,12 @@
  * (CoreMail keeps no thread counters).
  */
 import { createsParentCycle } from './mailbox-tree.js';
-import { prisma, reservedFolderPrefix } from '@coremail/storage';
+import { prisma, reservedFolderPrefix, announceFolderListChange } from '@coremail/storage';
 import { registerMethod } from '../dispatcher.js';
 import { CAP_MAIL } from '../capabilities.js';
 import { cannotCalculateChanges, setError, unsupportedFilter, unsupportedSort } from '../errors.js';
 import { decodeMailboxState, encodeMailboxState, mailboxState, mailboxStateParts } from '../state.js';
 import { roleForFolder, SYSTEM_FOLDER_NAMES } from '../mail/keywords.js';
-import { notifyMailboxChange } from '../mail/write.js';
 import { applyPatch, assertState, pageFields, paginate, parseGetArgs, parseSetArgs, pick } from './common.js';
 import { parseMaxChanges } from './email-changes.js';
 import type { AccountContext, JsonObject } from '../types.js';
@@ -262,7 +261,7 @@ registerMethod('Mailbox/set', CAP_MAIL, async (args, ctx) => {
     destroyed.push(id);
   }
 
-  if (Object.keys(created).length || Object.keys(updated).length || destroyed.length) await notifyMailboxChange(account);
+  if (Object.keys(created).length || Object.keys(updated).length || destroyed.length) announceFolderListChange(account.mailboxId);
 
   return {
     accountId: account.accountId,

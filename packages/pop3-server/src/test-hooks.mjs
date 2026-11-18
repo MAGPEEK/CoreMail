@@ -74,6 +74,10 @@ export const getRedisClient = () => g.redis ?? {
 };
 export const CHANNEL_MAIL_NEW = 'mail:new';
 export const CHANNEL_ADMIN_ATTACK = 'admin:attack';
+// 9.4 realtime: the message store records its changes; published through the fake Redis.
+export * from '${new URL('../../core/src/realtime/events.ts', import.meta.url).href}';
+export const publishMailboxChange = async (event) => { await getRedisClient().publish?.('mailbox:changes', JSON.stringify(event)); };
+export const publishUserEvent = async () => {};
 // v7.1.0 live-connection registry (credential changes) — inert in these tests.
 export class LiveConnectionRegistry {
   register() { return () => {}; }

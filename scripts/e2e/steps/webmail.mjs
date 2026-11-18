@@ -2,9 +2,10 @@
 // folder-pane list + hide/show persistence (/user/accessible-mailboxes), folder and
 // subfolder deletes (re-parent without ?recursive, subtree with it),
 // message operations on a shared mailbox with FULL_ACCESS, READ_ONLY → every write
-// 403 READ_ONLY (shared + delegated), SEND_AS-free users see nothing. Grants made
+// 403 READ_ONLY (shared + delegated), SEND_AS-free users see nothing; 9.4 live
+// stream (contacts / calendar / mailbox events), manifest + service worker. Grants made
 // here are removed again at the end.
-import { check, assert, creds, http, session } from '../lib.mjs';
+import { check, assert, creds, http, session, openSse } from '../lib.mjs';
 
 export async function run(state) {
   const c = creds();
@@ -146,6 +147,55 @@ export async function run(state) {
     } finally {
       await http('DELETE', `/api/v1/admin/mailboxes/${state.users.a.id}/delegates/${state.users.b.id}`, { token: admin });
     }
+  });
+
+  // 9.4 live updates: writes from another client reach the open webmail stream
+  const live = await openSse(A);
+  try {
+    await check('webmail: live stream gets a contacts event when a contact is created', async () => {
+      const r = await http('POST', '/api/v1/contacts', { token: A, body: { displayName: `E2E Live ${Date.now()}`, email: `live-${Date.now()}@example.test` } });
+      assert(r.status === 201 || r.status === 200, `create contact ${r.status} ${r.text.slice(0, 200)}`);
+      const ev = await live.next('contacts', { match: (d) => d?.action === 'create' });
+      if (r.json?.id) await http('DELETE', `/api/v1/contacts/${r.json.id}`, { token: A });
+      return `contacts ${JSON.stringify(ev)}`;
+    });
+
+    await check('webmail: live stream gets a calendar event when an event is created and changed', async () => {
+      const cals = await http('GET', '/api/v1/calendar', { token: A });
+      const calId = (Array.isArray(cals.json) ? cals.json : []).find((x) => !x.shared)?.id;
+      assert(calId, `no calendar: ${cals.status}`);
+      const start = new Date(Date.now() + 3 * 864e5);
+      const ev = await http('POST', '/api/v1/calendar/events', { token: A, body: {
+        calendarId: calId, summary: `E2E Live ${Date.now()}`, dtStart: start.toISOString(), dtEnd: new Date(start.getTime() + 36e5).toISOString(),
+      } });
+      assert(ev.status === 201, `create event ${ev.status} ${ev.text.slice(0, 200)}`);
+      const created = await live.next('calendar', { match: (d) => d?.action === 'create' && d?.ids?.includes(ev.json.id) });
+      const up = await http('PUT', `/api/v1/calendar/events/${ev.json.id}`, { token: A, body: { summary: 'E2E Live renamed' } });
+      assert(up.status === 200, `update event ${up.status}`);
+      await live.next('calendar', { match: (d) => d?.action === 'update' && d?.ids?.includes(ev.json.id) });
+      await http('DELETE', `/api/v1/calendar/events/${ev.json.id}`, { token: A });
+      return `create + update (${JSON.stringify(created.calendarIds)})`;
+    });
+
+    await check('webmail: live stream gets a mailbox event for a folder created in the shared mailbox', async () => {
+      const inbox = ((await http('GET', `${S}/folders`, { token: A })).json ?? []).find((x) => x.name === 'INBOX');
+      const cr = await http('POST', `${S}/folders`, { token: A, body: { name: `E2E-Live-${Date.now()}`, parentId: inbox?.id } });
+      assert(cr.status === 201, `create ${cr.status}`);
+      const ev = await live.next('mailbox', { match: (d) => d?.mailbox === sharedRef && d?.kinds?.includes('folders') });
+      await http('DELETE', `${S}/folders/${cr.json.id}?force=true`, { token: A });
+      return JSON.stringify(ev);
+    });
+  } finally {
+    live.close();
+  }
+
+  await check('webmail: installable — /manifest.webmanifest from the branding, service worker served uncached', async () => {
+    const m = await http('GET', '/manifest.webmanifest');
+    assert(m.status === 200 && /manifest\+json/.test(m.headers.get('content-type') ?? ''), `manifest ${m.status}`);
+    assert(m.json?.name && m.json.start_url === '/mail' && m.json.icons?.length, `manifest ${m.text.slice(0, 200)}`);
+    const sw = await http('GET', '/sw.js');
+    assert(sw.status === 200 && /no-cache/.test(sw.headers.get('cache-control') ?? ''), `sw.js ${sw.status} ${sw.headers.get('cache-control')}`);
+    return `${m.json.name}; sw.js no-cache`;
   });
 
   await check('webmail: access revoked → shared mailbox API 403 NO_ACCESS for B', async () => {

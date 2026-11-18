@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import { format } from 'date-fns';
 import { api } from '../api/client.js';
 import type { Task } from '../api/types.js';
+import { SAFETY_REFETCH_MS } from '../lib/realtimeEvents.js';
 
 // ── localStorage — persist reminders ───────────────────────────────────────────
 // Key format: "taskId:reminderEpochMs" → popup fires exactly once per (task, timestamp).
@@ -48,7 +49,7 @@ export function useTaskReminders() {
   const { data: allTasks } = useQuery({
     queryKey: ['tasks', 'all'],
     queryFn: () => api.get<Task[]>('/tasks'),
-    refetchInterval: 5 * 60_000,
+    refetchInterval: SAFETY_REFETCH_MS, // 9.4: live via tasks events
     meta: { silentError: true },
   });
   useEffect(() => { tasksRef.current = allTasks; }, [allTasks]);

@@ -9,6 +9,8 @@ import {
 import { invalidRegexConditionMessage } from '../lib/rule-validation.js';
 import { checkPasswordPolicy, revokeAllSessions } from '@coremail/storage/auth';
 import { protocolSubject, requireAuth } from '../middleware/auth.js';
+import { announceUserSettings } from '../lib/realtime.js';
+import { announceFolderListChange } from '@coremail/storage';
 import { allowedAreas, isAdminRole } from '../lib/rbac.js';
 import { getReadableSharedMailbox, getWritableSharedMailbox, listForeignMailboxes, foreignMailboxRef } from '../lib/mailbox-access.js';
 import { deleteFolder, folderDeleteFailure, folderDeleteOptions, folderDeleteRefusal } from '../lib/folder-delete.js';
@@ -16,6 +18,8 @@ import { auditForeignWrite, type ForeignAuditAction } from '../lib/foreign-audit
 
 export const userRouter: RouterType = Router();
 userRouter.use(requireAuth);
+// 9.4: settings writes reach the user's other tabs and devices
+userRouter.use(announceUserSettings);
 
 // GET /api/v1/user/client-config
 // v3.18.40: returns ALL setup data for external mail/calendar/contacts
@@ -878,6 +882,7 @@ userRouter.post('/shared-mailboxes/:id/folders', async (req: Request, res: Respo
       },
     });
     auditCompat(req, id, access.mailboxId, 'mailbox.foreign.folder.create', { folderId: folder.id, name: folder.name, parentId: parentId ?? null });
+    announceFolderListChange(access.mailboxId);
     res.status(201).json(folder);
   } catch (err) {
     if (String(err).includes('Unique constraint')) {
@@ -957,6 +962,7 @@ userRouter.patch('/shared-mailboxes/:id/folders/:folderId', async (req: Request,
       folderId, from: { name: folder.name, parentId: folder.parentId }, to: { name: updated.name, parentId: updated.parentId },
     });
   }
+  announceFolderListChange(access.mailboxId);
   res.json(updated);
 });
 

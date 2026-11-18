@@ -2,9 +2,12 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { requireAuth } from '../middleware/auth.js';
+import { announceOnWrite } from '../lib/realtime.js';
 
 export const categoriesRouter: RouterType = Router();
 categoriesRouter.use(requireAuth);
+// 9.4: category list writes reach the user's other tabs (message tagging is a message change)
+categoriesRouter.use(announceOnWrite(({ path }) => (path.startsWith('/messages') ? null : { type: 'settings', section: 'categories' })));
 
 // ── Schemas ───────────────────────────────────────────────────────────────────
 const HEX_RE = /^#[0-9A-Fa-f]{6}$/;

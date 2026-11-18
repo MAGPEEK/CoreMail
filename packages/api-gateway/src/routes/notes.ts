@@ -3,9 +3,12 @@ import { z } from 'zod';
 import { patchSchema } from '../lib/zod-compat.js';
 import { prisma } from '@coremail/storage';
 import { requireAuth } from '../middleware/auth.js';
+import { announceOnWrite } from '../lib/realtime.js';
 
 export const notesRouter: RouterType = Router();
 notesRouter.use(requireAuth);
+// 9.4: note writes reach the user's other tabs and devices
+notesRouter.use(announceOnWrite({ type: 'notes' }));
 
 const NoteSchema = z.object({
   subject: z.string().min(1),

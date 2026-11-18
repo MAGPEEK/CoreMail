@@ -64,11 +64,12 @@ pushRouter.get('/vapid-public-key', (_req: Request, res: Response) => {
  * Body: { endpoint, keys: { p256dh, auth }, topics?, userAgent? }
  */
 pushRouter.post('/subscribe', async (req: Request, res: Response) => {
-  const { endpoint, keys, topics, userAgent } = req.body as {
+  const { endpoint, keys, topics, userAgent, showPreview } = req.body as {
     endpoint?: string;
     keys?: { p256dh?: string; auth?: string };
     topics?: string[];
     userAgent?: string;
+    showPreview?: unknown;
   };
 
   if (!endpoint || !keys?.p256dh || !keys?.auth) {
@@ -93,16 +94,15 @@ pushRouter.post('/subscribe', async (req: Request, res: Response) => {
     p256dhKey: keys.p256dh,
     authKey: keys.auth,
     topics: normalizedTopics,
+    // 9.4: sender + subject on the lock screen only on explicit opt-in
+    showPreview: showPreview === true,
   };
+  const select = { id: true, endpoint: true, topics: true, showPreview: true, createdAt: true } as const;
   const subscription = existing && existing.userId === userId
-    ? await prisma.pushSubscription.update({
-        where: { id: existing.id },
-        data,
-        select: { id: true, endpoint: true, topics: true, createdAt: true },
-      })
+    ? await prisma.pushSubscription.update({ where: { id: existing.id }, data, select })
     : await prisma.pushSubscription.create({
         data: { userId, endpoint, ...data, userAgent: String(userAgent ?? req.get('user-agent') ?? '').slice(0, 512) },
-        select: { id: true, endpoint: true, topics: true, createdAt: true },
+        select,
       });
 
   res.status(201).json(subscription);
@@ -146,13 +146,29 @@ pushRouter.delete('/subscribe/:id', async (req: Request, res: Response) => {
 });
 
 /**
+ * POST /api/v1/push/unsubscribe
+ * 9.4: remove the own subscription of this browser by its endpoint (the
+ * webmail knows the endpoint from PushManager, not the row id).
+ * Body: { endpoint }
+ */
+pushRouter.post('/unsubscribe', async (req: Request, res: Response) => {
+  const { endpoint } = req.body as { endpoint?: unknown };
+  if (typeof endpoint !== 'string' || !endpoint || endpoint.length > 2048) {
+    res.status(400).json({ error: 'endpoint is required' });
+    return;
+  }
+  const { count } = await prisma.pushSubscription.deleteMany({ where: { endpoint, userId: req.apiUser!.userId } });
+  res.json({ ok: true, removed: count });
+});
+
+/**
  * GET /api/v1/push/subscriptions
  * List all push subscriptions for the current user.
  */
 pushRouter.get('/subscriptions', async (req: Request, res: Response) => {
   const subs = await prisma.pushSubscription.findMany({
     where: { userId: req.apiUser!.userId },
-    select: { id: true, endpoint: true, topics: true, userAgent: true, createdAt: true },
+    select: { id: true, endpoint: true, topics: true, showPreview: true, userAgent: true, createdAt: true },
     orderBy: { createdAt: 'desc' },
   });
   res.json(subs);

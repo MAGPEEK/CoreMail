@@ -16,7 +16,7 @@ import { randomUUID } from 'node:crypto';
 import { prisma } from '@coremail/storage/prisma';
 import {
   attendeesWithResponse, buildITipReplyIcs, buildITipReplyMime, calendarObjectForInvitee,
-  expunge, findITipRequest, findOwnAttendee, loadRawMessage, moveMessages,
+  announceCalendarChange, expunge, findITipRequest, findOwnAttendee, loadRawMessage, moveMessages,
   type ITipPartstat, type RawSourceMessage,
 } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
@@ -104,7 +104,10 @@ async function respond(req: WbxmlElement, userId: string, deps: MeetingResponseD
   }
   let calendarId: string | undefined;
   if (partstat === 'DECLINED') {
-    if (existing) await prisma.calendarEvent.delete({ where: { id: existing.id } });
+    if (existing) {
+      await prisma.calendarEvent.delete({ where: { id: existing.id } });
+      announceCalendarChange([existing.calendarId], { action: 'delete', ids: [existing.id] });
+    }
   } else {
     const calendar = existing
       ? { id: existing.calendarId }
@@ -131,6 +134,7 @@ async function respond(req: WbxmlElement, userId: string, deps: MeetingResponseD
       ? await prisma.calendarEvent.update({ where: { id: existing.id }, data, select: { id: true } })
       : await prisma.calendarEvent.create({ data: { ...data, calendarId: calendar.id, uid: ev.uid }, select: { id: true } });
     calendarId = saved.id;
+    announceCalendarChange([calendar.id], { action: existing ? 'update' : 'create', ids: [saved.id] });
   }
 
   // 2. iTIP REPLY to the organizer (not to ourselves) — only when the server is asked to

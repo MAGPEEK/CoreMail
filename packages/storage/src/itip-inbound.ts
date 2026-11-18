@@ -47,6 +47,7 @@ import {
 } from '@coremail/core/calendar';
 import { expandOccurrences } from '@coremail/core/recurrence';
 import { prisma } from './prisma/index.js';
+import { announceCalendarChange } from './realtime/announce.js';
 
 export interface ParsedReply {
   uid: string;
@@ -322,7 +323,7 @@ export async function processITipInbound(rawBuffer: Buffer, ctx: ITipContext): P
 
   const event = await prisma.calendarEvent.findFirst({
     where: { uid: reply.uid, calendar: { userId: ctx.recipientUserId } },
-    select: { id: true, sequence: true, attendees: true, icalData: true, organizer: true },
+    select: { id: true, calendarId: true, sequence: true, attendees: true, icalData: true, organizer: true },
   });
   if (!event) return false;
 
@@ -371,5 +372,7 @@ export async function processITipInbound(rawBuffer: Buffer, ctx: ITipContext): P
     where: { id: event.id },
     data: { attendees: attendees as object, ...(icalData ? { icalData } : {}) },
   });
+  // 9.4: the organizer's open webmail shows the new attendee status right away
+  announceCalendarChange([event.calendarId], { action: 'update', ids: [event.id] });
   return true;
 }

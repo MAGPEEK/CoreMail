@@ -34,3 +34,6 @@ export * from './references.js';
 export * from './references-backfill.js';
 export * from './branding.js';
 export * from './protocol-access.js';
+export * from './realtime/change-scope.js';
+export * from './realtime/audience.js';
+export * from './realtime/announce.js';

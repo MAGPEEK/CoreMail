@@ -1,5 +1,5 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
-import { prisma } from '@coremail/storage';
+import { prisma, announceUserEvent } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import { countVcards, parseVcard, vcardFields, vcardUid, type VcardFields } from '@coremail/core/vcard';
 import {
@@ -284,6 +284,7 @@ carddavRouter.put('/addressbooks/:userId/default/:contactId', asyncHandler(async
       select: { id: true, updatedAt: true },
     });
     log.info({ userId, contactId: id }, 'CardDAV contact updated');
+    announceUserEvent(userId, { type: 'contacts', action: 'update', ids: [id] });
     res.set('ETag', etagFor(saved.id, saved.updatedAt)).status(204).send();
   } else {
     const saved = await prisma.contact.create({
@@ -291,6 +292,7 @@ carddavRouter.put('/addressbooks/:userId/default/:contactId', asyncHandler(async
       select: { id: true, updatedAt: true },
     });
     log.info({ userId, contactId: id }, 'CardDAV contact created');
+    announceUserEvent(userId, { type: 'contacts', action: 'create', ids: [id] });
     res.set('ETag', etagFor(saved.id, saved.updatedAt)).status(201).send();
   }
 }));
@@ -311,6 +313,7 @@ carddavRouter.delete('/addressbooks/:userId/default/:contactId', asyncHandler(as
 
   await prisma.contact.delete({ where: { id } });
   log.info({ userId, contactId: id }, 'CardDAV contact deleted');
+  announceUserEvent(userId, { type: 'contacts', action: 'delete', ids: [id] });
   res.status(204).send();
 }));
 

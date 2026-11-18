@@ -4,7 +4,8 @@
  * Start value: the JSON the gateway injects into index.html
  * (<script id="cm-branding" type="application/json">), so the first render is
  * already branded; then GET /api/v1/branding (public, no auth) on start, when
- * the window regains focus / becomes visible, and every 10 minutes. The BCP
+ * the window regains focus / becomes visible, on the webmail's live `branding`
+ * event (hooks/useRealtime.ts) and every 15 minutes as a safety net. The BCP
  * branding page pushes saved values in directly (setBranding).
  */
 import { useEffect } from 'react';
@@ -16,7 +17,8 @@ import {
 
 const ENDPOINT = '/api/v1/branding';
 const MIN_REFETCH_MS = 15_000;
-const POLL_MS = 10 * 60_000;
+// 9.4: a safety refresh only — the webmail refetches on the live `branding` event
+const POLL_MS = 15 * 60_000;
 
 function readInjected(): Branding | null {
   if (typeof document === 'undefined') return null;

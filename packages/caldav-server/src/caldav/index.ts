@@ -1,5 +1,5 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
-import { prisma } from '@coremail/storage';
+import { prisma, announceCalendarChange, announceUserEvent } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import {
   escapeText,
@@ -409,6 +409,7 @@ async function handleCalendarProppatch(req: Request, res: Response, userId: stri
     results = results.map((r) => (r.status === 200 ? { ...r, status: 424 } : r));
   } else if (Object.keys(data).length > 0) {
     await prisma.calendar.update({ where: { id: calendarId }, data });
+    announceCalendarChange([calendarId], { action: 'update' });
   }
   const doc = newMultistatus();
   const r = doc.ele('d:response');
@@ -461,6 +462,7 @@ async function handleMkcalendar(req: Request, res: Response, userId: string, cal
       ...(data.sortOrder !== undefined ? { sortOrder: data.sortOrder } : {}),
     },
   });
+  announceUserEvent(userId, { type: 'calendar', action: 'create', calendarIds: [calendarId] });
   res.status(201).send();
 }
 
@@ -734,10 +736,12 @@ caldavRouter.put('/calendars/:userId/:calendarId/:eventId', asyncHandler(async (
     if (existing) {
       const saved = await prisma.calendarEvent.update({ where: { id }, data: fields, select: { id: true, updatedAt: true } });
       log.info({ userId, eventId: id, perm: access.permission }, 'CalDAV event updated');
+      announceCalendarChange([calendarId], { action: 'update', ids: [id] });
       res.set('ETag', etagFor(saved.id, saved.updatedAt)).status(204).send();
     } else {
       const saved = await prisma.calendarEvent.create({ data: { id, calendarId, ...fields }, select: { id: true, updatedAt: true } });
       log.info({ userId, eventId: id, perm: access.permission }, 'CalDAV event created');
+      announceCalendarChange([calendarId], { action: 'create', ids: [id] });
       res.set('ETag', etagFor(saved.id, saved.updatedAt)).status(201).send();
     }
   } catch (err) {
@@ -778,6 +782,7 @@ caldavRouter.delete('/calendars/:userId/:calendarId/:eventId', asyncHandler(asyn
 
   await prisma.calendarEvent.delete({ where: { id } });
   log.info({ userId, eventId: id, perm: access.permission }, 'CalDAV event deleted');
+  announceCalendarChange([calendarId], { action: 'delete', ids: [id] });
   res.status(204).send();
 }));
 

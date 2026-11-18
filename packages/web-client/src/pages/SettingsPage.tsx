@@ -7,13 +7,14 @@ import {
   ShieldCheck, ShieldOff, Copy, RefreshCw, AlertTriangle, Globe, CalendarDays,
   Tag, Star, Plus, Pencil, X as XIcon, Smartphone, AlertCircle,
   Layout, PanelRight, PanelBottom, EyeOff, Rows3, Clock, ListFilter,
-  Cable, Mail as MailIcon, BookUser, Info, ExternalLink, RotateCcw,
+  Cable, Mail as MailIcon, BookUser, Info, ExternalLink, RotateCcw, Bell,
 } from 'lucide-react';
 import { RulesSection } from '../components/RulesSection.js';
 import { RecoverDeletedItemsPanel } from '../components/RecoverDeletedItems.js';
 import { QuotaIndicator } from '../components/QuotaIndicator.js';
 import { quotaColor, type QuotaLevel } from '../lib/quota.js';
 import { SignatureSection } from '../components/SignatureSection.js';
+import { NotificationsSection } from '../components/NotificationsSection.js';
 import { ViewKeyboardSettings } from '../components/ViewKeyboardSettings.js';
 import { format as fmtDate } from 'date-fns';
 import { api, apiFetch, fetchBlob, saveBlob } from '../api/client.js';
@@ -37,7 +38,7 @@ import { copyToClipboard } from '../api/clipboard.js';
 import toast from 'react-hot-toast';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
-type Section = 'profile' | 'oof' | 'signature' | 'storage' | 'recover' | 'security' | 'password' | 'theme' | 'language' | 'calendar' | 'categories' | 'appPasswords' | 'inactivity' | 'view' | 'retention' | 'rules' | 'externalClients';
+type Section = 'profile' | 'oof' | 'signature' | 'storage' | 'recover' | 'security' | 'password' | 'theme' | 'language' | 'calendar' | 'categories' | 'appPasswords' | 'inactivity' | 'view' | 'retention' | 'rules' | 'externalClients' | 'notifications';
 
 interface RetentionTagDto {
   id: string;
@@ -2424,6 +2425,7 @@ const NAV: { group: TranslationKey; items: { id: Section; label: TranslationKey;
       { id: 'theme',      label: 'section_theme',      icon: Palette      },
       { id: 'language',   label: 'section_language',   icon: Globe        },
       { id: 'calendar',   label: 'calendar',           icon: CalendarDays },
+      { id: 'notifications', label: 'section_notifications', icon: Bell },
       { id: 'inactivity', label: 'section_inactivity', icon: Shield       },
       { id: 'security',   label: 'section_security',   icon: ShieldCheck  },
     ],
@@ -2448,6 +2450,7 @@ const SECTION_MAP: Record<Section, React.ComponentType> = {
   inactivity:      InactivitySection,
   view:         ViewSection,
   rules:        RulesSection,
+  notifications: NotificationsSection,
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════

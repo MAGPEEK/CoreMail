@@ -9,7 +9,7 @@
     "dev": "tsx watch src/server.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/server.js",
-    "test": "node --import tsx --test src/auth.test.ts src/dav-utils.test.ts src/caldav/routing.test.ts"
+    "test": "node --import tsx --import ../storage/src/test-support/realtime-off.ts --test src/auth.test.ts src/dav-utils.test.ts src/caldav/routing.test.ts"
   },
   "dependencies": {
     "@coremail/auth-ldap": "workspace:*",

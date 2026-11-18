@@ -86,6 +86,12 @@ export const getRedisClient = () => g.redis ?? {
   publish: async () => 0,
 };
 export const CHANNEL_MAIL_NEW = 'mail:new';
+// 9.4 realtime: the real event vocabulary; publishing goes through the fake Redis
+// (g.redis.publish), so writes through the real message store wake IDLE sessions.
+export * from '${new URL('../../core/src/realtime/events.ts', import.meta.url).href}';
+export * from '${storageUrl('realtime/change-scope.ts')}';
+export const publishMailboxChange = async (event) => { await getRedisClient().publish?.('mailbox:changes', JSON.stringify(event)); };
+export const publishUserEvent = async () => {};
 // v8.1 hard quota for client writes — g.overQuota(mailboxId) decides in tests.
 export const isMailboxWriteBlocked = async (mailboxId) => (g.overQuota ? !!(await g.overQuota(mailboxId)) : false);
 export const OVER_QUOTA_MESSAGE = 'Mailbox is full (over its storage quota): delete items and empty the Trash';

@@ -1,5 +1,7 @@
 /**
- * Change bus: Redis mail:new / mail:update → affected JMAP account →
+ * Change bus: Redis mailbox:changes (9.4 — every message and folder writer
+ * publishes it, see storage message-store / change-scope) → affected JMAP
+ * account →
  *  - local listeners (EventSource/WebSocket connections)
  *  - Web Push to verified PushSubscriptions of the authorized users
  *    (9.4: only users with JMAP switched on)
@@ -7,7 +9,7 @@
  */
 import { EventEmitter } from 'node:events';
 import { prisma, isProtocolAllowed } from '@coremail/storage';
-import { getRedisClient, CHANNEL_MAIL_NEW, CHANNEL_MAIL_UPDATE, createLogger } from '@coremail/core';
+import { getRedisClient, CHANNEL_MAILBOX_CHANGES, parseMailboxChange, createLogger } from '@coremail/core';
 import { emailState, mailboxState } from '../state.js';
 import { SHARED_PREFIX, usersForAccount } from '../accounts.js';
 import { sendPushMessage } from './webpush.js';
@@ -17,17 +19,19 @@ const log = createLogger('jmap:bus');
 export const changeBus = new EventEmitter();
 changeBus.setMaxListeners(10_000);
 
-const folderAccountCache = new Map<string, { accountId: string; expires: number }>();
+const mailboxAccountCache = new Map<string, { accountId: string; expires: number }>();
 
-async function accountForFolder(folderId: string): Promise<string | null> {
-  const hit = folderAccountCache.get(folderId);
+/** JMAP account of a mailbox: the owner's user id, or shared-<SharedMailbox id>. */
+export function accountIdOf(mailbox: { userId: string | null; sharedBoxId: string | null }): string | null {
+  return mailbox.userId ?? (mailbox.sharedBoxId ? `${SHARED_PREFIX}${mailbox.sharedBoxId}` : null);
+}
+
+async function accountForMailbox(mailboxId: string): Promise<string | null> {
+  const hit = mailboxAccountCache.get(mailboxId);
   if (hit && hit.expires > Date.now()) return hit.accountId;
-  const f = await prisma.folder.findUnique({
-    where: { id: folderId },
-    select: { mailbox: { select: { userId: true, sharedBoxId: true } } },
-  });
-  const accountId = f?.mailbox.userId ?? (f?.mailbox.sharedBoxId ? `${SHARED_PREFIX}${f.mailbox.sharedBoxId}` : null);
-  if (accountId) folderAccountCache.set(folderId, { accountId, expires: Date.now() + 300_000 });
+  const mbx = await prisma.mailbox.findUnique({ where: { id: mailboxId }, select: { userId: true, sharedBoxId: true } });
+  const accountId = mbx ? accountIdOf(mbx) : null;
+  if (accountId) mailboxAccountCache.set(mailboxId, { accountId, expires: Date.now() + 300_000 });
   return accountId;
 }
 
@@ -88,27 +92,26 @@ export function startChangeBus(): void {
   if (started) return;
   started = true;
   const sub = getRedisClient().duplicate();
-  void sub.subscribe(CHANNEL_MAIL_NEW, CHANNEL_MAIL_UPDATE);
-  sub.on('message', (_channel: string, message: string) => {
-    void (async () => {
-      try {
-        const p = JSON.parse(message) as { userId?: string; accountId?: string; folderId?: string };
-        let accountId = p.accountId ?? null;
-        if (!accountId && p.folderId) accountId = await accountForFolder(p.folderId);
-        if (!accountId && p.userId) accountId = p.userId;
-        if (!accountId) return;
-        changeBus.emit('change', accountId);
-        // Web Push batched (max. 1× per second per account)
-        if (!pendingPush.has(accountId)) {
-          pendingPush.set(accountId, setTimeout(() => {
-            pendingPush.delete(accountId);
-            void pushToSubscribers(accountId!, null).catch((err) => log.warn({ err }, 'pushToSubscribers'));
-          }, 1000));
-        }
-      } catch (err) {
-        log.warn({ err }, 'Invalid Redis event');
-      }
-    })();
+  void sub.subscribe(CHANNEL_MAILBOX_CHANGES).catch((err: unknown) => log.error({ err }, 'Change bus subscription failed'));
+  sub.on('message', (channel: string, message: string) => {
+    if (channel !== CHANNEL_MAILBOX_CHANGES) return;
+    void dispatchMailboxChange(message).catch((err: unknown) => log.warn({ err }, 'Mailbox change not dispatched'));
   });
-  log.info('Change bus started (mail:new, mail:update)');
+  log.info('Change bus started (mailbox:changes)');
+}
+
+/** Routes one mailbox change to the account's listeners and (batched) Web Push. */
+export async function dispatchMailboxChange(message: string): Promise<void> {
+  const change = parseMailboxChange(message);
+  if (!change) { log.warn('Malformed mailbox change ignored'); return; }
+  const accountId = await accountForMailbox(change.mailboxId);
+  if (!accountId) return;
+  changeBus.emit('change', accountId);
+  // Web Push batched (max. 1× per second per account)
+  if (!pendingPush.has(accountId)) {
+    pendingPush.set(accountId, setTimeout(() => {
+      pendingPush.delete(accountId);
+      void pushToSubscribers(accountId, change.mailboxId).catch((err) => log.warn({ err }, 'pushToSubscribers'));
+    }, 1000));
+  }
 }

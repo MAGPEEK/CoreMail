@@ -1,7 +1,7 @@
 import {
   prisma, createMessage, copyMessages, moveMessages, modifyFlags, expunge, verifyMailCredentials, isMailboxWriteBlocked, OVER_QUOTA_MESSAGE,
   parseRawMessage, storeRawMessage, truncateBodyColumn, parseMimeTree, headerBytes, bodyBytes,
-  attachmentKey, uploadBuffer, loadThreadReferences, deleteFolderMovingMail,
+  attachmentKey, uploadBuffer, loadThreadReferences, deleteFolderMovingMail, announceFolderListChange,
   type RawSourceMessage,
 } from '@coremail/storage';
 import { type Chunk, flagList, isValidFlag, literal, joinChunks, toBuffer } from '../fetch/imap-string.js';
@@ -177,6 +177,7 @@ export async function handleCreate(
   await prisma.folder.create({
     data: { mailboxId: target.mailboxId, name, displayName: name },
   });
+  announceFolderListChange(target.mailboxId);
   log.info({ mailboxId: target.mailboxId, name, foreign: target.foreign?.kind }, 'IMAP folder created');
   sendOk(session, tag, 'CREATE completed');
 }
@@ -273,6 +274,7 @@ export async function handleRename(
     for (const r of renames) {
       await tx.folder.update({ where: { id: r.id }, data: { name: r.name, displayName: r.name } });
     }
+    announceFolderListChange(mailboxId);
   });
   const selected = session.selected;
   const renamedSelected = selected ? renames.find((r) => r.id === selected.folderId) : undefined;
@@ -1505,9 +1507,14 @@ export async function handleExpunge(session: ImapSession, tag: string, uidSet?: 
 // ─────────────────────────────────────────────
 // IDLE (RFC 2177 / RFC 9051 §6.3.13)
 // ─────────────────────────────────────────────
-let idlePollMs = 30_000;
+/**
+ * 9.4: fallback interval of the mailbox check while idling. Changes are pushed
+ * (mailbox:changes, server/idle-push.ts); the timer only covers a lost Redis
+ * message or a Redis outage.
+ */
+let idlePollMs = 120_000;
 
-/** Interval of the mailbox check while idling (expunges and flag changes are not pushed). */
+/** Interval of the fallback mailbox check while idling. */
 export function setIdlePollInterval(ms: number): void {
   if (Number.isFinite(ms) && ms > 0) idlePollMs = ms;
 }

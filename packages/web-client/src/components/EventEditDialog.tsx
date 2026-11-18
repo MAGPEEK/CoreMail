@@ -18,7 +18,7 @@ import type { Calendar, CalendarEvent, EventAttendee } from '../api/types.js';
  *    Location, Classification (Public/Private/Confidential), Notes, Calendar-Select
  *  - Edit mode loads data from GET /calendar/events/:id (with canWrite flag)
  *  - Create mode with defaults from the passed DateSelect info
- *  - Attendee status refreshes automatically (refetchInterval 30s)
+ *  - Attendee status refreshes live (9.4: calendar events invalidate ['event'])
  *  - Save triggers POST or PUT, iMIP mails are sent on the backend side
  *  - Delete button (with confirmation) deletes the event + sends CANCEL mails
  */
@@ -121,7 +121,6 @@ export function EventEditDialog({
     queryKey: ['event', eventId],
     queryFn: () => api.get<CalendarEvent>(`/calendar/events/${eventId}`),
     enabled: isEdit,
-    refetchInterval: 30_000, // Attendee status live
     staleTime: 0,
   });
 

@@ -17,6 +17,7 @@ import {
 } from '../lib/attachment-download.js';
 import { getRedisClient, createBullMqConnection, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
 import { requireAuth } from '../middleware/auth.js';
+import { announceFolderListChange } from '@coremail/storage';
 import { checkFolderParent, type FolderLookup } from '../lib/folder-tree.js';
 import { withBodyLimit, checkRecipients, MAX_SEND_FILES } from '../lib/send-limits.js';
 import { createUserRateLimiter, envInt } from '../lib/user-rate-limit.js';
@@ -204,6 +205,7 @@ mailRouter.post('/folders', async (req: Request, res: Response) => {
       ...(parsed.data.color ? { color: parsed.data.color } : {}),
     },
   });
+  announceFolderListChange(mailbox.id);
   res.json(folder);
 });
 
@@ -257,6 +259,7 @@ mailRouter.patch('/folders/:id', async (req: Request, res: Response) => {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const updated = await prisma.folder.update({ where: { id }, data: updates as any });
+  announceFolderListChange(folder.mailboxId);
   res.json(updated);
 });
 
@@ -313,6 +316,7 @@ mailRouter.patch('/folders/:id/retention-tag', async (req: Request, res: Respons
     data: { retentionTagId: parsed.data.tagId },
     include: { retentionTag: { select: { id: true, name: true, retentionDays: true, action: true } } },
   });
+  announceFolderListChange(folder.mailboxId);
   res.json({
     id: updated.id,
     retentionTagId: updated.retentionTagId,

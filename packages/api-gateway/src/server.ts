@@ -70,7 +70,7 @@ import { auditMiddleware } from './lib/audit.js';
 import { syncServerUrlsFromHostname } from './lib/server-urls.js';
 import { initSetupToken } from './lib/setup-token.js';
 import { livenessHandler } from './lib/liveness.js';
-import { brandingApiRouter, brandingAssetsRouter } from './routes/branding.js';
+import { brandingApiRouter, brandingAssetsRouter, webManifestHandler } from './routes/branding.js';
 import { brandedIndexHtml, startBrandingSubscriber } from './lib/branding/state.js';
 
 const log = createLogger('api-gateway');
@@ -338,6 +338,8 @@ app.get('/api/v1/maintenance', async (_req, res) => {
 // (immutable, nosniff, sandbox CSP). Admin side: routes/admin/branding.ts.
 app.use('/api/v1/branding', brandingApiRouter);
 app.use('/branding/assets', brandingAssetsRouter);
+// 9.4: web app manifest of the webmail (installable PWA), from the branding
+app.get('/manifest.webmanifest', webManifestHandler);
 
 // ── Changelog API ─────────────────────────────────────────────────────────────
 const CHANGELOG_PATH = process.env['CHANGELOG_PATH']
@@ -446,7 +448,8 @@ if (existsSync(owaDir)) {
     maxAge: '1y',
     index: false, // we serve index.html manually so the catch-all applies
     setHeaders(res, filePath) {
-      if (filePath.endsWith('.html')) {
+      // 9.4: the service worker (sw.js + its importScripts) must update with every release
+      if (filePath.endsWith('.html') || /[\\/]sw(?:-logic)?\.js$/.test(filePath)) {
         res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       }
     },

@@ -26,7 +26,7 @@ import zlib from 'node:zlib';
 import { createImapServer } from './index.js';
 import { setIdlePollInterval } from '../commands/index.js';
 import { selfSignedTestCert } from '../test-cert.js';
-import { formatReferencesColumn } from '@coremail/storage';
+import { formatReferencesColumn, setFlags, prisma as storePrisma } from '@coremail/storage';
 
 // ─── In-memory database fake ─────────────────────────────────────────────────
 
@@ -116,8 +116,10 @@ function applyData(target: Row, data: Row): void {
 }
 
 interface RedisFake {
-  /** Simulates a publish on CHANNEL_MAIL_NEW. */
-  emitNewMail(event: { userId: string; folderId: string; messageId: string; uid: number; subject: string }): void;
+  /** 9.4: simulates the message store's mailbox:changes publish for new mail in a folder of mb1. */
+  emitNewMail(event: { folderId: string }): void;
+  /** Publishes any mailbox:changes payload. */
+  emitRaw(event: Row): void;
 }
 
 function installFakes(): { db: FakeDb; redis: RedisFake } {
@@ -283,12 +285,17 @@ function installFakes(): { db: FakeDb; redis: RedisFake } {
     subscribe: async () => 1,
     on: (event: string, listener: (channel: string, message: string) => void) => { if (event === 'message') onMessage = listener; },
   };
-  const redisClient = { duplicate: () => subscriber };
+  // publish → the server's own subscriber, like Redis (writes through the real message store land here)
+  const redisClient = {
+    duplicate: () => subscriber,
+    publish: async (channel: string, message: string) => { onMessage?.(channel, message); return 1; },
+  };
   const redis: RedisFake = {
     emitNewMail(event) {
-      if (!onMessage) throw new Error('fixture: the server did not subscribe to new-mail events');
-      onMessage('mail:new', JSON.stringify(event));
+      if (!onMessage) throw new Error('fixture: the server did not subscribe to mailbox changes');
+      onMessage('mailbox:changes', JSON.stringify({ mailboxId: 'mb1', kinds: ['messages'], folderIds: [event.folderId] }));
     },
+    emitRaw(event) { onMessage?.('mailbox:changes', JSON.stringify(event)); },
   };
 
   const globals = (globalThis as unknown as { __coremailTest: { prisma?: unknown; redis?: unknown } }).__coremailTest;
@@ -1707,10 +1714,40 @@ describe('IDLE and mailbox updates (RFC 9051 §6.3.13, §7.4.1)', () => {
     await client.readLine();
 
     const delivered = db.deliver('f-inbox');
-    redis.emitNewMail({ userId: 'u1', folderId: 'f-inbox', messageId: delivered.id, uid: delivered.uid, subject: 'new' });
+    redis.emitNewMail({ folderId: delivered.folderId });
     const update = await client.readLine();
 
     assert.equal(update, '* 4 EXISTS');
+  });
+
+  test('9.4: a flag change written through the message store wakes IDLE without waiting for the fallback timer', async (t) => {
+    setIdlePollInterval(60_000);
+    t.after(() => setIdlePollInterval(120_000));
+    const { client, db } = await select(t);
+    client.write('I1 IDLE\r\n');
+    await client.readLine();
+    await new Promise((r) => setTimeout(r, 30)); // initial IDLE check done
+
+    const target = db.messages.find((m) => m.uid === 12 && m.folderId === 'f-inbox')!;
+    // another writer (webmail, JMAP, ActiveSync …): the message store publishes mailbox:changes
+    await setFlags(storePrisma as never, [{ id: target.id, flags: ['\\Flagged'] }], { mailboxId: 'mb1' });
+    const started = Date.now();
+    const update = await client.readLine();
+
+    assert.equal(update, '* 3 FETCH (UID 12 FLAGS (\\Flagged))');
+    assert.ok(Date.now() - started < 2_000, 'pushed, not polled');
+  });
+
+  test('9.4: a folder-list change or a change of another mailbox does not wake IDLE', async (t) => {
+    const { client, redis } = await select(t);
+    client.write('I1 IDLE\r\n');
+    await client.readLine();
+
+    redis.emitRaw({ mailboxId: 'mb1', kinds: ['folders'] });
+    redis.emitRaw({ mailboxId: 'mb-other', kinds: ['messages'] });
+    const lines = await client.drain();
+
+    assert.deepEqual(lines, []);
   });
 
   test('new mail in another mailbox is not announced to an idling session', async (t) => {
@@ -1718,7 +1755,7 @@ describe('IDLE and mailbox updates (RFC 9051 §6.3.13, §7.4.1)', () => {
     client.write('I1 IDLE\r\n');
     await client.readLine();
 
-    redis.emitNewMail({ userId: 'u1', folderId: 'f-work', messageId: 'x', uid: 99, subject: 'new' });
+    redis.emitNewMail({ folderId: 'f-work' });
     const lines = await client.drain();
 
     assert.deepEqual(lines, []);
@@ -1738,7 +1775,7 @@ describe('IDLE and mailbox updates (RFC 9051 §6.3.13, §7.4.1)', () => {
   // v8.0 review: IDLE polls and every command end used to read all rows of the folder.
   test('an unchanged mailbox is not re-read on IDLE polls and NOOP', async (t) => {
     setIdlePollInterval(20);
-    t.after(() => setIdlePollInterval(30_000));
+    t.after(() => setIdlePollInterval(120_000));
     const { client, db } = await select(t);
     await client.cmd('NOOP'); // first comparison records the stamp
     const before = db.messageReads;
@@ -1908,7 +1945,7 @@ describe('per-session sequence map and unsolicited updates (RFC 9051 §2.3.1.2, 
 
   test('an expunge by another client is pushed while idling', async (t) => {
     setIdlePollInterval(40);
-    t.after(() => setIdlePollInterval(30_000));
+    t.after(() => setIdlePollInterval(120_000));
     const { client, db } = await select(t);
     client.write('I1 IDLE\r\n');
     await client.readLine();
@@ -1928,7 +1965,7 @@ describe('per-session sequence map and unsolicited updates (RFC 9051 §2.3.1.2, 
     await client.readLine();
 
     const delivered = db.deliver('f-inbox');
-    redis.emitNewMail({ userId: 'u1', folderId: 'f-inbox', messageId: delivered.id, uid: delivered.uid, subject: 'new' });
+    redis.emitNewMail({ folderId: delivered.folderId });
     const lines = await client.drain(200);
 
     assert.deepEqual(lines, ['* 4 EXISTS']);

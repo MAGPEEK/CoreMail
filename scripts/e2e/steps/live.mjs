@@ -3,9 +3,11 @@
 // and a POP3 session; B changes the password in the web client → IMAP gets
 // "* BYE Credentials changed …", SMTP "421 4.7.0 …", POP3 "-ERR [AUTH] …",
 // all three are closed. A's IMAP IDLE (app password) is not affected.
+// 9.4: IDLE gets EXISTS within 2 s of a delivery (Redis push, no 30 s poll).
 import { randomBytes } from 'node:crypto';
 import {
   check, assert, creds, setCred, http, session, imapCmd, PORTS, smtpOpen, smtpStartTls, smtpAuthPlain, smtpRead,
+  smtpSend, buildMime, sleep,
 } from '../lib.mjs';
 import { imapLogin } from './imap.mjs';
 import { popLogin } from './pop3.mjs';
@@ -33,6 +35,31 @@ export async function run(state) {
   const B = state.users.b.email;
   const A = state.users.a.email;
   const tokB = await session(state, 'b', B, c.userB);
+
+  // 9.4: IDLE is pushed (mailbox:changes), not polled — a delivery shows within 2 s
+  await check('live: IMAP IDLE reports EXISTS within 2 s of a delivery (push, not the fallback timer)', async () => {
+    const idler = await imapLogin(B, c.userB);
+    const s = await smtpOpen(PORTS.submission);
+    try {
+      assert(idler.loginResult.status === 'OK', `IMAP B: ${idler.loginResult.text}`);
+      const sel = await imapCmd(idler, 'SELECT INBOX');
+      assert(sel.status === 'OK', `SELECT: ${sel.text}`);
+      await idle(idler);
+      await sleep(300); // the initial IDLE check has finished
+      await smtpStartTls(s);
+      const a = await smtpAuthPlain(s, B, c.userB);
+      assert(a.code === 235, `SMTP AUTH B: ${a.text}`);
+      const sent = Date.now();
+      const r = await smtpSend(s, B, [B], buildMime({ from: B, to: B, subject: `E2E IDLE push ${sent}`, text: 'idle' }));
+      assert(r.code === 250, `${r.stage}: ${r.text}`);
+      const line = await idler.readLine(10_000);
+      const ms = Date.now() - sent;
+      assert(/^\* \d+ EXISTS$/.test(line), `got ${line}`);
+      assert(ms <= 2_000, `EXISTS after ${ms} ms (expected ≤ 2000 ms)`);
+      idler.write('DONE\r\n');
+      return `${line} after ${ms} ms`;
+    } finally { idler.close(); s.close(); }
+  });
 
   const imapB = await imapLogin(B, c.userB);
   const imapA = c.appPwA ? await imapLogin(A, c.appPwA) : null;
