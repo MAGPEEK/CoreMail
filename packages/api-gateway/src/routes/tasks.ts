@@ -3,9 +3,12 @@ import { z } from 'zod';
 import { patchSchema } from '../lib/zod-compat.js';
 import { prisma } from '@coremail/storage';
 import { requireAuth } from '../middleware/auth.js';
+import { announceOnWrite } from '../lib/realtime.js';
 
 export const tasksRouter: RouterType = Router();
 tasksRouter.use(requireAuth);
+// 9.4: task writes (incl. reminders) reach the user's other tabs and devices
+tasksRouter.use(announceOnWrite({ type: 'tasks' }));
 
 const TaskSchema = z.object({
   subject:       z.string().min(1),

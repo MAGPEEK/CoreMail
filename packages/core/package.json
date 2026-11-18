@@ -16,7 +16,8 @@
     "./http": "./dist/http/index.js",
     "./ssrf": "./dist/net/ssrf.js",
     "./tls-errors": "./dist/tls/tls-errors.js",
-    "./tls-policy": "./dist/tls/legacy-tls.js"
+    "./tls-policy": "./dist/tls/legacy-tls.js",
+    "./realtime": "./dist/realtime/index.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

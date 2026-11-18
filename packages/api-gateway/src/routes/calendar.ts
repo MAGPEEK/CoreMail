@@ -1,7 +1,7 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { patchSchema } from '../lib/zod-compat.js';
-import { prisma, getProductName } from '@coremail/storage';
+import { prisma, getProductName, announceCalendarChange, announceUserEvent } from '@coremail/storage';
 import { requireAuth } from '../middleware/auth.js';
 import {
   canAccessCalendar,
@@ -12,7 +12,8 @@ import {
 import { audit, auditContext } from '../lib/audit.js';
 import { notifyUserInbox } from '../lib/internal-notify.js';
 import { loadPreferences } from '../lib/preferences-store.js';
-import { getRedisClient, CHANNEL_CALENDAR_SHARES, createBullMqConnection } from '@coremail/core';
+import { createBullMqConnection, type UserEventAction } from '@coremail/core';
+import { announceOnWrite } from '../lib/realtime.js';
 import { Queue } from 'bullmq';
 import {
   enqueueInvitation,
@@ -59,28 +60,24 @@ function resolveEventRange(
 const MAX_LIST_WINDOW_MS = 4 * 366 * 24 * 60 * 60 * 1000;
 
 /**
- * v3.18.17 A2: Publishes a calendar-share lifecycle event to Redis. SSE handler
- * forwards it to all affectedUserIds (owner + grantee). Frontend invalidates
- * TanStack Query cache → instant UI update instead of 60s polling.
+ * Share lifecycle → live sync of owner and grantee (9.4 user events, v3.18.17
+ * before). The grantee hears `create` / `delete` when they gained / lost the
+ * calendar (the webmail shows a hint), everyone else an `update`.
  */
-function publishShareEvent(
-  action: 'create' | 'update' | 'delete' | 'self_remove',
-  calendarId: string,
-  affectedUserIds: string[],
-  extra?: Record<string, unknown>,
-): void {
-  try {
-    void getRedisClient().publish(
-      CHANNEL_CALENDAR_SHARES,
-      JSON.stringify({ action, calendarId, affectedUserIds, ...extra }),
-    );
-  } catch {
-    // best-effort — a Redis outage must not block the main path
-  }
+function announceShare(calendarId: string, ownerId: string, granteeId: string, granteeAction: UserEventAction): void {
+  announceUserEvent(ownerId, { type: 'calendar', scope: 'shares', action: 'update', calendarIds: [calendarId] });
+  announceUserEvent(granteeId, { type: 'calendar', scope: 'shares', action: granteeAction, calendarIds: [calendarId] });
 }
 
 export const calendarRouter: RouterType = Router();
 calendarRouter.use(requireAuth);
+// 9.4: the acting user's own calendar list (create, reorder, colours of shared
+// calendars) reaches their other tabs; events, calendar edits and shares
+// announce owner + grantees explicitly (announceCalendarChange / announceShare).
+calendarRouter.use(announceOnWrite(({ method, path }) =>
+  (method === 'POST' && (path === '/' || path === '/reorder')) || path.startsWith('/mine-shares/')
+    ? { type: 'calendar', action: method === 'POST' && path === '/' ? 'create' : 'update' }
+    : null));
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -240,6 +237,7 @@ calendarRouter.patch('/:id', async (req: Request, res: Response) => {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const updated = await prisma.calendar.update({ where: { id }, data: updates as any });
+  announceCalendarChange([id], { action: 'update' });
   res.json(updated);
 });
 
@@ -249,7 +247,9 @@ calendarRouter.delete('/:id', async (req: Request, res: Response) => {
   const cal = await prisma.calendar.findFirst({ where: { id, userId: req.apiUser!.userId } });
   if (!cal) { res.status(404).json({ error: 'Kalender nicht gefunden' }); return; }
   if (cal.isDefault) { res.status(400).json({ error: 'Standard-Kalender kann nicht gelöscht werden' }); return; }
+  const grantees = await prisma.calendarShare.findMany({ where: { calendarId: id }, select: { granteeId: true } });
   await prisma.calendar.delete({ where: { id } });
+  announceUserEvent([cal.userId, ...grantees.map((g) => g.granteeId)], { type: 'calendar', action: 'delete', calendarIds: [id] });
   res.json({ ok: true });
 });
 
@@ -509,12 +509,7 @@ calendarRouter.post('/:id/shares', async (req: Request, res: Response) => {
   });
 
   // v3.18.17 A2: SSE push for live sync
-  publishShareEvent(
-    share.createdAt.getTime() < Date.now() - 5000 ? 'update' : 'create',
-    id,
-    [userId, granteeId],
-    { permission: parsed.data.permission },
-  );
+  announceShare(id, userId, granteeId, share.createdAt.getTime() < Date.now() - 5000 ? 'update' : 'create');
 
   // v3.18.16 A1: notification mail in the grantee inbox — only for a *new* share,
   // not for a permission update via upsert (would be spam otherwise).
@@ -601,9 +596,7 @@ calendarRouter.put('/:id/shares/:shareId', async (req: Request, res: Response) =
     ...auditContext(req),
   });
 
-  publishShareEvent('update', id, [userId, updated.granteeId], {
-    permission: parsed.data.permission,
-  });
+  announceShare(id, userId, updated.granteeId, 'update');
 
   res.json({
     id: updated.id,
@@ -656,11 +649,7 @@ calendarRouter.delete('/:id/shares/:shareId', async (req: Request, res: Response
     ...auditContext(req),
   });
 
-  publishShareEvent(
-    isOwnerAction ? 'delete' : 'self_remove',
-    id,
-    [share.ownerId, share.granteeId],
-  );
+  announceShare(id, share.ownerId, share.granteeId, isOwnerAction ? 'delete' : 'update');
 
   res.json({ ok: true });
 });
@@ -1018,6 +1007,7 @@ calendarRouter.post('/events', async (req: Request, res: Response) => {
     });
   }
 
+  announceCalendarChange([event.calendarId], { action: 'create', ids: [event.id] });
   res.status(201).json(event);
 });
 
@@ -1156,6 +1146,7 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
     });
   }
 
+  announceCalendarChange([event.calendarId], { action: 'update', ids: [id] });
   res.json(updated);
 });
 
@@ -1181,6 +1172,7 @@ calendarRouter.delete('/events/:id', async (req: Request, res: Response) => {
   }
 
   await prisma.calendarEvent.delete({ where: { id } });
+  announceCalendarChange([event.calendarId], { action: 'delete', ids: [id] });
 
   // v3.18.25 A5: CANCEL mails to all attendees (with sequence+1)
   const attList = Array.isArray(event.attendees) ? event.attendees : [];

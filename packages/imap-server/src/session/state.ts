@@ -94,6 +94,8 @@ export interface ImapSession {
   updateLock?: Promise<void>;
   // v7.1.0: periodic mailbox check while idling (expunges/flag changes by other clients)
   idleTimer?: ReturnType<typeof setInterval> | null;
+  // 9.4: an IDLE re-read is queued and has not started yet (later wake-ups join it)
+  idleSyncQueued?: boolean;
   // v8.1: set by the server — switches the idle timeout to the post-login value
   onAuthenticated?: () => void;
   // v9.1: cached foreign mailbox permissions (commands/namespaces.ts, ≤ 30 s)

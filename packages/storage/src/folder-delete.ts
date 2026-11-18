@@ -27,6 +27,7 @@
  * updateMany/delete on folder, findMany/updateMany/update on message).
  */
 import { moveMessages, expunge, type MessageStoreTx } from './message-store.js';
+import { announceFolderListChange } from './realtime/change-scope.js';
 
 export interface FolderDeleteTarget { id: string; mailboxId: string }
 export interface FolderNode { id: string; name: string; parentId: string | null; depth: number }
@@ -161,6 +162,7 @@ export async function deleteFolderMovingMail(
       : 0;
     const deepestFirst = [...doomed].sort((a, b) => b.depth - a.depth);
     for (const f of deepestFirst) await tx.folder.delete({ where: { id: f.id } });
+    announceFolderListChange(target.mailboxId);
     return { ok: true, reason: null, ...mail, folders: doomed.length, reparented };
   });
 }

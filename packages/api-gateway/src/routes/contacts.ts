@@ -10,9 +10,12 @@ import {
   type VcardPatch,
 } from '@coremail/core/vcard';
 import { requireAuth } from '../middleware/auth.js';
+import { announceOnWrite } from '../lib/realtime.js';
 
 export const contactsRouter: RouterType = Router();
 contactsRouter.use(requireAuth);
+// 9.4: contact writes reach the user's other tabs and devices
+contactsRouter.use(announceOnWrite({ type: 'contacts' }));
 
 /** Columns returned for the user's own contacts (address book view + autocomplete). */
 const CONTACT_LIST_SELECT = {

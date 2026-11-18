@@ -19,6 +19,8 @@ import webPush from 'web-push';
 import { prisma } from '@coremail/storage/prisma';
 import https from 'node:https';
 import { createLogger, assertPublicHttpsUrl, safeLookup } from '@coremail/core';
+import { isNotifiable, mailNotification } from './mail-notification.js';
+import { currentBranding } from './branding/state.js';
 
 const log = createLogger('push');
 
@@ -57,13 +59,16 @@ export interface PushPayload {
   url?: string;       // click-action URL
 }
 
+/** Per-device payload: the subscription decides (e.g. its preview opt-in). */
+export type PushPayloadFor = PushPayload | ((sub: { showPreview: boolean }) => PushPayload);
+
 /**
  * Send a push notification to all subscriptions of a user for the given topic.
  */
 export async function sendPushToUser(
   userId: string,
   topic: string,
-  payload: PushPayload,
+  payload: PushPayloadFor,
 ): Promise<void> {
   ensureVapidConfigured();
   if (!vapidConfigured) return;
@@ -74,7 +79,8 @@ export async function sendPushToUser(
 
   if (subscriptions.length === 0) return;
 
-  const payloadStr = JSON.stringify(payload);
+  const payloadOf = (sub: { showPreview: boolean }): string =>
+    JSON.stringify(typeof payload === 'function' ? payload(sub) : payload);
   const staleIds: string[] = [];
 
   await Promise.allSettled(
@@ -92,7 +98,7 @@ export async function sendPushToUser(
             endpoint: sub.endpoint,
             keys: { p256dh: sub.p256dhKey, auth: sub.authKey },
           },
-          payloadStr,
+          payloadOf(sub),
           { TTL: 86400, agent: pushAgent }, // 24h TTL
         );
         log.debug({ userId, topic, endpoint: sub.endpoint.slice(0, 40) }, 'Push sent');
@@ -114,6 +120,16 @@ export async function sendPushToUser(
     await prisma.pushSubscription.deleteMany({ where: { id: { in: staleIds } } });
     log.info({ count: staleIds.length }, 'Removed stale push subscriptions');
   }
+}
+
+/**
+ * 9.4: new-mail notification for a `mail:new` event — generic text unless the
+ * device opted into previews (sender + subject), click opens the message.
+ */
+export async function sendMailNotification(userId: string, event: Record<string, unknown>): Promise<void> {
+  if (!isNotifiable(event)) return;
+  const { productName } = await currentBranding();
+  await sendPushToUser(userId, 'mail.new', (sub) => mailNotification(event, { preview: sub.showPreview, productName }));
 }
 
 /**

@@ -298,3 +298,58 @@ test('expunge with a where scope leaves rows alone that moved away or are alread
   assert.ok(byId('b')['deletedAt'] instanceof Date);
   assert.equal(byId('c')['deletedAt'], earlier);
 });
+
+// ── 9.4 realtime: every write announces its mailbox change after the commit ──
+const { setMailboxChangePublisher, recordMailboxChange } = await import('./realtime/change-scope.js');
+
+function captureChanges(): Array<Record<string, unknown>> {
+  const seen: Array<Record<string, unknown>> = [];
+  setMailboxChangePublisher(async (e) => { seen.push(e as unknown as Record<string, unknown>); });
+  return seen;
+}
+
+test('realtime: create/flags/expunge publish one merged change per mailbox after the transaction', async () => {
+  const seen = captureChanges();
+  await prisma.$transaction(async (tx) => {
+    await store.createMessage(tx, 'mb1', 'archive', { subject: 'n', date: new Date() } as never);
+    await store.setFlags(tx, [{ id: 'a', flags: ['\\Seen'] }]);
+    assert.equal(seen.length, 0, 'nothing published before the commit');
+  });
+  assert.deepEqual(seen, [{ mailboxId: 'mb1', kinds: ['messages', 'flags'], folderIds: ['archive', 'inbox'], modSeq: '5' }]);
+  seen.length = 0;
+  await prisma.$transaction((tx) => store.expunge(tx, ['b'], { mailboxId: 'mb1', where: { folderId: 'inbox' } }));
+  assert.deepEqual(seen, [{ mailboxId: 'mb1', kinds: ['messages'], folderIds: ['inbox'], modSeq: '6' }]);
+  seen.length = 0;
+  await prisma.$transaction((tx) => store.touchMessages(tx, ['c'], {}, { mailboxId: 'mb1' }));
+  assert.deepEqual(seen, [{ mailboxId: 'mb1', kinds: ['messages'], modSeq: '7' }], 'folder unknown → no folderIds');
+});
+
+test('realtime: a rolled-back transaction publishes nothing; modifyFlags without a change neither', async () => {
+  const seen = captureChanges();
+  await assert.rejects(prisma.$transaction(async (tx) => {
+    await store.createMessage(tx, 'mb1', 'inbox', { subject: 'n', date: new Date() } as never);
+    throw new Error('rollback');
+  }));
+  await prisma.$transaction((tx) => store.modifyFlags(tx, ['a'], () => null));
+  assert.deepEqual(seen, []);
+});
+
+test('realtime: a cross-mailbox move announces both mailboxes', async () => {
+  db.mailboxes.push({ id: 'mb2', uidNext: 1, highestModSeq: 0n, uidValidity: 1 });
+  db.folders.push({ id: 'other', mailboxId: 'mb2', name: 'INBOX' });
+  const seen = captureChanges();
+  await prisma.$transaction((tx) => store.moveMessages(tx, ['a'], 'other'));
+  assert.deepEqual(seen, [
+    { mailboxId: 'mb2', kinds: ['messages'], folderIds: ['other'], modSeq: '1' },
+    { mailboxId: 'mb1', kinds: ['messages'], folderIds: ['inbox'], modSeq: '4' },
+  ]);
+});
+
+test('realtime: changes recorded outside a transaction are published shortly after', async () => {
+  const seen = captureChanges();
+  recordMailboxChange({ mailboxId: 'mb1', kinds: ['folders'] });
+  recordMailboxChange({ mailboxId: 'mb1', kinds: ['flags'], folderIds: ['inbox'] });
+  assert.equal(seen.length, 0);
+  await new Promise((r) => setTimeout(r, 150));
+  assert.deepEqual(seen, [{ mailboxId: 'mb1', kinds: ['flags', 'folders'] }]);
+});

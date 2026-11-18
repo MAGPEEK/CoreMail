@@ -1,5 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import { createLogger } from '@coremail/core/logger';
+import { installChangeScope } from '../realtime/change-scope.js';
 
 const log = createLogger('prisma');
 
@@ -24,6 +25,9 @@ export const prisma: PrismaClient =
 if (process.env['NODE_ENV'] !== 'production') {
   globalThis.__prisma = prisma;
 }
+
+// 9.4: interactive transactions publish their mailbox changes after the commit.
+installChangeScope(prisma);
 
 prisma.$on('error' as never, (e: unknown) => log.error(e, 'Prisma error'));
 prisma.$on('warn' as never, (e: unknown) => log.warn(e, 'Prisma warning'));

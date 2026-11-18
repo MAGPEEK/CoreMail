@@ -19,7 +19,13 @@
  * visible in allocation order.
  *
  * This module only talks to the transaction client it is given (also makes it
- * trivial to fake in tests); its one runtime import is the pure references.ts.
+ * trivial to fake in tests); its runtime imports are the pure references.ts and
+ * the realtime change scope.
+ *
+ * Realtime (9.4): every write records a mailbox change (realtime/change-scope.ts);
+ * it is published on `mailbox:changes` once the surrounding transaction
+ * committed, so the webmail, IMAP IDLE and JMAP push of every writer — SMTP,
+ * IMAP, JMAP, ActiveSync, REST, restore, retention — see it without polling.
  *
  * References (v9.1): a row created without `references` but with a
  * `storagePath` gets the References of that raw object when this process stored
@@ -32,7 +38,15 @@
  * {@link ensureCounterFloor} and {@link migrateMailboxCounters}.
  */
 import type { Prisma, Message } from '@prisma/client';
+import type { MailboxChangeKind } from '@coremail/core/realtime';
 import { cachedReferencesColumn } from './references.js';
+import { recordMailboxChange } from './realtime/change-scope.js';
+
+/** Records a change for post-commit publishing (folders: undefined = unknown). */
+function noteChange(mailboxId: string, kind: MailboxChangeKind, modSeq: bigint, folderIds?: Iterable<string>): void {
+  const folders = folderIds ? [...new Set(folderIds)] : [];
+  recordMailboxChange({ mailboxId, kinds: [kind], modSeq: modSeq.toString(), ...(folders.length ? { folderIds: folders } : {}) });
+}
 
 /** Interactive transaction client (or the root client for single-statement use). */
 export type MessageStoreTx = Prisma.TransactionClient;
@@ -127,6 +141,7 @@ export async function createMessages(
       },
     }));
   }
+  noteChange(mailboxId, 'messages', modSeq, [folderId]);
   return created;
 }
 
@@ -146,19 +161,35 @@ interface ScopeOpts {
   mailboxId?: string;
 }
 
+interface MailboxGroup {
+  ids: string[];
+  /** Folders of the messages, when known (looked up, or fixed by the caller's `where`). */
+  folderIds?: Set<string>;
+}
+
 /** Group message ids by their mailbox (one lookup unless the caller passes mailboxId). */
-async function byMailbox(tx: MessageStoreTx, ids: string[], opts: ScopeOpts): Promise<Map<string, string[]>> {
-  const out = new Map<string, string[]>();
+async function byMailbox(
+  tx: MessageStoreTx,
+  ids: string[],
+  opts: ScopeOpts,
+  where?: Omit<Prisma.MessageWhereInput, 'id'>,
+): Promise<Map<string, MailboxGroup>> {
+  const out = new Map<string, MailboxGroup>();
   if (ids.length === 0) return out;
-  if (opts.mailboxId) { out.set(opts.mailboxId, [...ids]); return out; }
+  if (opts.mailboxId) {
+    const fixedFolder = typeof where?.folderId === 'string' ? where.folderId : null;
+    out.set(opts.mailboxId, { ids: [...ids], ...(fixedFolder ? { folderIds: new Set([fixedFolder]) } : {}) });
+    return out;
+  }
   const rows = await tx.message.findMany({
     where: { id: { in: ids } },
-    select: { id: true, folder: { select: { mailboxId: true } } },
+    select: { id: true, folderId: true, folder: { select: { mailboxId: true } } },
   });
   for (const r of rows) {
-    const list = out.get(r.folder.mailboxId) ?? [];
-    list.push(r.id);
-    out.set(r.folder.mailboxId, list);
+    const group = out.get(r.folder.mailboxId) ?? { ids: [], folderIds: new Set<string>() };
+    group.ids.push(r.id);
+    group.folderIds?.add(r.folderId);
+    out.set(r.folder.mailboxId, group);
   }
   return out;
 }
@@ -185,13 +216,14 @@ export async function touchMessages(
   opts: TouchOpts = {},
 ): Promise<Map<string, bigint>> {
   const result = new Map<string, bigint>();
-  for (const [mailboxId, list] of await byMailbox(tx, ids, opts)) {
+  for (const [mailboxId, group] of await byMailbox(tx, ids, opts, opts.where)) {
     const modSeq = await nextModSeq(tx, mailboxId);
     await tx.message.updateMany({
-      where: { ...(opts.where ?? {}), id: { in: list } },
+      where: { ...(opts.where ?? {}), id: { in: group.ids } },
       data: { ...data, modSeq, changeKey: modSeq.toString() },
     });
     result.set(mailboxId, modSeq);
+    noteChange(mailboxId, 'messages', modSeq, group.folderIds);
   }
   return result;
 }
@@ -204,13 +236,14 @@ export async function setFlags(
 ): Promise<Array<{ id: string; flags: string[]; modSeq: bigint }>> {
   const flagsById = new Map(updates.map((u) => [u.id, u.flags]));
   const out: Array<{ id: string; flags: string[]; modSeq: bigint }> = [];
-  for (const [mailboxId, list] of await byMailbox(tx, [...flagsById.keys()], opts)) {
+  for (const [mailboxId, group] of await byMailbox(tx, [...flagsById.keys()], opts)) {
     const modSeq = await nextModSeq(tx, mailboxId);
-    for (const id of list) {
+    for (const id of group.ids) {
       const flags = flagsById.get(id)!;
       await tx.message.update({ where: { id }, data: { flags, modSeq, changeKey: modSeq.toString() } });
       out.push({ id, flags, modSeq });
     }
+    noteChange(mailboxId, 'flags', modSeq, group.folderIds);
   }
   return out;
 }
@@ -231,18 +264,21 @@ export async function modifyFlags(
   opts: ScopeOpts = {},
 ): Promise<Array<{ id: string; flags: string[]; modSeq: bigint }>> {
   const out: Array<{ id: string; flags: string[]; modSeq: bigint }> = [];
-  for (const [mailboxId, list] of await byMailbox(tx, ids, opts)) {
+  for (const [mailboxId, group] of await byMailbox(tx, ids, opts)) {
     const modSeq = await nextModSeq(tx, mailboxId);
     const rows = await tx.message.findMany({
-      where: { id: { in: list } },
-      select: { id: true, flags: true, modSeq: true },
+      where: { id: { in: group.ids } },
+      select: { id: true, flags: true, modSeq: true, folderId: true },
     });
+    const changedFolders = new Set<string>();
     for (const row of rows) {
       const flags = compute([...row.flags], row.modSeq, row.id);
       if (flags === null) continue;
       await tx.message.update({ where: { id: row.id }, data: { flags, modSeq, changeKey: modSeq.toString() } });
       out.push({ id: row.id, flags, modSeq });
+      changedFolders.add(row.folderId);
     }
+    if (changedFolders.size > 0) noteChange(mailboxId, 'flags', modSeq, changedFolders);
   }
   return out;
 }
@@ -266,6 +302,26 @@ export interface MoveOpts {
 }
 
 export interface UidMapping { id: string; oldUid: number; newUid: number }
+
+/**
+ * Move/restore bookkeeping: the target mailbox changed in the target folder and
+ * in the source folders it owns; every other source mailbox gets a modSeq bump
+ * and its own change.
+ */
+async function noteRelocation(
+  tx: MessageStoreTx,
+  targetMailboxId: string,
+  targetFolderId: string,
+  modSeq: bigint,
+  mailboxByFolder: Map<string, string>,
+): Promise<void> {
+  const foldersOf = (mailboxId: string) =>
+    [...mailboxByFolder].filter(([, mbx]) => mbx === mailboxId).map(([folderId]) => folderId);
+  noteChange(targetMailboxId, 'messages', modSeq, [targetFolderId, ...foldersOf(targetMailboxId)]);
+  for (const mbx of new Set(mailboxByFolder.values())) {
+    if (mbx !== targetMailboxId) noteChange(mbx, 'messages', await nextModSeq(tx, mbx), foldersOf(mbx));
+  }
+}
 
 async function mailboxOfFolder(tx: MessageStoreTx, folderId: string): Promise<string> {
   const f = await tx.folder.findUnique({ where: { id: folderId }, select: { mailboxId: true } });
@@ -314,8 +370,7 @@ export async function moveMessages(
     });
     mapping.push({ id: m.id, oldUid: m.uid, newUid });
   }
-  const sourceMailboxes = new Set<string>(mailboxByFolder.values());
-  for (const mbx of sourceMailboxes) if (mbx !== targetMailboxId) await nextModSeq(tx, mbx);
+  await noteRelocation(tx, targetMailboxId, targetFolderId, modSeq, mailboxByFolder);
   return { mapping, modSeq };
 }
 
@@ -343,8 +398,8 @@ export async function restoreMessages(
   if (src.length === 0) return { mapping: [], modSeq: null };
   const targetMailboxId = opts.targetMailboxId ?? await mailboxOfFolder(tx, targetFolderId);
   const { firstUid, modSeq } = await allocate(tx, targetMailboxId, src.length);
-  const sourceMailboxes = new Set<string>();
-  for (const folderId of new Set(src.map((m) => m.folderId))) sourceMailboxes.add(await mailboxOfFolder(tx, folderId));
+  const mailboxByFolder = new Map<string, string>();
+  for (const folderId of new Set(src.map((m) => m.folderId))) mailboxByFolder.set(folderId, await mailboxOfFolder(tx, folderId));
   const mapping: UidMapping[] = [];
   for (const [i, m] of src.entries()) {
     const newUid = firstUid + i;
@@ -357,7 +412,7 @@ export async function restoreMessages(
     });
     mapping.push({ id: m.id, oldUid: m.uid, newUid });
   }
-  for (const mbx of sourceMailboxes) if (mbx !== targetMailboxId) await nextModSeq(tx, mbx);
+  await noteRelocation(tx, targetMailboxId, targetFolderId, modSeq, mailboxByFolder);
   return { mapping, modSeq };
 }
 
@@ -426,6 +481,7 @@ export async function copyMessages(
     });
     mapping.push({ id: m.id, oldUid: m.uid, newUid, newId: created.id });
   }
+  noteChange(targetMailboxId, 'messages', modSeq, [targetFolderId]);
   return { mapping, modSeq };
 }
 

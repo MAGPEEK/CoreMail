@@ -12,7 +12,7 @@
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { prisma } from '@coremail/storage';
+import { prisma, announceUserEvent } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import { requireArea } from '../../middleware/auth.js';
 import { ensureSharedMailboxProvisioned } from '../../lib/provision-mailbox.js';
@@ -157,6 +157,10 @@ adminSharedMailboxesRouter.put('/:id', async (req: Request, res: Response) => {
     });
     // 9.1: (de)activation changes the access of every grantee.
     if (p.data.active !== undefined) await publishPermissionChange(await sharedMailboxGrantees(id));
+    // 9.4: a quota change reaches the open webmail of every member
+    if (p.data.quotaBytes !== undefined || p.data.quotaWarningBytes !== undefined || p.data.quotaProhibitSendBytes !== undefined) {
+      announceUserEvent(await sharedMailboxGrantees(id), { type: 'quota' });
+    }
     res.json(item);
   } catch { res.status(404).json({ error: 'Not found' }); }
 });

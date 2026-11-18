@@ -290,8 +290,13 @@ function install(): Db {
   let onMessage: ((channel: string, message: string) => void) | null = null;
   globals['redis'] = {
     duplicate: () => ({ subscribe: async () => 1, on: (e: string, l: typeof onMessage) => { if (e === 'message') onMessage = l; } }),
+    publish: async (channel: string, message: string) => { onMessage?.(channel, message); return 1; },
   };
-  (db as unknown as { emit: (e: Row) => void }).emit = (e) => onMessage?.('mail:new', JSON.stringify(e));
+  // 9.4: the message store's mailbox:changes event for new mail in a folder
+  (db as unknown as { emit: (e: Row) => void }).emit = (e) => {
+    const folder = db.folders.find((f) => f['id'] === e['folderId']);
+    onMessage?.('mailbox:changes', JSON.stringify({ mailboxId: folder?.['mailboxId'], kinds: ['messages'], folderIds: [e['folderId']] }));
+  };
   invalidateAccessCaches();
   return db;
 }

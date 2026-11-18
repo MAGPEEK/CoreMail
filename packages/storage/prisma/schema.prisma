@@ -1344,6 +1344,8 @@ model PushSubscription {
   userAgent String?
   // Topics the client is subscribed to
   topics    String[] // e.g. ["mail.new", "calendar.reminder"]
+  // 9.4: new-mail notifications show sender + subject (opt-in per device; default: generic text)
+  showPreview Boolean @default(false)
   createdAt DateTime @default(now())
 
   @@index([userId])

@@ -7,6 +7,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '../api/client.js';
 import { useT, fmt } from '../i18n/useT.js';
 import { fmtQuotaBytes, quotaColor, quotaPath, quotaPercent, quotaQueryKey, type UserQuota } from '../lib/quota.js';
+import { SAFETY_REFETCH_MS } from '../lib/realtimeEvents.js';
 
 export function QuotaIndicator({ sharedMailboxId, label, className }: { sharedMailboxId?: string; label?: string; className?: string } = {}) {
   const t = useT();
@@ -14,7 +15,7 @@ export function QuotaIndicator({ sharedMailboxId, label, className }: { sharedMa
     queryKey: quotaQueryKey(sharedMailboxId),
     queryFn: () => api.get<UserQuota>(quotaPath(sharedMailboxId)),
     staleTime: 60_000,
-    refetchInterval: 5 * 60_000,
+    refetchInterval: SAFETY_REFETCH_MS, // 9.4: live via mailbox / quota events
     retry: sharedMailboxId ? false : 3, // a 403 (no read access) is final
   });
   if (!data || data.prohibitSendReceiveBytes <= 0) return null;

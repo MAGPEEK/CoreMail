@@ -16,7 +16,7 @@
 import { createHash } from 'node:crypto';
 import {
   prisma, createMessage, parseRawMessage, storeRawMessage, truncateBodyColumn, rawContentKey,
-  attachmentKey, uploadBuffer, reservedFolderPrefix,
+  attachmentKey, uploadBuffer, reservedFolderPrefix, announceFolderListChange,
 } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import { openZip, ZipEntryTooLargeError, type ZipEntry } from './zip-reader.js';
@@ -173,6 +173,7 @@ export class FolderResolver {
             select: { id: true },
           });
           this.created++;
+          announceFolderListChange(this.mailboxId);
         } catch (err) {
           // concurrent creation (unique mailboxId + name): use the existing row
           row = await prisma.folder.findFirst({ where: { mailboxId: this.mailboxId, name }, select: { id: true } });

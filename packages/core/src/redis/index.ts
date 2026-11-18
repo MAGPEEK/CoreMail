@@ -64,13 +64,11 @@ export function greylistKey(ip: string, mailFrom: string, rcptTo: string): strin
 }
 
 // Pub/Sub channels
+/** New mail delivered (sender/subject for toasts and Web Push). State changes: realtime/events.ts. */
 export const CHANNEL_MAIL_NEW = 'mail:new';
-export const CHANNEL_MAIL_UPDATE = 'mail:update';
 export const CHANNEL_ADMIN_EVENT = 'admin:event';
 export const CHANNEL_SERVICE_LISTENERS_RELOAD = 'service:listeners:reload';
 /** Fired after ServerSettings.publicHostname (or other global settings) change. */
 export const CHANNEL_SETTINGS_RELOAD = 'settings:reload';
 /** Fired whenever a security attack event is detected (brute-force, relay, DNSBL, etc.). */
 export const CHANNEL_ADMIN_ATTACK = 'admin:attack';
-/** Fired on calendar-share lifecycle changes (create/update/delete/self_remove). v3.18.17 */
-export const CHANNEL_CALENDAR_SHARES = 'calendar:shares';

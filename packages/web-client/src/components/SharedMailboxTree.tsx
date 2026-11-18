@@ -33,6 +33,7 @@ import { isStaleSubfolderRefusal } from '../lib/folderDelete.js';
 import { RecoverDeletedItemsDialog } from './RecoverDeletedItems.js';
 import { QuotaIndicator } from './QuotaIndicator.js';
 import { OpenSharedMailboxModal } from './OpenSharedMailboxModal.js';
+import { SAFETY_REFETCH_MS } from '../lib/realtimeEvents.js';
 
 type DialogState =
   | { kind: 'create'; parentId: string | null; parentLabel: string }
@@ -129,7 +130,7 @@ function ForeignMailboxNode({ entry, expanded, onToggle, onHide }: {
     queryKey: foldersQueryKey(ref),
     queryFn: () => api.get<FolderType[]>(`${base}/folders`),
     enabled: expanded || isActive,
-    refetchInterval: expanded ? 60_000 : false,
+    refetchInterval: expanded ? SAFETY_REFETCH_MS : false, // 9.4: live via mailbox events
   });
   const all = useMemo(() => (folders ?? []).filter((f) => !HIDDEN_FOLDER_NAMES.has(f.name)), [folders]);
   const childrenOf = useMemo(() => buildFolderChildren(all), [all]);

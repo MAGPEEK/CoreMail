@@ -52,7 +52,7 @@ jmap-server (port 3006)
    │
    ├─ PostgreSQL (Prisma)   Folder / Message / Attachment / User / SharedMailbox …
    ├─ MinIO                 raw messages, attachments, upload blobs (jmap-upload/, 7 days)
-   ├─ Redis                 mail:new / mail:update, settings:reload, EmailSubmission objects
+   ├─ Redis                 mailbox:changes, settings:reload, EmailSubmission objects
    └─ BullMQ smtp-outbound  sending (same path as SMTP submission and webmail)
 ```
 
@@ -118,8 +118,10 @@ immediately visible in IMAP clients and in the MWA, and vice versa.
   (RFC 8291) with a VAPID signature when `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY` are set.
   The public key is in the session under `urn:ietf:params:jmap:webpush-vapid`.
 
-The source of changes is the Redis channel `mail:new` / `mail:update`, which SMTP inbound,
-the REST API and the jmap-server itself feed — this keeps MWA and JMAP clients in sync.
+The source of changes is the Redis channel `mailbox:changes` (9.4, docs/realtime.md): the
+message store publishes every message write of every writer (SMTP, IMAP, POP3, JMAP,
+ActiveSync, webmail, restore, retention) after the commit, folder writers announce folder
+list changes — this keeps MWA and JMAP clients in sync.
 
 ## Setup
 
@@ -292,8 +294,8 @@ the user has `FULL_ACCESS` or `READ_ONLY`. Send as a Shared Mailbox via the iden
 `sm-<id>` (requires `SEND_AS` or `FULL_ACCESS`).
 
 **Why do I see the same changes immediately in the webmail?** JMAP writes to the same
-tables and publishes `mail:update` on Redis — the same source the MWA uses via SSE
-and the jmap-server uses for push.
+tables through the same message store, which publishes `mailbox:changes` on Redis — the
+same source the MWA uses via SSE and the jmap-server uses for push.
 
 **Can I read calendars and contacts via JMAP?** Not yet. JMAP for Calendars/Contacts
 (JSCalendar/JSContact) are not included; CalDAV/CardDAV remain responsible for that.

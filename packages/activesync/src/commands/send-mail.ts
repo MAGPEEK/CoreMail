@@ -2,7 +2,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { prisma } from '@coremail/storage/prisma';
 import {
   listAllowedSenderAddresses, createMessage, setFlags, loadRawMessage, parseRawMessage, storeRawMessage,
-  truncateBodyColumn, uploadBuffer, attachmentKey, checkSendQuota, maxOutgoingMessageBytes, type RawSourceMessage,
+  truncateBodyColumn, uploadBuffer, attachmentKey, checkSendQuota, maxOutgoingMessageBytes, deferMailboxChanges,
+  type RawSourceMessage,
 } from '@coremail/storage';
 import { createLogger, getRedisClient } from '@coremail/core';
 import { encodeWbxml, el, getChild, getText, type WbxmlElement } from '../wbxml.js';
@@ -328,7 +329,12 @@ export async function submitCompose(
  * original octets are stored, the row is parsed from them and the attachments are stored
  * as attachment rows — IMAP/POP3/JMAP and the web client see the full message.
  */
-export async function saveSentCopy(userId: string, plan: EasSubmissionPlan): Promise<void> {
+export function saveSentCopy(userId: string, plan: EasSubmissionPlan): Promise<void> {
+  // 9.4: announced once the attachments and the folder counter are written
+  return deferMailboxChanges(() => storeSentCopy(userId, plan));
+}
+
+async function storeSentCopy(userId: string, plan: EasSubmissionPlan): Promise<void> {
   const mailbox = await prisma.mailbox.findFirst({ where: { userId } });
   if (!mailbox) return;
   const sentFolder = await prisma.folder.findFirst({

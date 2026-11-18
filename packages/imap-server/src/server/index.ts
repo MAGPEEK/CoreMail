@@ -1,6 +1,7 @@
 import net from 'net';
 import tls from 'node:tls';
-import { getRedisClient, CHANNEL_MAIL_NEW, createLogger, tlsServerOptions } from '@coremail/core';
+import { getRedisClient, CHANNEL_MAILBOX_CHANGES, parseMailboxChange, createLogger, tlsServerOptions } from '@coremail/core';
+import { idleWakes } from './idle-push.js';
 import { logTlsSocketError } from '@coremail/core/tls-errors';
 import {
   createSession, sendUntagged, refreshCapabilities,
@@ -819,38 +820,36 @@ export function applyAuthInvalidation(event: { userId: string }): void {
   }
 }
 
+/** Wakes the idling sessions a mailbox change concerns (server/idle-push.ts). */
+export function dispatchIdleChange(message: string): number {
+  const change = parseMailboxChange(message);
+  if (!change) { log.warn('IDLE push: malformed mailbox change ignored'); return 0; }
+  let woken = 0;
+  for (const session of sessions.values()) {
+    const view = session.selected;
+    const mailboxId = view ? (view.mailboxId ?? session.mailboxId) : null;
+    const candidate = { idleActive: session.idleActive, selected: view && mailboxId ? { mailboxId, folderId: view.folderId } : null };
+    if (idleWakes(change, candidate)) {
+      notifyMailboxChanged(session);
+      woken++;
+    }
+  }
+  if (woken > 0) log.debug({ mailboxId: change.mailboxId, woken }, 'IDLE push');
+  return woken;
+}
+
+/**
+ * 9.4: IDLE is driven by `mailbox:changes` (every message writer publishes it
+ * through the message store); the per-session timer is only a fallback.
+ * Sessions ended by a credential change or the protocol switch are already
+ * gone from `sessions` (LiveConnectionRegistry) and are never woken.
+ */
 function setupIdlePush(): void {
   const subscriber = getRedisClient().duplicate();
-
-  void subscriber.subscribe(CHANNEL_MAIL_NEW);
-  subscriber.on('message', (_channel, message) => {
-    try {
-      const event = JSON.parse(message) as {
-        userId: string;
-        folderId: string;
-        messageId: string;
-        uid: number;
-        subject: string;
-      };
-
-      // IDLE sessions watching the same folder compare their view with the
-      // database and report the difference (EXISTS, and anything else that
-      // changed meanwhile) — never a blind "EXISTS + 1".
-      // v9.1: matched by folder only — a shared / delegated folder is watched by
-      // other users than the event's mailbox owner. The folder was access-checked
-      // on SELECT and the sync re-checks the permission (namespaces.ts).
-      for (const session of sessions.values()) {
-        if (
-          session.idleActive &&
-          session.selected?.folderId === event.folderId &&
-          (session.userId === event.userId || !!session.selected.foreign)
-        ) {
-          notifyMailboxChanged(session);
-          log.debug({ userId: event.userId, uid: event.uid }, 'IDLE push: new message');
-        }
-      }
-    } catch (err) {
-      log.error({ err }, 'IDLE push error');
-    }
+  void subscriber.subscribe(CHANNEL_MAILBOX_CHANGES).catch((err: unknown) => {
+    log.error({ err }, 'IDLE push subscription failed — IDLE falls back to its timer');
+  });
+  subscriber.on('message', (channel: string, message: string) => {
+    if (channel === CHANNEL_MAILBOX_CHANGES) dispatchIdleChange(message);
   });
 }
