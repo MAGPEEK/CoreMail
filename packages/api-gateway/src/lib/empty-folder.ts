@@ -3,21 +3,26 @@
  * (recoverable for the retention period) through the message store, counters reset.
  * Used by DELETE /user/folders/:id/empty and (9.4) "empty Deleted Items on logout".
  */
-import { prisma, expunge } from '@coremail/storage';
+import { prisma, expunge, deferMailboxChanges } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import { loadPreferences } from './preferences-store.js';
 
 const log = createLogger('api:empty-folder');
 export const TRASH_FOLDER = 'Trash';
 
-/** Returns the number of messages moved to the recoverable items. */
-export async function emptyFolder(mailboxId: string, folderId: string): Promise<number> {
-  const live = await prisma.message.findMany({ where: { folderId, deletedAt: null }, select: { id: true } });
-  if (live.length > 0) {
-    await prisma.$transaction((tx) => expunge(tx, live.map((m) => m.id), { mailboxId }));
-  }
-  await prisma.folder.update({ where: { id: folderId }, data: { totalCount: 0, unreadCount: 0 } });
-  return live.length;
+/**
+ * Returns the number of messages moved to the recoverable items. The live event
+ * (9.4 realtime) goes out once the folder counters are reset as well.
+ */
+export function emptyFolder(mailboxId: string, folderId: string): Promise<number> {
+  return deferMailboxChanges(async () => {
+    const live = await prisma.message.findMany({ where: { folderId, deletedAt: null }, select: { id: true } });
+    if (live.length > 0) {
+      await prisma.$transaction((tx) => expunge(tx, live.map((m) => m.id), { mailboxId }));
+    }
+    await prisma.folder.update({ where: { id: folderId }, data: { totalCount: 0, unreadCount: 0 } });
+    return live.length;
+  });
 }
 
 /**
