@@ -1,7 +1,7 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
 import nodemailer from 'nodemailer';
-import { prisma } from '@coremail/storage';
+import { prisma, clearMessageSizeLimitCache } from '@coremail/storage';
 import { getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 import { requireArea } from '../../middleware/auth.js';
 import { smarthostTestOptions } from '../../lib/smarthost-test.js';
@@ -182,6 +182,7 @@ adminSmtpConfigRouter.put('/settings', async (req: Request, res: Response) => {
   // Invalidate the SMTP server cache (banner, ESMTP flags, maxSize, outbound
   // smarthost) immediately — takes effect without waiting for the TTL.
   await getRedisClient().publish(CHANNEL_SETTINGS_RELOAD, JSON.stringify({ kind: 'smtp' })).catch(() => undefined);
+  clearMessageSizeLimitCache(); // 9.4: REST /mail/send uses the new maximum message size at once
 
   res.json({ ...settings, smarthostPassword: settings.smarthostPassword ? '••••••••' : '' });
 });

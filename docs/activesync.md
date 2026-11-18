@@ -79,7 +79,12 @@ server failure (the device keeps the message and retries).
   including the appended original — must not exceed the configured maximum message size (the
   stricter of BCP → SMTP and BCP → Settings → Mail; one storage helper shared with REST and JMAP,
   cached 60 s). Too large: Status 115 (SendQuotaExceeded, [MS-ASCMD] 2.2.2) in 14.x, HTTP 413 in
-  12.1. The ActiveSync request body itself is limited to 25 MB.
+  12.1. A settings save applies at once (settings reload drops the cache).
+- **Request-body cap** (`src/body-limit.ts`): every ActiveSync request body is limited to the
+  maximum message size × 4/3 + 1 MB (base64 / WBXML margin, so a message slightly above the
+  limit still gets Status 115 / HTTP 413 from the compose handler), at most 150 MB; larger
+  bodies end with HTTP 413. Before 9.4 the cap was a fixed 25 MB, so a larger configured size
+  could not be used over ActiveSync.
 - **Retries**: a 14.x request with a `ClientId` that was already sent gets Status 118
   (MessagePreviouslySent; remembered for 3 days). Without a ClientId (always in 12.1, which has
   none) a request is recognised as a retry by the `Message-ID` header of its MIME together with the

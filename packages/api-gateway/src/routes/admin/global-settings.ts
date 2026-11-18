@@ -14,7 +14,7 @@
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { prisma } from '@coremail/storage';
+import { prisma, clearMessageSizeLimitCache } from '@coremail/storage';
 import { requireArea } from '../../middleware/auth.js';
 import { createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 import { audit, auditContext, invalidateAuditCache } from '../../lib/audit.js';
@@ -161,6 +161,7 @@ adminGlobalSettingsRouter.put('/mail', async (req: Request, res: Response) => {
   });
   log.info(parsed.data, 'Mail settings updated');
   publishReload('mail');
+  clearMessageSizeLimitCache(); // 9.4: REST /mail/send uses the new maximum message size at once
   res.json(settingsView(cfg));
 });
 

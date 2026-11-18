@@ -1,4 +1,4 @@
-import { initRuntimeLogLevel, startAuthInvalidationSubscriber } from '@coremail/core';
+import { initRuntimeLogLevel, startAuthInvalidationSubscriber, getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 import { registerLdapMailVerifier } from '@coremail/auth-ldap';
 import express, { type Request, type Response, type NextFunction } from 'express';
 import { createLogger } from '@coremail/core/logger';
@@ -28,7 +28,8 @@ import { handleMoveItems } from './commands/move-items.js';
 import { handleMeetingResponse } from './commands/meeting-response.js';
 import { handleResolveRecipients } from './commands/resolve-recipients.js';
 import { getObjectStream } from '@coremail/storage/minio';
-import { waitForObjectStorage } from '@coremail/storage';
+import { waitForObjectStorage, clearMessageSizeLimitCache } from '@coremail/storage';
+import { easBodyParser } from './body-limit.js';
 
 const log = createLogger('activesync');
 installProcessGuards(log);
@@ -45,7 +46,8 @@ const APP_VERSION = (() => {
 })();
 
 // ─── Raw body parser for WBXML ────────────────────────────────────────────────
-app.use('/Microsoft-Server-ActiveSync', express.raw({ type: '*/*', limit: '25mb' }));
+// 9.4: the cap follows the configured maximum message size (body-limit.ts)
+app.use('/Microsoft-Server-ActiveSync', easBodyParser());
 
 // ─── OPTIONS — Autodiscover capability negotiation ────────────────────────────
 app.options('/Microsoft-Server-ActiveSync', (_req: Request, res: Response) => {
@@ -243,6 +245,16 @@ void initRuntimeLogLevel('activesync', { aliases: ['eas'] }); // BCP per-service
 // v7.1.0: credential changes end the user's Ping long-polls with 401.
 easLiveRequests.attachInvalidation();
 startAuthInvalidationSubscriber();
+// 9.4: a settings save (BCP → SMTP / Settings → Mail) applies the message size limit and
+// the request-body cap at once instead of after the 60 s cache.
+try {
+  const settingsSub = getRedisClient().duplicate();
+  settingsSub.on('error', (err) => log.warn({ err }, 'Settings subscriber Redis error'));
+  void settingsSub.subscribe(CHANNEL_SETTINGS_RELOAD);
+  settingsSub.on('message', () => clearMessageSizeLimitCache());
+} catch (err) {
+  log.warn({ err }, 'Redis subscription failed — the message size limit refreshes after 60 s');
+}
 // v6: internal service behind the api-gateway — loopback by default
 const HOST = resolveBindHost();
 // v7.1: no listener while the object storage misses the referenced objects
