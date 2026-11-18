@@ -15,7 +15,8 @@ before. The webmail route `/compose/<draftId>` is new.
 - Webmail: "In neuem Fenster öffnen" moves a draft into a browser window of its own
   (`/compose/<draftId>`, loads the server draft). Sending there hands the mail to the main window
   (undo toast there); closing the window saves and returns the draft to the tab strip; closing the
-  browser window with unsaved changes asks first.
+  browser window with unsaved changes asks first. A draft of a shared or delegated mailbox keeps
+  that mailbox in its window (sender choice and signature swap as inline).
 - Webmail compose: command row with **Senden** (split: Senden / Senden planen …), **Verwerfen**,
   **Anhängen** (Datei / Bild) and "…" (Signatur, Lesebestätigung anfordern, Nur-Text-Format, Als
   Entwurf speichern, In neuem Fenster öffnen), ✕ to save and close.

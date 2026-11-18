@@ -4,12 +4,13 @@
  * draft is sent here with the undo hold (toast with "Rückgängig"; undo reopens
  * it inline); `returned` → the window was closed without sending, the draft
  * goes back into the tab strip. Windows opened before a reload of this window
- * are recognised by their opener.
+ * are recognised by their opener. Both reopen the draft in the mailbox it was
+ * written in (shared / delegated: sender choice and signature as before).
  */
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useUiPrefs, useUiStore } from '../store/ui.js';
-import { acceptedMessage, acceptsMessage, parsePopoutMessage } from '../lib/composePopout.js';
+import { acceptedMessage, acceptsMessage, messageMailbox, parsePopoutMessage } from '../lib/composePopout.js';
 import { sendDraft, unsendDraft } from '../lib/draft-api.js';
 import { queueHeldSend } from '../components/DelayedSendToast.js';
 import { forgetPopout, isOwnPopout } from '../components/compose/popoutChannel.js';
@@ -26,9 +27,10 @@ export function usePopoutBridge(): void {
       const source = e.source as Window;
       const msg = parsePopoutMessage(e.data);
       if (!msg || msg.type === 'accepted') return;
+      const mailbox = messageMailbox(msg);
       if (msg.type === 'returned') {
         forgetPopout(source);
-        useUiStore.getState().openCompose({ mode: 'new', draftId: msg.draftId, subject: msg.subject }, { background: true });
+        useUiStore.getState().openCompose({ mode: 'new', draftId: msg.draftId, subject: msg.subject, mailbox }, { background: true });
         return;
       }
       forgetPopout(source);
@@ -45,8 +47,8 @@ export function usePopoutBridge(): void {
           return msg.draftId;
         },
         undo: (id) => unsendDraft(id),
-        reopenAfterUndo: (id) => ({ mode: 'new', draftId: id }),
-        reopenOnError: () => ({ mode: 'new', draftId: msg.draftId }),
+        reopenAfterUndo: (id) => ({ mode: 'new', draftId: id, mailbox }),
+        reopenOnError: () => ({ mode: 'new', draftId: msg.draftId, mailbox }),
         onSent: invalidate,
       });
       setTimeout(invalidate, 1500);

@@ -2,9 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   HANDOFF_ACK_MS, POPOUT_ROUTE, PRESENCE_TIMEOUT_MS, acceptedMessage, acceptsMessage, draftIdSet, holdsDraft, isDraftId,
-  parsePopoutMessage, parsePresenceMessage, popoutUrl, popoutWindowName, presenceQuery, presenceReply, returnedMessage, sendMessage,
+  messageMailbox, parsePopoutMessage, parsePresenceMessage, popoutMailbox, popoutUrl, popoutWindowName, presenceQuery, presenceReply,
+  returnedMessage, sendMessage,
 } from './composePopout.ts';
 import { IMPORTANCE_LEVELS, importanceBadge, toImportance } from './importance.ts';
+import { OWN_MAILBOX } from './mailboxContext.ts';
 
 const flags = { requestReceipt: true, requestDeliveryReceipt: false };
 
@@ -30,6 +32,29 @@ test('messages: send / accepted / returned round trip, everything else refused',
     assert.equal(parsePopoutMessage(bad), null, JSON.stringify(bad));
   }
   assert.equal((returnedMessage('d1', 'x'.repeat(900)) as { subject: string }).subject.length, 500);
+});
+
+test('mailbox context: the window address and the send / returned messages keep a shared or delegated mailbox', () => {
+  const shared = { kind: 'shared', id: 'smb_1' } as const;
+  const delegated = { kind: 'delegated', id: 'mbx-2' } as const;
+  assert.equal(popoutUrl('d1', OWN_MAILBOX), '/compose/d1', 'own mailbox: no parameter');
+  assert.equal(popoutUrl('d1', shared), '/compose/d1?mailbox=shared%3Asmb_1');
+  assert.deepEqual(popoutMailbox('?mailbox=shared%3Asmb_1'), shared);
+  assert.deepEqual(popoutMailbox(new URL(`https://x.test${popoutUrl('d1', delegated)}`).search), delegated, 'round trip');
+  for (const bad of ['', '?mailbox=', '?mailbox=shared%3A..%2Fx', '?mailbox=other%3Aabc', '?mailbox=shared%3A' + 'x'.repeat(65)]) {
+    assert.deepEqual(popoutMailbox(bad), OWN_MAILBOX, bad);
+  }
+  const send = parsePopoutMessage(sendMessage('d1', flags, shared));
+  assert.ok(send);
+  assert.deepEqual(messageMailbox(send), shared, 'the main window sends / reopens in the shared mailbox');
+  const back = parsePopoutMessage(returnedMessage('d1', 'Angebot', delegated));
+  assert.ok(back);
+  assert.deepEqual(messageMailbox(back), delegated, 'the returned draft goes into the strip with its mailbox');
+  assert.deepEqual(messageMailbox(parsePopoutMessage({ ...sendMessage('d1', flags), mailbox: 'shared:../x' })!), OWN_MAILBOX, 'invalid key: own');
+  assert.deepEqual(messageMailbox(parsePopoutMessage({ ...returnedMessage('d1', 's'), mailbox: 42 })!), OWN_MAILBOX);
+  const { mailbox: _omit, ...legacy } = sendMessage('d1', flags) as { mailbox: string };
+  assert.deepEqual(messageMailbox(parsePopoutMessage(legacy)!), OWN_MAILBOX, 'a window of an older build: own mailbox');
+  assert.deepEqual(messageMailbox(acceptedMessage('d1')), OWN_MAILBOX);
 });
 
 test('messages count only from the own origin and from a window this window opened', () => {

@@ -17,8 +17,15 @@
  * that holds it answers and comes to the front, the inline compose is not
  * opened. No answer within PRESENCE_TIMEOUT_MS → inline as usual.
  *
+ * Mailbox context: a draft written in a shared / delegated mailbox keeps that
+ * mailbox in its window (`?mailbox=<key>`, lib/mailboxContext.ts), so the
+ * sender choice and the per-identity signature work as inline; the `send` /
+ * `returned` messages carry it back (undo and the tab strip reopen it there).
+ * The server re-checks every send-as permission — the key only picks choices.
+ *
  * Pure — unit-tested with `node --test`.
  */
+import { OWN_MAILBOX, mailboxKey, parseMailboxKey, type MailboxRef } from './mailboxContext.ts';
 
 export const POPOUT_ROUTE = '/compose/:draftId';
 export const POPOUT_FEATURES = 'popup,width=980,height=840';
@@ -34,8 +41,14 @@ export function isDraftId(value: unknown): value is string {
   return typeof value === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(value);
 }
 
-export function popoutUrl(draftId: string): string {
-  return `/compose/${encodeURIComponent(draftId)}`;
+export function popoutUrl(draftId: string, mailbox: MailboxRef = OWN_MAILBOX): string {
+  const base = `/compose/${encodeURIComponent(draftId)}`;
+  return mailbox.kind === 'own' ? base : `${base}?mailbox=${encodeURIComponent(mailboxKey(mailbox))}`;
+}
+
+/** Mailbox of a compose window from its query string (`location.search`); anything invalid is the own one. */
+export function popoutMailbox(search: string): MailboxRef {
+  return parseMailboxKey(new URLSearchParams(search).get('mailbox'));
 }
 
 /** Window name per draft tab: opening the same tab again reuses its window. */
@@ -45,22 +58,33 @@ export function popoutWindowName(tabKey: string): string {
 
 export interface SendFlags { requestReceipt: boolean; requestDeliveryReceipt: boolean }
 
+/** `mailbox`: key of the mailbox the draft is written in ('own' | 'shared:<id>' | 'delegated:<id>'). */
 export type PopoutMessage =
-  | { kind: typeof KIND; type: 'send'; draftId: string } & SendFlags
+  | { kind: typeof KIND; type: 'send'; draftId: string; mailbox: string } & SendFlags
   | { kind: typeof KIND; type: 'accepted'; draftId: string }
-  | { kind: typeof KIND; type: 'returned'; draftId: string; subject: string };
+  | { kind: typeof KIND; type: 'returned'; draftId: string; subject: string; mailbox: string };
 
-export function sendMessage(draftId: string, flags: SendFlags): PopoutMessage {
-  return { kind: KIND, type: 'send', draftId, requestReceipt: flags.requestReceipt, requestDeliveryReceipt: flags.requestDeliveryReceipt };
+export function sendMessage(draftId: string, flags: SendFlags, mailbox: MailboxRef = OWN_MAILBOX): PopoutMessage {
+  return {
+    kind: KIND, type: 'send', draftId, mailbox: mailboxKey(mailbox),
+    requestReceipt: flags.requestReceipt, requestDeliveryReceipt: flags.requestDeliveryReceipt,
+  };
 }
 
 export function acceptedMessage(draftId: string): PopoutMessage {
   return { kind: KIND, type: 'accepted', draftId };
 }
 
-export function returnedMessage(draftId: string, subject: string): PopoutMessage {
-  return { kind: KIND, type: 'returned', draftId, subject: subject.slice(0, 500) };
+export function returnedMessage(draftId: string, subject: string, mailbox: MailboxRef = OWN_MAILBOX): PopoutMessage {
+  return { kind: KIND, type: 'returned', draftId, subject: subject.slice(0, 500), mailbox: mailboxKey(mailbox) };
 }
+
+/** Mailbox of a `send` / `returned` message (validated; `accepted` and anything invalid: own). */
+export function messageMailbox(msg: PopoutMessage): MailboxRef {
+  return msg.type === 'accepted' ? OWN_MAILBOX : parseMailboxKey(msg.mailbox);
+}
+
+const mailboxOf = (v: unknown): MailboxRef => parseMailboxKey(typeof v === 'string' ? v : null);
 
 /** Validated message between a compose window and its main window, or null (anything else). */
 export function parsePopoutMessage(data: unknown): PopoutMessage | null {
@@ -68,10 +92,11 @@ export function parsePopoutMessage(data: unknown): PopoutMessage | null {
   const m = data as Record<string, unknown>;
   if (m['kind'] !== KIND || !isDraftId(m['draftId'])) return null;
   if (m['type'] === 'send') {
-    return sendMessage(m['draftId'], { requestReceipt: m['requestReceipt'] === true, requestDeliveryReceipt: m['requestDeliveryReceipt'] === true });
+    const flags = { requestReceipt: m['requestReceipt'] === true, requestDeliveryReceipt: m['requestDeliveryReceipt'] === true };
+    return sendMessage(m['draftId'], flags, mailboxOf(m['mailbox']));
   }
   if (m['type'] === 'accepted') return acceptedMessage(m['draftId']);
-  if (m['type'] === 'returned') return returnedMessage(m['draftId'], typeof m['subject'] === 'string' ? m['subject'] : '');
+  if (m['type'] === 'returned') return returnedMessage(m['draftId'], typeof m['subject'] === 'string' ? m['subject'] : '', mailboxOf(m['mailbox']));
   return null;
 }
 

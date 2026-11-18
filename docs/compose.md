@@ -68,6 +68,11 @@ sign/encrypt (S/MIME is applied by the server from Settings → S/MIME).
   or busy) the window sends itself — the server's send claim keeps it to one send. Windows opened
   before a reload of the main window are still recognised (by their opener). The window's address
   follows the current draft version, so reloading it loads the latest save.
+  A draft written in a shared or delegated mailbox keeps that mailbox in its window
+  (`/compose/<draftId>?mailbox=shared:<id>` / `delegated:<id>`): the "Von" choice (send as / on
+  behalf of) and the per-identity signature swap work as inline; a handed-off send, undo and a
+  draft returned to the tab strip reopen it in the same mailbox. The server re-checks the send-as
+  permission on every save and send — the parameter only selects the offered choices.
   Closing the browser window with unsaved changes asks first and saves. A browser that blocks the
   new window keeps the draft inline (message "Der Browser hat das neue Fenster blockiert").
 - **A draft already open in its own window** is not opened inline a second time: before loading a

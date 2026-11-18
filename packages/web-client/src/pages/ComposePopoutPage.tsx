@@ -7,24 +7,26 @@
  * The window answers "is this draft open?" for every id the draft had (the
  * main window then brings it to the front instead of opening it inline) and
  * keeps its address on the current id (a reload loads the current version).
+ * The mailbox the draft is written in comes with the address (`?mailbox=`): a
+ * shared / delegated mailbox keeps its sender choice and signature defaults.
  */
-import { useEffect, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useLocation, useParams } from 'react-router-dom';
 import { ComposePane, type ComposeOutcome } from '../components/compose/ComposePane.js';
 import { composeRuntimes } from '../components/compose/composeRuntime.js';
 import { postToOpener, serveDraftPresence } from '../components/compose/popoutChannel.js';
 import { useSendGuard } from '../components/DelayedSendToast.js';
 import { useUiStore } from '../store/ui.js';
-import { isDraftId, popoutUrl, returnedMessage } from '../lib/composePopout.js';
+import { isDraftId, popoutMailbox, popoutUrl, returnedMessage } from '../lib/composePopout.js';
 import { hasPendingChanges } from '../lib/composeRules.js';
 import { tabTitle } from '../lib/composeTabs.js';
-import { OWN_MAILBOX } from '../lib/mailboxContext.js';
+import { mailboxKey, parseMailboxKey, type MailboxRef } from '../lib/mailboxContext.js';
 import { useT } from '../i18n/useT.js';
 
 type Done = 'saved' | 'sending' | null;
 
 /** Saves on browser close (asks first) and returns the draft to the main window. */
-function useWindowCloseGuard(draftId: string): void {
+function useWindowCloseGuard(draftId: string, mailbox: MailboxRef): void {
   useEffect(() => {
     const live = () => {
       const key = useUiStore.getState().compose.activeKey;
@@ -42,7 +44,7 @@ function useWindowCloseGuard(draftId: string): void {
       const cur = live();
       if (!cur) return;
       const tab = useUiStore.getState().compose.tabs.find((t) => t.key === cur.key);
-      postToOpener(returnedMessage(cur.rt.saver.draftId ?? draftId, tab?.subject ?? ''));
+      postToOpener(returnedMessage(cur.rt.saver.draftId ?? draftId, tab?.subject ?? '', mailbox));
     };
     window.addEventListener('beforeunload', onBeforeUnload);
     window.addEventListener('pagehide', onPageHide);
@@ -50,42 +52,48 @@ function useWindowCloseGuard(draftId: string): void {
       window.removeEventListener('beforeunload', onBeforeUnload);
       window.removeEventListener('pagehide', onPageHide);
     };
-  }, [draftId]);
+  }, [draftId, mailbox]);
 }
 
-/** Presence for every id the draft had; the address follows the current id. */
-function useDraftWindowIdentity(openedId: string, currentId: string | null | undefined): void {
+/** Presence for every id the draft had; the address follows the current id (and keeps the mailbox). */
+function useDraftWindowIdentity(openedId: string, currentId: string | null | undefined, mailbox: MailboxRef): void {
   const held = useRef(new Set<string>([openedId]));
   useEffect(() => serveDraftPresence(() => held.current), []);
   useEffect(() => {
     if (!currentId || !isDraftId(currentId)) return;
     held.current.add(currentId);
-    if (window.location.pathname !== popoutUrl(currentId)) window.history.replaceState(window.history.state, '', popoutUrl(currentId));
-  }, [currentId]);
+    const url = popoutUrl(currentId, mailbox);
+    if (window.location.pathname + window.location.search !== url) window.history.replaceState(window.history.state, '', url);
+  }, [currentId, mailbox]);
 }
 
 export function ComposePopoutPage() {
   const t = useT();
   const { draftId = '' } = useParams<{ draftId: string }>();
+  const { search } = useLocation();
+  // one ref per mailbox key (stable across renders; invalid keys are the own mailbox)
+  const mailboxParam = mailboxKey(popoutMailbox(search));
+  const mailbox = useMemo(() => parseMailboxKey(mailboxParam), [mailboxParam]);
   const valid = isDraftId(draftId);
   const activeKey = useUiStore((s) => s.compose.activeKey);
   const subject = useUiStore((s) => s.compose.tabs.find((x) => x.key === s.compose.activeKey)?.subject ?? '');
   const currentId = useUiStore((s) => s.compose.tabs.find((x) => x.key === s.compose.activeKey)?.draftId);
   const [done, setDone] = useState<Done>(null);
   useSendGuard();
-  useWindowCloseGuard(draftId);
-  useDraftWindowIdentity(draftId, currentId);
+  useWindowCloseGuard(draftId, mailbox);
+  useDraftWindowIdentity(draftId, currentId, mailbox);
 
   useEffect(() => {
-    if (valid) useUiStore.getState().openCompose({ mode: 'new', draftId, mailbox: OWN_MAILBOX });
-  }, [draftId, valid]);
+    // the compose opens in the mailbox it was written in (sender choice, signature defaults)
+    if (valid) useUiStore.getState().openCompose({ mode: 'new', draftId, mailbox });
+  }, [draftId, valid, mailbox]);
 
   useEffect(() => {
     document.title = tabTitle(subject, t('compose_new_message'));
   }, [subject, t]);
 
   const onDone = (o: ComposeOutcome) => {
-    if (o.kind === 'closed' && o.draftId) postToOpener(returnedMessage(o.draftId, o.subject));
+    if (o.kind === 'closed' && o.draftId) postToOpener(returnedMessage(o.draftId, o.subject, mailbox));
     setDone(o.kind === 'sent' ? 'sending' : 'saved');
     // a window opened by the webmail can close itself; one opened by hand shows the note
     if (o.kind !== 'sent') window.close();

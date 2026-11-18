@@ -365,7 +365,7 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
         return id;
       },
       undo: (id) => unsendDraft(id),
-      reopenAfterUndo: (id) => ({ mode: 'new', draftId: id }),
+      reopenAfterUndo: (id) => ({ mode: 'new', draftId: id, mailbox }),
       reopenOnError: () => ({ ...baseCtx, restore: restoreSnapshot, ...(saver.draftId ? { draftId: saver.draftId } : {}) }),
       onSent: invalidateMail,
     });
@@ -383,7 +383,7 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
     busyAction.current = true;
     try {
       const id = await saveNow();
-      if (await postToOpenerAndWait(sendMessage(id, sendFlags()))) { end({ kind: 'handedOff' }); return; }
+      if (await postToOpenerAndWait(sendMessage(id, sendFlags(), mailbox))) { end({ kind: 'handedOff' }); return; }
     } catch (err) {
       toastError(err);
       return;
@@ -461,7 +461,7 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
       const id = await saveNow();
       saver.dispose();
       trackPopout(win);
-      win.location.replace(popoutUrl(id));
+      win.location.replace(popoutUrl(id, mailbox));
       end({ kind: 'poppedOut' });
     } catch (err) {
       win.close();
