@@ -321,6 +321,9 @@ const composeUiDe = {
   sc_compose_close:                  'Entwurf speichern und schließen',
   sc_compose_bold:                   'Fett',
   sc_compose_italic:                 'Kursiv',
+  // 413 of a draft save / send (lib/errorTexts.ts); {mb}: the server's limit
+  compose_too_large:                 'Die Nachricht ist zu groß. Bitte Anhänge entfernen oder verkleinern.',
+  compose_too_large_max:             'Die Nachricht ist zu groß (höchstens {mb} MB). Bitte Anhänge entfernen oder verkleinern.',
 } as const;
 
 const composeUiEn: Record<keyof typeof composeUiDe, string> = {
@@ -488,6 +491,8 @@ const composeUiEn: Record<keyof typeof composeUiDe, string> = {
   sc_compose_close:                  'Save draft and close',
   sc_compose_bold:                   'Bold',
   sc_compose_italic:                 'Italic',
+  compose_too_large:                 'The message is too large. Please remove or shrink attachments.',
+  compose_too_large_max:             'The message is too large (at most {mb} MB). Please remove or shrink attachments.',
 };
 
 const de = {

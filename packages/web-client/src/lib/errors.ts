@@ -1,5 +1,6 @@
 import toast from 'react-hot-toast';
 import { tooLargeText } from './errorTexts.js';
+import { useLanguageStore } from '../store/language.js';
 
 /** Error with the machine-readable code of the auth/API error body (e.g. REAUTH_FAILED). */
 export class ApiError extends Error {
@@ -37,8 +38,10 @@ export function apiErrorFromBody(body: unknown, status: number, fallback = `HTTP
   const code = typeof b.code === 'string' ? b.code
     : error && /^[A-Z][A-Z0-9_]+$/.test(error) ? error : undefined;
   if (status === 429 && !code) return new ApiError('Zu viele Versuche. Bitte warten Sie kurz.', 'RATE_LIMITED', status);
-  // 9.4: message / draft over the size limit (body: { maxBytes }) — say what to do
-  if (status === 413 && !code) return new ApiError(tooLargeText((b as { maxBytes?: unknown }).maxBytes), 'MESSAGE_TOO_LARGE', status);
+  // 9.4: message / draft over the size limit (body: { maxBytes }) — say what to do, in the UI language
+  if (status === 413 && !code) {
+    return new ApiError(tooLargeText((b as { maxBytes?: unknown }).maxBytes, useLanguageStore.getState().lang), 'MESSAGE_TOO_LARGE', status);
+  }
   const known = code ? CODE_MESSAGES[code] : undefined;
   const message = known
     ?? (typeof b.message === 'string' && b.message ? b.message : undefined)
