@@ -202,7 +202,7 @@ export function ServersPage() {
                     onChange={(e) => set('useHttps', e.target.checked)}
                   />
                   <span className="text-sm text-fg-muted">HTTPS verwenden</span>
-                  <span className="text-xs text-fg-subtle">(TLS über HTTPS (Port 443) dieses Servers oder einen Reverse Proxy)</span>
+                  <span className="text-xs text-fg-subtle">— TLS über HTTPS (Port 443) dieses Servers oder über einen Reverse Proxy</span>
                 </label>
 
                 <div className="flex items-center gap-3">

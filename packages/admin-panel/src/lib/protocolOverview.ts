@@ -20,10 +20,15 @@ export interface OverviewPort {
 }
 
 export interface OverrideEntry { id: string; name: string; setting: 'on' | 'off'; differs: boolean }
-export interface OverrideGroup { total: number; differing: number; entries: OverrideEntry[] }
+/** `namesHidden`: the role may not read these domains / mailboxes — counts only, `entries` empty. */
+export interface OverrideGroup { total: number; differing: number; entries: OverrideEntry[]; namesHidden?: true }
 
 export type OverviewWarningCode = 'no-active-port' | 'port-open-access-off' | 'mapi-https';
 export interface OverviewWarning { code: OverviewWarningCode; protocol: Protocol; ports?: number[] }
+
+/** Softer than a warning: port open, server-wide off, on for some domains / mailboxes. */
+export type OverviewNoticeCode = 'port-open-access-limited';
+export interface OverviewNotice { code: OverviewNoticeCode; protocol: Protocol; ports: number[] }
 
 export interface HttpsState {
   active: boolean;
@@ -41,6 +46,7 @@ export interface ProtocolOverviewRow {
   overrides: { domains: OverrideGroup; users: OverrideGroup };
   enabledAnywhere: boolean;
   warnings: OverviewWarning[];
+  notices: OverviewNotice[];
 }
 
 export interface ProtocolOverview {
@@ -48,6 +54,7 @@ export interface ProtocolOverview {
   smtpInbound: { ports: OverviewPort[]; activePorts: number[] };
   https: HttpsState;
   warnings: OverviewWarning[];
+  notices: OverviewNotice[];
 }
 
 /** Names on the page (German UI). */
@@ -110,9 +117,49 @@ export function warningText(w: OverviewWarning, https: HttpsState): string {
   }
 }
 
+/** One sentence per notice (shown softer than a warning, not counted as an inconsistency). */
+export function noticeText(n: OverviewNotice): string {
+  switch (n.code) {
+    case 'port-open-access-limited':
+      return `${PROTOCOL_NAMES[n.protocol]}: Port offen (${n.ports.join(', ')}); Anmeldung nur für abweichende Domains/Benutzer.`;
+  }
+}
+
 /** Link to an overriding domain / mailbox: the list page, filtered to that name. */
 export function overrideLink(level: 'domains' | 'users', name: string): string {
   return `${level === 'domains' ? '/domains' : '/mailboxes'}?q=${encodeURIComponent(name)}`;
+}
+
+/** Hint instead of the list when the role may not read the names (OverrideGroup.namesHidden). */
+export function hiddenNamesText(level: 'domains' | 'users'): string {
+  return level === 'domains' ? 'Namen nur mit Leserecht für Domains sichtbar' : 'Adressen nur mit Leserecht für Empfänger sichtbar';
+}
+
+/** Element id of a protocol card (anchor target, e.g. /services#protocol-imap). */
+export function protocolAnchorId(p: Protocol): string {
+  return `protocol-${p}`;
+}
+
+/** Element id of the SMTP-Empfang (transport) card. */
+export const SMTP_INBOUND_ANCHOR = 'smtp-inbound';
+
+/**
+ * Before w2b the Services page had sub-pages per listener service (SMTP Inbound,
+ * IMAP, POP3) and the server-level "Protokollzugriff" editor. Old links
+ * /services/<slug> land on the combined page at the matching card.
+ */
+const LEGACY_SERVICE_ANCHORS: Record<string, string> = {
+  'smtp-receive': protocolAnchorId('smtp'),
+  smtp: protocolAnchorId('smtp'),
+  'smtp-inbound': SMTP_INBOUND_ANCHOR,
+  imap: protocolAnchorId('imap'),
+  pop3: protocolAnchorId('pop3'),
+};
+
+/** Target of an old /services/<sub> link: the combined page, anchored to the card when known. */
+export function legacyServicesTarget(sub: string | undefined): string {
+  const anchor = sub ? LEGACY_SERVICE_ANCHORS[sub.toLowerCase()] : undefined;
+  return anchor ? `/services#${anchor}` : '/services';
 }
 
 /** "an" / "aus" label of an override entry, with "(wie geerbt)" when it does not differ. */

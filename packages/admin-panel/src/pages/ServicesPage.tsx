@@ -1,14 +1,16 @@
 /**
- * BCP → Dienste → "Protokolle" (w2b): one page for both things that switch a
+ * BCP → "Protokolle & Dienste" (w2b, route /services): one page for both things that switch a
  * protocol — the ports it listens on (listeners: active, TLS mode, legacy TLS,
  * address/port) and the server-wide access after the login (protocol switches;
  * domains and mailboxes override them in their own dialogs). Per protocol: the
  * access switch, its ports, a summary line with the overriding domains /
- * mailboxes and the consistency warnings of GET /admin/protocol-access/overview.
- * Writes use the existing routes (/admin/protocol-access, /admin/services/*).
+ * mailboxes, the consistency warnings and softer notices of
+ * GET /admin/protocol-access/overview. Writes use the existing routes
+ * (/admin/protocol-access, /admin/services/*). Each card has an anchor id
+ * (protocolAnchorId) — old /services/<sub> links redirect there (main.tsx).
  */
-import { useId, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useId, useState } from 'react';
+import { Link, Navigate, useLocation, useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Pencil, Trash2, Lock, Loader2, AlertTriangle, Globe, Info, Inbox, ChevronDown, ChevronUp } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -20,10 +22,12 @@ import { errorMessage } from '../lib/errors.js';
 import { LEGACY_TLS_LABEL, LEGACY_TLS_WARNING, listenerPayload, type ListenerForm } from '../lib/legacyClients.js';
 import type { ProtocolLevelView } from '../lib/protocolAccess.js';
 import {
-  httpsName, listenerSlug, orderedRows, overrideEntryLabel, overrideLink, overrideSummary, PROTOCOL_NAMES, summaryLine, warningText,
-  type HttpsState, type ListenerService, type OverrideGroup, type OverviewPort, type OverviewWarning, type ProtocolOverview,
-  type ProtocolOverviewRow,
+  hiddenNamesText, httpsName, legacyServicesTarget, listenerSlug, noticeText, orderedRows, overrideEntryLabel, overrideLink, overrideSummary, PROTOCOL_NAMES,
+  protocolAnchorId, SMTP_INBOUND_ANCHOR, summaryLine, warningText,
+  type HttpsState, type ListenerService, type OverrideGroup, type OverviewNotice, type OverviewPort, type OverviewWarning,
+  type ProtocolOverview, type ProtocolOverviewRow,
 } from '../lib/protocolOverview.js';
+import { useT } from '../i18n/useT.js';
 
 const OVERVIEW_KEY = ['protocol-overview'] as const;
 
@@ -74,6 +78,8 @@ function ListenerModal({ initial, smtp, onSave, onClose, saving }: {
   const set = (f: keyof ListenerForm, v: string | boolean) => setForm(prev => ({ ...prev, [f]: v }));
 
   const titleId = useId();
+  const addressId = useId();
+  const portId = useId();
   return (
     <Modal
       onClose={onClose}
@@ -87,15 +93,15 @@ function ListenerModal({ initial, smtp, onSave, onClose, saving }: {
         </h3>
         <div className="space-y-3">
           <div>
-            <label className="block text-xs font-medium text-fg-muted mb-1">IP-Adresse</label>
-            <input type="text" value={form.address} onChange={e => set('address', e.target.value)}
+            <label htmlFor={addressId} className="block text-xs font-medium text-fg-muted mb-1">IP-Adresse</label>
+            <input id={addressId} type="text" value={form.address} onChange={e => set('address', e.target.value)}
               placeholder="0.0.0.0"
               className="w-full border border-line-strong rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-fg" />
             <p className="text-[11px] text-fg-subtle mt-1">0.0.0.0 = alle Schnittstellen. Eine feste IP muss auf dem Server existieren.</p>
           </div>
           <div>
-            <label className="block text-xs font-medium text-fg-muted mb-1">Port</label>
-            <input type="number" value={form.port} onChange={e => set('port', e.target.value)}
+            <label htmlFor={portId} className="block text-xs font-medium text-fg-muted mb-1">Port</label>
+            <input id={portId} type="number" value={form.port} onChange={e => set('port', e.target.value)}
               placeholder="25" min={1} max={65535}
               className="w-full border border-line-strong rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-accent-fg" />
             {smtp && (
@@ -245,6 +251,9 @@ function OverrideList({ level, group }: { level: 'domains' | 'users'; group: Ove
   const listId = useId();
   if (group.total === 0) return null;
   const label = overrideSummary(level, group) ?? `${group.total} ${level === 'domains' ? 'Domain-Einstellung(en)' : 'Postfach-Einstellung(en)'} wie geerbt`;
+  if (group.namesHidden) {
+    return <p className="text-xs text-fg-muted">{label} <span className="text-fg-subtle">({hiddenNamesText(level)})</span></p>;
+  }
   return (
     <div>
       <button type="button" aria-expanded={open} aria-controls={listId} onClick={() => setOpen(!open)}
@@ -292,7 +301,8 @@ function ProtocolCard({ row, https }: { row: ProtocolOverviewRow; https: HttpsSt
   };
 
   return (
-    <section aria-labelledby={headingId} className="bg-surface border border-line rounded-xl p-4">
+    <section id={protocolAnchorId(row.protocol)} tabIndex={-1} aria-labelledby={headingId}
+      className="bg-surface border border-line rounded-xl p-4 scroll-mt-4 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-fg">
       <div className="flex items-start gap-3">
         <div className="flex-1 min-w-0">
           <h3 id={headingId} className="text-sm font-semibold text-fg">{name}</h3>
@@ -310,6 +320,7 @@ function ProtocolCard({ row, https }: { row: ProtocolOverviewRow; https: HttpsSt
         <OverrideList level="users" group={row.overrides.users} />
       </div>
       {row.warnings.map((w) => <WarningLine key={w.code} warning={w} https={https} />)}
+      {row.notices.map((n) => <NoticeLine key={n.code} notice={n} />)}
       {row.listenerService
         ? <PortsTable ports={row.ports} service={row.listenerService} caption={`${name}: Ports`} />
         : (
@@ -330,11 +341,22 @@ function WarningLine({ warning, https }: { warning: OverviewWarning; https: Http
   );
 }
 
+/** Softer than WarningLine: consistent, but worth knowing (port open, access only for overrides). */
+function NoticeLine({ notice }: { notice: OverviewNotice }) {
+  return (
+    <p className="mt-2 flex items-start gap-1.5 rounded-lg border border-info-line bg-info-bg px-3 py-2 text-xs text-info-fg">
+      <Info size={12} className="mt-0.5 shrink-0" aria-hidden="true" />
+      <span><span className="sr-only">Hinweis: </span>{noticeText(notice)}</span>
+    </p>
+  );
+}
+
 // ── Inbound transport (SMTP from other servers) ──────────────────────────────
 function InboundCard({ ports }: { ports: OverviewPort[] }) {
   const headingId = useId();
   return (
-    <section aria-labelledby={headingId} className="bg-surface border border-line rounded-xl p-4">
+    <section id={SMTP_INBOUND_ANCHOR} tabIndex={-1} aria-labelledby={headingId}
+      className="bg-surface border border-line rounded-xl p-4 scroll-mt-4 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-fg">
       <div className="flex items-center gap-2">
         <Inbox size={14} className="text-fg-subtle" aria-hidden="true" />
         <h3 id={headingId} className="text-sm font-semibold text-fg">SMTP-Empfang (Transport)</h3>
@@ -408,17 +430,37 @@ function ExplanationBox() {
 }
 
 // ── Page ──────────────────────────────────────────────────────────────────────
+/** Old sub-page links (/services/imap, /services/smtp-receive, …) → the combined page at the matching card. */
+export function ServicesLegacyRedirect() {
+  const { sub } = useParams();
+  return <Navigate to={legacyServicesTarget(sub)} replace />;
+}
+
+/** Scrolls to and focuses the card named by the URL hash (/services#protocol-imap) once the page has loaded. */
+function useAnchorFocus(ready: boolean): void {
+  const { hash } = useLocation();
+  useEffect(() => {
+    if (!ready || hash.length < 2) return;
+    const el = document.getElementById(decodeURIComponent(hash.slice(1)));
+    if (!el) return;
+    el.scrollIntoView({ block: 'start' });
+    el.focus({ preventScroll: true });
+  }, [ready, hash]);
+}
+
 export function ServicesPage() {
+  const t = useT();
   const { data, isLoading, isError } = useQuery<ProtocolOverview>({
     queryKey: OVERVIEW_KEY,
     queryFn:  () => api.get<ProtocolOverview>('/admin/protocol-access/overview'),
   });
+  useAnchorFocus(data !== undefined);
 
   return (
     <div className="h-full overflow-y-auto bg-surface-2">
       <div className="p-6 max-w-4xl space-y-4">
         <div>
-          <h2 className="text-lg font-semibold text-fg">Protokolle</h2>
+          <h2 className="text-lg font-semibold text-fg">{t('nav_services')}</h2>
           <p className="text-sm text-fg-subtle mt-0.5">Ports und serverweiter Zugriff je Protokoll</p>
         </div>
         <ExplanationBox />

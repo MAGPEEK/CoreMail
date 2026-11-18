@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  httpsName, listenerSlug, orderedRows, overrideEntryLabel, overrideLink, overrideSummary, portsSummary, summaryLine, warningText,
+  hiddenNamesText, httpsName, legacyServicesTarget, listenerSlug, noticeText, orderedRows, overrideEntryLabel, overrideLink, overrideSummary,
+  portsSummary, protocolAnchorId, summaryLine, warningText,
   type HttpsState, type OverrideGroup, type ProtocolOverviewRow,
 } from './protocolOverview.ts';
 
@@ -9,7 +10,7 @@ const HTTPS: HttpsState = { active: true, port: 443, cert: { id: 'c1', name: 'le
 const none: OverrideGroup = { total: 0, differing: 0, entries: [] };
 const row = (over: Partial<ProtocolOverviewRow> = {}): ProtocolOverviewRow => ({
   protocol: 'imap', transport: 'listener', listenerService: 'IMAP', server: 'on', ports: [], activePorts: [993],
-  overrides: { domains: none, users: none }, enabledAnywhere: true, warnings: [], ...over,
+  overrides: { domains: none, users: none }, enabledAnywhere: true, warnings: [], notices: [], ...over,
 });
 
 test('summary line: active ports, then the differing domains and mailboxes', () => {
@@ -57,4 +58,25 @@ test('display order puts SMTP sending first; listener slugs; HTTPS name', () => 
   assert.equal(listenerSlug('SMTP_RECEIVE'), 'smtp-receive');
   assert.equal(listenerSlug('IMAP'), 'imap');
   assert.equal(httpsName(8443), 'HTTPS (Port 8443)');
+});
+
+test('notice: port open, login only for the differing domains / mailboxes', () => {
+  assert.equal(noticeText({ code: 'port-open-access-limited', protocol: 'imap', ports: [143, 993] }),
+    'IMAP: Port offen (143, 993); Anmeldung nur für abweichende Domains/Benutzer.');
+});
+
+test('hidden names: a hint instead of the list', () => {
+  assert.match(hiddenNamesText('users'), /Empfänger/);
+  assert.match(hiddenNamesText('domains'), /Domains/);
+});
+
+test('old /services/<sub> links land on the matching card', () => {
+  assert.equal(legacyServicesTarget('imap'), '/services#protocol-imap');
+  assert.equal(legacyServicesTarget('POP3'), '/services#protocol-pop3');
+  assert.equal(legacyServicesTarget('smtp-receive'), '/services#protocol-smtp');
+  assert.equal(legacyServicesTarget('smtp-inbound'), '/services#smtp-inbound');
+  assert.equal(legacyServicesTarget('protocols'), '/services');
+  assert.equal(legacyServicesTarget('nonsense'), '/services');
+  assert.equal(legacyServicesTarget(undefined), '/services');
+  assert.equal(protocolAnchorId('mapi'), 'protocol-mapi');
 });

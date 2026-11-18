@@ -34,7 +34,7 @@ const de = {
   nav_quarantine:         'Quarantäne',
 
   // ── Navigation — Infrastructure ──────────────────────────────────────────
-  nav_services:           'Services',
+  nav_services:           'Protokolle & Dienste',
   nav_smtp_config:        'SMTP & Routing',
   nav_certificates:       'Zertifikate',
   nav_sso:                'SSO',
@@ -1098,7 +1098,7 @@ const en: { [K in keyof DE]: string } = {
   nav_quarantine:         'Quarantine',
 
   // ── Navigation — Infrastructure ──────────────────────────────────────────
-  nav_services:           'Services',
+  nav_services:           'Protocols & services',
   nav_smtp_config:        'SMTP & Routing',
   nav_certificates:       'Certificates',
   nav_sso:                'SSO',
