@@ -30,6 +30,14 @@ Basic authentication is accepted over HTTPS only (a connection the gateway verif
 refused); set `MAPI_ALLOW_PLAIN_HTTP=true` only for test setups. Accounts with MFA use an app password,
 as on every mail protocol.
 
+Refusals before a session exists:
+
+| Situation | HTTP | X-ResponseCode | Notes |
+|-----------|------|----------------|-------|
+| No / wrong credentials | 401 + `WWW-Authenticate: Basic` | 8 Anonymous Not Allowed | the only answer that makes Outlook ask for the password |
+| MAPI switched off, plain HTTP | 403 | 11 No Privilege | |
+| Per-account request limit (`MAPI_RATE_LIMIT`), account locked by the shared mail-login lockout, temporary failure | 503 + `Retry-After` | 1 Unknown Failure | MS-OXCMAPIHTTP has no throttling code (2.2.3.3.3) and reserves non-200 statuses for authentication and exceptional conditions (2.2.2.2): throttling is a 5xx with `Retry-After`, never 401 (no password prompt) and never a misused X-ResponseCode |
+
 ## What works
 
 | Area | Details |
@@ -59,7 +67,7 @@ as on every mail protocol.
   accepted but not stored; saving an opened received message does not change it.
 - Named property IDs are kept in memory (per mailbox, per service process).
 - Requests are limited per mail account (`MAPI_RATE_LIMIT` requests per `MAPI_RATE_WINDOW_SEC`, default
-  3000 per 5 minutes; above it HTTP 429 with `Retry-After`). The api-gateway's global API limit (per user / per IP,
+  3000 per 5 minutes; above it HTTP 503 with `Retry-After`). The api-gateway's global API limit (per user / per IP,
   [api-gateway-security.md](api-gateway-security.md)) does not count `/mapi` (Outlook is chatty and clients often share a NAT address); password guessing stays
   bounded by the shared mail-login lockout.
 - Each session holds its open messages, attachments and streams in memory, at most

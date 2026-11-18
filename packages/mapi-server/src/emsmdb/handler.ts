@@ -74,19 +74,29 @@ function bodyOf(req: Request): Buffer {
   return Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
 }
 
-/** Answers a refused authentication (401 asks for credentials, the others never do). */
+/**
+ * Answers a refused authentication: 401 asks for credentials (X-ResponseCode 8
+ * Anonymous Not Allowed), 403 has no privilege (11), 503 + Retry-After is a
+ * locked account or a temporary failure. MS-OXCMAPIHTTP 2.2.3.3.3 has no
+ * throttling code, so a 503 carries the generic X-ResponseCode 1 (Unknown
+ * Failure, the header is mandatory) — the HTTP status and Retry-After are the
+ * signal, and the client never gets a password prompt for it.
+ */
 export function refuseAuth(res: Response, h: MapiRequestHeaders, outcome: Extract<AuthOutcome, { ok: false }>): void {
   const extra: Record<string, string> = {};
   if (outcome.status === 401) extra['WWW-Authenticate'] = BASIC_CHALLENGE;
   if (outcome.retryAfterSec !== undefined) extra['Retry-After'] = String(outcome.retryAfterSec);
-  const code = outcome.status === 401 ? ResponseCode.AnonymousNotAllowed : ResponseCode.NoPrivilege;
+  const code = outcome.status === 401 ? ResponseCode.AnonymousNotAllowed
+    : outcome.status === 403 ? ResponseCode.NoPrivilege
+      : ResponseCode.UnknownFailure;
   respondFailure(res, h, code, outcome.reason, outcome.status, extra);
 }
 
 /**
  * Validation, authentication and the per-account request limit, shared by both
- * endpoints; null when the request was answered. Over the limit: HTTP 429 with
- * Retry-After (X-ResponseCode 1) — the client retries later, the session stays.
+ * endpoints; null when the request was answered. Over the limit: HTTP 503 with
+ * Retry-After (X-ResponseCode 1, see refuseAuth) — the client retries later,
+ * the session stays.
  */
 export async function admit(
   endpoint: Endpoint, req: Request, res: Response,
@@ -105,7 +115,7 @@ export async function admit(
   const rate = await deps.limiter.hit(auth.auth.user.userId);
   if (!rate.allowed) {
     if (rate.count === rate.limit + 1) log.warn({ userId: auth.auth.user.userId, limit: rate.limit }, 'MAPI request limit reached');
-    respondFailure(res, h, ResponseCode.UnknownFailure, 'too many requests', 429, { 'Retry-After': String(rate.retryAfterSec) });
+    respondFailure(res, h, ResponseCode.UnknownFailure, 'too many requests', 503, { 'Retry-After': String(rate.retryAfterSec) });
     return null;
   }
   return { h, auth };

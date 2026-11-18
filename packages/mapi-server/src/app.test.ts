@@ -35,6 +35,8 @@ class MemoryRedis implements SessionRedis {
 async function fakeAuthenticate(header: string | undefined): Promise<AuthOutcome> {
   if (!header?.startsWith('Basic ')) return { ok: false, status: 401, reason: 'credentials required' };
   const [login, password] = Buffer.from(header.slice(6), 'base64').toString().split(':');
+  // the shared mail-login lockout as http/auth.ts reports it
+  if (login === 'locked@example.test') return { ok: false, status: 503, reason: 'too many failed logins', retryAfterSec: 120 };
   const u = USERS[login!];
   if (!u || u.password !== password) return { ok: false, status: 401, reason: 'invalid credentials' };
   if (!u.mapi) return { ok: false, status: 403, reason: 'MAPI access is disabled for this account', userId: u.userId };
@@ -226,7 +228,7 @@ test('PING and NotificationWait on a live session; the address book answers PING
   assert.equal((await c.request('nspi', 'Bind', Buffer.alloc(0))).responseCode, 16);
 });
 
-test('per-account request limit: over the limit → 429 + Retry-After (X-ResponseCode 1), other accounts unaffected', async () => {
+test('per-account request limit: over the limit → 503 + Retry-After (X-ResponseCode 1), other accounts unaffected', async () => {
   const counter = memoryCounter();
   const limited = createApp({
     sessions, store, rops: ROP_REGISTRY, notifications: instantNotify, authenticate: fakeAuthenticate,
@@ -241,7 +243,7 @@ test('per-account request limit: over the limit → 429 + Retry-After (X-Respons
     assertOk(await c.request('emsmdb', 'PING', Buffer.alloc(0)));
     assertOk(await c.request('nspi', 'PING', Buffer.alloc(0)));
     const over = await c.request('emsmdb', 'PING', Buffer.alloc(0));
-    assert.equal(over.status, 429);
+    assert.equal(over.status, 503, 'throttling is a 5xx with Retry-After, never 401 / 429');
     assert.equal(over.responseCode, 1);
     assert.ok(Number(over.headers.get('retry-after')) >= 1);
     assert.equal(over.headers.get('www-authenticate'), null);
@@ -251,6 +253,16 @@ test('per-account request limit: over the limit → 429 + Retry-After (X-Respons
     for (let i = 0; i < 5; i++) assert.equal((await wrong.connect()).status, 401);
   } finally {
     s.close();
+  }
+});
+
+test('locked account: 503 + Retry-After, X-ResponseCode 1, no password prompt (never 401 / 429 / X-ResponseCode 11)', async () => {
+  for (const endpoint of ['emsmdb', 'nspi'] as const) {
+    const r = await new MapiHttpClient(base, 'locked@example.test', 'pw').request(endpoint, 'PING', Buffer.alloc(0));
+    assert.equal(r.status, 503, endpoint);
+    assert.equal(r.responseCode, 1, endpoint);
+    assert.equal(r.headers.get('retry-after'), '120', endpoint);
+    assert.equal(r.headers.get('www-authenticate'), null, endpoint);
   }
 });
 

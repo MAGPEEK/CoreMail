@@ -6,6 +6,9 @@
  * cached (HMAC-keyed CredentialCache, dropped on every credential/switch
  * change of the user). Basic over a connection the gateway verified as plain
  * HTTP is refused unless MAPI_ALLOW_PLAIN_HTTP=true (test setups).
+ * A locked account (shared lockout) and a temporary failure are answered
+ * 503 + Retry-After — never 401, which would make Outlook ask for the
+ * password again (MS-OXCMAPIHTTP 2.2.2.2: 5xx for exceptional conditions).
  * NTLM / Negotiate follow in a later package.
  */
 import { CredentialCache, createLogger } from '@coremail/core';
@@ -16,7 +19,7 @@ const log = createLogger('mapi:auth');
 
 export type AuthOutcome =
   | { ok: true; auth: SessionAuth; startedAt: number }
-  | { ok: false; status: 401 | 403 | 429 | 503; reason: string; retryAfterSec?: number; userId?: string };
+  | { ok: false; status: 401 | 403 | 503; reason: string; retryAfterSec?: number; userId?: string };
 
 export const BASIC_CHALLENGE = 'Basic realm="CoreMail"';
 
@@ -77,7 +80,7 @@ export async function authenticate(header: string | undefined, transport: Transp
     case 'protocol_disabled':
       return { ok: false, status: 403, reason: 'MAPI access is disabled for this account', userId: r.userId };
     case 'locked':
-      return { ok: false, status: 429, reason: 'too many failed logins', retryAfterSec: r.retryAfterSec };
+      return { ok: false, status: 503, reason: 'too many failed logins', retryAfterSec: r.retryAfterSec };
     case 'error':
       return { ok: false, status: 503, reason: 'temporary failure', retryAfterSec: 30 };
     default:
