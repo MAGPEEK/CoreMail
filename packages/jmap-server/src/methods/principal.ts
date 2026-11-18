@@ -11,11 +11,24 @@ import { hashState } from '../state.js';
 import { compareBy, pageFields, paginate, parseGetArgs, parseSetArgs, pick } from './common.js';
 import type { JsonObject, MethodContext } from '../types.js';
 
+/**
+ * Pure (9.4): is a principal listed? Mailboxes hidden from the address list
+ * (MailFlowPolicy.hiddenFromGal) are left out unless the caller has an account
+ * for them (own mailbox, shared / delegated access).
+ */
+export function principalListed(hiddenFromGal: boolean | undefined, hasAccount: boolean): boolean {
+  return hasAccount || hiddenFromGal !== true;
+}
+
+const PRINCIPAL_SELECT = { id: true, email: true, displayName: true, mailFlowPolicy: { select: { hiddenFromGal: true } } } as const;
+
 async function listPrincipals(ctx: MethodContext): Promise<JsonObject[]> {
-  const [users, shared] = await Promise.all([
-    prisma.user.findMany({ where: { active: true }, select: { id: true, email: true, displayName: true }, orderBy: { displayName: 'asc' } }),
-    prisma.sharedMailbox.findMany({ where: { active: true }, select: { id: true, email: true, displayName: true }, orderBy: { displayName: 'asc' } }),
+  const [allUsers, allShared] = await Promise.all([
+    prisma.user.findMany({ where: { active: true }, select: PRINCIPAL_SELECT, orderBy: { displayName: 'asc' } }),
+    prisma.sharedMailbox.findMany({ where: { active: true }, select: PRINCIPAL_SELECT, orderBy: { displayName: 'asc' } }),
   ]);
+  const users = allUsers.filter((u) => principalListed(u.mailFlowPolicy?.hiddenFromGal, ctx.accounts.has(u.id)));
+  const shared = allShared.filter((s) => principalListed(s.mailFlowPolicy?.hiddenFromGal, ctx.accounts.has(`shared-${s.id}`)));
   const out: JsonObject[] = [];
   for (const u of users) {
     const acc = ctx.accounts.get(u.id);

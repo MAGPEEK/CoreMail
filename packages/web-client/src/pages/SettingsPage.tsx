@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { RulesSection } from '../components/RulesSection.js';
 import { RecoverDeletedItemsPanel } from '../components/RecoverDeletedItems.js';
+import { MailboxAccessLog } from '../components/MailboxAccessLog.js';
 import { QuotaIndicator } from '../components/QuotaIndicator.js';
 import { quotaColor, type QuotaLevel } from '../lib/quota.js';
 import { SignatureSection } from '../components/SignatureSection.js';
@@ -1277,6 +1278,9 @@ function SecuritySection() {
           <p className="text-xs text-warning-fg">Dieser Browser unterstützt kein WebAuthn (oder die Seite läuft nicht über HTTPS).</p>
         )}
       </div>
+
+      {/* 9.4: who accessed my mailbox (delegates) */}
+      <MailboxAccessLog />
 
       {reauth && (
         <PasswordPromptDialog

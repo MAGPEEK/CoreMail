@@ -43,6 +43,7 @@ const none = async () => null;
     },
   },
   sharedMailbox: { findFirst: none, findUnique: none },
+  mailFlowPolicy: { findUnique: none },
   resourceMailbox: { findFirst: none },
   emailAlias: { findFirst: none, findMany: async () => [] },
   sharedMailboxPerm: { findMany: async () => [] },

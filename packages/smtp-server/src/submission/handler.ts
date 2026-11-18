@@ -10,10 +10,10 @@
 import { createLogger } from '@coremail/core';
 import {
   prisma, checkHeaderSenderIdentity, isSenderAddressAllowed, listAllowedSenderAddresses, checkSendQuota,
-  stripHeaders,
+  stripHeaders, checkUserSendLimits, afterForeignSend, type SendLimitVerdict,
 } from '@coremail/storage';
 import { VIRUS_SCAN_HEADER } from '../inbound/virus-scan-header.js';
-import { storeInboundMessage } from '../handlers/message.js';
+import { storeInboundMessage, toLocalOutcome } from '../handlers/message.js';
 import { expandRecipientsWithOrigins, isLocalDomainAddress } from '../handlers/expand.js';
 import { enqueueOutbound } from '../outbound/queue.js';
 import { dsnForRecipients } from '../core/dsn-params.js';
@@ -55,6 +55,14 @@ export function completeSubmissionHeaders(raw: Buffer, hostname: string, now = n
  * external recipients). Port 25 strips it on receipt as well; only the inbound
  * path adds it after its own ClamAV scan.
  */
+/** Pure: the SMTP reply for a per-mailbox send limit verdict (9.4), or null. */
+export function submissionLimitReply(verdict: SendLimitVerdict): string | null {
+  if (verdict.ok) return null;
+  return verdict.kind === 'size'
+    ? `552 5.3.4 Message exceeds the sender's size limit (${Math.floor(verdict.limit / (1024 * 1024))} MB)`
+    : `550 5.5.3 Too many recipients for this sender (max ${verdict.limit})`;
+}
+
 export function stripSubmittedInternalHeaders(raw: Buffer): Buffer {
   return stripHeaders(raw, [VIRUS_SCAN_HEADER]);
 }
@@ -133,6 +141,15 @@ async function onMessage(
     log.warn({ authed: authUser.email, from, reason: verdict.reason }, 'SMTP submission: header sender not allowed');
     throw new Error('550 5.7.1 From/Sender header not allowed for authenticated user');
   }
+  // 9.4: per-mailbox send limits (the listener's global limits were applied by
+  // the session already; a per-mailbox value can only narrow them here).
+  const limitReply = submissionLimitReply(
+    await checkUserSendLimits(authUser.id, { maxBytes: Number.POSITIVE_INFINITY, maxRecipients: Number.POSITIVE_INFINITY }, raw.length, to.length),
+  );
+  if (limitReply) {
+    log.info({ authed: authUser.email, reply: limitReply }, 'SMTP submission refused: per-mailbox send limit');
+    throw new Error(limitReply);
+  }
 
   const hostname = meta?.hostname ?? await prisma.serverSettings.findUnique({
     where: { id: 'singleton' },
@@ -193,7 +210,7 @@ async function onMessage(
         fromAddr: from, rcptTo: rcpt, toJunk: false, deliveryKey: txKey,
         senderAuth: { authenticatedSender: from },
       });
-      return result === 'unknown' || result === 'quota' ? result : 'delivered';
+      return toLocalOutcome(result);
     },
     enqueueExternal: async (rcpts) => {
       // RFC 3461: the DSN request travels with the queue job (passed on to a
@@ -217,6 +234,9 @@ async function onMessage(
     from, originals: localRcpts, origins, outcomes, dsn: meta?.envelope?.dsn, hostname,
     deliveredRaw: submittedRaw, ndrRaw: submittedRaw,
   });
+
+  // 9.4: sent as / on behalf of a Shared Mailbox → audit + its Sent copy.
+  await afterForeignSend({ userId: authUser.id, raw: submittedRaw, source: 'smtp', ipAddress: ip });
 
   // MAIL_FLOW — message flow tracing (outbound ACCEPTED)
   const headers = extractRawHeaders(raw);

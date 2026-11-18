@@ -5,6 +5,7 @@ import toast from 'react-hot-toast';
 import { Inbox, Plus, Trash2, Pencil, UserPlus, X, Loader2, Shield, RefreshCw, HardDrive } from 'lucide-react';
 import { api } from '../api/client.js';
 import { MailboxAliasesSection } from '../components/MailboxAliasesSection.js';
+import { MailFlowEditor } from '../components/MailFlowEditor.js';
 import { useT } from '../i18n/useT.js';
 import type { TranslationKey } from '../i18n/translations.js';
 import { Can, WriteGuard } from '../components/Can.js';
@@ -16,12 +17,16 @@ type PermType = 'FULL_ACCESS' | 'SEND_AS' | 'SEND_ON_BEHALF' | 'READ_ONLY';
 
 interface Perm {
   id: string; userId: string; permission: PermType; grantedAt: string;
+  /** 9.4 auto-mapping ("Automatisch einblenden"), default true. */
+  autoMap?: boolean;
   user: { email: string; displayName: string };
 }
 interface SharedMailbox {
   id: string; email: string; displayName: string; domainId: string;
   quotaBytes: number; usedBytes: number; active: boolean; createdAt: string;
   quotaWarningBytes?: number | null; quotaProhibitSendBytes?: number | null;
+  /** 9.4: copy of mail sent as / on behalf of the box into its Sent folder. */
+  sentCopySendAs?: boolean; sentCopySendOnBehalf?: boolean;
   permissions: Perm[];
 }
 interface Domain { id: string; name: string; active?: boolean }
@@ -213,6 +218,8 @@ function SharedMailboxModal({ item, onClose }: { item?: SharedMailbox; onClose: 
   const [quotaBytes, setQuotaBytes] = useState<number>(item?.quotaBytes ?? 5 * 1024 ** 3);
   const [warningGb, setWarningGb]   = useState(bytesToGbInput(item?.quotaWarningBytes));
   const [sendGb, setSendGb]         = useState(bytesToGbInput(item?.quotaProhibitSendBytes));
+  const [copySendAs, setCopySendAs]         = useState(item?.sentCopySendAs ?? false);
+  const [copyOnBehalf, setCopyOnBehalf]     = useState(item?.sentCopySendOnBehalf ?? false);
   const levelsValid = gbInputValid(warningGb) && gbInputValid(sendGb);
 
   const { data: allDomains = [] } = useQuery<Domain[]>({
@@ -241,6 +248,7 @@ function SharedMailboxModal({ item, onClose }: { item?: SharedMailbox; onClose: 
           displayName: name.trim(), active, quotaBytes,
           quotaWarningBytes: gbInputToBytes(warningGb),
           quotaProhibitSendBytes: gbInputToBytes(sendGb),
+          sentCopySendAs: copySendAs, sentCopySendOnBehalf: copyOnBehalf,
         })
       : api.post('/admin/shared-mailboxes', { email: fullEmail, displayName: name.trim(), domainId, quotaBytes }),
     onSuccess: () => {
@@ -333,6 +341,20 @@ function SharedMailboxModal({ item, onClose }: { item?: SharedMailbox; onClose: 
               {t('shared_active')}
             </label>
           )}
+          {/* 9.4: sent items of send as / send on behalf */}
+          {item && (
+            <fieldset className="space-y-1.5">
+              <legend className="field-label">{t('shared_sent_copy_title')}</legend>
+              <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                <input type="checkbox" checked={copySendAs} onChange={e => setCopySendAs(e.target.checked)} className="rounded" />
+                {t('shared_sent_copy_send_as')}
+              </label>
+              <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                <input type="checkbox" checked={copyOnBehalf} onChange={e => setCopyOnBehalf(e.target.checked)} className="rounded" />
+                {t('shared_sent_copy_on_behalf')}
+              </label>
+            </fieldset>
+          )}
           <div className="flex justify-end gap-2 pt-2">
             <button onClick={onClose} className="btn-secondary">{t('action_cancel')}</button>
             <button onClick={() => mutation.mutate()}
@@ -359,6 +381,12 @@ function SharedMailboxModal({ item, onClose }: { item?: SharedMailbox; onClose: 
               />
             </div>
           )}
+          {/* 9.4: per-mailbox mail flow — edit mode only */}
+          {item && (
+            <div className="border-t border-line pt-4 mt-2">
+              <MailFlowEditor path={`/admin/shared-mailboxes/${item.id}/mail-flow`} kind="shared" />
+            </div>
+          )}
         </div>
     </Modal>
   );
@@ -370,6 +398,7 @@ function PermissionsModal({ item, onClose }: { item: SharedMailbox; onClose: () 
   const qc = useQueryClient();
   const [userId, setUserId]     = useState('');
   const [perms, setPerms]       = useState<PermType[]>(['FULL_ACCESS']);
+  const [autoMap, setAutoMap]   = useState(true);
   const [userSearch, setUserSearch] = useState('');
   const [editingUser, setEditingUser] = useState<string | null>(null);
 
@@ -395,20 +424,21 @@ function PermissionsModal({ item, onClose }: { item: SharedMailbox; onClose: () 
   const visibleUsers = editingUser ? filteredUsers : filteredUsers.filter(u => !alreadyGrantedIds.has(u.id));
 
   // Group existing permissions per user
-  const grouped = item.permissions.reduce<Record<string, { user: { email: string; displayName: string }; perms: { id: string; permission: PermType }[] }>>((acc, p) => {
+  const grouped = item.permissions.reduce<Record<string, { user: { email: string; displayName: string }; perms: { id: string; permission: PermType }[]; autoMap: boolean }>>((acc, p) => {
     const key = p.userId;
-    if (!acc[key]) acc[key] = { user: p.user, perms: [] };
+    if (!acc[key]) acc[key] = { user: p.user, perms: [], autoMap: false };
     acc[key].perms.push({ id: p.id, permission: p.permission });
+    acc[key].autoMap = acc[key].autoMap || p.autoMap !== false;
     return acc;
   }, {});
 
   const setMutation = useMutation({
     mutationFn: ({ uid, permissions }: { uid: string; permissions: PermType[] }) =>
-      api.post(`/admin/shared-mailboxes/${item.id}/permissions`, { userId: uid, permissions }),
+      api.post(`/admin/shared-mailboxes/${item.id}/permissions`, { userId: uid, permissions, autoMap }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['admin-shared-mailboxes'] });
       toast.success(t('shared_perm_saved'));
-      setUserId(''); setUserSearch(''); setPerms(['FULL_ACCESS']); setEditingUser(null);
+      setUserId(''); setUserSearch(''); setPerms(['FULL_ACCESS']); setAutoMap(true); setEditingUser(null);
     },
     onError: (e: Error) => toast.error(e.message || t('shared_save_error')),
   });
@@ -460,6 +490,7 @@ function PermissionsModal({ item, onClose }: { item: SharedMailbox; onClose: () 
                           {t(PERM_KEYS[p.permission].label)}
                         </span>
                       ))}
+                      {!g.autoMap && <span className="text-[10px] text-fg-subtle px-1.5 py-0.5">{t('shared_perm_not_automapped')}</span>}
                     </div>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
@@ -468,6 +499,7 @@ function PermissionsModal({ item, onClose }: { item: SharedMailbox; onClose: () 
                       onClick={() => {
                         setEditingUser(uid);
                         setPerms(g.perms.map((p) => p.permission));
+                        setAutoMap(g.autoMap);
                         setUserId(uid);
                       }}
                       className="text-xs text-accent-fg hover:underline"
@@ -554,6 +586,15 @@ function PermissionsModal({ item, onClose }: { item: SharedMailbox; onClose: () 
               ))}
             </div>
 
+            {/* 9.4 auto-mapping */}
+            <label className="flex items-start gap-2 p-2 hover:bg-surface-2 rounded cursor-pointer">
+              <input type="checkbox" checked={autoMap} onChange={(e) => setAutoMap(e.target.checked)} className="mt-0.5" />
+              <div className="flex-1">
+                <p className="text-sm font-medium text-fg">{t('shared_perm_automap')}</p>
+                <p className="text-xs text-fg-subtle">{t('shared_perm_automap_hint')}</p>
+              </div>
+            </label>
+
             {sendConflict && (
               <p className="text-xs text-warning-fg bg-warning-bg border border-warning-line rounded px-2 py-1">
                 ⚠ {t('shared_perm_send_conflict')}
@@ -562,7 +603,7 @@ function PermissionsModal({ item, onClose }: { item: SharedMailbox; onClose: () 
 
             <div className="flex justify-end gap-2 pt-2">
               {editingUser && (
-                <button type="button" onClick={() => { setEditingUser(null); setUserId(''); setPerms(['FULL_ACCESS']); }}
+                <button type="button" onClick={() => { setEditingUser(null); setUserId(''); setPerms(['FULL_ACCESS']); setAutoMap(true); }}
                   className="btn-secondary text-sm">
                   {t('action_cancel')}
                 </button>

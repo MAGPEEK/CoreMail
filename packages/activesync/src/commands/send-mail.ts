@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { prisma } from '@coremail/storage/prisma';
 import {
   listAllowedSenderAddresses, createMessage, setFlags, loadRawMessage, parseRawMessage, storeRawMessage,
-  truncateBodyColumn, uploadBuffer, attachmentKey, checkSendQuota, type RawSourceMessage,
+  truncateBodyColumn, uploadBuffer, attachmentKey, checkSendQuota, checkUserSendLimits, afterForeignSend,
+  type RawSourceMessage, type SendLimitVerdict,
 } from '@coremail/storage';
 import { createLogger, getRedisClient } from '@coremail/core';
 import { encodeWbxml, el, getChild, getText, type WbxmlElement } from '../wbxml.js';
@@ -30,7 +31,17 @@ export interface SendMailDeps {
   markSource: (source: SourceMessage, flag: string) => Promise<void>;
   /** v8.1: false = the mailbox is at/over its ProhibitSendQuota. Default: storage checkSendQuota. */
   sendAllowed?: (userId: string) => Promise<boolean>;
+  /** 9.4: per-mailbox send limits of the user. Default: storage checkUserSendLimits. */
+  sendLimits?: (userId: string, sizeBytes: number, recipients: number) => Promise<SendLimitVerdict>;
+  /** 9.4: audit + Shared Mailbox Sent copy of a send as / on behalf. Default: storage afterForeignSend. */
+  afterSend?: (userId: string, plan: EasSubmissionPlan) => Promise<unknown>;
 }
+
+const NO_GLOBAL_LIMIT = { maxBytes: Number.POSITIVE_INFINITY, maxRecipients: Number.POSITIVE_INFINITY };
+const defaultSendLimits = (userId: string, size: number, rcpts: number): Promise<SendLimitVerdict> =>
+  checkUserSendLimits(userId, NO_GLOBAL_LIMIT, size, rcpts);
+const defaultAfterSend = (userId: string, plan: EasSubmissionPlan): Promise<unknown> =>
+  afterForeignSend({ userId, raw: plan.raw, source: 'activesync' });
 
 const clientIdKey = (userId: string, clientId: string) => `eas:clientid:${userId}:${clientId}`;
 
@@ -221,6 +232,13 @@ export async function submitCompose(
     }
     const plan = result.plan;
 
+    // 9.4: per-mailbox send limits (size, recipients)
+    const limit = await (deps.sendLimits ?? defaultSendLimits)(userId, plan.raw.length, plan.recipients.length);
+    if (!limit.ok) {
+      log.info({ userId, command, kind: limit.kind, limit: limit.limit }, 'EAS send refused: per-mailbox send limit');
+      return EAS_SEND_STATUS.SUBMISSION_FAILED;
+    }
+
     if (clientId) {
       claimed = await deps.claimClientId(userId, clientId);
       if (!claimed) {
@@ -265,6 +283,8 @@ export async function submitCompose(
         log.error({ err, userId, jobId }, 'Saving EAS Sent copy failed (mail was sent)'),
       );
     }
+    // Send as / on behalf of a Shared Mailbox: audit + its Sent copy (never throws).
+    await (deps.afterSend ?? defaultAfterSend)(userId, plan).catch(() => undefined);
 
     return EAS_SEND_STATUS.SUCCESS;
   } catch (err) {

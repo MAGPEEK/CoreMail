@@ -10,6 +10,7 @@ import { audit, auditContext } from '../../lib/audit.js';
 import { quotaLevelError, quotaLevelPatchError } from '../../lib/quota-levels.js';
 import { publishPermissionChange } from '../../lib/permission-events.js';
 import { addressCollision } from '../../lib/address-collision.js';
+import { getMailFlowHandler, putMailFlowHandler } from '../../lib/mail-flow-admin.js';
 
 export const adminMailboxesRouter: RouterType = Router();
 // v6 RBAC: area 'recipients'. HELP_DESK may additionally PUT /:id (password
@@ -446,6 +447,10 @@ adminMailboxesRouter.post('/:id/revoke-sessions', async (req: Request, res: Resp
   res.json({ ok: true, sessionsRevoked: r.sessions });
 });
 
+// ── 9.4: per-mailbox mail flow (lib/mail-flow-admin.ts) ─────────────────────
+adminMailboxesRouter.get('/:id/mail-flow', getMailFlowHandler('user'));
+adminMailboxesRouter.put('/:id/mail-flow', putMailFlowHandler('user'));
+
 // ── Mailbox delegation (user mailbox access rights) ─────────────────────────
 
 // GET /api/v1/admin/mailboxes/:id/delegates
@@ -472,6 +477,8 @@ adminMailboxesRouter.post('/:id/delegates', async (req: Request, res: Response) 
   const schema = z.object({
     granteeId: z.string(),
     permission: z.enum(['FULL_ACCESS', 'SEND_AS', 'SEND_ON_BEHALF', 'READ_ONLY']),
+    // 9.4 auto-mapping (default on): off → the grantee adds the mailbox to the folder pane / IMAP list
+    autoMap: z.boolean().optional(),
   });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
@@ -501,18 +508,25 @@ adminMailboxesRouter.post('/:id/delegates', async (req: Request, res: Response) 
   // Upsert: update if exists, create if not
   const delegate = await prisma.mailboxDelegate.upsert({
     where: { mailboxId_granteeId: { mailboxId: mailbox.id, granteeId: parsed.data.granteeId } },
-    update: { permission: parsed.data.permission, grantedBy: req.apiUser!.userId },
+    update: {
+      permission: parsed.data.permission, grantedBy: req.apiUser!.userId,
+      ...(parsed.data.autoMap !== undefined ? { autoMap: parsed.data.autoMap } : {}),
+    },
     create: {
       mailboxId: mailbox.id,
       granteeId: parsed.data.granteeId,
       permission: parsed.data.permission,
       grantedBy: req.apiUser!.userId,
+      ...(parsed.data.autoMap !== undefined ? { autoMap: parsed.data.autoMap } : {}),
     },
   });
   audit({
     actorId: actor.userId, actorEmail: actor.email,
     action: 'mailbox.delegate.grant', targetType: 'mailbox', targetId: id, targetName: user.email,
-    changes: { owner: user.email, grantee: grantee.email, granteeId: grantee.id, permission: parsed.data.permission },
+    changes: {
+      owner: user.email, grantee: grantee.email, granteeId: grantee.id, permission: parsed.data.permission,
+      ...(parsed.data.autoMap !== undefined ? { autoMap: parsed.data.autoMap } : {}),
+    },
     ...auditContext(req),
   });
   await publishPermissionChange([grantee.id]); // 9.1: grantee caches (IMAP, JMAP) refresh at once

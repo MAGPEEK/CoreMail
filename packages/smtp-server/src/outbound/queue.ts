@@ -4,7 +4,7 @@ import nodemailer, { type SendMailOptions } from 'nodemailer';
 import { createBullMqConnection, createLogger } from '@coremail/core';
 import {
   prisma, downloadBuffer, deleteObject, buildOutboundJobOptions, getOutboundJobOptions, loadQueueSettings, isExpiredInQueue,
-  outboundRetryDelay, queueStartMs,
+  outboundRetryDelay, queueStartMs, afterForeignSend,
 } from '@coremail/storage';
 import { relayMessage, type RecipientFailure, type RelayResult, type DkimOptions, type RelayOptions } from './relay.js';
 import { extractSmtpCode, sendDsnBounce, sendSuccessDsn, rawSubjectAndId, type DsnOptions } from './dsn.js';
@@ -13,7 +13,7 @@ import { domainVariants } from '../core/idn.js';
 import { BARE_POSTMASTER } from '../core/types.js';
 import { signMessageForUser, encryptMessageForRecipient } from '../smime/index.js';
 import { storeInboundMessage, type StoreResult } from '../handlers/message.js';
-import { stripForLocalDelivery, unknownRecipientDsn, quotaExceededDsn } from '../handlers/local-delivery.js';
+import { stripForLocalDelivery, unknownRecipientDsn, quotaExceededDsn, policyRefusedDsn } from '../handlers/local-delivery.js';
 import { isRuleForwardedAlready } from '../handlers/rule-forward.js';
 import type { SenderAuth } from '@coremail/storage';
 import { expandRecipients } from '../handlers/expand.js';
@@ -128,6 +128,15 @@ export interface OutboundJob {
    * second time.
    */
   finalNdrRcpts?: string[];
+  /**
+   * 9.4: the client path a user's own submission came from (webmail, JMAP).
+   * On the first processing the worker runs storage `afterForeignSend`: audit
+   * of a send as / on behalf of a Shared Mailbox and its Sent copy — at the
+   * real send time, so a cancelled scheduled / undone send leaves no trace.
+   */
+  foreignSendSource?: 'webmail' | 'jmap';
+  /** Set once afterForeignSend ran for this job (retries do not repeat it). */
+  foreignSendDone?: boolean;
 }
 
 // ── Build RFC 5322 buffer from structured message ─────────────────────────────
@@ -346,6 +355,7 @@ export async function deliverOutboundJob(job: OutboundJobLike, buffer: Buffer, d
   // ── Local delivery (write directly into the mailbox) ──────────────────────
   const unknownLocal: string[] = [];
   const fullLocal: string[] = [];
+  const policyLocal: string[] = [];
   for (const rcpt of finalLocal) {
     if (delivered.has(rcpt) || bounced.has(rcpt)) continue;
     let result: void | StoreResult;
@@ -365,6 +375,12 @@ export async function deliverOutboundJob(job: OutboundJobLike, buffer: Buffer, d
       // v8.1: mailbox over its ProhibitSendReceiveQuota → NDR 5.2.2 below
       bounced.add(rcpt);
       fullLocal.push(rcpt);
+      continue;
+    }
+    if (result === 'policy') {
+      // 9.4: refused by the recipient's mail flow policy → NDR 5.7.1 below
+      bounced.add(rcpt);
+      policyLocal.push(rcpt);
       continue;
     }
     delivered.add(rcpt);
@@ -394,6 +410,17 @@ export async function deliverOutboundJob(job: OutboundJobLike, buffer: Buffer, d
       });
     }
     newlyBounced.push(...fullLocal);
+  }
+  if (policyLocal.length > 0) {
+    await persist(data.pendingFailures ?? []); // recorded before the NDR: at most one
+    const notify = asOriginals(policyLocal).filter((r) => !(data.finalNdrRcpts ?? []).includes(r));
+    if (notify.length > 0 && from) {
+      await deps.bounce({
+        ...policyRefusedDsn(buffer, from, notify, await deps.hostname(), data.ruleRedirect !== true),
+        ...(data.message ? { originalSubject: data.message.subject, originalMessageId: data.message.messageId } : {}),
+      });
+    }
+    newlyBounced.push(...policyLocal);
   }
   // NOTIFY=SUCCESS: "delivered" for the local recipients as addressed (aliases
   // included) — judged on the persisted sets, so a retry never confirms a
@@ -597,6 +624,28 @@ const defaultOutboundDeps: OutboundDeps = {
   },
 };
 
+/**
+ * Runs storage `afterForeignSend` once per job marked with `foreignSendSource`
+ * (marked done in the job before it runs: at most once, even when a retry
+ * follows). Never throws.
+ */
+export async function runForeignSendOnce(
+  job: Pick<OutboundJobLike, 'data' | 'updateData'>,
+  buffer: Buffer,
+  run: typeof afterForeignSend = afterForeignSend,
+): Promise<boolean> {
+  const { senderUserId, foreignSendSource, foreignSendDone } = job.data;
+  if (!senderUserId || !foreignSendSource || foreignSendDone) return false;
+  try {
+    await job.updateData({ ...job.data, foreignSendDone: true });
+  } catch (err) {
+    log.warn({ err }, 'Could not mark the foreign send step — skipped');
+    return false;
+  }
+  await run({ userId: senderUserId, raw: buffer, source: foreignSendSource });
+  return true;
+}
+
 export function startOutboundWorker(): Worker<OutboundJob> {
   const worker = new Worker<OutboundJob>(
     QUEUE_NAME,
@@ -641,6 +690,10 @@ export function startOutboundWorker(): Worker<OutboundJob> {
       } else {
         throw new UnrecoverableError('OutboundJob without message and rawMessage — invalid job');
       }
+
+      // 9.4: send as / on behalf of a Shared Mailbox → audit + its Sent copy
+      // (the unsigned original, like the sender's own copy).
+      await runForeignSendOnce(job, buffer);
 
       // ── Phase 9: S/MIME Auto-Sign / Auto-Encrypt ──────────────────────────
       if (senderUserId) {

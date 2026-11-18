@@ -78,3 +78,27 @@ test('reservedFolderPrefix: IMAP namespace prefixes (any case), env overrides, d
   assert.equal(reservedFolderPrefix('Shared/x', { IMAP_NAMESPACE_SHARED: 'off' }), null);
   assert.equal(reservedFolderPrefix('Shared/x', { IMAP_NAMESPACE_SHARED: 'bad/prefix.x' }), 'Shared', 'invalid → default');
 });
+
+test('9.4 auto-mapping: default on, off only when every read grant has it off; delegations carry their flag', async () => {
+  const { isMailboxMapped, accessibleMailboxRef } = await import('./mailbox-access.js');
+  const out = accessFromRows('u1', [
+    { ...shared('s1', 'a@x.test', 'READ_ONLY'), autoMap: false },
+    { ...shared('s1', 'a@x.test', 'FULL_ACCESS'), autoMap: true },
+    { ...shared('s2', 'b@x.test', 'FULL_ACCESS'), autoMap: false },
+    shared('s3', 'c@x.test', 'FULL_ACCESS'),
+  ], [{ ...delegate('o1', 'owner@x.test', 'FULL_ACCESS'), autoMap: false }]);
+  const byEmail = new Map(out.map((a) => [a.email, a]));
+  assert.equal(byEmail.get('a@x.test')!.autoMap, true, 'one auto-mapped read grant suffices');
+  assert.equal(byEmail.get('b@x.test')!.autoMap, false);
+  assert.equal(byEmail.get('c@x.test')!.autoMap, true, 'rows without the column (pre-9.4 fakes) are auto-mapped');
+  assert.equal(byEmail.get('owner@x.test')!.autoMap, false);
+
+  const b = byEmail.get('b@x.test')!;
+  const owner = byEmail.get('owner@x.test')!;
+  assert.equal(accessibleMailboxRef(b), 'shared:s2');
+  assert.equal(accessibleMailboxRef(owner), 'delegated:mb-o1');
+  assert.equal(isMailboxMapped(b, new Set()), false, 'not mapped until added');
+  assert.equal(isMailboxMapped(b, new Set(['shared:s2'])), true);
+  assert.equal(isMailboxMapped(owner, new Set(['delegated:mb-o1'])), true);
+  assert.equal(isMailboxMapped(byEmail.get('c@x.test')!, new Set()), true);
+});

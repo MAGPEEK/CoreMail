@@ -96,7 +96,7 @@ test('pre-8.1 ledger entries (bare addresses) still count as delivered', async (
 test('a full alias target is reported under the alias: NDR only, no "delivered" DSN', async () => {
   const origins = new Map([['full@corp.test', ['sales@corp.test']], ['a@corp.test', ['a@corp.test']]]);
   const outcomes = new Map([['full@corp.test', 'quota' as const], ['a@corp.test', 'delivered' as const]]);
-  assert.deepEqual(outcomesByOriginal(origins, outcomes), { delivered: ['a@corp.test'], quota: ['sales@corp.test'], unknown: [] });
+  assert.deepEqual(outcomesByOriginal(origins, outcomes), { delivered: ['a@corp.test'], quota: ['sales@corp.test'], unknown: [], policy: [] });
   const { calls, deps } = recordingDeps();
   await notifyLocalOutcomes({
     from: 'alice@corp.test', originals: ['sales@corp.test', 'a@corp.test'], origins, outcomes,

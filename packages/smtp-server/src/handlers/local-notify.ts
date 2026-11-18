@@ -14,7 +14,7 @@
 import { createLogger } from '@coremail/core';
 import { isAttendeeAuthenticated, type SenderAuth } from '@coremail/storage';
 import { sendSuccessDsn, rawSubjectAndId } from '../outbound/dsn.js';
-import { bounceUnknownLocal, bounceQuotaLocal } from './local-delivery.js';
+import { bounceUnknownLocal, bounceQuotaLocal, bouncePolicyLocal } from './local-delivery.js';
 import { outcomesByOriginal, type LocalOutcome } from './delivery.js';
 import type { EnvelopeDsn } from '../core/dsn-params.js';
 
@@ -43,10 +43,12 @@ export interface LocalNotifyDeps {
   successDsn: typeof sendSuccessDsn;
   bounceUnknown: typeof bounceUnknownLocal;
   bounceQuota: typeof bounceQuotaLocal;
+  /** 9.4: refused by the recipient's mail flow policy. Optional for pre-9.4 fakes. */
+  bouncePolicy?: typeof bouncePolicyLocal;
 }
 
 const defaultDeps: LocalNotifyDeps = {
-  successDsn: sendSuccessDsn, bounceUnknown: bounceUnknownLocal, bounceQuota: bounceQuotaLocal,
+  successDsn: sendSuccessDsn, bounceUnknown: bounceUnknownLocal, bounceQuota: bounceQuotaLocal, bouncePolicy: bouncePolicyLocal,
 };
 
 /** Pure: may an unauthenticated (port 25) transaction get a success DSN? */
@@ -56,7 +58,7 @@ export function successDsnAllowed(from: string, senderAuth: SenderAuth): boolean
 
 /** Sends the success DSN and the NDRs for one local delivery (never throws). */
 export async function notifyLocalOutcomes(input: LocalNotifyInput, deps: LocalNotifyDeps = defaultDeps): Promise<{
-  success: string[]; unknown: string[]; quota: string[];
+  success: string[]; unknown: string[]; quota: string[]; policy: string[];
 }> {
   const summary = outcomesByOriginal(input.origins, input.outcomes);
   let success: string[] = [];
@@ -89,5 +91,9 @@ export async function notifyLocalOutcomes(input: LocalNotifyInput, deps: LocalNo
     await deps.bounceQuota(input.ndrRaw, input.from, summary.quota, { hostname: input.hostname }).catch((err: unknown) =>
       log.error({ err, from: input.from, quota: summary.quota }, 'NDR for over-quota local recipients failed'));
   }
-  return { success, unknown: summary.unknown, quota: summary.quota };
+  if (summary.policy.length > 0) {
+    await (deps.bouncePolicy ?? bouncePolicyLocal)(input.ndrRaw, input.from, summary.policy, { hostname: input.hostname }).catch((err: unknown) =>
+      log.error({ err, from: input.from, policy: summary.policy }, 'NDR for policy-refused local recipients failed'));
+  }
+  return { success, unknown: summary.unknown, quota: summary.quota, policy: summary.policy };
 }

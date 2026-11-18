@@ -72,6 +72,8 @@ interface AuditFilters {
   targetId?: string;
   ipAddress?: string;
   searchText?: string;
+  /** 9.4: 'mailbox-access' = the mailbox access audit (mailbox.foreign.*). */
+  category?: string;
   success?: string;
   from?: string;
   to?: string;
@@ -86,10 +88,21 @@ function parseFilters(q: Record<string, string | undefined>): AuditFilters {
   if (q['targetId']) out.targetId = q['targetId'];
   if (q['ipAddress']) out.ipAddress = q['ipAddress'];
   if (q['searchText']) out.searchText = q['searchText'];
+  if (q['category']) out.category = q['category'];
   if (q['success'] !== undefined) out.success = q['success'];
   if (q['from']) out.from = q['from'];
   if (q['to']) out.to = q['to'];
   return out;
+}
+
+/** Audit categories (9.4) — BCP filter "Postfachzugriffe" = mailbox access audit. */
+export const AUDIT_CATEGORIES: Readonly<Record<string, { action: { startsWith: string } }>> = {
+  'mailbox-access': { action: { startsWith: 'mailbox.foreign.' } },
+};
+
+/** Pure: the filter of a category; null for none / an unknown one. */
+export function auditCategoryWhere(category: string | undefined): { action: { startsWith: string } } | null {
+  return category ? (AUDIT_CATEGORIES[category] ?? null) : null;
 }
 
 function buildWhere(filters: AuditFilters): Record<string, unknown> {
@@ -102,6 +115,8 @@ function buildWhere(filters: AuditFilters): Record<string, unknown> {
   if (filters.targetType) where['targetType'] = { contains: filters.targetType, mode: 'insensitive' };
   if (filters.targetId) where['targetId'] = filters.targetId;
   if (filters.ipAddress) where['ipAddress'] = filters.ipAddress;
+  const category = auditCategoryWhere(filters.category);
+  if (category) where['AND'] = [category];
   if (filters.success !== undefined && filters.success !== '') {
     where['success'] = filters.success === 'true';
   }

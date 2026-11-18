@@ -212,6 +212,17 @@ const ACTION_MAP: Record<string, ActionMeta> = {
   'audit-log.verify-export.post': { label: 'Export-Signatur geprüft',        tone: 'read' },
   'message-trace.export.get':     { label: 'Nachrichtenverfolgung exportiert', tone: 'read' },
   'mailbox.sessions.revoke':      { label: 'Sitzungen abgemeldet',           tone: 'delete' },
+  // 9.4: per-mailbox mail flow + mailbox access audit (delegates / shared mailbox users)
+  'mailbox.mailflow.update':           { label: 'Nachrichtenfluss geändert',          tone: 'update' },
+  'mailbox.foreign.open':              { label: 'Fremdes Postfach geöffnet',          tone: 'read' },
+  'mailbox.foreign.send_as':           { label: 'Gesendet als',                       tone: 'update' },
+  'mailbox.foreign.send_on_behalf':    { label: 'Gesendet im Auftrag',                tone: 'update' },
+  'mailbox.foreign.message.move':      { label: 'Nachrichten verschoben (fremdes Postfach)', tone: 'update' },
+  'mailbox.foreign.message.delete':    { label: 'Nachrichten gelöscht (fremdes Postfach)',   tone: 'delete' },
+  'mailbox.foreign.folder.create':     { label: 'Ordner erstellt (fremdes Postfach)',  tone: 'create' },
+  'mailbox.foreign.folder.update':     { label: 'Ordner geändert (fremdes Postfach)',  tone: 'update' },
+  'mailbox.foreign.folder.delete':     { label: 'Ordner gelöscht (fremdes Postfach)',  tone: 'delete' },
+  'mailbox.foreign.folder.empty':      { label: 'Ordner geleert (fremdes Postfach)',   tone: 'delete' },
   'quarantine.release':           { label: 'Quarantäne-Mail freigegeben',    tone: 'update' },
   'backup.archive.download':      { label: 'Backup-Archiv heruntergeladen',  tone: 'read' },
   'audit-log.anomalies.get':      { label: 'Anomalien-Report abgerufen',     tone: 'read' },
@@ -382,7 +393,7 @@ export function AuditLogPage() {
   const t = useT();
   const [filters, setFilters] = useState({
     action: '', targetType: '', from: '', to: '', success: '',
-    actorEmail: '', ipAddress: '', searchText: '',
+    actorEmail: '', ipAddress: '', searchText: '', category: '',
   });
   const [offset, setOffset] = useState(0);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -398,6 +409,7 @@ export function AuditLogPage() {
     if (filters.actorEmail)  p.set('actorEmail', filters.actorEmail);
     if (filters.ipAddress)   p.set('ipAddress', filters.ipAddress);
     if (filters.searchText)  p.set('searchText', filters.searchText);
+    if (filters.category)    p.set('category', filters.category);
     const from = dayStartIso(filters.from);
     const to = dayEndIso(filters.to);
     if (from)                p.set('from', from);
@@ -460,7 +472,7 @@ export function AuditLogPage() {
 
   const hasAnyFilter =
     filters.action || filters.targetType || filters.from || filters.to ||
-    filters.success || filters.actorEmail || filters.ipAddress || filters.searchText;
+    filters.success || filters.actorEmail || filters.ipAddress || filters.searchText || filters.category;
 
   const s = stats.data;
 
@@ -592,7 +604,7 @@ export function AuditLogPage() {
             onClick={() => {
               setFilters({
                 action: '', targetType: '', from: '', to: '', success: '',
-                actorEmail: '', ipAddress: '', searchText: '',
+                actorEmail: '', ipAddress: '', searchText: '', category: '',
               });
               setOffset(0);
             }}
@@ -620,6 +632,12 @@ export function AuditLogPage() {
               className="input w-36" placeholder="Aktion…" aria-label="Aktion" />
             <input value={filters.targetType} onChange={e => setFilter('targetType', e.target.value)}
               className="input w-36" placeholder="Zieltyp…" aria-label="Zieltyp" />
+            {/* 9.4: category filter — mailbox access audit */}
+            <select value={filters.category} onChange={e => setFilter('category', e.target.value)}
+              className="input w-auto" aria-label={t('audit_filter_category')}>
+              <option value="">{t('audit_category_all')}</option>
+              <option value="mailbox-access">{t('audit_category_mailbox_access')}</option>
+            </select>
             <select value={filters.success} onChange={e => setFilter('success', e.target.value)}
               className="input w-auto" aria-label="Status">
               <option value="">Alle</option>

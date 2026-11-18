@@ -1,6 +1,6 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { prisma } from '@coremail/storage';
+import { prisma, GAL_VISIBLE_WHERE } from '@coremail/storage';
 import {
   buildVcard,
   patchVcard,
@@ -75,6 +75,7 @@ contactsRouter.get('/', async (req: Request, res: Response) => {
     where: {
       domainId,
       active: true,
+      ...GAL_VISIBLE_WHERE, // 9.4: hidden from the address list
       OR: [
         { email:       { contains: q, mode: 'insensitive' } },
         { displayName: { contains: q, mode: 'insensitive' } },
@@ -117,6 +118,7 @@ contactsRouter.get('/gal', async (req: Request, res: Response) => {
   const userWhere = {
     domainId: domainId ?? '',
     active: true,
+    ...GAL_VISIBLE_WHERE, // 9.4: hidden from the address list
     ...(searchWhere ? {
       OR: [
         { email:       { contains: searchWhere, mode: 'insensitive' as const } },

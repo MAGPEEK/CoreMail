@@ -36,6 +36,7 @@ import {
   NOPERM, clientNameOf, findTargetFolder, namespaceResponse, reservedNamePerm, resolveMailbox, revalidateSelected, selectedWritable,
 } from './namespaces.js';
 import { runStatus } from './list.js';
+import { auditImapAccess, selectedAccess } from './access-audit.js';
 import {
   parseSelectParams, selectCandidates, sendVanishedEarlier, vanishedUids, type SelectParams,
 } from './qresync.js';
@@ -178,6 +179,7 @@ export async function handleCreate(
     data: { mailboxId: target.mailboxId, name, displayName: name },
   });
   log.info({ mailboxId: target.mailboxId, name, foreign: target.foreign?.kind }, 'IMAP folder created');
+  auditImapAccess(session, target.foreign, 'mailbox.foreign.folder.create', { folder: name });
   sendOk(session, tag, 'CREATE completed');
 }
 
@@ -214,6 +216,7 @@ export async function handleDeleteFolder(
     return;
   }
   log.info({ mailboxId: folder.mailboxId, folderId: folder.id, movedToTrash: done.moved, reparented: done.reparented }, 'IMAP folder deleted');
+  auditImapAccess(session, folder.target.foreign, 'mailbox.foreign.folder.delete', { folder: folder.target.folderName, movedToTrash: done.moved });
   sendOk(session, tag, 'DELETE completed');
 }
 
@@ -280,6 +283,7 @@ export async function handleRename(
     selected.folderName = renamedSelected.name;
     selected.clientName = clientNameOf(from.target, renamedSelected.name);
   }
+  auditImapAccess(session, from.target.foreign, 'mailbox.foreign.folder.update', { from: oldName, to: newName });
   sendOk(session, tag, 'RENAME completed');
 }
 
@@ -558,6 +562,10 @@ export async function handleMove(
   if (mapping.length > 0) {
     sendUntagged(session, `OK [COPYUID ${target.mailbox.uidValidity} ${mapping.map((m) => m.oldUid).join(',')} ${mapping.map((m) => m.newUid).join(',')}] Moved`);
   }
+  // 9.4: moving out of a foreign folder (also into the own mailbox) is audited.
+  auditImapAccess(session, selectedAccess(session) ?? target.target.foreign, 'mailbox.foreign.message.move', {
+    count: mapping.length, from: view.folderName, to: target.target.folderName,
+  });
   // RFC 6851 §3.3: EXPUNGE responses for the moved messages. Nothing to expunge
   // when moving into the same folder.
   reportExpunged(session, view, new Set(mapping.map((m) => m.oldUid)));
@@ -795,6 +803,7 @@ export async function handleClose(
     if (doomed.length > 0) {
       const mailboxId = selectedMailboxId(session, closing);
       await prisma.$transaction((tx) => expunge(tx, doomed.map((m) => m.id), { mailboxId }));
+      auditImapAccess(session, selectedAccess(session), 'mailbox.foreign.message.delete', { count: doomed.length, folder: closing.folderName, expunge: true });
     }
   }
   session.selected = null;
@@ -1077,6 +1086,8 @@ export async function handleSelect(
   });
   session.state = 'SELECTED';
   session.selected = view;
+  // 9.4: opening a foreign mailbox (one entry per user, mailbox and hour)
+  auditImapAccess(session, target.foreign, 'mailbox.foreign.open', { folder: target.folderName, readOnly: effectiveReadOnly });
 
   sendUntagged(session, `${view.uids.length} EXISTS`);
   if (session.imap4rev2Enabled) {
@@ -1497,6 +1508,7 @@ export async function handleExpunge(session: ImapSession, tag: string, uidSet?: 
   if (toDelete.length > 0) {
     const mailboxId = selectedMailboxId(session, view);
     await prisma.$transaction((tx) => expunge(tx, toDelete.map((m) => m.id), { mailboxId }));
+    auditImapAccess(session, selectedAccess(session), 'mailbox.foreign.message.delete', { count: toDelete.length, folder: view.folderName, expunge: true });
   }
   // The EXPUNGE responses (ours and those of other clients) come from the view sync.
   await completeWithUpdates(session, tag, uidSet !== undefined ? 'UID EXPUNGE completed' : 'EXPUNGE completed', true, true);

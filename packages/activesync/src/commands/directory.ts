@@ -2,10 +2,12 @@
  * Address lookups for Search (Store=GAL) and ResolveRecipients.
  *
  * Scope: the global address list of a caller is the active users and Shared
- * Mailboxes of the caller's own domain — never other domains of the server.
+ * Mailboxes of the caller's own domain — never other domains of the server —
+ * without the mailboxes hidden from the address list (9.4 MailFlowPolicy).
  * Contacts are the caller's own personal contacts.
  */
 import { prisma } from '@coremail/storage/prisma';
+import { GAL_VISIBLE_WHERE } from '@coremail/storage';
 
 export interface DirectoryEntry {
   kind: 'user' | 'shared' | 'contact';
@@ -37,13 +39,13 @@ export async function searchGal(userId: string, query: string): Promise<Director
   ] };
   const [users, shared] = await Promise.all([
     prisma.user.findMany({
-      where: { domainId, active: true, ...match },
+      where: { domainId, active: true, ...GAL_VISIBLE_WHERE, ...match },
       select: { displayName: true, email: true, domainId: true },
       orderBy: { displayName: 'asc' },
       take: MAX_ROWS,
     }),
     prisma.sharedMailbox.findMany({
-      where: { domainId, active: true, ...match },
+      where: { domainId, active: true, ...GAL_VISIBLE_WHERE, ...match },
       select: { displayName: true, email: true, domainId: true },
       orderBy: { displayName: 'asc' },
       take: MAX_ROWS,

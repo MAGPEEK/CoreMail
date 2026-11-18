@@ -1,7 +1,8 @@
-import { prisma, parseRawMessage, uploadBuffer, storeRawMessage, truncateBodyColumn, attachmentKey, applyMailRules, applyTransportRules, applyOutcomeToBuffer, processITipInbound, createMessage, createRulePatternBudget, ruleMessageStepBudget, checkReceiveQuota, recordDelivery, type SenderAuth, type QuotaOwner } from '@coremail/storage';
+import { prisma, parseRawMessage, uploadBuffer, storeRawMessage, truncateBodyColumn, attachmentKey, applyMailRules, applyTransportRules, applyOutcomeToBuffer, processITipInbound, createMessage, createRulePatternBudget, ruleMessageStepBudget, checkReceiveQuota, recordDelivery, loadMailFlowPolicy, deliveryRefusal, headerFromAddress, type SenderAuth, type QuotaOwner, type MailFlowOwner } from '@coremail/storage';
+import type { LocalOutcome } from './delivery.js';
 import { getRedisClient, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
 import { verifyIncomingSmime, decryptIncomingSmime } from '../smime/index.js';
-import { enqueueRuleForward } from './rule-forward.js';
+import { enqueueRuleForward, isRuleForwardedAlready, planAdminForward } from './rule-forward.js';
 import { handleTransportOutcome } from './transport-actions.js';
 import { sendAutoReplyIfNeeded } from './auto-reply.js';
 import { withReturnPath } from './trace.js';
@@ -43,8 +44,15 @@ export interface StoreOptions {
  *               NDR to the sender (never a silent drop)
  *  - 'quota'    v8.1: the mailbox is at/over its ProhibitSendReceiveQuota — not
  *               stored; the caller sends an NDR (5.2.2)
+ *  - 'policy'   9.4: refused by the mailbox's mail flow policy (accept-only-from,
+ *               reject-from, receive size limit) — not stored; NDR (5.7.1)
  */
-export type StoreResult = 'stored' | 'resource' | 'unknown' | 'quota';
+export type StoreResult = 'stored' | 'resource' | 'unknown' | 'quota' | 'policy';
+
+/** Pure: the delivery-ledger outcome of a store result. */
+export function toLocalOutcome(result: StoreResult | void): LocalOutcome {
+  return result === 'unknown' || result === 'quota' || result === 'policy' ? result : 'delivered';
+}
 
 export async function storeInboundMessage(
   rawBuffer: Buffer,
@@ -75,6 +83,19 @@ export async function storeInboundMessage(
     if (handled.length > 0) return 'resource';
     log.warn({ rcptTo: opts.rcptTo }, 'Mailbox not found — recipient unknown at delivery time');
     return 'unknown';
+  }
+
+  // 9.4: per-mailbox mail flow — accept-only-from / reject-from (envelope sender
+  // and header From:) and the receive size limit. Port 25 refuses the envelope
+  // sender at RCPT TO already; this covers every delivery path.
+  const flowOwner: MailFlowOwner = ownerType === 'user' && user ? { userId: user.id } : { sharedMailboxId: sharedMailbox!.id };
+  const flow = await loadMailFlowPolicy(flowOwner);
+  const refusal = deliveryRefusal(flow, {
+    envelopeFrom: opts.fromAddr || null, headerFrom: headerFromAddress(rawBuffer), sizeBytes: rawBuffer.length,
+  });
+  if (refusal) {
+    log.warn({ rcptTo: opts.rcptTo, from: opts.fromAddr, refusal }, 'Delivery refused by the mailbox mail flow policy');
+    return 'policy';
   }
 
   // v8.1: ProhibitSendReceiveQuota. Port 25 already refuses at RCPT TO; this
@@ -214,6 +235,31 @@ export async function storeInboundMessage(
     }
   } catch (err) {
     log.error({ err }, 'TransportRules evaluation failed — delivering mail unchanged');
+  }
+
+  // ── Admin forwarding (9.4, MailFlowPolicy.forwardTo) ─────────────────────────
+  // Queued before the local copy is committed, like rule forwards (a failure
+  // defers the transaction; the claim keyed by the transaction prevents a second
+  // forward on the retry). When the mailbox keeps no copy, delivery ends here.
+  const adminForward = planAdminForward(flow, {
+    envelopeFrom: opts.fromAddr, alreadyForwarded: isRuleForwardedAlready(effectiveBuffer),
+  });
+  if (adminForward === 'skipped-loop') {
+    log.warn({ rcptTo: opts.rcptTo, to: flow.forwardTo }, 'Admin forwarding skipped (already forwarded / bounce) — delivering locally');
+  } else if (adminForward !== 'none') {
+    await enqueueRuleForward({
+      rawBuffer:      effectiveBuffer,
+      toAddress:      adminForward.to,
+      forwardingUser: { id: user?.id ?? sharedMailbox!.id, email: opts.rcptTo.toLowerCase() },
+      mode:           'forward',
+      originalFrom:   opts.fromAddr,
+      dedupKey:       opts.deliveryKey,
+      recipient:      opts.rcptTo,
+    });
+    if (!adminForward.keepCopy) {
+      log.info({ rcptTo: opts.rcptTo, to: adminForward.to }, 'Admin forwarding without a local copy');
+      return 'stored';
+    }
   }
 
   // ── User inbox rules (Outlook-style, v3.18.0) ────────────────────────────────

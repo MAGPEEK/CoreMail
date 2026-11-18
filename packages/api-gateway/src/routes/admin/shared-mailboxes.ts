@@ -9,6 +9,7 @@
  * GET    /api/v1/admin/shared-mailboxes/:id/permissions        — permissions
  * POST   /api/v1/admin/shared-mailboxes/:id/permissions        — add permission
  * DELETE /api/v1/admin/shared-mailboxes/:id/permissions/:userId — remove permission
+ * GET|PUT /api/v1/admin/shared-mailboxes/:id/mail-flow         — 9.4 mail flow (lib/mail-flow-admin.ts)
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
@@ -19,6 +20,7 @@ import { ensureSharedMailboxProvisioned } from '../../lib/provision-mailbox.js';
 import { quotaLevelPatchError } from '../../lib/quota-levels.js';
 import { publishPermissionChange, sharedMailboxGrantees } from '../../lib/permission-events.js';
 import { addressCollision } from '../../lib/address-collision.js';
+import { getMailFlowHandler, putMailFlowHandler } from '../../lib/mail-flow-admin.js';
 
 const log = createLogger('admin:shared-mailboxes');
 export const adminSharedMailboxesRouter: RouterType = Router();
@@ -28,9 +30,10 @@ const SELECT = {
   id: true, email: true, displayName: true, domainId: true,
   quotaBytes: true, usedBytes: true, active: true, createdAt: true,
   quotaWarningBytes: true, quotaProhibitSendBytes: true,
+  sentCopySendAs: true, sentCopySendOnBehalf: true,
   permissions: {
     select: {
-      id: true, userId: true, permission: true, grantedAt: true,
+      id: true, userId: true, permission: true, grantedAt: true, autoMap: true,
       user: { select: { email: true, displayName: true } },
     },
   },
@@ -132,6 +135,9 @@ adminSharedMailboxesRouter.put('/:id', async (req: Request, res: Response) => {
     // v8.1: Exchange quota levels (null = server default percent of quotaBytes)
     quotaWarningBytes:      z.number().int().min(0).nullable().optional(),
     quotaProhibitSendBytes: z.number().int().min(0).nullable().optional(),
+    // 9.4: copy of mail sent as / on behalf of the box into its Sent folder
+    sentCopySendAs:       z.boolean().optional(),
+    sentCopySendOnBehalf: z.boolean().optional(),
   });
   const p = schema.safeParse(req.body);
   if (!p.success) { res.status(400).json({ error: 'Invalid input' }); return; }
@@ -152,6 +158,8 @@ adminSharedMailboxesRouter.put('/:id', async (req: Request, res: Response) => {
         ...(p.data.quotaBytes  !== undefined ? { quotaBytes: BigInt(p.data.quotaBytes) } : {}),
         ...(p.data.quotaWarningBytes !== undefined ? { quotaWarningBytes: big(p.data.quotaWarningBytes) } : {}),
         ...(p.data.quotaProhibitSendBytes !== undefined ? { quotaProhibitSendBytes: big(p.data.quotaProhibitSendBytes) } : {}),
+        ...(p.data.sentCopySendAs !== undefined ? { sentCopySendAs: p.data.sentCopySendAs } : {}),
+        ...(p.data.sentCopySendOnBehalf !== undefined ? { sentCopySendOnBehalf: p.data.sentCopySendOnBehalf } : {}),
       },
       select: SELECT,
     });
@@ -173,6 +181,10 @@ adminSharedMailboxesRouter.delete('/:id', async (req: Request, res: Response) =>
   } catch { res.status(404).json({ error: 'Not found' }); }
 });
 
+// ── 9.4: per-mailbox mail flow (lib/mail-flow-admin.ts) ──────────────────────
+adminSharedMailboxesRouter.get('/:id/mail-flow', getMailFlowHandler('shared'));
+adminSharedMailboxesRouter.put('/:id/mail-flow', putMailFlowHandler('shared'));
+
 // ── GET /:id/permissions ──────────────────────────────────────────────────────
 adminSharedMailboxesRouter.get('/:id/permissions', async (req: Request, res: Response) => {
   const sharedMailboxId = req.params['id'] ?? '';
@@ -193,6 +205,8 @@ adminSharedMailboxesRouter.post('/:id/permissions', async (req: Request, res: Re
     userId:      z.string().min(1),
     permissions: z.array(z.enum(PERM_VALUES)).min(1).optional(),
     permission:  z.enum(PERM_VALUES).optional(), // Legacy
+    // 9.4 auto-mapping (default on): off → the user adds the box to the folder pane / IMAP list
+    autoMap:     z.boolean().optional(),
   });
   const p = schema.safeParse(req.body);
   if (!p.success) { res.status(400).json({ error: 'Invalid input' }); return; }
@@ -212,7 +226,9 @@ adminSharedMailboxesRouter.post('/:id/permissions', async (req: Request, res: Re
     await prisma.$transaction([
       prisma.sharedMailboxPerm.deleteMany({ where: { sharedMailboxId, userId: p.data.userId } }),
       prisma.sharedMailboxPerm.createMany({
-        data: perms.map((permission) => ({ sharedMailboxId, userId: p.data.userId, permission, grantedBy: actorId })),
+        data: perms.map((permission) => ({
+          sharedMailboxId, userId: p.data.userId, permission, grantedBy: actorId, autoMap: p.data.autoMap ?? true,
+        })),
         skipDuplicates: true,
       }),
     ]);

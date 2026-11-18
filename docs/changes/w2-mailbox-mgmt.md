@@ -1,0 +1,15 @@
+# w2-mailbox-mgmt — changelog text (Keep a Changelog)
+
+SemVer: MINOR (additive schema, new endpoints/fields/options; no removed or changed contract).
+
+### Added
+- Shared mailboxes: "Automatisch einblenden" per permission grant (`SharedMailboxPerm.autoMap`, `MailboxDelegate.autoMap`, default on). Without it the mailbox appears in the webmail folder pane and the IMAP `Shared/` / `Other Users/` listing only after the user adds it; access is unchanged. BCP, admin API (`autoMap` on the permission and delegate endpoints) and `coremail shared grant --no-automap`.
+- Shared mailboxes: "Gesendete Elemente im freigegebenen Postfach ablegen", separately for send as and send on behalf (`sentCopySendAs`, `sentCopySendOnBehalf`) — a copy goes into the shared mailbox's Sent folder in addition to the sender's own, from webmail, SMTP submission, JMAP and ActiveSync (one helper, storage `afterForeignSend`). `coremail shared sent-copy`.
+- Per-mailbox mail flow for user mailboxes and shared mailboxes (`MailFlowPolicy`): hide from the global address list (webmail GAL and autocomplete, ActiveSync GAL, JMAP principals), admin forwarding with or without a kept copy (loop-protected, bounces never forwarded), accept-only-from / reject-from lists (addresses or domains; 550 5.7.1 at SMTP RCPT/DATA and an NDR on every local delivery path), per-mailbox max receive size, and for users max send size and max recipients replacing the global limits. BCP "Nachrichtenfluss", `GET|PUT /api/v1/admin/{mailboxes,shared-mailboxes}/:id/mail-flow` (audited as `mailbox.mailflow.update`), `coremail mailbox flow` / `coremail shared flow`.
+- Mailbox access audit (`mailbox.foreign.*`): delegates and shared mailbox users opening a foreign mailbox (aggregated: once per user, mailbox and client per hour), sending as / on behalf, deleting, moving and changing folders — from webmail, IMAP (SELECT/EXAMINE, EXPUNGE, CLOSE, MOVE, CREATE/RENAME/DELETE), JMAP (account use, Email/set, Mailbox/set), ActiveSync and SMTP sends. Switch and retention in BCP → Einstellungen → Sicherheit (`mailboxAccessAuditEnabled`, `mailboxAccessAuditRetentionDays`, default 180 days, hourly purge of these entries only), BCP audit-log filter "Postfachzugriffe" (`?category=mailbox-access`), and webmail Settings → Sicherheit "Zugriffe auf mein Postfach" (`GET /api/v1/user/mailbox-access-log`).
+- e2e step `mailbox-mgmt`; docs `docs/mailbox-management.md`.
+
+### Changed
+- `GET /api/v1/user/accessible-mailboxes` entries carry `autoMap`; `hidden` is also true for a grant without auto-mapping the user has not added yet.
+- The 9.3 webmail foreign-mailbox audit (`mailbox.foreign.*` writes) now goes through the storage mailbox access audit: `changes.source` is set and it follows the new mailbox access audit switch.
+- Local delivery has a new refusal outcome `policy` (NDR 5.7.1) next to `unknown` and `quota` (delivery ledger, local NDRs, outbound worker).

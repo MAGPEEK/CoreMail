@@ -4,7 +4,7 @@ import { patchSchema } from '../lib/zod-compat.js';
 import { hashPassword, verifyPassword } from '@coremail/core';
 import {
   prisma, expunge, countRegexConditions, MAX_REGEX_CONDITIONS_PER_USER, saveOofSettings, getQuotaStatus, hasMfa,
-  reservedFolderPrefix, reservedFolderNameError, effectiveProtocolAccess,
+  reservedFolderPrefix, reservedFolderNameError, effectiveProtocolAccess, MAILBOX_ACCESS_ACTION_PREFIX,
 } from '@coremail/storage';
 import { invalidRegexConditionMessage } from '../lib/rule-validation.js';
 import { checkPasswordPolicy, revokeAllSessions } from '@coremail/storage/auth';
@@ -696,7 +696,7 @@ const MAX_HIDDEN_MAILBOXES = 500;
 async function accessibleMailboxView(userId: string) {
   const [list, settings] = await Promise.all([
     listForeignMailboxes(userId),
-    prisma.userSettings.findUnique({ where: { userId }, select: { hiddenSharedMailboxes: true } }),
+    prisma.userSettings.findUnique({ where: { userId }, select: { hiddenSharedMailboxes: true, addedSharedMailboxes: true } }),
   ]);
   const sharedIds = list.filter((a) => a.kind === 'shared' && a.sharedMailboxId).map((a) => a.sharedMailboxId as string);
   // Shared mailboxes: every permission row (FULL_ACCESS/READ_ONLY + SEND_AS/SEND_ON_BEHALF)
@@ -707,6 +707,7 @@ async function accessibleMailboxView(userId: string) {
     })
     : [];
   const hidden = new Set(settings?.hiddenSharedMailboxes ?? []);
+  const added = new Set(settings?.addedSharedMailboxes ?? []);
   return list.map((a) => {
     const ref = foreignMailboxRef(a);
     const permissions = a.kind === 'shared'
@@ -720,9 +721,38 @@ async function accessibleMailboxView(userId: string) {
       displayName: a.displayName,
       readOnly: a.readOnly,
       permissions,
-      hidden: hidden.has(ref),
+      // 9.4: a grant without auto-mapping stays hidden until the user adds it
+      autoMap: a.autoMap,
+      hidden: folderPaneHidden(ref, a.autoMap, hidden, added),
     };
   });
+}
+
+/** Pure (9.4): is a foreign mailbox hidden from the folder pane? */
+export function folderPaneHidden(ref: string, autoMap: boolean, hidden: ReadonlySet<string>, added: ReadonlySet<string>): boolean {
+  return hidden.has(ref) || (!autoMap && !added.has(ref));
+}
+
+/**
+ * Pure (9.4): the stored hide / add lists after the user hides or shows a
+ * mailbox. Showing removes it from `hidden` and, without auto-mapping, puts it
+ * on `added`; hiding does the reverse. Refs of mailboxes no longer accessible
+ * (`current` = refs of the user's accessible mailboxes) are pruned.
+ */
+export function nextFolderPaneLists(
+  lists: { hidden: readonly string[]; added: readonly string[] },
+  current: ReadonlySet<string>,
+  ref: string,
+  hide: boolean,
+  autoMap: boolean,
+  max: number,
+): { hidden: string[]; added: string[] } {
+  const keep = (r: string): boolean => current.has(r) && r !== ref;
+  const hiddenNext = lists.hidden.filter(keep);
+  const addedNext = lists.added.filter(keep);
+  if (hide) hiddenNext.push(ref);
+  else if (!autoMap) addedNext.push(ref);
+  return { hidden: hiddenNext.slice(0, max), added: addedNext.slice(0, max) };
 }
 
 userRouter.get('/accessible-mailboxes', async (req: Request, res: Response) => {
@@ -739,17 +769,52 @@ userRouter.patch('/accessible-mailboxes/:ref', async (req: Request, res: Respons
   // Hiding needs access (no oracle beyond the user's own list); un-hiding always works.
   if (!entry && body.data.hidden) { res.status(404).json({ error: 'Postfach nicht gefunden' }); return; }
 
-  // view.hidden only covers accessible mailboxes → stale entries are pruned here
-  const current = view.filter((v) => v.hidden).map((v) => v.ref);
-  const hiddenSharedMailboxes = (body.data.hidden
-    ? [...new Set([...current, ref])]
-    : current.filter((r) => r !== ref)).slice(0, MAX_HIDDEN_MAILBOXES);
+  // Only refs of accessible mailboxes are kept → stale entries are pruned here
+  const stored = await prisma.userSettings.findUnique({ where: { userId }, select: { hiddenSharedMailboxes: true, addedSharedMailboxes: true } });
+  const next = nextFolderPaneLists(
+    { hidden: stored?.hiddenSharedMailboxes ?? [], added: stored?.addedSharedMailboxes ?? [] },
+    new Set(view.map((v) => v.ref)), ref, body.data.hidden, entry?.autoMap ?? true, MAX_HIDDEN_MAILBOXES,
+  );
+  const data = { hiddenSharedMailboxes: next.hidden, addedSharedMailboxes: next.added };
   await prisma.userSettings.upsert({
     where: { userId },
-    create: { userId, hiddenSharedMailboxes },
-    update: { hiddenSharedMailboxes },
+    create: { userId, ...data },
+    update: data,
   });
   res.json(entry ? { ...entry, hidden: body.data.hidden } : { ref, hidden: false });
+});
+
+// ── 9.4: who accessed my mailbox (Settings → Sicherheit) ─────────────────────
+// GET /api/v1/user/mailbox-access-log?limit=  — the mailbox access audit entries
+// (mailbox.foreign.*) of the caller's own mailbox, newest first: who (delegate),
+// when, what, from which client. IP addresses stay in the admin audit log.
+const ACCESS_LOG_MAX = 200;
+
+/** Pure: the owner's view of one audit row. */
+export function ownerAccessEntry(row: { id: string; timestamp: Date; actorEmail: string | null; action: string; changes: unknown }) {
+  const c = (row.changes && typeof row.changes === 'object' ? row.changes : {}) as Record<string, unknown>;
+  return {
+    id: row.id,
+    at: row.timestamp.toISOString(),
+    actor: row.actorEmail ?? '',
+    action: row.action.startsWith(MAILBOX_ACCESS_ACTION_PREFIX) ? row.action.slice(MAILBOX_ACCESS_ACTION_PREFIX.length) : row.action,
+    source: typeof c['source'] === 'string' ? c['source'] : null,
+    ...(typeof c['count'] === 'number' ? { count: c['count'] } : {}),
+    ...(typeof c['folder'] === 'string' ? { folder: c['folder'] } : {}),
+  };
+}
+
+userRouter.get('/mailbox-access-log', async (req: Request, res: Response) => {
+  const limit = Math.min(ACCESS_LOG_MAX, Math.max(1, parseInt(String(req.query['limit'] ?? '50'), 10) || 50));
+  const mailbox = await prisma.mailbox.findUnique({ where: { userId: req.apiUser!.userId }, select: { id: true } });
+  if (!mailbox) { res.json({ entries: [] }); return; }
+  const rows = await prisma.auditLog.findMany({
+    where: { targetType: 'mailbox', targetId: mailbox.id, action: { startsWith: MAILBOX_ACCESS_ACTION_PREFIX } },
+    orderBy: { timestamp: 'desc' },
+    take: limit,
+    select: { id: true, timestamp: true, actorEmail: true, action: true, changes: true },
+  });
+  res.json({ entries: rows.map(ownerAccessEntry) });
 });
 
 // ── Pre-9.3 shared-mailbox content API (compat) ───────────────────────────────

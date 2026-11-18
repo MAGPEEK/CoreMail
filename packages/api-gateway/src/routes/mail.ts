@@ -9,7 +9,7 @@ import {
   prisma, parseRawMessage, uploadBuffer, outboundAttachKey,
   createMessage, moveMessages, setFlags, touchMessages, expunge, nextModSeq,
   loadRawMessage, storeRawMessage, truncateBodyColumn, getObjectStream, getObjectStore, downloadBuffer,
-  checkSendQuota, reservedFolderPrefix, reservedFolderNameError,
+  checkSendQuota, reservedFolderPrefix, reservedFolderNameError, sendLimitsForUser,
 } from '@coremail/storage';
 import { getOutboundJobOptions } from '@coremail/storage/queue-options';
 import {
@@ -18,7 +18,7 @@ import {
 import { getRedisClient, createBullMqConnection, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
 import { requireAuth } from '../middleware/auth.js';
 import { checkFolderParent, type FolderLookup } from '../lib/folder-tree.js';
-import { withBodyLimit, checkRecipients, MAX_SEND_FILES } from '../lib/send-limits.js';
+import { withBodyLimit, checkRecipients, maxMessageBytes, maxRecipients, MAX_SEND_FILES } from '../lib/send-limits.js';
 import { createUserRateLimiter, envInt } from '../lib/user-rate-limit.js';
 import { resolveReplyHeaders, prismaReplyLookup, parseClientReferences } from '../lib/reply-headers.js';
 import { rspamdControllerHeaders } from '../lib/rspamd-controller.js';
@@ -983,6 +983,11 @@ export async function resolveSender(
   return { ok: true, fromEmail: user.email, fromName: (user.displayName ?? '').trim(), onBehalfHeader: null };
 }
 
+/** Pure (9.4): size estimate of an outgoing webmail message for the per-mailbox send limit. */
+export function estimatedSendSize(bodyHtml: string, bodyText: string, files: ReadonlyArray<{ size: number }>): number {
+  return Buffer.byteLength(bodyHtml ?? '') + Buffer.byteLength(bodyText ?? '') + files.reduce((n, f) => n + (f.size || 0), 0);
+}
+
 /** Validates and enqueues one outgoing mail (BullMQ `smtp-outbound`) + Sent copy. */
 export async function performSend(userId: string, input: SendRequest): Promise<SendResult> {
     const { to, cc, bcc, subject, bodyHtml, bodyText, inReplyTo } = input;
@@ -995,7 +1000,10 @@ export async function performSend(userId: string, input: SendRequest): Promise<S
     const clientRefs = parseClientReferences(input.referencesRaw);
     if (!clientRefs.ok) return fail(400, { error: clientRefs.error });
     // 8.0.x: recipient count + syntax (header injection, envelope abuse)
-    const rcptCheck = checkRecipients([to, cc, bcc]);
+    // 9.4: a per-mailbox limit (MailFlowPolicy) replaces the global one; the
+    // request body guard (global size) stays the transport's upper bound.
+    const limits = await sendLimitsForUser(userId, { maxBytes: await maxMessageBytes(), maxRecipients: maxRecipients() });
+    const rcptCheck = checkRecipients([to, cc, bcc], limits.maxRecipients);
     if (!rcptCheck.ok) {
       return fail(400, { error: rcptCheck.error, ...(rcptCheck.invalid ? { invalid: rcptCheck.invalid } : {}) });
     }
@@ -1052,6 +1060,9 @@ export async function performSend(userId: string, input: SendRequest): Promise<S
     };
 
     const files       = input.attachments;
+    if (estimatedSendSize(bodyHtml, bodyText, files) > limits.maxBytes) {
+      return fail(413, { error: 'Die Nachricht überschreitet die Größenbeschränkung des Postfachs', maxBytes: limits.maxBytes });
+    }
     const jobId       = crypto.randomUUID();
     const msgId       = input.messageId || `<${crypto.randomUUID()}@${user.domain.name}>`;
     const sendDate    = new Date();
@@ -1105,6 +1116,8 @@ export async function performSend(userId: string, input: SendRequest): Promise<S
         from:         effectiveFromEmail,
         to:           smtpRecipients,
         senderUserId: user.id,
+        // 9.4: send as / on behalf of a Shared Mailbox → audit + its Sent copy in the worker
+        ...(input.sendAs || input.sendOnBehalfOf ? { foreignSendSource: 'webmail' } : {}),
         ...(user.domain.dkimPrivateKey ? {
           dkimDomain:     user.domain.name,
           dkimSelector:   user.domain.dkimSelector ?? 'mail',

@@ -28,6 +28,27 @@ export function prependHeaders(rawBuffer: Buffer, extraHeaders: Record<string, s
   return Buffer.concat([Buffer.from(extra), rawBuffer]);
 }
 
+/** What the admin forwarding of a mailbox does with one delivery (9.4). */
+export type AdminForwardPlan = 'none' | 'skipped-loop' | { to: string; keepCopy: boolean };
+
+/**
+ * Pure: the admin forwarding (MailFlowPolicy.forwardTo) of one delivery.
+ * Forwarded like a rule `forward` (Resent-* fields, envelope sender = the
+ * forwarding mailbox — aligned with our SPF/DKIM, no SRS rewriting) with the
+ * same loop header. Never forwarded — and then always kept locally, so nothing
+ * is lost: a message that was already forwarded by a rule or an admin
+ * forwarding (loop protection), and a null-sender message (bounces and DSNs
+ * stay where they arrive; forwarding them could bounce back and forth).
+ */
+export function planAdminForward(
+  policy: { forwardTo: string | null; forwardKeepCopy: boolean },
+  ctx: { envelopeFrom: string; alreadyForwarded: boolean },
+): AdminForwardPlan {
+  if (!policy.forwardTo) return 'none';
+  if (ctx.alreadyForwarded || !ctx.envelopeFrom) return 'skipped-loop';
+  return { to: policy.forwardTo, keepCopy: policy.forwardKeepCopy };
+}
+
 export interface RuleForwardOpts {
   rawBuffer:      Buffer;
   toAddress:      string;        // target address (from the rule)

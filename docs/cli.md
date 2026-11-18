@@ -89,6 +89,9 @@ coremail shared list
 coremail shared show team@example.com
 coremail shared create team@example.com --name "Sales Team" [--quota 20GB]
 coremail shared grant team@example.com john@example.com FULL_ACCESS SEND_AS   # replaces the user's existing rights
+coremail shared grant team@example.com john@example.com READ_ONLY --no-automap  # 9.4: john adds it himself
+coremail shared sent-copy team@example.com --send-as on --on-behalf off        # 9.4: Sent copy in the shared mailbox
+coremail shared flow team@example.com --accept-from example.com --max-receive 20
 coremail shared revoke team@example.com john@example.com
 coremail shared delete team@example.com [--yes]
 ```

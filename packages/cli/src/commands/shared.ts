@@ -5,7 +5,7 @@ import { confirm, fail, formatBytes, formatDate, parseBytes, printJson, printTab
 
 const PERMS = ['FULL_ACCESS', 'SEND_AS', 'SEND_ON_BEHALF', 'READ_ONLY'];
 
-export function registerShared(program: Command, api: () => CoreMailClient, json: () => boolean): void {
+export function registerShared(program: Command, api: () => CoreMailClient, json: () => boolean): Command {
   const sh = program.command('shared').description('Show, create, grant and delete shared mailboxes (team mailboxes)');
 
   sh.command('list').alias('ls').description('All shared mailboxes')
@@ -45,15 +45,16 @@ export function registerShared(program: Command, api: () => CoreMailClient, json
     });
 
   sh.command('grant <shared> <user> <permissions...>').description(`Set permissions (${PERMS.join(', ')}) — replaces the user's existing ones`)
-    .action(async (sharedRef: string, userRef: string, permissions: string[]) => {
+    .option('--no-automap', 'do not show the mailbox automatically (the user adds it in the webmail)')
+    .action(async (sharedRef: string, userRef: string, permissions: string[], opts: { automap: boolean }) => {
       const perms = permissions.map((p) => p.toUpperCase());
       const bad = perms.filter((p) => !PERMS.includes(p));
       if (bad.length) fail(`Invalid permission: ${bad.join(', ')}`);
       const s = await resolveShared(api(), sharedRef);
       const u = await resolveUser(api(), userRef);
-      const r = await api().post(`/api/v1/admin/shared-mailboxes/${s.id}/permissions`, { userId: u.id, permissions: perms });
+      const r = await api().post(`/api/v1/admin/shared-mailboxes/${s.id}/permissions`, { userId: u.id, permissions: perms, autoMap: opts.automap });
       if (json()) { printJson(r); return; }
-      process.stdout.write(`${u.email} → ${s.email}: ${perms.join(', ')}\n`);
+      process.stdout.write(`${u.email} → ${s.email}: ${perms.join(', ')}${opts.automap ? '' : ' (not auto-mapped)'}\n`);
     });
 
   sh.command('revoke <shared> <user>').description("Remove all of a user's permissions")
@@ -72,4 +73,5 @@ export function registerShared(program: Command, api: () => CoreMailClient, json
       await api().delete(`/api/v1/admin/shared-mailboxes/${s.id}`);
       process.stdout.write(`Shared mailbox deleted: ${s.email}\n`);
     });
+  return sh;
 }

@@ -13,6 +13,7 @@ import { registerAuth } from './commands/auth.js';
 import { registerUser } from './commands/user.js';
 import { registerMailbox } from './commands/mailbox.js';
 import { registerShared } from './commands/shared.js';
+import { registerMailFlow } from './commands/mail-flow.js';
 import { registerDomain } from './commands/domain.js';
 import { registerConnector } from './commands/connector.js';
 import { registerSmtp } from './commands/smtp.js';
@@ -44,8 +45,7 @@ const json = (): boolean => program.opts<{ json?: boolean }>().json === true;
 
 registerAuth(program, api, json);
 registerUser(program, api, json);
-registerMailbox(program, api, json);
-registerShared(program, api, json);
+registerMailFlow(registerMailbox(program, api, json), registerShared(program, api, json), api, json);
 registerDomain(program, api, json);
 registerConnector(program, api, json);
 registerSmtp(program, api, json);

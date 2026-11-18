@@ -34,3 +34,6 @@ export * from './references.js';
 export * from './references-backfill.js';
 export * from './branding.js';
 export * from './protocol-access.js';
+export * from './mail-flow.js';
+export * from './mailbox-access-audit.js';
+export * from './shared-sent-copy.js';

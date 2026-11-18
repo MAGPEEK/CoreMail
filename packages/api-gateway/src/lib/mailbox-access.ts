@@ -17,7 +17,7 @@
  * Each returns null when the caller lacks the right (or the mailbox does not
  * exist) — callers answer 403/404 without telling the two apart.
  */
-import { prisma, listAccessibleMailboxes, type AccessibleMailbox, type MailboxAccessDb } from '@coremail/storage';
+import { prisma, listAccessibleMailboxes, accessibleMailboxRef, type AccessibleMailbox, type MailboxAccessDb } from '@coremail/storage';
 
 export interface SharedMailboxAccess {
   mailboxId: string;
@@ -67,7 +67,7 @@ export async function listForeignMailboxes(userId: string): Promise<AccessibleMa
 
 /** Webmail reference of a foreign mailbox: "shared:<sharedMailboxId>" | "delegated:<mailboxId>". */
 export function foreignMailboxRef(a: AccessibleMailbox): string {
-  return a.kind === 'shared' ? `shared:${a.sharedMailboxId ?? ''}` : `delegated:${a.mailboxId}`;
+  return accessibleMailboxRef(a);
 }
 
 /**

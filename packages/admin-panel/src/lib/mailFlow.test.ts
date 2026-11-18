@@ -1,0 +1,43 @@
+/**
+ * 9.4 BCP mail flow form: view → form → PUT body.
+ * Run: node --test src/lib/mailFlow.test.ts  (in packages/admin-panel)
+ */
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { formFromView, limitFromInput, listFromText, patchFromForm } from './mailFlow.ts';
+
+const view = {
+  hiddenFromGal: false, forwardTo: null, forwardKeepCopy: true, acceptFrom: ['partner.example'], rejectFrom: [],
+  maxReceiveSizeMb: null, maxSendSizeMb: 10, maxRecipients: null,
+};
+
+test('view → form: lists one per line, limits as text, empty for the global limit', () => {
+  const f = formFromView(view);
+  assert.equal(f.acceptFrom, 'partner.example');
+  assert.equal(f.maxSendSizeMb, '10');
+  assert.equal(f.maxReceiveSizeMb, '');
+  assert.equal(f.forwardTo, '');
+});
+
+test('lists split on lines, commas and semicolons; limits validated', () => {
+  assert.deepEqual(listFromText(' a@x.test\n\n b.test, c.test; '), ['a@x.test', 'b.test', 'c.test']);
+  assert.equal(limitFromInput(''), null);
+  assert.equal(limitFromInput(' 25 '), 25);
+  assert.equal(limitFromInput('0'), undefined);
+  assert.equal(limitFromInput('2.5'), undefined);
+});
+
+test('form → body: user mailboxes carry send limits, shared ones do not; invalid fields are named', () => {
+  const user = patchFromForm({ ...formFromView(view), forwardTo: ' boss@partner.example ', maxRecipients: '50' }, 'user');
+  assert.deepEqual(user, {
+    ok: true,
+    patch: {
+      hiddenFromGal: false, forwardTo: 'boss@partner.example', forwardKeepCopy: true, acceptFrom: ['partner.example'], rejectFrom: [],
+      maxReceiveSizeMb: null, maxSendSizeMb: 10, maxRecipients: 50,
+    },
+  });
+  const shared = patchFromForm(formFromView({ ...view, maxSendSizeMb: undefined }), 'shared');
+  assert.equal(shared.ok && 'maxSendSizeMb' in shared.patch, false);
+  assert.deepEqual(patchFromForm({ ...formFromView(view), forwardTo: 'nope' }, 'user'), { ok: false, field: 'forwardTo' });
+  assert.deepEqual(patchFromForm({ ...formFromView(view), maxRecipients: '-1' }, 'user'), { ok: false, field: 'maxRecipients' });
+});

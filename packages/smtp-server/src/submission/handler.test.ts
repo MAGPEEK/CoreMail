@@ -34,6 +34,7 @@ const PASSED = new Error('header check passed (delivery reached)');
     },
   },
   serverSettings: { findUnique: async () => ({ publicHostname: 'mail.corp.test' }) },
+  mailFlowPolicy: { findUnique: async () => null },
   // First DB access after the header check → proves the message was accepted for delivery.
   domain: { findFirst: async () => { throw PASSED; } },
   systemLog: { create: async () => ({}) },
