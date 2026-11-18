@@ -23,7 +23,6 @@ import {
   type AccessibleMailboxEntry,
 } from '../lib/mailboxContext.js';
 import { MAIL_VIEW_ROOT_CLASS } from '../lib/mailLayout.js';
-import { mailDeepLinkTarget } from '../lib/webPush.js';
 
 // ── Persistent panel widths ───────────────────────────────────────────────────
 const PANEL_STORAGE_KEY = 'coremail:panel-widths';
@@ -120,24 +119,9 @@ export function MailPage() {
     setListW((w) => Math.max(MIN_LIST_W, Math.min(MAX_LIST_W, w + delta)));
   }, []);
 
-  // 9.4: the URL holds mailbox / folder / message (/mail/<mailbox>/<folderId>/<messageId>)
+  // 9.4: the URL holds mailbox / folder / message (/mail/<mailbox>/<folderId>/<messageId>);
+  // a notification click (/mail?folder=…&message=…) is turned into that form
   useMailDeepLink();
-
-  // 9.4: notification deep link /mail?folder=…&message=… (Web Push click) — opens
-  // the message once, then the parameters leave the URL (the mailbox one stays).
-  useEffect(() => {
-    const target = mailDeepLinkTarget(searchParams);
-    if (!target) return;
-    const store = useUiStore.getState();
-    store.setSelectedFolder(target.folderId, 'tree', parseMailboxKey(searchParams.get('mailbox')));
-    store.setSelectedMessage(target.messageId);
-    setSearchParams((prev) => {
-      const next = new URLSearchParams(prev);
-      next.delete('folder');
-      next.delete('message');
-      return next;
-    }, { replace: true });
-  }, [searchParams, setSearchParams]);
 
   const { data: folders } = useQuery({
     queryKey: mailbox.foldersKey,

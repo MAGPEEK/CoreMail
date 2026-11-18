@@ -40,6 +40,45 @@ export function parseMailPath(pathname: string): MailLocation | null {
   return { mailbox, folderId, messageId: folderId ? segment(parts[3]) : null };
 }
 
+/**
+ * Query parameters of the older link forms: `?mailbox=` (pre-9.4) and
+ * `?folder=…&message=…` (Web Push notification clicks, built by the gateway's
+ * lib/mail-notification.ts). The view → URL step drops them.
+ */
+export const LEGACY_MAIL_PARAMS = ['mailbox', 'folder', 'message'] as const;
+
+function idParam(v: string | null): string | null {
+  return v && ID_RE.test(v) ? v : null;
+}
+
+/**
+ * What a /mail… URL asks to show (path form first; the legacy parameters only
+ * complete a folder-less path). Null for other paths; invalid ids are dropped.
+ */
+export function mailLocationFromUrl(pathname: string, search: string): MailLocation | null {
+  const parsed = parseMailPath(pathname);
+  if (!parsed || parsed.folderId) return parsed;
+  const q = new URLSearchParams(search);
+  const legacy = q.get('mailbox');
+  const mailbox = legacy ? parseMailboxKey(legacy) : parsed.mailbox;
+  const folderId = idParam(q.get('folder'));
+  return { mailbox, folderId, messageId: folderId ? idParam(q.get('message')) : null };
+}
+
+/** True when the search part still holds one of the legacy parameters. */
+export function hasLegacyMailParams(search: string): boolean {
+  const q = new URLSearchParams(search);
+  return LEGACY_MAIL_PARAMS.some((p) => q.has(p));
+}
+
+/** Search part without the legacy parameters (other parameters, e.g. ?q=, stay). */
+export function searchWithoutLegacyMailParams(search: string): string {
+  const q = new URLSearchParams(search);
+  for (const p of LEGACY_MAIL_PARAMS) q.delete(p);
+  const s = q.toString();
+  return s ? `?${s}` : '';
+}
+
 export function sameMailLocation(a: MailLocation, b: MailLocation): boolean {
   return mailboxKey(a.mailbox) === mailboxKey(b.mailbox) && a.folderId === b.folderId && a.messageId === b.messageId;
 }

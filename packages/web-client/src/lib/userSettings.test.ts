@@ -4,7 +4,10 @@ import { formatDate, formatTime, formatListDate, formatDateTime, zonedParts, typ
 import { autoReadDelayMs, receiptAction, receiptRequestOption, MDN_SENT_FLAG } from './readBehaviour.ts';
 import { conversationKey, orderForDisplay, sortParams } from './conversationOrder.ts';
 import { attachmentKeyword, needsAttachmentReminder } from './attachmentReminder.ts';
-import { mailPath, parseMailPath, calendarEventPath, contactPath, itemIdFromPath } from './mailLinks.ts';
+import {
+  mailPath, parseMailPath, calendarEventPath, contactPath, itemIdFromPath,
+  mailLocationFromUrl, hasLegacyMailParams, searchWithoutLegacyMailParams,
+} from './mailLinks.ts';
 import { describeUserAgent } from './sessionDevice.ts';
 import { businessHours, hiddenDaysForWorkWeek, slotDuration } from './calendarPrefs.ts';
 import { defaultSignatureHtml, mayAutoSwapSignature, signatureBlockHtml, signatureIdentity } from './signaturePick.ts';
@@ -143,4 +146,19 @@ test('describeUserAgent', () => {
   assert.equal(describeUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1'), 'Safari · iOS');
   assert.equal(describeUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/126.0 Safari/537.36 Edg/126.0'), 'Edge · macOS');
   assert.equal(describeUserAgent(''), 'Unbekanntes Gerät');
+});
+
+test('deep links: legacy ?mailbox= and notification ?folder=&message= complete a folder-less path', () => {
+  const shared = { kind: 'shared' as const, id: 'sb1' };
+  assert.deepEqual(mailLocationFromUrl('/mail', '?folder=f1&message=m1'), { mailbox: { kind: 'own' }, folderId: 'f1', messageId: 'm1' });
+  assert.deepEqual(mailLocationFromUrl('/mail', '?mailbox=shared%3Asb1&folder=f1&message=m1'), { mailbox: shared, folderId: 'f1', messageId: 'm1' });
+  assert.deepEqual(mailLocationFromUrl('/mail', '?mailbox=shared:sb1'), { mailbox: shared, folderId: null, messageId: null });
+  assert.deepEqual(mailLocationFromUrl('/mail', '?folder=../x&message=m1'), { mailbox: { kind: 'own' }, folderId: null, messageId: null });
+  assert.deepEqual(mailLocationFromUrl('/mail', '?message=m1'), { mailbox: { kind: 'own' }, folderId: null, messageId: null }, 'no message without folder');
+  assert.deepEqual(mailLocationFromUrl('/mail/own/f2/m2', '?folder=f1&message=m1'), { mailbox: { kind: 'own' }, folderId: 'f2', messageId: 'm2' }, 'the path wins');
+  assert.equal(mailLocationFromUrl('/calendar', '?folder=f1'), null);
+  assert.equal(hasLegacyMailParams('?folder=f1&message=m1'), true);
+  assert.equal(hasLegacyMailParams('?q=x'), false);
+  assert.equal(searchWithoutLegacyMailParams('?mailbox=own&folder=f1&message=m1&q=x'), '?q=x');
+  assert.equal(searchWithoutLegacyMailParams('?folder=f1'), '');
 });

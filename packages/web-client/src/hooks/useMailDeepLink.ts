@@ -1,6 +1,7 @@
 /**
  * 9.4: keeps the address bar and the mail view in step (lib/mailLinks.ts).
- *  - URL → view: opening a link, back/forward, the pre-9.4 `?mailbox=` form.
+ *  - URL → view: opening a link, back/forward, the pre-9.4 `?mailbox=` form and
+ *    the notification-click form `/mail?folder=…&message=…` (Web Push).
  *  - view → URL: selecting a mailbox/folder/message pushes a history entry; the
  *    automatic INBOX selection replaces the bare /mail entry instead.
  * Both directions read the store directly (not render values), so an update in
@@ -9,20 +10,15 @@
 import { useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useUiStore, useUiPrefs } from '../store/ui.js';
-import { mailPath, parseMailPath, sameMailLocation, type MailLocation } from '../lib/mailLinks.js';
-import { isForeign, mailboxKey, parseMailboxKey } from '../lib/mailboxContext.js';
+import {
+  hasLegacyMailParams, mailLocationFromUrl, mailPath, parseMailPath, sameMailLocation, searchWithoutLegacyMailParams,
+  type MailLocation,
+} from '../lib/mailLinks.js';
+import { isForeign, mailboxKey } from '../lib/mailboxContext.js';
 
 function storeLocation(): MailLocation {
   const s = useUiStore.getState();
   return { mailbox: s.activeMailbox, folderId: s.selectedFolderId, messageId: s.selectedMessageId };
-}
-
-/** Search part without the pre-9.4 `mailbox` parameter. */
-function searchWithoutMailbox(search: string): string {
-  const params = new URLSearchParams(search);
-  params.delete('mailbox');
-  const s = params.toString();
-  return s ? `?${s}` : '';
 }
 
 export function useMailDeepLink(): void {
@@ -33,10 +29,8 @@ export function useMailDeepLink(): void {
 
   // URL → view
   useEffect(() => {
-    const parsed = parseMailPath(location.pathname);
-    if (!parsed) return;
-    const legacy = new URLSearchParams(location.search).get('mailbox');
-    const target: MailLocation = legacy && !parsed.folderId ? { ...parsed, mailbox: parseMailboxKey(legacy) } : parsed;
+    const target = mailLocationFromUrl(location.pathname, location.search);
+    if (!target) return;
     const s = useUiStore.getState();
     const current = storeLocation();
     if (mailboxKey(target.mailbox) !== mailboxKey(current.mailbox)) {
@@ -56,10 +50,10 @@ export function useMailDeepLink(): void {
   useEffect(() => {
     const current = storeLocation();
     const shown = parseMailPath(location.pathname);
-    if (shown && sameMailLocation(shown, current) && !new URLSearchParams(location.search).has('mailbox')) return;
+    if (shown && sameMailLocation(shown, current) && !hasLegacyMailParams(location.search)) return;
     // the folder-less entry (/mail, /mail/<mailbox>) is the automatic INBOX choice → replace
     const replace = !shown?.folderId;
-    navigate(`${mailPath(current.mailbox, current.folderId, current.messageId)}${searchWithoutMailbox(location.search)}`, { replace });
+    navigate(`${mailPath(current.mailbox, current.folderId, current.messageId)}${searchWithoutLegacyMailParams(location.search)}`, { replace });
     // render values only trigger the effect; the store is read inside
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeMailbox, selectedFolderId, selectedMessageId]);
