@@ -30,7 +30,8 @@ uses the existing `settings:reload` message `{ "type": "branding" }`. The former
   database transaction of its own and publishes on its own commit. Writers that
   finish related rows after the message transaction wrap the whole unit in
   `deferMailboxChanges(fn)` — SMTP delivery (attachments, rule copies, folder
-  counters) and the ActiveSync Sent copy — so the event goes out once the clients
+  counters), the ActiveSync Sent copy and the Shared Mailbox Sent copy of a send as /
+  on behalf (storage `storeRawInSentFolder`) — so the event goes out once the clients
   can re-read the finished state (also when a later step fails: committed stays
   committed). Changes recorded outside any scope are published 100 ms later. This covers SMTP delivery, IMAP, POP3, JMAP,
   ActiveSync, the REST API, restore, retention and mail rules alike.

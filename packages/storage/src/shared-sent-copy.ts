@@ -23,6 +23,7 @@ import { addressesOf } from './mime/address.js';
 import { storeRawMessage } from './raw-message-default.js';
 import { truncateBodyColumn } from './raw-message.js';
 import { createMessage } from './message-store.js';
+import { deferMailboxChanges } from './realtime/change-scope.js';
 import { uploadBuffer, attachmentKey } from './minio/index.js';
 import { normalizeSenderAddress } from './sender-identity.js';
 import { recordMailboxAccess, type MailboxAccessSource } from './mailbox-access-audit.js';
@@ -140,9 +141,15 @@ async function loadSendContext(userId: string): Promise<{ email: string; own: st
 /**
  * Stores `raw` in the Sent folder of `mailboxId` (\Seen, raw original kept,
  * attachment rows). Returns the new message id, or null without a Sent folder.
+ * The realtime announcement follows once the attachments and the folder
+ * counter are written (deferMailboxChanges).
  */
-export async function storeRawInSentFolder(mailboxId: string, raw: Buffer): Promise<string | null> {
-  const sent = await prisma.folder.findFirst({ where: { mailboxId, name: 'Sent' }, select: { id: true } });
+export function storeRawInSentFolder(mailboxId: string, raw: Buffer): Promise<string | null> {
+  return deferMailboxChanges(() => storeInSentFolder(mailboxId, raw));
+}
+
+async function storeInSentFolder(mailboxId: string, raw: Buffer): Promise<string | null> {
+  const sent =await prisma.folder.findFirst({ where: { mailboxId, name: 'Sent' }, select: { id: true } });
   if (!sent) return null;
   const parsed = await parseRawMessage(raw);
   const { storagePath } = await storeRawMessage(raw);
