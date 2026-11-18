@@ -85,6 +85,8 @@ function print(view: ProtocolView, json: boolean): void {
 
 interface OverrideGroup { total: number; differing: number; entries: Array<{ name: string; setting: 'on' | 'off'; differs: boolean }> }
 interface OverviewWarning { code: 'no-active-port' | 'port-open-access-off' | 'mapi-https'; protocol: Protocol; ports?: number[] }
+/** Softer than a warning (port open, server-wide off, on for some domains / mailboxes). */
+interface OverviewNotice { code: 'port-open-access-limited'; protocol: Protocol; ports: number[] }
 interface HttpsState { active: boolean; port: number; cert: { name: string; trusted: boolean } | null }
 export interface ProtocolOverview {
   protocols: Array<{
@@ -98,6 +100,8 @@ export interface ProtocolOverview {
   smtpInbound: { activePorts: number[] };
   https: HttpsState;
   warnings: OverviewWarning[];
+  /** Absent on servers before the notices were added. */
+  notices?: OverviewNotice[];
 }
 
 const httpsLabel = (https: HttpsState) => `HTTPS ${https.port}${https.active ? '' : ' (off)'}`;
@@ -122,6 +126,14 @@ export function warningLine(w: OverviewWarning, https: HttpsState): string {
   }
 }
 
+/** One line per notice. */
+export function noticeLine(n: OverviewNotice): string {
+  switch (n.code) {
+    case 'port-open-access-limited':
+      return `${n.protocol}: port open (${n.ports.join(', ')}); login only for the differing domains / mailboxes`;
+  }
+}
+
 function printOverview(o: ProtocolOverview, json: boolean): void {
   if (json) { printJson(o); return; }
   printTable(overviewRows(o), [
@@ -132,6 +144,7 @@ function printOverview(o: ProtocolOverview, json: boolean): void {
   process.stdout.write(`SMTP inbound (transport, no login): ${o.smtpInbound.activePorts.join(', ') || 'no port active'}\n`);
   process.stdout.write(`HTTPS (port ${o.https.port}): ${o.https.active ? 'active' : 'not active'}, ${cert}\n`);
   for (const w of o.warnings) process.stdout.write(`Warning: ${warningLine(w, o.https)}\n`);
+  for (const n of o.notices ?? []) process.stdout.write(`Note: ${noticeLine(n)}\n`);
 }
 
 export function registerProtocol(program: Command, api: () => CoreMailClient, json: () => boolean): void {

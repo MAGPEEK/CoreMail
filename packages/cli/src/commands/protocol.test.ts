@@ -57,3 +57,9 @@ test('w2b: combined view — one row per protocol, HTTP-based ones on HTTPS, war
   assert.match(warningLine({ code: 'mapi-https', protocol: 'mapi' }, https), /HTTPS \(port 443\) is not active or has no trusted certificate/);
   assert.match(warningLine({ code: 'no-active-port', protocol: 'imap' }, https), /no port is active/);
 });
+
+test('w2b: notice when a port is open and only differing domains / mailboxes may log in', async () => {
+  const { noticeLine } = await import('./protocol.js');
+  assert.equal(noticeLine({ code: 'port-open-access-limited', protocol: 'imap', ports: [993] }),
+    'imap: port open (993); login only for the differing domains / mailboxes');
+});

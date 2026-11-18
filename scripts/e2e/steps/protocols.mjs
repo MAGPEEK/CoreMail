@@ -43,6 +43,11 @@ export async function run(state) {
     assert(r.json.protocols.find((p) => p.protocol === 'activesync').transport === 'http', 'ActiveSync runs on the HTTP server');
     assert(Array.isArray(r.json.smtpInbound?.activePorts) && Array.isArray(r.json.warnings), 'smtpInbound / warnings');
     assert(!r.json.warnings.some((w) => w.protocol === 'imap'), `IMAP warns: ${JSON.stringify(r.json.warnings)}`);
+    assert(Array.isArray(r.json.notices), 'notices');
+    for (const n of r.json.notices) {
+      const p = r.json.protocols.find((x) => x.protocol === n.protocol);
+      assert(n.code === 'port-open-access-limited' && p.server === 'off' && p.activePorts.length > 0, `notice ${JSON.stringify(n)}`);
+    }
     return `imap ${imap.activePorts.join('/')}, inbound ${r.json.smtpInbound.activePorts.join('/')}, ${r.json.warnings.length} warning(s)`;
   });
 

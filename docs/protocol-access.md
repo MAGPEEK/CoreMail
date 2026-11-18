@@ -17,7 +17,8 @@ the server, per domain and per mailbox.
 ## Ports vs. Zugriff
 
 Two different things decide whether a client can use a protocol, and the BCP shows both on one
-page (*Services → Protokolle*):
+page (*Protokolle & Dienste*, `/services`; the old sub-page links `/services/imap`, `/services/pop3`,
+`/services/smtp-receive` redirect to the matching protocol card, e.g. `/services#protocol-imap`):
 
 | | Port (listener) | Access (protocol switch) |
 |---|---|---|
@@ -30,7 +31,10 @@ A port that listens while the protocol is off for everyone accepts connections a
 login after the password ("Port offen, Anmeldung für alle gesperrt"); a protocol that is allowed
 without an active port cannot be reached at all. The page warns about both, and about MAPI being on
 while HTTPS (Port 443) is off or has no trusted certificate (Outlook connects over HTTPS only,
-unless a reverse proxy in front provides it).
+unless a reverse proxy in front provides it). A port that listens while the protocol is off on the
+server but on for some domains or mailboxes is consistent; the page says so in a softer notice
+("Port offen; Anmeldung nur für abweichende Domains/Benutzer") that is not counted as an
+inconsistency.
 
 Per protocol the page shows the server-wide access switch, its ports (port on/off, TLS mode
 implicit TLS / STARTTLS, "Ältere Clients erlauben", address and port — add, edit, delete), and a
@@ -48,16 +52,21 @@ The page reads `GET /api/v1/admin/protocol-access/overview` (area *servers*, rea
                  activePorts, enabledAnywhere,
                  overrides: { domains: { total, differing, entries: [ { id, name, setting, differs } ] },
                               users:   { … } },            // entries: first 25 by name
-                 warnings: [ { code, protocol, ports? } ] } ],
+                 warnings: [ { code, protocol, ports? } ],
+                 notices:  [ { code, protocol, ports } ] } ],
   smtpInbound: { ports, activePorts },                      // SMTP on non-submission ports (25)
   https: { active, port, cert: { id, name, trusted } | null },
-  warnings: [ … ] }                                         // all protocols
+  warnings: [ … ], notices: [ … ] }                         // all protocols
 ```
 
 Warning codes: `no-active-port` (allowed for someone, no active port), `port-open-access-off`
 (active port, off on the server and on for no domain or mailbox), `mapi-https` (MAPI on for
 someone, HTTPS not active or its certificate not trusted — self-signed, staging, expired or not
-covering the public host name). SMTP submission ports are 465 and 587 (`SMTP_PORT_465`,
+covering the public host name). Notice code: `port-open-access-limited` (active port, off on the
+server, on for at least one domain or mailbox). The names in `entries` need read access to the
+area *domains* (domain names) or *recipients* (mailbox addresses); without it the group keeps
+`total` / `differing`, `entries` is empty and `namesHidden: true` (SERVER_MANAGEMENT sees the
+domains but only the number of mailboxes). SMTP submission ports are 465 and 587 (`SMTP_PORT_465`,
 `SMTP_PORT_587`); every other SMTP port is inbound. Writes go through the existing routes — the
 level routes below and `/api/v1/admin/services/listeners/*`.
 
@@ -168,7 +177,7 @@ Only enabled protocols are announced:
 
 ## Administration
 
-**BCP**: server level under *Services → Protokolle* (access switch per protocol, next to its
+**BCP**: server level under *Protokolle & Dienste* (access switch per protocol, next to its
 ports), domain level in *Domain bearbeiten*, mailbox level in the mailbox edit dialog (Erben / An /
 Aus — "Erben" names what it resolves to, e.g. "Erben (an)"). Every row shows the effective value and
 the level that decides it, e.g. "aus (Domain)", "an (serverweit)", "an (Postfach)".

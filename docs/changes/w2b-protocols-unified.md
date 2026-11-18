@@ -12,23 +12,30 @@ the `protocol` command is new in 9.4 (unreleased), so this is no breaking change
   mode, legacy TLS, address), how many domains and mailboxes set it differently (with the first 25
   names), and consistency warnings: protocol allowed but no active port (`no-active-port`), port
   active but nobody may log in (`port-open-access-off`), MAPI on while HTTPS (port 443) is off or
-  has no trusted certificate (`mapi-https`). SMTP on port 25 (and every non-submission SMTP port) is
+  has no trusted certificate (`mapi-https`); a softer notice `port-open-access-limited` when a port
+  listens and the protocol is off on the server but on for some domains / mailboxes. Domain names
+  need read access to *domains*, mailbox addresses to *recipients* — otherwise the lists are empty
+  (`namesHidden`) and only the counts are sent. SMTP on port 25 (and every non-submission SMTP port) is
   listed separately as inbound transport, not user access.
 - The level answers of `/api/v1/admin/protocol-access[/domains/:id|/users/:id]` carry
   `inheritedFrom` (`default` | `server` | `domain`): where `inherit` takes its value from.
 - `coremail protocol show` prints the combined view: access, active ports, differing domains /
-  mailboxes per protocol, the SMTP inbound ports, the HTTPS state and the warnings.
+  mailboxes per protocol, the SMTP inbound ports, the HTTPS state, the warnings and notices.
 
 ### Changed
-- BCP → Services is one page „Protokolle“: per protocol (SMTP-Versand, IMAP, POP3, ActiveSync,
+- BCP → Services is one page „Protokolle & Dienste“ (EN „Protocols & services“; sidebar entry and
+  page title): per protocol (SMTP-Versand, IMAP, POP3, ActiveSync,
   JMAP, CalDAV/CardDAV, Webmail, MAPI) the server-wide access switch, its ports (port on/off, TLS
   mode, „Ältere Clients erlauben“, add / edit / delete address and port as before; HTTP-based
   protocols say they run on the HTTP/HTTPS server), a summary line („aktiv auf 993 · 2 Domains
   abweichend · 1 Benutzer abweichend“) whose counts open the list of those domains / mailboxes with
   links to the filtered domain / mailbox list, and the warnings. SMTP-Empfang (port 25) is shown as
   transport, HTTPS (Port 443) with its legacy-TLS switch below. A short box explains ports vs.
-  access. The separate listener pages (SMTP Inbound, IMAP, POP3) and the separate server-level
-  „Protokollzugriff“ editor are gone.
+  access. A listening port with access off on the server but on for some domains / mailboxes shows
+  the notice „Port offen; Anmeldung nur für abweichende Domains/Benutzer“. The separate listener
+  pages (SMTP Inbound, IMAP, POP3) and the separate server-level „Protokollzugriff“ editor are gone;
+  links `/services/imap`, `/services/pop3`, `/services/smtp-receive` open the combined page at
+  the matching protocol card.
 - Domain and mailbox dialogs show the effective value with the level that decides it, e.g.
   „aus (Domain)“, „an (serverweit)“, „an (Postfach)“.
 - The domain and mailbox lists accept `?q=` to start with a search.
