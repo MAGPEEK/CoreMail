@@ -49,6 +49,12 @@ const FEATURE_SINCE = {
   userInformationAccounts: '14.1',
   /** Settings RightsManagementInformation ([MS-ASWBXML] 2.1.2.1.19, token 0x2B). */
   rightsManagement: '14.1',
+  /** The Notes class and its code page 23 ([MS-ASNOTE] "Protocol versions"; [MS-ASWBXML] 2.1.2.1.24). */
+  notesClass: '14.0',
+  /** calendar:ResponseRequested / ResponseType of a meeting ([MS-ASWBXML] 2.1.2.1.5, tokens 0x34, 0x36). */
+  meetingResponseType: '14.0',
+  /** FirstDayOfWeek of a calendar / task Recurrence ([MS-ASWBXML] 2.1.2.1.5 token 0x39, 2.1.2.1.10 token 0x26). */
+  recurrenceFirstDayOfWeek: '14.1',
 } as const satisfies Record<string, EasVersion>;
 export type EasFeature = keyof typeof FEATURE_SINCE;
 

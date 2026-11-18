@@ -4,7 +4,9 @@
  *    optional Range/Total),
  *  - Fetch by airsync:CollectionId + ServerId → the full message (Email properties +
  *    airsyncbase:Body per BodyPreference/MIMESupport, MIME byte-exact),
- *  - EmptyFolderContents → every message of the folder deleted through the message store.
+ *  - EmptyFolderContents → every message of the folder deleted through the message store,
+ *  - w3: Fetch by CollectionId + ServerId of a calendar / tasks / notes collection → the
+ *    item's class properties (pim/fetch.ts).
  * Ownership is checked exactly like Sync/GetAttachment: the folder / message /
  * attachment must belong to the authenticated user's mailbox; anything else is
  * reported as "not found" (no existence oracle).
@@ -17,10 +19,12 @@ import { downloadBuffer } from '@coremail/storage/minio';
 import { encodeWbxml, getChild, getText, pel, CP, type WbxmlElement } from '../wbxml.js';
 import {
   parseBodyOptions, chooseBodyPreference, buildEmailProperties, EAS_MESSAGE_SELECT, EAS_ATTACHMENT_SELECT,
-  type EasMessage, type LoadRaw,
+  type BodyOptions, type EasMessage, type LoadRaw,
 } from './body.js';
 import { defaultLoadRaw } from './sync.js';
 import { HIGHEST_EAS_VERSION, type EasVersion } from '../protocol-version.js';
+import { moduleFor } from '../pim/registry.js';
+import { fetchPimItem, type FetchedPimItem } from '../pim/fetch.js';
 
 // itemoperations:Status ([MS-ASCMD] 2.2.3.177.7)
 export const IO_STATUS = {
@@ -39,6 +43,8 @@ export interface ItemOperationsDeps {
   loadRaw: LoadRaw;
   /** Deletes every (non-deleted) message of the folder; returns the count. */
   emptyFolder(folderId: string, mailboxId: string): Promise<number>;
+  /** w3: a calendar / task / note item of the user (pim/fetch.ts), else null. */
+  fetchPimItem(userId: string, collectionId: string, serverId: string, options: BodyOptions | null, version: EasVersion): Promise<FetchedPimItem | null>;
   warn?(msg: string, err: unknown): void;
 }
 
@@ -94,6 +100,17 @@ async function fetchItem(
 ): Promise<WbxmlElement> {
   const ids = [pel(CP.AirSync, 'CollectionId', collectionId), pel(CP.AirSync, 'ServerId', serverId)];
   const fail = (status: string) => pel(CP.ItemOperations, 'Fetch', [pel(CP.ItemOperations, 'Status', status), ...ids]);
+  const pim = moduleFor(collectionId);
+  if (pim) {
+    const item = await deps.fetchPimItem(userId, collectionId, serverId, parseBodyOptions(fetch, pim.className), version);
+    if (!item) return fail(IO_STATUS.NotFound);
+    return pel(CP.ItemOperations, 'Fetch', [
+      pel(CP.ItemOperations, 'Status', IO_STATUS.Success),
+      ...ids,
+      pel(CP.AirSync, 'Class', item.className),
+      pel(CP.ItemOperations, 'Properties', item.properties),
+    ]);
+  }
   const folder = await deps.findFolder(collectionId, userId);
   if (!folder) return fail(IO_STATUS.NotFound);
   const msg = await deps.findMessage(serverId, folder.id);
@@ -181,6 +198,7 @@ export function prismaItemOperationsDeps(warn?: (msg: string, err: unknown) => v
       return { ...row, attachments: atts.map(({ messageId: _m, ...a }) => a) };
     },
     loadRaw: defaultLoadRaw,
+    fetchPimItem,
     emptyFolder: async (folderId, mailboxId) => {
       let total = 0;
       for (;;) {

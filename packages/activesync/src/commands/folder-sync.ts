@@ -1,6 +1,11 @@
 import { prisma } from '@coremail/storage/prisma';
+import { createLogger } from '@coremail/core';
 import { encodeWbxml, el, getText, type WbxmlElement } from '../wbxml.js';
 import { mergeSyncKeys } from './sync-keys.js';
+import { HIGHEST_EAS_VERSION, type EasVersion } from '../protocol-version.js';
+import { moduleFor, pimFolders } from '../pim/registry.js';
+
+const log = createLogger('activesync:folder-sync');
 
 // EAS folder type codes ([MS-ASCMD] FolderSync Type)
 const FOLDER_TYPES: Record<string, string> = {
@@ -32,8 +37,50 @@ function nextKey(key: string): string {
   return /^\d{1,20}$/.test(key) ? (BigInt(key) + 1n).toString() : '1';
 }
 
+/** Only the mail folders of a snapshot (what FolderSync announced before the PIM classes). */
+function mailOnly(snapshot: Snapshot): Snapshot {
+  return Object.fromEntries(Object.entries(snapshot).filter(([id]) => !moduleFor(id)));
+}
+
 /**
- * FolderSync command — the folder hierarchy of the user's mailbox.
+ * The hierarchy as FolderSync announces it: the mailbox folders plus the folders of the PIM
+ * classes the user has in this version (w3: calendars, tasks, notes). Null without a mailbox;
+ * throws when the webmail policy cannot be read.
+ */
+export async function currentHierarchy(userId: string, version: EasVersion): Promise<Snapshot | null> {
+  const mailbox = await prisma.mailbox.findFirst({
+    where: { userId },
+    include: { folders: { select: { id: true, name: true, displayName: true, parentId: true } } },
+  });
+  if (!mailbox) return null;
+  const current: Snapshot = {};
+  for (const f of mailbox.folders) {
+    current[f.id] = [f.parentId ?? '0', f.displayName, FOLDER_TYPES[f.name] ?? USER_MAIL_FOLDER];
+  }
+  for (const f of await pimFolders(userId, version)) current[f.serverId] = ['0', f.displayName, f.type];
+  return current;
+}
+
+const sameSnapshot = (a: Snapshot, b: Snapshot): boolean =>
+  Object.keys(a).length === Object.keys(b).length && Object.entries(a).every(([id, entry]) => b[id]?.join('\0') === entry.join('\0'));
+
+/**
+ * Ping: has the hierarchy changed since the snapshot the device got with its last FolderSync
+ * ([MS-ASCMD] Ping Status 7)? False without a snapshot (devices synced before v7.1), and when
+ * the hierarchy cannot be read now (the next Ping asks again).
+ */
+export async function hierarchyChanged(userId: string, syncKeys: Record<string, string>, version: EasVersion): Promise<boolean> {
+  const state = readState(syncKeys);
+  if (!state) return false;
+  const current = await currentHierarchy(userId, version).catch((err: unknown) => {
+    log.warn({ err, userId }, 'EAS Ping: folder hierarchy not readable — not compared');
+    return null;
+  });
+  return current !== null && !sameSnapshot(state.folders, current);
+}
+
+/**
+ * FolderSync command — the folder hierarchy of the user's mailbox and PIM classes.
  *
  * SyncKey 0: every folder as Add. Otherwise the key must be the current one (or the
  * previous one — a retry after a lost response), else Status 9 and the device starts over;
@@ -44,20 +91,19 @@ export async function handleFolderSync(
   body: WbxmlElement,
   userId: string,
   deviceId: string,
+  version: EasVersion = HIGHEST_EAS_VERSION,
 ): Promise<Buffer> {
   const clientSyncKey = getText(body, 'SyncKey');
   const status = (s: string) => encodeWbxml(el('FolderSync', undefined, [el('Status', s)]));
 
-  const mailbox = await prisma.mailbox.findFirst({
-    where: { userId },
-    include: { folders: { select: { id: true, name: true, displayName: true, parentId: true } } },
-  });
-  if (!mailbox) return status(FOLDER_SYNC_STATUS.SERVER_ERROR);
-
-  const current: Snapshot = {};
-  for (const f of mailbox.folders) {
-    current[f.id] = [f.parentId ?? '0', f.displayName, FOLDER_TYPES[f.name] ?? USER_MAIL_FOLDER];
+  let current: Snapshot | null;
+  try {
+    current = await currentHierarchy(userId, version);
+  } catch (err) {
+    log.error({ err, userId }, 'EAS FolderSync: webmail policy not readable');
+    return status(FOLDER_SYNC_STATUS.SERVER_ERROR);
   }
+  if (!current) return status(FOLDER_SYNC_STATUS.SERVER_ERROR);
 
   const device = await prisma.activeSyncDevice.findUnique({
     where: { userId_deviceId: { userId, deviceId } },
@@ -74,8 +120,9 @@ export async function handleFolderSync(
   } else if (state && state.prevKey !== undefined && clientSyncKey === state.prevKey && state.prevFolders) {
     base = state.prevFolders;
   } else if (!state && device && clientSyncKey === device.folderSyncKey) {
-    base = current; // device synced before v7.1: no snapshot yet, assume it is current
-    state = { key: clientSyncKey, folders: current };
+    // device synced before v7.1: no snapshot yet — it holds the mail folders as they are now
+    base = mailOnly(current);
+    state = { key: clientSyncKey, folders: base };
   } else {
     return status(FOLDER_SYNC_STATUS.INVALID_SYNC_KEY);
   }

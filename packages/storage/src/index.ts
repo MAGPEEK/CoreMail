@@ -55,4 +55,5 @@ export * from './mime/crlf.js';
 export * from './sensitivity.js';
 export * from './follow-up.js';
 export * from './task-rules.js';
+export * from './task-writer.js';
 export * from './resource-lock.js';

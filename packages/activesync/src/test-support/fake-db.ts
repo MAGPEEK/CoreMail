@@ -4,18 +4,24 @@
  * the commands use: equality, in/contains/equals (mode ignored → case-insensitive),
  * gt/lt/lte, OR/AND/NOT, relation filters (folder.mailbox, message.folder,
  * calendarEvent.calendar), select/include of those relations, increment updates,
- * count/aggregate and `$transaction(fn)`. Every call is logged in `calls`.
+ * count/aggregate and `$transaction(fn)`; `updatedAt` of calendar events, tasks and notes
+ * is set on every write. Every call is logged in `calls`.
  * Test-only module.
  */
 type Row = Record<string, unknown>;
 
 export type Tables = Record<string, Row[]>;
 
+/** Models with a Prisma `@updatedAt` column the fake maintains. */
+const UPDATED_AT_MODELS = new Set(['calendarEvent', 'task', 'note']);
+
 const RELATIONS: Record<string, Record<string, { table: string; local: string; foreign: string; many?: boolean }>> = {
   folder: { mailbox: { table: 'mailbox', local: 'mailboxId', foreign: 'id' } },
   mailbox: { folders: { table: 'folder', local: 'id', foreign: 'mailboxId', many: true } },
   message: { folder: { table: 'folder', local: 'folderId', foreign: 'id' } },
   calendarEvent: { calendar: { table: 'calendar', local: 'calendarId', foreign: 'id' } },
+  // realtime audience of calendar writes (announceCalendarChange: owner + grantees)
+  calendar: { shares: { table: 'calendarShare', local: 'id', foreign: 'calendarId', many: true } },
   user: { mailFlowPolicy: { table: 'mailFlowPolicy', local: 'id', foreign: 'userId' } },
   sharedMailbox: { mailFlowPolicy: { table: 'mailFlowPolicy', local: 'id', foreign: 'sharedMailboxId' } },
 };
@@ -103,6 +109,15 @@ export function createFakeDb(tables: Tables) {
     });
   }
 
+  // Prisma @updatedAt of the PIM models (w3): set on every write, strictly increasing so
+  // two writes in the same millisecond still differ (item versions).
+  let lastStamp = 0;
+  const stamp = (name: string, row: Row): void => {
+    if (!UPDATED_AT_MODELS.has(name)) return;
+    lastStamp = Math.max(Date.now(), lastStamp + 1);
+    row['updatedAt'] = new Date(lastStamp);
+  };
+
   function applyData(row: Row, data: Row): void {
     for (const [k, v] of Object.entries(data)) {
       if (v && typeof v === 'object' && !Array.isArray(v) && !(v instanceof Date) && 'increment' in (v as Row)) {
@@ -137,6 +152,7 @@ export function createFakeDb(tables: Tables) {
       create: async (args: Row) => {
         log('create', args);
         const row: Row = { id: `${name}-${++seq}`, ...(args['data'] as Row) };
+        stamp(name, row);
         t(name).push(row);
         return shape(name, row, args);
       },
@@ -145,6 +161,7 @@ export function createFakeDb(tables: Tables) {
         const r = t(name).find((x) => match(name, x, args['where'] as Row));
         if (!r) throw new Error(`fake ${name}.update: not found ${JSON.stringify(args['where'])}`);
         applyData(r, args['data'] as Row);
+        stamp(name, r);
         return shape(name, r, args);
       },
       createMany: async (args: Row) => {
@@ -163,7 +180,7 @@ export function createFakeDb(tables: Tables) {
       updateMany: async (args: Row) => {
         log('updateMany', args);
         const rows = t(name).filter((x) => match(name, x, args['where'] as Row));
-        for (const r of rows) applyData(r, args['data'] as Row);
+        for (const r of rows) { applyData(r, args['data'] as Row); stamp(name, r); }
         return { count: rows.length };
       },
       upsert: async (args: Row) => {
@@ -193,7 +210,7 @@ export function createFakeDb(tables: Tables) {
   }
 
   const db: Row = { $on: () => undefined, calls, tables };
-  for (const name of ['user', 'emailAlias', 'userSettings', 'activeSyncDevice', 'activeSyncItem', 'mailbox', 'folder', 'message', 'attachment', 'sharedMailbox', 'sharedMailboxPerm', 'mailFlowPolicy', 'contact', 'calendar', 'calendarEvent', 'systemLog', 'webmailPolicy']) {
+  for (const name of ['user', 'emailAlias', 'userSettings', 'activeSyncDevice', 'activeSyncItem', 'mailbox', 'folder', 'message', 'attachment', 'sharedMailbox', 'sharedMailboxPerm', 'mailFlowPolicy', 'contact', 'calendar', 'calendarShare', 'calendarEvent', 'task', 'note', 'systemLog', 'webmailPolicy']) {
     db[name] = model(name);
   }
   db['$transaction'] = async (fn: (tx: unknown) => Promise<unknown>) => fn(db);

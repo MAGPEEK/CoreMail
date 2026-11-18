@@ -2,7 +2,7 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { z } from 'zod';
 import { patchSchema } from '../lib/zod-compat.js';
 import {
-  prisma, applyTaskProgress, nextTaskOccurrence, normTaskStatus, TASK_STATUSES, type TaskProgressPatch,
+  prisma, createTask, updateTask, TASK_STATUSES, type TaskColumns, type TaskProgressPatch,
 } from '@coremail/storage';
 import { requireAuth } from '../middleware/auth.js';
 import { announceOnWrite } from '../lib/realtime.js';
@@ -43,12 +43,6 @@ type TaskInput = z.infer<typeof TaskSchema>;
 
 const toDate = (v: string | null | undefined): Date | null | undefined => (v === undefined ? undefined : v === null ? null : new Date(v));
 const normRrule = (v: string | null | undefined): string | null | undefined => (v === undefined ? undefined : v ? v.replace(/^RRULE:/i, '').toUpperCase() : null);
-
-interface TaskColumns {
-  subject?: string; body?: string; bodyHtml?: string; priority?: string; reminderByMail?: boolean; isPrivate?: boolean;
-  totalWorkMinutes?: number | null; actualWorkMinutes?: number | null; mileage?: string; billingInfo?: string; companies?: string;
-  dueDate?: Date | null; startDate?: Date | null; reminder?: Date | null; rrule?: string | null;
-}
 
 /** Columns of the form fields that were sent (absent = keep). */
 function optionalColumns(d: { [K in keyof TaskInput]?: TaskInput[K] | undefined }): TaskColumns {
@@ -110,21 +104,18 @@ tasksRouter.post('/', async (req: Request, res: Response) => {
   const parsed = TaskSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request', details: parsed.error.issues }); return; }
 
-  const progress = applyTaskProgress({ status: 'NOT_STARTED', percentComplete: 0, completedAt: null }, progressPatch(parsed.data), new Date());
-  const task = await prisma.task.create({
-    data: {
-      ...optionalColumns(parsed.data),
-      userId: req.apiUser!.userId,
-      subject: parsed.data.subject,
-      ...progress,
-    },
-  });
+  const task = await createTask(
+    req.apiUser!.userId,
+    { ...optionalColumns(parsed.data), subject: parsed.data.subject },
+    progressPatch(parsed.data),
+  );
   res.status(201).json(task);
 });
 
 // PUT /api/v1/tasks/:id
 // 9.4: status / % / completion date stay consistent (task-rules.ts); completing a
-// recurring task closes this occurrence and creates the next one (returned as `next`).
+// recurring task closes this occurrence and creates the next one (returned as `next`,
+// storage task-writer.ts — shared with ActiveSync).
 tasksRouter.put('/:id', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
   const parsed = patchSchema(TaskSchema).safeParse(req.body);
@@ -133,49 +124,10 @@ tasksRouter.put('/:id', async (req: Request, res: Response) => {
   const task = await prisma.task.findFirst({ where: { id, userId: req.apiUser!.userId } });
   if (!task) { res.status(404).json({ error: 'Task not found' }); return; }
 
-  const now = new Date();
-  const patch = progressPatch(parsed.data);
-  const current = { status: normTaskStatus(task.status), percentComplete: task.percentComplete, completedAt: task.completedAt };
-  const progressTouched = Object.keys(patch).length > 0;
-  const progress = progressTouched ? applyTaskProgress(current, patch, now) : current;
-  const columns = optionalColumns(parsed.data);
-  const rrule = columns.rrule !== undefined ? columns.rrule : task.rrule;
-  const justCompleted = progress.status === 'COMPLETED' && current.status !== 'COMPLETED';
-  const next = justCompleted && rrule
-    ? nextTaskOccurrence({
-        rrule,
-        dueDate: columns.dueDate !== undefined ? columns.dueDate : task.dueDate,
-        startDate: columns.startDate !== undefined ? columns.startDate : task.startDate,
-        reminder: columns.reminder !== undefined ? columns.reminder : task.reminder,
-      })
-    : null;
-
   // only the fields that were sent (a one-field PUT must not rewrite the others)
-  const data = { ...columns, ...(progressTouched ? progress : {}), ...(justCompleted && rrule ? { rrule: null } : {}) };
-  if (!next) {
-    res.json(await prisma.task.update({ where: { id }, data }));
-    return;
-  }
-  // Completing a recurring occurrence creates the next one exactly once: the update
-  // only applies while the task is still open (a concurrent or repeated completion
-  // matches no row and creates nothing).
-  const { updated, created } = await prisma.$transaction(async (tx) => {
-    const won = await tx.task.updateMany({ where: { id, userId: task.userId, status: { not: 'COMPLETED' } }, data });
-    const row = await tx.task.findFirst({ where: { id, userId: task.userId } });
-    if (won.count === 0 || !row) return { updated: row, created: null };
-    const nextTask = await tx.task.create({
-      data: {
-        userId: task.userId, subject: row.subject, body: row.body, bodyHtml: row.bodyHtml,
-        priority: row.priority, reminderByMail: row.reminderByMail, isPrivate: row.isPrivate,
-        totalWorkMinutes: row.totalWorkMinutes, mileage: row.mileage, billingInfo: row.billingInfo,
-        companies: row.companies, status: 'NOT_STARTED', percentComplete: 0,
-        rrule: next.rrule, dueDate: next.dueDate, startDate: next.startDate, reminder: next.reminder,
-      },
-    });
-    return { updated: row, created: nextTask };
-  });
+  const { updated, next } = await updateTask(task, optionalColumns(parsed.data), progressPatch(parsed.data));
   if (!updated) { res.status(404).json({ error: 'Task not found' }); return; }
-  res.json(created ? { ...updated, next: created } : updated);
+  res.json(next ? { ...updated, next } : updated);
 });
 
 // DELETE /api/v1/tasks/:id

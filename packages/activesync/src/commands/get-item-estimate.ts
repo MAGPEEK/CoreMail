@@ -19,10 +19,19 @@ import { encodeWbxml, getChild, getText, pel, CP, type WbxmlElement } from '../w
 import { estimateSyncWindow, syncRange, type SyncEstimateDb } from './sync-window.js';
 import { filterCutoff, parseBodyOptions, parseFilterType } from './body.js';
 import { knownItems } from './item-state.js';
-import { departedItems, storedOptions } from './sync.js';
+import { departedItems } from './sync.js';
+import { storedOptions } from './sync-options.js';
 import { HIGHEST_EAS_VERSION, supports, type EasVersion } from '../protocol-version.js';
+import { moduleFor } from '../pim/registry.js';
+import { estimatePimCollection, type PimEstimate } from '../pim/estimate.js';
 
 export const GIE_STATUS = { Success: '1', InvalidCollection: '2', NotPrimed: '3', InvalidSyncKey: '4' } as const;
+
+const PIM_ESTIMATE_STATUS: Record<Exclude<PimEstimate['status'], 'ok'>, string> = {
+  'invalid-collection': GIE_STATUS.InvalidCollection,
+  'not-primed': GIE_STATUS.NotPrimed,
+  'invalid-key': GIE_STATUS.InvalidSyncKey,
+};
 
 /** FilterType of a request Collection: airsync:Options (14.0+) or the direct child (12.1). */
 export function requestFilterType(collection: WbxmlElement): number | undefined {
@@ -55,6 +64,16 @@ export async function handleGetItemEstimate(
         ...(estimate !== undefined ? [pel(G, 'Estimate', String(estimate))] : []),
       ]),
     ]));
+
+    // w3: calendar, tasks and notes collections
+    if (moduleFor(collectionId)) {
+      const est = await estimatePimCollection({
+        userId, deviceRowId: device?.id ?? null, version, syncKeys, collectionId, clientSyncKey: getText(col, 'SyncKey'),
+        filterType: requestFilterType(col) ?? storedOptions(syncKeys, collectionId)?.filterType, now: now(),
+      });
+      if (est.status === 'ok') respond(GIE_STATUS.Success, est.estimate); else respond(PIM_ESTIMATE_STATUS[est.status]);
+      continue;
+    }
 
     const folder = collectionId
       ? await prisma.folder.findFirst({ where: { id: collectionId, mailbox: { userId } }, select: { id: true, mailboxId: true } })

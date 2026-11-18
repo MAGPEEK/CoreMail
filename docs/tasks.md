@@ -90,12 +90,20 @@ distance, `COUNT` is reduced by one; when the series is over no task follows. `P
 returns the new task as `next`. The completion is a conditional update (only while the task is
 still open) in one transaction with the creation, so two concurrent or repeated completions
 create the next task once. A task rule repeats at most daily (`FREQ=DAILY|WEEKLY|MONTHLY|YEARLY`
-with `NAME=value` parts); anything else is refused with 400.
+with `NAME=value` parts); anything else is refused with 400. The writes (rules + next occurrence)
+live in `storage/src/task-writer.ts` (`createTask` / `updateTask`), shared by the REST routes and
+ActiveSync.
+
+### ActiveSync Tasks folder (w3)
+
+Phones sync the tasks as the ActiveSync Tasks class (`tasks:default`, FolderSync type 7) both
+ways — mapping in [activesync.md](activesync.md#calendar-tasks-and-notes-w3). A task completed on
+a phone follows the same rules (a recurring one brings the next task to the phone).
 
 ### Not covered
 
-CoreMail has no CalDAV task list (`VTODO`) and no ActiveSync Tasks folder; tasks are reachable in
-the webmail only. Flags of mails are visible over IMAP, JMAP (keyword) and ActiveSync.
+CoreMail has no CalDAV task list (`VTODO`). Flags of mails are visible over IMAP, JMAP (keyword)
+and ActiveSync.
 
 Tests: `storage/src/follow-up.test.ts`, `task-rules.test.ts`, `message-store.test.ts`,
 `activesync/src/commands/flag.test.ts`, `api-gateway/src/routes/tasks-followup.test.ts`,

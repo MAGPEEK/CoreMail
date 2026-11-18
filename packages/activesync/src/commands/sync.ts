@@ -5,12 +5,15 @@ import { encodeWbxml, el, pel, getText, getChild, CP, type WbxmlElement } from '
 import { loadSyncWindow, isPrimingSyncKey, parseWindowSize, PRIMING_SYNC_KEY, type SyncWindowDb } from './sync-window.js';
 import {
   parseBodyOptions, chooseBodyPreference, buildEmailProperties, filterCutoff, EAS_ATTACHMENT_SELECT,
-  type BodyOptions, type BodyPreference, type EasAttachment, type EasMessage, type LoadRaw,
+  type BodyPreference, type EasAttachment, type EasMessage, type LoadRaw,
 } from './body.js';
 import { createLogger } from '@coremail/core';
 import { ACK_KEY, acknowledgeSyncKey, forgetItems, knownItems, markKnown, recordPending, resetCollection } from './item-state.js';
 import { changedSyncKeys, mergeSyncKeys } from './sync-keys.js';
+import { applyRequestOptions } from './sync-options.js';
 import { HIGHEST_EAS_VERSION, type EasVersion } from '../protocol-version.js';
+import { moduleFor } from '../pim/registry.js';
+import { syncPimCollection } from '../pim/sync.js';
 
 /** [MS-ASCMD] Sync status values used here. */
 export const SYNC_STATUS = {
@@ -79,19 +82,6 @@ export async function addProperties(
       'EAS Sync: message skipped — properties could not be built');
     return null;
   }
-}
-
-/**
- * Sync Options are sticky ([MS-ASCMD] 2.2.3.115.5): a Sync without Options uses the
- * ones the client sent last for that collection. Stored next to the sync key in
- * ActiveSyncDevice.syncKeys under `opts:<collectionId>`.
- */
-const OPTIONS_KEY = (collectionId: string) => `opts:${collectionId}`;
-
-export function storedOptions(syncKeys: Record<string, string>, collectionId: string): BodyOptions | null {
-  const raw = syncKeys[OPTIONS_KEY(collectionId)];
-  if (!raw) return null;
-  try { return JSON.parse(raw) as BodyOptions; } catch { return null; }
 }
 
 async function attachmentsByMessage(ids: string[]): Promise<Map<string, EasAttachment[]>> {
@@ -236,6 +226,8 @@ export async function vanishedItems(deviceRowId: string, collectionId: string): 
  * moved out of the collection; items it already holds at their current modSeq (its own
  * changes) are not sent. FilterType limits `Add` to the age window. `version` selects the
  * item schema (12.1: no Email2 conversation properties, no body Preview).
+ * w3: collections of the Calendar, Tasks and Notes classes go to their class module
+ * (pim/sync.ts); everything above describes the mail folders.
  */
 export async function handleSync(
   body: WbxmlElement,
@@ -270,6 +262,15 @@ export async function handleSync(
     const clientSyncKey = getText(child, 'SyncKey');
     const commands = getChild(child, 'Commands');
 
+    // w3: calendar, tasks and notes collections (pim/sync.ts)
+    if (moduleFor(collectionId)) {
+      responseCollections.push(await syncPimCollection(child, {
+        userId, deviceRowId, version, syncKeys, now: now(), ...(requestWindow ? { windowSize: requestWindow } : {}),
+      }));
+      syncKeysDirty = true;
+      continue;
+    }
+
     // Verify folder belongs to user
     const folder = await prisma.folder.findFirst({
       where: { id: collectionId, mailbox: { userId } },
@@ -280,15 +281,9 @@ export async function handleSync(
     }
 
     // Body options: from this request, else the sticky ones of the last request.
-    const requestOptions = parseBodyOptions(child);
-    const previousOptions = storedOptions(syncKeys, collectionId);
     // A changed FilterType changes which items the device holds → resync (Status 3).
-    const filterChanged = !!requestOptions && !!previousOptions && requestOptions.filterType !== previousOptions.filterType;
-    if (requestOptions) {
-      const json = JSON.stringify(requestOptions);
-      if (syncKeys[OPTIONS_KEY(collectionId)] !== json) { syncKeys[OPTIONS_KEY(collectionId)] = json; syncKeysDirty = true; }
-    }
-    const bodyOptions = requestOptions ?? storedOptions(syncKeys, collectionId);
+    const { options: bodyOptions, filterChanged, dirty } = applyRequestOptions(syncKeys, collectionId, parseBodyOptions(child));
+    if (dirty) syncKeysDirty = true;
 
     // SyncKey 0: prime the state only (no Commands) — see PRIMING_SYNC_KEY.
     if (isPrimingSyncKey(clientSyncKey)) {

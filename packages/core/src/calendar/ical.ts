@@ -750,6 +750,11 @@ export function buildVCalendar(opts: VEventFields & {
   recurrenceId?: { date: Date; dateOnly: boolean };
   /** 9.4: display alarm this many minutes before the start (VALARM); `alarm` wins when both are set. */
   alarmMinutes?: number;
+  /**
+   * IANA zone of a timed DTSTART/DTEND (written as local time with TZID, so a series keeps
+   * its wall-clock time across DST changes); omitted or unknown = UTC.
+   */
+  tzid?: string;
 }): string {
   const ev: IcalComponent = { name: 'VEVENT', properties: [], components: [] };
   const now = opts.dtstamp ?? new Date();
@@ -760,7 +765,7 @@ export function buildVCalendar(opts: VEventFields & {
       ? { name: 'RECURRENCE-ID', params: { VALUE: 'DATE' }, value: formatDateOnly(opts.recurrenceId.date) }
       : { name: 'RECURRENCE-ID', params: {}, value: formatUtcDateTime(opts.recurrenceId.date) });
   }
-  ev.properties.push(...dateProps(opts.start, opts.end, opts.allDay ?? false, null));
+  ev.properties.push(...dateProps(opts.start, opts.end, opts.allDay ?? false, opts.tzid ?? null));
   ev.properties.push(textProp('SUMMARY', opts.summary));
   if (opts.description) ev.properties.push(textProp('DESCRIPTION', opts.description));
   if (opts.location) ev.properties.push(textProp('LOCATION', opts.location));
