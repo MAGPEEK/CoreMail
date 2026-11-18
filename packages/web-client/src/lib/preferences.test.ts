@@ -2,7 +2,7 @@ import { test, mock, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   DEFAULT_PREFERENCES, applyPatch, bridgedDiff, bridgedFromPrefs, isEmptyPatch, localToPatch, mergePatches,
-  normalizePreferences, persistedState,
+  jwtSubject, normalizePreferences, persistedState,
 } from './preferences.ts';
 import { PatchQueue } from './patchQueue.ts';
 
@@ -122,4 +122,31 @@ test('PatchQueue: flush sends at once; stop drops pending changes', async () => 
   assert.equal(sent.length, 1);
   q.push({});
   assert.equal(q.hasPending, false);
+});
+
+test('PatchQueue: nothing is sent before the server copy was loaded (isReady)', async () => {
+  const sent: unknown[] = [];
+  let ready = false;
+  const q = new PatchQueue({ delayMs: 100, retryMs: 1000, isReady: () => ready, send: async (p) => { sent.push(p); } });
+  q.push({ theme: { mode: 'dark' } });
+  mock.timers.tick(100);
+  await q.flush();
+  assert.equal(sent.length, 0);
+  assert.deepEqual(q.pendingPatch, { theme: { mode: 'dark' } });
+  ready = true;
+  mock.timers.tick(1000);
+  await settle();
+  assert.deepEqual(sent, [{ theme: { mode: 'dark' } }]);
+  assert.deepEqual(q.pendingPatch, {});
+});
+
+test('jwtSubject reads base64url payloads; garbage → null', () => {
+  const seg = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  // "?>>" encodes to base64url with "-" / "_" — plain atob refuses those
+  const tricky = seg({ sub: 'u1', n: '?>>~~~' });
+  assert.match(tricky, /[-_]/);
+  assert.equal(jwtSubject(`h.${tricky}.s`), 'u1');
+  assert.equal(jwtSubject(`h.${seg({ sub: 42 })}.s`), null);
+  assert.equal(jwtSubject('nope'), null);
+  assert.equal(jwtSubject(null), null);
 });

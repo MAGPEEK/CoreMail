@@ -2,8 +2,9 @@
  * 9.4: debounced writer for preference changes. Changes are merged and sent as
  * one PATCH after `delayMs` of quiet; a failed send keeps its changes (merged
  * under newer ones) and is retried after `retryMs`. `flush()` sends at once
- * (page hidden / logout). Framework-free; uses the global timers so tests can
- * fake them.
+ * (page hidden / logout). Until `isReady()` (the server copy was loaded once)
+ * nothing is sent — changes wait and are retried. Framework-free; uses the
+ * global timers so tests can fake them.
  */
 import { isEmptyPatch, mergePatches, type PreferencesPatch } from './preferences.ts';
 
@@ -11,6 +12,8 @@ export interface PatchQueueOptions {
   delayMs: number;
   retryMs: number;
   send: (patch: PreferencesPatch) => Promise<void>;
+  /** false → keep the changes and try again after `retryMs` (default: always ready). */
+  isReady?: () => boolean;
 }
 
 export class PatchQueue {
@@ -28,6 +31,11 @@ export class PatchQueue {
     return !isEmptyPatch(this.pending) || this.inFlight !== null;
   }
 
+  /** Changes not handed to `send` yet. */
+  get pendingPatch(): PreferencesPatch {
+    return this.pending;
+  }
+
   push(patch: PreferencesPatch): void {
     if (isEmptyPatch(patch)) return;
     this.pending = mergePatches(this.pending, patch);
@@ -39,6 +47,10 @@ export class PatchQueue {
     this.clearTimer();
     if (this.inFlight) await this.inFlight;
     if (isEmptyPatch(this.pending)) return;
+    if (this.opts.isReady && !this.opts.isReady()) {
+      this.schedule(this.opts.retryMs);
+      return;
+    }
     const batch = this.pending;
     this.pending = {};
     this.inFlight = this.opts.send(batch)

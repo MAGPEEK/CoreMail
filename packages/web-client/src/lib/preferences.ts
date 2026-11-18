@@ -264,3 +264,15 @@ export function localToPatch(ui: Record<string, unknown>, theme: Record<string, 
   for (const s of SECTIONS) if (patch[s] && Object.keys(patch[s] as object).length === 0) delete patch[s];
   return patch;
 }
+
+/** JWT subject without verifying (only to tell accounts apart in this browser); base64url-safe. */
+export function jwtSubject(token: string | null | undefined): string | null {
+  try {
+    const seg = (token ?? '').split('.')[1] ?? '';
+    const b64 = seg.replace(/-/g, '+').replace(/_/g, '/');
+    const sub = (JSON.parse(atob(b64.padEnd(b64.length + ((4 - (b64.length % 4)) % 4), '='))) as { sub?: unknown }).sub;
+    return typeof sub === 'string' ? sub : null;
+  } catch {
+    return null;
+  }
+}

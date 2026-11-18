@@ -10,6 +10,10 @@
  *     go to the server debounced (lib/patchQueue.ts); when the tab becomes
  *     visible again without pending changes, the server copy is re-read (other
  *     devices).
+ *  Server unreachable at start: the cached copy is used, step 1 is retried
+ *  (every 30 s and when the tab becomes visible) and changes made meanwhile
+ *  wait in the queue — they are sent after the server copy was loaded (and
+ *  re-applied on top of it), so the one-time import still runs first.
  */
 import { useEffect } from 'react';
 import { api, apiFetch } from '../api/client.js';
@@ -20,7 +24,7 @@ import { usePreferences, setPreferencesSink } from '../store/preferences.js';
 import { PatchQueue } from '../lib/patchQueue.js';
 import { registerComposeFlush } from '../lib/compose-flush.js';
 import {
-  bridgedDiff, bridgedFromPrefs, localToPatch, normalizePreferences,
+  applyPatch, bridgedDiff, bridgedFromPrefs, isEmptyPatch, jwtSubject, localToPatch, normalizePreferences,
   type BridgedValues, type PreferencesPatch, type UserPreferences,
 } from '../lib/preferences.js';
 import type { Lang } from '../i18n/translations.js';
@@ -29,16 +33,6 @@ interface PreferencesResponse { preferences: unknown }
 
 const PATCH_DELAY_MS = 800;
 const RETRY_MS = 30_000;
-
-/** JWT subject without verifying (only to tell accounts apart in this browser). */
-function tokenSubject(token: string | null): string | null {
-  try {
-    const sub = (JSON.parse(atob(token?.split('.')[1] ?? '')) as { sub?: unknown }).sub;
-    return typeof sub === 'string' ? sub : null;
-  } catch {
-    return null;
-  }
-}
 
 function currentBridged(): BridgedValues {
   const ui = useUiPrefs.getState();
@@ -94,9 +88,14 @@ async function loadInitial(ownerId: string): Promise<UserPreferences> {
 
 function startSync(ownerId: string): () => void {
   let stopped = false;
+  /** The server copy was loaded once (import done) — only then changes are sent. */
+  let loaded = false;
+  let loading = false;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
   const queue = new PatchQueue({
     delayMs: PATCH_DELAY_MS,
     retryMs: RETRY_MS,
+    isReady: () => loaded,
     send: async (patch) => {
       const res = await apiFetch('/user/preferences', { method: 'PATCH', body: JSON.stringify({ preferences: patch }), keepalive: true }, 'application/json');
       if (res.ok) return;
@@ -108,7 +107,8 @@ function startSync(ownerId: string): () => void {
   let last = currentBridged();
   const onLocalChange = () => {
     const next = currentBridged();
-    if (!applyingRemote && usePreferences.getState().synced) {
+    // also before the first load: queued, sent once the server copy is known
+    if (!applyingRemote) {
       const patch = bridgedDiff(last, next);
       if (Object.keys(patch).length > 0) usePreferences.getState().update(patch);
     }
@@ -120,28 +120,44 @@ function startSync(ownerId: string): () => void {
     useLanguageStore.subscribe(onLocalChange),
   ];
 
-  const refresh = async (initial: boolean) => {
+  const refresh = async () => {
+    if (loading) return;
+    loading = true;
+    const initial = !loaded;
     try {
       const prefs = initial ? await loadInitial(ownerId) : normalizePreferences((await api.get<PreferencesResponse>('/user/preferences')).preferences);
       if (stopped || (!initial && queue.hasPending)) return;
-      applyRemote(prefs, ownerId);
+      // changes made before the first load stay visible (and are sent next)
+      const pending = queue.pendingPatch;
+      applyRemote(isEmptyPatch(pending) ? prefs : applyPatch(prefs, pending), ownerId);
       last = currentBridged();
+      if (initial) {
+        loaded = true;
+        void queue.flush();
+      }
     } catch {
-      // offline / server busy: keep working with the cached copy
+      // offline / server busy: keep working with the cached copy; the first load is retried
+      if (initial && !stopped) {
+        if (retryTimer) clearTimeout(retryTimer);
+        retryTimer = setTimeout(() => { retryTimer = null; void refresh(); }, RETRY_MS);
+      }
+    } finally {
+      loading = false;
     }
   };
   const onVisibility = () => {
     if (document.visibilityState === 'hidden') void queue.flush();
-    else if (!queue.hasPending) void refresh(false);
+    else if (!loaded || !queue.hasPending) void refresh();
   };
   document.addEventListener('visibilitychange', onVisibility);
   setPreferencesSink((patch) => queue.push(patch));
   // logout waits for pending changes like for open drafts (lib/compose-flush.ts)
   const unregisterFlush = registerComposeFlush(() => queue.flush());
-  void refresh(true);
+  void refresh();
 
   return () => {
     stopped = true;
+    if (retryTimer) clearTimeout(retryTimer);
     queue.stop();
     unregisterFlush();
     setPreferencesSink(null);
@@ -154,7 +170,7 @@ function startSync(ownerId: string): () => void {
 /** Runs the sync while a session exists (mounted once in the signed-in layout). */
 export function usePreferencesSync(): void {
   const token = useAuthStore((s) => s.accessToken);
-  const ownerId = tokenSubject(token);
+  const ownerId = jwtSubject(token);
   useEffect(() => {
     if (!ownerId) return;
     return startSync(ownerId);
