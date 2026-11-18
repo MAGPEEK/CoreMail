@@ -179,6 +179,9 @@ export async function run(state) {
     const id = list.json.messages[0].id;
     const send = await http('POST', `/api/v1/mail/messages/${id}/receipt`, { token: tok, body: { action: 'send' } });
     assert(send.status === 409, `send without request → ${send.status} ${send.json?.code}`);
+    // automatic answers only with "always answer" (default: ask)
+    const auto = await http('POST', `/api/v1/mail/messages/${id}/receipt`, { token: tok, body: { action: 'send', mode: 'automatic' } });
+    assert(auto.status === 409 && ['RECEIPT_NOT_AUTOMATIC', 'RECEIPT_HANDLED', 'RECEIPT_NOT_ALLOWED'].includes(auto.json?.code), `automatic → ${auto.status} ${auto.json?.code}`);
     const ign = await http('POST', `/api/v1/mail/messages/${id}/receipt`, { token: tok, body: { action: 'ignore' } });
     assert(ign.status === 200 || (ign.status === 409 && ign.json?.code === 'RECEIPT_HANDLED'), `ignore → ${ign.status}`);
     const m = await http('GET', `/api/v1/mail/messages/${id}?markRead=false`, { token: tok });

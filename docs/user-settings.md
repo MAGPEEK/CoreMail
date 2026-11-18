@@ -86,10 +86,13 @@ seconds in the reading pane, or only manually.
 Incoming mail with a `Disposition-Notification-To` header gets the address stored in
 `Message.dispositionNotificationTo` at delivery (messages delivered before 9.4 have none). The
 receipt route re-reads the header from the raw original, sends the receipt (`multipart/report`,
-disposition "displayed") through the normal outbound queue and sets the `$MDNSent` keyword;
-`ignore` only sets the keyword, so the user is asked once per message. Policy "Immer senden"
-answers automatically only when the receipt goes back to the sender's domain; requests in Junk and
-in shared or delegated mailboxes are never answered.
+disposition "displayed") through the normal outbound queue with a null envelope sender (an
+undeliverable receipt is not reported back) and sets the `$MDNSent` keyword; `ignore` only sets
+the keyword, so the user is asked once per message. Policy "Immer senden" answers automatically
+only when the receipt goes back to the sender's domain, and the route accepts `mode: 'automatic'`
+only with that policy. Never answered: requests in Junk, in shared or delegated mailboxes, and
+mailing-list, bulk or automatic mail (`List-Id`, `List-Post`, `Precedence: bulk|list|junk`,
+`Auto-Submitted` other than `no`, `multipart/report`) — those requests are not even stored.
 
 Sending: `POST /mail/send` and `POST /mail/drafts/:id/send` accept `requestReceipt: true`, which
 adds `Disposition-Notification-To: <From address>`.
@@ -105,7 +108,20 @@ conversation together, newest or oldest first.
 
 `POST /api/v1/calendar/events` accepts `reminderMinutes` (number, or `null` for none). Without it
 the user's default reminder is written as a display alarm (`VALARM`) into the event, so CalDAV and
-ActiveSync clients alert too. Invitations show times in the organizer's time zone.
+ActiveSync clients alert too. Invitations show times in the organizer's time zone (all-day events
+as dates, the exclusive end shown as the last day).
+
+The calendar grid and the event dialog use the configured time zone (FullCalendar with the luxon
+time-zone plugin; empty setting = the browser's zone): times are shown and entered as wall-clock
+times of that zone and stored as UTC instants.
+
+### Compose signatures
+
+The inserted signature is a block of its own in the compose body (`<div data-cm-signature>`).
+Changing the sender ("Von") replaces it with the new identity's default while it is still exactly
+as inserted — never after the user edited or removed it, and not in reopened drafts. The signature
+picker in the compose action bar inserts any named signature (or removes it), also in plain-text
+format.
 
 ### Logout
 
@@ -126,7 +142,5 @@ The pre-9.4 form `/mail?mailbox=shared:<id>` is still understood and rewritten.
 
 ## Not covered
 
-- The calendar grid itself uses the browser's time zone; the configured time zone applies to the
-  mail list, the reading pane, the sessions list and invitation texts.
-- A compose window picks its signature once when it opens; changing the sender afterwards does not
-  swap the signature.
+- Sorting by sender, subject or size uses the folder index and sorts the folder's rows in the
+  database (no per-column index: subjects can exceed the B-tree entry size).
