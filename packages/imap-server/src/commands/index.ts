@@ -23,6 +23,7 @@ import {
 import { ImapParseError, type Token } from '../server/tokenizer.js';
 import { registerLiveSession, imapLiveSessions, IMAP_DISABLED } from '../session/live.js';
 import { maxConnsPerUser, maxSortMessages } from '../server/limits.js';
+import { queueIdleSync } from '../server/idle-push.js';
 import {
   parseSearch, needsBody, needsRawHeaders, hasModseq, evaluateSearch, formatEsearch, toSequenceSet,
   type SearchProgram, type SearchableMessage, type ReturnOption, type SearchKey,
@@ -1533,7 +1534,8 @@ async function idleSync(session: ImapSession): Promise<void> {
 /** Queues a mailbox check for an idling session (new-mail push). */
 export function notifyMailboxChanged(session: ImapSession): void {
   if (!session.idleActive) return;
-  void withUpdateLock(session, () => idleSync(session));
+  // 9.4: wake-ups coalesce while a re-read is still waiting for the lock
+  queueIdleSync(session, (run) => { void withUpdateLock(session, run); }, () => idleSync(session));
 }
 
 /** Stops the IDLE poll timer (DONE, logout, connection closed). */

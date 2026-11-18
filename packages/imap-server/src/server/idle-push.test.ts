@@ -3,7 +3,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { idleWakes } from './idle-push.js';
+import { idleWakes, queueIdleSync } from './idle-push.js';
 
 const idling = (mailboxId: string, folderId: string) => ({ idleActive: true, selected: { mailboxId, folderId } });
 
@@ -22,4 +22,23 @@ test('other folders, other mailboxes, folder-list changes and non-idling session
 
 test('a shared mailbox folder is matched by its own mailbox id, whoever idles on it', () => {
   assert.equal(idleWakes({ mailboxId: 'mb-team', kinds: ['messages'], folderIds: ['team-inbox'] }, idling('mb-team', 'team-inbox')), true);
+});
+
+test('wake-ups coalesce while a re-read waits to start; a change during a running re-read queues one more', async () => {
+  const queue: Array<() => Promise<void>> = [];
+  const state: { idleSyncQueued?: boolean } = {};
+  let syncs = 0;
+  const wake = () => queueIdleSync(state, (run) => { queue.push(run); }, async () => { syncs++; });
+
+  assert.equal(wake(), true);
+  assert.equal(wake(), false, 'second wake-up joins the waiting re-read');
+  assert.equal(wake(), false);
+  assert.equal(queue.length, 1);
+
+  const running = queue.shift()!();
+  assert.equal(wake(), true, 'the waiting re-read started — a new change needs another one');
+  await running;
+  await queue.shift()!();
+  assert.equal(syncs, 2);
+  assert.equal(state.idleSyncQueued, false);
 });

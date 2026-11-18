@@ -20,6 +20,27 @@ export interface IdleCandidate {
   selected: { mailboxId: string; folderId: string } | null;
 }
 
+/**
+ * Queues one re-read of an idling session's view, unless one is already
+ * waiting to start — it reads the database when it runs, so it covers this
+ * wake-up too. A burst of changes (bulk move, retention run, many deliveries)
+ * therefore costs at most one running and one waiting re-read per session.
+ * Returns whether a re-read was queued.
+ */
+export function queueIdleSync(
+  state: { idleSyncQueued?: boolean },
+  enqueue: (run: () => Promise<void>) => void,
+  sync: () => Promise<void>,
+): boolean {
+  if (state.idleSyncQueued) return false;
+  state.idleSyncQueued = true;
+  enqueue(() => {
+    state.idleSyncQueued = false;
+    return sync();
+  });
+  return true;
+}
+
 /** True when `change` concerns what the idling session shows. */
 export function idleWakes(change: MailboxChangeEvent, session: IdleCandidate): boolean {
   if (!session.idleActive || !session.selected) return false;
