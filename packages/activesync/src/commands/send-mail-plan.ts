@@ -16,6 +16,14 @@ export const EAS_SEND_STATUS = {
   MESSAGE_PREVIOUSLY_SENT: '118',
   NO_RECIPIENTS:     '119',
   SUBMISSION_FAILED: '120',
+  /**
+   * [MS-ASCMD] 2.2.2 common status 122 AttachmentIsTooLarge ("too large to be
+   * processed by this request") — 9.4: the message exceeds the sender's
+   * per-mailbox send size limit. MS-ASCMD has no status for the message size
+   * itself; 122 is the size status, not a retryable failure.
+   * https://learn.microsoft.com/en-us/openspecs/exchange_server_protocols/ms-ascmd/95cb9d7c-d33d-4b94-9366-d59911c7a060
+   */
+  MESSAGE_TOO_LARGE: '122',
   ACCESS_DENIED:     '130',
   ITEM_NOT_FOUND:    '150',
 } as const;

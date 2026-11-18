@@ -156,7 +156,7 @@ test('v8.1: a mailbox over its ProhibitSendQuota gets Status 113 (SendMail/Smart
   assert.equal(ok.jobs.length, 1);
 });
 
-test('9.4: per-mailbox send limits refuse with Status 120 before queueing; a sent mail runs the foreign-send step once', async () => {
+test('9.4: per-mailbox send limits refuse before queueing (recipients 120, size 122); a sent mail runs the foreign-send step once', async () => {
   const seen: Array<[string, number, number]> = [];
   const after: unknown[] = [];
   const refused = deps({
@@ -168,6 +168,13 @@ test('9.4: per-mailbox send limits refuse with Status 120 before queueing; a sen
   assert.equal(after.length, 0);
   assert.equal(seen[0]![0], 'u1');
   assert.equal(seen[0]![2], 1, 'recipient count of the plan');
+
+  // [MS-ASCMD] 2.2.2: 122 AttachmentIsTooLarge for the size limit; 12.1 → HTTP 413 (not retried)
+  const tooLarge = deps({ sendLimits: async () => ({ ok: false, kind: 'size', limit: 1024 }) });
+  assert.equal(status(await handleSendMail(composeReq('SendMail', MIME), 'u1', 'SendMail', tooLarge.d)), '122');
+  assert.equal(tooLarge.jobs.length, 0);
+  assert.equal(await handleLegacySendMail(MIME, { saveInSent: false }, 'u1', 'SendMail', tooLarge.d), 413);
+  assert.equal(legacySendHttpStatus('122'), 413);
 
   const ok = deps({ sendLimits: async () => ({ ok: true }), afterSend: async (_u, plan) => { after.push(plan); } });
   assert.equal(status(await handleSendMail(composeReq('SendMail', MIME), 'u1', 'SendMail', ok.d)), '1');

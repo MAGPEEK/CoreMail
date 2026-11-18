@@ -126,10 +126,23 @@ export function composeRequestFromMime(mime: Buffer, params: EasCommandParams): 
 }
 
 /**
+ * Pure (9.4): the SendMail / SmartReply / SmartForward status of a refused
+ * per-mailbox send limit ([MS-ASCMD] 2.2.2 common status codes,
+ * https://learn.microsoft.com/en-us/openspecs/exchange_server_protocols/ms-ascmd/95cb9d7c-d33d-4b94-9366-d59911c7a060):
+ * size → 122 AttachmentIsTooLarge (the only size status); recipient count → 120
+ * MailSubmissionFailed (MS-ASCMD has no status for too many recipients — 116 is
+ * an unresolvable recipient, 160 counts availability lookups only).
+ */
+export function sendLimitStatus(kind: 'size' | 'recipients'): string {
+  return kind === 'size' ? EAS_SEND_STATUS.MESSAGE_TOO_LARGE : EAS_SEND_STATUS.SUBMISSION_FAILED;
+}
+
+/**
  * HTTP status of a 12.1 compose request — the response has no body ([MS-ASHTTP]): sent →
  * 200; a request that cannot succeed when repeated → 400 (malformed MIME, no recipient,
- * unknown source item) / 403 (sender address not allowed) / 507 (send quota); a server
- * failure → 500, so the device keeps the message and retries.
+ * unknown source item) / 403 (sender address not allowed) / 413 (over the sender's size
+ * limit) / 507 (send quota); a server failure → 500, so the device keeps the message and
+ * retries.
  */
 export function legacySendHttpStatus(status: string): number {
   switch (status) {
@@ -142,6 +155,8 @@ export function legacySendHttpStatus(status: string): number {
       return 400;
     case EAS_SEND_STATUS.ACCESS_DENIED:
       return 403;
+    case EAS_SEND_STATUS.MESSAGE_TOO_LARGE:
+      return 413;
     case EAS_SEND_STATUS.MAILBOX_QUOTA_EXCEEDED:
       return 507;
     default:
@@ -236,7 +251,7 @@ export async function submitCompose(
     const limit = await (deps.sendLimits ?? defaultSendLimits)(userId, plan.raw.length, plan.recipients.length);
     if (!limit.ok) {
       log.info({ userId, command, kind: limit.kind, limit: limit.limit }, 'EAS send refused: per-mailbox send limit');
-      return EAS_SEND_STATUS.SUBMISSION_FAILED;
+      return sendLimitStatus(limit.kind);
     }
 
     if (clientId) {
