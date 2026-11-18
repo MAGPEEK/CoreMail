@@ -88,7 +88,16 @@ user) and puts it on `req.apiUser.adminScope` — never from the token.
   organisation-wide admin account inside their domain is out of reach too.
 - Scoped admins create USER accounts only (`canAssignRole`).
 - Delegations and shared-mailbox permissions: the grantee must be inside the
-  scope as well (`404 Grantee not found` / `User not found`).
+  scope as well (`404 Grantee not found` / `User not found`), and an admin other
+  than ORGANIZATION_MANAGEMENT never grants mailbox access to itself
+  (`403 FORBIDDEN_ROLE`; applies to organisation-wide recipient admins too).
+- Devices (block / wipe / deregister) and aliases (create / change / delete) of
+  an admin account are a change of that account: ORGANIZATION_MANAGEMENT only
+  (`403 FORBIDDEN_ROLE`), so a scoped admin cannot wipe the phone of an
+  organisation-wide admin of its domain.
+- No address oracle: a create in another domain is refused (`OUT_OF_SCOPE`)
+  before the address is looked up (mailbox create, sender-list targets incl.
+  CSV import), so taken and free addresses of other domains answer alike.
 
 ### API
 
@@ -114,8 +123,9 @@ CLI (`packages/cli`, docs/cli.md): `coremail role list [--admins]`,
 - Sidebar and 403 page: the organisation-wide pages of otherwise reachable
   areas (`transport-rules`, `retention`) are hidden for scoped admins
   (`UNSCOPED_ONLY_PATHS`); server-wide areas are absent from `areas` anyway.
-- Protection page: a scoped admin sees only the sender lists; the audit-log
-  statistics are not loaded.
+- Protection page: a scoped admin sees only the sender lists, and the entry
+  form offers no "Global" scope (`creatableScopes` in `lib/senderLists.ts`); the
+  audit-log statistics are not loaded.
 - Domain pickers (mailbox / shared-mailbox dialogs) list `/admin/domains`,
   which the API already limits to the scope.
 - RBAC page: a "Verwaltungsbereich" column; ORGANIZATION_MANAGEMENT edits the
@@ -151,7 +161,7 @@ matrix already limits the route to ORGANIZATION_MANAGEMENT (never scoped) ·
 | `GET/POST /mailboxes/:id/aliases`, `GET/POST /shared-mailboxes/:id/aliases` | 404 for the owner; alias address in another domain → OUT_OF_SCOPE; list filtered |
 | `PATCH/DELETE /aliases/:aliasId` | 404 unless alias domain and target are in the scope |
 | `GET /mobile/devices` | filter (device user's domain) |
-| `GET /mobile/devices/:id`, `PATCH /:id/status`, `POST /:id/wipe`, `DELETE /:id` | 404 |
+| `GET /mobile/devices/:id`, `PATCH /:id/status`, `POST /:id/wipe`, `DELETE /:id` | 404; writes on a device of an admin account → `FORBIDDEN_ROLE` |
 | `GET/PUT /protocol-access/users/:id`, `GET/PUT /webmail-policies/users/:id` | 404 |
 | `/ems/mailboxes…`, `/ems/mailbox-statistics`, `/ems/resource-mailboxes` | org (cmdlet bridge addresses objects organisation-wide) |
 
@@ -200,7 +210,7 @@ matrix already limits the route to ORGANIZATION_MANAGEMENT (never scoped) ·
 
 | Route | Decision |
 |---|---|
-| `GET /api/v1/events` | the organisation-wide admin feed (`security:attack`) only for admins confirmed organisation-wide (the stream joins it after the scope lookup; a scoped admin or a failed lookup never gets it) |
+| `GET /api/v1/events` | the organisation-wide admin feed (`security:attack`) only for admins confirmed organisation-wide (the stream joins it after the lookup of the current database role and scope — not the token role; a scoped admin or a failed lookup never gets it) |
 
 ### organisation, identity, servers (server-wide)
 
@@ -224,6 +234,14 @@ Every route of `/settings` (except the public `GET /settings/public`),
 - `cli/src/commands/role.test.ts`; e2e step `scopes` (docs/e2e.md).
 
 ## Known limits
+
+- Read views of an in-scope object can name addresses of other domains that
+  belong to it: the grantees of a delegation / shared-mailbox permission, the
+  other recipients of a quarantined message or mail-flow row, the `changes` of an
+  audit entry about an in-scope object.
+- Admin mail-flow forwarding (`PUT /mailboxes/:id/mail-flow` `forwardTo`) of an
+  in-scope USER mailbox accepts any address, the admin's own included — like the
+  password reset a recipient admin already holds, it is part of the role.
 
 - `GET /api/v1/user/me` → `adminAreas` (fallback for pre-8.x BCPs) is not
   scope-aware; the BCP uses `/admin/me/permissions`, the API enforces anyway.

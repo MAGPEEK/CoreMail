@@ -2,8 +2,7 @@ import type { Request, Response } from 'express';
 import { createLogger, type AuthInvalidationEvent } from '@coremail/core';
 import { getSseHub, startSseHub } from './lib/sse-hub.js';
 import { registerSseConnection } from './lib/live-sse.js';
-import type { ApiUser } from './middleware/auth.js';
-import { loadAdminScope } from './middleware/admin-scope.js';
+import { currentAdminState, type ApiUser } from './middleware/auth.js';
 import { isScoped } from './lib/admin-scope.js';
 
 const log = createLogger('api:sse');
@@ -21,12 +20,15 @@ export interface SseDeps {
 
 /**
  * Admin events are server-wide: admin roles only, and (9.5) not for admins
- * limited to domains. A failed scope lookup gives no admin events (fail closed).
+ * limited to domains. Role and scope come from the database like on every admin
+ * route (middleware/auth.ts currentAdminState — not the token role alone, which
+ * may predate a demotion). A failed lookup gives no admin events (fail closed).
  */
 async function defaultAdminFeed(user: ApiUser): Promise<boolean> {
   if (!ADMIN_ROLES.includes(user.role)) return false;
   try {
-    return !isScoped(await loadAdminScope(user.userId, user.role));
+    const { role, scope } = await currentAdminState(user.userId);
+    return role !== null && ADMIN_ROLES.includes(role) && !isScoped(scope);
   } catch (err) {
     log.warn({ err, userId: user.userId }, 'Admin scope lookup failed — no admin events on this stream');
     return false;

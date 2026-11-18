@@ -55,10 +55,14 @@ const db: Record<string, Row[]> = {
     { id: 'alA', address: 'x@a.example', domainId: 'dA', targetUserId: 'ua1', targetUser: { domainId: 'dA' }, targetShared: null },
     { id: 'alB', address: 'x@b.example', domainId: 'dB', targetUserId: 'ub1', targetUser: { domainId: 'dB' }, targetShared: null },
     { id: 'alMix', address: 'y@a.example', domainId: 'dA', targetUserId: 'ub1', targetUser: { domainId: 'dB' }, targetShared: null },
+    // an alias of the organisation-wide admin account inside dA
+    { id: 'alAdm', address: 'boss@a.example', domainId: 'dA', targetUserId: 'adminA', targetUser: { domainId: 'dA', role: 'SERVER_MANAGEMENT' }, targetShared: null },
   ],
   activeSyncDevice: [
-    { id: 'devA', deviceId: 'A', status: 'OK', userId: 'ua1', user: { id: 'ua1', domainId: 'dA' } },
-    { id: 'devB', deviceId: 'B', status: 'OK', userId: 'ub1', user: { id: 'ub1', domainId: 'dB' } },
+    { id: 'devA', deviceId: 'A', status: 'OK', userId: 'ua1', user: { id: 'ua1', domainId: 'dA', role: 'USER' } },
+    { id: 'devB', deviceId: 'B', status: 'OK', userId: 'ub1', user: { id: 'ub1', domainId: 'dB', role: 'USER' } },
+    // the phone of the organisation-wide admin account inside dA
+    { id: 'devAdm', deviceId: 'C', status: 'OK', userId: 'adminA', user: { id: 'adminA', domainId: 'dA', role: 'SERVER_MANAGEMENT' } },
   ],
   blacklist: [
     { id: 'gl', scope: 'GLOBAL', scopeId: null, listType: 'BLOCK', patternType: 'EXACT', pattern: 'g@spam.test', comment: '', active: true, createdAt: new Date() },
@@ -229,7 +233,7 @@ test('resources: list, 404, bookings must belong to the resource', async () => {
 });
 
 test('aliases: alias domain and target must be in scope', async () => {
-  assert.deepEqual(ids((await call('hdA', 'GET', '/aliases')).json), ['alA']);
+  assert.deepEqual(ids((await call('hdA', 'GET', '/aliases')).json), ['alA', 'alAdm']);
   assert.deepEqual((await call('rmA', 'PATCH', '/aliases/alB', { active: false })).json, NOT_FOUND);
   assert.deepEqual((await call('rmA', 'DELETE', '/aliases/alMix')).json, NOT_FOUND, 'target mailbox in another domain');
   assert.deepEqual((await call('rmA', 'GET', '/mailboxes/ub1/aliases')).json, NOT_FOUND);
@@ -238,8 +242,71 @@ test('aliases: alias domain and target must be in scope', async () => {
 });
 
 test('mobile devices: list and 404', async () => {
-  assert.deepEqual(ids((await call('hdA', 'GET', '/mobile/devices')).json['items']), ['devA']);
+  assert.deepEqual(ids((await call('hdA', 'GET', '/mobile/devices')).json['items']), ['devA', 'devAdm']);
   assert.deepEqual((await call('rmA', 'PATCH', '/mobile/devices/devB/status', { status: 'BLOCKED' })).json, NOT_FOUND);
+});
+
+// ── review fixes (9.5 review) ────────────────────────────────────────────────
+
+test('review: devices and aliases of admin accounts are ORGANIZATION_MANAGEMENT-only', async () => {
+  for (const [m, p, b] of [
+    ['POST', '/mobile/devices/devAdm/wipe', {}], ['PATCH', '/mobile/devices/devAdm/status', { status: 'BLOCKED' }],
+    ['DELETE', '/mobile/devices/devAdm', undefined],
+    ['DELETE', '/aliases/alAdm', undefined], ['PATCH', '/aliases/alAdm', { active: false }],
+    ['POST', '/mailboxes/adminA/aliases', { localPart: 'boss2' }],
+  ] as const) {
+    const r = await call('rmA', m, p, b);
+    assert.deepEqual([r.status, r.json['code']], [403, 'FORBIDDEN_ROLE'], `${m} ${p}`);
+  }
+  assert.equal((await call('rmOrg', 'POST', '/mobile/devices/devAdm/wipe', {})).status, 403, 'also for unscoped recipient admins');
+  assert.equal((await call('rmA', 'PATCH', '/mobile/devices/devA/status', { status: 'OK' })).status, 200, 'USER devices stay manageable');
+  assert.equal((await call('org', 'PATCH', '/mobile/devices/devAdm/status', { status: 'OK' })).status, 200);
+});
+
+test('review: shared-mailbox permissions — no self-grant except ORGANIZATION_MANAGEMENT', async () => {
+  const self = await call('rmA', 'POST', '/shared-mailboxes/smA/permissions', { userId: 'rmA', permissions: ['FULL_ACCESS'] });
+  assert.deepEqual([self.status, self.json['code']], [403, 'FORBIDDEN_ROLE'], 'scoped recipient admin, grantee itself (in scope)');
+  const selfOrg = await call('rmOrg', 'POST', '/shared-mailboxes/smB/permissions', { userId: 'rmOrg', permissions: ['READ_ONLY'] });
+  assert.deepEqual([selfOrg.status, selfOrg.json['code']], [403, 'FORBIDDEN_ROLE'], 'unscoped recipient admin as well');
+  const hd = await call('hdA', 'POST', '/shared-mailboxes/smA/permissions', { userId: 'ua1', permissions: ['READ_ONLY'] });
+  assert.equal(hd.status, 403, 'HELP_DESK has no recipients write');
+  const other = await call('rmA', 'POST', '/shared-mailboxes/smA/permissions', { userId: 'ua1', permissions: ['READ_ONLY'] });
+  assert.equal(other.status, 201, 'in-scope recipient admin grants an in-scope user');
+  const org = await call('org', 'POST', '/shared-mailboxes/smA/permissions', { userId: 'org', permissions: ['READ_ONLY'] });
+  assert.equal(org.status, 201, 'ORGANIZATION_MANAGEMENT may grant itself');
+  const selfDelegate = await call('rmA', 'POST', '/mailboxes/ua1/delegates', { granteeId: 'rmA', permission: 'FULL_ACCESS' });
+  assert.deepEqual([selfDelegate.status, selfDelegate.json['code']], [403, 'FORBIDDEN_ROLE'], 'delegations: same rule');
+});
+
+test('review: no existence oracle for addresses of other domains', async () => {
+  // mailbox create: an existing and an unknown address of another domain answer alike
+  const taken = await call('rmA', 'POST', '/mailboxes', { email: 'ub1@b.example', displayName: 'N', password: 'x'.repeat(16), domainId: 'dB' });
+  const free = await call('rmA', 'POST', '/mailboxes', { email: 'free@b.example', displayName: 'N', password: 'x'.repeat(16), domainId: 'dB' });
+  assert.deepEqual([taken.status, taken.json], [free.status, free.json]);
+  assert.equal(taken.json['code'], OUT_OF_SCOPE);
+  // sender lists: a USER target of another domain is refused before the lookup
+  const entry = (target: string) => ({ listType: 'BLOCK', scope: 'USER', target, patternType: 'EXACT', pattern: 'o@spam.test' });
+  const known = await call('hyA', 'POST', '/security/sender-lists', entry('ub1@b.example'));
+  const unknown = await call('hyA', 'POST', '/security/sender-lists', entry('nobody@b.example'));
+  assert.deepEqual([known.status, known.json], [unknown.status, unknown.json]);
+  assert.equal(known.json['code'], OUT_OF_SCOPE);
+  const imp = await call('hyA', 'POST', '/security/sender-lists/import', {
+    csv: 'listType,scope,target,patternType,pattern,comment,active\nBLOCK,USER,ub1@b.example,EXACT,i@spam.test,,true\nBLOCK,USER,nobody@b.example,EXACT,i@spam.test,,true\n',
+  });
+  const rowErrors = ((imp.json as Row)['errors'] as Row[]).map((e) => e['error']);
+  assert.deepEqual(rowErrors, [rowErrors[0], rowErrors[0]], 'both import rows fail alike');
+  assert.match(String(rowErrors[0]), /management scope/);
+});
+
+test('review: targetNamedInScope (pure)', async () => {
+  const { targetNamedInScope } = await import('./security-sender-lists.js');
+  const scope = { kind: 'domains' as const, domains: [{ id: 'dA', name: 'a.example' }] };
+  assert.equal(targetNamedInScope(scope, 'GLOBAL', ''), false);
+  assert.equal(targetNamedInScope(scope, 'DOMAIN', 'A.Example'), true);
+  assert.equal(targetNamedInScope(scope, 'DOMAIN', 'b.example'), false);
+  assert.equal(targetNamedInScope(scope, 'USER', 'u@a.example'), true);
+  assert.equal(targetNamedInScope(scope, 'USER', 'u@sub.a.example'), false);
+  assert.equal(targetNamedInScope({ kind: 'organisation' }, 'GLOBAL', ''), true);
 });
 
 test('sender lists: DOMAIN / USER entries of the scope only; GLOBAL and other domains refused', async () => {
@@ -349,6 +416,9 @@ test('scope assignment: audited, sessions revoked, the admin sees the new scope 
   assert.deepEqual((list.json.find((u) => u['id'] === 'hdA') as Row)['scope'], r.json['scope']);
   // back to dA only; clearing to [] would make the account organisation-wide
   assert.equal((await call('org', 'PUT', '/organisation/role-assignments/hdA/scope', { domainIds: ['dA'] })).status, 200);
+  // review: narrowing takes effect at once as well (the open session sees dB disappear)
+  assert.deepEqual(ids((await call('hdA', 'GET', '/shared-mailboxes')).json['items']), ['smA']);
+  assert.deepEqual((await call('hdA', 'GET', '/shared-mailboxes/smB')).json, NOT_FOUND);
 });
 
 test('event stream: scoped admins never join the organisation-wide admin feed (security:attack)', async () => {
@@ -361,8 +431,10 @@ test('event stream: scoped admins never join the organisation-wide admin feed (s
     register: () => () => undefined,
     heartbeatMs: 60_000,
   });
-  const reqs = ['org', 'hyA', 'ua1'].map((id) => {
-    const req = Object.assign(new EventEmitter(), { apiUser: { userId: id, email: `${id}@a.example`, role: roleOf(id) } });
+  // review: voA with a token claiming ORGANIZATION_MANAGEMENT (issued before a demotion) — the
+  // database role and scope decide, as on every admin route
+  const reqs = [['org', roleOf('org')], ['hyA', roleOf('hyA')], ['ua1', roleOf('ua1')], ['voA', 'ORGANIZATION_MANAGEMENT']].map(([id, role]) => {
+    const req = Object.assign(new EventEmitter(), { apiUser: { userId: id, email: `${id}@a.example`, role } });
     const res = { setHeader: () => undefined, flushHeaders: () => undefined, write: () => true, end: () => undefined };
     void handler(req as never, res as never);
     return req;

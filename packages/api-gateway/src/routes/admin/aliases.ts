@@ -22,6 +22,7 @@ import { requireArea } from '../../middleware/auth.js';
 import { addressCollision } from '../../lib/address-collision.js';
 import { allowDomain, requireInScope, scopeOf, scopeParam } from '../../middleware/admin-scope.js';
 import { aliasWhere } from '../../lib/admin-scope.js';
+import { canManageAccount } from '../../lib/rbac.js';
 
 const log = createLogger('admin:aliases');
 export const adminAliasesRouter: RouterType = Router();
@@ -35,6 +36,18 @@ adminAliasesRouter.use(ALIAS_PATHS, requireArea('recipients'));
 adminAliasesRouter.param('aliasId', scopeParam('alias'));
 const userInScope = requireInScope('user');
 const sharedInScope = requireInScope('shared');
+
+/**
+ * An alias routes mail into its target mailbox: adding, changing or removing
+ * one on an admin account is a change of that account — ORGANIZATION_MANAGEMENT
+ * only (lib/rbac.ts canManageAccount; 9.5: also keeps domain-scoped admins away
+ * from organisation-wide admin accounts of their domains). True = go on.
+ */
+function allowAccountChange(req: Request, res: Response, targetRole: string | null | undefined): boolean {
+  if (canManageAccount(req.apiUser!.role, targetRole ?? undefined)) return true;
+  res.status(403).json({ error: 'Only Organization Management may modify admin accounts', code: 'FORBIDDEN_ROLE' });
+  return false;
+}
 
 const LOCAL_PART_RE = /^[a-z0-9._+-]+$/;
 
@@ -117,8 +130,9 @@ adminAliasesRouter.post('/mailboxes/:id/aliases', userInScope, async (req: Reque
   const p = CreateBody.safeParse(req.body);
   if (!p.success) { res.status(400).json({ error: 'Invalid input', details: p.error.issues }); return; }
 
-  const user = await prisma.user.findUnique({ where: { id }, select: { id: true, domainId: true } });
+  const user = await prisma.user.findUnique({ where: { id }, select: { id: true, domainId: true, role: true } });
   if (!user) { res.status(404).json({ error: 'User not found' }); return; }
+  if (!allowAccountChange(req, res, user.role)) return;
 
   // Default domain = the user's (for localPart-only mode)
   const input = { ...p.data, domainId: p.data.domainId ?? user.domainId };
@@ -199,8 +213,9 @@ adminAliasesRouter.patch('/aliases/:aliasId', async (req: Request, res: Response
   const p = PatchBody.safeParse(req.body);
   if (!p.success) { res.status(400).json({ error: 'Invalid input' }); return; }
 
-  const existing = await prisma.emailAlias.findUnique({ where: { id: aliasId } });
+  const existing = await prisma.emailAlias.findUnique({ where: { id: aliasId }, include: { targetUser: { select: { role: true } } } });
   if (!existing) { res.status(404).json({ error: 'Alias not found' }); return; }
+  if (!allowAccountChange(req, res, existing.targetUser?.role)) return;
 
   const updated = await prisma.emailAlias.update({
     where: { id: aliasId },
@@ -217,8 +232,9 @@ adminAliasesRouter.patch('/aliases/:aliasId', async (req: Request, res: Response
 
 adminAliasesRouter.delete('/aliases/:aliasId', async (req: Request, res: Response) => {
   const { aliasId } = req.params as { aliasId: string };
-  const existing = await prisma.emailAlias.findUnique({ where: { id: aliasId } });
+  const existing = await prisma.emailAlias.findUnique({ where: { id: aliasId }, include: { targetUser: { select: { role: true } } } });
   if (!existing) { res.status(404).json({ error: 'Alias not found' }); return; }
+  if (!allowAccountChange(req, res, existing.targetUser?.role)) return;
   await prisma.emailAlias.delete({ where: { id: aliasId } });
   log.info({ aliasId, address: existing.address }, 'Alias deleted');
   res.status(204).end();

@@ -54,3 +54,17 @@ belong to the resource of the path (404 otherwise) — a fix, not a breaking cha
   every admin request (15 s cache dropped on auth events), never from the token,
   and a request without a resolved scope sees nothing (fail closed). Nobody but
   ORGANIZATION_MANAGEMENT assigns scopes, so no admin can grant more than it holds.
+- An admin other than ORGANIZATION_MANAGEMENT can no longer grant itself a
+  shared-mailbox permission (`POST /api/v1/admin/shared-mailboxes/:id/permissions`
+  → 403 `FORBIDDEN_ROLE`), the same rule delegations already had. Applies to
+  organisation-wide recipient admins too.
+- Blocking, wiping or deregistering a mobile device and creating, changing or
+  deleting an alias of an admin account need ORGANIZATION_MANAGEMENT (403
+  `FORBIDDEN_ROLE`), like every other change of an admin account.
+- Mailbox create and sender-list entries / imports refuse a target of another
+  domain before looking the address up — taken and free addresses of other domains
+  answer alike (no address oracle for scoped admins).
+- The event stream decides on the admin feed from the current database role and
+  scope, not from the token role.
+- BCP: the sender-list form no longer offers the "Global" scope to admins limited
+  to domains.

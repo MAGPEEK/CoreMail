@@ -25,6 +25,20 @@ export const PATTERN_TYPE_LABEL: Record<PatternType, string> = {
   EXACT: 'Adresse', WILDCARD: 'Platzhalter (*)', REGEX: 'Regulärer Ausdruck',
 };
 
+/**
+ * 9.5: scopes the admin may create entries in. GLOBAL entries are
+ * organisation-wide — an admin limited to domains (management scope) only gets
+ * DOMAIN / USER (the API answers 403 OUT_OF_SCOPE for GLOBAL).
+ */
+export function creatableScopes(scopedAdmin: boolean): ListScope[] {
+  return scopedAdmin ? ['DOMAIN', 'USER'] : ['GLOBAL', 'DOMAIN', 'USER'];
+}
+
+/** The chosen scope when it is offered, else the first offered one. */
+export function effectiveScope(chosen: ListScope, offered: readonly ListScope[]): ListScope {
+  return offered.includes(chosen) ? chosen : offered[0] ?? chosen;
+}
+
 /** Placeholder of the pattern field for a pattern type. */
 export function patternPlaceholder(type: PatternType): string {
   if (type === 'WILDCARD') return '*@werbung.example';

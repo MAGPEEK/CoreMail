@@ -12,11 +12,12 @@
  * nothing else (Status 140); `remoteWipeAckAt` records the device's acknowledgement.
  * DELETE /api/v1/admin/mobile/devices/:id         — deregister device
  */
-import { Router, type Router as RouterType, type Request, type Response } from 'express';
+import { Router, type Router as RouterType, type Request, type Response, type NextFunction } from 'express';
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import { requireArea } from '../../middleware/auth.js';
+import { canManageAccount } from '../../lib/rbac.js';
 import { scopeOf, scopeParam } from '../../middleware/admin-scope.js';
 import { domainIdWhere, isScoped } from '../../lib/admin-scope.js';
 
@@ -25,6 +26,24 @@ export const adminMobileRouter: RouterType = Router();
 adminMobileRouter.use(requireArea('recipients'));
 // 9.5: a device of a user outside the admin's management scope is "not found".
 adminMobileRouter.param('id', scopeParam('device'));
+
+/**
+ * Route guard: blocking, wiping or deregistering a device changes its owner's
+ * account — for an admin account ORGANIZATION_MANAGEMENT only, like every other
+ * change of an admin account (lib/rbac.ts canManageAccount). 9.5: otherwise a
+ * domain-scoped admin could wipe the phone of an organisation-wide admin of its domain.
+ */
+async function requireManageableOwner(req: Request, res: Response, next: NextFunction): Promise<void> {
+  const device = await prisma.activeSyncDevice.findUnique({
+    where: { id: String(req.params['id'] ?? '') }, select: { user: { select: { role: true } } },
+  });
+  if (!device) { res.status(404).json({ error: 'Not found' }); return; }
+  if (!canManageAccount(req.apiUser!.role, device.user?.role)) {
+    res.status(403).json({ error: 'Only Organization Management may change devices of admin accounts', code: 'FORBIDDEN_ROLE' });
+    return;
+  }
+  next();
+}
 
 const SELECT = {
   id: true, deviceId: true, deviceType: true, deviceFriendlyName: true,
@@ -65,7 +84,7 @@ adminMobileRouter.get('/devices/:id', async (req: Request, res: Response) => {
 });
 
 // ── PATCH /devices/:id/status ─────────────────────────────────────────────────
-adminMobileRouter.patch('/devices/:id/status', async (req: Request, res: Response) => {
+adminMobileRouter.patch('/devices/:id/status', requireManageableOwner, async (req: Request, res: Response) => {
   const id = req.params['id'] ?? '';
   const schema = z.object({ status: z.enum(['OK', 'PENDING', 'BLOCKED']) });
   const p = schema.safeParse(req.body);
@@ -80,7 +99,7 @@ adminMobileRouter.patch('/devices/:id/status', async (req: Request, res: Respons
 });
 
 // ── POST /devices/:id/wipe ────────────────────────────────────────────────────
-adminMobileRouter.post('/devices/:id/wipe', async (req: Request, res: Response) => {
+adminMobileRouter.post('/devices/:id/wipe', requireManageableOwner, async (req: Request, res: Response) => {
   const id = req.params['id'] ?? '';
   const device = await prisma.activeSyncDevice.findUnique({ where: { id } });
   if (!device) { res.status(404).json({ error: 'Not found' }); return; }
@@ -95,7 +114,7 @@ adminMobileRouter.post('/devices/:id/wipe', async (req: Request, res: Response) 
 });
 
 // ── DELETE /devices/:id ───────────────────────────────────────────────────────
-adminMobileRouter.delete('/devices/:id', async (req: Request, res: Response) => {
+adminMobileRouter.delete('/devices/:id', requireManageableOwner, async (req: Request, res: Response) => {
   const id = req.params['id'] ?? '';
   try {
     await prisma.activeSyncDevice.delete({ where: { id } });

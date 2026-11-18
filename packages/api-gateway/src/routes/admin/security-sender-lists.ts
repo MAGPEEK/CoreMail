@@ -23,7 +23,7 @@ import { z } from 'zod';
 import { prisma, addressVariants, domainVariants } from '@coremail/storage';
 import { audit, auditContext } from '../../lib/audit.js';
 import { scopeOf, scopeParam } from '../../middleware/admin-scope.js';
-import { OUT_OF_SCOPE_REFUSAL, inScope, scopeDomainIds, type AdminScope } from '../../lib/admin-scope.js';
+import { OUT_OF_SCOPE_REFUSAL, domainOfAddress, inScope, isScoped, scopeDomainIds, type AdminScope } from '../../lib/admin-scope.js';
 import {
   normalizeEntry, entryKey, toCsv, parseSenderListCsv, LIST_TYPES, PATTERN_TYPES, patternError, storedPattern,
   type SenderListInput,
@@ -67,6 +67,19 @@ async function resolveTarget(scope: string, target: string): Promise<{ scopeId: 
   }
   const u = await prisma.user.findFirst({ where: { email: { in: addressVariants(target) } }, select: { id: true, domainId: true } });
   return u ? { scopeId: u.id, domainId: u.domainId } : { error: `unknown mailbox ${target}` };
+}
+
+/**
+ * Pure (9.5): does the requested target name lie inside the management scope?
+ * Checked BEFORE the target is looked up, so a scoped admin cannot probe which
+ * mailboxes exist in another domain (unknown mailbox 400 vs. 403). GLOBAL is
+ * organisation-wide; either IDN spelling of a domain counts.
+ */
+export function targetNamedInScope(scope: AdminScope, listScope: string, target: string): boolean {
+  if (!isScoped(scope)) return true;
+  if (listScope === 'GLOBAL') return false;
+  const names = listScope === 'DOMAIN' ? domainVariants(target) : addressVariants(target).map(domainOfAddress);
+  return names.some((n) => scope.domains.some((d) => d.name === n.toLowerCase()));
 }
 
 /**
@@ -128,9 +141,11 @@ adminSenderListsRouter.post('/', async (req: Request, res: Response) => {
   const parsed = normalizeEntry((req.body ?? {}) as Record<string, unknown>);
   if (!parsed.ok) { res.status(400).json({ error: parsed.error }); return; }
   const e = parsed.entry;
+  // 9.5: GLOBAL entries and targets of other domains are outside a management scope —
+  // by name first (no lookup of another domain's mailboxes), then by the resolved domain
+  if (!targetNamedInScope(scopeOf(req), e.scope, e.target)) { res.status(403).json(OUT_OF_SCOPE_REFUSAL); return; }
   const target = await resolveTarget(e.scope, e.target);
   if ('error' in target) { res.status(400).json({ error: target.error }); return; }
-  // 9.5: GLOBAL entries and targets of other domains are outside a management scope
   if (!inScope(scopeOf(req), target.domainId)) { res.status(403).json(OUT_OF_SCOPE_REFUSAL); return; }
   const dup = await prisma.blacklist.findFirst({
     where: { listType: e.listType, scope: e.scope, scopeId: target.scopeId, patternType: e.patternType, pattern: e.pattern },
@@ -207,11 +222,12 @@ adminSenderListsRouter.post('/import', async (req: Request, res: Response) => {
   const cache = new Map<string, Awaited<ReturnType<typeof resolveTarget>>>();
   const scope = scopeOf(req);
   for (const e of entries) {
+    // 9.5: every row must lie inside the admin's management scope (by name before the lookup)
+    if (!targetNamedInScope(scope, e.scope, e.target)) { errors.push({ line: e.line, error: OUT_OF_SCOPE_REFUSAL.error }); continue; }
     const key = `${e.scope}:${e.target}`;
     if (!cache.has(key)) cache.set(key, await resolveTarget(e.scope, e.target));
     const t = cache.get(key)!;
     if ('error' in t) errors.push({ line: e.line, error: t.error });
-    // 9.5: every row must lie inside the admin's management scope
     else if (!inScope(scope, t.domainId)) errors.push({ line: e.line, error: OUT_OF_SCOPE_REFUSAL.error });
     else resolved.push({ ...e, scopeId: t.scopeId });
   }

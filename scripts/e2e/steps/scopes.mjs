@@ -91,6 +91,10 @@ export async function run(state) {
     assert(del.status === 200, `delete other user ${del.status}`);
     const widen = await http('PUT', `/api/v1/admin/organisation/role-assignments/${s.hdId}/scope`, { token: admin, body: { domainIds: [state.domainId, s.otherDomainId] } });
     assert(widen.status === 200, `widen ${widen.status}`);
+    // the scope change ends the scoped admin's open web/API session at once
+    const stale = await http('GET', '/api/v1/admin/me/permissions', { token: hd });
+    assert(stale.status === 401, `old session after the scope change: ${stale.status}`);
+    delete state.sessions?.scopeHd;
     const refused = await http('DELETE', `/api/v1/admin/domains/${s.otherDomainId}`, { token: admin });
     assert(refused.status === 409 && refused.json?.code === 'DOMAIN_SCOPES_ADMINS', `${refused.status} ${refused.text}`);
     const gone = await http('DELETE', `/api/v1/admin/mailboxes/${s.hdId}`, { token: admin });

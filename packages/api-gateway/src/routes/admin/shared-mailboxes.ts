@@ -224,6 +224,12 @@ adminSharedMailboxesRouter.post('/:id/permissions', async (req: Request, res: Re
   if (!p.success) { res.status(400).json({ error: 'Invalid input' }); return; }
   const perms = p.data.permissions ?? (p.data.permission ? [p.data.permission] : []);
   if (perms.length === 0) { res.status(400).json({ error: 'No permission given' }); return; }
+  // 9.5: a permission is access to the box's mail — like delegations, an admin
+  // other than ORGANIZATION_MANAGEMENT never grants it to itself.
+  const actor = req.apiUser!;
+  if (p.data.userId === actor.userId && actor.role !== 'ORGANIZATION_MANAGEMENT') {
+    res.status(403).json({ error: 'Admins may not grant mailbox access to themselves', code: 'FORBIDDEN_ROLE' }); return;
+  }
 
   const [sm, grantee] = await Promise.all([
     prisma.sharedMailbox.findUnique({ where: { id: sharedMailboxId }, select: { id: true } }),
@@ -233,7 +239,7 @@ adminSharedMailboxesRouter.post('/:id/permissions', async (req: Request, res: Re
   // 9.5: a grantee outside the admin's management scope is "not found" as well
   if (!grantee || !(await targetInScope(req, 'user', grantee.id))) { res.status(404).json({ error: 'User not found' }); return; }
 
-  const actorId = req.apiUser?.userId ?? 'system';
+  const actorId = actor.userId;
   try {
     // Replace strategy: delete all existing for (mailbox, user), then set anew
     await prisma.$transaction([

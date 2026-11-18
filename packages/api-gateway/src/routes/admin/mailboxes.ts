@@ -261,11 +261,8 @@ adminMailboxesRouter.post('/', async (req: Request, res: Response) => {
   if (policyError) { res.status(400).json({ error: policyError }); return; }
 
   {
-    // users, shared mailboxes and aliases share one address namespace
-    const collision = await addressCollision(email);
-    if (collision) { res.status(409).json({ error: collision }); return; }
-
-    // 9.5: a scoped admin creates mailboxes only in its own domains
+    // 9.5: a scoped admin creates mailboxes only in its own domains — checked
+    // before the address lookup, so an address of another domain is never probed
     if (!allowDomain(req, res, domainId)) return;
     const domain = await prisma.domain.findUnique({ where: { id: domainId } });
     if (!domain) { res.status(404).json({ error: 'Domain not found' }); return; }
@@ -274,6 +271,10 @@ adminMailboxesRouter.post('/', async (req: Request, res: Response) => {
     if (email.toLowerCase().split('@')[1] !== domain.name.toLowerCase()) {
       res.status(400).json({ error: `The address must end in @${domain.name}` }); return;
     }
+
+    // users, shared mailboxes and aliases share one address namespace
+    const collision = await addressCollision(email);
+    if (collision) { res.status(409).json({ error: collision }); return; }
 
     const passwordHash = await hashPassword(password);
 
