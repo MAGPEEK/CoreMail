@@ -44,10 +44,10 @@ now.
 
 Listed for 9.4 but **not present** in the pre-9.4 window (the Gmail-style redesign of 3.18.1 with
 header drag, small/large modes, emoji picker, image insert and drag & drop was rolled back in
-3.18.2): emoji, image insert and drag & drop are new in 9.4. Not offered because the server API has
-no field for them: **importance** (high/low) and per-mail **S/MIME** sign/encrypt (S/MIME is applied
-by the server from Settings → S/MIME). Tables need the Tiptap table extension, which is not a
-dependency of the webmail.
+3.18.2): emoji, image insert and drag & drop are new in 9.4, and so are **importance**
+(high / normal / low, stored in the draft), the **delivery receipt** (success notice per recipient),
+**tables** (Tiptap table extension) and the larger font list. Not offered: per-mail **S/MIME**
+sign/encrypt (S/MIME is applied by the server from Settings → S/MIME).
 
 ## 2. The 9.4 model
 
@@ -64,24 +64,51 @@ dependency of the webmail.
   Sending from the window hands the send to the main window (undo toast there) and closes the
   window; closing the window (✕, Esc) saves and returns the draft to the main window's tab strip.
   Opened without a main window (link, bookmark), the window sends itself and shows the result.
+  The main window confirms a handed-off send; without that answer within 1.5 s (main window reloaded
+  or busy) the window sends itself — the server's send claim keeps it to one send. Windows opened
+  before a reload of the main window are still recognised (by their opener). The window's address
+  follows the current draft version, so reloading it loads the latest save.
   Closing the browser window with unsaved changes asks first and saves. A browser that blocks the
   new window keeps the draft inline (message "Der Browser hat das neue Fenster blockiert").
+- **A draft already open in its own window** is not opened inline a second time: before loading a
+  server draft inline, the webmail asks over a same-origin BroadcastChannel whether a compose window
+  holds it (by every id the draft had — a save gives it a new id). That window answers and comes to
+  the front, the inline tab closes ("Der Entwurf ist bereits in einem eigenen Fenster geöffnet").
+  No answer within 300 ms → the draft opens inline as usual.
 - **Small screens** (< 768 px): compose fills the screen.
 
 ### Compose area
 
 1. **Command row** (toolbar): **Senden** (split: Senden / Senden planen …), **Verwerfen**,
    **Anhängen** (Datei anhängen / Bild einfügen), "…" (Signatur, Lesebestätigung anfordern,
-   Nur-Text-Format, Als Entwurf speichern, In neuem Fenster öffnen); ✕ **Schließen** at the end.
+   Übermittlungsbestätigung anfordern, Wichtigkeit ▸ Hoch / Normal / Niedrig, Nur-Text-Format, Als
+   Entwurf speichern, In neuem Fenster öffnen); ✕ **Schließen** at the end.
+   - **Wichtigkeit** is stored in the draft (`Importance` / `X-Priority` headers) and written into
+     the sent mail; the reader shows "Wichtigkeit: hoch / niedrig" next to the subject for any mail
+     that carries such a header (`Message.importance`, read at delivery).
+   - **Übermittlungsbestätigung** asks for a delivery status notification per recipient
+     (NOTIFY=SUCCESS,FAILURE): the server reports deliveries to its own mailboxes itself and passes
+     the request on to the next server; one that does not support it is reported as "relayed".
 2. **Ribbon** with three tabs (tab list, arrow keys), each a command bar with "…" overflow:
    - **Nachricht**: Rückgängig, Wiederholen, Fett, Kursiv, Unterstrichen, Aufzählung, Nummerierung,
      Link, Formatierung löschen.
-   - **Einfügen**: Datei, Bild, Link, Emoji, Signatur, Datum/Uhrzeit, Trennlinie.
+   - **Einfügen**: Datei, Bild, Tabelle, Link, Emoji, Signatur, Datum/Uhrzeit, Trennlinie.
    - **Format**: Absatzformat, Schriftart, Schriftgrad, Fett, Kursiv, Unterstrichen,
      Durchgestrichen, Schriftfarbe, Hervorhebung, Ausrichtung (links, zentriert, rechts,
      Blocksatz), Aufzählung, Nummerierung, Einzug verringern/vergrößern, Zitat, Code,
      Formatierung löschen.
    In plain-text format only **Einfügen** with Datei, Emoji, Signatur and Datum/Uhrzeit remains.
+   - **Einfügen → Tabelle**: Tabelle einfügen (3 × 3, first row a header row), Zeile oberhalb /
+     unterhalb, Spalte links / rechts einfügen, Zeile / Spalte / Tabelle löschen (only offered with
+     the cursor in a table). Tables carry inline styles (collapsed 1 px grid, cell padding) so other
+     mail clients show the grid; tables of a quoted original are kept (pre-9.4 they were flattened).
+   - **Format → Schriftart**: "Standardschrift" and three submenus — Lateinische Schriften (Arial …
+     Verdana), Chinesisch/Japanisch/Koreanisch (Microsoft YaHei … Batang), Weitere Schriften
+     (Leelawadee UI, Nirmala UI, Mangal, Nyala, Sylfaen); each name is shown in its own font. Every
+     entry is a CSS font stack of our own (the font, close relatives, an open alternative such as
+     Noto / Liberation / DejaVu, a generic family last — `lib/composeFonts.ts`). **Schriftgrad**:
+     8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 36 pt. New text starts with the font and size of
+     Settings → Verfassen (same lists), else Calibri 11 pt.
 3. **Fields**: Von (only with a choice), An with "Cc" / "Bcc" buttons, Cc, Bcc, Betreff.
    Recipients are pills: click shows the full address, ✕ (or Backspace in the empty field) removes
    one, invalid addresses are marked and stop the send.
@@ -117,8 +144,12 @@ focus to the control that opened the compose, else to the message list.
 ### Server API (unchanged)
 
 `POST/PUT/GET/DELETE /api/v1/mail/drafts[/:id]`, `POST /api/v1/mail/drafts/:id/send`
-(`undoDelaySec`, `scheduledAt`, `requestReceipt`) and `POST /api/v1/mail/drafts/:id/unsend` — the
-popout window uses the same calls (`GET` loads the draft into the window).
+(`undoDelaySec`, `scheduledAt`, `requestReceipt`, 9.4 `requestDeliveryReceipt`) and
+`POST /api/v1/mail/drafts/:id/unsend` — the popout window uses the same calls (`GET` loads the
+draft into the window). 9.4 additions: drafts take and return `importance`
+(`high` | `normal` | `low`, default normal; also on `POST /mail/send`); a mail's envelope
+recipients are the bare addresses (a picked contact "Name <a@b>" is written to the header only).
+Generated MIME (drafts, Sent copies, outgoing mail) uses CRLF line ends.
 
 ## 3. Code
 
@@ -131,7 +162,7 @@ popout window uses the same calls (`GET` loads the draft into the window).
 | `components/compose/AttachmentChips.tsx`, `SchedulePopover.tsx`, `EmojiPopover.tsx`, `AnchoredPopover.tsx` | Pieces of the compose area |
 | `components/compose/DraftTabStrip.tsx` | Tab strip of open drafts |
 | `components/compose/composeRuntime.ts` | Per-draft autosave that outlives tab switches; logout flush |
-| `components/compose/popoutChannel.ts` | Windows this tab opened, messages to the opening window |
+| `components/compose/popoutChannel.ts` | Windows this tab opened, messages to / acknowledgements from the opening window, draft presence (BroadcastChannel) |
 | `hooks/useCompose*.ts` | Editor, sender, original message, signature/body, draft lifecycle; `useComposeRouting` switches to Mail |
 | `hooks/usePopoutBridge.ts`, `pages/ComposePopoutPage.tsx` | Own window and its messages to the main window |
 | `lib/composeTabs.ts` | Open / switch / minimise / close drafts (state machine) |
@@ -139,12 +170,19 @@ popout window uses the same calls (`GET` loads the draft into the window).
 | `lib/recipients.ts` | Recipient parsing, pills, validation, reply-all lists |
 | `lib/composeQuote.ts` | Subject prefix, reply/forward quote, long-quote rule |
 | `lib/composeRules.ts` | Field visibility, attachment and image rules, send blockers, schedule presets, ribbon model, status text |
-| `lib/composePopout.ts` | Window URL and the message protocol between window and main window |
-| `lib/composeFormat.ts` | Fonts, sizes, colours, paragraph styles, emoji, date/time insert |
+| `lib/composePopout.ts` | Window URL, the message protocol between window and main window, the presence protocol |
+| `lib/composeFormat.ts` | Colours, paragraph styles, table styles and commands, emoji, date/time insert |
+| `lib/composeFonts.ts` | Font list by script with our CSS stacks, point sizes, defaults of new text |
+| `lib/importance.ts` | Importance levels and the reader badge |
 
 Tests (`node --test`): `lib/composeTabs.test.ts`, `lib/recipients.test.ts`,
-`lib/composeQuote.test.ts`, `lib/composeRules.test.ts`, `lib/composePopout.test.ts`,
+`lib/composeQuote.test.ts`, `lib/composeRules.test.ts`, `lib/composePopout.test.ts` (incl. presence and
+importance), `lib/composeFonts.test.ts`, `lib/mailHtmlCss.test.ts` (tables survive the sanitiser),
+`lib/errorTexts.test.ts`; server: `storage/src/importance.test.ts`, `api-gateway/src/routes/drafts.test.ts`
+(importance, delivery receipt, bare envelope, CRLF), `smtp-server/src/handlers/delivery-reports.test.ts`
+(CRLF, importance headers),
 `lib/composeUi.test.ts` (source checks: no floating window, no components inside components,
 German texts from the translation table, ARIA wiring), plus the existing compose, autosave,
 conflict, flush and send-delay tests. e2e: the `webmail` step checks the draft round trip the popout
-window relies on (`POST` → `GET` → `PUT` → `/compose/<id>` serves the webmail → `DELETE`).
+window relies on (`POST` → `GET` → `PUT` → `/compose/<id>` serves the webmail → `DELETE`), with a
+table and the importance surviving load and replace.
