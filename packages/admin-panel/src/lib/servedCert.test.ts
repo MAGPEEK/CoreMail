@@ -159,3 +159,15 @@ test('switch labels say what each switch does', () => {
   assert.equal(mailSwitchLabel(false), 'Mail-Protokolle (SMTP · IMAP · POP3): Dieses Zertifikat sofort verwenden');
   assert.match(mailSwitchLabel(true), /^Mail-Protokolle \(SMTP · IMAP · POP3\): aktiv/);
 });
+
+test('w2b: a wrong HTTPS certificate raises its own warning line; a matching one or a silent server does not', async () => {
+  const { httpsServedProblem, httpsWarningText } = await import('./servedCert.ts');
+  const base: ServedReport = { hostname: 'mail.example.com', problem: false, suggestedCert: null, ports: [] };
+  const wrong = port('https', 443, true, { problem: 'hostname-mismatch', cert: cert('mail.localhost') });
+  assert.equal(httpsServedProblem({ ...base, https: wrong }), wrong);
+  assert.equal(httpsWarningText(base, wrong), 'HTTPS (Port 443): passt nicht zu mail.example.com (CN=mail.localhost)');
+  assert.equal(httpsServedProblem({ ...base, https: port('https', 443, true) }), null);
+  assert.equal(httpsServedProblem({ ...base, https: null }), null, 'not listening is the chip\'s job, not a wrong certificate');
+  assert.equal(httpsServedProblem(base), null, 'older servers without the HTTPS probe');
+  assert.equal(httpsServedProblem(undefined), null);
+});

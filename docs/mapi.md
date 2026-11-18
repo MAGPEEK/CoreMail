@@ -21,7 +21,7 @@ coremail protocol set --scope domain example.com --mapi on         # a domain
 coremail protocol set --mapi on                                    # the whole server
 ```
 
-or in the BCP (*Services → Protokollzugriff*, *Domain bearbeiten*, mailbox dialog). With the switch
+or in the BCP (*Protokolle & Dienste*, *Domain bearbeiten*, mailbox dialog). With the switch
 off the endpoint answers 403 (no password prompt) after a correct password; turning it off ends the
 running MAPI sessions of the affected accounts at once.
 

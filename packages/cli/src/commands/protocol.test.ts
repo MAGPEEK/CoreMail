@@ -34,3 +34,32 @@ test('rows: inherit shows what it resolves to', () => {
   assert.deepEqual(rows.find((r) => r['protocol'] === 'imap'), { protocol: 'imap', setting: 'inherit (on)', effective: 'on' });
   assert.deepEqual(rows.find((r) => r['protocol'] === 'pop3'), { protocol: 'pop3', setting: 'off', effective: 'off' });
 });
+
+test('w2b: combined view — one row per protocol, HTTP-based ones on HTTPS, warnings worded', async () => {
+  const { overviewRows, warningLine } = await import('./protocol.js');
+  const group = (differing: number) => ({ total: differing, differing, entries: [] });
+  const https = { active: true, port: 443, cert: { name: 'le', trusted: true } };
+  const rows = overviewRows({
+    protocols: [
+      { protocol: 'imap', transport: 'listener', server: 'on', activePorts: [143, 993], overrides: { domains: group(2), users: group(0) }, warnings: [] },
+      { protocol: 'pop3', transport: 'listener', server: 'off', activePorts: [], overrides: { domains: group(0), users: group(1) }, warnings: [] },
+      { protocol: 'mapi', transport: 'http', server: 'off', activePorts: [], overrides: { domains: group(0), users: group(0) }, warnings: [] },
+    ],
+    smtpInbound: { activePorts: [25] },
+    https,
+    warnings: [],
+  });
+  assert.deepEqual(rows[0], { protocol: 'imap', access: 'on', ports: '143, 993', domains: '2 differ', mailboxes: '-' });
+  assert.deepEqual(rows[1], { protocol: 'pop3', access: 'off', ports: 'none active', domains: '-', mailboxes: '1 differ' });
+  assert.equal(rows[2]!['ports'], 'HTTPS 443');
+  assert.equal(warningLine({ code: 'port-open-access-off', protocol: 'pop3', ports: [110, 995] }, https),
+    'pop3: port open (110, 995), login refused for everyone');
+  assert.match(warningLine({ code: 'mapi-https', protocol: 'mapi' }, https), /HTTPS \(port 443\) is not active or has no trusted certificate/);
+  assert.match(warningLine({ code: 'no-active-port', protocol: 'imap' }, https), /no port is active/);
+});
+
+test('w2b: notice when a port is open and only differing domains / mailboxes may log in', async () => {
+  const { noticeLine } = await import('./protocol.js');
+  assert.equal(noticeLine({ code: 'port-open-access-limited', protocol: 'imap', ports: [993] }),
+    'imap: port open (993); login only for the differing domains / mailboxes');
+});

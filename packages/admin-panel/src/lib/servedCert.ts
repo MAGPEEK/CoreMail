@@ -218,6 +218,18 @@ export function httpsSwitchName(port: number): string {
   return `HTTPS (Port ${port})`;
 }
 
+/** w2b: the integrated HTTPS server when it serves a self-signed / name-mismatched / expired certificate, else null. */
+export function httpsServedProblem(report: ServedReport | null | undefined): ServedPort | null {
+  const https = report?.https;
+  return https && https.problem !== null ? https : null;
+}
+
+/** w2b: detail line of the HTTPS warning banner: "HTTPS (Port 443): selbstsigniert … (CN=mail.localhost)". */
+export function httpsWarningText(report: ServedReport, https: ServedPort): string {
+  const cn = https.cert?.commonName ? ` (CN=${https.cert.commonName})` : '';
+  return `${httpsSwitchName(https.port)}: ${problemText(https.problem, report.hostname)}${cn}`;
+}
+
 /** Accessible name + tooltip of the HTTPS switch (its on/off state is aria-pressed). */
 export function httpsSwitchLabel(port: number): string {
   return `${httpsSwitchName(port)}: Dieses Zertifikat für Webmail/BCP/ActiveSync/Autodiscover über den integrierten HTTPS-Server verwenden`;

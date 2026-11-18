@@ -129,3 +129,51 @@ test('validation: unknown protocols, unknown values and empty bodies are refused
   assert.equal((await call('PUT', '', 'org', { ews: 'off' })).status, 400);
   assert.equal((await call('PUT', '/domains/nope', 'org', { imap: 'off' })).status, 404);
 });
+
+test('level views name where inherit takes its value from (inheritedFrom)', async () => {
+  const user = await call('GET', '/users/bob', 'rcp');
+  assert.equal(user.body['inheritedFrom'].imap, 'domain', 'one.test sets IMAP');
+  assert.equal(user.body['inheritedFrom'].jmap, 'server');
+  assert.equal((await call('GET', '/domains/d1', 'srv')).body['inheritedFrom'].imap, 'server');
+  assert.equal((await call('GET', '', 'srv')).body['inheritedFrom'].imap, 'default');
+});
+
+test('overview (w2b): ports, overrides and warnings in one answer; servers area only', async () => {
+  const listeners = new FakeTable(() => ({ address: '0.0.0.0', allowLegacyTls: false, active: true }));
+  const certificates = new FakeTable(() => ({ acmeStaging: false, status: 'ACTIVE', certPem: null }));
+  db['serviceListener'] = listeners;
+  db['certificate'] = certificates;
+  for (const [port, service, ssl, active] of [[25, 'SMTP_RECEIVE', false, true], [587, 'SMTP_RECEIVE', false, true],
+    [993, 'IMAP', true, true], [110, 'POP3', false, false]] as const) {
+    await listeners.create({ data: { service, port, ssl, active } });
+  }
+  await certificates.create({ data: { name: 'self', type: 'SELF_SIGNED', isActiveHttps: true } });
+  const r = await call('GET', '/overview', 'srv');
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  const row = (p: string) => (r.body['protocols'] as Array<Record<string, any>>).find((x) => x['protocol'] === p)!;
+  assert.deepEqual(row('imap')['activePorts'], [993]);
+  assert.deepEqual(row('smtp')['activePorts'], [587]);
+  assert.deepEqual(r.body['smtpInbound'].activePorts, [25]);
+  assert.equal(row('imap')['overrides'].domains.total, 1, 'one.test switched IMAP off (domain test above)');
+  assert.equal(row('imap')['overrides'].users.differing, 1, 'bob switched IMAP back on');
+  assert.equal(r.body['https'].active, false);
+  assert.equal(r.body['https'].cert.name, 'self');
+  assert.equal(r.body['https'].cert.trusted, false);
+  const codes = (r.body['warnings'] as Array<Record<string, string>>).map((w) => `${w['protocol']}:${w['code']}`);
+  assert.ok(codes.includes('pop3:no-active-port'), codes.join(', '));
+
+  // SERVER_MANAGEMENT reads domains but not recipients: mailbox addresses stay hidden, counts stay.
+  assert.deepEqual(row('imap')['overrides'].users.entries, []);
+  assert.equal(row('imap')['overrides'].users.namesHidden, true);
+  assert.equal(row('imap')['overrides'].domains.entries[0].name, 'one.test');
+  assert.ok(!JSON.stringify(r.body).includes('bob@one.test'), 'no mailbox address for SERVER_MANAGEMENT');
+
+  const org = await call('GET', '/overview', 'org');
+  assert.equal(org.status, 200);
+  const orgImap = (org.body['protocols'] as Array<Record<string, any>>).find((x) => x['protocol'] === 'imap')!;
+  assert.equal(orgImap['overrides'].users.entries[0].name, 'bob@one.test');
+  assert.equal(orgImap['overrides'].users.namesHidden, undefined);
+  assert.equal((await call('GET', '/overview', 'rcp')).status, 403, 'recipients admins do not read the server view');
+  assert.equal((await call('GET', '/overview', 'help')).status, 403);
+  assert.equal((await call('GET', '/overview', 'bob')).status, 403);
+});

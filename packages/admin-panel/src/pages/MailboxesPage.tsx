@@ -1,4 +1,5 @@
 import { useId, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Modal as AccessibleModal } from '../components/Modal.js';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -115,6 +116,9 @@ export function MailboxesPage() {
   const qc = useQueryClient();
   const { can, canManage, role: actorRole } = usePermissions();
   const canWrite = can('recipients', 'write');
+  // w2b: `?q=` (links from Dienste → Protokolle) starts the list search
+  const [searchParams] = useSearchParams();
+  const initialQuery = searchParams.get('q');
   const [domainFilter, setDomainFilter] = useState('');
   const [activeId, setActiveId]         = useState<string | null>(null);
   const [showCreate, setShowCreate]     = useState(false);
@@ -386,7 +390,10 @@ export function MailboxesPage() {
             rowKey={(u) => u.id}
             loading={isLoading}
             initialSort={{ key: 'user', dir: 'asc' }}
-            search={{ placeholder: t('mbox_filter_placeholder'), text: (u) => [u.email, u.displayName, domainName(u.domainId)] }}
+            search={{
+              placeholder: t('mbox_filter_placeholder'), text: (u) => [u.email, u.displayName, domainName(u.domainId)],
+              ...(initialQuery ? { initial: initialQuery } : {}),
+            }}
             selectable={canWrite}
             onActivate={(u) => setActiveId(u.id)}
             activeKey={activeId}

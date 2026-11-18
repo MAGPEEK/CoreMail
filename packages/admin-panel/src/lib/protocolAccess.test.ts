@@ -31,3 +31,15 @@ test('Webmail off on the server or a domain level is flagged (user level is not)
   assert.equal(locksOutWebmail({ level: 'user', inherited }, draft), false);
   assert.equal(locksOutWebmail({ level: 'domain', inherited }, inherit()), false);
 });
+
+test('w2b: effective reason — an explicit switch decides on its own level, inherit names where it comes from', async () => {
+  const { effectiveReason } = await import('./protocolAccess.ts');
+  const from = (v: 'server' | 'domain') => Object.fromEntries(PROTOCOLS.map((p) => [p, v])) as Record<(typeof PROTOCOLS)[number], 'server' | 'domain'>;
+  assert.equal(effectiveReason({ level: 'global' }, 'imap', 'off'), 'server');
+  assert.equal(effectiveReason({ level: 'domain' }, 'imap', 'off'), 'domain');
+  assert.equal(effectiveReason({ level: 'domain' }, 'imap', 'inherit'), 'server');
+  assert.equal(effectiveReason({ level: 'user', inheritedFrom: from('domain') }, 'imap', 'inherit'), 'domain');
+  assert.equal(effectiveReason({ level: 'user', inheritedFrom: from('server') }, 'imap', 'inherit'), 'server');
+  assert.equal(effectiveReason({ level: 'user', inheritedFrom: from('server') }, 'imap', 'on'), 'user');
+  assert.equal(effectiveReason({ level: 'user' }, 'imap', 'inherit'), null, 'older server: no reason shown');
+});

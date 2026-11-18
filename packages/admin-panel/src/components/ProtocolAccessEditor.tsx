@@ -2,7 +2,8 @@
  * 9.4: editor of the per-protocol access switches of one level (server,
  * domain or mailbox). Domain and mailbox: Erben | An | Aus — the "inherit"
  * option shows what it resolves to; the server level is An | Aus. The last
- * column shows the effective value. Saving sends only the changed switches.
+ * column shows the effective value and the level that decides it (w2b:
+ * "aus (Domain)", "an (serverweit)"). Saving sends only the changed switches.
  */
 import { useEffect, useId, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -15,13 +16,16 @@ import type { TranslationKey } from '../i18n/translations.js';
 import type { AdminArea } from '../lib/adminAreas.js';
 import { errorMessage } from '../lib/errors.js';
 import {
-  changedSettings, effectiveOf, locksOutWebmail, settingsForLevel,
-  type Protocol, type ProtocolLevelView, type ProtocolSetting, type ProtocolSettings,
+  changedSettings, effectiveOf, effectiveReason, locksOutWebmail, settingsForLevel,
+  type EffectiveReason, type Protocol, type ProtocolLevelView, type ProtocolSetting, type ProtocolSettings,
 } from '../lib/protocolAccess.js';
 
 const LABEL_KEYS: Record<Protocol, TranslationKey> = {
   imap: 'proto_label_imap', pop3: 'proto_label_pop3', smtp: 'proto_label_smtp', activesync: 'proto_label_activesync',
   jmap: 'proto_label_jmap', dav: 'proto_label_dav', webmail: 'proto_label_webmail', mapi: 'proto_label_mapi',
+};
+const REASON_KEYS: Record<EffectiveReason, TranslationKey> = {
+  server: 'proto_reason_server', domain: 'proto_reason_domain', user: 'proto_reason_user',
 };
 const HINT_KEYS: Record<ProtocolLevelView['level'], TranslationKey> = {
   global: 'proto_hint_global', domain: 'proto_hint_domain', user: 'proto_hint_user',
@@ -61,6 +65,9 @@ export function ProtocolAccessEditor({ path, area }: {
   const dirty = Object.keys(patch).length > 0;
   const options = settingsForLevel(view.level);
   const state = (on: boolean) => (on ? t('proto_state_on') : t('proto_state_off'));
+  /** "aus (Domain)", "an (serverweit)" — the effective value and the level that decides it. */
+  const effectiveLabel = (on: boolean, reason: EffectiveReason | null): string =>
+    reason ? `${state(on)} (${t(REASON_KEYS[reason])})` : state(on);
   const optionLabel = (s: ProtocolSetting, p: Protocol): string =>
     s === 'inherit' ? `${t('proto_setting_inherit')} (${state(view.inherited[p])})` : s === 'on' ? t('proto_setting_on') : t('proto_setting_off');
 
@@ -97,8 +104,8 @@ export function ProtocolAccessEditor({ path, area }: {
                     </select>
                   </td>
                   <td className="px-3 py-1.5 text-right">
-                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${on ? 'bg-success-bg text-success-fg' : 'bg-surface-2 text-fg-subtle'}`}>
-                      {state(on)}
+                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${on ? 'bg-success-bg text-success-fg' : 'bg-surface-2 text-fg-subtle'}`}>
+                      {effectiveLabel(on, effectiveReason(view, p, draft[p]))}
                     </span>
                   </td>
                 </tr>

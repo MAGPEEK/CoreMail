@@ -34,7 +34,7 @@ const de = {
   nav_quarantine:         'Quarantäne',
 
   // ── Navigation — Infrastructure ──────────────────────────────────────────
-  nav_services:           'Services',
+  nav_services:           'Protokolle & Dienste',
   nav_smtp_config:        'SMTP & Routing',
   nav_certificates:       'Zertifikate',
   nav_sso:                'SSO',
@@ -1024,6 +1024,9 @@ const de = {
   proto_saved_users:          'Betroffene Konten',
   proto_load_error:           'Protokollzugriff konnte nicht geladen werden',
   proto_save_error:           'Protokollzugriff konnte nicht gespeichert werden',
+  proto_reason_server:        'serverweit',
+  proto_reason_domain:        'Domain',
+  proto_reason_user:          'Postfach',
   // 9.4 mailbox management (mail flow, sent copies, auto-mapping, mailbox access audit)
   mflow_title: 'Nachrichtenfluss',
   mflow_hint: 'Gilt nur für dieses Postfach. Grenzwerte ersetzen die globalen Werte; leer = globaler Wert.',
@@ -1095,7 +1098,7 @@ const en: { [K in keyof DE]: string } = {
   nav_quarantine:         'Quarantine',
 
   // ── Navigation — Infrastructure ──────────────────────────────────────────
-  nav_services:           'Services',
+  nav_services:           'Protocols & services',
   nav_smtp_config:        'SMTP & Routing',
   nav_certificates:       'Certificates',
   nav_sso:                'SSO',
@@ -2085,6 +2088,9 @@ const en: { [K in keyof DE]: string } = {
   proto_saved_users:          'Affected accounts',
   proto_load_error:           'Protocol access could not be loaded',
   proto_save_error:           'Protocol access could not be saved',
+  proto_reason_server:        'server-wide',
+  proto_reason_domain:        'domain',
+  proto_reason_user:          'mailbox',
   // 9.4 mailbox management
   mflow_title: 'Mail flow',
   mflow_hint: 'Applies to this mailbox only. Limits replace the global values; empty = the global value.',

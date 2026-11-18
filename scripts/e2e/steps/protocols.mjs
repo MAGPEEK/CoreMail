@@ -33,6 +33,24 @@ export async function run(state) {
     return `imap ${r.json.settings.imap}, mapi ${r.json.settings.mapi}`;
   });
 
+  await check('protocols: combined overview lists ports, access and warnings per protocol', async () => {
+    const r = await http('GET', `${ADMIN_PATH}/overview`, { token: admin });
+    assert(r.status === 200, `${r.status} ${r.text.slice(0, 200)}`);
+    const names = (r.json.protocols ?? []).map((p) => p.protocol);
+    assert(['imap', 'pop3', 'smtp', 'activesync', 'jmap', 'dav', 'webmail', 'mapi'].every((p) => names.includes(p)), names.join(','));
+    const imap = r.json.protocols.find((p) => p.protocol === 'imap');
+    assert(imap.transport === 'listener' && imap.server === 'on' && imap.activePorts.length > 0, JSON.stringify(imap));
+    assert(r.json.protocols.find((p) => p.protocol === 'activesync').transport === 'http', 'ActiveSync runs on the HTTP server');
+    assert(Array.isArray(r.json.smtpInbound?.activePorts) && Array.isArray(r.json.warnings), 'smtpInbound / warnings');
+    assert(!r.json.warnings.some((w) => w.protocol === 'imap'), `IMAP warns: ${JSON.stringify(r.json.warnings)}`);
+    assert(Array.isArray(r.json.notices), 'notices');
+    for (const n of r.json.notices) {
+      const p = r.json.protocols.find((x) => x.protocol === n.protocol);
+      assert(n.code === 'port-open-access-limited' && p.server === 'off' && p.activePorts.length > 0, `notice ${JSON.stringify(n)}`);
+    }
+    return `imap ${imap.activePorts.join('/')}, inbound ${r.json.smtpInbound.activePorts.join('/')}, ${r.json.warnings.length} warning(s)`;
+  });
+
   await check('protocols: the server level is two-state (inherit refused)', async () => {
     const r = await http('PUT', ADMIN_PATH, { token: admin, body: { imap: 'inherit' } });
     assert(r.status === 400, `${r.status} ${r.text.slice(0, 200)}`);
@@ -71,6 +89,17 @@ export async function run(state) {
       assert(r.json.protocols?.imap === false && r.json.mail?.imap === null && r.json.mail?.pop3?.host,
         JSON.stringify({ protocols: r.json.protocols, mail: r.json.mail }));
       return 'imap null, pop3 listed';
+    });
+
+    await check('protocols: the overview counts B as a mailbox that differs for IMAP', async () => {
+      const r = await http('GET', `${ADMIN_PATH}/overview`, { token: admin });
+      assert(r.status === 200, `${r.status} ${r.text.slice(0, 200)}`);
+      const users = r.json.protocols.find((p) => p.protocol === 'imap').overrides.users;
+      const entry = users.entries.find((e) => e.name === B);
+      assert(users.differing >= 1 && entry?.setting === 'off' && entry.differs === true, JSON.stringify(users));
+      const view = await http('GET', userPath, { token: admin });
+      assert(view.json.inheritedFrom?.imap === 'server', `inheritedFrom ${JSON.stringify(view.json.inheritedFrom)}`);
+      return `${users.differing} mailbox(es) differ`;
     });
 
     await check('protocols: Webmail off for B → web login 403 PROTOCOL_DISABLED, existing session refused', async () => {

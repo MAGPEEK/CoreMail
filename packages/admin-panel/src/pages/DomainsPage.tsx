@@ -1,4 +1,5 @@
 import { useId, useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Modal } from '../components/Modal.js';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Pencil, Plus, X, Copy, Check, CheckCircle, AlertCircle, Globe, RefreshCw } from 'lucide-react';
@@ -571,7 +572,9 @@ export function DomainsPage() {
   const t = useT();
   const qc = useQueryClient();
 
-  const [search, setSearch]       = useState('');
+  // w2b: `?q=` (links from Dienste → Protokolle) starts the search
+  const [searchParams] = useSearchParams();
+  const [search, setSearch]       = useState(() => searchParams.get('q') ?? '');
   const [limit,  setLimit]        = useState(50);
   const [page,   setPage]         = useState(1);
   const [showAdd, setShowAdd]     = useState(false);

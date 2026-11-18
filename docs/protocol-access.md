@@ -14,6 +14,62 @@ the server, per domain and per mailbox.
 | `webmail`    | web login (password, MFA, SSO, token refresh) and the webmail / user REST API          |
 | `mapi`       | MAPI over HTTP (`/mapi/emsmdb`, `/mapi/nspi`, classic Outlook — see [mapi.md](mapi.md)), off by default |
 
+## Ports vs. Zugriff
+
+Two different things decide whether a client can use a protocol, and the BCP shows both on one
+page (*Protokolle & Dienste*, `/services`; the old sub-page links `/services/imap`, `/services/pop3`,
+`/services/smtp-receive` redirect to the matching protocol card, e.g. `/services#protocol-imap`):
+
+| | Port (listener) | Access (protocol switch) |
+|---|---|---|
+| Decides | whether the server listens on an address/port at all — no active port, no connection | whether an account may use the protocol **after** a successful login |
+| Scope | the whole server | server → domain → mailbox (this document) |
+| Applies to | IMAP, POP3, SMTP (submission 465/587 and inbound 25); HTTP-based protocols (ActiveSync, JMAP, CalDAV/CardDAV, Webmail, MAPI) share the HTTP/HTTPS server and have no ports of their own | every protocol in the table above; SMTP inbound on port 25 is transport from other servers, nobody logs in there, so no switch applies |
+| Stored in | `service_listeners` (`/api/v1/admin/services/listeners/*`) | `protocol_policies` (`/api/v1/admin/protocol-access/*`) |
+
+A port that listens while the protocol is off for everyone accepts connections and refuses every
+login after the password ("Port offen, Anmeldung für alle gesperrt"); a protocol that is allowed
+without an active port cannot be reached at all. The page warns about both, and about MAPI being on
+while HTTPS (Port 443) is off or has no trusted certificate (Outlook connects over HTTPS only,
+unless a reverse proxy in front provides it). A port that listens while the protocol is off on the
+server but on for some domains or mailboxes is consistent; the page says so in a softer notice
+("Port offen; Anmeldung nur für abweichende Domains/Benutzer") that is not counted as an
+inconsistency.
+
+Per protocol the page shows the server-wide access switch, its ports (port on/off, TLS mode
+implicit TLS / STARTTLS, "Ältere Clients erlauben", address and port — add, edit, delete), and a
+summary line such as "aktiv auf 993 · 2 Domains abweichend · 1 Benutzer abweichend". The counts
+open the list of those domains / mailboxes; each links to the domain or mailbox list filtered to it
+(`/domains?q=…`, `/mailboxes?q=…`), where the override is edited. "Abweichend" counts the explicit
+settings whose value differs from what that level would inherit; a setting equal to the inherited
+value is listed as "wie geerbt".
+
+The page reads `GET /api/v1/admin/protocol-access/overview` (area *servers*, read-only):
+
+```
+{ protocols: [ { protocol, transport: 'listener'|'http', listenerService, server: 'on'|'off',
+                 ports: [ { id, service, address, port, ssl, tlsMode, active, allowLegacyTls } ],
+                 activePorts, enabledAnywhere,
+                 overrides: { domains: { total, differing, entries: [ { id, name, setting, differs } ] },
+                              users:   { … } },            // entries: first 25 by name
+                 warnings: [ { code, protocol, ports? } ],
+                 notices:  [ { code, protocol, ports } ] } ],
+  smtpInbound: { ports, activePorts },                      // SMTP on non-submission ports (25)
+  https: { active, port, cert: { id, name, trusted } | null },
+  warnings: [ … ], notices: [ … ] }                         // all protocols
+```
+
+Warning codes: `no-active-port` (allowed for someone, no active port), `port-open-access-off`
+(active port, off on the server and on for no domain or mailbox), `mapi-https` (MAPI on for
+someone, HTTPS not active or its certificate not trusted — self-signed, staging, expired or not
+covering the public host name). Notice code: `port-open-access-limited` (active port, off on the
+server, on for at least one domain or mailbox). The names in `entries` need read access to the
+area *domains* (domain names) or *recipients* (mailbox addresses); without it the group keeps
+`total` / `differing`, `entries` is empty and `namesHidden: true` (SERVER_MANAGEMENT sees the
+domains but only the number of mailboxes). SMTP submission ports are 465 and 587 (`SMTP_PORT_465`,
+`SMTP_PORT_587`); every other SMTP port is inbound. Writes go through the existing routes — the
+level routes below and `/api/v1/admin/services/listeners/*`.
+
 ## Levels and resolution
 
 There are three levels:
@@ -121,9 +177,10 @@ Only enabled protocols are announced:
 
 ## Administration
 
-**BCP**: server level under *Services → Protokollzugriff* (An / Aus), domain level in *Domain
-bearbeiten*, mailbox level in the mailbox edit dialog (Erben / An / Aus — "Erben" names what it
-resolves to, e.g. "Erben (an)"). Every row shows the effective value.
+**BCP**: server level under *Protokolle & Dienste* (access switch per protocol, next to its
+ports), domain level in *Domain bearbeiten*, mailbox level in the mailbox edit dialog (Erben / An /
+Aus — "Erben" names what it resolves to, e.g. "Erben (an)"). Every row shows the effective value and
+the level that decides it, e.g. "aus (Domain)", "an (serverweit)", "an (Postfach)".
 
 **Admin API**:
 
@@ -132,11 +189,14 @@ GET|PUT /api/v1/admin/protocol-access                 server level (on | off)
 GET|PUT /api/v1/admin/protocol-access/domains/:id     domain level (inherit | on | off)
 GET|PUT /api/v1/admin/protocol-access/users/:id       user level   (inherit | on | off)
 PUT body: { "imap": "off", "webmail": "inherit", … }   (only the switches to change)
-Answer:   { level, id?, protocols, settings, inherited, effective, changedUsers? }
+Answer:   { level, id?, protocols, settings, inherited, inheritedFrom, effective, changedUsers? }
+GET     /api/v1/admin/protocol-access/overview        ports + access + overrides + warnings (see "Ports vs. Zugriff")
 ```
 
 `inherited` is what `inherit` resolves to on that level (on the server level: the built-in
-defaults). RBAC: server and domain level need write
+defaults), `inheritedFrom` where it comes from per protocol (`default` on the server level, `server`
+on the domain level, `domain` or `server` on the user level). The overview needs read access to the
+area *servers*. RBAC: server and domain level need write
 access to the area *servers* (SERVER_MANAGEMENT, ORGANIZATION_MANAGEMENT; readers of *domains* may
 read the domain level), the user level the area *recipients* (RECIPIENT_MANAGEMENT; HELP_DESK and
 VIEW_ONLY_ORG read) — switches of an admin account only ORGANIZATION_MANAGEMENT. Every change is in
@@ -146,7 +206,8 @@ number of affected accounts; `settings.*` actions are logged even with the audit
 **CLI**:
 
 ```bash
-coremail protocol show                                   # server level
+coremail protocol show                                   # combined view: access, ports, overrides, warnings
+coremail protocol show --scope global                    # server level switches
 coremail protocol show --scope domain example.com
 coremail protocol set --scope user alice@example.com --imap off --webmail inherit
 coremail protocol set --mapi off --pop3 off              # server level
