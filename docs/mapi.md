@@ -35,7 +35,7 @@ as on every mail protocol.
 | Area | Details |
 |------|---------|
 | Envelope | POST only; `X-RequestType` `Connect`, `Execute`, `Disconnect`, `NotificationWait`, `PING`; `X-RequestId` / `X-ClientInfo` echoed; `X-ResponseCode`, `X-PendingPeriod`, `X-ExpirationInfo`, `X-ServerApplication`; streamed `PROCESSING` / `PENDING` / `DONE` with `X-ElapsedTime` and `X-StartTime` |
-| Sessions | Cookies `MapiContext` (session) and `MapiSequence` (rotated per Execute/Disconnect: a replayed or concurrent request gets 15 "Invalid Sequence"); the session is bound to the credentials it was created with (else 10 "Context Not Found"); idle timeout 30 min (`MAPI_SESSION_IDLE_MS`); at most 16 sessions per account |
+| Sessions | Cookies `MapiContext` (session) and `MapiSequence` (rotated per Execute/Disconnect: a replayed or concurrent request gets 15 "Invalid Sequence"); the session is bound to the credentials it was created with (else 10 "Context Not Found"; PING refreshes only the caller's own session); idle timeout 30 min (`MAPI_SESSION_IDLE_MS`); at most 16 sessions per account; one outstanding NotificationWait per session (a newer one ends the older with EventPending 0); a failure after `PROCESSING` still ends with `DONE` and X-ResponseCode 1 |
 | Execute | RPC_HEADER_EXT payloads, also XOR-obfuscated and LZ77/DIRECT2-compressed requests; responses uncompressed; output limited to `MaxRopOut` and 32 KB, `RopBufferTooSmall` when a response does not fit |
 | Logon | Own mailbox; shared and delegated mailboxes the account may read (Essdn = their legacy DN), read-only ones refuse writes |
 | Folders | Root, Top of Information Store, Outbox and the other special folders, the CoreMail folders below; open, create (subfolders `Parent.Name`), delete (mail moves to Deleted Items; default folders cannot be deleted), hierarchy tables (with depth) |
@@ -43,8 +43,8 @@ as on every mail protocol.
 | Messages | Open (recipients, subject), properties (specific/all, large values via streams), read flag, delete (tombstones, recoverable 30 days), move/copy (also between logons), attachments (table, open, create, save) |
 | Streams | Read the plain-text and HTML body and attachment data; write bodies and attachment data of new messages |
 | Composing | `CreateMessage` in Drafts (saved as a draft, visible to every client) or in the Outbox (kept in the session), `SetProperties`, `ModifyRecipients` (SMTP addresses, X500 DNs of CoreMail accounts), `SaveChangesMessage`, `SubmitMessage` |
-| Sending | Same rules as SMTP submission and JMAP: send quota, sender identity (own address, aliases, shared mailboxes with Send As / Full Access), queue `smtp-outbound`, copy in Sent Items unless `PidTagDeleteAfterSubmit`, the draft is removed |
-| Named properties | `GetPropertyIdsFromNames` / `GetNamesFromPropertyIds` (IDs from 0x8000, stable per mailbox while the service runs) |
+| Sending | Same rules as SMTP submission and JMAP: the SMTP limits (recipients: BCP SMTP *max. recipients* → `ecTooManyRecips`; size: the stricter max. message size → `ecMaxSubmissionExceeded`, also reported as `PidTagMaximumSubmitMessageSize`), send quota, sender identity (own address, aliases, shared mailboxes with Send As / Full Access), queue `smtp-outbound`, copy in Sent Items unless `PidTagDeleteAfterSubmit`, the draft is removed; folder associated messages are never sent |
+| Named properties | `GetPropertyIdsFromNames` / `GetNamesFromPropertyIds` (registered IDs from 0x8001, stable per mailbox while the service runs; PS_MAPI LIDs are the property ID; only internet header names are case-insensitive; a read-only mailbox registers nothing; no names on the store object lists every ID) |
 
 ## Limits
 
@@ -58,13 +58,22 @@ as on every mail protocol.
 - Properties CoreMail has no column for (flags, categories, custom properties of received mail) are
   accepted but not stored; saving an opened received message does not change it.
 - Named property IDs are kept in memory (per mailbox, per service process).
-- The api-gateway's general rate limit (500 requests / 15 min per client IP) also applies to `/mapi`.
+- Requests are limited per mail account (`MAPI_RATE_LIMIT` requests per `MAPI_RATE_WINDOW_SEC`, default
+  3000 per 5 minutes; above it HTTP 429 with `Retry-After`). The api-gateway's general per-IP limit does
+  not count `/mapi` (Outlook is chatty and clients often share a NAT address); password guessing stays
+  bounded by the shared mail-login lockout.
+- Each session holds its open messages, attachments and streams in memory, at most
+  `MAPI_SESSION_MEMORY_MB` (64) — beyond it writes fail (`STG_E_MEDIUMFULL` / `ecMAPIOOM`); a single
+  stream holds at most 32 MB; a message at most 1000 recipients and 250 attachments; a table filter
+  at most 1024 restriction nodes (`ecTooComplex`).
 
 ## Operations
 
 - Service: supervisord program `mapi-server`; health `GET http://127.0.0.1:3007/health`.
 - Environment: `MAPI_PORT` (3007), `MAPI_SESSION_IDLE_MS` (1 800 000), `MAPI_PENDING_MS` (15 000),
-  `MAPI_ALLOW_PLAIN_HTTP` (false), gateway `MAPI_SERVICE_URL` (`http://localhost:3007`).
+  `MAPI_ALLOW_PLAIN_HTTP` (false), `MAPI_RATE_LIMIT` (3000, 0 = off), `MAPI_RATE_WINDOW_SEC` (300),
+  `MAPI_SESSION_MEMORY_MB` (64), gateway `MAPI_SERVICE_URL` (`http://localhost:3007`).
+- Rate-limit counters: Redis `ratelimit:mapi:<userId>:<window>` (in-process fallback while Redis is down).
 - Session records: Redis `mapi:ctx:<sha256(cookie)>` with the idle TTL; the open server objects live
   in the service process, so after a restart clients connect again ("Context Not Found").
 - e2e: step `mapi` (`scripts/e2e/steps/mapi.mjs`); the client used by the tests and the e2e step is
