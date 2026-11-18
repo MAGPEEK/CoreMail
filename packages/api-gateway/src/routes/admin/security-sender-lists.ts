@@ -141,6 +141,13 @@ adminSenderListsRouter.patch('/:id', async (req: Request, res: Response) => {
     ...(parsed.data.comment !== undefined ? { comment: parsed.data.comment.trim() } : {}),
     ...(parsed.data.active !== undefined ? { active: parsed.data.active } : {}),
   };
+  // A changed list type / pattern must not turn the entry into a duplicate of another one.
+  if (parsed.data.listType !== undefined || 'pattern' in data) {
+    const identity = { listType: data.listType ?? before.listType, scope: before.scope, scopeId: before.scopeId, patternType, pattern };
+    const same = await prisma.blacklist.findMany({ where: identity, select: { id: true } });
+    const dup = same.find((r) => r.id !== id);
+    if (dup) { res.status(409).json({ error: 'entry exists already', id: dup.id }); return; }
+  }
   const row = await prisma.blacklist.update({ where: { id }, data });
   const changes: Record<string, { from: string; to: string }> = {};
   for (const [k, v] of Object.entries(data)) {

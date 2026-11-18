@@ -112,6 +112,11 @@ test('patch / delete with audit diff; USER-JUNK rows are not reachable; invalid 
   assert.equal((await call('PATCH', `/sender-lists/${id}`, undefined, { active: false, comment: 'paused' })).status, 200);
   assert.equal((await call('PATCH', `/sender-lists/${id}`, undefined, { patternType: 'WILDCARD' })).status, 400, 'a@… has no *');
   assert.equal((await call('PATCH', `/sender-lists/${id}`, undefined, { scope: 'USER' })).status, 400, 'strict schema');
+  // review fix: a patch must not create a duplicate of another entry
+  const other = (await (await call('POST', '/sender-lists', undefined, { pattern: 'b@spam.example' })).json() as Row)['id'] as string;
+  assert.equal((await call('PATCH', `/sender-lists/${other}`, undefined, { pattern: 'A@spam.example' })).status, 409);
+  assert.equal((await call('PATCH', `/sender-lists/${other}`, undefined, { pattern: 'b@spam.example', comment: 'same' })).status, 200, 'its own identity is no clash');
+  assert.equal((await call('DELETE', `/sender-lists/${other}`)).status, 200);
   assert.equal((await call('PATCH', '/sender-lists/junk1', undefined, { active: false })).status, 404);
   assert.equal((await call('DELETE', '/sender-lists/junk1')).status, 404);
   assert.equal((await call('DELETE', `/sender-lists/${id}`)).status, 200);
