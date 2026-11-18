@@ -48,9 +48,15 @@ audit entry (`mailbox.foreign.send_as` / `send_on_behalf`) and the copy.
 | Path | When |
 |---|---|
 | Webmail (`/mail/send`, drafts, undo send, scheduled send) | outbound worker, first processing of the job (`foreignSendSource: 'webmail'`) — a cancelled / undone send leaves no copy |
-| JMAP `EmailSubmission/set` from the personal account | outbound worker (`foreignSendSource: 'jmap'`); a submission from the Shared Mailbox account keeps the Email in that mailbox itself |
+| JMAP `EmailSubmission/set` from the personal account | outbound worker (`foreignSendSource: 'jmap'`) |
+| JMAP `EmailSubmission/set` from the Shared Mailbox account | outbound worker, audit only (`foreignSendAuditOnly`): the Email already lives in that mailbox |
 | SMTP submission (587/465) | after delivery / queueing |
 | ActiveSync SendMail / SmartReply / SmartForward | after queueing |
+
+The sender's own Sent copy (webmail `/mail/send`; drafts become the Sent copy
+themselves) is built from the same message as the outbound job
+(`sentCopyMailOptions()` in api-gateway `routes/mail.ts`): it shows the Shared
+Mailbox as From and, on behalf, the user as Sender — plus Bcc.
 
 Set it: BCP → Freigegebene Postfächer → Bearbeiten, `PUT
 /api/v1/admin/shared-mailboxes/:id {sentCopySendAs, sentCopySendOnBehalf}`,
@@ -75,16 +81,23 @@ defaults). Logic in `packages/storage/src/mail-flow.ts`.
   From: matches; accept-only-from needs every known sender to match and refuses
   a message without any sender (null reverse-path and no From:).
   * Port 25 `RCPT TO`: envelope sender → `550 5.7.1 Recipient does not accept mail from this sender`.
+    A null reverse-path is judged at DATA / delivery, where the header From: is known.
   * Port 25 `DATA`: when every local recipient refuses (header From:, size) and
     there is no external one, the DATA reply refuses (550 5.7.1 / 552 5.2.3).
   * Every local delivery (port 25, submission, outbound worker for webmail /
     JMAP / ActiveSync, rule redirects): `storeInboundMessage` returns `policy`
     → not stored, NDR `5.7.1` to the sender (never for a null sender).
+  * The server's own notices — local DSNs / NDRs and dead-letter notices
+    (`StoreOptions.systemNotice`, internal flag) — pass the sender lists and the
+    receive size limit: a restricted mailbox still gets the NDRs of its own mail.
 * **Receive size** — `552 5.2.3 Message exceeds the size limit of the recipient (N MB)`
   at DATA / NDR at delivery.
 * **Send limits** — a per-mailbox value replaces the global one: webmail
   (`413`, recipients `400`), SMTP submission (`552 5.3.4` / `550 5.5.3` at DATA),
-  JMAP (`tooLarge` / `tooManyRecipients`), ActiveSync (Status 120). The
+  JMAP (`tooLarge` / `tooManyRecipients`), ActiveSync (size → Status 122
+  AttachmentIsTooLarge, the only size status of the MS-ASCMD common status codes;
+  recipients → 120 MailSubmissionFailed, as there is no specific code; protocol
+  12.1: HTTP 413 / 500). The
   listener-level message size (SMTP `SIZE`, the webmail request limit) stays the
   transport's upper bound: a per-mailbox value above it has no effect beyond it.
 * **Forwarding** — like a rule `forward`: `Resent-*` fields, envelope sender =
@@ -95,7 +108,10 @@ defaults). Logic in `packages/storage/src/mail-flow.ts`.
   forwarded again and is always kept locally; null-sender messages (bounces,
   DSNs) are never forwarded. Forwarding to the mailbox's own address or alias is
   refused by the API. Transport rules run first; a transport rule that stops the
-  delivery stops the forwarding too.
+  delivery stops the forwarding too. An S/MIME message decrypted for storage is
+  forwarded as received (still encrypted, with the transport rules' header
+  edits) — the plaintext never leaves the server. A Shared Mailbox forwards with
+  its primary address as envelope sender.
 
 ### Admin API, BCP, CLI
 
@@ -137,9 +153,11 @@ the delegating user); `changes` holds `mailboxId`, `source`
 (`webmail|imap|jmap|activesync|smtp`) and counts / folder names.
 
 * **Aggregation** — `open` is written at most once per actor, mailbox and client
-  type per hour (bounded in-process window per service; each client type is
-  served by one process). Writes and sends are written every time, one row per
-  command with a count.
+  type per hour across all processes: `SET NX EX` on the shared Redis client
+  (`claimShared()`); a key the process already holds is answered without Redis.
+  While Redis is not ready, fails or does not answer within 500 ms, a bounded
+  per-process window takes over (at most one row per process and hour). Writes
+  and sends are written every time, one row per command with a count.
 * **On / off** — `ServerSettings.mailboxAccessAuditEnabled` (default on) and the
   global audit switch `auditLogEnabled`; BCP → Einstellungen → Sicherheit.
 * **Retention** — `ServerSettings.mailboxAccessAuditRetentionDays` (default 180,
@@ -163,4 +181,4 @@ read access.
 * jmap-server: `mailbox-mgmt.test.ts`; activesync: `commands/directory-hidden.test.ts`, `commands/send-mail.test.ts`
 * api-gateway: `routes/mailbox-mgmt.test.ts`, `routes/contacts.test.ts`; cli: `commands/mail-flow.test.ts`
 * BCP `lib/mailFlow.test.ts`, webmail `lib/mailboxAccessLog.test.ts`
-* e2e step `mailbox-mgmt` (GAL hidden, forwarding with / without copy, reject-from 550 on port 25, send-as copy in `Shared/<box>/Sent`, audit filter, auto-mapping)
+* e2e step `mailbox-mgmt` (GAL hidden, forwarding with / without copy, reject-from 550 on port 25, send-as copy in `Shared/<box>/Sent`, From of the own Sent copy of a webmail send as, audit filter, auto-mapping)

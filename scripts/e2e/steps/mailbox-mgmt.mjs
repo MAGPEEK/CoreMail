@@ -1,6 +1,7 @@
 // Step: 9.4 mailbox management — hidden from the address list, admin forwarding
 // with / without a kept copy, reject-from refused with 550 5.7.1 on port 25,
-// send-as copy in the shared mailbox's Sent folder, auto-mapping and the
+// send-as copy in the shared mailbox's Sent folder, the From of the own Sent
+// copy of a webmail send as, auto-mapping and the
 // mailbox access audit ("Postfachzugriffe").
 import {
   check, assert, creds, http, session, buildMime, imapCmd, imapQuote, waitFor, sleep, PORTS, DOMAIN,
@@ -15,6 +16,19 @@ async function findSubject(user, pass, subject, folder = 'INBOX') {
     if (sel.status !== 'OK') return [];
     const x = await imapCmd(im, `UID SEARCH SUBJECT ${imapQuote(subject)}`);
     return (x.lines.find((l) => l.startsWith('* SEARCH')) ?? '').split(' ').slice(2).filter(Boolean);
+  } finally { im.close(); }
+}
+
+/** One header field of a message (IMAP BODY.PEEK[HEADER.FIELDS]), unfolded. */
+async function headerField(user, pass, folder, uid, field) {
+  const im = await imapLogin(user, pass);
+  try {
+    const sel = await imapCmd(im, `EXAMINE ${imapQuote(folder)}`);
+    if (sel.status !== 'OK') return null;
+    const f = await imapCmd(im, `UID FETCH ${uid} (BODY.PEEK[HEADER.FIELDS (${field.toUpperCase()})])`);
+    const text = f.literals.map((b) => b.toString('latin1')).join('\r\n').replace(/\r?\n[ \t]+/g, ' ');
+    const m = new RegExp(`^${field}:\\s*(.*)$`, 'im').exec(text);
+    return m ? m[1].trim() : null;
   } finally { im.close(); }
 }
 
@@ -98,6 +112,21 @@ export async function run(state) {
       { timeout: 30000, what: 'copy in Shared/<team>/Sent' });
     await http('PUT', `/api/v1/admin/shared-mailboxes/${state.shared.id}`, { token: admin, body: { sentCopySendAs: false } });
     return `Shared/${state.shared.email}/Sent`;
+  });
+
+  await check('mailbox-mgmt: webmail send as → the own Sent copy shows the shared mailbox as From', async () => {
+    const subject = `E2E own sent copy ${Date.now()}`;
+    const r = await http('POST', '/api/v1/mail/send', {
+      token: A, body: { to: [userB], subject, bodyText: 'sent as the team', sendAs: state.shared.email },
+    });
+    assert(r.status === 200, `send ${r.status} ${r.text.slice(0, 200)}`);
+    const from = await waitFor(async () => {
+      const [uid] = await findSubject(userA, c.userA, subject, 'Sent');
+      return uid ? headerField(userA, c.userA, 'Sent', uid, 'From') : null;
+    }, { timeout: 30000, what: 'own Sent copy' });
+    assert(from.toLowerCase().includes(state.shared.email.toLowerCase()), `From of the own Sent copy: ${from}`);
+    assert(!from.toLowerCase().includes(userA.toLowerCase()), `own address in From: ${from}`);
+    return from;
   });
 
   await check('mailbox-mgmt: mailbox access audit lists the send-as ("Postfachzugriffe" filter)', async () => {
