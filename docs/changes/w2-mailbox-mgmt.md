@@ -16,7 +16,7 @@ SemVer: MINOR (additive schema, new endpoints/fields/options; no removed or chan
 
 ### Fixed (review)
 - Webmail send as / on behalf of a Shared Mailbox: the sender's own Sent copy showed the user's address as From and no Sender. It is now built from the same message as the outbound job (From = the box, Sender = the user for on behalf, the job's Date and Message-ID, plus Bcc).
-- Mailbox access audit: the hourly `open` aggregation is shared across processes (Redis `SET NX EX` on the shared client) with the per-process window as fallback while Redis is unavailable.
+- Mailbox access audit: the hourly `open` aggregation is shared across processes (Redis `SET NX EX` on the process's shared client, new core helper `peekRedisClient()` — the audit never opens a connection itself) with the per-process window as fallback while Redis is unavailable.
 - ActiveSync: a message over the sender's per-mailbox size limit is refused with Status 122 (AttachmentIsTooLarge, the MS-ASCMD size status) instead of 120; protocol 12.1 devices get HTTP 413 instead of 500 (no endless resend). Too many recipients stays 120 (no specific status exists).
 - Accept-only-from no longer refuses a null reverse-path at RCPT TO before the header From: is known (now judged at DATA / delivery, as documented).
 - The server's own DSNs / NDRs and dead-letter notices reach mailboxes with accept-only-from / reject-from lists or a receive size limit.

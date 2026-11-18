@@ -153,8 +153,9 @@ the delegating user); `changes` holds `mailboxId`, `source`
 (`webmail|imap|jmap|activesync|smtp`) and counts / folder names.
 
 * **Aggregation** — `open` is written at most once per actor, mailbox and client
-  type per hour across all processes: `SET NX EX` on the shared Redis client
-  (`claimShared()`); a key the process already holds is answered without Redis.
+  type per hour across all processes: `SET NX EX` on the process's shared Redis
+  client (`claimShared()`, via core `peekRedisClient()` — it never opens a
+  connection itself); a key the process already holds is answered without Redis.
   While Redis is not ready, fails or does not answer within 500 ms, a bounded
   per-process window takes over (at most one row per process and hour). Writes
   and sends are written every time, one row per command with a count.
