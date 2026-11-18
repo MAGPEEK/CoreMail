@@ -84,3 +84,43 @@ test('rights still valid: the held message is sent', async () => {
   };
   assert.equal(await refuseRevokedSender(job, RAW, deps), null);
 });
+
+test('review: only still open recipients are refused — none delivered before, no second NDR on an admin retry', async () => {
+  const bounces: Array<Record<string, unknown>> = [];
+  const job = {
+    id: 'api-3',
+    data: { messageId: 'j3', from: 'team@corp.test', to: ['x@ext.test', 'y@ext.test'], senderUserId: 'u1', deliveredRcpts: ['x@ext.test'] } as Job,
+    async updateData(d: Job) { this.data = d; },
+  };
+  const deps = {
+    check: async () => ({ ok: false, reason: 'From address <team@corp.test> not allowed' }),
+    userEmail: async () => 'bob@corp.test',
+    bounce: async (o: unknown) => { bounces.push(o as Record<string, unknown>); },
+    hostname: async () => 'mail.corp.test',
+    cancelScheduled: async () => undefined,
+  };
+  assert.ok(await refuseRevokedSender(job, RAW, deps));
+  assert.deepEqual((bounces[0]!['recipients'] as Array<{ rcpt: string }>).map((r) => r.rcpt), ['y@ext.test'], 'x was delivered on an earlier attempt');
+  assert.deepEqual(bounces[0]!['originalTo'], ['y@ext.test']);
+  assert.deepEqual(job.data.bouncedRcpts, ['y@ext.test']);
+
+  // admin "Retry" of the dead letter: the progress is kept, the job is refused again without an NDR
+  const again = await refuseRevokedSender(job, RAW, deps);
+  assert.ok(again && again.name === 'UnrecoverableError');
+  assert.equal(bounces.length, 1, 'no second NDR');
+});
+
+test('review: messages as the webmail builds them pass with the current rights (no false cancellation)', async () => {
+  const build = (o: Record<string, unknown>) => storage.buildCrlfMime({ to: 'x@ext.test', subject: 's', text: 'b', ...o });
+  const own = await build({ from: { name: 'Jürgen Müller-Lüdenscheidt, Abteilung Vertrieb', address: 'bob@corp.test' } });
+  assert.equal(storage.evaluateSubmissionSender(own, 'bob@corp.test', ['bob@corp.test']).ok, true, 'own address, non-ASCII display name');
+  const onBehalf = await build({ from: { name: 'Team', address: 'team@corp.test' }, sender: '"Bob, Sales" <bob@corp.test>' });
+  assert.equal(storage.evaluateSubmissionSender(onBehalf, 'team@corp.test', ['bob@corp.test'], ['team@corp.test']).ok, true, 'on behalf');
+  const sendAs = await build({ from: { name: 'Team', address: 'Team@Corp.Test' } });
+  assert.equal(storage.evaluateSubmissionSender(sendAs, 'team@corp.test', ['bob@corp.test', 'team@corp.test']).ok, true, 'send as, mixed case');
+  // nodemailer writes the A-label into From — the account may be stored with the U-label
+  const idn = await build({ from: { name: 'Anna', address: 'anna@bücher.example' } });
+  assert.match(idn.toString(), /anna@xn--bcher-kva\.example/);
+  assert.equal(storage.evaluateSubmissionSender(idn, 'anna@bücher.example', ['anna@bücher.example']).ok, true, 'IDN: either spelling');
+  assert.equal(storage.evaluateSubmissionSender(idn, 'anna@xn--bcher-kva.example', ['anna@bücher.example']).ok, true);
+});

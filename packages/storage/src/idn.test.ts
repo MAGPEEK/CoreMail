@@ -45,3 +45,13 @@ test('mail flow lists: Unicode and punycode spellings match each other (entries 
   assert.equal(senderRefusal({ acceptFrom: [], rejectFrom: [A] }, [`spam@${U}`]), SENDER_REFUSED_REPLY);
   assert.equal(senderRefusal({ acceptFrom: [U], rejectFrom: [] }, [`ok@${A}`]), null);
 });
+
+test('sender identity: an allowed address matches in either IDN spelling (From, Sender, envelope)', async () => {
+  const { isSenderAddressAllowed, evaluateHeaderSenders } = await import('./sender-identity.js');
+  assert.equal(isSenderAddressAllowed(`<Anna@${A}>`, [`anna@${U}`]), true);
+  assert.equal(isSenderAddressAllowed(`anna@${U}`, [`anna@${A}`]), true);
+  assert.equal(isSenderAddressAllowed(`anna@other.example`, [`anna@${A}`]), false);
+  const raw = Buffer.from(`From: Team <team@${A}>\r\nSender: <anna@${A}>\r\n\r\nb\r\n`);
+  assert.equal(evaluateHeaderSenders(raw, [`anna@${U}`], [`team@${U}`]).ok, true);
+  assert.equal(evaluateHeaderSenders(raw, [`anna@${U}`], []).ok, false, 'on-behalf right still required');
+});

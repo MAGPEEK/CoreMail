@@ -12,18 +12,29 @@
 import { prisma } from './prisma/index.js';
 import { findBodyStart, parseHeaderFields } from './mime/tree.js';
 import { addressesOf } from './mime/address.js';
+import { canonicalAddress } from './idn.js';
 
 /** Lower-case and strip angle brackets/whitespace from an address. */
 export function normalizeSenderAddress(address: string): string {
   return address.trim().replace(/^<|>$/g, '').trim().toLowerCase();
 }
 
+/**
+ * Comparison key of a sender address (9.4 review): normalized, an
+ * internationalized domain as A-label — nodemailer writes A-labels into
+ * From/Sender, an SMTPUTF8 client may use U-labels, the account may be stored
+ * in either spelling.
+ */
+function senderKey(address: string): string {
+  return canonicalAddress(address);
+}
+
 /** Pure: is `address` one of the allowed sender addresses? */
 export function isSenderAddressAllowed(address: string, allowed: Iterable<string>): boolean {
-  const wanted = normalizeSenderAddress(address);
+  const wanted = senderKey(address);
   if (!wanted) return false;
   for (const a of allowed) {
-    if (normalizeSenderAddress(a) === wanted) return true;
+    if (senderKey(a) === wanted) return true;
   }
   return false;
 }
@@ -121,14 +132,14 @@ export function evaluateHeaderSenders(
   if (froms.length > 1) return { ok: false, reason: 'multiple From header fields' };
   if (senders.length > 1) return { ok: false, reason: 'multiple Sender header fields' };
 
-  const allowedSet = new Set([...allowed].map(normalizeSenderAddress));
-  const onBehalfSet = new Set([...onBehalf].map(normalizeSenderAddress));
+  const allowedSet = new Set([...allowed].map(senderKey));
+  const onBehalfSet = new Set([...onBehalf].map(senderKey));
 
   let senderOk = false;
   if (senders.length === 1) {
     const addrs = addressesOf(senders[0] ?? '');
     if (addrs.length !== 1) return { ok: false, reason: 'Sender must contain exactly one address' };
-    if (!allowedSet.has(normalizeSenderAddress(addrs[0] ?? ''))) {
+    if (!allowedSet.has(senderKey(addrs[0] ?? ''))) {
       return { ok: false, reason: `Sender address <${addrs[0]}> not allowed` };
     }
     senderOk = true;
@@ -137,7 +148,7 @@ export function evaluateHeaderSenders(
   const fromAddrs = addressesOf(froms[0] ?? '');
   if (fromAddrs.length === 0) return { ok: false, reason: 'From contains no address' };
   for (const a of fromAddrs) {
-    const n = normalizeSenderAddress(a);
+    const n = senderKey(a);
     if (allowedSet.has(n)) continue;
     if (senderOk && onBehalfSet.has(n)) continue;
     return { ok: false, reason: `From address <${a}> not allowed` };
