@@ -8,15 +8,16 @@ import type { Editor } from '@tiptap/react';
 import {
   AlignCenter, AlignJustify, AlignLeft, AlignRight, Baseline, Bold, CalendarDays, Code, Heading, Highlighter,
   Image as ImageIcon, IndentDecrease, IndentIncrease, Italic, Link2, List, ListOrdered, Minus, Paperclip, PenLine,
-  Redo2, RemoveFormatting, Smile, Strikethrough, TextQuote, Type, Underline, Undo2, Unlink, ALargeSmall,
+  Redo2, RemoveFormatting, Smile, Strikethrough, Table as TableIcon, TextQuote, Type, Underline, Undo2, Unlink, ALargeSmall,
 } from 'lucide-react';
 import { CommandBar, type CommandGroup, type CommandItem } from '../CommandBar.js';
 import type { ContextMenuItem } from '../ContextMenu.js';
 import { signatureMenu } from './ComposeCommandRow.js';
 import {
-  COMPOSE_FONTS, COMPOSE_FONT_SIZES, HIGHLIGHT_COLORS, PARAGRAPH_STYLES, TEXT_COLORS, dateTimeInsertOptions, fontLabel,
-  sizeLabel, type ContentColor, type ParagraphStyleId,
+  HIGHLIGHT_COLORS, NEW_TABLE, PARAGRAPH_STYLES, TABLE_COMMANDS, TEXT_COLORS, dateTimeInsertOptions, type ContentColor,
+  type ParagraphStyleId, type TableCommandId,
 } from '../../lib/composeFormat.js';
+import { COMPOSE_FONT_SIZES_PT, FONT_SCRIPTS, findFont, fontsOf, sizeLabel, sizeValue } from '../../lib/composeFonts.js';
 import { insertCommands, ribbonTabs, type InsertCommandId, type RibbonTabId } from '../../lib/composeRules.js';
 import { nextRovingIndex } from '../../lib/toolbarNav.js';
 import type { NamedSignature } from '../../lib/signaturePick.js';
@@ -114,13 +115,21 @@ function editorCommands(e: Editor | null, t: T, p: Props): Record<string, Comman
     style: menuItem('style', 'compose_style', <Heading size={15} />, () => PARAGRAPH_STYLES.map((id) => ({
       label: t(`compose_style_${id}` as TranslationKey), checked: !!e && activeStyle(e) === id, onClick: run((ed) => applyStyle(ed, id)),
     }))),
+    // Fonts by script (submenus), each name shown in its own font
     font: menuItem('font', 'compose_font', <Type size={15} />, () => [
-      { label: t('compose_font_default'), checked: !fontLabel(font), onClick: run((ed) => ed.chain().focus().unsetFontFamily().run()) },
-      ...COMPOSE_FONTS.map((f) => ({ label: f.label, checked: fontLabel(font) === f.label, onClick: run((ed) => ed.chain().focus().setFontFamily(f.value).run()) })),
+      { label: t('compose_font_default'), checked: !findFont(font), onClick: run((ed) => ed.chain().focus().unsetFontFamily().run()) },
+      { type: 'divider' },
+      ...FONT_SCRIPTS.map((script): ContextMenuItem => ({
+        label: t(`compose_fonts_${script}` as TranslationKey),
+        children: fontsOf(script).map((f) => ({
+          label: f.label, labelStyle: { fontFamily: f.stack }, checked: findFont(font)?.label === f.label,
+          onClick: run((ed) => ed.chain().focus().setFontFamily(f.stack).run()),
+        })),
+      })),
     ]),
     size: menuItem('size', 'compose_size', <ALargeSmall size={15} />, () => [
       { label: t('compose_size_default'), checked: !size, onClick: run((ed) => ed.chain().focus().setMark('textStyle', { fontSize: null }).run()) },
-      ...COMPOSE_FONT_SIZES.map((s) => ({ label: sizeLabel(s), checked: size === s, onClick: run((ed) => ed.chain().focus().setMark('textStyle', { fontSize: s }).run()) })),
+      ...COMPOSE_FONT_SIZES_PT.map(sizeValue).map((s) => ({ label: sizeLabel(s), checked: size === s, onClick: run((ed) => ed.chain().focus().setMark('textStyle', { fontSize: s }).run()) })),
     ]),
     color: menuItem('color', 'compose_color', <Baseline size={15} />, () => colorMenu(TEXT_COLORS, textColor, 'compose_color_', t, (hex) => {
       if (!e) return;
@@ -133,10 +142,37 @@ function editorCommands(e: Editor | null, t: T, p: Props): Record<string, Comman
   };
 }
 
+/** Runs a table command; true when the editor could (cursor in a table, or insert). */
+function tableCommand(e: Editor, id: TableCommandId, dryRun: boolean): boolean {
+  const chain = dryRun ? e.can().chain() : e.chain().focus();
+  switch (id) {
+    case 'insert': return chain.insertTable(NEW_TABLE).run();
+    case 'rowBefore': return chain.addRowBefore().run();
+    case 'rowAfter': return chain.addRowAfter().run();
+    case 'colBefore': return chain.addColumnBefore().run();
+    case 'colAfter': return chain.addColumnAfter().run();
+    case 'deleteRow': return chain.deleteRow().run();
+    case 'deleteCol': return chain.deleteColumn().run();
+    case 'deleteTable': return chain.deleteTable().run();
+  }
+}
+
+function tableMenu(e: Editor | null, t: T): ContextMenuItem[] {
+  return TABLE_COMMANDS.flatMap((id): ContextMenuItem[] => [
+    ...(id === 'rowBefore' || id === 'deleteRow' ? [{ type: 'divider' as const }] : []),
+    {
+      label: t(`compose_table_${id}` as TranslationKey),
+      ...(e && tableCommand(e, id, true) ? {} : { disabled: true }),
+      onClick: () => { if (e) tableCommand(e, id, false); },
+    },
+  ]);
+}
+
 function insertItems(e: Editor | null, t: T, p: Props): CommandItem[] {
   const all: Record<InsertCommandId, CommandItem> = {
     file: { id: 'file', label: t('compose_file'), icon: <Paperclip size={15} />, onClick: p.actions.attachFile },
     image: { id: 'image', label: t('compose_image'), icon: <ImageIcon size={15} />, onClick: p.actions.insertImage },
+    table: { id: 'table', label: t('compose_table'), icon: <TableIcon size={15} />, menu: () => tableMenu(e, t) },
     link: { id: 'ins-link', label: t('compose_link'), icon: <Link2 size={15} />, onClick: p.actions.openLink },
     emoji: { id: 'emoji', label: t('compose_emoji'), icon: <Smile size={15} />, onClick: p.actions.openEmoji, dialogOpen: p.emojiOpen },
     signature: {

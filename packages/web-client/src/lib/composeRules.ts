@@ -114,18 +114,18 @@ export function scheduleProblem(value: string, now: Date): 'invalid' | 'tooSoon'
 // ── Ribbon ──────────────────────────────────────────────────────────────────
 
 export type RibbonTabId = 'message' | 'insert' | 'format';
-export type InsertCommandId = 'file' | 'image' | 'link' | 'emoji' | 'signature' | 'datetime' | 'rule';
+export type InsertCommandId = 'file' | 'image' | 'table' | 'link' | 'emoji' | 'signature' | 'datetime' | 'rule';
 
 /** Plain-text format has nothing to format: only Einfügen remains. */
 export function ribbonTabs(plain: boolean): RibbonTabId[] {
   return plain ? ['insert'] : ['message', 'insert', 'format'];
 }
 
-/** Einfügen commands; images, links and lines need HTML. */
+/** Einfügen commands; images, tables, links and lines need HTML. */
 export function insertCommands(plain: boolean, hasSignatures: boolean): InsertCommandId[] {
   const all: InsertCommandId[] = plain
     ? ['file', 'emoji', 'signature', 'datetime']
-    : ['file', 'image', 'link', 'emoji', 'signature', 'datetime', 'rule'];
+    : ['file', 'image', 'table', 'link', 'emoji', 'signature', 'datetime', 'rule'];
   return hasSignatures ? all : all.filter((c) => c !== 'signature');
 }
 

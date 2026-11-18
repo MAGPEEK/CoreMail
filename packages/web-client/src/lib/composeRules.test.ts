@@ -6,7 +6,7 @@ import {
   inlineImageProblem, insertCommands, ribbonTabs, schedulePresets, scheduleProblem, visibleRibbonTab,
 } from './composeRules.ts';
 import {
-  COMPOSE_EMOJI, COMPOSE_FONTS, EMOJI_COLUMNS, HIGHLIGHT_COLORS, TEXT_COLORS, dateTimeInsertOptions, fontLabel, gridMove,
+  COMPOSE_EMOJI, EMOJI_COLUMNS, HIGHLIGHT_COLORS, TEXT_COLORS, dateTimeInsertOptions, gridMove,
 } from './composeFormat.ts';
 import { createRuntimeRegistry } from './composeRuntime.ts';
 import { toLocalInput } from './datetime.ts';
@@ -79,7 +79,7 @@ test('custom schedule: in an hour on the full hour; at least 30 s ahead; invalid
 test('ribbon: three tabs for HTML, only Einfügen (file, emoji, signature, date) for plain text', () => {
   assert.deepEqual(ribbonTabs(false), ['message', 'insert', 'format']);
   assert.deepEqual(ribbonTabs(true), ['insert']);
-  assert.deepEqual(insertCommands(false, true), ['file', 'image', 'link', 'emoji', 'signature', 'datetime', 'rule']);
+  assert.deepEqual(insertCommands(false, true), ['file', 'image', 'table', 'link', 'emoji', 'signature', 'datetime', 'rule']);
   assert.deepEqual(insertCommands(true, true), ['file', 'emoji', 'signature', 'datetime']);
   assert.deepEqual(insertCommands(true, false), ['file', 'emoji', 'datetime'], 'no signatures: no picker');
   assert.equal(visibleRibbonTab('format', true), 'insert', 'switching to plain text leaves Format');
@@ -99,12 +99,7 @@ test('status line: loading, saving, failed, locked, saved at …', () => {
   assert.ok(!hasPendingChanges('saved') && !hasPendingChanges('idle') && !hasPendingChanges('locked'));
 });
 
-test('format choices: fonts match Settings → Verfassen, colour ids unique, emoji grid navigation', () => {
-  assert.equal(fontLabel('Arial'), 'Arial', 'Settings store the bare name');
-  assert.equal(fontLabel('"Times New Roman", serif'), 'Times New Roman');
-  assert.equal(fontLabel(undefined), null);
-  assert.equal(fontLabel('Comic Sans MS'), null);
-  assert.equal(new Set(COMPOSE_FONTS.map((f) => f.label)).size, COMPOSE_FONTS.length);
+test('format choices: colour ids unique, emoji grid navigation', () => {
   for (const list of [TEXT_COLORS, HIGHLIGHT_COLORS]) {
     assert.equal(new Set(list.map((c) => c.id)).size, list.length);
     for (const c of list) assert.match(c.hex, /^#[0-9a-f]{6}$/);

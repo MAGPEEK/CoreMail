@@ -1,32 +1,27 @@
 /**
- * 9.4: choices of the compose ribbon — fonts, sizes, colours, paragraph styles,
- * emoji and the date/time formats of "Einfügen → Datum/Uhrzeit". Labels of
+ * 9.4: choices of the compose ribbon — colours, paragraph styles, emoji and
+ * the date/time formats of "Einfügen → Datum/Uhrzeit" (fonts and sizes:
+ * lib/composeFonts.ts). Labels of
  * colours and styles come from the translation table (`compose_color_<id>`,
  * `compose_style_<id>`). Pure — unit-tested with `node --test`.
  */
 import { formatDate, formatTime, localeOf, type RegionalSettings } from './regionalFormat.ts';
 
-/** Same list as Settings → Verfassen (CSS values; '' = the default font). */
-export const COMPOSE_FONTS: ReadonlyArray<{ label: string; value: string }> = [
-  { label: 'Arial', value: 'Arial, sans-serif' },
-  { label: 'Calibri', value: 'Calibri, sans-serif' },
-  { label: 'Georgia', value: 'Georgia, serif' },
-  { label: 'Times New Roman', value: '"Times New Roman", serif' },
-  { label: 'Courier New', value: '"Courier New", monospace' },
-  { label: 'Verdana', value: 'Verdana, sans-serif' },
-  { label: 'Trebuchet MS', value: '"Trebuchet MS", sans-serif' },
+/**
+ * Tables written into a mail: inline styles (mail clients ignore our CSS) —
+ * collapsed borders, a thin grey grid and cell padding; the first row is a
+ * header row. Mail content, not the app theme.
+ */
+export const TABLE_STYLE = 'border-collapse: collapse; margin: 4px 0';
+export const TABLE_CELL_STYLE = 'border: 1px solid #a6a6a6; padding: 4px 8px; vertical-align: top; min-width: 2em';
+export const NEW_TABLE = { rows: 3, cols: 3, withHeaderRow: true } as const;
+
+/** Commands of "Einfügen → Tabelle" (insert first; the others need the cursor in a table). */
+export type TableCommandId =
+  | 'insert' | 'rowBefore' | 'rowAfter' | 'colBefore' | 'colAfter' | 'deleteRow' | 'deleteCol' | 'deleteTable';
+export const TABLE_COMMANDS: readonly TableCommandId[] = [
+  'insert', 'rowBefore', 'rowAfter', 'colBefore', 'colAfter', 'deleteRow', 'deleteCol', 'deleteTable',
 ];
-
-export const COMPOSE_FONT_SIZES: readonly string[] = ['10px', '11px', '12px', '14px', '16px', '18px', '20px', '24px', '28px', '36px'];
-
-export const sizeLabel = (value: string): string => value.replace('px', ' px');
-
-/** The font entry a CSS font-family value belongs to (Settings store the bare name, the editor the CSS list). */
-export function fontLabel(value: string | undefined): string | null {
-  if (!value) return null;
-  const bare = value.split(',')[0]!.replace(/["']/g, '').trim().toLowerCase();
-  return COMPOSE_FONTS.find((f) => f.label.toLowerCase() === bare)?.label ?? null;
-}
 
 export type ParagraphStyleId = 'paragraph' | 'h1' | 'h2' | 'h3' | 'codeBlock';
 export const PARAGRAPH_STYLES: readonly ParagraphStyleId[] = ['paragraph', 'h1', 'h2', 'h3', 'codeBlock'];

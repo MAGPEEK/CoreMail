@@ -4,11 +4,15 @@
  * plain text, save, own window); ✕ Schließen at the end. Shared command bar:
  * one tab stop, ←/→, overflow menu.
  */
-import { CalendarClock, Image as ImageIcon, MailCheck, Paperclip, PenLine, Save, Send, SquareArrowOutUpRight, Trash2, Type, X } from 'lucide-react';
+import {
+  CalendarClock, Flag, Image as ImageIcon, MailCheck, PackageCheck, Paperclip, PenLine, Save, Send, SquareArrowOutUpRight, Trash2, Type, X,
+} from 'lucide-react';
 import { CommandBar, type CommandGroup, type CommandItem } from '../CommandBar.js';
 import type { ContextMenuItem } from '../ContextMenu.js';
 import type { NamedSignature } from '../../lib/signaturePick.js';
+import { IMPORTANCE_LEVELS, type Importance } from '../../lib/importance.js';
 import { useT } from '../../i18n/useT.js';
+import type { TranslationKey } from '../../i18n/translations.js';
 
 export interface ComposeCommandState {
   canSend: boolean;
@@ -17,6 +21,9 @@ export interface ComposeCommandState {
   plainText: boolean;
   receiptVisible: boolean;
   requestReceipt: boolean;
+  /** 9.4: delivery receipt (success DSN) asked for. */
+  deliveryReceipt: boolean;
+  importance: Importance;
   signatures: NamedSignature[];
   /** The draft is in its own window (no "In neuem Fenster öffnen"). */
   inWindow: boolean;
@@ -30,6 +37,8 @@ export interface ComposeCommandActions {
   insertImage: () => void;
   pickSignature: (id: string) => void;
   toggleReceipt: () => void;
+  toggleDeliveryReceipt: () => void;
+  setImportance: (level: Importance) => void;
   togglePlain: () => void;
   saveDraft: () => void;
   popOut: () => void;
@@ -71,6 +80,16 @@ export function ComposeCommandRow({ state, actions }: { state: ComposeCommandSta
       id: 'receipt', label: t('compose_receipt'), icon: <MailCheck size={15} />, placement: 'overflow' as const,
       pressed: state.requestReceipt, onClick: actions.toggleReceipt,
     }] : []),
+    {
+      id: 'delivery-receipt', label: t('compose_delivery_receipt'), icon: <PackageCheck size={15} />, placement: 'overflow',
+      pressed: state.deliveryReceipt, onClick: actions.toggleDeliveryReceipt,
+    },
+    {
+      id: 'importance', label: t('compose_importance'), icon: <Flag size={15} />, placement: 'overflow',
+      menu: () => IMPORTANCE_LEVELS.map((level): ContextMenuItem => ({
+        label: t(`compose_importance_${level}` as TranslationKey), checked: state.importance === level, onClick: () => actions.setImportance(level),
+      })),
+    },
     { id: 'plain', label: t('compose_plain'), icon: <Type size={15} />, placement: 'overflow', pressed: state.plainText, onClick: actions.togglePlain },
     { id: 'save', label: t('compose_save_draft'), icon: <Save size={15} />, placement: 'overflow', onClick: actions.saveDraft },
     ...(state.inWindow ? [] : [{

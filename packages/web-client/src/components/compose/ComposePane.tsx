@@ -21,7 +21,7 @@ import { PromptDialog } from '../PromptDialog.js';
 import { isModalOpen } from '../Modal.js';
 import { queueHeldSend } from '../DelayedSendToast.js';
 import { attachmentsAfterSave, finishRuntime, type ComposePayload } from './composeRuntime.js';
-import { hasLiveOpener, postToOpener, trackPopout } from './popoutChannel.js';
+import { hasLiveOpener, postToOpenerAndWait, trackPopout } from './popoutChannel.js';
 import { hasQuotedOriginal } from '../editorExtensions.js';
 import { COMPOSE_EDITOR_CLASS, QUOTE_FOLDED_CLASS, useComposeEditor } from '../../hooks/useComposeEditor.js';
 import { useComposeSender } from '../../hooks/useComposeSender.js';
@@ -40,19 +40,23 @@ import {
   addAttachments, composeFieldVisibility, dragHasFiles, draftStatusText, hasPendingChanges, initialFocus,
   inlineImageProblem, visibleRibbonTab, MAX_ATTACHMENTS, type RibbonTabId,
 } from '../../lib/composeRules.js';
-import { POPOUT_FEATURES, popoutUrl, popoutWindowName, sendMessage } from '../../lib/composePopout.js';
+import { POPOUT_FEATURES, popoutUrl, popoutWindowName, sendMessage, type SendFlags } from '../../lib/composePopout.js';
+import { toImportance, type Importance } from '../../lib/importance.js';
 import { isDraftAttachment } from '../../lib/draft-autosave.js';
 import { deleteDraft, sendDraft, unsendDraft, type LoadedDraft, type SavedDraftResponse } from '../../lib/draft-api.js';
 import { needsAttachmentReminder } from '../../lib/attachmentReminder.js';
 import { receiptRequestOption } from '../../lib/readBehaviour.js';
 import { formatLongDateTime, formatTime } from '../../lib/regionalFormat.js';
+import { composeTextDefaults } from '../../lib/composeFonts.js';
 import { OWN_MAILBOX, senderDraftFields, senderFromDraft, senderKey } from '../../lib/mailboxContext.js';
 import { toastError } from '../../lib/errors.js';
 import { fmt, useT } from '../../i18n/useT.js';
 
 export type ComposeOutcome =
   | { kind: 'closed'; draftId: string | null; subject: string }
-  | { kind: 'sent' } | { kind: 'scheduled' } | { kind: 'discarded' } | { kind: 'handedOff' } | { kind: 'poppedOut' };
+  | { kind: 'sent' } | { kind: 'scheduled' } | { kind: 'discarded' } | { kind: 'handedOff' } | { kind: 'poppedOut' }
+  /** The draft is already open in a compose window (that window came to the front). */
+  | { kind: 'elsewhere' };
 
 export type ComposeVariant = 'inline' | 'window';
 
@@ -113,6 +117,8 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
   const [attachments, setAttachments] = useState<ComposeAttachment[]>(restore?.attachments ?? []);
   const [plainText, setPlainText] = useState(restore?.plainText ?? composePrefs.format === 'plain');
   const [requestReceipt, setRequestReceipt] = useState(restore?.requestReceipt ?? receiptOption.checked);
+  const [deliveryReceipt, setDeliveryReceipt] = useState(restore?.deliveryReceipt ?? false);
+  const [importance, setImportance] = useState<Importance>(restore?.importance ?? 'normal');
   const [quoteFolded, setQuoteFolded] = useState(restore?.quoteFolded ?? false);
   const [ribbonTab, setRibbonTab] = useState<RibbonTabId>('message');
   const [scheduling, setScheduling] = useState(false);
@@ -156,6 +162,7 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
       ...(th.inReplyTo ? { inReplyTo: th.inReplyTo } : {}),
       ...(th.references ? { references: th.references } : {}),
       ...senderDraftFields(sender.selected),
+      importance,
       keepAttachmentIds: attachments.filter(isDraftAttachment).map((a) => a.id),
       files: attachments.filter((a): a is File => !isDraftAttachment(a)),
       snapshot: [...attachments],
@@ -166,7 +173,7 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
     to: recipientList(to), cc: recipientList(cc), bcc: recipientList(bcc), subject,
     bodyHtml: editorHtml(), attachments: [...attachments],
     showCc, showBcc, fromKey: sender.fromKey, draftSender: sender.draftSender,
-    requestReceipt, plainText, quoteFolded, signature: signature.state(), threading: threading.current,
+    requestReceipt, deliveryReceipt, importance, plainText, quoteFolded, signature: signature.state(), threading: threading.current,
     ...(bodyBuilt.current ? {} : { bodyPending: true }),
     ...(forwardPending ? { forwardPending: true } : {}),
   });
@@ -188,6 +195,7 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
     const fromDraft = senderFromDraft(d.sendAs, d.sendOnBehalfOf, sender.ownEmail);
     sender.setDraftSender(fromDraft);
     sender.setFromKey(fromDraft ? senderKey(fromDraft) : 'self:');
+    setImportance(toImportance(d.importance));
     if (!d.bodyHtml && d.bodyText) setPlainText(true);
     editor?.commands.setContent(d.bodyHtml || textToParagraphsHtml(d.bodyText));
     setQuoteFolded(!!d.inReplyTo && isLongQuote(quotedPart(d.bodyHtml)));
@@ -207,6 +215,8 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
   const forwardLoadingRef = useRef(false);
   const { runtime, saveInfo, draftLoading } = useComposeDraft({
     tabKey: tab.key, ctx, editor, loadFromServer, payload,
+    // 9.4: a draft open in a compose window is not opened inline a second time
+    ...(variant === 'inline' ? { onElsewhere: () => { toast(t('compose_open_elsewhere')); end({ kind: 'elsewhere' }); } } : {}),
     freeze: () => (draftLoaded.current ? snapshot(forwardLoadingRef.current) : null),
     onLoaded, onSaved,
   });
@@ -237,7 +247,7 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
     replyOrForward: mode !== 'new',
     signatureKey: sender.signatureKey,
     quoteHtml,
-    fontDefaults: composePrefs,
+    fontDefaults: composeTextDefaults(composePrefs),
     initial: restore?.signature,
     onBuilt: (quote) => {
       bodyBuilt.current = true;
@@ -326,7 +336,11 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
     const forgotten = needsAttachmentReminder(composePrefs.attachmentReminder, attachments.length, subject, editorHtml());
     return !forgotten || window.confirm(fmt(t('compose_attachment_reminder'), { word: forgotten }));
   };
-  const receiptFlag = () => (requestReceipt && receiptOption.visible ? { requestReceipt: true } : {});
+  const sendFlags = (): SendFlags => ({ requestReceipt: requestReceipt && receiptOption.visible, requestDeliveryReceipt: deliveryReceipt });
+  const sendOptions = () => {
+    const f = sendFlags();
+    return { ...(f.requestReceipt ? { requestReceipt: true } : {}), ...(f.requestDeliveryReceipt ? { requestDeliveryReceipt: true } : {}) };
+  };
 
   /**
    * Senden / Ctrl+Enter: the mail is saved as a server draft and handed to the
@@ -337,13 +351,17 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
   const send = () => {
     if (!readyToSend()) return;
     if (variant === 'window' && hasLiveOpener()) { void handOffSend(); return; }
+    sendHere();
+  };
+
+  const sendHere = () => {
     const restoreSnapshot = snapshot();
     const baseCtx = ctx;
     queueHeldSend({
       delaySec: sendDelaySec,
       start: async () => {
         const id = await saveNow();
-        await sendDraft(id, { undoDelaySec: sendDelaySec, ...receiptFlag() });
+        await sendDraft(id, { undoDelaySec: sendDelaySec, ...sendOptions() });
         return id;
       },
       undo: (id) => unsendDraft(id),
@@ -356,17 +374,23 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
     end({ kind: 'sent' });
   };
 
+  /**
+   * Own window: the main window sends (and answers `accepted`). Without an
+   * answer — main window reloaded, busy or gone — this window sends itself;
+   * the server's send claim keeps it to one send either way.
+   */
   const handOffSend = async () => {
     busyAction.current = true;
     try {
       const id = await saveNow();
-      postToOpener(sendMessage(id, !!receiptFlag().requestReceipt));
-      end({ kind: 'handedOff' });
+      if (await postToOpenerAndWait(sendMessage(id, sendFlags()))) { end({ kind: 'handedOff' }); return; }
     } catch (err) {
       toastError(err);
+      return;
     } finally {
       busyAction.current = false;
     }
+    sendHere();
   };
 
   const schedule = async (date: Date) => {
@@ -376,7 +400,7 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
     setScheduling(true);
     try {
       const id = await saveNow();
-      await sendDraft(id, { scheduledAt: date.toISOString(), ...receiptFlag() });
+      await sendDraft(id, { scheduledAt: date.toISOString(), ...sendOptions() });
       toast.success(fmt(t('compose_scheduled'), { date: formatLongDateTime(date, regional) }));
       invalidateMail();
       end({ kind: 'scheduled' });
@@ -494,6 +518,8 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
     insertImage: () => imageInput.current?.click(),
     pickSignature: (id) => { signature.pick(id); touch(); },
     toggleReceipt: () => setRequestReceipt((v) => !v),
+    toggleDeliveryReceipt: () => setDeliveryReceipt((v) => !v),
+    setImportance: (level) => { setImportance(level); touch(); },
     togglePlain,
     saveDraft: saveDraftNow,
     popOut: () => { void popOut(); },
@@ -544,7 +570,7 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
     >
       <ComposeCommandRow
         state={{
-          canSend, sendBlockedReason, plainText, receiptVisible: receiptOption.visible, requestReceipt,
+          canSend, sendBlockedReason, plainText, receiptVisible: receiptOption.visible, requestReceipt, deliveryReceipt, importance,
           signatures: signature.signatures, inWindow: variant === 'window',
         }}
         actions={commandActions}

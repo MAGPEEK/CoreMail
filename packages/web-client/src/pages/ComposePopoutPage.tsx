@@ -4,15 +4,18 @@
  * the mail to the main window (undo toast there), closing (✕, Esc) saves and
  * returns the draft to the main window's tab strip. Closing the browser window
  * with unsaved changes asks first and saves; the draft returns as well.
+ * The window answers "is this draft open?" for every id the draft had (the
+ * main window then brings it to the front instead of opening it inline) and
+ * keeps its address on the current id (a reload loads the current version).
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { ComposePane, type ComposeOutcome } from '../components/compose/ComposePane.js';
 import { composeRuntimes } from '../components/compose/composeRuntime.js';
-import { postToOpener } from '../components/compose/popoutChannel.js';
+import { postToOpener, serveDraftPresence } from '../components/compose/popoutChannel.js';
 import { useSendGuard } from '../components/DelayedSendToast.js';
 import { useUiStore } from '../store/ui.js';
-import { isDraftId, returnedMessage } from '../lib/composePopout.js';
+import { isDraftId, popoutUrl, returnedMessage } from '../lib/composePopout.js';
 import { hasPendingChanges } from '../lib/composeRules.js';
 import { tabTitle } from '../lib/composeTabs.js';
 import { OWN_MAILBOX } from '../lib/mailboxContext.js';
@@ -50,15 +53,28 @@ function useWindowCloseGuard(draftId: string): void {
   }, [draftId]);
 }
 
+/** Presence for every id the draft had; the address follows the current id. */
+function useDraftWindowIdentity(openedId: string, currentId: string | null | undefined): void {
+  const held = useRef(new Set<string>([openedId]));
+  useEffect(() => serveDraftPresence(() => held.current), []);
+  useEffect(() => {
+    if (!currentId || !isDraftId(currentId)) return;
+    held.current.add(currentId);
+    if (window.location.pathname !== popoutUrl(currentId)) window.history.replaceState(window.history.state, '', popoutUrl(currentId));
+  }, [currentId]);
+}
+
 export function ComposePopoutPage() {
   const t = useT();
   const { draftId = '' } = useParams<{ draftId: string }>();
   const valid = isDraftId(draftId);
   const activeKey = useUiStore((s) => s.compose.activeKey);
   const subject = useUiStore((s) => s.compose.tabs.find((x) => x.key === s.compose.activeKey)?.subject ?? '');
+  const currentId = useUiStore((s) => s.compose.tabs.find((x) => x.key === s.compose.activeKey)?.draftId);
   const [done, setDone] = useState<Done>(null);
   useSendGuard();
   useWindowCloseGuard(draftId);
+  useDraftWindowIdentity(draftId, currentId);
 
   useEffect(() => {
     if (valid) useUiStore.getState().openCompose({ mode: 'new', draftId, mailbox: OWN_MAILBOX });

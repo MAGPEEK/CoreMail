@@ -11,6 +11,7 @@ import {
   type ComposeTab, type ComposeTabsState, type OpenOptions, type TabPatch,
 } from '../lib/composeTabs.js';
 import { subjectFor, type ComposeMode } from '../lib/composeQuote.js';
+import type { Importance } from '../lib/importance.js';
 
 export type { ComposeMode };
 /** A local file, or an attachment already stored with the server draft. */
@@ -32,6 +33,10 @@ export interface ComposeSnapshot {
   fromKey?: string | null;
   draftSender?: SenderOption | undefined;
   requestReceipt?: boolean;
+  /** 9.4: delivery receipt (success DSN) asked for */
+  deliveryReceipt?: boolean;
+  /** 9.4: Wichtigkeit hoch / normal / niedrig */
+  importance?: Importance;
   plainText?: boolean;
   quoteFolded?: boolean;
   /** Identity whose signature was placed, and the block as placed (undefined = unknown). */

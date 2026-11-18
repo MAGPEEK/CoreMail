@@ -12,6 +12,7 @@ import type { SaveStatus } from '../lib/draft-autosave.js';
 import { toastError } from '../lib/errors.js';
 import { useUiStore, type ComposeContext, type ComposeSnapshot } from '../store/ui.js';
 import { composeRuntime, frozenBindings, type ComposePayload, type ComposeRuntime } from '../components/compose/composeRuntime.js';
+import { askDraftWindow } from '../components/compose/popoutChannel.js';
 
 export interface SaveInfo { status: SaveStatus; savedAt?: string }
 
@@ -26,6 +27,12 @@ export function useComposeDraft(o: {
   freeze: () => ComposeSnapshot | null;
   onLoaded: (d: LoadedDraft) => void;
   onSaved: (saved: SavedDraftResponse, state: ComposePayload) => void;
+  /**
+   * 9.4: set for the inline compose — before a server draft is loaded, a
+   * compose window holding it is asked (and comes to the front); then this is
+   * called instead of loading.
+   */
+  onElsewhere?: () => void;
 }): { runtime: ComposeRuntime; saveInfo: SaveInfo; draftLoading: boolean } {
   const [runtime] = useState(() => composeRuntime(o.tabKey, o.ctx.draftId ?? null));
   const [saveInfo, setSaveInfo] = useState<SaveInfo>(() => ({
@@ -71,13 +78,19 @@ export function useComposeDraft(o: {
   useEffect(() => {
     const { editor, loadFromServer, ctx } = latest.current;
     if (!loadFromServer || !ctx.draftId || !editor) return;
+    const draftId = ctx.draftId;
     let cancelled = false;
-    loadDraft(ctx.draftId).then((d) => {
+    const tabDraftId = useUiStore.getState().compose.tabs.find((t) => t.key === latest.current.tabKey)?.draftId;
+    const elsewhere = latest.current.onElsewhere ? askDraftWindow([draftId, tabDraftId]) : Promise.resolve(false);
+    elsewhere.then(async (found) => {
+      if (cancelled) return;
+      if (found) { latest.current.onElsewhere?.(); return; }
+      const d = await loadDraft(draftId);
       if (cancelled) return;
       latest.current.onLoaded(d);
       runtime.savedAt = d.savedAt;
       setSaveInfo({ status: 'saved', savedAt: d.savedAt });
-    }, (err: unknown) => {
+    }).catch((err: unknown) => {
       if (!cancelled) toastError(err);
     }).finally(() => { if (!cancelled) setDraftLoading(false); });
     return () => { cancelled = true; };

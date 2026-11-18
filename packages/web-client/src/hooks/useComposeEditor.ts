@@ -1,8 +1,9 @@
 /**
  * 9.4: the Tiptap editor of the compose area. Same extensions as before
  * (formatting, colours, fonts, sizes, links, inline images incl. data: URIs,
- * the signature block) plus the quote marker. Pasting an image file inserts it
- * (raster images only, lib/composeRules.ts inlineImageProblem).
+ * the signature block) plus the quote marker and tables (also those of a
+ * quoted original, which were flattened before). Pasting an image file inserts
+ * it (raster images only, lib/composeRules.ts inlineImageProblem).
  */
 import { useRef } from 'react';
 import { useEditor } from '@tiptap/react';
@@ -14,6 +15,11 @@ import { Color } from '@tiptap/extension-color';
 import TextStyle from '@tiptap/extension-text-style';
 import Highlight from '@tiptap/extension-highlight';
 import FontFamilyExt from '@tiptap/extension-font-family';
+import Table from '@tiptap/extension-table';
+import TableRow from '@tiptap/extension-table-row';
+import TableHeader from '@tiptap/extension-table-header';
+import TableCell from '@tiptap/extension-table-cell';
+import { TABLE_CELL_STYLE, TABLE_STYLE } from '../lib/composeFormat.js';
 import { FontSizeExt, InlineImageExt, QuoteMarkerExt, SignatureBlockExt } from '../components/editorExtensions.js';
 
 /** Editor area classes: headings, quotes (the quoted original without italics), lists, code, links. */
@@ -31,6 +37,7 @@ export const COMPOSE_EDITOR_CLASS = [
   '[&_.ProseMirror_pre]:bg-surface-2 [&_.ProseMirror_pre]:p-3 [&_.ProseMirror_pre]:rounded-lg [&_.ProseMirror_pre]:font-mono [&_.ProseMirror_pre]:text-xs [&_.ProseMirror_pre]:overflow-x-auto [&_.ProseMirror_pre]:my-2',
   '[&_.ProseMirror_a]:text-accent-fg [&_.ProseMirror_a]:underline [&_.ProseMirror_a]:cursor-pointer',
   '[&_.ProseMirror_hr]:border-line [&_.ProseMirror_hr]:my-4',
+  '[&_.ProseMirror_.selectedCell]:bg-accent/10',
   '[&_.ProseMirror_p]:mb-1',
 ].join(' ');
 
@@ -50,12 +57,15 @@ export function useComposeEditor(o: { label: string; onPasteImage: (file: File) 
       Color,
       Highlight.configure({ multicolor: true }),
       FontFamilyExt,
-      // Same as the signature editor: font sizes + images of signatures and
-      // quoted originals must survive (tables are not supported by the editor)
+      // Same as the signature editor: font sizes + images of signatures and quoted originals must survive
       FontSizeExt,
       InlineImageExt,
       SignatureBlockExt,
       QuoteMarkerExt,
+      Table.configure({ resizable: false, HTMLAttributes: { style: TABLE_STYLE } }),
+      TableRow,
+      TableHeader.configure({ HTMLAttributes: { style: TABLE_CELL_STYLE } }),
+      TableCell.configure({ HTMLAttributes: { style: TABLE_CELL_STYLE } }),
     ],
     content: '',
     editorProps: {

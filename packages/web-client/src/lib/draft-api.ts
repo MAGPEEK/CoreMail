@@ -6,6 +6,7 @@ import { api, apiFetch } from '../api/client.js';
 import { ApiError, apiErrorFromBody } from './errors.js';
 import type { DraftAttachmentRef, SavedDraft } from './draft-autosave.js';
 import { draftConflictFromBody, saveDraftWith } from './draft-conflict.js';
+import type { Importance } from './importance.js';
 
 export interface DraftPayload {
   to: string[];
@@ -19,6 +20,8 @@ export interface DraftPayload {
   /** 9.3: send as / on behalf of a shared mailbox (server checks the permission) */
   sendAs?: string;
   sendOnBehalfOf?: string;
+  /** 9.4: Importance / X-Priority (normal: no header). */
+  importance?: Importance;
   /** Attachments of the current server version to keep (by id). */
   keepAttachmentIds: string[];
   /** New local files (uploaded with this save). */
@@ -43,6 +46,8 @@ export interface LoadedDraft {
   /** 9.3: sender mode stored in the draft (From/Sender headers) */
   sendAs?: string | null;
   sendOnBehalfOf?: string | null;
+  /** 9.4: importance stored in the draft (older servers: absent = normal) */
+  importance?: Importance;
   attachments: DraftAttachmentRef[];
 }
 
@@ -89,7 +94,7 @@ export const deleteDraft = (id: string) => api.delete<{ ok: boolean }>(`/mail/dr
  * state could not be stored — that is a success for the caller (never resend);
  * `stateUnsaved` lets the UI mention it.
  */
-export async function sendDraft(id: string, body: { undoDelaySec?: number; scheduledAt?: string; requestReceipt?: boolean }) {
+export async function sendDraft(id: string, body: { undoDelaySec?: number; scheduledAt?: string; requestReceipt?: boolean; requestDeliveryReceipt?: boolean }) {
   try {
     return await api.post<{ ok: boolean; jobId: string; scheduled: boolean; sendAt?: string; stateUnsaved?: boolean }>(
       `/mail/drafts/${encodeURIComponent(id)}/send`, body);

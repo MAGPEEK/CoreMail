@@ -1,13 +1,15 @@
 /**
  * 9.4: main-window side of the compose windows this tab opened
- * (lib/composePopout.ts): `send` → the saved draft is sent here with the undo
- * hold (toast with "Rückgängig"; undo reopens it inline); `returned` → the
- * window was closed without sending, the draft goes back into the tab strip.
+ * (lib/composePopout.ts): `send` → answered with `accepted`, then the saved
+ * draft is sent here with the undo hold (toast with "Rückgängig"; undo reopens
+ * it inline); `returned` → the window was closed without sending, the draft
+ * goes back into the tab strip. Windows opened before a reload of this window
+ * are recognised by their opener.
  */
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useUiPrefs, useUiStore } from '../store/ui.js';
-import { acceptsMessage, parsePopoutMessage } from '../lib/composePopout.js';
+import { acceptedMessage, acceptsMessage, parsePopoutMessage } from '../lib/composePopout.js';
 import { sendDraft, unsendDraft } from '../lib/draft-api.js';
 import { queueHeldSend } from '../components/DelayedSendToast.js';
 import { forgetPopout, isOwnPopout } from '../components/compose/popoutChannel.js';
@@ -21,19 +23,25 @@ export function usePopoutBridge(): void {
     };
     const onMessage = (e: MessageEvent) => {
       if (!acceptsMessage(e.origin, window.location.origin, isOwnPopout(e.source))) return;
+      const source = e.source as Window;
       const msg = parsePopoutMessage(e.data);
-      if (!msg) return;
+      if (!msg || msg.type === 'accepted') return;
       if (msg.type === 'returned') {
-        forgetPopout(e.source as Window);
+        forgetPopout(source);
         useUiStore.getState().openCompose({ mode: 'new', draftId: msg.draftId, subject: msg.subject }, { background: true });
         return;
       }
-      forgetPopout(e.source as Window);
+      forgetPopout(source);
+      source.postMessage(acceptedMessage(msg.draftId), window.location.origin);
       const delaySec = useUiPrefs.getState().sendDelaySec;
       queueHeldSend({
         delaySec,
         start: async () => {
-          await sendDraft(msg.draftId, { undoDelaySec: delaySec, ...(msg.requestReceipt ? { requestReceipt: true } : {}) });
+          await sendDraft(msg.draftId, {
+            undoDelaySec: delaySec,
+            ...(msg.requestReceipt ? { requestReceipt: true } : {}),
+            ...(msg.requestDeliveryReceipt ? { requestDeliveryReceipt: true } : {}),
+          });
           return msg.draftId;
         },
         undo: (id) => unsendDraft(id),
