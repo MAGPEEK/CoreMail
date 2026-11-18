@@ -20,7 +20,7 @@ import {
   createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD, startAuthInvalidationSubscriber,
   installProcessGuards, installAsyncErrorHandling, resolveBindHost,
 } from '@coremail/core';
-import { connectDatabase, waitForObjectStorage } from '@coremail/storage';
+import { connectDatabase, waitForObjectStorage, clearMessageSizeLimitCache } from '@coremail/storage';
 import { jmapAuthMiddleware } from './auth.js';
 import { resolveAccounts } from './accounts.js';
 import { parseRequest, processRequest } from './dispatcher.js';
@@ -69,6 +69,7 @@ async function main(): Promise<void> {
     sub.on('message', () => {
       invalidateJmapFlagCache();
       invalidateSettingsCache();
+      clearMessageSizeLimitCache(); // 9.4: maximum message size (tooLarge) applies at once
       log.info('Settings cache invalidated (Redis signal)');
     });
   } catch (err) {

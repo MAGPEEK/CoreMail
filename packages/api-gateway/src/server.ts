@@ -14,7 +14,7 @@ import {
 } from '@coremail/storage';
 import {
   getRedisClient, createLogger, startAuthInvalidationSubscriber,
-  installAsyncErrorHandling, installProcessGuards, errorMiddleware, parseTrustProxy,
+  installAsyncErrorHandling, installProcessGuards, errorMiddleware, parseTrustProxy, verifyAccessToken,
 } from '@coremail/core';
 
 // ── Security Middleware (OWASP) ───────────────────────────────────────────────
@@ -22,7 +22,7 @@ import {
   requestId,
   helmetMiddleware,
   suspiciousInputGuard,
-  generalRateLimit,
+  isLoopback,
   authRateLimit,
   authRouteRateLimit,
   setupRateLimit,
@@ -61,6 +61,8 @@ import { startLdapSyncScheduler } from '@coremail/auth-ldap';
 import { retentionTagsRouter } from './routes/retention-tags.js';
 import { requireAuth, requireSseAuth } from './middleware/auth.js';
 import { eventTicketHandler } from './lib/event-tickets.js';
+import { createApiRateLimit } from './lib/api-rate-limit.js';
+import { apiRateLimitConfig, startApiRateLimitRefresh } from './lib/api-rate-limit-state.js';
 import { applyUpstreamHeaders, type TrustFn } from './lib/proxy-headers.js';
 import { createHttpsRedirect, hstsOnHttps } from './lib/https-redirect.js';
 import { sseHandler } from './sse.js';
@@ -129,8 +131,15 @@ app.use(createHttpsRedirect({
 //    Blocks CRLF injection, null bytes, path traversal, oversized headers.
 app.use(suspiciousInputGuard);
 
-// 4. Global rate limiting — per IP, loopback exempt
-app.use(generalRateLimit);
+// 4. Global API rate limit (9.4) — signed-in requests per user, anonymous ones per IP;
+//    static assets, the live-event stream and loopback peers are exempt. Configurable in
+//    BCP → Settings → Security / API_RATE_LIMIT_* (lib/api-rate-limit.ts).
+app.use(createApiRateLimit({
+  config: apiRateLimitConfig,
+  verifyUser: (token) => verifyAccessToken(token)?.sub ?? null,
+  isLoopback,
+  onLimited: ({ kind, path }) => log.warn({ kind, path }, 'API rate limit exceeded'),
+}));
 
 // v5.6.0: OIDC Discovery + JWKS removed (OAuth2 completely out of the stack).
 
@@ -483,6 +492,7 @@ async function start() {
   // backfill of the persistent setup flag for existing installations.
   await initSetupToken(log).catch((err) => log.error({ err }, 'Setup token initialisation failed — setup wizard stays locked'));
   void initRuntimeLogLevel('api-gateway', { aliases: ['api'] }); // BCP per-service log level
+  startApiRateLimitRefresh(); // 9.4: BCP-configurable API rate limit (60 s refresh)
   startBrandingSubscriber(); // 9.3: branding changes of other instances → drop cached index.html
   void startSseHub(); // one Redis subscriber → SSE fan-out + Web Push (lib/sse-hub.ts)
   // v7.1.0: session revocations done by the auth-service / LDAP sync reach

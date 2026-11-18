@@ -1,7 +1,9 @@
 import { BlockList, isIP } from 'node:net';
 import { createLogger } from '@coremail/core';
-import { parseRawMessage } from '@coremail/storage';
-import { checkDnsbl } from '../dnsbl/index.js';
+import {
+  parseRawMessage, parseSpoofAllowEntry, resolveSpoofSettings, type LocalSpoofAction, type SpoofSettings,
+} from '@coremail/storage';
+import { checkDnsbl, dnsblScoreFor, type DnsblScore } from '../dnsbl/index.js';
 import { checkGreylist } from '../greylisting/index.js';
 import { checkCountry, type CountryConfig } from '../geoip/index.js';
 import { prisma } from '@coremail/storage';
@@ -61,6 +63,11 @@ export interface PipelineConfig {
   clamavPuaAsVirus?: boolean;
   /** Treat Heuristics.Encrypted.* results as a virus (default true) */
   clamavEncryptedAsVirus?: boolean;
+  /**
+   * Local-domain anti-spoofing (SecuritySettings.localSpoof* with the LOCAL_SPOOF_* /
+   * ARC_TRUSTED_SEALERS environment override). Unset: environment variables only.
+   */
+  localSpoof?: SpoofSettings;
 }
 
 /**
@@ -95,8 +102,6 @@ export interface ConnectionContext {
   senderIp: string;
   mailFrom: string;
   rcptTo: string;
-  domainId?: string;
-  userId?: string;
   /** EHLO/HELO name of the SMTP session (content stage). */
   helo?: string;
   /** Our host name — authserv-id of the Authentication-Results header. */
@@ -124,12 +129,15 @@ export interface PipelineDeps {
   rspamd: typeof rspamdScan;
   /** Is the domain one of ours (active Domain row)? */
   isLocalDomain: (domain: string) => Promise<boolean>;
-  /** Local anti-spoofing options (default: from the environment). */
+  /** Local anti-spoofing options (default: compiled from config.localSpoof / the environment). */
   spoofOptions?: SpoofPolicyOptions;
+  /** Spam-score contribution of SCORE_ONLY DNSBL zones (default: cached DNSBL lookup). */
+  dnsblScore?: (senderIp: string) => Promise<DnsblScore>;
 }
 
 const defaultDeps: PipelineDeps = {
   dnsbl: checkDnsbl,
+  dnsblScore: dnsblScoreFor,
   country: checkCountry,
   greylist: checkGreylist,
   authenticate: authenticateMail,
@@ -246,6 +254,20 @@ export async function runGreylistCheck(
 }
 
 /**
+ * Stage 1a (9.4): sender lists for one recipient (RCPT TO) — a BLOCK verdict for this
+ * recipient's scope (user, domain, global) refuses the recipient (550 5.7.1).
+ */
+export async function runSenderListCheck(
+  ctx: ConnectionContext,
+  deps: Pick<PipelineDeps, 'blacklist'> = defaultDeps,
+): Promise<PipelineResult> {
+  const r = await deps.blacklist(ctx.mailFrom, [ctx.rcptTo]);
+  return r.blocked
+    ? { action: 'reject', reason: r.reason ?? 'Sender blocked' }
+    : { action: 'accept', reason: 'Sender lists passed' };
+}
+
+/**
  * Stages 1b/1c: checks that only need the client IP (DNSBL/DNSWL, GeoIP
  * country filter) — these run at connect time.
  */
@@ -268,7 +290,8 @@ export async function runIpChecks(
         reason: `Sender IP listed in DNSBL: ${dnsbl.hits.map((h) => h.zone.host).join(', ')}`,
       };
     }
-    // TAG and SCORE_ONLY hits feed into the rspamd score further below
+    // SCORE_ONLY hits add their weight to the spam score at the content stage
+    // (runSpamStage); TAG hits are only recorded in the statistics.
   }
 
   // ── Stage 1c: Country filtering ──────────────────────────────────────────
@@ -284,53 +307,38 @@ export async function runIpChecks(
 
 // ── Local-domain anti-spoofing configuration ─────────────────────────────────
 
-export type LocalSpoofAction = 'policy' | 'junk' | 'reject';
+export type { LocalSpoofAction } from '@coremail/storage';
 
 export interface SpoofPolicyOptions {
   /**
-   * LOCAL_SPOOF_ACTION: what happens to unauthenticated mail claiming one of
-   * our domains. `policy` (default) follows the local domain's own published
+   * BCP "Spoofing" / LOCAL_SPOOF_ACTION: what happens to unauthenticated mail claiming
+   * one of our domains. `policy` (default) follows the local domain's own published
    * policy (DMARC for the header From, SPF -all for MAIL FROM); `junk` always
    * delivers to Junk; `reject` always answers 550 (pre-8.1 behaviour).
    */
   action: LocalSpoofAction;
-  /** LOCAL_SPOOF_ALLOW (IP/CIDR entries): trusted third-party sending hosts. */
+  /** Allow list (IP/CIDR entries): trusted third-party sending hosts. */
   allowIp: (ip: string) => boolean;
-  /** LOCAL_SPOOF_ALLOW (domain entries): trusted senders, matched against the authenticated (SPF/DKIM pass) domains. */
+  /** Allow list (domain entries): trusted senders, matched against the authenticated (SPF/DKIM pass) domains. */
   allowDomains: readonly string[];
-  /** ARC_TRUSTED_SEALERS: ARC sealers whose passing chain overrides the local check and DMARC rejection. */
+  /** Trusted ARC sealers whose passing chain overrides the local check and DMARC rejection. */
   arcTrustedSealers: readonly string[];
   /** Random source of the DMARC pct sampling (tests). */
   rng?: () => number;
 }
 
-const splitList = (v: string | undefined): string[] =>
-  (v ?? '').split(/[\s,]+/).map((e) => e.trim().toLowerCase().replace(/\.$/, '')).filter(Boolean);
-
-/** Pure: parses LOCAL_SPOOF_ACTION / LOCAL_SPOOF_ALLOW / ARC_TRUSTED_SEALERS. */
-export function loadSpoofPolicyOptions(env: Record<string, string | undefined> = process.env): SpoofPolicyOptions & { invalid: string[] } {
-  const rawAction = (env['LOCAL_SPOOF_ACTION'] ?? '').trim().toLowerCase();
-  const action: LocalSpoofAction = rawAction === 'junk' || rawAction === 'reject' ? rawAction : 'policy';
-  const invalid: string[] = rawAction && rawAction !== action ? [`LOCAL_SPOOF_ACTION=${rawAction}`] : [];
+/** Pure: the matchers for resolved settings; `invalid` lists allow-list entries that are neither IP/CIDR nor domain. */
+export function compileSpoofPolicy(settings: SpoofSettings): SpoofPolicyOptions & { invalid: string[] } {
+  const invalid: string[] = [];
   const blocks = new BlockList();
   let ipEntries = 0;
   const allowDomains: string[] = [];
-  for (const entry of splitList(env['LOCAL_SPOOF_ALLOW'])) {
-    const slash = entry.indexOf('/');
-    const addr = slash === -1 ? entry : entry.slice(0, slash);
-    const family = isIP(addr);
-    if (family !== 0) {
-      const max = family === 4 ? 32 : 128;
-      const prefixText = slash === -1 ? String(max) : entry.slice(slash + 1);
-      const prefix = Number(prefixText);
-      if (!/^\d{1,3}$/.test(prefixText) || prefix > max) { invalid.push(entry); continue; }
-      blocks.addSubnet(addr, prefix, family === 4 ? 'ipv4' : 'ipv6');
-      ipEntries++;
-    } else if (/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(entry)) {
-      allowDomains.push(entry);
-    } else {
-      invalid.push(entry);
-    }
+  for (const raw of settings.allow) {
+    const entry = parseSpoofAllowEntry(raw);
+    if (!entry) { invalid.push(raw); continue; }
+    if (entry.kind === 'domain') { allowDomains.push(entry.domain); continue; }
+    blocks.addSubnet(entry.addr, entry.prefix, entry.family);
+    ipEntries++;
   }
   const allowIp = (rawIp: string): boolean => {
     if (ipEntries === 0) return false;
@@ -338,17 +346,40 @@ export function loadSpoofPolicyOptions(env: Record<string, string | undefined> =
     const family = isIP(ip);
     return family !== 0 && blocks.check(ip, family === 4 ? 'ipv4' : 'ipv6');
   };
-  return { action, allowIp, allowDomains, arcTrustedSealers: splitList(env['ARC_TRUSTED_SEALERS']), invalid };
+  return { action: settings.action, allowIp, allowDomains, arcTrustedSealers: settings.arcTrustedSealers, invalid };
 }
 
-let defaultSpoofOptions: SpoofPolicyOptions | null = null;
-function spoofOptionsFromEnv(): SpoofPolicyOptions {
-  if (!defaultSpoofOptions) {
-    const loaded = loadSpoofPolicyOptions();
-    if (loaded.invalid.length) log.warn({ invalid: loaded.invalid }, 'ignoring invalid LOCAL_SPOOF_* entries');
-    defaultSpoofOptions = loaded;
+/** Pure: the policy from LOCAL_SPOOF_ACTION / LOCAL_SPOOF_ALLOW / ARC_TRUSTED_SEALERS alone. */
+export function loadSpoofPolicyOptions(env: Record<string, string | undefined> = process.env): SpoofPolicyOptions & { invalid: string[] } {
+  const settings = resolveSpoofSettings(null, env);
+  const compiled = compileSpoofPolicy(settings);
+  return settings.invalidAction
+    ? { ...compiled, invalid: [`LOCAL_SPOOF_ACTION=${settings.invalidAction}`, ...compiled.invalid] }
+    : compiled;
+}
+
+/** Compiled policy per settings object (rebuilt only on a settings reload). */
+const compiledSpoof = new WeakMap<SpoofSettings, SpoofPolicyOptions>();
+let envSpoofOptions: SpoofPolicyOptions | null = null;
+
+function spoofOptionsFor(config: PipelineConfig): SpoofPolicyOptions {
+  const settings = config.localSpoof;
+  if (!settings) {
+    if (!envSpoofOptions) {
+      const loaded = loadSpoofPolicyOptions();
+      if (loaded.invalid.length) log.warn({ invalid: loaded.invalid }, 'ignoring invalid LOCAL_SPOOF_* entries');
+      envSpoofOptions = loaded;
+    }
+    return envSpoofOptions;
   }
-  return defaultSpoofOptions;
+  let opts = compiledSpoof.get(settings);
+  if (!opts) {
+    const compiled = compileSpoofPolicy(settings);
+    if (compiled.invalid.length) log.warn({ invalid: compiled.invalid }, 'ignoring invalid local-spoof allow-list entries');
+    opts = compiled;
+    compiledSpoof.set(settings, opts);
+  }
+  return opts;
 }
 
 const domainCovered = (domain: string, list: readonly string[]): boolean =>
@@ -391,7 +422,7 @@ export async function decideAuthentication(
   auth: AuthResult,
   ctx: ConnectionContext,
   isLocalDomain: (domain: string) => Promise<boolean>,
-  opts: SpoofPolicyOptions = spoofOptionsFromEnv(),
+  opts: SpoofPolicyOptions = spoofOptionsFor({}),
 ): Promise<PipelineResult | JunkDecision | null> {
   if (ctx.authUser) return null; // authenticated SMTP session — identity checked by SMTP AUTH
 
@@ -478,7 +509,7 @@ export async function runContentChecks(
     mailFrom: ctx.mailFrom,
     mta: hostname,
   });
-  const authDecision = await decideAuthentication(auth, ctx, deps.isLocalDomain, deps.spoofOptions);
+  const authDecision = await decideAuthentication(auth, ctx, deps.isLocalDomain, deps.spoofOptions ?? spoofOptionsFor(config));
   if (authDecision && 'action' in authDecision) return authDecision;
   const junk = authDecision !== null && 'junk' in authDecision ? authDecision : null;
 
@@ -505,18 +536,43 @@ async function runContentStages(
   auth: AuthResult,
   hostname: string,
 ): Promise<PipelineResult> {
-  // ── Stage 3: Address blacklist ───────────────────────────────────────────
-  const blacklist = await deps.blacklist(ctx.mailFrom, ctx.domainId, ctx.userId);
-  if (blacklist.blocked) {
-    return { action: 'reject', reason: blacklist.reason ?? 'Sender blocked' };
+  // ── Stage 3: Sender lists (every recipient; per-recipient blocks ran at RCPT TO) ──
+  const senderList = await deps.blacklist(ctx.mailFrom, recipientsOf(ctx));
+  if (senderList.blocked) {
+    return { action: 'reject', reason: senderList.reason ?? 'Sender blocked' };
   }
+  // An allow entry never trusts a forged sender: the envelope domain must be authenticated.
+  const senderDomain = ctx.mailFrom ? addressDomain(ctx.mailFrom) : null;
+  const allowlisted = senderList.allowed === true && !!senderDomain
+    && isDomainAuthenticated(senderDomain, auth.verifiedDomains ?? []);
 
   const malware = await runMalwareStages(rawMessage, ctx, config, deps);
   if (malware.decision) return malware.decision;
   const virusNote = malware.note;
 
-  const result = await runSpamStage(rawMessage, ctx, config, deps, auth, hostname);
+  const result = await runSpamStage(rawMessage, ctx, config, deps, auth, hostname, allowlisted);
   return virusNote && result.action !== 'reject' ? { ...result, virusScan: virusNote } : result;
+}
+
+/** Envelope recipients of the content stage (`rcpts`, else the single `rcptTo`). */
+function recipientsOf(ctx: ConnectionContext): string[] {
+  if (ctx.rcpts && ctx.rcpts.length > 0) return ctx.rcpts;
+  return ctx.rcptTo ? [ctx.rcptTo] : [];
+}
+
+/**
+ * Pure: the spam verdict for a score (rspamd + SCORE_ONLY DNSBL weights). An allow-listed,
+ * authenticated sender is never junked or rejected by score.
+ */
+export function spamVerdict(
+  score: number,
+  config: Pick<PipelineConfig, 'spamScoreJunk' | 'spamScoreReject'>,
+  allowlisted = false,
+): 'reject' | 'junk' | 'inbox' {
+  if (allowlisted) return 'inbox';
+  if (score >= (config.spamScoreReject ?? 15.0)) return 'reject';
+  if (score >= (config.spamScoreJunk ?? 6.0)) return 'junk';
+  return 'inbox';
 }
 
 /**
@@ -599,46 +655,42 @@ async function runSpamStage(
   deps: PipelineDeps,
   auth: AuthResult,
   hostname: string,
+  allowlisted = false,
 ): Promise<PipelineResult> {
-  const spamJunk   = config.spamScoreJunk   ?? 6.0;
-  const spamReject = config.spamScoreReject ?? 15.0;
-
   // ── Stage 4d: rspamd anti-spam (with the SMTP session data) ─────────────
   if (config.rspamdEnabled !== false) {
     const spam = await deps.rspamd(rawMessage, {
       ip: ctx.senderIp,
       ...(ctx.helo ? { helo: ctx.helo } : {}),
       from: ctx.mailFrom,
-      rcpts: ctx.rcpts && ctx.rcpts.length > 0 ? ctx.rcpts : ctx.rcptTo ? [ctx.rcptTo] : [],
+      rcpts: recipientsOf(ctx),
       ...(ctx.authUser ? { user: ctx.authUser } : {}),
       hostname,
     });
+    // DNSBL zones with the action SCORE_ONLY add their weight to the score (9.4) — only
+    // for unauthenticated sessions: an SMTP AUTH client's (dial-up) address says nothing
+    // about the message, like greylisting and the local-spoof check.
+    const dnsbl = config.dnsblEnabled !== false && !ctx.authUser && deps.dnsblScore
+      ? await deps.dnsblScore(ctx.senderIp)
+      : { score: 0, zones: [] };
+    const score = spam.score + dnsbl.score;
+    const scoreNote = dnsbl.score > 0 ? ` (DNSBL +${dnsbl.score}: ${dnsbl.zones.join(', ')})` : '';
 
-    if (spam.score >= spamReject) {
-      return {
-        action: 'reject',
-        reason: `Spam score too high: ${spam.score.toFixed(2)}`,
-        spamScore: spam.score,
-      };
+    switch (spamVerdict(score, config, allowlisted)) {
+      case 'reject':
+        return { action: 'reject', reason: `Spam score too high: ${score.toFixed(2)}${scoreNote}`, spamScore: score };
+      case 'junk':
+        return {
+          action: 'accept', reason: `Spam — deliver to Junk folder${scoreNote}`, spamScore: score,
+          junkFolder: true, authSummary: auth.summary,
+        };
+      case 'inbox':
+        return {
+          action: 'accept',
+          reason: allowlisted ? 'Sender allow-listed — spam verdict skipped' : 'All checks passed',
+          spamScore: score, authSummary: auth.summary, junkFolder: false,
+        };
     }
-
-    if (spam.score >= spamJunk) {
-      return {
-        action: 'accept',
-        reason: 'Spam — deliver to Junk folder',
-        spamScore: spam.score,
-        junkFolder: true,
-        authSummary: auth.summary,
-      };
-    }
-
-    return {
-      action: 'accept',
-      reason: 'All checks passed',
-      spamScore: spam.score,
-      authSummary: auth.summary,
-      junkFolder: false,
-    };
   }
 
   // rspamd disabled — accept directly

@@ -8,13 +8,16 @@ import {
   type ScannerCapabilities, type ScannerNotice, type ProtectionSection,
 } from '../lib/protectionVisibility.js';
 import {
-  LayoutDashboard, Zap, Bug, Database, Clock, Globe, Paperclip,
+  LayoutDashboard, Zap, Bug, Database, Clock, Globe, Paperclip, ListFilter, ShieldAlert,
   CheckCircle, XCircle, RefreshCw, Plus, Trash2, AlertTriangle, Info,
 } from 'lucide-react';
 import { api } from '../api/client.js';
 import toast from 'react-hot-toast';
 import { Toggle } from '../components/Toggle.js';
 import { ClamavSettingsSection } from '../components/ClamavSettingsSection.js';
+import { SenderListsSection } from '../components/SenderListsSection.js';
+import { SpoofingSection } from '../components/SpoofingSection.js';
+import { dnsblActionOptions } from '../lib/senderLists.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -92,6 +95,8 @@ const SUB_NAV: { id: Section; label: string; icon: React.ElementType }[] = [
   { id: 'rspamd',      label: 'Rspamd',       icon: Zap },
   { id: 'antivirus',   label: 'Antivirus',    icon: Bug },
   { id: 'dnsbl',       label: 'DNSBL',        icon: Database },
+  { id: 'senderlists', label: 'Absenderlisten', icon: ListFilter },
+  { id: 'spoofing',    label: 'Spoofing',     icon: ShieldAlert },
   { id: 'greylisting', label: 'Greylisting',  icon: Clock },
   { id: 'geoip',       label: 'Länderfilter', icon: Globe },
   { id: 'attachments', label: 'Anhänge',      icon: Paperclip },
@@ -513,8 +518,11 @@ function ActionBadge({ action }: { action: DnsblZone['action'] }) {
   );
 }
 
-function DnsblSection({ settings, onSave }: { settings: SecuritySettings; onSave: (d: Partial<SecuritySettings>) => void }) {
+function DnsblSection({ settings, onSave, rspamdAbsent }: {
+  settings: SecuritySettings; onSave: (d: Partial<SecuritySettings>) => void; rspamdAbsent: boolean;
+}) {
   const qc = useQueryClient();
+  const actionOptions = dnsblActionOptions(rspamdAbsent);
   const [enabled, setEnabled] = useState(settings.dnsblEnabled);
   const [tab, setTab] = useState<'zones' | 'test' | 'stats'>('zones');
 
@@ -623,7 +631,8 @@ function DnsblSection({ settings, onSave }: { settings: SecuritySettings; onSave
           </div>
           <p className="text-xs text-fg-subtle">
             „Ablehnen“ weist die Verbindung ab, ein DNSWL-Treffer überspringt die übrigen Verbindungsprüfungen.
-            „Markieren“ und „Score“ werden derzeit nur in der Statistik erfasst und beeinflussen die Zustellung nicht.
+            „Score“ addiert das Score-Gewicht der Zone zum Spam-Score der Nachricht – nur wenn Rspamd aktiv ist{rspamdAbsent ? ' (Rspamd ist in dieser Installation nicht bereitgestellt)' : ''}; angemeldete Absender (SMTP AUTH) erhalten keinen DNSBL-Score.
+            „Markieren“ wird derzeit nur in der Statistik erfasst und beeinflusst die Zustellung nicht.
           </p>
 
           {showAdd && (
@@ -637,10 +646,8 @@ function DnsblSection({ settings, onSave }: { settings: SecuritySettings; onSave
               </div>
               <div className="flex items-center gap-3 flex-wrap">
                 <select value={newAction} onChange={(e) => setNewAction(e.target.value as DnsblZone['action'])}
-                  className="border border-line-strong rounded px-2 py-1.5 text-sm">
-                  <option value="REJECT">Ablehnen</option>
-                  <option value="TAG">Als Spam markieren</option>
-                  <option value="SCORE_ONLY">Nur Score (rspamd)</option>
+                  aria-label="Aktion" className="border border-line-strong rounded px-2 py-1.5 text-sm">
+                  {actionOptions.map((o) => <option key={o.value} value={o.value} disabled={o.disabled}>{o.label}</option>)}
                 </select>
                 <label className="text-sm text-fg-muted flex items-center gap-1">
                   Score:
@@ -695,9 +702,7 @@ function DnsblSection({ settings, onSave }: { settings: SecuritySettings; onSave
                         <select value={z.action}
                           onChange={(e) => patchZone.mutate({ id: z.id, body: { action: e.target.value as DnsblZone['action'] } })}
                           className="border border-line rounded px-1.5 py-0.5 text-xs">
-                          <option value="REJECT">Ablehnen</option>
-                          <option value="TAG">Markieren</option>
-                          <option value="SCORE_ONLY">Score</option>
+                          {actionOptions.map((o) => <option key={o.value} value={o.value} disabled={o.disabled}>{o.label}</option>)}
                         </select>
                       </label>
                       <label className="flex items-center gap-1 text-xs text-fg-muted">
@@ -1103,7 +1108,9 @@ export function ProtectionPage() {
               <WriteGuard area="hygiene">
                 {active === 'rspamd'      && <RspamdSection    settings={settings} onSave={handleSave} />}
                 {active === 'antivirus'   && <ClamavSettingsSection />}
-                {active === 'dnsbl'       && <DnsblSection       settings={settings} onSave={handleSave} />}
+                {active === 'dnsbl'       && <DnsblSection       settings={settings} onSave={handleSave} rspamdAbsent={caps?.rspamd.state === 'absent'} />}
+                {active === 'senderlists' && <SenderListsSection />}
+                {active === 'spoofing'    && <SpoofingSection />}
                 {active === 'greylisting' && <GreylistingSection settings={settings} onSave={handleSave} />}
                 {active === 'geoip'       && <GeoipSection       settings={settings} onSave={handleSave} />}
                 {active === 'attachments' && <AttachmentsSection settings={settings} onSave={handleSave} />}

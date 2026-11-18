@@ -7,7 +7,7 @@ import {
   generateSelfSignedCert, tlsPemToBuffers, applyTlsToListeners, tlsMaterialEquals, installProcessGuards,
   startAuthInvalidationSubscriber, resolveBindAddress, listenWithRecovery,
 } from '@coremail/core';
-import { connectDatabase, waitForObjectStorage, prisma, loadProtocolTls, selfSignedReplacement, selfSignedFallbackHostname, encryptPrivateKey, invalidateQueueSettingsCache } from '@coremail/storage';
+import { connectDatabase, waitForObjectStorage, prisma, loadProtocolTls, selfSignedReplacement, selfSignedFallbackHostname, encryptPrivateKey, invalidateQueueSettingsCache, maxMessageBytesFrom } from '@coremail/storage';
 import { createSmtpServer } from './core/factory.js';
 import { smtpLiveSessions } from './core/live-sessions.js';
 import { inboundTarpitMaxDelayMs } from './core/session.js';
@@ -89,7 +89,7 @@ async function refreshSmtpSettings(): Promise<void> {
       authCramMd5:    false,
       ...esmtpEnvFlags(),
     };
-    _maxSize = Math.max(1, s?.maxMessageSizeMb ?? 25) * 1024 * 1024;
+    _maxSize = maxMessageBytesFrom([s?.maxMessageSizeMb]); // port 25 + submission follow the SMTP setting
     _maxRcpt = Math.max(1, s?.maxRecipients ?? 100);
     if (inboundMaxSize(_maxSize) < _maxSize) {
       log.warn({ configured: _maxSize, inbound: inboundMaxSize(_maxSize) },

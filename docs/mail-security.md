@@ -45,9 +45,18 @@ affected):
    DKIM are rejected when the original domain publishes `p=reject`, unless they
    are ARC-trusted (below).
 
-### Local-domain anti-spoofing switches (9.0)
+### Local-domain anti-spoofing settings (9.0, BCP since 9.4)
 
-| Variable | Default | Effect |
+Since 9.4 the three settings are edited in **BCP → Schutzfilter → Spoofing**
+(`GET/PUT /api/v1/admin/security/spoofing`, stored in `SecuritySettings.localSpoofAction`,
+`localSpoofAllow`, `arcTrustedSealers`; every change is audited as
+`settings.spoofing.update` and the security filter applies it at once through the
+settings-reload channel). The 9.0 environment variables stay: a variable that is
+**set** (non-empty) overrides its BCP field, which the BCP then shows read-only with
+the variable name — deployments that configured them keep their behaviour. The
+values and their meaning:
+
+| Variable / BCP field | Default | Effect |
 |----------|---------|--------|
 | `LOCAL_SPOOF_ACTION` | `policy` | `policy`: follow the local domain's **own** published policy. Header `From` of a local domain: our DMARC `p=reject` → `550 5.7.1 Unauthenticated mail claiming local domain …`; `p=quarantine`, `p=none` or no DMARC record → delivered to **Junk** with an extra `Authentication-Results: <host>; x-local-spoof=fail … header.from=<domain>` field. `MAIL FROM` of a local domain only: SPF hard fail (our `-all`) → 550, otherwise Junk + tag. `junk`: always Junk + tag, never reject. `reject`: always `550 5.7.1` (the pre-9.0 behaviour). |
 | `LOCAL_SPOOF_ALLOW` | *(empty)* | Comma-separated trusted third-party senders that may use a local domain without alignment: IPs / CIDRs (matched against the client IP) and domains (matched against the domains the message is **authenticated** for — SPF pass or DKIM `d=`; subdomains included), e.g. `LOCAL_SPOOF_ALLOW=203.0.113.25,198.51.100.0/24,sendgrid.net,mcsv.net`. Such mail is also exempt from our own DMARC reject. Invalid entries are logged and ignored. |
@@ -58,8 +67,7 @@ says "do not reject unaligned mail" — contact forms on a web host, SaaS tools
 (newsletters, ticket systems, CRM) and mailing lists legitimately send with a
 local `From`. They now land in Junk (visible, flagged) instead of being
 rejected. Publish `p=reject` for your domains once SPF/DKIM are in place to get
-hard rejects back, or set `LOCAL_SPOOF_ACTION=reject`. These switches are
-environment-only (no BCP field).
+hard rejects back, or choose „Immer ablehnen“ (`reject`) in the BCP.
 
 Devices or applications that send mail "as" a local domain should use SMTP
 submission (587/465 with AUTH), be covered by SPF/DKIM, or be listed in
@@ -102,6 +110,60 @@ recipient, `User` for authenticated sessions, `MTA-Name`).
   rooms as well (9.0) — they are processed on every delivery path. A local
   recipient that does not exist (anymore) at delivery time is never dropped
   silently: the sender gets an NDR (`5.1.1`).
+
+## Sender lists (block / allow, 9.4)
+
+**BCP → Schutzfilter → Absenderlisten** manages the sender lists (table `blacklist`,
+API `/api/v1/admin/security/sender-lists`, hygiene permission: read-only roles may
+view and export). Each entry has
+
+- a **list**: `BLOCK` (Sperrliste) or `ALLOW` (Zulassungsliste);
+- a **scope**: `GLOBAL` (every recipient), `DOMAIN` (recipients of one local domain)
+  or `USER` (one mailbox — its aliases included);
+- a **pattern** matched against the envelope sender (`MAIL FROM`): `EXACT` (a complete
+  address, case-insensitive), `WILDCARD` (`*` = any run, e.g. `*@werbung.example`) or
+  `REGEX` (linear-time matcher, the same limits as mail rules — refused when saved).
+
+Evaluation, per recipient: the **most specific scope** with a matching entry decides
+(USER before DOMAIN before GLOBAL), and inside that scope an ALLOW entry wins over a
+BLOCK entry. So a user can allow a sender the organisation blocks, and a user's block
+beats an organisation-wide allow. The null sender (`<>`, bounces) is never listed.
+
+- **RCPT TO** (port 25, unauthenticated sessions): a BLOCK verdict refuses that
+  recipient with `550 5.7.1 Sender blocked` before greylisting; other recipients of the
+  same transaction are unaffected.
+- **After DATA**: the message is refused when every recipient blocks the sender (a
+  fallback for an unreachable filter at RCPT time). When every recipient **allows** the
+  sender, the spam verdict (Junk / reject by score) is skipped — but only when the
+  envelope sender's domain is authenticated (SPF or DKIM pass, aligned). An allow entry
+  never bypasses SPF/DKIM/DMARC, the local-domain check, the attachment filter or the
+  virus scan.
+- Webmail "Junk" actions keep their own per-user entries (`USER-JUNK`, delivered to
+  Junk); they are not shown in the BCP.
+
+**CSV import/export**: `GET …/sender-lists/export.csv` and `POST …/sender-lists/import`
+(`{ "csv": "…" }`, at most 5000 rows / 1 MB). Columns:
+`listType,scope,target,patternType,pattern,comment,active` — `target` is empty for
+GLOBAL, the domain name for DOMAIN and the mailbox address for USER. Cells starting
+with `= + - @` are exported with a leading `'` (spreadsheet formula injection) and
+read back without it. An import is validated completely first: one invalid row
+(unknown domain or mailbox, invalid pattern) refuses the whole file with the line
+numbers; existing entries are skipped. Every create, change, delete and import is
+audited (`security.sender-list.*` with the entry data).
+
+## DNSBL zone actions
+
+| Action | Effect |
+|--------|--------|
+| `REJECT` (Ablehnen) | The connection is refused at connect time. |
+| `SCORE_ONLY` (Score, 9.4) | The zone's weight is added to the rspamd spam score of the message; the sum is compared with the Junk / reject thresholds (the reason names the zones, e.g. `DNSBL +3: psbl.surriel.com`). Needs rspamd: when rspamd is not deployed (`RSPAMD_ENABLED=false`) the BCP disables the option. The cached connect-time lookup is reused, hits are counted once in the statistics. |
+| `TAG` (Markieren) | Only recorded in the DNSBL statistics. |
+
+A DNSWL hit (whitelist zone) skips the other connection checks and adds no score. Sessions
+authenticated with SMTP AUTH get no DNSBL score (their client address is often a listed dial-up
+address). rspamd runs its own RBL checks: do not set a zone to `SCORE_ONLY` that the rspamd RBL
+module already queries (e.g. Spamhaus ZEN) — that listing would count twice; check the RBL
+configuration of the deployed rspamd before choosing „Score“ for a zone.
 
 ## Mail rules (`regex` conditions)
 

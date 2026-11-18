@@ -22,6 +22,7 @@ const db = installFakeDb({
 
 const {
   handleSendMail, handleLegacySendMail, legacySendHttpStatus, composeRequestFromWbxml, composeRequestFromMime, saveSentCopy,
+  composeResponse, idempotencyKey,
 } = await import('./send-mail.js');
 const { decodeWbxml } = await import('../wbxml.js');
 const storage = await import('@coremail/storage');
@@ -49,16 +50,21 @@ function composeReq(cmd: 'SendMail' | 'SmartReply' | 'SmartForward', mime: Buffe
 const str = (tok: number, s: string) => [tok | 0x40, 0x03, ...Buffer.from(s), 0x00, 0x01];
 const clientId = (id: string) => str(0x11, id);
 const source = (itemId: string, folderId = 'inbox') => [0x4b, ...str(0x0c, folderId), ...str(0x0d, itemId), 0x01];
-const status = (buf: Buffer) => (decodeWbxml(buf).children?.find((c) => typeof c !== 'string' && c.name === 'Status') as E | undefined)?.text;
+/** Status of a 14.x compose response; SENT = the empty success response ([MS-ASCMD] 2.2.1.17). */
+const SENT = 'empty response';
+const status = (buf: Buffer) => (buf.length === 0
+  ? SENT
+  : (decodeWbxml(buf).children?.find((c) => typeof c !== 'string' && c.name === 'Status') as E | undefined)?.text);
 
 function deps(over: Partial<Deps> = {}) {
   const jobs: Job[] = [];
   const claimed = new Set<string>();
   const marks: string[] = [];
   const sent: unknown[] = [];
+  const ttls: number[] = [];
   const d: Deps = {
     enqueue: async (j) => { jobs.push(j); },
-    claimClientId: async (u, c) => { const k = `${u}:${c}`; if (claimed.has(k)) return false; claimed.add(k); return true; },
+    claimClientId: async (u, c, ttl) => { const k = `${u}:${c}`; ttls.push(ttl); if (claimed.has(k)) return false; claimed.add(k); return true; },
     releaseClientId: async (u, c) => { claimed.delete(`${u}:${c}`); },
     saveSentCopy: async (_u, plan) => { sent.push(plan); },
     loadSource: async (_u, ref) => (ref.itemId === 'orig'
@@ -66,19 +72,19 @@ function deps(over: Partial<Deps> = {}) {
     markSource: async (_s, flag) => { marks.push(flag); },
     ...over,
   };
-  return { d, jobs, marks, sent };
+  return { d, jobs, marks, sent, ttls };
 }
 
 test('opaque 8-bit MIME is queued byte-exact (no UTF-8 round trip)', async () => {
   const { d, jobs } = deps();
-  assert.equal(status(await handleSendMail(composeReq('SendMail', MIME), 'u1', 'SendMail', d)), '1');
+  assert.equal(status(await handleSendMail(composeReq('SendMail', MIME), 'u1', 'SendMail', d)), SENT);
   assert.equal(jobs.length, 1);
   assert.ok(Buffer.from(jobs[0]!.rawMessage, 'base64').equals(MIME), 'rawMessage must be the client octets');
 });
 
 test('ClientId: a retried SendMail is not sent twice (Status 118); a failed send can be retried', async () => {
   const { d, jobs } = deps();
-  assert.equal(status(await handleSendMail(composeReq('SendMail', MIME, clientId('c-1')), 'u1', 'SendMail', d)), '1');
+  assert.equal(status(await handleSendMail(composeReq('SendMail', MIME, clientId('c-1')), 'u1', 'SendMail', d)), SENT);
   assert.equal(status(await handleSendMail(composeReq('SendMail', MIME, clientId('c-1')), 'u1', 'SendMail', d)), '118');
   assert.equal(jobs.length, 1);
 
@@ -86,13 +92,13 @@ test('ClientId: a retried SendMail is not sent twice (Status 118); a failed send
   const flaky = deps({ enqueue: async (j) => { if (fail) throw new Error('redis down'); jobs.push(j); } }).d;
   assert.equal(status(await handleSendMail(composeReq('SendMail', MIME, clientId('c-2')), 'u1', 'SendMail', flaky)), '110');
   fail = false;
-  assert.equal(status(await handleSendMail(composeReq('SendMail', MIME, clientId('c-2')), 'u1', 'SendMail', flaky)), '1');
+  assert.equal(status(await handleSendMail(composeReq('SendMail', MIME, clientId('c-2')), 'u1', 'SendMail', flaky)), SENT);
   assert.equal(jobs.length, 2);
 });
 
 test('SmartForward appends the original (body + attachments) as message/rfc822; source flagged $Forwarded', async () => {
   const { d, jobs, marks } = deps();
-  assert.equal(status(await handleSendMail(composeReq('SmartForward', MIME, source('orig')), 'u1', 'SmartForward', d)), '1');
+  assert.equal(status(await handleSendMail(composeReq('SmartForward', MIME, source('orig')), 'u1', 'SmartForward', d)), SENT);
   const raw = Buffer.from(jobs[0]!.rawMessage, 'base64');
   assert.ok(raw.includes(ORIGINAL), 'original octets embedded unchanged');
   assert.ok(raw.includes(MIME.subarray(MIME.indexOf('\r\n\r\n') + 4)), 'client body kept byte-exact');
@@ -109,12 +115,12 @@ test('SmartForward appends the original (body + attachments) as message/rfc822; 
 
 test('SmartReply: inline original, \\Answered; ReplaceMime → client MIME as is; unknown source → 150', async () => {
   const r = deps();
-  assert.equal(status(await handleSendMail(composeReq('SmartReply', MIME, source('orig')), 'u1', 'SmartReply', r.d)), '1');
+  assert.equal(status(await handleSendMail(composeReq('SmartReply', MIME, source('orig')), 'u1', 'SmartReply', r.d)), SENT);
   assert.match(Buffer.from(r.jobs[0]!.rawMessage, 'base64').toString('latin1'), /Content-Disposition: inline; filename\*=UTF-8''Report\.eml/);
   assert.deepEqual(r.marks, ['\\Answered']);
 
   const replace = deps();
-  assert.equal(status(await handleSendMail(composeReq('SmartReply', MIME, [...source('orig'), 0x09]), 'u1', 'SmartReply', replace.d)), '1');
+  assert.equal(status(await handleSendMail(composeReq('SmartReply', MIME, [...source('orig'), 0x09]), 'u1', 'SmartReply', replace.d)), SENT);
   assert.ok(Buffer.from(replace.jobs[0]!.rawMessage, 'base64').equals(MIME));
   assert.deepEqual(replace.marks, ['\\Answered']);
 
@@ -152,7 +158,7 @@ test('v8.1: a mailbox over its ProhibitSendQuota gets Status 113 (SendMail/Smart
   assert.equal(h.jobs.length, 0);
   assert.equal(h.sent.length, 0);
   const ok = deps({ sendAllowed: async () => true });
-  assert.equal(status(await handleSendMail(composeReq('SendMail', MIME), 'u1', 'SendMail', ok.d)), '1');
+  assert.equal(status(await handleSendMail(composeReq('SendMail', MIME), 'u1', 'SendMail', ok.d)), SENT);
   assert.equal(ok.jobs.length, 1);
 });
 
@@ -196,7 +202,65 @@ test('12.1 compose failures map to HTTP statuses (no response body exists before
 test('ComposeMail WBXML (14.0+) and the 12.1 request line describe the same request', () => {
   const fromWbxml = composeRequestFromWbxml(composeReq('SmartReply', MIME, [...clientId('c-9'), ...source('orig')]));
   assert.ok(fromWbxml.mime?.equals(MIME));
-  assert.deepEqual({ ...fromWbxml, mime: null }, { mime: null, saveInSent: true, clientId: 'c-9', source: { itemId: 'orig', folderId: 'inbox' }, replaceMime: false });
+  assert.deepEqual({ ...fromWbxml, mime: null }, { mime: null, saveInSent: true, clientId: 'c-9', source: { itemId: 'orig', folderId: 'inbox' }, replaceMime: false, deviceId: '' });
   const fromLine = composeRequestFromMime(MIME, { saveInSent: true, itemId: 'orig', collectionId: 'inbox' });
-  assert.deepEqual({ ...fromLine, mime: null }, { mime: null, saveInSent: true, clientId: '', source: { itemId: 'orig', folderId: 'inbox' }, replaceMime: false });
+  assert.deepEqual({ ...fromLine, mime: null }, { mime: null, saveInSent: true, clientId: '', source: { itemId: 'orig', folderId: 'inbox' }, replaceMime: false, deviceId: '' });
+});
+
+test('9.4: 14.x success is an empty response; failures keep <Command><Status>', async () => {
+  const ok = deps();
+  const body = await handleSendMail(composeReq('SendMail', MIME), 'u1', 'SendMail', ok.d);
+  assert.equal(body.length, 0, '[MS-ASCMD] 2.2.1.17: empty response on success');
+  assert.equal(composeResponse('SmartReply', '1').length, 0);
+  assert.equal(status(composeResponse('SmartForward', '150')), '150');
+});
+
+test('9.4: maximum message size — Status 115 (14.x) / HTTP 413 (12.1), the appended original counts', async () => {
+  const small = deps({ maxMessageBytes: async () => MIME.length - 1 });
+  assert.equal(status(await handleSendMail(composeReq('SendMail', MIME), 'u1', 'SendMail', small.d)), '115');
+  assert.equal(await handleLegacySendMail(MIME, { saveInSent: false }, 'u1', 'SendMail', small.d), 413);
+  assert.equal(small.jobs.length, 0, 'nothing queued');
+
+  // the client part fits, but not with the original appended (SmartForward)
+  const fwd = deps({ maxMessageBytes: async () => MIME.length + 100 });
+  assert.equal(status(await handleSendMail(composeReq('SendMail', MIME), 'u1', 'SendMail', fwd.d)), SENT);
+  assert.equal(status(await handleSendMail(composeReq('SmartForward', MIME, source('orig')), 'u1', 'SmartForward', fwd.d)), '115');
+  assert.equal(fwd.jobs.length, 1);
+  assert.equal(legacySendHttpStatus('115'), 413);
+});
+
+test('9.4: 12.1 retry without ClientId — same Message-ID from the same device within the window is not sent twice', async () => {
+  const r = deps();
+  assert.equal(await handleLegacySendMail(MIME, { saveInSent: false }, 'u1', 'SendMail', r.d, 'DEV1'), 200);
+  assert.equal(await handleLegacySendMail(MIME, { saveInSent: false }, 'u1', 'SendMail', r.d, 'DEV1'), 200, 'retry answered as sent');
+  assert.equal(r.jobs.length, 1, 'only one message queued');
+  assert.deepEqual(r.ttls, [600, 600], 'short window (10 min)');
+
+  // another device, or another Message-ID, is a different message
+  assert.equal(await handleLegacySendMail(MIME, { saveInSent: false }, 'u1', 'SendMail', r.d, 'DEV2'), 200);
+  const other = Buffer.from(MIME.toString('latin1').replace('<x1@example.com>', '<x2@example.com>'), 'latin1');
+  assert.equal(await handleLegacySendMail(other, { saveInSent: false }, 'u1', 'SendMail', r.d, 'DEV1'), 200);
+  assert.equal(r.jobs.length, 3);
+
+  // a failed send releases the key: the device's retry goes out
+  const flakyJobs: Job[] = [];
+  let fail = true;
+  const flaky = deps({ enqueue: async (j) => { if (fail) throw new Error('queue down'); flakyJobs.push(j); } });
+  assert.equal(await handleLegacySendMail(MIME, { saveInSent: false }, 'u1', 'SendMail', flaky.d, 'DEV1'), 500);
+  fail = false;
+  assert.equal(await handleLegacySendMail(MIME, { saveInSent: false }, 'u1', 'SendMail', flaky.d, 'DEV1'), 200);
+  assert.equal(flakyJobs.length, 1);
+});
+
+test('9.4: idempotency key — ClientId first (3 days), else Message-ID + device; none without either', () => {
+  const base = { mime: MIME, saveInSent: false, source: null, replaceMime: false };
+  assert.deepEqual(idempotencyKey({ ...base, clientId: 'c-1', deviceId: 'DEV1' }), { id: 'c-1', ttlSec: 3 * 24 * 3600 });
+  const a = idempotencyKey({ ...base, clientId: '', deviceId: 'DEV1' });
+  assert.ok(a && a.id.startsWith('mid:') && a.ttlSec === 600);
+  assert.notDeepEqual(idempotencyKey({ ...base, clientId: '', deviceId: 'DEV2' }), a);
+  assert.equal(idempotencyKey({ ...base, clientId: '', deviceId: '' }), null, 'no device id');
+  const noId = Buffer.from('From: bob@example.com\r\nTo: carol@ext.test\r\n\r\nx\r\n', 'latin1');
+  assert.equal(idempotencyKey({ ...base, mime: noId, clientId: '', deviceId: 'DEV1' }), null, 'no Message-ID');
+  const folded = Buffer.from('Message-ID:\r\n <x1@example.com>\r\nFrom: bob@example.com\r\n\r\nx\r\n', 'latin1');
+  assert.deepEqual(idempotencyKey({ ...base, mime: folded, clientId: '', deviceId: 'DEV1' }), a, 'folded header unfolded');
 });

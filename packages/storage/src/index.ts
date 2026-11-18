@@ -15,6 +15,8 @@ export * from './protocol-cert.js';
 export * from './private-key-crypto.js';
 export * from './private-key-migration.js';
 export * from './sender-identity.js';
+export * from './message-size-limit.js';
+export * from './spoof-settings.js';
 export * from './message-store.js';
 export * from './folder-delete.js';
 export * from './quarantine.js';

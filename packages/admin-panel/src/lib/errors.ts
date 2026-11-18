@@ -2,7 +2,7 @@ import toast from 'react-hot-toast';
 
 /** Error with the machine-readable code of the auth/API error body (e.g. REAUTH_FAILED). */
 export class ApiError extends Error {
-  constructor(message: string, readonly code: string | undefined, readonly status: number) {
+  constructor(message: string, readonly code: string | undefined, readonly status: number, readonly errors?: unknown[]) {
     super(message);
     this.name = 'ApiError';
   }
@@ -29,7 +29,7 @@ const CODE_MESSAGES: Record<string, string> = {
  * where `error` may itself be a code (e.g. `{ error: 'MFA_INVALID_CODE' }`).
  */
 export function apiErrorFromBody(body: unknown, status: number, fallback = `HTTP ${status}`): ApiError {
-  const b = (body && typeof body === 'object' ? body : {}) as { error?: unknown; code?: unknown; message?: unknown };
+  const b = (body && typeof body === 'object' ? body : {}) as { error?: unknown; code?: unknown; message?: unknown; errors?: unknown };
   const error = typeof b.error === 'string' ? b.error : undefined;
   const code = typeof b.code === 'string' ? b.code
     : error && /^[A-Z][A-Z0-9_]+$/.test(error) ? error : undefined;
@@ -39,7 +39,8 @@ export function apiErrorFromBody(body: unknown, status: number, fallback = `HTTP
     ?? (typeof b.message === 'string' && b.message ? b.message : undefined)
     ?? error
     ?? fallback;
-  return new ApiError(message, code, status);
+  // per-item errors of a bulk request (e.g. the sender-list CSV import: { line, error }[])
+  return Array.isArray(b.errors) ? new ApiError(message, code, status, b.errors) : new ApiError(message, code, status);
 }
 
 /** Human-readable message of an unknown error value. */

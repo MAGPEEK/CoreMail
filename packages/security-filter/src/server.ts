@@ -14,6 +14,7 @@ import {
   runMalwareChecks,
   runGreylistCheck,
   runIpChecks,
+  runSenderListCheck,
   type PipelineConfig,
   type PipelineResult,
   type ConnectionContext,
@@ -63,6 +64,7 @@ async function loadSecuritySettings(): Promise<void> {
         greylisting: pipelineConfig.greylistingEnabled, dnsbl: pipelineConfig.dnsblEnabled,
         geoip: pipelineConfig.countryFilter?.mode ?? 'disabled', attachments: pipelineConfig.attachmentEnabled,
         clamav: pipelineConfig.clamavEnabled, clamavAction: pipelineConfig.clamavAction, rspamd: pipelineConfig.rspamdEnabled,
+        localSpoof: pipelineConfig.localSpoof?.action,
       },
       'Security settings loaded from DB',
     );
@@ -75,7 +77,7 @@ async function loadSecuritySettings(): Promise<void> {
  * POST /check/connection
  * Body: { senderIp, stage?: 'connect'|'rcpt'|'full', mailFrom?, rcptTo? }
  *  - connect (TCP connect, only the IP is known): DNSBL/DNSWL + GeoIP
- *  - rcpt    (RCPT TO, full triple known):        greylisting
+ *  - rcpt    (RCPT TO, full triple known):        sender lists of the recipient, greylisting
  *  - full    (legacy, all fields):                greylisting + IP checks
  */
 app.post('/check/connection', async (req, res) => {
@@ -89,6 +91,7 @@ app.post('/check/connection', async (req, res) => {
     const result = await runConnectionStage(parsed.stage, parsed.ctx, effectiveConfig(), {
       ipChecks: runIpChecks,
       greylist: runGreylistCheck,
+      senderList: (ctx) => runSenderListCheck(ctx),
     });
     res.json(result);
   } catch (err) {

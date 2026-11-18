@@ -14,6 +14,7 @@ import { MethodError, cannotCalculateChanges, setError, type SetError } from '..
 import { emailState } from '../state.js';
 import { loadRawMessage, parseAddress, parseHeaders } from '../mail/raw.js';
 import { stripBccHeader } from '../mail/strip-bcc.js';
+import { assertMessageSize } from '../mail/size-limit.js';
 import { checkEnvelopeMailFrom, checkSubmissionSendersFor } from '../mail/sender-check.js';
 import { MAX_DELAYED_SEND_SEC } from '../limits.js';
 import { listIdentities } from './identity.js';
@@ -106,6 +107,8 @@ async function parseCreate(obj: JsonObject, account: AccountContext, ctx: Method
   if (!msg) throw setError('invalidProperties', 'emailId not found', ['emailId']);
 
   const raw = await loadRawMessage(msg);
+  // 9.4: the configured maximum message size (shared with REST and ActiveSync)
+  await assertMessageSize(raw.length);
   // RFC 8621 §7.5 forbiddenFrom: every From/Sender address must be one the user may send
   // as (shared policy with SMTP submission); a missing/unparseable From is invalidEmail.
   const verdict = await checkSubmissionSendersFor(raw, identityEmail, ctx.user.userId);

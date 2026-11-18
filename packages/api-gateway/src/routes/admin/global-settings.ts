@@ -14,11 +14,21 @@
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { prisma } from '@coremail/storage';
+import { prisma, clearMessageSizeLimitCache } from '@coremail/storage';
 import { requireArea } from '../../middleware/auth.js';
 import { createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 import { audit, auditContext, invalidateAuditCache } from '../../lib/audit.js';
 import { publicServerSettings } from '../../lib/secrets.js';
+import { API_RATE_LIMIT_BOUNDS, resolveApiRateLimit } from '../../lib/api-rate-limit.js';
+import { reloadApiRateLimitConfig } from '../../lib/api-rate-limit-state.js';
+
+/**
+ * Settings view for the BCP: the public fields plus the API rate-limit fields an
+ * API_RATE_LIMIT_* environment variable overrides (shown read-only).
+ */
+export function settingsView<T extends object>(cfg: T): Record<string, unknown> {
+  return { ...publicServerSettings(cfg), apiRateLimitEnvOverrides: resolveApiRateLimit(cfg).envOverrides };
+}
 
 const log = createLogger('admin:global-settings');
 export const adminGlobalSettingsRouter: RouterType = Router();
@@ -85,6 +95,11 @@ export const SecuritySchema = z.object({
   // v3.18.30: audit log globally on/off. The toggle is always logged as a
   // critical event regardless of its own value (see ALWAYS_AUDIT in audit.ts).
   auditLogEnabled:            z.boolean(),
+  // 9.4: global API rate limit (lib/api-rate-limit.ts; API_RATE_LIMIT_* override)
+  apiRateLimitEnabled:        z.boolean(),
+  apiRateLimitWindowMin:      z.number().int().min(API_RATE_LIMIT_BOUNDS.windowMin[0]).max(API_RATE_LIMIT_BOUNDS.windowMin[1]),
+  apiRateLimitPerIp:          z.number().int().min(API_RATE_LIMIT_BOUNDS.perIp[0]).max(API_RATE_LIMIT_BOUNDS.perIp[1]),
+  apiRateLimitPerUser:        z.number().int().min(API_RATE_LIMIT_BOUNDS.perUser[0]).max(API_RATE_LIMIT_BOUNDS.perUser[1]),
 }).partial();
 
 export const MaintenanceSchema = z.object({
@@ -114,7 +129,7 @@ function publishReload(section: string): void {
 adminGlobalSettingsRouter.get('/', async (_req: Request, res: Response) => {
   try {
     const cfg = await getOrCreate();
-    res.json(publicServerSettings(cfg));
+    res.json(settingsView(cfg));
   } catch (err) {
     log.error({ err }, 'Failed to read global settings');
     res.status(500).json({ error: 'Einstellungen nicht verfügbar' });
@@ -132,7 +147,7 @@ adminGlobalSettingsRouter.put('/org', async (req: Request, res: Response) => {
   });
   log.info({ orgName: parsed.data.orgName }, 'Organisation settings updated');
   publishReload('org');
-  res.json(publicServerSettings(cfg));
+  res.json(settingsView(cfg));
 });
 
 // ── PUT /api/v1/admin/settings/mail ───────────────────────────────────────────
@@ -146,7 +161,8 @@ adminGlobalSettingsRouter.put('/mail', async (req: Request, res: Response) => {
   });
   log.info(parsed.data, 'Mail settings updated');
   publishReload('mail');
-  res.json(publicServerSettings(cfg));
+  clearMessageSizeLimitCache(); // 9.4: REST /mail/send uses the new maximum message size at once
+  res.json(settingsView(cfg));
 });
 
 // ── PUT /api/v1/admin/settings/security ───────────────────────────────────────
@@ -190,10 +206,12 @@ adminGlobalSettingsRouter.put('/security', async (req: Request, res: Response) =
 
   // Invalidate the audit middleware cache so the toggle takes effect immediately.
   invalidateAuditCache();
+  // 9.4: the API rate limit applies at once (otherwise within the 60 s refresh)
+  await reloadApiRateLimitConfig();
 
   log.info(parsed.data, 'Security policies updated');
   publishReload('security');
-  res.json(publicServerSettings(cfg));
+  res.json(settingsView(cfg));
 });
 
 // ── PUT /api/v1/admin/settings/maintenance ────────────────────────────────────
@@ -207,5 +225,5 @@ adminGlobalSettingsRouter.put('/maintenance', async (req: Request, res: Response
   });
   log.info({ maintenanceMode: parsed.data.maintenanceMode }, 'Maintenance mode changed');
   publishReload('maintenance');
-  res.json(publicServerSettings(cfg));
+  res.json(settingsView(cfg));
 });

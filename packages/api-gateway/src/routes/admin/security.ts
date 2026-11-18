@@ -7,6 +7,8 @@ import { rspamdControllerHeaders } from '../../lib/rspamd-controller.js';
 import { getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 import { adminClamavRouter } from './security-clamav.js';
 import { adminSecurityCapabilitiesRouter } from './security-capabilities.js';
+import { adminSenderListsRouter } from './security-sender-lists.js';
+import { adminSpoofingRouter } from './security-spoofing.js';
 
 export const adminSecurityRouter: RouterType = Router();
 adminSecurityRouter.use(requireArea('hygiene'));
@@ -14,6 +16,9 @@ adminSecurityRouter.use(requireArea('hygiene'));
 adminSecurityRouter.use('/clamav', adminClamavRouter);
 // rspamd / ClamAV deployment state for the BCP (9.3)
 adminSecurityRouter.use('/capabilities', adminSecurityCapabilitiesRouter);
+// Sender block / allow lists and local-domain anti-spoofing (9.4)
+adminSecurityRouter.use('/sender-lists', adminSenderListsRouter);
+adminSecurityRouter.use('/spoofing', adminSpoofingRouter);
 
 const RSPAMD_URL  = process.env['RSPAMD_URL']  ?? 'http://rspamd:11334';
 const CLAMAV_HOST = process.env['CLAMAV_HOST'] ?? 'clamav';

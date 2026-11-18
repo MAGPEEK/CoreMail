@@ -4,7 +4,8 @@
  * Sources:
  *  - SecuritySettings (BCP → Protection): DNSBL switch, GeoIP country filter,
  *    attachment filter, ClamAV switch/action/failure policy, rspamd switch +
- *    thresholds.
+ *    thresholds, local-domain anti-spoofing (9.4; LOCAL_SPOOF_* / ARC_TRUSTED_SEALERS
+ *    override the columns when set — storage spoof-settings.ts).
  *  - SmtpSettings (BCP → SMTP → Greylisting): greylisting switch. Wait time,
  *    TTL and whitelist are read by greylisting/index.ts from the same row.
  *    SmtpSettings is the single source of truth for greylisting; the
@@ -14,6 +15,7 @@
  * row behave the same.
  */
 import type { PipelineConfig } from './pipeline/index.js';
+import { resolveSpoofSettings } from '@coremail/storage';
 import { DEFAULT_BLOCKED_EXTENSIONS } from './attachment/index.js';
 
 export type ClamavAction = 'quarantine' | 'reject' | 'pass';
@@ -39,6 +41,10 @@ export interface SecuritySettingsRow {
   clamavHeuristicsAsVirus?: boolean;
   clamavPuaAsVirus?: boolean;
   clamavEncryptedAsVirus?: boolean;
+  // 9.4 local-spoof columns — optional like the ClamAV policy fields
+  localSpoofAction?: string;
+  localSpoofAllow?: unknown;
+  arcTrustedSealers?: unknown;
 }
 
 export interface SmtpGreylistRow {
@@ -116,6 +122,7 @@ export function buildPipelineConfig(
   const d = DEFAULT_PIPELINE_CONFIG;
   const cfg: PipelineConfig = { ...d, blockedExtensions: [...d.blockedExtensions] };
   if (smtp) cfg.greylistingEnabled = smtp.greylistingEnabled;
+  cfg.localSpoof = resolveSpoofSettings(sec, env);
   if (!sec) return applyScannerEnvOverrides(cfg, env);
 
   const mode = sec.geoipMode.toUpperCase();

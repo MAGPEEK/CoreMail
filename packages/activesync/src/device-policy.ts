@@ -36,13 +36,22 @@ export type DeviceAccess = { allow: true } | { allow: false; status: EasGlobalSt
 /** Statuses an admin sets to keep a device out (PENDING = not approved yet). */
 const REFUSED = new Set(['BLOCKED', 'PENDING']);
 
-/** Decide whether `command` may run for this device with the given X-MS-PolicyKey header. */
+/**
+ * Decide whether `command` may run for this device with the given X-MS-PolicyKey header
+ * (`undefined` = the request carries no policy key at all).
+ *
+ * 9.4: Ping may omit the policy key — [MS-ASPROV] "Provision Command": the current policy key
+ * is received "for all protocol command requests except the Autodiscover command, the Ping
+ * command, and the HTTP OPTIONS command". A key-less Ping is allowed only for a known device
+ * in status OK with a committed final policy key; every other case keeps the checks below.
+ */
 export function deviceAccess(device: DeviceAccessRow | null, command: string, headerKey: string | undefined): DeviceAccess {
   if (command === 'Provision') return { allow: true }; // handles wipe / block itself
   if (!device) return { allow: false, status: EAS_GLOBAL_STATUS.DEVICE_NOT_PROVISIONED };
   if (device.status === 'WIPED') return { allow: false, status: EAS_GLOBAL_STATUS.REMOTE_WIPE_REQUESTED };
   if (REFUSED.has(device.status)) return { allow: false, status: EAS_GLOBAL_STATUS.DEVICE_BLOCKED };
   if (!device.policyKey || device.policyKey === '0') return { allow: false, status: EAS_GLOBAL_STATUS.DEVICE_NOT_PROVISIONED };
+  if (command === 'Ping' && headerKey === undefined && device.status === 'OK') return { allow: true };
   const key = (headerKey ?? '').trim();
   if (key === '' || key === '0') return { allow: false, status: EAS_GLOBAL_STATUS.DEVICE_NOT_PROVISIONED };
   if (key !== device.policyKey) return { allow: false, status: EAS_GLOBAL_STATUS.INVALID_POLICY_KEY };
