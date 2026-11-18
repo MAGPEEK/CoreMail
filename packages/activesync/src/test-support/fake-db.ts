@@ -193,7 +193,7 @@ export function createFakeDb(tables: Tables) {
   }
 
   const db: Row = { $on: () => undefined, calls, tables };
-  for (const name of ['user', 'emailAlias', 'userSettings', 'activeSyncDevice', 'activeSyncItem', 'mailbox', 'folder', 'message', 'attachment', 'sharedMailbox', 'sharedMailboxPerm', 'mailFlowPolicy', 'contact', 'calendar', 'calendarEvent', 'systemLog']) {
+  for (const name of ['user', 'emailAlias', 'userSettings', 'activeSyncDevice', 'activeSyncItem', 'mailbox', 'folder', 'message', 'attachment', 'sharedMailbox', 'sharedMailboxPerm', 'mailFlowPolicy', 'contact', 'calendar', 'calendarEvent', 'systemLog', 'webmailPolicy']) {
     db[name] = model(name);
   }
   db['$transaction'] = async (fn: (tx: unknown) => Promise<unknown>) => fn(db);

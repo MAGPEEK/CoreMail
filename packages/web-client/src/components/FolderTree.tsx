@@ -21,6 +21,7 @@ import { isStaleSubfolderRefusal } from '../lib/folderDelete.js';
 import { useT } from '../i18n/useT.js';
 import { useLanguageStore } from '../store/language.js';
 import { SAFETY_REFETCH_MS } from '../lib/realtimeEvents.js';
+import { useWebmailFeatures } from '../hooks/useWebmailFeatures.js';
 
 type DialogState =
   | { kind: 'createRoot' }
@@ -44,6 +45,8 @@ export function FolderTree() {
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [dialog, setDialog] = useState<DialogState>(null);
   const [recoverOpen, setRecoverOpen] = useState(false);
+  // 9.4 webmail policy: shared mailboxes and "recover deleted items" can be switched off
+  const { features } = useWebmailFeatures();
   const [collapsedNodes, setCollapsedNodes] = useState<Set<string>>(new Set());
 
   const { data: folders } = useQuery({
@@ -263,7 +266,7 @@ export function FolderTree() {
       items.push(
         { type: 'divider' },
         // v8.1: "Recover deleted items" — from the Trash folder
-        ...(folder.name === 'Trash' ? [{
+        ...(folder.name === 'Trash' && features.recoverItems ? [{
           label: t('recover_title'),
           icon: <RotateCcw size={14} />,
           onClick: () => setRecoverOpen(true),
@@ -395,8 +398,8 @@ export function FolderTree() {
         )}
         {/* Public folders completely removed in v3.18.31 */}
 
-        {/* 9.3: shared + delegated mailboxes (OWA "add shared folder") */}
-        <SharedMailboxTree />
+        {/* 9.3: shared + delegated mailboxes (OWA "add shared folder"); 9.4: module switch */}
+        {features.sharedMailboxes && <SharedMailboxTree />}
       </nav>
 
       {/* v8.1: mailbox usage / quota level */}

@@ -11,6 +11,7 @@ import {
   startDeletedItemsPurger, type PurgeRedis, startMailboxAccessAuditPurger, type AccessPurgeRedis,
   startReferencesBackfill, type BackfillRedis,
   migratePrivateKeysAtRestLocked, type PrivateKeyMigrationRedis,
+  startWebmailPolicySubscriber,
 } from '@coremail/storage';
 import {
   getRedisClient, createLogger, startAuthInvalidationSubscriber,
@@ -40,6 +41,7 @@ import { tasksRouter } from './routes/tasks.js';
 import { notesRouter } from './routes/notes.js';
 import { userRouter } from './routes/user.js';
 import { userSettingsRouter } from './routes/user-settings.js';
+import { userPolicyRouter } from './routes/user-policy.js';
 import { readReceiptRouter } from './routes/read-receipts.js';
 import { appleProfileRouter } from './routes/apple-profile.js';
 import { categoriesRouter } from './routes/categories.js';
@@ -396,6 +398,7 @@ app.use('/api/v1/contacts',       contactsRouter);
 app.use('/api/v1/tasks',          tasksRouter);
 app.use('/api/v1/notes',          notesRouter);
 app.use('/api/v1/user',           userSettingsRouter); // 9.4: preferences, sessions, signatures
+app.use('/api/v1/user',           userPolicyRouter);   // 9.4: webmail features + trusted image senders
 app.use('/api/v1/user',           userRouter);
 app.use('/api/v1/categories',     categoriesRouter);
 app.use('/api/v1/smime',          smimeRouter);
@@ -505,6 +508,7 @@ async function start() {
   void initRuntimeLogLevel('api-gateway', { aliases: ['api'] }); // BCP per-service log level
   startApiRateLimitRefresh(); // 9.4: BCP-configurable API rate limit (60 s refresh)
   startBrandingSubscriber(); // 9.3: branding changes of other instances → drop cached index.html
+  startWebmailPolicySubscriber(); // 9.4: webmail policy changes of other instances → drop the policy cache
   void startSseHub(); // one Redis subscriber → SSE fan-out + Web Push (lib/sse-hub.ts)
   // v7.1.0: session revocations done by the auth-service / LDAP sync reach
   // requireAuth's in-process revocation check immediately.

@@ -80,7 +80,7 @@ node scripts/e2e/run.mjs imap pop3       # single steps (state is kept in state.
 node --test scripts/e2e/repo-hygiene.test.mjs   # static regression checks (no stack needed)
 ```
 
-Steps: `setup users smtp imap pop3 jmap dav eas eas-body eas-commands eas-legacy rest webmail admin tls legacy-clients backup branding mfa live protocols mapi lockout restart storage schema-upgrade`.
+Steps: `setup users smtp imap pop3 jmap dav eas eas-body eas-commands eas-legacy rest webmail admin tls legacy-clients backup branding mfa live protocols policies mapi lockout restart storage schema-upgrade`.
 `eas-legacy`: OPTIONS announces `12.1,14.0,14.1` and an unannounced version (2.5) is served as 14.1
 (Status 142 in WBXML for the unprovisioned device); a 12.1
 device gets HTTP 449 without a policy key, provisions, syncs (no Email2 / 14.x tags in any
@@ -167,6 +167,14 @@ closed, a new login with the correct password gets `NO [AUTHORIZATIONFAILED]`, a
 `POST /auth/login` and B's existing session on
 `/api/v1/mail/folders` answer 403 `PROTOCOL_DISABLED`; back to inherit → web login and IMAP work.
 B's switches are reset to inherit at the end. See [protocol-access.md](protocol-access.md).
+`policies` (9.4): the server level of the webmail policies is readable and refuses `inherit`; the
+calendar and tasks modules off for B (`PUT /api/v1/admin/webmail-policies/users/:id`) → B's
+`/api/v1/calendar` and `/api/v1/tasks` answer 403 `FEATURE_DISABLED`, `/api/v1/user/features`
+reports them off, mail keeps working, CalDAV `PROPFIND /dav/calendars/<id>/` → 403; the blocked
+extension `bin` → the attachment download answers 403 `ATTACHMENT_BLOCKED`; `bin` as "save only" →
+`?inline=1` 403 `INLINE_PREVIEW_DISABLED`, the plain download 200; external images "always block" →
+the image proxy 403 `EXTERNAL_IMAGES_BLOCKED`. Everything is reset to inherit at the end. See
+[webmail-policies.md](webmail-policies.md).
 `mapi` (9.4): MAPI over HTTP is off by default (Connect → 403 without a password prompt; GET →
 X-ResponseCode 2; no credentials → 401). The admin turns the switch on for A, B sends A a mail over
 SMTP submission; A connects (`Connect`, cookies, PROCESSING/DONE), logs on, finds the mail in the

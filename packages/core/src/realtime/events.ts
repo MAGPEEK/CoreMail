@@ -118,9 +118,9 @@ export const USER_EVENT_TYPES: readonly UserEventType[] = ['calendar', 'tasks', 
 export type UserEventAction = 'create' | 'update' | 'delete';
 const ACTIONS: readonly UserEventAction[] = ['create', 'update', 'delete'];
 
-/** Settings areas the webmail caches separately (`settings` events). */
-export type SettingsSection = 'profile' | 'preferences' | 'signature' | 'oof' | 'rules' | 'categories' | 'mailboxes';
-export const SETTINGS_SECTIONS: readonly SettingsSection[] = ['profile', 'preferences', 'signature', 'oof', 'rules', 'categories', 'mailboxes'];
+/** Settings areas the webmail caches separately (`settings` events; `policies` = webmail policy, 9.4). */
+export type SettingsSection = 'profile' | 'preferences' | 'signature' | 'oof' | 'rules' | 'categories' | 'mailboxes' | 'policies';
+export const SETTINGS_SECTIONS: readonly SettingsSection[] = ['profile', 'preferences', 'signature', 'oof', 'rules', 'categories', 'mailboxes', 'policies'];
 
 export interface UserEvent {
   type: UserEventType;

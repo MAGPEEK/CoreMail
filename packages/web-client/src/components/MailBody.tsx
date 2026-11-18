@@ -1,11 +1,18 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
-import { Image as ImageIcon } from 'lucide-react';
+import { useQueryClient } from '@tanstack/react-query';
+import { Image as ImageIcon, ImageOff } from 'lucide-react';
+import toast from 'react-hot-toast';
+import { api } from '../api/client.js';
+import { toastError } from '../lib/errors.js';
 import { renderMailHtml } from '../lib/mailHtml.js';
 import { useInlineImages } from '../hooks/useInlineImages.js';
 import { useExternalImages } from '../hooks/useExternalImages.js';
+import { useWebmailFeatures } from '../hooks/useWebmailFeatures.js';
+import { inlinePreviewAllowed, showExternalImages, type ExternalImageDecision } from '../lib/webmailFeatures.js';
 
 interface MailAttachment {
   id: string;
+  filename?: string | null;
   contentId?: string | null;
   mimeType?: string | null;
 }
@@ -37,17 +44,26 @@ const MAIL_PAPER_STYLE: CSSProperties = { ...MAIL_BODY_STYLE, colorScheme: 'ligh
 /**
  * Sanitized mail HTML with inline (cid:) images, the external-image privacy
  * toggle and image-proxy loading. `resetKey` (the message id) resets the toggle.
+ * 9.4 webmail policy: `decision` (from the server, per mail) loads the external
+ * images at once or never; "save only" attachment types are not shown inline.
  */
 export function useMailHtml(
   html: string | undefined,
   attachments: MailAttachment[] | undefined,
   resetKey: string,
+  decision: ExternalImageDecision = 'ask',
 ) {
-  const [showExternal, setShowExternal] = useState(false);
+  const [clicked, setShowExternal] = useState(false);
   useEffect(() => { setShowExternal(false); }, [resetKey]);
+  const showExternal = showExternalImages(decision, clicked);
+  const { content } = useWebmailFeatures();
+  const previewable = useMemo(
+    () => attachments?.filter((a) => inlinePreviewAllowed(a, content)),
+    [attachments, content],
+  );
 
   // Inline (cid:) images are fetched with the Authorization header → blob: URLs
-  const cidMap = useInlineImages(html, attachments);
+  const cidMap = useInlineImages(html, previewable);
   // Blocked render: privacy filter + list of external image URLs
   const base = useMemo(
     () => (html ? renderMailHtml(html, { cidMap }) : null),
@@ -65,6 +81,7 @@ export function useMailHtml(
     blockedCount: showExternal ? 0 : base?.blockedCount ?? 0,
     showExternal,
     setShowExternal,
+    decision,
   };
 }
 
@@ -76,14 +93,38 @@ interface MailBodyProps {
   scrollClassName?: string;
   /** Classes of the body element itself (typography) */
   bodyClassName?: string;
+  /** 9.4: the server's external-image decision for this mail (webmail policy, trusted senders). */
+  imageDecision?: ExternalImageDecision | undefined;
+  /** 9.4: sender address — "always show images from this sender". */
+  sender?: string | undefined;
 }
 
 /** Renders a sanitized HTML mail body with the "external images blocked" banner. */
-export function MailBody({ messageId, html, attachments, scrollClassName, bodyClassName }: MailBodyProps) {
-  const mail = useMailHtml(html, attachments, messageId);
+export function MailBody({ messageId, html, attachments, scrollClassName, bodyClassName, imageDecision, sender }: MailBodyProps) {
+  const mail = useMailHtml(html, attachments, messageId, imageDecision);
+  const qc = useQueryClient();
+  const trustSender = () => {
+    if (!sender) return;
+    api.post('/user/trusted-senders', { sender })
+      .then(() => {
+        mail.setShowExternal(true);
+        void qc.invalidateQueries({ queryKey: ['trusted-senders'] });
+        toast.success(`Bilder von ${sender} werden künftig immer angezeigt`, { duration: 2500 });
+      })
+      .catch(toastError);
+  };
   return (
     <>
-      {mail.blockedCount > 0 && !mail.showExternal && (
+      {mail.blockedCount > 0 && mail.decision === 'block' && (
+        <div className="px-4 py-2.5 border-b border-line bg-surface-2 flex items-center gap-2.5 text-sm shrink-0">
+          <ImageOff size={16} className="text-fg-muted shrink-0" aria-hidden="true" />
+          <p className="text-xs text-fg-muted leading-tight">
+            {mail.blockedCount === 1 ? '1 externes Bild wurde blockiert.' : `${mail.blockedCount} externe Bilder wurden blockiert.`}
+            {' '}Externe Bilder sind für Ihr Konto gesperrt.
+          </p>
+        </div>
+      )}
+      {mail.blockedCount > 0 && !mail.showExternal && mail.decision !== 'block' && (
         <div className="px-4 py-2.5 border-b border-info-line bg-info-bg flex items-center gap-2.5 text-sm shrink-0">
           <ImageIcon size={16} className="text-info-fg shrink-0" aria-hidden="true" />
           <div className="flex-1 min-w-0">
@@ -104,6 +145,16 @@ export function MailBody({ messageId, html, attachments, scrollClassName, bodyCl
           >
             <ImageIcon size={13} aria-hidden="true" /> Bilder anzeigen
           </button>
+          {sender && (
+            <button
+              type="button"
+              onClick={trustSender}
+              className="shrink-0 px-3 py-1.5 text-xs font-medium text-info-fg hover:underline"
+              title={`Externe Bilder in Mails von ${sender} immer anzeigen`}
+            >
+              Immer von diesem Absender
+            </button>
+          )}
         </div>
       )}
       <div className={scrollClassName}>

@@ -2,8 +2,10 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Reply, ReplyAll, Forward, Trash2, Archive, Paperclip, Download, Printer, ListFilter, Mail,
   AlertOctagon, ShieldOff, Code, Pin, Flag, FolderInput, Clock, X,
-  ShieldAlert, ShieldCheck, CalendarClock, CheckCircle, AlertCircle, RefreshCw, ArrowDown,
+  ShieldAlert, ShieldCheck, CalendarClock, CheckCircle, AlertCircle, RefreshCw, ArrowDown, Ban,
 } from 'lucide-react';
+import { useWebmailFeatures } from '../hooks/useWebmailFeatures.js';
+import { attachmentAccess, parseImageDecision } from '../lib/webmailFeatures.js';
 import { useRef, useState, type ReactNode } from 'react';
 import { textToQuotedHtml } from '../lib/mailHtml.js';
 import { api, downloadFile, fetchText } from '../api/client.js';
@@ -99,6 +101,7 @@ export function MessageReader({ messageId }: Props) {
   const avatarRef = useRef<HTMLDivElement>(null);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const policy = useWebmailFeatures().content; // 9.4: blocked attachment types
   const { data: msg, isLoading, isError, error, refetch, isFetching } = useQuery({
     queryKey: ['message', messageId],
     // 9.4: the reader marks read itself (immediately / after a delay / manually)
@@ -411,7 +414,15 @@ export function MessageReader({ messageId }: Props) {
       {/* Attachments */}
       {msg.attachments?.length > 0 && (
         <div className="px-6 py-2 border-b border-line flex flex-wrap gap-2 shrink-0">
-          {msg.attachments.map((att) => (
+          {msg.attachments.map((att) => (attachmentAccess(att.filename || '', policy) === 'blocked' ? (
+            // 9.4 webmail policy: this file type may not be downloaded
+            <span key={att.id} title={`${att.filename} — dieser Dateityp ist gesperrt`}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-surface-2 border border-line rounded text-xs text-fg-subtle cursor-not-allowed">
+              <Ban size={12} aria-hidden="true" />
+              {att.filename}
+              <span>(gesperrt)</span>
+            </span>
+          ) : (
             // Fetch-to-blob with the Authorization header (a plain <a href> would
             // reach GET /api/v1/mail/attachments/:id without a token → 401).
             <button key={att.id} type="button" title={att.filename}
@@ -422,7 +433,7 @@ export function MessageReader({ messageId }: Props) {
               <span className="text-fg-subtle">({Math.round(att.size / 1024)} KB)</span>
               <Download size={11} className="text-fg-subtle" />
             </button>
-          ))}
+          )))}
         </div>
       )}
 
@@ -441,6 +452,8 @@ export function MessageReader({ messageId }: Props) {
             messageId={msg.id}
             html={msg.bodyHtml}
             attachments={msg.attachments}
+            imageDecision={parseImageDecision(msg.externalImages)}
+            sender={msg.fromAddr}
             scrollClassName="flex-1 overflow-y-auto px-6 py-4"
             bodyClassName="prose prose-sm max-w-none"
           />

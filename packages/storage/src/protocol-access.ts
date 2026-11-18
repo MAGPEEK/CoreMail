@@ -33,6 +33,10 @@ import { createLogger, onAuthInvalidation, CHANNEL_SETTINGS_RELOAD, PROTOCOL_ACC
 import { prisma } from './prisma/index.js';
 import { publishUserAuthChange } from './auth/invalidation.js';
 import { authRedis } from './auth/redis.js';
+import {
+  SWITCH_SETTINGS, SERVER_SWITCH_SETTINGS, inheritAllSwitches, mapKeys, resolveSwitches, switchFromColumn, switchToColumn,
+  type PolicyScope, type SwitchColumn, type SwitchSetting,
+} from './policy-levels.js';
 
 const log = createLogger('protocol-access');
 
@@ -42,11 +46,11 @@ const log = createLogger('protocol-access');
 export const ACCESS_PROTOCOLS = ['imap', 'pop3', 'smtp', 'activesync', 'jmap', 'dav', 'webmail', 'mapi'] as const;
 export type AccessProtocol = typeof ACCESS_PROTOCOLS[number];
 
-export const PROTOCOL_SETTINGS = ['inherit', 'on', 'off'] as const;
-export type ProtocolSetting = typeof PROTOCOL_SETTINGS[number];
+export const PROTOCOL_SETTINGS = SWITCH_SETTINGS;
+export type ProtocolSetting = SwitchSetting;
 
 /** The server level has no broader level to inherit from: only on / off. */
-export const SERVER_PROTOCOL_SETTINGS = ['on', 'off'] as const;
+export const SERVER_PROTOCOL_SETTINGS = SERVER_SWITCH_SETTINGS;
 
 /** The settings a level accepts (`inherit` only below the server level). */
 export function settingsForLevel(level: ProtocolScope['level']): readonly ProtocolSetting[] {
@@ -63,10 +67,7 @@ export const PROTOCOL_DEFAULTS: Readonly<ProtocolAccess> = Object.freeze({
   imap: true, pop3: true, smtp: true, activesync: true, jmap: true, dav: true, webmail: true, mapi: false,
 });
 
-export type ProtocolScope =
-  | { level: 'global' }
-  | { level: 'domain'; domainId: string }
-  | { level: 'user'; userId: string };
+export type ProtocolScope = PolicyScope;
 
 export function isAccessProtocol(v: unknown): v is AccessProtocol {
   return typeof v === 'string' && (ACCESS_PROTOCOLS as readonly string[]).includes(v);
@@ -77,11 +78,11 @@ export function isProtocolSetting(v: unknown): v is ProtocolSetting {
 }
 
 function mapProtocols<T>(fn: (p: AccessProtocol) => T): Record<AccessProtocol, T> {
-  return Object.fromEntries(ACCESS_PROTOCOLS.map((p) => [p, fn(p)])) as Record<AccessProtocol, T>;
+  return mapKeys(ACCESS_PROTOCOLS, fn);
 }
 
 export function inheritAll(): ProtocolSettings {
-  return mapProtocols(() => 'inherit');
+  return inheritAllSwitches(ACCESS_PROTOCOLS);
 }
 
 /** Effective access from `levels` (broadest first): the most specific non-inherit switch wins. */
@@ -89,13 +90,7 @@ export function resolveProtocolAccess(
   levels: readonly ProtocolSettings[],
   defaults: Readonly<ProtocolAccess> = PROTOCOL_DEFAULTS,
 ): ProtocolAccess {
-  return mapProtocols((p) => {
-    for (let i = levels.length - 1; i >= 0; i--) {
-      const s = levels[i]![p];
-      if (s !== 'inherit') return s === 'on';
-    }
-    return defaults[p];
-  });
+  return resolveSwitches(ACCESS_PROTOCOLS, levels, defaults);
 }
 
 /** The protocols that are off. */
@@ -109,13 +104,13 @@ function sameAccess(a: ProtocolAccess | undefined, b: ProtocolAccess | undefined
 
 // ─── Rows ─────────────────────────────────────────────────────────────────────
 
-type SwitchValue = 'INHERIT' | 'ON' | 'OFF';
+type SwitchValue = SwitchColumn;
 type PolicyRow = { id: string; domainId: string | null; userId: string | null } & Record<AccessProtocol, SwitchValue>;
 
 export const GLOBAL_POLICY_ID = 'global';
 
-const toSetting = (v: SwitchValue | undefined): ProtocolSetting => (v === 'ON' ? 'on' : v === 'OFF' ? 'off' : 'inherit');
-const toSwitch = (s: ProtocolSetting): SwitchValue => (s === 'on' ? 'ON' : s === 'off' ? 'OFF' : 'INHERIT');
+const toSetting = switchFromColumn;
+const toSwitch = switchToColumn;
 
 function settingsOf(row: PolicyRow | undefined): ProtocolSettings {
   return mapProtocols((p) => toSetting(row?.[p]));

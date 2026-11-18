@@ -1,6 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import {
-  LayoutDashboard, Globe, ListOrdered, ScrollText, Shield, Server,
+  LayoutDashboard, Globe, ListOrdered, ScrollText, Shield, Server, LayoutGrid,
   Mail, Settings2, ShieldCheck, Inbox, Workflow,
   ShieldAlert, Search,
   ShieldHalf, Archive,
@@ -56,6 +56,7 @@ export function Sidebar() {
       groupKey: 'nav_group_infra',
       items: [
         { path: '/services',         labelKey: 'nav_services',         icon: Server },
+        { path: '/webmail-policies', labelKey: 'nav_webmail_policies', icon: LayoutGrid },
         { path: '/smtp-config',      labelKey: 'nav_smtp_config',      icon: Terminal },
         { path: '/certificates',     labelKey: 'nav_certificates',     icon: ShieldCheck },
         { path: '/sso',              labelKey: 'nav_sso',              icon: Fingerprint },

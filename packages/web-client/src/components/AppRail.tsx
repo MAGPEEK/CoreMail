@@ -11,6 +11,8 @@ import { Mail, Calendar, Users, CheckSquare, StickyNote } from 'lucide-react';
 import { activeAppForPath, RAIL_ITEMS, type AppId, type RailItem } from '../lib/appRail.js';
 import { useT } from '../i18n/useT.js';
 import { nextRovingIndex } from '../lib/toolbarNav.js';
+import { isAppEnabled } from '../lib/webmailFeatures.js';
+import { useWebmailFeatures } from '../hooks/useWebmailFeatures.js';
 
 const ICONS: Record<AppId, ReactNode> = {
   mail: <Mail size={20} />,
@@ -70,6 +72,8 @@ export function AppRail() {
   const { pathname } = useLocation();
   const active = activeAppForPath(pathname);
   const [hiddenTip, setHiddenTip] = useState<AppId | null>(null);
+  // 9.4: apps whose module the webmail policy switched off are not on the rail
+  const { features } = useWebmailFeatures();
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLElement>) => {
     const links = Array.from(e.currentTarget.querySelectorAll<HTMLElement>('[data-rail-item]'));
@@ -98,7 +102,7 @@ export function AppRail() {
       onMouseLeave={() => setHiddenTip(null)}
       className="shrink-0 flex md:flex-col bg-surface border-line max-md:border-t md:border-r md:w-16 md:py-2 max-md:px-1"
     >
-      <ul className="flex md:flex-col items-center gap-1 max-md:flex-1">{RAIL_ITEMS.map(link)}</ul>
+      <ul className="flex md:flex-col items-center gap-1 max-md:flex-1">{RAIL_ITEMS.filter((i) => isAppEnabled(i.id, features)).map(link)}</ul>
     </nav>
   );
 }

@@ -42,7 +42,10 @@ export function matches(row: Row, where: Row | undefined): boolean {
           case 'gt': return v != null && num(v) > num(arg);
           case 'gte': return v != null && num(v) >= num(arg);
           case 'not': return !eq(v, arg);
-          case 'equals': return eq(v, arg);
+          case 'equals':
+            return cond['mode'] === 'insensitive' && typeof v === 'string' && typeof arg === 'string'
+              ? v.toLowerCase() === arg.toLowerCase() : eq(v, arg);
+          case 'mode': return true;
           case 'has': return Array.isArray(v) && v.includes(arg);
           default: throw new Error(`fake prisma: unsupported operator ${op}`);
         }
@@ -193,6 +196,9 @@ export interface FakePrisma {
   folder: FakeTable;
   calendar: FakeTable;
   protocolPolicy: FakeTable;
+  webmailPolicy: FakeTable;
+  trustedImageSender: FakeTable;
+  contact: FakeTable;
   [k: string]: unknown;
 }
 
@@ -208,6 +214,8 @@ export function fakeProtocolPolicies(rows: Row[]): Record<string, unknown> {
   return {
     protocolPolicy: { findMany: async () => rows, count: async () => 0 },
     serverSettings: { findUnique: async () => null },
+    // 9.4: the webmail module switches are checked with the same session (all defaults)
+    webmailPolicy: { findMany: async () => [] },
   };
 }
 
@@ -222,6 +230,30 @@ export function protocolPolicyDefaults(): Row {
     domainId: null, userId: null, updatedAt: new Date(),
     imap: 'INHERIT', pop3: 'INHERIT', smtp: 'INHERIT', activesync: 'INHERIT',
     jmap: 'INHERIT', dav: 'INHERIT', webmail: 'INHERIT', mapi: 'INHERIT',
+  };
+}
+
+/** 9.4: defaults of a WebmailPolicy row (every feature and value inherited). */
+export function webmailPolicyDefaults(): Row {
+  return {
+    domainId: null, userId: null, updatedAt: new Date(),
+    calendar: 'INHERIT', contacts: 'INHERIT', tasks: 'INHERIT', notes: 'INHERIT', rules: 'INHERIT',
+    signatures: 'INHERIT', categories: 'INHERIT', recoverItems: 'INHERIT', changePassword: 'INHERIT',
+    themes: 'INHERIT', externalClients: 'INHERIT', appPasswords: 'INHERIT', sharedMailboxes: 'INHERIT',
+    blockedExtensions: null, downloadOnlyExtensions: null, maxUploadMb: null, externalImages: null,
+  };
+}
+
+/**
+ * 9.4: the models the webmail policy check reads, for hand-written Prisma
+ * fakes (`rows` = the live WebmailPolicy rows; call
+ * invalidateWebmailPolicyCache() after changing them). Spread it like
+ * fakeProtocolPolicies().
+ */
+export function fakeWebmailPolicies(rows: Row[]): Record<string, unknown> {
+  return {
+    webmailPolicy: { findMany: async (args?: { where?: Row }) => rows.filter((r) => matches(r, args?.where)) },
+    trustedImageSender: { findMany: async () => [] },
   };
 }
 
@@ -260,6 +292,9 @@ export function createFakePrisma(): FakePrisma {
   p.folder = new FakeTable(() => ({ totalCount: 0, unreadCount: 0 }), ['id']);
   p.calendar = new FakeTable(() => ({ color: '#0078D4', isDefault: false, sortOrder: 0, syncToken: '' }));
   p.protocolPolicy = new FakeTable(protocolPolicyDefaults, ['id', 'domainId', 'userId'], { domain: () => p.domain });
+  p.webmailPolicy = new FakeTable(webmailPolicyDefaults, ['id', 'domainId', 'userId']);
+  p.trustedImageSender = new FakeTable(() => ({ createdAt: new Date() }));
+  p.contact = new FakeTable(() => ({ email2: null }));
   return p;
 }
 

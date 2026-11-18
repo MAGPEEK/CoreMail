@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { installFakeDb, clientWbxml, wbxmlTags, type WNode } from '../test-support/fake-db.js';
 
-installFakeDb({
+const db = installFakeDb({
   user: [
     { id: 'u1', email: 'alice@example.com', displayName: 'Alice Anders', domainId: 'd1', active: true },
     { id: 'u2', email: 'bob@example.com', displayName: 'Bob Brown', domainId: 'd1', active: true },
@@ -54,6 +54,20 @@ test('own contact → Type 2; another user\'s contact and other domains are neve
   assert.equal(kid(responses[1], 'Status')?.text, '4');
   assert.equal(kid(responses[1], 'RecipientCount')?.text, '0');
   assert.equal(kid(responses[2], 'Status')?.text, '4');
+});
+
+test('9.4 webmail policy: without the contacts module only the address list resolves', async () => {
+  const storage = await import('@coremail/storage');
+  db.tables['webmailPolicy'] = [{ id: 'p1', domainId: null, userId: 'u1', contacts: 'OFF' }];
+  storage.invalidateWebmailPolicyCache();
+  try {
+    const { responses } = await run(['carla', 'bob@example.com']);
+    assert.equal(kid(responses[0], 'Status')?.text, '4', 'own contact not resolved');
+    assert.deepEqual(recips(responses[1]!), [['1', 'Bob Brown', 'bob@example.com']], 'the GAL still resolves');
+  } finally {
+    db.tables['webmailPolicy'] = [];
+    storage.invalidateWebmailPolicyCache();
+  }
 });
 
 test('ambiguous name → Status 2 with the candidates (MaxAmbiguousRecipients honoured)', async () => {

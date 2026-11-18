@@ -22,6 +22,7 @@ export const PATH_AREA: Record<string, AdminArea | null> = {
   'sso':              'identity',
   'servers':          'servers',
   'services':         'servers',
+  'webmail-policies': 'servers',
   'certificates':     'servers',
   'queues':           'servers',
   'logs':             'servers',

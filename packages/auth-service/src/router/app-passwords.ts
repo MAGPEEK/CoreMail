@@ -2,6 +2,7 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { z } from 'zod';
 import { createLogger } from '@coremail/core';
 import { notifySecurityEvent, reauthErrorBody, verifyReauth } from '@coremail/storage/auth';
+import { featureDisabledBody, isWebmailFeatureEnabled } from '@coremail/storage';
 import {
   createAppPassword,
   listAppPasswords,
@@ -17,8 +18,26 @@ export const appPasswordRouter: RouterType = Router();
 // revoked session must not mint (persistent) app passwords until it expires
 // (requireBearerUser, 9.4: also the Webmail switch).
 
-appPasswordRouter.get('/', async (req: Request, res: Response) => {
+/**
+ * 9.4 webmail policy: with the module "App-Passwörter" off, listing and
+ * creating answer 403 FEATURE_DISABLED (revoking stays possible; existing app
+ * passwords keep working on the enabled protocols). Unreadable policy → 503.
+ */
+async function requireAppPasswordUser(req: Request, res: Response): Promise<string | null> {
   const userId = await requireBearerUser(req, res);
+  if (!userId) return null;
+  try {
+    if (await isWebmailFeatureEnabled(userId, 'appPasswords')) return userId;
+    res.status(403).json(featureDisabledBody('appPasswords'));
+  } catch (err) {
+    log.error({ err, userId }, 'Webmail policy not readable');
+    res.status(503).json({ error: 'Service temporarily unavailable' });
+  }
+  return null;
+}
+
+appPasswordRouter.get('/', async (req: Request, res: Response) => {
+  const userId = await requireAppPasswordUser(req, res);
   if (!userId) return;
   const list = await listAppPasswords(userId);
   res.json(list);
@@ -35,7 +54,7 @@ const CreateSchema = z.object({
 });
 
 appPasswordRouter.post('/', async (req: Request, res: Response) => {
-  const userId = await requireBearerUser(req, res);
+  const userId = await requireAppPasswordUser(req, res);
   if (!userId) return;
 
   const parsed = CreateSchema.safeParse(req.body);

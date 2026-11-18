@@ -62,8 +62,8 @@ export function protocolRows(view: ProtocolView): Array<Record<string, unknown>>
   }));
 }
 
-async function levelPath(api: CoreMailClient, scope: ProtocolScope, target: string | undefined): Promise<string> {
-  const base = '/api/v1/admin/protocol-access';
+/** API path of a level below `base` (server, domain by name, mailbox by address) — also `coremail policy`. */
+export async function levelPath(api: CoreMailClient, scope: ProtocolScope, target: string | undefined, base = '/api/v1/admin/protocol-access'): Promise<string> {
   if (scope === 'global') return base;
   if (!target) throw new Error(`--scope ${scope} needs a ${scope === 'domain' ? 'domain name' : 'mailbox address'}`);
   if (scope === 'domain') return `${base}/domains/${(await resolveDomain(api, target)).id}`;

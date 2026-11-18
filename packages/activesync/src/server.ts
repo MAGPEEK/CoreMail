@@ -28,7 +28,7 @@ import { handleMoveItems } from './commands/move-items.js';
 import { handleMeetingResponse } from './commands/meeting-response.js';
 import { handleResolveRecipients } from './commands/resolve-recipients.js';
 import { getObjectStream } from '@coremail/storage/minio';
-import { waitForObjectStorage, clearMessageSizeLimitCache } from '@coremail/storage';
+import { waitForObjectStorage, clearMessageSizeLimitCache, isWebmailPolicyReload, invalidateWebmailPolicyCache } from '@coremail/storage';
 import { easBodyParser } from './body-limit.js';
 
 const log = createLogger('activesync');
@@ -251,7 +251,10 @@ try {
   const settingsSub = getRedisClient().duplicate();
   settingsSub.on('error', (err) => log.warn({ err }, 'Settings subscriber Redis error'));
   void settingsSub.subscribe(CHANNEL_SETTINGS_RELOAD);
-  settingsSub.on('message', () => clearMessageSizeLimitCache());
+  settingsSub.on('message', (_channel: string, message: string) => {
+    clearMessageSizeLimitCache();
+    if (isWebmailPolicyReload(message)) invalidateWebmailPolicyCache(); // 9.4: module switches (contacts, calendar)
+  });
 } catch (err) {
   log.warn({ err }, 'Redis subscription failed — the message size limit refreshes after 60 s');
 }

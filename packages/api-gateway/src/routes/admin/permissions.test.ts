@@ -195,6 +195,7 @@ const MOUNT_AREAS: Record<string, { area: AdminArea | null; get: string; write?:
   '/branding':             { area: 'organisation', get: '/', write: ['PUT', '/'] },
   '/ems':                  { area: 'recipients',   get: '/mailboxes' },
   '/protocol-access':      { area: 'servers',      get: '/', write: ['PUT', '/'] },
+  '/webmail-policies':     { area: 'servers',      get: '/', write: ['PUT', '/'] },
 };
 const EXTRA_PROBES: Array<{ area: AdminArea | null; method: string; path: string }> = [
   { area: 'domains', method: 'GET', path: '/ems/accepted-domains' },
@@ -204,6 +205,10 @@ const EXTRA_PROBES: Array<{ area: AdminArea | null; method: string; path: string
   { area: 'servers',    method: 'PUT', path: '/protocol-access/domains/c0000000000000000000000x1' },
   { area: 'recipients', method: 'GET', path: '/protocol-access/users/c0000000000000000000000x1' },
   { area: 'recipients', method: 'PUT', path: '/protocol-access/users/c0000000000000000000000x1' },
+  // 9.4 webmail policies: same split as the protocol switches
+  { area: 'servers',    method: 'PUT', path: '/webmail-policies/domains/c0000000000000000000000x1' },
+  { area: 'recipients', method: 'GET', path: '/webmail-policies/users/c0000000000000000000000x1' },
+  { area: 'recipients', method: 'PUT', path: '/webmail-policies/users/c0000000000000000000000x1' },
 ];
 
 test('every admin mount is in the area table', () => {

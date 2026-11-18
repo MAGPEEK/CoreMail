@@ -23,6 +23,7 @@ const { createFakePrisma, createFakeRedis } = await import('@coremail/storage/au
 const db = createFakePrisma();
 (globalThis as Record<string, unknown>)['__prisma'] = db;
 (globalThis as Record<string, unknown>)['__authRedis'] = createFakeRedis();
+(globalThis as Record<string, unknown>)['__realtimeRedis'] = null; // policy change events: publish nothing
 
 const core = await import('@coremail/core');
 const sauth = await import('@coremail/storage/auth');
@@ -66,6 +67,24 @@ test('app passwords: live session may create; after logout the access token is r
   assert.equal((await call('POST', '/auth/app-passwords', { name: 'attacker', currentPassword: PW }, token)).status, 401);
   assert.equal((await call('GET', '/auth/app-passwords', undefined, token)).status, 401);
   assert.equal(db.appPassword.rows.length, before + 1);
+});
+
+test('9.4 webmail policy: module "App-Passwörter" off → list and create 403 FEATURE_DISABLED, revoke still works', async () => {
+  const storage = await import('@coremail/storage');
+  const login = await call('POST', '/auth/login', { email: 'bob@example.com', password: PW });
+  const token = String(login.body['accessToken']);
+  const created = await call('POST', '/auth/app-passwords', { name: 'tablet', currentPassword: PW }, token);
+  assert.equal(created.status, 201);
+  await storage.updateWebmailPolicy({ level: 'global' }, { features: { appPasswords: 'off' } });
+  try {
+    const list = await call('GET', '/auth/app-passwords', undefined, token);
+    assert.equal(list.status, 403);
+    assert.equal(list.body['code'], 'FEATURE_DISABLED');
+    assert.equal((await call('POST', '/auth/app-passwords', { name: 'x', currentPassword: PW }, token)).status, 403);
+    assert.equal((await call('DELETE', `/auth/app-passwords/${String(created.body['id'])}`, undefined, token)).status, 200);
+  } finally {
+    await storage.updateWebmailPolicy({ level: 'global' }, { features: { appPasswords: 'on' } });
+  }
 });
 
 test('app passwords: creation needs re-authentication (REAUTH_REQUIRED / REAUTH_FAILED)', async () => {

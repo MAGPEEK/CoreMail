@@ -17,6 +17,7 @@ import type { Category, Folder } from '../api/types.js';
 import { useUiStore, useUiPrefs, type Density, type ReadingPane } from '../store/ui.js';
 import { useActiveMailbox } from '../hooks/useActiveMailbox.js';
 import { useMailActions } from '../hooks/useMailActions.js';
+import { useWebmailFeatures } from '../hooks/useWebmailFeatures.js';
 import { useTargetMessages } from '../hooks/useTargetMessages.js';
 import { dispatchShortcut, useAriaKeys } from '../hooks/useShortcuts.js';
 import { toastError } from '../lib/errors.js';
@@ -82,11 +83,12 @@ export function MailCommandBar() {
     queryKey: mailbox.foldersKey,
     queryFn: () => api.get<Folder[]>(`${mailbox.base}/folders`),
   });
-  // Categories are personal — own mailbox only
+  // Categories are personal — own mailbox only; 9.4: the module can be switched off
+  const categoriesOn = useWebmailFeatures().features.categories;
   const { data: categories = [] } = useQuery({
     queryKey: ['categories'],
     queryFn: () => api.get<Category[]>('/categories'),
-    enabled: !mailbox.foreign,
+    enabled: !mailbox.foreign && categoriesOn,
   });
 
   const isJunkFolder = folders.find((f) => f.id === selectedFolderId)?.name === 'Junk';
@@ -165,7 +167,7 @@ export function MailCommandBar() {
       readToggle(selection) === 'read'
         ? cmd('read', <MailOpen size={16} />, viaShortcut('mail.markRead'))
         : cmd('read', <Mail size={16} />, viaShortcut('mail.markUnread')),
-      cmd('categorize', <Tag size={16} />, { menu: categoryMenu }),
+      ...(categoriesOn ? [cmd('categorize', <Tag size={16} />, { menu: categoryMenu })] : []),
       cmd('pin', <Pin size={16} />, { onClick: () => { void setState(selection.allPinned ? 'unpin' : 'pin', targets); } }),
     ] },
     { id: 'history', title: t('mail_cmd_undo'), items: [

@@ -14,16 +14,23 @@ import {
   defaultSignatureHtml, mayAutoSwapSignature, signatureBlockHtml, type NamedSignature, type SignatureDefaults,
 } from '../lib/signaturePick.js';
 import { initialBodyHtml } from '../lib/composeQuote.js';
+import { useWebmailFeatures } from './useWebmailFeatures.js';
 
 export interface SignatureState { forKey: string | null; inserted: string | null | undefined }
 
 export interface SignatureList { signatures: NamedSignature[]; defaults: Record<string, SignatureDefaults> }
 
+/** 9.4: with the signatures module off (webmail policy) compose works without any signature. */
+const NO_SIGNATURES: SignatureList = Object.freeze({ signatures: [], defaults: {} }) as SignatureList;
+
 export function useSignatures() {
-  return useQuery({
+  const enabled = useWebmailFeatures().features.signatures;
+  const data = useQuery({
     queryKey: ['user', 'signatures'],
     queryFn: () => api.get<SignatureList>('/user/signatures'),
+    enabled,
   }).data;
+  return enabled ? data : NO_SIGNATURES;
 }
 
 export function useComposeSignature(o: {

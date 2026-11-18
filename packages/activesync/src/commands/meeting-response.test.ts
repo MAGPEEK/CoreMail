@@ -244,6 +244,24 @@ test('integration 7.1.0: a REQUEST without ORGANIZER → Status 2 for 14.1 and 1
   }
 });
 
+test('9.4 webmail policy: calendar module off → Status 2, no event, no REPLY, request stays', async () => {
+  reset();
+  queued.length = 0;
+  const storage = await import('@coremail/storage');
+  db.tables['webmailPolicy'] = [{ id: 'p1', domainId: 'd1', userId: null, calendar: 'OFF' }];
+  storage.invalidateWebmailPolicyCache();
+  try {
+    const result = await run(request('1'));
+    assert.equal(kid(result, 'Status')?.text, '2');
+    assert.equal(db.tables['calendarEvent']!.length, 0);
+    assert.equal(queued.length, 0);
+    assert.equal(db.tables['message']!.find((m) => m['id'] === 'req1')?.['folderId'], 'inbox');
+  } finally {
+    db.tables['webmailPolicy'] = [];
+    storage.invalidateWebmailPolicyCache();
+  }
+});
+
 test('a mail without a REQUEST → Status 2', async () => {
   reset(); queued.length = 0;
   const plain = Buffer.from('From: a@b\r\nSubject: hi\r\n\r\nno calendar\r\n');

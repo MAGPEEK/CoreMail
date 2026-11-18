@@ -23,6 +23,7 @@ import {
   READ_ONLY_HINT, type AccessibleMailboxEntry, type MailboxRef,
 } from '../lib/mailboxContext.js';
 import { useAccessibleMailboxes, ACCESSIBLE_MAILBOXES_KEY } from '../hooks/useActiveMailbox.js';
+import { useWebmailFeatures } from '../hooks/useWebmailFeatures.js';
 import {
   FolderItem, SYSTEM_SET, SYSTEM_LABEL_KEY, HIDDEN_FOLDER_NAMES, buildFolderChildren, systemFoldersOf,
 } from './FolderItem.js';
@@ -160,16 +161,18 @@ function ForeignMailboxNode({ entry, expanded, onToggle, onHide }: {
     if (unread.length) await api.post(`${base}/messages/bulk`, { ids: unread, action: 'read' });
   };
 
-  const recoverItem = (): ContextMenuItem => writeItem(readOnly, {
+  // 9.4 webmail policy: "recover deleted items" only with that module on
+  const canRecover = useWebmailFeatures().features.recoverItems;
+  const recoverItems = (): ContextMenuItem[] => (canRecover ? [writeItem(readOnly, {
     label: t('recover_title'), icon: <RotateCcw size={14} />, onClick: () => setRecoverOpen(true),
-  });
+  })] : []);
 
   const rootMenu = (): ContextMenuItem[] => [
     writeItem(readOnly, {
       label: 'Neuer Ordner', icon: <FolderPlus size={14} />,
       onClick: () => setDialog({ kind: 'create', parentId: inbox?.id ?? null, parentLabel: title }),
     }),
-    recoverItem(),
+    ...recoverItems(),
     { type: 'divider' },
     { label: 'Ausblenden', icon: <EyeOff size={14} />, onClick: onHide },
   ];
@@ -205,7 +208,7 @@ function ForeignMailboxNode({ entry, expanded, onToggle, onHide }: {
     }
     if (f.name === 'Trash' || f.name === 'Junk') {
       items.push({ type: 'divider' });
-      if (f.name === 'Trash') items.push(recoverItem());
+      if (f.name === 'Trash') items.push(...recoverItems());
       items.push(writeItem(readOnly, {
         label: t('empty_folder'), icon: <Eraser size={14} />, danger: true,
         onClick: () => {

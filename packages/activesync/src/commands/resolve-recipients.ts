@@ -8,6 +8,7 @@
  * 12.1), Picture ignored.
  */
 import { encodeWbxml, el, getChild, getText, type WbxmlElement } from '../wbxml.js';
+import { isWebmailFeatureEnabled } from '@coremail/storage';
 import { searchContacts, searchGal, type DirectoryEntry } from './directory.js';
 import { HIGHEST_EAS_VERSION, supports, type EasVersion } from '../protocol-version.js';
 
@@ -72,9 +73,12 @@ export async function handleResolveRecipients(
   };
   const maxAmbiguous = Math.max(0, Math.min(Number(options ? getText(options, 'MaxAmbiguousRecipients') || DEFAULT_MAX_AMBIGUOUS : DEFAULT_MAX_AMBIGUOUS) || 0, 100));
 
+  // 9.4 webmail policy: without the contacts module only the address list resolves
+  // (an unreadable policy leaves the personal contacts out)
+  const withContacts = await isWebmailFeatureEnabled(userId, 'contacts').catch(() => false);
   const responses: WbxmlElement[] = [];
   for (const to of tos) {
-    const [gal, contacts] = await Promise.all([searchGal(userId, to), searchContacts(userId, to)]);
+    const [gal, contacts] = await Promise.all([searchGal(userId, to), withContacts ? searchContacts(userId, to) : []]);
     const { exact, list } = rankCandidates(to, gal, contacts);
     let status: string;
     let shown: DirectoryEntry[];

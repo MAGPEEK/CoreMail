@@ -22,6 +22,7 @@ import { registerStorage } from './commands/storage.js';
 import { registerAudit } from './commands/audit.js';
 import { registerBranding } from './commands/branding.js';
 import { registerProtocol } from './commands/protocol.js';
+import { registerPolicy } from './commands/policy.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json') as { version: string };
@@ -54,6 +55,7 @@ registerStorage(program, api, json);
 registerAudit(program, api, json);
 registerBranding(program, api, json);
 registerProtocol(program, api, json);
+registerPolicy(program, api, json);
 
 program.addHelpText('after', `
 Examples:
@@ -70,6 +72,7 @@ Examples:
   coremail storage status
   coremail storage migrate --from minio --to filesystem --dry-run
   coremail branding set --name "Acme Mail" --color "#0a5bd3" && coremail branding upload logoLight ./logo.svg
+  coremail policy set --scope domain example.com --calendar off --blocked-extensions exe,js --external-images contacts
 
 Environment:
   COREMAIL_API_URL  COREMAIL_TOKEN  COREMAIL_ADMIN_EMAIL  COREMAIL_ADMIN_PASSWORD  COREMAIL_ADMIN_TOTP  COREMAIL_CLI_CREDENTIALS

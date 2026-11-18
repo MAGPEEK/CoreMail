@@ -14,11 +14,12 @@
  *  servers       /servers, /services, /certificates, /queues, /logs,        SERVER_MANAGEMENT     VIEW_ONLY_ORG
  *                /backups, /connectors, /smtp-config,
  *                /protocol-access, /protocol-access/domains/:id (9.4; the
- *                domain level is also readable by `domains` readers)
+ *                domain level is also readable by `domains` readers),
+ *                /webmail-policies, /webmail-policies/domains/:id (9.4, same)
  *  recipients    /mailboxes, /shared-mailboxes, /resources, /mobile,        RECIPIENT_MANAGEMENT  HELP_DESK, VIEW_ONLY_ORG
  *                aliases (/mailboxes/:id/aliases, /aliases, …),
  *                /ems/mailboxes, /ems/mailbox-statistics, /ems/resource-mailboxes,
- *                /protocol-access/users/:id (9.4)
+ *                /protocol-access/users/:id, /webmail-policies/users/:id (9.4)
  *  domains       /domains, /ems/accepted-domains                            —                     RECIPIENT_MANAGEMENT, SERVER_MANAGEMENT, VIEW_ONLY_ORG
  *  hygiene       /security, /security/attacks, /quarantine,                 HYGIENE_MANAGEMENT    VIEW_ONLY_ORG
  *                /transport-rules, /ems/transport-rules
