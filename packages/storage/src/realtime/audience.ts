@@ -78,6 +78,10 @@ export interface CalendarAudienceDb {
  * Announces a change of calendar data (events, the calendar itself or its
  * shares) to the owners and grantees of the given calendars. `extraUserIds`
  * reach users that lost access in the same change (a removed share).
+ *
+ * Event ids go to the owners only: a grantee must not learn that a
+ * confidential event (hidden from grantees) was created or changed — the
+ * calendar ids are enough for their refresh.
  */
 export async function publishCalendarChange(
   db: CalendarAudienceDb,
@@ -85,22 +89,27 @@ export async function publishCalendarChange(
   opts: { action?: UserEventAction; ids?: string[]; scope?: 'shares'; extraUserIds?: string[] } = {},
 ): Promise<void> {
   const ids = [...new Set(calendarIds)];
-  const users = new Set(opts.extraUserIds ?? []);
+  const owners = new Set<string>();
+  const others = new Set(opts.extraUserIds ?? []);
   if (ids.length > 0) {
     const rows = await db.calendar.findMany({
       where: { id: { in: ids } },
       select: { userId: true, shares: { select: { granteeId: true } } },
     } as never) as Array<{ userId: string; shares: Array<{ granteeId: string }> }>;
     for (const r of rows) {
-      users.add(r.userId);
-      for (const s of r.shares) users.add(s.granteeId);
+      owners.add(r.userId);
+      for (const s of r.shares) others.add(s.granteeId);
     }
   }
-  await publishUserEvent(users, {
-    type: 'calendar',
+  for (const o of owners) others.delete(o);
+  const base = {
+    type: 'calendar' as const,
     ...(ids.length ? { calendarIds: ids } : {}),
     ...(opts.action ? { action: opts.action } : {}),
-    ...(opts.ids?.length ? { ids: opts.ids } : {}),
     ...(opts.scope ? { scope: opts.scope } : {}),
-  });
+  };
+  await Promise.all([
+    publishUserEvent(owners, { ...base, ...(opts.ids?.length ? { ids: opts.ids } : {}) }),
+    publishUserEvent(others, base),
+  ]);
 }

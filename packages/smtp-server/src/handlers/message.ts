@@ -1,4 +1,4 @@
-import { prisma, parseRawMessage, uploadBuffer, storeRawMessage, truncateBodyColumn, attachmentKey, applyMailRules, applyTransportRules, applyOutcomeToBuffer, processITipInbound, createMessage, createRulePatternBudget, ruleMessageStepBudget, checkReceiveQuota, recordDelivery, type SenderAuth, type QuotaOwner } from '@coremail/storage';
+import { prisma, parseRawMessage, uploadBuffer, storeRawMessage, truncateBodyColumn, attachmentKey, applyMailRules, applyTransportRules, applyOutcomeToBuffer, processITipInbound, createMessage, deferMailboxChanges, createRulePatternBudget, ruleMessageStepBudget, checkReceiveQuota, recordDelivery, type SenderAuth, type QuotaOwner } from '@coremail/storage';
 import { getRedisClient, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
 import { verifyIncomingSmime, decryptIncomingSmime } from '../smime/index.js';
 import { enqueueRuleForward } from './rule-forward.js';
@@ -46,10 +46,14 @@ export interface StoreOptions {
  */
 export type StoreResult = 'stored' | 'resource' | 'unknown' | 'quota';
 
-export async function storeInboundMessage(
-  rawBuffer: Buffer,
-  opts: StoreOptions,
-): Promise<StoreResult> {
+export function storeInboundMessage(rawBuffer: Buffer, opts: StoreOptions): Promise<StoreResult> {
+  // 9.4: one realtime announcement once the delivery is complete (message,
+  // rule copies, attachments, folder counters) — a client re-reading on the
+  // event sees the new counts and attachments, not a half-written state
+  return deferMailboxChanges(() => deliverInbound(rawBuffer, opts));
+}
+
+async function deliverInbound(rawBuffer: Buffer, opts: StoreOptions): Promise<StoreResult> {
   // Find recipient — can be a User (mailbox) or a SharedMailbox.
   // (Public folder path removed in v3.18.31 — feature completely removed)
   const [user, sharedMailbox] = await Promise.all([
@@ -425,6 +429,8 @@ export async function storeInboundMessage(
       where: {
         sharedMailboxId: sharedMailbox.id,
         permission: { in: ['FULL_ACCESS', 'READ_ONLY'] },
+        // 9.4: the event also drives Web Push — never to deactivated members
+        user: { active: true },
       },
       select: { userId: true },
     });
