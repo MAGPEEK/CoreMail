@@ -194,3 +194,13 @@ test('9.4 review IDN: entries are stored as A-label, both spellings are one entr
   assert.equal(row['scopeId'], 'd2');
   assert.equal(row['pattern'], '*@xn--bcher-kva.example');
 });
+
+test('9.4 review IDN: a domain that is no valid IDN is refused with 400 (globs stay allowed)', async () => {
+  for (const pattern of ['spam@xn--bücher.example', 'spam@\u0301bc.example']) {
+    const r = await call('POST', '/sender-lists', undefined, { listType: 'BLOCK', scope: 'GLOBAL', patternType: 'EXACT', pattern });
+    assert.equal(r.status, 400, pattern);
+    assert.match(String(((await r.json()) as Row)['error']), /internationalized domain/);
+  }
+  const glob = await call('POST', '/sender-lists', undefined, { listType: 'BLOCK', scope: 'GLOBAL', patternType: 'WILDCARD', pattern: '*@*bücher*' });
+  assert.equal(glob.status, 201, 'a glob label is matched as written');
+});

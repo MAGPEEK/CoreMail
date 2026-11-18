@@ -510,8 +510,9 @@ mailRouter.post('/messages/bulk', async (req: Request, res: Response) => {
           // stored canonical (IDN domain as A-label); delivery looks the entry up in both spellings
           const senders = [...new Set(msgs.map((m) => canonicalAddress(m.fromAddr)))];
           for (const sender of senders) {
+            // an entry stored before 9.4 may use the Unicode spelling — one entry per sender
             const exists = await prisma.blacklist.findFirst({
-              where: { scope: 'USER-JUNK', scopeId: req.apiUser!.userId, pattern: sender },
+              where: { scope: 'USER-JUNK', scopeId: req.apiUser!.userId, pattern: { in: addressVariants(sender) } },
             });
             if (!exists) {
               await prisma.blacklist.create({

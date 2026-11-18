@@ -36,6 +36,17 @@ export interface SenderListInput {
 const ADDRESS_CHARS = /^[^\s<>()[\]\\,;:"]+$/;
 const isOneOf = <T extends string>(list: readonly T[], v: string): v is T => (list as readonly string[]).includes(v);
 
+/**
+ * Pure (9.4 review): a domain label of a stored (canonical) pattern that is
+ * still non-ASCII could not be converted to an A-label — no valid IDN. Labels
+ * with a `*` are globs and stay as written.
+ */
+function hasInvalidIdnLabel(pattern: string): boolean {
+  const at = pattern.lastIndexOf('@');
+  if (at < 0) return false;
+  return pattern.slice(at + 1).split('.').some((label) => !label.includes('*') && /[^\x00-\x7f]/.test(label));
+}
+
 /** Pure: a refusal message for the pattern, or null when it is valid for its type. */
 export function patternError(patternType: PatternType, pattern: string): string | null {
   if (pattern.length === 0 || pattern.length > 254) return 'pattern must be 1–254 characters';
@@ -45,6 +56,7 @@ export function patternError(patternType: PatternType, pattern: string): string 
     return v.ok ? null : `invalid regular expression: ${v.error}`;
   }
   if (!ADDRESS_CHARS.test(pattern)) return 'pattern contains characters that never occur in an address';
+  if (hasInvalidIdnLabel(pattern)) return 'pattern contains an invalid internationalized domain name';
   if (patternType === 'EXACT' && (pattern.includes('*') || !/^[^@]+@[^@]+$/.test(pattern))) {
     return 'EXACT needs a complete address (name@domain), use WILDCARD for *@domain';
   }
