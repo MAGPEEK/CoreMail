@@ -1,6 +1,7 @@
 import { prisma } from './prisma/index.js';
 import { moveMessages, touchMessages } from './message-store.js';
 import type { ParsedMessage } from './mime/index.js';
+import { deliveredImportance } from './importance.js';
 import { createLogger } from '@coremail/core';
 import {
   matchRulePattern, createRulePatternBudget, evaluateRulePattern, withRuleBudget, ruleMessageStepBudget, type RulePatternBudget,
@@ -362,7 +363,7 @@ export interface RunNowResult {
 /**
  * Applies a single rule retroactively to existing messages.
  * Forward/redirect actions are NOT executed (that would be spam) —
- * only Move/Copy/Flag/Categorize/Pin/MarkRead.
+ * only Move/Copy/Flag/Categorize/Pin/MarkRead/SetImportance.
  */
 export async function runRuleOnExisting(
   ruleId: string,
@@ -439,7 +440,7 @@ export async function runRuleOnExisting(
       };
       await executeActions(rule, outcome, userId);
 
-      const updates: { flags?: string[]; pinnedAt?: Date | null } = {};
+      const updates: { flags?: string[]; pinnedAt?: Date | null; importance?: string | null } = {};
       let changed = false;
       let moveTo: string | null = null;
 
@@ -454,6 +455,11 @@ export async function runRuleOnExisting(
         changed = true;
       }
       if (outcome.pinned) { updates.pinnedAt = new Date(); changed = true; }
+      // 9.4: "set importance" — the stored value (normal = null), through the message store
+      if (outcome.importance !== null) {
+        const level = deliveredImportance(null, outcome.importance);
+        if (level !== (m.importance ?? null)) { updates.importance = level; changed = true; }
+      }
       // Move → new UID in the target folder + new modSeq; other changes → new modSeq.
       if (moveTo) {
         const target = moveTo;

@@ -90,7 +90,9 @@ sign/encrypt (S/MIME is applied by the server from Settings → S/MIME).
    Entwurf speichern, In neuem Fenster öffnen); ✕ **Schließen** at the end.
    - **Wichtigkeit** is stored in the draft (`Importance` / `X-Priority` headers) and written into
      the sent mail; the reader shows "Wichtigkeit: hoch / niedrig" next to the subject for any mail
-     that carries such a header (`Message.importance`, read at delivery).
+     that carries such a header (`Message.importance`, read at delivery). An inbox rule with the
+     action "Wichtigkeit setzen" replaces that value at delivery (and on "Jetzt auf Posteingang anwenden" for
+     existing mail, through the message store); the stored message octets keep their headers.
    - **Übermittlungsbestätigung** asks for a delivery status notification per recipient
      (NOTIFY=SUCCESS,FAILURE): the server reports deliveries to its own mailboxes itself and passes
      the request on to the next server; one that does not support it is reported as "relayed".

@@ -1,4 +1,4 @@
-import { prisma, parseRawMessage, uploadBuffer, storeRawMessage, truncateBodyColumn, attachmentKey, applyMailRules, applyTransportRules, applyOutcomeToBuffer, processITipInbound, createMessage, deferMailboxChanges, createRulePatternBudget, ruleMessageStepBudget, checkReceiveQuota, recordDelivery, loadMailFlowPolicy, deliveryRefusal, headerFromAddress, type SenderAuth, type QuotaOwner, type MailFlowOwner, type TransportOutcome } from '@coremail/storage';
+import { prisma, parseRawMessage, uploadBuffer, storeRawMessage, truncateBodyColumn, attachmentKey, applyMailRules, applyTransportRules, applyOutcomeToBuffer, processITipInbound, deliveredImportance, createMessage, deferMailboxChanges, createRulePatternBudget, ruleMessageStepBudget, checkReceiveQuota, recordDelivery, loadMailFlowPolicy, deliveryRefusal, headerFromAddress, type SenderAuth, type QuotaOwner, type MailFlowOwner, type TransportOutcome } from '@coremail/storage';
 import type { LocalOutcome } from './delivery.js';
 import { getRedisClient, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
 import { verifyIncomingSmime, decryptIncomingSmime } from '../smime/index.js';
@@ -287,6 +287,7 @@ async function deliverInbound(rawBuffer: Buffer, opts: StoreOptions): Promise<St
   let ruleCategories: string[] = [];
   let rulePinned     = false;
   let ruleDiscard    = false;          // hardDelete → mail is not persisted at all
+  let ruleImportance: 'high' | 'normal' | 'low' | null = null;   // 9.4: "set importance" action
   const ruleCopyTargets: string[] = [];
   const ruleForwards: Array<{ address: string; mode: 'forward' | 'redirect' }> = [];
   if (ownerType === 'user' && user) {
@@ -296,6 +297,7 @@ async function deliverInbound(rawBuffer: Buffer, opts: StoreOptions): Promise<St
       ruleFlags = [...outcome.flagsToAdd];
       ruleCategories = [...outcome.categoriesToAdd];
       rulePinned = outcome.pinned;
+      ruleImportance = outcome.importance;
       ruleCopyTargets.push(...outcome.copyTargets);
 
       // forceJunk override: rule can force delivery to Junk
@@ -367,6 +369,7 @@ async function deliverInbound(rawBuffer: Buffer, opts: StoreOptions): Promise<St
     ? JSON.stringify({ ...smimeVerifyResult, decrypted: smimeDecrypted })
     : null;
 
+  const messageImportance = deliveredImportance(parsed.importance, ruleImportance);
   const baseData = {
     flags: ruleFlags,
     subject: parsed.subject,
@@ -380,8 +383,9 @@ async function deliverInbound(rawBuffer: Buffer, opts: StoreOptions): Promise<St
     inReplyTo: parsed.inReplyTo,
     // 9.4: read receipt requested — the webmail asks / answers per the user's setting
     ...(parsed.dispositionNotificationTo ? { dispositionNotificationTo: parsed.dispositionNotificationTo } : {}),
-    // 9.4: Importance / X-Priority (the webmail shows a badge)
-    ...(parsed.importance ? { importance: parsed.importance } : {}),
+    // 9.4: Importance / X-Priority (the webmail shows a badge); an inbox rule's
+    // "set importance" replaces the header value (main message and rule copies)
+    ...(messageImportance ? { importance: messageImportance } : {}),
     date: parsed.date,
     bodyText: truncateBodyColumn(parsed.bodyText),
     bodyHtml: truncateBodyColumn(parsed.bodyHtml),

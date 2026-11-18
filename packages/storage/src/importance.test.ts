@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  importanceMailOption, importanceOfRaw, normalizeImportance, storedImportance,
+  deliveredImportance, importanceMailOption, importanceOfRaw, normalizeImportance, storedImportance,
 } from './importance.js';
 import { parseRawMessage } from './mime/index.js';
 import { parseDraftFields } from './draft.js';
@@ -40,4 +40,13 @@ test('parseRawMessage and parseDraftFields carry the importance', async () => {
   assert.equal((await parseRawMessage(raw(''))).importance, null);
   assert.equal((await parseDraftFields(raw('Importance: Low\r\n'))).importance, 'low');
   assert.equal((await parseDraftFields(raw(''))).importance, 'normal');
+});
+
+test('delivered importance: a rule\'s "set importance" replaces the header value, normal is stored as null', () => {
+  assert.equal(deliveredImportance('high', null), 'high', 'no rule: the header');
+  assert.equal(deliveredImportance(null, undefined), null);
+  assert.equal(deliveredImportance(null, 'high'), 'high');
+  assert.equal(deliveredImportance('high', 'low'), 'low');
+  assert.equal(deliveredImportance('high', 'normal'), null, 'a rule can lower a high mail to normal');
+  assert.equal(deliveredImportance('low', 'urgent' as never), 'low', 'an unknown rule value changes nothing');
 });

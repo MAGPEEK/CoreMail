@@ -35,7 +35,9 @@ before. The webmail route `/compose/<draftId>` is new.
 - Webmail compose: "…" → **Wichtigkeit** (hoch / normal / niedrig) — stored in the draft and sent as
   `Importance` / `X-Priority`; the reader shows "Wichtigkeit: hoch / niedrig" for mails that carry
   such a header (stored at delivery as `Message.importance`); inbox rules with the condition
-  "Wichtigkeit" now see the real value (it was always "normal").
+  "Wichtigkeit" now see the real value (it was always "normal"), and the rule action "Wichtigkeit
+  setzen" — offered before but never applied — now sets the stored importance at delivery and on
+  "Jetzt auf Posteingang anwenden".
 - Webmail compose: "…" → **Übermittlungsbestätigung anfordern** — a delivery status notification per
   recipient (NOTIFY=SUCCESS,FAILURE; local deliveries are reported by the server itself).
 - Webmail compose: **Einfügen → Tabelle** — insert a table, add rows / columns before or after,
