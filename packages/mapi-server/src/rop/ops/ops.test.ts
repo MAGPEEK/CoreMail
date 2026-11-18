@@ -564,6 +564,31 @@ test('QueryRows Origin (MS-OXCTABL): END when a forward read leaves no rows, BEG
   assert.deepEqual([none.origin, none.rows.length], [2, 0], 'empty table, forward read → END');
 });
 
+test('QueryRows NoAdvance (MS-OXCTABL 3.2.5.5): the cursor stays; Origin as for the same read with advance', async () => {
+  const h = new Harness();
+  const inbox = h.store.folderByName('mb1', 'INBOX');
+  for (const s of ['A', 'B', 'C']) h.store.addMessage(inbox.id, { subject: s });
+  await h.logon();
+  // RopQueryRows: RopId, LogonId, InputHandleIndex, QueryRowsFlags, ForwardRead, RowCount
+  const peek = (count: number, forward = true): Buffer => new Writer().u8(RopId.QueryRows).u8(0).u8(2).u8(0x01).u8(forward ? 1 : 0).u16(count).toBuffer();
+  let r = await h.run(rop.openFolder(0, 1, h.inbox), rop.getContentsTable(1, 2), rop.setColumns(2, [TAG.Subject]), peek(2));
+  ok(r, RopId.OpenFolder); r.u8(); r.u8(); ok(r, RopId.GetContentsTable); r.u32(); ok(r, RopId.SetColumns); r.u8();
+  let q = decodeQueryRows(r, [TAG.Subject]);
+  assert.deepEqual([q.origin, q.rows.map((x) => x[0])], [1, ['A', 'B']], 'rows left after the read → CURRENT');
+  q = decodeQueryRows(await h.run(peek(5)), [TAG.Subject]);
+  assert.deepEqual([q.origin, q.rows.map((x) => x[0])], [2, ['A', 'B', 'C']], 'same rows again (cursor not moved); none left → END');
+  q = decodeQueryRows(await h.run(peek(1, false)), [TAG.Subject]);
+  assert.deepEqual([q.origin, q.rows.length], [0, 0], 'backward at the start → BEGINNING');
+  q = decodeQueryRows(await h.run(rop.queryRows(2, 1)), [TAG.Subject]);
+  assert.deepEqual([q.origin, q.rows.map((x) => x[0])], [1, ['A']], 'a normal read still starts at the beginning');
+  // byte level, cursor at 1: RopId 0x15, InputHandleIndex 2, ReturnValue 0, Origin 0x00 BEGINNING, RowCount 1, row A
+  const raw = await h.run(peek(1, false));
+  assert.deepEqual(raw.bytes(9), Buffer.from([0x15, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00]));
+  assert.deepEqual(readRow(raw, [TAG.Subject]), ['A']);
+  q = decodeQueryRows(await h.run(rop.queryRows(2, 1)), [TAG.Subject]);
+  assert.deepEqual(q.rows.map((x) => x[0]), ['B'], 'the backward peek did not move the cursor either');
+});
+
 test('a row larger than any output buffer: QueryRows fails with ecBufferTooSmall, the next ROP still runs', async () => {
   const h = new Harness();
   const inbox = h.store.folderByName('mb1', 'INBOX');

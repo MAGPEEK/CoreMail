@@ -192,8 +192,10 @@ export const ropRestrict = defineRop<RestrictReq>({
 interface QueryReq { inputIndex: number; flags: number; forward: boolean; rowCount: number }
 
 /**
- * MS-OXCTABL, Processing RopQueryRows: no rows left in the read direction →
- * BOOKMARK_END (forward) / BOOKMARK_BEGINNING (backward), else BOOKMARK_CURRENT.
+ * MS-OXCTABL 3.2.5.5, Processing RopQueryRows: no rows left in the read
+ * direction after the returned ones → BOOKMARK_END (forward) /
+ * BOOKMARK_BEGINNING (backward), else BOOKMARK_CURRENT. `position` is where
+ * the read ended — also with NoAdvance, which only keeps the cursor where it was.
  */
 function originOf(position: number, count: number, forward: boolean): number {
   if (forward) return position >= count ? ORIGIN_END : ORIGIN_CURRENT;
@@ -230,9 +232,11 @@ export const ropQueryRows = defineRop<QueryReq>({
     }
     if (!req.forward) encoded.reverse();
     const sent = encoded.length;
-    if ((req.flags & QUERY_NO_ADVANCE) === 0) table.position = req.forward ? start + sent : start - sent;
+    const end = req.forward ? start + sent : start - sent;
+    // NoAdvance (0x01): "the server MUST NOT change the position of the cursor"
+    if ((req.flags & QUERY_NO_ADVANCE) === 0) table.position = end;
     return okResponse(RopId.QueryRows, req.inputIndex)
-      .u8(originOf(table.position, rows.length, req.forward)).u16(sent).bytes(Buffer.concat(encoded)).toBuffer();
+      .u8(originOf(end, rows.length, req.forward)).u16(sent).bytes(Buffer.concat(encoded)).toBuffer();
   },
 });
 
