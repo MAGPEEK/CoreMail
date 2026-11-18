@@ -449,6 +449,9 @@ model Message {
   // receipt requested); null = none, or delivered before 9.4. The receipt route
   // re-reads the raw header before it answers.
   dispositionNotificationTo String?
+  // 9.4: Importance / X-Priority of the message ("high" | "low"), null = normal.
+  // Set at delivery, for drafts and their Sent copies; JMAP/EAS do not use it.
+  importance       String?
   attachments  Attachment[]
   categories   MessageCategory[]
   createdAt    DateTime    @default(now())

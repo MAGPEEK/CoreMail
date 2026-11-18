@@ -50,6 +50,7 @@ async function store(opts: StoreRawOptions): Promise<Message> {
     replyTo: parsed.replyTo,
     messageId: parsed.messageId,
     inReplyTo: parsed.inReplyTo,
+    ...(parsed.importance ? { importance: parsed.importance } : {}),
     date: parsed.date,
     bodyText: truncateBodyColumn(parsed.bodyText),
     bodyHtml: truncateBodyColumn(parsed.bodyHtml),

@@ -2,8 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   classifyUrl, normalizeCid, decodeCss, splitCssDeclarations, filterStyle, srcsetIsInlineOnly,
-  neutralizeLayoutDeclaration, proxyableUrl, escapeHtml, MAX_MAIL_Z_INDEX,
+  neutralizeLayoutDeclaration, proxyableUrl, escapeHtml, MAX_MAIL_Z_INDEX, FORBIDDEN_MAIL_TAGS,
 } from './mailHtmlCss.ts';
+import { TABLE_CELL_STYLE, TABLE_STYLE } from './composeFormat.ts';
 import { base64UrlToBuffer, bufferToBase64Url } from './webauthn.ts';
 
 const block = { allowExternal: false, resolveCid: () => null };
@@ -69,6 +70,16 @@ for (const css of EXTERNAL_STYLES) {
     assert.match(res.style, /color:red/);
   });
 }
+
+test('9.4 tables written by compose survive the mail sanitiser (tags kept, cell styles kept)', () => {
+  for (const tag of ['table', 'thead', 'tbody', 'tr', 'th', 'td', 'colgroup', 'col']) assert.ok(!FORBIDDEN_MAIL_TAGS.includes(tag), tag);
+  for (const tag of ['script', 'style', 'iframe', 'form']) assert.ok(FORBIDDEN_MAIL_TAGS.includes(tag), tag);
+  for (const style of [TABLE_STYLE, TABLE_CELL_STYLE]) {
+    const res = filterStyle(style, block);
+    assert.equal(res.blocked, 0);
+    assert.equal(res.style.replace(/\s+/g, ''), style.replace(/\s+/g, ''));
+  }
+});
 
 test('filterStyle keeps external references when images are allowed', () => {
   const res = filterStyle('background:url(http://t/p.gif)', allow);

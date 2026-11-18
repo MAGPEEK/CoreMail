@@ -9,6 +9,7 @@
  */
 import { simpleParser, type AddressObject, type ParsedMail } from 'mailparser';
 import { capHeaderSection } from './mime/index.js';
+import { importanceOfRaw, type Importance } from './importance.js';
 
 export const DRAFTS_FOLDER = 'Drafts';
 export const DRAFT_FLAG = '\\Draft';
@@ -28,6 +29,8 @@ export interface DraftFields {
   inReplyTo: string | null;
   /** References chain (Message-IDs with angle brackets), oldest first. */
   references: string[];
+  /** 9.4: importance chosen in compose (Importance / X-Priority headers). */
+  importance: Importance;
 }
 
 /** `Name <a@b>` (display name kept when present), the bare address, or the name alone. */
@@ -109,6 +112,7 @@ export async function parseDraftFields(raw: Buffer): Promise<DraftFields> {
     messageId: parsed.messageId ?? null,
     inReplyTo: parsed.inReplyTo ?? null,
     references: msgIdList(parsed.references),
+    importance: importanceOfRaw(raw),
   };
 }
 

@@ -120,6 +120,17 @@ const COREMAIL_EXTRAS: Binding[] = [
   { keys: 'ctrl+z', action: 'undo' },
 ];
 
+/**
+ * 9.4: keys of the compose area itself (not part of a set — they work with
+ * shortcuts switched off too); the help lists them under "Verfassen".
+ * `label` is a translation key.
+ */
+export const COMPOSE_AREA_KEYS: ReadonlyArray<{ keys: string; label: string }> = [
+  { keys: 'escape', label: 'sc_compose_close' },
+  { keys: 'ctrl+b', label: 'sc_compose_bold' },
+  { keys: 'ctrl+i', label: 'sc_compose_italic' },
+];
+
 /** Combos the browser owns; no set may bind them (checked by the tests). */
 export const RESERVED_BROWSER_KEYS: readonly string[] = ['ctrl+f', 'ctrl+r', 'ctrl+shift+r', 'ctrl+u', 'ctrl+l', 'ctrl+t', 'ctrl+w', 'ctrl+p'];
 
@@ -302,6 +313,7 @@ export function displayKeys(keys: string, isMac = false, noMeta = false): string
     if (p === 'shift') return isMac ? '⇧' : 'Shift';
     if (p === 'alt') return isMac ? '⌥' : 'Alt';
     if (p === 'enter') return 'Enter';
+    if (p === 'escape') return 'Esc';
     if (p === 'delete') return isMac ? 'Del' : 'Entf/Del';
     if (p === 'insert') return 'Einfg/Ins';
     return p.length === 1 ? p.toUpperCase() : p;

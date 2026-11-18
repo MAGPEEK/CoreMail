@@ -89,6 +89,8 @@ export interface Message extends MessageSummary {
   inReplyTo?: string | null;
   /** 9.4: read receipt requested by this address (Disposition-Notification-To), null = none */
   dispositionNotificationTo?: string | null;
+  /** 9.4: importance of the mail ('high' | 'low'), null / absent = normal */
+  importance?: string | null;
 }
 
 export interface MessagesResponse {

@@ -5,35 +5,70 @@ import type { ShortcutSetId } from '../lib/shortcuts.js';
 import { DEFAULT_SEND_DELAY_SEC, normalizeSendDelay, type SendDelaySec } from '../lib/send-delay.js';
 import type { DraftAttachmentRef } from '../lib/draft-autosave.js';
 import { migrateThemeState } from '../lib/branding.js';
-import { OWN_MAILBOX, mailboxKey, toggleExpanded, type MailboxRef } from '../lib/mailboxContext.js';
+import { OWN_MAILBOX, mailboxKey, toggleExpanded, type MailboxRef, type SenderOption } from '../lib/mailboxContext.js';
+import {
+  NO_COMPOSE, activateTab, closeTab, onMessageSelected, openTab, updateTab,
+  type ComposeTab, type ComposeTabsState, type OpenOptions, type TabPatch,
+} from '../lib/composeTabs.js';
+import { subjectFor, type ComposeMode } from '../lib/composeQuote.js';
+import type { Importance } from '../lib/importance.js';
 
-export type ComposeMode = 'new' | 'reply' | 'replyAll' | 'forward';
+export type { ComposeMode };
 /** A local file, or an attachment already stored with the server draft. */
 export type ComposeAttachment = File | DraftAttachmentRef;
-/** Full compose state, used to reopen a mail whose send was undone. */
+/**
+ * Full compose state: reopens a mail whose send was undone or failed, and a
+ * draft brought back from the tab strip (9.4) exactly as it was left.
+ */
 export interface ComposeSnapshot {
-  to: string;
-  cc: string;
-  bcc: string;
+  to: string[];
+  cc: string[];
+  bcc: string[];
   subject: string;
   bodyHtml: string;
   attachments: ComposeAttachment[];
+  showCc?: boolean;
+  showBcc?: boolean;
+  /** Chosen sender (senderKey) and the sender of a reopened draft. */
+  fromKey?: string | null;
+  draftSender?: SenderOption | undefined;
+  requestReceipt?: boolean;
+  /** 9.4: delivery receipt (success DSN) asked for */
+  deliveryReceipt?: boolean;
+  /** 9.4: Wichtigkeit hoch / normal / niedrig */
+  importance?: Importance;
+  plainText?: boolean;
+  quoteFolded?: boolean;
+  /** Identity whose signature was placed, and the block as placed (undefined = unknown). */
+  signature?: { forKey: string | null; inserted: string | null | undefined };
+  /** Threading headers of a reopened draft. */
+  threading?: { inReplyTo?: string; references?: string };
+  /** Left before the body was built (signature / original still loading): build it on reopen. */
+  bodyPending?: boolean;
+  /** Left before the forwarded original's attachments arrived: load them on reopen. */
+  forwardPending?: boolean;
 }
 export interface ComposeContext {
   mode: ComposeMode;
   restore?: ComposeSnapshot;
-  /** Server draft being edited (Drafts folder, undo send, failed send). */
+  /** Server draft being edited (Drafts folder, undo send, failed send, own window). */
   draftId?: string;
   id?: string;
   subject?: string;
   fromAddr?: string;
+  fromName?: string;
   toAddrs?: string[];
   ccAddrs?: string[];
+  /** Date of the original (reply / forward header). */
+  date?: string;
   bodyHtml?: string;
   bodyText?: string;
   /** 9.3: mailbox the compose was opened in (reply original, From choice); default: the active one */
   mailbox?: MailboxRef;
 }
+export type ComposeTabEntry = ComposeTab<ComposeContext>;
+
+let composeSeq = 0;
 
 // ── UI state (not persistent) ─────────────────────────────────────────────────
 /** Where the current folder was selected — determines which render path
@@ -46,8 +81,8 @@ interface UiState {
   selectedMessageId: string | null;
   /** 9.3: mailbox shown in the mail view (own / shared / delegated) */
   activeMailbox: MailboxRef;
-  composeOpen: boolean;
-  composeCtx: ComposeContext | null;
+  /** 9.4: open drafts (tab strip) and the one shown in the reading pane */
+  compose: ComposeTabsState<ComposeContext>;
   sidebarCollapsed: boolean;
   /** Keyboard shortcut help dialog (?) */
   shortcutHelpOpen: boolean;
@@ -63,8 +98,11 @@ interface UiState {
   /** Switches the mail view to another mailbox (its INBOX is selected once loaded). */
   setActiveMailbox: (ref: MailboxRef) => void;
   setSelectedMessage: (id: string | null) => void;
-  openCompose: (ctx?: Partial<ComposeContext>) => void;
-  closeCompose: () => void;
+  /** Opens a draft (shown, or in the strip with `background`); returns its tab key. */
+  openCompose: (ctx?: Partial<ComposeContext>, opts?: OpenOptions) => string;
+  activateCompose: (key: string) => void;
+  closeCompose: (key: string) => void;
+  updateComposeTab: (key: string, patch: TabPatch<ComposeContext>) => void;
   toggleSidebar: () => void;
 
   toggleSelection: (id: string, opts?: { range?: boolean; orderedIds?: string[] }) => void;
@@ -79,8 +117,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   selectedFolderSource: 'tree',
   selectedMessageId: null,
   activeMailbox: OWN_MAILBOX,
-  composeOpen: false,
-  composeCtx: null,
+  compose: NO_COMPOSE,
   sidebarCollapsed: false,
   shortcutHelpOpen: false,
   setShortcutHelpOpen: (v) => set({ shortcutHelpOpen: v }),
@@ -110,9 +147,23 @@ export const useUiStore = create<UiState>((set, get) => ({
       filter: 'all',
     });
   },
-  setSelectedMessage: (id) => set({ selectedMessageId: id }),
-  openCompose: (ctx) => set({ composeOpen: true, composeCtx: { mode: 'new', mailbox: get().activeMailbox, ...ctx } }),
-  closeCompose: () => set({ composeOpen: false, composeCtx: null }),
+  // Opening another mail while a draft is shown puts the draft into the tab strip
+  setSelectedMessage: (id) => set((s) => ({
+    selectedMessageId: id,
+    compose: onMessageSelected(s.compose, s.selectedMessageId, id),
+  })),
+  openCompose: (ctx, opts) => {
+    const key = `compose-${++composeSeq}`;
+    const full: ComposeContext = { mode: 'new', mailbox: get().activeMailbox, ...ctx };
+    const subject = full.restore?.subject ?? subjectFor(full.mode, full.subject);
+    const next = openTab(get().compose, key, full, subject, opts);
+    set({ compose: next });
+    // a draft that already had a tab keeps its key
+    return next.tabs.some((t) => t.key === key) ? key : (next.tabs.find((t) => t.draftId === full.draftId)?.key ?? key);
+  },
+  activateCompose: (key) => set((s) => ({ compose: activateTab(s.compose, key) })),
+  closeCompose: (key) => set((s) => ({ compose: closeTab(s.compose, key) })),
+  updateComposeTab: (key, patch) => set((s) => ({ compose: updateTab(s.compose, key, patch) })),
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
 
   toggleSelection: (id, opts) => {

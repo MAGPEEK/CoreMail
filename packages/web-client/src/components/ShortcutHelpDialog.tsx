@@ -5,7 +5,7 @@ import { useUiPrefs, useUiStore } from '../store/ui.js';
 import { useT, fmt } from '../i18n/useT.js';
 import type { TranslationKey } from '../i18n/translations.js';
 import {
-  SHORTCUT_SETS, ACTION_GROUP, displayKeys,
+  SHORTCUT_SETS, ACTION_GROUP, COMPOSE_AREA_KEYS, displayKeys,
   type Binding, type ShortcutAction, type ShortcutGroup,
 } from '../lib/shortcuts.js';
 
@@ -93,6 +93,13 @@ export function ShortcutHelpDialog() {
                       </Fragment>
                     ))}
                   </dd>
+                </div>
+              ))}
+              {/* 9.4: keys of the compose area itself (always on) */}
+              {group === 'compose' && COMPOSE_AREA_KEYS.map((k) => (
+                <div key={k.keys} className="flex items-center justify-between gap-3 text-sm">
+                  <dt className="text-fg-muted">{t(k.label as TranslationKey)}</dt>
+                  <dd className="flex items-center gap-1.5 shrink-0"><Keys keys={k.keys} then={t('sc_then')} /></dd>
                 </div>
               ))}
             </dl>

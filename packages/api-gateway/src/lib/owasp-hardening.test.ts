@@ -19,7 +19,7 @@ const express = (await import('express')).default;
 const multer = (await import('multer')).default;
 const { csvCell, csvCellQuoted, exportSignature, verifyExportSignature } = await import('./export-safety.js');
 const { checkFolderParent } = await import('./folder-tree.js');
-const { checkRecipients, recipientAddress, withBodyLimit } = await import('./send-limits.js');
+const { checkRecipients, recipientAddress, withBodyLimit, envelopeRecipients, deliveryReceiptDsn } = await import('./send-limits.js');
 const { createUserRateLimiter } = await import('./user-rate-limit.js');
 const { resolveReplyHeaders, rawHeader } = await import('./reply-headers.js');
 const { applyUpstreamHeaders, isUntrustedForwardingHeader } = await import('./proxy-headers.js');
@@ -102,6 +102,11 @@ test('recipient validation: syntax, CR/LF, max. count', () => {
   const bad = checkRecipients([['ok@ex.com', 'bad']]);
   assert.equal(bad.ok, false);
   assert.deepEqual(!bad.ok && bad.invalid, ['bad']);
+});
+
+test('9.4 envelope: bare addresses, each once; delivery receipt asks for SUCCESS,FAILURE per recipient', () => {
+  assert.deepEqual(envelopeRecipients([['Jörg <Joerg@x.test>', 'a@x.test'], ['A@X.test', '"Doe, J" <j@x.test>'], ['bad']]), ['Joerg@x.test', 'a@x.test', 'j@x.test']);
+  assert.deepEqual(deliveryReceiptDsn(['Joerg@x.test']), { ret: 'HDRS', rcpts: { 'joerg@x.test': { notify: ['SUCCESS', 'FAILURE'] } } });
 });
 
 test('per-user rate limiter: Redis counter, window, in-process fallback', async () => {

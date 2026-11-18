@@ -105,7 +105,7 @@ function getFieldValue(field: RuleField, parsed: ParsedMessage, userEmail: strin
     case 'body':      return ((parsed.bodyText ?? '') + ' ' + (parsed.bodyHtml ?? '')).toLowerCase();
     case 'hasAttachment': return parsed.attachments.length > 0;
     case 'size':      return parsed.size;
-    case 'importance': return 'normal'; // TODO: parse from X-Priority, neutral for now
+    case 'importance': return parsed.importance ?? 'normal';
     case 'sentOnlyToMe': {
       const me = userEmail.toLowerCase();
       const recips = [...parsed.toAddrs, ...parsed.ccAddrs, ...parsed.bccAddrs].map((r) => r.toLowerCase());
@@ -398,7 +398,7 @@ export async function runRuleOnExisting(
       toAddrs: true, ccAddrs: true, bccAddrs: true,
       replyTo: true, messageId: true, inReplyTo: true,
       date: true, bodyText: true, bodyHtml: true,
-      rawSize: true,
+      rawSize: true, importance: true,
     },
     take: limit,
     orderBy: { date: 'desc' },
@@ -419,6 +419,7 @@ export async function runRuleOnExisting(
       inReplyTo: m.inReplyTo,
       references: [],
       dispositionNotificationTo: null,
+      importance: m.importance === 'high' || m.importance === 'low' ? m.importance : null,
       date:      m.date,
       bodyText:  m.bodyText,
       bodyHtml:  m.bodyHtml,

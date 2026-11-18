@@ -1,9 +1,12 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { Check } from 'lucide-react';
 import { menuKeyIntent } from '../lib/toolbarNav.js';
 
 export interface ContextMenuItem {
   label?: string;
+  /** Style of the label only (e.g. a font name shown in that font). */
+  labelStyle?: CSSProperties;
   icon?: ReactNode;
   onClick?: () => void;
   /** Submenu items */
@@ -13,6 +16,8 @@ export interface ContextMenuItem {
   /** Visually a destructive action (red) */
   danger?: boolean;
   disabled?: boolean;
+  /** Checkable entry (role menuitemcheckbox + aria-checked); a check mark shows when on. */
+  checked?: boolean;
   /** Tooltip (e.g. why the item is disabled) */
   title?: string;
   /** Full divider row or special render */
@@ -116,7 +121,8 @@ export function ContextMenu({ x, y, items, onClose, autoFocus = false, onBack }:
       ref={ref}
       role="menu"
       data-coremail-contextmenu
-      className="fixed z-[100] min-w-[220px] bg-surface border border-line rounded-md shadow-lg py-1 text-sm select-none animate-fly-in"
+      // long menus (e.g. the compose font list) scroll inside the viewport
+      className="fixed z-[100] min-w-[220px] max-h-[calc(100vh-16px)] overflow-y-auto bg-surface border border-line rounded-md shadow-lg py-1 text-sm select-none animate-fly-in"
       style={{ left: pos.x, top: pos.y }}
       onContextMenu={(e) => e.preventDefault()}
       onKeyDown={onMenuKeyDown}
@@ -159,7 +165,8 @@ export function ContextMenu({ x, y, items, onClose, autoFocus = false, onBack }:
             {/* aria-disabled (not disabled): stays reachable by keyboard and its reason is read out */}
             <button
               type="button"
-              role="menuitem"
+              role={item.checked === undefined ? 'menuitem' : 'menuitemcheckbox'}
+              {...(item.checked === undefined ? {} : { 'aria-checked': item.checked })}
               tabIndex={-1}
               data-menuitem
               data-menuindex={i}
@@ -193,8 +200,10 @@ export function ContextMenu({ x, y, items, onClose, autoFocus = false, onBack }:
                     : 'text-fg-muted hover:bg-surface-2 focus:bg-surface-2'
               }`}
             >
-              <span className="w-4 h-4 flex items-center justify-center shrink-0 text-fg-subtle" aria-hidden="true">{item.icon}</span>
-              <span className="flex-1 truncate">{item.label}</span>
+              <span className="w-4 h-4 flex items-center justify-center shrink-0 text-fg-subtle" aria-hidden="true">
+                {item.checked ? <Check size={14} /> : item.icon}
+              </span>
+              <span className="flex-1 truncate" style={item.labelStyle}>{item.label}</span>
               {item.disabled && item.title && <span className="sr-only">{`, ${item.title}`}</span>}
               {hasChildren && <span className="text-fg-subtle" aria-hidden="true">›</span>}
             </button>

@@ -105,6 +105,13 @@ export interface StyleFilterOptions {
 export const MAX_MAIL_Z_INDEX = 10;
 
 /**
+ * Tags removed from every mail body (lib/mailHtml.ts): tracking and script
+ * vectors (incl. <style> — CSS would bypass the attribute filter) and forms
+ * (credential phishing). Tables are content and stay (9.4: compose writes them).
+ */
+export const FORBIDDEN_MAIL_TAGS: readonly string[] = ['script', 'style', 'link', 'iframe', 'frame', 'frameset', 'object', 'embed', 'meta', 'base', 'form'];
+
+/**
  * Layout declarations that could let mail content escape its container and
  * overlay the application UI (phishing): position fixed/sticky becomes static,
  * z-index is clamped to 0..MAX_MAIL_Z_INDEX. Returns the (possibly rewritten)

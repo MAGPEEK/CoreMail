@@ -411,7 +411,8 @@ test('send-from-draft enqueues like /send, then the draft becomes the Sent copy'
   const job = [...jobs.values()].at(-1)!;
   const m = job.data['message'] as Row;
   assert.equal(job.data['from'], 'team@ex.com', 'send-as resolved like /send');
-  assert.deepEqual(job.data['to'], ['Jörg <joerg@x.test>', 'c@x.test', 'b@x.test']);
+  assert.deepEqual(job.data['to'], ['joerg@x.test', 'c@x.test', 'b@x.test'], 'envelope: bare addresses');
+  assert.equal(job.data['dsn'], undefined, 'no delivery receipt asked for');
   assert.deepEqual(m['bcc'], ['b@x.test']);
   assert.equal(m['messageId'], draftMid, 'draft Message-ID is kept');
   const qAtt = (m['attachments'] as Row[])[0]!;
@@ -580,6 +581,36 @@ test('post-enqueue failure: queued draft is marked SENT/PENDING, never re-sendab
   assert.equal((await call('POST', `/drafts/${zid}/send`, { user: 'u1', body: {} })).json['code'], 'DRAFT_SENT');
   draftStateDown = false;
   assert.equal(jobs.size, n, 'never re-sent');
+});
+
+test('9.4 importance: stored in the draft (headers + column), loaded back, carried to the outbound job; CRLF only', async () => {
+  const created = await call('POST', '/drafts', { user: 'u1', body: { to: ['imp@x.test'], subject: 'Wichtig', bodyText: 'a\nb\n', importance: 'high' } });
+  assert.equal(created.status, 201);
+  const id = String(created.json['id']);
+  const raw = rawOf(id);
+  assert.match(raw, /^Importance: High\r$/m);
+  assert.match(raw, /^X-Priority: 1 \(Highest\)\r$/m);
+  assert.doesNotMatch(raw, /(^|[^\r])\n/, 'generated MIME uses CRLF line ends only');
+  assert.equal(messages.get(id)!['importance'], 'high');
+  assert.equal((await call('GET', `/drafts/${id}`, { user: 'u1' })).json['importance'], 'high');
+
+  const low = await call('PUT', `/drafts/${id}`, { user: 'u1', body: { to: ['imp@x.test'], subject: 'Wichtig', importance: 'low' } });
+  const lowId = String(low.json['id']);
+  assert.equal((await call('GET', `/drafts/${lowId}`, { user: 'u1' })).json['importance'], 'low');
+  const sent = await call('POST', `/drafts/${lowId}/send`, { user: 'u1', body: { requestDeliveryReceipt: true } });
+  assert.equal(sent.status, 200);
+  const job = [...jobs.values()].at(-1)!;
+  assert.equal((job.data['message'] as Row)['importance'], 'low');
+  // 9.4: delivery receipt = success DSN for every envelope recipient
+  assert.deepEqual(job.data['dsn'], { ret: 'HDRS', rcpts: { 'imp@x.test': { notify: ['SUCCESS', 'FAILURE'] } } });
+
+  const normal = await call('POST', '/drafts', { user: 'u1', body: { to: ['imp@x.test'], subject: 'Normal' } });
+  const nid = String(normal.json['id']);
+  assert.doesNotMatch(rawOf(nid), /Importance|X-Priority/i);
+  assert.equal(messages.get(nid)!['importance'] ?? null, null);
+  assert.equal((await call('GET', `/drafts/${nid}`, { user: 'u1' })).json['importance'], 'normal');
+  assert.equal((await call('POST', '/drafts', { user: 'u1', body: { to: [], importance: 'urgent' } })).status, 400);
+  await call('DELETE', `/drafts/${nid}`, { user: 'u1' });
 });
 
 test('draft writes: refused at ProhibitSendReceive; per-user rate limit', async () => {

@@ -102,3 +102,25 @@ export function checkRecipients(lists: string[][], max = maxRecipients()): Recip
   if (invalid.length) return { ok: false, error: 'Invalid recipient address', invalid: invalid.slice(0, 10).map((a) => a.slice(0, 100)) };
   return { ok: true };
 }
+
+/**
+ * 9.4: SMTP envelope of checked recipient lists — bare addresses ("Name <a@b>"
+ * → "a@b"), each once (case-insensitive), in order. Invalid entries are left
+ * out (callers run checkRecipients first).
+ */
+export function envelopeRecipients(lists: string[][]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of lists.flat()) {
+    const addr = recipientAddress(raw);
+    if (!addr || seen.has(addr.toLowerCase())) continue;
+    seen.add(addr.toLowerCase());
+    out.push(addr);
+  }
+  return out;
+}
+
+/** 9.4: delivery receipt — DSN request (headers only back) asking for success and failure notices. */
+export function deliveryReceiptDsn(envelope: string[]): { ret: 'HDRS'; rcpts: Record<string, { notify: Array<'SUCCESS' | 'FAILURE'> }> } {
+  return { ret: 'HDRS', rcpts: Object.fromEntries(envelope.map((r) => [r.toLowerCase(), { notify: ['SUCCESS', 'FAILURE'] }])) };
+}

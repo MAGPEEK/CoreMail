@@ -216,6 +216,41 @@ export async function run(state) {
     return 'revoked → 403; test folder removed';
   });
 
+  // 9.4: inline compose — a draft in its own window (/compose/<id>) is loaded and saved
+  // through the server-draft API; the quote marker (folding of long quotes) survives a save.
+  await check('webmail: compose window round trip — /compose/<id> serves the webmail, GET loads the draft, PUT replaces it', async () => {
+    const quote = '<blockquote data-cm-quote=""><hr><p><strong>Von:</strong> e2e@example.test</p><p>alt</p></blockquote>';
+    // 9.4: importance (Importance / X-Priority headers) and a table travel with the draft
+    const table = '<table style="border-collapse: collapse"><tbody><tr><th>A</th></tr><tr><td>1</td></tr></tbody></table>';
+    const body = { to: [state.users.b.email], cc: [], bcc: [], subject: `E2E-Compose-${Date.now()}`, bodyHtml: `<p>neu</p>${table}${quote}`, bodyText: 'neu', keepAttachmentIds: [], importance: 'high' };
+    const mk = await http('POST', '/api/v1/mail/drafts', { token: A, body });
+    assert(mk.status === 201 && mk.json?.id, `create ${mk.status} ${mk.text.slice(0, 200)}`);
+    let id = mk.json.id;
+    try {
+      const page = await http('GET', `/compose/${encodeURIComponent(id)}`);
+      assert(page.status === 200 && /text\/html/.test(page.headers.get('content-type') ?? ''), `/compose/<id> → ${page.status} ${page.headers.get('content-type')}`);
+      const got = await http('GET', `/api/v1/mail/drafts/${id}`, { token: A });
+      assert(got.status === 200 && got.json.subject === body.subject && got.json.to.includes(state.users.b.email), `load ${got.status} ${got.text.slice(0, 200)}`);
+      assert(/data-cm-quote/.test(got.json.bodyHtml), 'quote marker lost');
+      assert(got.json.importance === 'high', `importance ${got.json.importance}`);
+      assert(/<table[\s>]/.test(got.json.bodyHtml) && /<td>1<\/td>/.test(got.json.bodyHtml), 'table lost');
+      const foreign = await http('GET', `/api/v1/mail/drafts/${id}`, { token: B });
+      assert(foreign.status === 404, `other user loads the draft → ${foreign.status}`);
+      const put = await http('PUT', `/api/v1/mail/drafts/${id}`, { token: A, body: { ...body, bodyText: 'neu 2', importance: 'low' } });
+      assert(put.status === 200 && put.json?.id && put.json.id !== id && put.json.supersedes === id, `replace ${put.status} ${put.text.slice(0, 200)}`);
+      const old = id;
+      id = put.json.id;
+      const stale = await http('GET', `/api/v1/mail/drafts/${old}`, { token: A });
+      assert(stale.status === 404, `replaced version still loadable → ${stale.status}`);
+      const low = await http('GET', `/api/v1/mail/drafts/${id}`, { token: A });
+      assert(low.json?.importance === 'low', `importance after replace ${low.json?.importance}`);
+    } finally {
+      const del = await http('DELETE', `/api/v1/mail/drafts/${id}`, { token: A });
+      assert(del.status === 200, `delete ${del.status}`);
+    }
+    return 'window page 200, draft loaded (quote marker, table, importance kept), 404 for others, replaced + old id gone, deleted';
+  });
+
   // 9.4: named signatures with defaults per identity (own + shared mailbox)
   await check('webmail: signatures — create, defaults per identity, legacy /user/signature mirror, delete', async () => {
     const mk = await http('POST', '/api/v1/user/signatures', { token: A, body: { name: `E2E-${Date.now()}`, html: '<p>E2E Gruß</p>' } });

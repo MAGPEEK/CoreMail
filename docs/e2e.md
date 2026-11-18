@@ -104,7 +104,10 @@ READ_ONLY on the team mailbox and a READ_ONLY delegation on A's mailbox: reads w
 route answers 403 `READ_ONLY`; after the grants are removed B gets 403 `NO_ACCESS`. The test folder
 and grants are removed again. 9.4: A creates a named signature, sets it as default for the own
 address and the team mailbox, the legacy `/user/signature` mirrors it, B cannot edit it, deleting
-it clears the defaults. `rest` (9.4) additionally checks the preferences round trip (partial PATCH,
+it clears the defaults. 9.4 compose: `/compose/<draftId>` (a draft in its own window) serves the
+webmail, `GET /api/v1/mail/drafts/:id` loads the draft with its quote marker (B gets 404), `PUT`
+replaces it (new id, the old one 404), the draft is deleted again; see [compose.md](compose.md).
+`rest` (9.4) additionally checks the preferences round trip (partial PATCH,
 400 on invalid values, `migrateFromLocal` ignored once written), `?markRead=false`, `?sort=&dir=`,
 `/auth/sessions` (current marked, ending another session, `revoke-others`) and the read-receipt
 route. See [user-settings.md](user-settings.md).

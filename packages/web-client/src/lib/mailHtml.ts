@@ -1,6 +1,6 @@
 import DOMPurify from 'dompurify';
 import {
-  PLACEHOLDER_IMG, classifyUrl, normalizeCid, filterStyle, srcsetIsInlineOnly, proxyableUrl, escapeHtml,
+  PLACEHOLDER_IMG, classifyUrl, normalizeCid, filterStyle, srcsetIsInlineOnly, proxyableUrl, escapeHtml, FORBIDDEN_MAIL_TAGS,
 } from './mailHtmlCss.js';
 
 /**
@@ -50,9 +50,8 @@ const BASE_CONFIG = {
   // Our markers + link targets
   ADD_ATTR: ['target', 'data-coremail-blocked', 'data-coremail-unresolved-cid'],
   ALLOW_DATA_ATTR: true,
-  // Completely block tracking-relevant tags (incl. <style> — CSS would bypass the
-  // attribute filter) + forms (credential phishing)
-  FORBID_TAGS: ['script', 'style', 'link', 'iframe', 'frame', 'frameset', 'object', 'embed', 'meta', 'base', 'form'],
+  // Tracking-relevant tags + forms (lib/mailHtmlCss.ts); tables are kept
+  FORBID_TAGS: [...FORBIDDEN_MAIL_TAGS],
   FORBID_ATTR: [
     'onload', 'onerror', 'onclick', 'onmouseover', 'onmouseenter', 'onmouseleave',
     'onfocus', 'onblur', 'onkeydown', 'onkeyup', 'onsubmit', 'onchange',

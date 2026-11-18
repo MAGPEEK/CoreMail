@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Reply, ReplyAll, Forward, Trash2, Archive, Paperclip, Download, Printer, ListFilter, Mail,
   AlertOctagon, ShieldOff, Code, Pin, Flag, FolderInput, Clock, X,
-  ShieldAlert, ShieldCheck, CalendarClock, CheckCircle, AlertCircle, RefreshCw,
+  ShieldAlert, ShieldCheck, CalendarClock, CheckCircle, AlertCircle, RefreshCw, ArrowDown,
 } from 'lucide-react';
 import { useRef, useState, type ReactNode } from 'react';
 import { textToQuotedHtml } from '../lib/mailHtml.js';
@@ -27,6 +27,7 @@ import { readerOverflowActions, type ReaderAction, type ReaderActionId } from '.
 import { useAutoMarkRead, useReadReceipt } from '../hooks/useReadBehaviour.js';
 import { useRegional } from '../store/preferences.js';
 import { formatLongDateTime } from '../lib/regionalFormat.js';
+import { importanceBadge } from '../lib/importance.js';
 
 interface Props {
   messageId: string;
@@ -67,6 +68,21 @@ function overflowGroups(
     });
   }
   return groups;
+}
+
+/** 9.4: "Wichtigkeit: hoch / niedrig" next to the subject (normal: nothing). */
+function ImportanceBadge({ value }: { value: string | null | undefined }) {
+  const t = useT();
+  const badge = importanceBadge(value);
+  if (!badge) return null;
+  const high = badge === 'high';
+  return (
+    <span className={`inline-flex items-center gap-1 shrink-0 mt-1 px-1.5 py-0.5 rounded border text-xs font-medium ${
+      high ? 'bg-danger-bg border-danger-line text-danger-fg' : 'bg-surface-2 border-line text-fg-muted'}`}>
+      {high ? <AlertCircle size={12} aria-hidden="true" /> : <ArrowDown size={12} aria-hidden="true" />}
+      {t(high ? 'reader_importance_high' : 'reader_importance_low')}
+    </span>
+  );
 }
 
 export function MessageReader({ messageId }: Props) {
@@ -352,6 +368,7 @@ export function MessageReader({ messageId }: Props) {
       <div className="px-6 py-4 border-b border-line shrink-0 animate-page-in">
         <div className="flex items-start gap-2 mb-3">
           <h2 className="text-lg font-semibold text-fg flex-1">{msg.subject || '(kein Betreff)'}</h2>
+          <ImportanceBadge value={msg.importance} />
           {isFlagged && <Flag size={16} className="fill-danger-fg text-danger-fg shrink-0 mt-1" />}
           {isPinned && <Pin size={16} className="text-accent-fg shrink-0 mt-1" />}
         </div>

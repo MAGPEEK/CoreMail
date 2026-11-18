@@ -33,16 +33,12 @@ interface HeldSendOptions<T> {
   onSent?: (started: T) => void;
 }
 
+/** 9.4: a mail being written is never replaced — the reopened one waits in the draft tab strip. */
 function reopenCompose(ctx: ComposeContext): void {
   const ui = useUiStore.getState();
-  if (!ui.composeOpen) { ui.openCompose(ctx); return; }
-  // Never overwrite a mail being written — reopen once that window is closed
-  toast(translate('send_compose_busy'), { duration: 5000 });
-  const unsub = useUiStore.subscribe((s) => {
-    if (s.composeOpen) return;
-    unsub();
-    s.openCompose(ctx);
-  });
+  const background = ui.compose.activeKey !== null;
+  ui.openCompose(ctx, { background });
+  if (background) toast(translate('send_reopened_in_strip'), { duration: 5000 });
 }
 
 function CountdownToast({ visible, seconds, onUndo }: {

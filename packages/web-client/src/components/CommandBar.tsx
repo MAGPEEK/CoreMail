@@ -231,6 +231,8 @@ function toMenuItem(item: CommandItem, anchor: () => HTMLElement): ContextMenuIt
     label: item.label,
     icon,
     ...(item.disabled ? { disabled: true } : {}),
+    // a toggle keeps its state in the "…" menu (menuitemcheckbox)
+    ...(item.pressed !== undefined && !children && item.dialogOpen === undefined ? { checked: item.pressed } : {}),
     ...(item.tooltip && item.tooltip !== item.label ? { title: item.tooltip } : {}),
     ...(item.tone === 'danger' ? { danger: true } : {}),
     ...(children ? { children } : { onClick: () => item.onClick?.(anchor()) }),

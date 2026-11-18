@@ -241,3 +241,32 @@ test('a structured job with dispositionNotificationTo gets a validated header', 
   const none = (await buildRawFromMessage(base)).toString();
   assert.doesNotMatch(none, /Disposition-Notification-To/i);
 });
+
+// ── 9.4: line ends and importance of structured jobs ─────────────────────────
+
+test('a structured job is built with CRLF line ends only (no bare LF)', async () => {
+  const raw = (await buildRawFromMessage({
+    from: 'alice@corp.test', fromName: 'Alice', to: ['bob@ext.test'], cc: [], bcc: [], subject: 'Lines',
+    html: '<p>a</p>\n<p>b</p>\n', text: 'line 1\nline 2\n', messageId: '<l@corp.test>', date: new Date(0).toISOString(),
+    attachments: [{ filename: 'n.txt', minioPath: 'outbound-queue/j/n', contentType: 'text/plain', size: 4 }],
+  }, async () => Buffer.from('a\nb\n'))).toString('latin1');
+  assert.match(raw, /\r\n\r\n/);
+  assert.doesNotMatch(raw, /(^|[^\r])\n/);
+});
+
+test('a structured job carries Importance / X-Priority only for high and low', async () => {
+  const base = {
+    from: 'alice@corp.test', fromName: '', to: ['bob@ext.test'], cc: [], bcc: [], subject: 'Prio',
+    html: '', text: 'hi', messageId: '<p@corp.test>', date: new Date(0).toISOString(), attachments: [],
+  };
+  const high = (await buildRawFromMessage({ ...base, importance: 'high' })).toString();
+  assert.match(high, /^Importance: High\r$/im);
+  assert.match(high, /^X-Priority: 1 \(Highest\)\r$/im);
+  const low = (await buildRawFromMessage({ ...base, importance: 'low' })).toString();
+  assert.match(low, /^Importance: Low\r$/im);
+  assert.match(low, /^X-Priority: 5 \(Lowest\)\r$/im);
+  for (const importance of [undefined, 'normal', 'High\r\nBcc: evil@ext.test']) {
+    const raw = (await buildRawFromMessage({ ...base, ...(importance === undefined ? {} : { importance }) })).toString();
+    assert.doesNotMatch(raw, /Importance|X-Priority|Bcc: evil/i);
+  }
+});

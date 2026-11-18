@@ -14,6 +14,8 @@ export interface PromptDialogProps {
   onCancel: () => void;
   /** Validation hook; returns error text or null if ok */
   validate?: (value: string) => string | null;
+  /** Error text for an empty value */
+  requiredText?: string;
 }
 
 export function PromptDialog({
@@ -26,6 +28,7 @@ export function PromptDialog({
   onConfirm,
   onCancel,
   validate,
+  requiredText = 'Bitte einen Namen eingeben',
 }: PromptDialogProps) {
   const [value, setValue] = useState(initialValue);
   const [error, setError] = useState<string | null>(null);
@@ -43,7 +46,7 @@ export function PromptDialog({
 
   const handleConfirm = async () => {
     const v = value.trim();
-    if (!v) { setError('Bitte einen Namen eingeben'); return; }
+    if (!v) { setError(requiredText); return; }
     if (validate) {
       const err = validate(v);
       if (err) { setError(err); return; }

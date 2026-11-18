@@ -120,8 +120,8 @@ times of that zone and stored as UTC instants.
 The inserted signature is a block of its own in the compose body (`<div data-cm-signature>`).
 Changing the sender ("Von") replaces it with the new identity's default while it is still exactly
 as inserted — never after the user edited or removed it, and not in reopened drafts. The signature
-picker in the compose action bar inserts any named signature (or removes it), also in plain-text
-format.
+picker (compose ribbon **Einfügen → Signatur** and the "…" menu) inserts any named signature (or
+removes it), also in plain-text format. The compose area itself: [compose.md](compose.md).
 
 ### Logout
 
