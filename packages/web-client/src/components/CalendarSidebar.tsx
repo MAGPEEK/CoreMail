@@ -405,7 +405,7 @@ export function CalendarSidebar({
   };
 
   return (
-    <aside aria-label="Kalenderliste" className="w-60 shrink-0 max-md:hidden bg-surface-2 border-r border-line flex flex-col">
+    <aside aria-label="Kalenderliste" className="w-60 max-w-full shrink-0 bg-surface-2 border-r border-line flex flex-col">
       {/* Mini calendar at the top */}
       <MiniCalendar selectedDate={selectedDate} onSelectDate={onSelectDate} />
 

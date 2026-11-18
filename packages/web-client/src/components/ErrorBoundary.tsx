@@ -35,7 +35,7 @@ export class ErrorBoundary extends Component<Props, State> {
   render() {
     if (this.state.error) {
       return (
-        <div role="alert" className="flex-1 p-8 max-w-2xl mx-auto mt-16">
+        <div role="alert" className="flex-1 min-w-0 p-4 md:p-8 max-w-2xl mx-auto mt-16">
           <div className="bg-danger-bg border border-danger-line rounded-lg p-6 space-y-3">
             <h2 className="text-lg font-semibold text-danger-fg">Diese Ansicht konnte nicht angezeigt werden</h2>
             <p className="text-sm text-danger-fg">{this.state.error.message}</p>
