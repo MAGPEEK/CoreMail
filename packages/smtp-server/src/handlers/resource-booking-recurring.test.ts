@@ -190,6 +190,38 @@ test('two concurrent requests for the same slot: exactly one gets the room', asy
   assert.deepEqual([booking('race-a').status, booking('race-b').status].sort(), ['ACCEPTED', 'DECLINED']);
 });
 
+test('lead decision: a moved occurrence that conflicts is declined alone — the series stays booked, both of its slots are free', async () => {
+  await send(vcal('REQUEST', [WEEKLY]));
+  await send(vcal('REQUEST', [event('blocker', '20261208T140000Z', '20261208T150000Z')]));
+  assert.equal(booking('blocker').status, 'ACCEPTED');
+
+  // the organizer moves the 8 Dec occurrence onto the blocker
+  await send(vcal('REQUEST', [event('series', '20261208T140000Z', '20261208T150000Z', ['RECURRENCE-ID:20261208T093000Z'])]));
+  assert.equal(booking('series').status, 'ACCEPTED', 'the series keeps its answer');
+  assert.deepEqual(booking('series').conflicts, [{ start: '2026-12-08T14:00:00.000Z', end: '2026-12-08T15:00:00.000Z' }]);
+  const stored = booking('series').icalData.replace(/\r\n[ \t]/g, '');
+  assert.match(stored, /RECURRENCE-ID:20261208T093000Z[\s\S]*STATUS:CANCELLED\r\nX-RESOURCE-DECLINED:TRUE/);
+  assert.match(stored, /RRULE:FREQ=WEEKLY;COUNT=6/);
+
+  // the original slot of that occurrence is released, the other occurrences stay booked
+  await send(vcal('REQUEST', [event('at-original', '20261208T093000Z', '20261208T100000Z')]));
+  assert.equal(booking('at-original').status, 'ACCEPTED');
+  await send(vcal('REQUEST', [event('next-week', '20261215T093000Z', '20261215T100000Z')]));
+  assert.equal(booking('next-week').status, 'DECLINED');
+  // the moved slot is not blocked by the series either (the blocker leaves → free)
+  await send(vcal('CANCEL', [[`UID:blocker`, `ORGANIZER:mailto:${ORG}`, 'DTSTART:20261208T140000Z']]));
+  await send(vcal('REQUEST', [event('at-moved', '20261208T143000Z', '20261208T150000Z')]));
+  assert.equal(booking('at-moved').status, 'ACCEPTED');
+
+  // moving it again to a free slot replaces the declined exception and books it
+  await send(vcal('REQUEST', [event('series', '20261208T160000Z', '20261208T170000Z', ['RECURRENCE-ID:20261208T093000Z'])]));
+  assert.equal(booking('series').status, 'ACCEPTED');
+  assert.deepEqual(booking('series').conflicts, []);
+  assert.doesNotMatch(booking('series').icalData, /X-RESOURCE-DECLINED/);
+  await send(vcal('REQUEST', [event('at-new', '20261208T163000Z', '20261208T170000Z')]));
+  assert.equal(booking('at-new').status, 'DECLINED', 'the newly moved occurrence blocks its slot');
+});
+
 test('review: two concurrent occurrence updates of one series are both kept (merged under the lock)', async () => {
   await send(vcal('REQUEST', [WEEKLY]));
   await Promise.all([
@@ -216,6 +248,7 @@ test('review: an unauthenticated request racing the organizer never takes over t
 test('review: a series repeating more than daily is declined (no expansion from its start)', async () => {
   await send(vcal('REQUEST', [event('dense', '20261201T090000Z', '20261201T093000Z', ['RRULE:FREQ=MINUTELY;INTERVAL=1'])]));
   assert.equal(booking('dense').status, 'DECLINED');
+  assert.deepEqual(booking('dense').conflicts, []);
   await send(vcal('REQUEST', [event('hourly', '20261201T090000Z', '20261201T093000Z', ['RRULE:FREQ=DAILY;BYHOUR=9,10,11'])]));
   assert.equal(booking('hourly').status, 'DECLINED');
 });

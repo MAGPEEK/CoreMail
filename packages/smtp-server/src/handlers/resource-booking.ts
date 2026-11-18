@@ -23,7 +23,9 @@
  * expanded. Conflicting occurrences are stored with the booking — the reason of a
  * decline, or listed with the acceptance when the resource does not decline
  * conflicts. A REQUEST or CANCEL for single occurrences (RECURRENCE-ID only) updates
- * or removes those occurrences of the stored series instead of the whole booking.
+ * or removes those occurrences of the stored series instead of the whole booking; a
+ * declined occurrence update declines those occurrences only (cancelled exceptions,
+ * the series keeps its answer).
  */
 import { createLogger } from '@coremail/core';
 import {
@@ -131,21 +133,37 @@ export function parseInvitation(icalData: string): Invitation | null {
   };
 }
 
+/** Marks an occurrence exception the resource declined (the series itself stays booked). */
+export const DECLINED_MARK = 'X-RESOURCE-DECLINED';
+
+/** The occurrence as a cancelled exception the resource declined. */
+function declinedException(occ: IcalComponent): IcalComponent {
+  const properties = occ.properties.filter((p) => p.name !== 'STATUS' && p.name !== DECLINED_MARK);
+  properties.push({ name: 'STATUS', params: {}, value: 'CANCELLED' }, { name: DECLINED_MARK, params: {}, value: 'TRUE' });
+  return { ...occ, properties };
+}
+
 /**
  * Pure: the stored series with the occurrences of an update (VEVENTs with
  * RECURRENCE-ID) replaced or added, plus VTIMEZONEs the series lacks. Null when the
  * stored object is no series master or either side is unreadable.
+ *
+ * `declined`: the resource declines these occurrences — each is stored as a cancelled
+ * exception (STATUS:CANCELLED + {@link DECLINED_MARK}): neither its original slot nor the
+ * slot it was moved to blocks the resource, the rest of the series stays booked. A later
+ * update of the occurrence replaces the exception and is checked again.
  */
-export function applyOccurrenceUpdates(stored: string, incoming: string): string | null {
+export function applyOccurrenceUpdates(stored: string, incoming: string, opts: { declined?: boolean } = {}): string | null {
   const root = parseIcal(stored);
   const update = parseIcal(incoming);
   if (!root || !update || !vevents(root).some((c) => !getProperty(c, 'RECURRENCE-ID'))) return null;
   for (const occ of vevents(update)) {
     const rid = recurrenceIdOf(occ, update)?.getTime();
     if (rid === undefined) continue;
+    const entry = opts.declined ? declinedException(occ) : occ;
     const at = root.components.findIndex((c) => c.name === 'VEVENT' && recurrenceIdOf(c, root)?.getTime() === rid);
-    if (at >= 0) root.components[at] = occ;
-    else root.components.push(occ);
+    if (at >= 0) root.components[at] = entry;
+    else root.components.push(entry);
   }
   const zones = new Set(root.components.filter((c) => c.name === 'VTIMEZONE').map((c) => getProperty(c, 'TZID')?.value));
   for (const tz of update.components.filter((c) => c.name === 'VTIMEZONE' && !zones.has(getProperty(c, 'TZID')?.value))) {
@@ -204,7 +222,8 @@ type Outcome =
   | { kind: 'unusable' }
   | { kind: 'cancelled'; occurrences: number }
   | { kind: 'pending' }
-  | { kind: 'decided'; check: ResourceCheck };
+  | { kind: 'decided'; check: ResourceCheck }
+  | { kind: 'occurrences-declined'; check: ResourceCheck; occurrences: number };
 
 /** CANCEL: the whole booking, or only the cancelled occurrences of the stored series. */
 async function cancelBooking(tx: BookingTx, existing: Booking, invite: Invitation): Promise<Outcome> {
@@ -279,6 +298,14 @@ function handleInvitation(
       return { kind: 'pending' };
     }
     const check = await checkLockedResourceBooking(tx, calendarId, resource, meeting, now);
+    const declinedSeries = !invite.master && existing && check.decision.status === 'DECLINED'
+      ? applyOccurrenceUpdates(existing.icalData, icalData, { declined: true })
+      : null;
+    if (existing && declinedSeries) {
+      // A declined occurrence update declines those occurrences only: the series keeps its answer
+      await tx.resourceBooking.update({ where: { id: existing.id }, data: { icalData: declinedSeries, conflicts: conflictList(check.conflicts) } });
+      return { kind: 'occurrences-declined', check, occurrences: invite.recurrenceIds.length };
+    }
     await writeBooking(tx, existing, calendarId, meeting, organizer, check.decision.status, check.conflicts);
     return { kind: 'decided', check };
   });
@@ -297,6 +324,12 @@ function logOutcome(outcome: Outcome, ctx: Record<string, unknown>): void {
       const conflictDates = conflicts.map((c) => c.dtStart.toISOString());
       if (decision.status === 'DECLINED') log.info({ ...ctx, reason: decision.reason, conflicts: conflictDates }, 'Resource booking declined');
       else log.info({ ...ctx, status: decision.status, conflicts: conflictDates }, 'Resource booking decided');
+      return;
+    }
+    case 'occurrences-declined': {
+      const { decision, conflicts } = outcome.check;
+      log.info({ ...ctx, reason: decision.reason, occurrences: outcome.occurrences, conflicts: conflicts.map((c) => c.dtStart.toISOString()) },
+        'Resource booking: occurrence update declined — the series stays booked');
     }
   }
 }

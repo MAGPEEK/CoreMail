@@ -10,12 +10,13 @@
 
 ### Fixed
 - Room invitations by mail: every occurrence of a recurring meeting is now checked for conflicts (EXDATE and moved occurrences applied, recurring bookings expanded, capped at 400 occurrences), the resource settings for series, maximum duration and booking window apply as in the event form, and TZID start times are no longer read as UTC.
-- Room invitations by mail: a REQUEST that carries only moved occurrences updates the stored series, a CANCEL of single occurrences frees just those slots (EXDATE) instead of deleting the whole booking.
+- Room invitations by mail: a REQUEST that carries only moved occurrences updates the stored series, a CANCEL of single occurrences frees just those slots (EXDATE) instead of deleting the whole booking. A moved occurrence the resource declines (e.g. onto a booked slot) is declined alone: it is stored as a cancelled exception (`X-RESOURCE-DECLINED`), neither its original nor its new slot blocks the resource, the series keeps its answer and `conflicts` lists the date.
+- Calendar expansion (core): a simple DAILY / WEEKLY rule (only INTERVAL, COUNT, UNTIL) jumps to the requested window instead of iterating from its start — a series that started long ago is as cheap as a new one (calendar lists, free/busy, CalDAV, room checks).
 - Room invitations by mail: the existing booking is read, its organizer checked, occurrences merged or cancelled and the answer written in one transaction under the resource's booking lock — two occurrence updates of one series no longer overwrite each other, and an unauthenticated request racing the organizer can no longer take over the booking.
 - CalDAV task list: sending a completed recurring task again (retry, or the client's copy with its RRULE) no longer puts the rule back on it (reopening it later would have started a second series).
 
 ### Security
-- Rooms (event form and mail path): a series repeating more than once a day (FREQ=HOURLY/MINUTELY/SECONDLY, several BYHOUR/BYMINUTE/BYSECOND values) is declined (reason `recurring`) and a stored booking with such a rule blocks its first slot only — its expansion ran from the series start on every booking check of the room and grew with time (CPU denial of service under the room's booking lock).
+- Rooms (event form and mail path): a series repeating more than once a day (FREQ=HOURLY/MINUTELY/SECONDLY, several BYHOUR/BYMINUTE/BYSECOND values) is declined with the new reason `too-frequent` (webmail room picker: "Serie wiederholt sich zu häufig") and a stored booking with such a rule blocks its first slot only — its expansion ran from the series start on every booking check of the room and grew with time (CPU denial of service under the room's booking lock).
 - CalDAV: the task list's path segment is reserved in every spelling — MKCALENDAR with a percent-encoded `tasks` no longer creates a calendar behind the task list, and a calendar created under that name before 9.5 is not listed twice in the calendar home.
 
 No breaking change (SemVer MINOR): no endpoint or protocol behaviour removed; the schema change is additive.

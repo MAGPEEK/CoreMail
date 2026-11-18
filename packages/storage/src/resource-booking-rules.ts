@@ -37,7 +37,7 @@ export interface RoomPolicy {
 }
 
 export type RoomBookingStatus = 'ACCEPTED' | 'DECLINED' | 'PENDING';
-export type RoomDeclineReason = 'inactive' | 'recurring' | 'duration' | 'window' | 'conflict';
+export type RoomDeclineReason = 'inactive' | 'recurring' | 'too-frequent' | 'duration' | 'window' | 'conflict';
 
 export interface RoomDecision {
   status: RoomBookingStatus;
@@ -56,7 +56,8 @@ export function decideRoomBooking(
   now: Date,
 ): RoomDecision {
   if (!room.active) return { status: 'DECLINED', reason: 'inactive' };
-  if (slot.recurring && (!room.allowRecurring || slot.tooFrequent === true)) return { status: 'DECLINED', reason: 'recurring' };
+  if (slot.recurring && !room.allowRecurring) return { status: 'DECLINED', reason: 'recurring' };
+  if (slot.recurring && slot.tooFrequent === true) return { status: 'DECLINED', reason: 'too-frequent' };
   const minutes = (slot.end.getTime() - slot.start.getTime()) / 60_000;
   if (room.maxDurationMinutes !== null && minutes > room.maxDurationMinutes) return { status: 'DECLINED', reason: 'duration' };
   if (slot.start.getTime() > now.getTime() + room.bookingWindowDays * DAY_MS) return { status: 'DECLINED', reason: 'window' };

@@ -24,6 +24,7 @@ const DECLINE_REASON: Record<NonNullable<EventAttendee['reason']>, string> = {
   conflict: 'belegt',
   inactive: 'nicht buchbar',
   recurring: 'keine Serien erlaubt',
+  'too-frequent': 'Serie wiederholt sich zu häufig',
   duration: 'Dauer zu lang',
   window: 'außerhalb des Buchungszeitraums',
 };

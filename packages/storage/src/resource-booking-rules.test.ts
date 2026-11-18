@@ -98,6 +98,8 @@ test('dense series: a request is declined without expansion, a stored one blocks
     resourceBooking: { findMany: async () => [] },
   } as unknown as Parameters<typeof checkResourceBooking>[0];
   const result = await checkResourceBooking(tx, 'rc', ROOM, meeting, NOW);
-  assert.deepEqual(result.decision, { status: 'DECLINED', reason: 'recurring' });
+  assert.deepEqual(result.decision, { status: 'DECLINED', reason: 'too-frequent' });
+  const noSeries = await checkResourceBooking(tx, 'rc', { ...ROOM, allowRecurring: false }, meeting, NOW);
+  assert.deepEqual(noSeries.decision, { status: 'DECLINED', reason: 'recurring' }, 'a room without series keeps its own reason');
   assert.ok(Date.now() - started < 1000, 'no expansion from the series start');
 });

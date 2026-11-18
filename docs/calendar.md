@@ -105,9 +105,12 @@ applied). The conflicting occurrences (up to 50) are stored with the booking
 acceptance when the room does not decline conflicts.
 
 A series that repeats more than once a day (`FREQ=HOURLY`/`MINUTELY`/`SECONDLY`, or several
-`BYHOUR`/`BYMINUTE`/`BYSECOND` values) is declined like a series the room does not allow
-(reason `recurring`); a stored booking with such a rule blocks its first slot only. Its expansion
-would run from the series start on every later check of the room and grow with time.
+`BYHOUR`/`BYMINUTE`/`BYSECOND` values) is declined with reason `too-frequent` (picker: "Serie
+wiederholt sich zu häufig"; a room that allows no series at all keeps `recurring`); a stored
+booking with such a rule blocks its first slot only. Its expansion would run from the series start
+on every later check of the room and grow with time. A simple `DAILY`/`WEEKLY` rule (only
+`INTERVAL`, `COUNT`, `UNTIL`) is not iterated from its start: the expansion jumps to the window
+(core `recurrence.ts`), so an old series costs no more than a new one.
 
 The answer is the room's attendee entry (`ACCEPTED`, `DECLINED` with the reason, or
 `NEEDS-ACTION`) and is shown next to the room. Moving the meeting, changing its recurrence or
@@ -126,7 +129,7 @@ read as UTC:
 | Invitation | Effect on the room's booking |
 |------------|------------------------------|
 | `REQUEST` with the series (or a single meeting) | decided by the rules above, every occurrence checked |
-| `REQUEST` with only `RECURRENCE-ID` occurrences (a moved occurrence) | merged into the stored series, which is checked again |
+| `REQUEST` with only `RECURRENCE-ID` occurrences (a moved occurrence) | merged into the stored series, which is checked again; if declined, only those occurrences are: they are stored as cancelled exceptions (`STATUS:CANCELLED`, `X-RESOURCE-DECLINED:TRUE`) — neither their original nor their new slot blocks the room — the series keeps its answer and `conflicts` lists the dates. Moving the occurrence again replaces the exception and is checked again |
 | `CANCEL` of the series | the booking is removed |
 | `CANCEL` with only `RECURRENCE-ID` occurrences | those occurrences get an `EXDATE`, their slots are free; the answer stays |
 
