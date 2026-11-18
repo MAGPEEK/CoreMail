@@ -56,17 +56,18 @@ function sources(dir: string): string[] {
 }
 
 test('repository guard: every X-CoreMail-* message header read by mail code is in the list', () => {
-  // mail-processing packages; HTTP headers of the web frontends/API (X-CoreMail-App, -Client,
-  // -Signature, -Export-*, -Proto-Verified, -User) are no message headers and filtered by the proxy.
+  // every package that builds, reads or delivers messages (any spelling, also lower-case
+  // literals); HTTP headers of the web frontends/API (X-CoreMail-App, -Client, -Signature,
+  // -Export-*, -Proto-Verified, -User) are no message headers and filtered by the proxy.
   const packages = fileURLToPath(new URL('../../', import.meta.url));
-  const mailPackages = ['smtp-server', 'storage', 'imap-server', 'pop3-server', 'jmap-server', 'activesync', 'security-filter'];
+  const mailPackages = ['smtp-server', 'storage', 'imap-server', 'pop3-server', 'jmap-server', 'activesync', 'security-filter', 'api-gateway', 'mapi-server', 'backup-service', 'caldav-server'];
   const informational = new Set(['x-coremail-calendar-method']);
   const http = /^x-coremail-(app|client|signature|export-|proto-verified|user)/;
   const listed = new Set(INTERNAL_MAIL_HEADERS.map((h) => h.toLowerCase()));
   const missing = new Set<string>();
   for (const pkg of mailPackages) {
     for (const file of sources(join(packages, pkg, 'src'))) {
-      for (const m of readFileSync(file, 'utf8').matchAll(/X-Core[Mm]ail-[A-Za-z-]*[A-Za-z]/g)) {
+      for (const m of readFileSync(file, 'utf8').matchAll(/x-coremail-[a-z-]*[a-z]/gi)) {
         const name = m[0].toLowerCase();
         if (!listed.has(name) && !informational.has(name) && !http.test(name)) missing.add(m[0]);
       }
