@@ -1,18 +1,22 @@
 /**
  * 9.4: the compose area — inline in the reading pane (new mail, reply, reply
  * all, forward, a reopened draft) or in its own window (/compose/<draftId>).
- * Command row, ribbon, fields, status line + attachments, body; files dropped
- * anywhere on it are attached. Server draft semantics are those of 8.1/9.3
- * (autosave, undo hold, schedule, discard); the inventory and the model are in
- * docs/compose.md. Esc saves and closes, Ctrl/⌘+Enter sends.
+ * Command row, fields, status line + attachments, body, formatting toolbar,
+ * action bar; files dropped anywhere on it are attached. Server draft
+ * semantics are those of 8.1/9.3 (autosave, undo hold, schedule, discard); the
+ * inventory and the model are in docs/compose.md. Esc saves and closes,
+ * Ctrl/⌘+Enter sends.
  */
 import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { EditorContent } from '@tiptap/react';
 import { Loader2, Paperclip } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { ComposeCommandRow, type ComposeCommandActions } from './ComposeCommandRow.js';
-import { ComposeRibbon } from './ComposeRibbon.js';
+import { ComposeCommandRow, type ComposeCommandActions, type ComposeCommandState } from './ComposeCommandRow.js';
+import { ComposeFormatBar } from './ComposeFormatBar.js';
+import { ComposeActionBar } from './ComposeActionBar.js';
+import { MessageOptionsDialog, type MessageOptions } from './MessageOptionsDialog.js';
+import { AccessibilityDialog } from './AccessibilityDialog.js';
 import { ComposeFields } from './ComposeFields.js';
 import { AttachmentChips } from './AttachmentChips.js';
 import { SchedulePopover } from './SchedulePopover.js';
@@ -38,10 +42,19 @@ import {
 import { fromList, initialRecipients, recipientList, sendBlockers, type RecipientValue } from '../../lib/recipients.js';
 import {
   addAttachments, composeFieldVisibility, dragHasFiles, draftStatusText, hasPendingChanges, initialFocus,
-  inlineImageProblem, visibleRibbonTab, MAX_ATTACHMENTS, type RibbonTabId,
+  inlineImageProblem, MAX_ATTACHMENTS,
 } from '../../lib/composeRules.js';
+import { formatBarVisible } from '../../lib/composeToolbar.js';
+import { checkAccessibility, collectA11yItems, jumpTarget, type A11yIssue } from '../../lib/composeA11y.js';
+import {
+  MAX_NAME_CHECKS, applyNameCheck, nameCheckQuery, needsNameCheck, resolveRecipient,
+  type DirectoryEntry, type NameCheckResult, type UnresolvedReason,
+} from '../../lib/nameCheck.js';
+import { dateTimeInsertOptions } from '../../lib/composeFormat.js';
+import { api } from '../../api/client.js';
 import { POPOUT_FEATURES, popoutUrl, popoutWindowName, sendMessage, type SendFlags } from '../../lib/composePopout.js';
 import { toImportance, type Importance } from '../../lib/importance.js';
+import { toSensitivity, type Sensitivity } from '../../lib/sensitivity.js';
 import { isDraftAttachment } from '../../lib/draft-autosave.js';
 import { deleteDraft, sendDraft, unsendDraft, type LoadedDraft, type SavedDraftResponse } from '../../lib/draft-api.js';
 import { needsAttachmentReminder } from '../../lib/attachmentReminder.js';
@@ -78,6 +91,18 @@ export function ComposePane({ tabKey, variant, onDone }: Props) {
   const tab = useUiStore((s) => s.compose.tabs.find((t) => t.key === tabKey));
   if (!tab) return null;
   return <ComposeForm tab={tab} variant={variant} {...(onDone ? { onDone } : {})} />;
+}
+
+type ComposeDialog = { kind: 'options' } | { kind: 'a11y'; issues: A11yIssue[] };
+
+interface ContactHit { displayName?: string | null; email?: string | null }
+
+/** Address book entries for one "Namen prüfen" query (own contacts + directory). */
+async function lookupRecipient(entry: string): Promise<DirectoryEntry[]> {
+  const q = nameCheckQuery(entry);
+  if (!q) return [];
+  const hits = await api.get<ContactHit[]>(`/contacts?q=${encodeURIComponent(q)}`);
+  return hits.map((h) => ({ displayName: h.displayName ?? '', email: h.email ?? '' }));
 }
 
 function readFileAsDataUrl(file: File): Promise<string> {
@@ -119,11 +144,15 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
   const [requestReceipt, setRequestReceipt] = useState(restore?.requestReceipt ?? receiptOption.checked);
   const [deliveryReceipt, setDeliveryReceipt] = useState(restore?.deliveryReceipt ?? false);
   const [importance, setImportance] = useState<Importance>(restore?.importance ?? 'normal');
+  const [sensitivity, setSensitivity] = useState<Sensitivity>(restore?.sensitivity ?? 'normal');
+  const [showFrom, setShowFrom] = useState(restore?.showFrom ?? false);
   const [quoteFolded, setQuoteFolded] = useState(restore?.quoteFolded ?? false);
-  const [ribbonTab, setRibbonTab] = useState<RibbonTabId>('message');
   const [scheduling, setScheduling] = useState(false);
+  const [checkingNames, setCheckingNames] = useState(false);
+  const [unresolved, setUnresolved] = useState<Record<string, UnresolvedReason>>({});
   const [dragging, setDragging] = useState(false);
   const [popover, setPopover] = useState<{ kind: 'schedule' | 'emoji'; anchor: HTMLElement } | null>(null);
+  const [dialog, setDialog] = useState<ComposeDialog | null>(null);
   const [linkDialog, setLinkDialog] = useState<string | null>(null);
   const [announcement, setAnnouncement] = useState('');
   const threading = useRef<{ inReplyTo?: string; references?: string }>(restore?.threading ?? {});
@@ -137,7 +166,9 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
   const imageInput = useRef<HTMLInputElement>(null);
   const insertImageRef = useRef<(file: File) => void>(() => undefined);
 
-  const editor = useComposeEditor({ label: t('compose_body'), onPasteImage: (f) => insertImageRef.current(f) });
+  const editor = useComposeEditor({
+    label: t('compose_body'), placeholder: t('compose_body_placeholder'), onPasteImage: (f) => insertImageRef.current(f),
+  });
   const { original, originalId, loading: originalLoading } = useComposeOriginal({ mode, id: ctx.id, mailbox });
 
   const editorHtml = () => {
@@ -163,6 +194,7 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
       ...(th.references ? { references: th.references } : {}),
       ...senderDraftFields(sender.selected),
       importance,
+      sensitivity,
       keepAttachmentIds: attachments.filter(isDraftAttachment).map((a) => a.id),
       files: attachments.filter((a): a is File => !isDraftAttachment(a)),
       snapshot: [...attachments],
@@ -173,7 +205,7 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
     to: recipientList(to), cc: recipientList(cc), bcc: recipientList(bcc), subject,
     bodyHtml: editorHtml(), attachments: [...attachments],
     showCc, showBcc, fromKey: sender.fromKey, draftSender: sender.draftSender,
-    requestReceipt, deliveryReceipt, importance, plainText, quoteFolded, signature: signature.state(), threading: threading.current,
+    requestReceipt, deliveryReceipt, importance, sensitivity, showFrom, plainText, quoteFolded, signature: signature.state(), threading: threading.current,
     ...(bodyBuilt.current ? {} : { bodyPending: true }),
     ...(forwardPending ? { forwardPending: true } : {}),
   });
@@ -196,6 +228,7 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
     sender.setDraftSender(fromDraft);
     sender.setFromKey(fromDraft ? senderKey(fromDraft) : 'self:');
     setImportance(toImportance(d.importance));
+    setSensitivity(toSensitivity(d.sensitivity));
     if (!d.bodyHtml && d.bodyText) setPlainText(true);
     editor?.commands.setContent(d.bodyHtml || textToParagraphsHtml(d.bodyText));
     setQuoteFolded(!!d.inReplyTo && isLongQuote(quotedPart(d.bodyHtml)));
@@ -510,6 +543,68 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
     }
     setLinkDialog(null);
   };
+  const openLink = () => setLinkDialog((editor?.getAttributes('link')['href'] as string | undefined) ?? 'https://');
+
+  /**
+   * "Namen prüfen": every entry that is not yet "Name <address>" is looked up
+   * in the address book (lib/nameCheck.ts); unresolved ones are marked.
+   */
+  const checkNames = async () => {
+    const fields = [[to, setTo], [cc, setCc], [bcc, setBcc]] as const;
+    const lists = fields.map(([v]) => recipientList(v));
+    const pending = [...new Set(lists.flat().filter(needsNameCheck))].slice(0, MAX_NAME_CHECKS);
+    setCheckingNames(true);
+    try {
+      const found = new Map(await Promise.all(pending.map(async (e) => [e, await lookupRecipient(e)] as const)));
+      const marked: Record<string, UnresolvedReason> = {};
+      fields.forEach(([, set], i) => {
+        const results = lists[i]!.map((e): NameCheckResult => {
+          const hits = found.get(e);
+          return hits ? resolveRecipient(e, hits) : { kind: 'known', entry: e };
+        });
+        const r = applyNameCheck(results);
+        Object.assign(marked, r.unresolved);
+        set(fromList(r.entries));
+      });
+      setUnresolved(marked);
+      recipientsTouched.current = true;
+      touch();
+      const open = Object.keys(marked);
+      const text = open.length ? fmt(t('compose_names_unresolved'), { list: open.join(', ') }) : t('compose_names_ok');
+      announce(text);
+      if (open.length) toast.error(text); else toast.success(text);
+    } catch (err) {
+      toastError(err);
+    } finally {
+      setCheckingNames(false);
+    }
+  };
+
+  const openAccessibilityCheck = () => {
+    if (!editor) return;
+    setDialog({ kind: 'a11y', issues: checkAccessibility(collectA11yItems(editor.state.doc)) });
+  };
+
+  /** "Anzeigen" of an accessibility issue: the dialog closes, the cursor goes there. */
+  const showIssue = (issue: A11yIssue) => {
+    setDialog(null);
+    const target = jumpTarget(issue);
+    // after the dialog has handed focus back to its opener
+    requestAnimationFrame(() => {
+      if (!editor || editor.isDestroyed) return;
+      const pos = Math.min(target.pos, editor.state.doc.content.size);
+      const chain = editor.chain().focus();
+      (target.select === 'node' ? chain.setNodeSelection(pos) : chain.setTextSelection(pos)).scrollIntoView().run();
+    });
+  };
+
+  const applyOptions = (o: MessageOptions) => {
+    setDialog(null);
+    setSensitivity(o.sensitivity);
+    setRequestReceipt(o.requestReceipt);
+    setDeliveryReceipt(o.deliveryReceipt);
+    touch();
+  };
 
   const commandActions: ComposeCommandActions = {
     send,
@@ -517,12 +612,17 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
     discard: () => { void discard(); },
     attachFile: () => fileInput.current?.click(),
     insertImage: () => imageInput.current?.click(),
+    openEmoji: (anchor) => setPopover({ kind: 'emoji', anchor }),
     pickSignature: (id) => { signature.pick(id); touch(); },
-    toggleReceipt: () => setRequestReceipt((v) => !v),
-    toggleDeliveryReceipt: () => setDeliveryReceipt((v) => !v),
+    dateTimes: () => dateTimeInsertOptions(new Date(), regional).map((o) => o.text),
+    insertText: (text) => { editor?.chain().focus().insertContent(text).run(); },
+    saveDraft: saveDraftNow,
+    toggleFrom: () => { setShowFrom((v) => !v); },
+    checkNames: () => { void checkNames(); },
     setImportance: (level) => { setImportance(level); touch(); },
     togglePlain,
-    saveDraft: saveDraftNow,
+    openOptions: () => setDialog({ kind: 'options' }),
+    checkAccessibility: openAccessibilityCheck,
     popOut: () => { void popOut(); },
     close: () => { void close(); },
   };
@@ -542,7 +642,7 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
 
   // ── View ─────────────────────────────────────────────────────────────────────
   const visibility = composeFieldVisibility({
-    senderCount: sender.choices.length, showCc, showBcc, ccCount: recipientList(cc).length, bccCount: recipientList(bcc).length,
+    senderCount: sender.choices.length, showFrom, showCc, showBcc, ccCount: recipientList(cc).length, bccCount: recipientList(bcc).length,
   });
   const status = draftStatusText(saveInfo.status, saveInfo.savedAt, draftLoading);
   const statusText = status.kind === 'loading' ? t('compose_loading')
@@ -552,6 +652,11 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
           : status.kind === 'savedAt' ? fmt(t('draft_saved_at'), { time: formatTime(status.at, regional) }) : '';
   const sendBlockedReason = busy ? t('compose_send_busy') : blockers.missingTo ? t('compose_send_need_to') : undefined;
   const quoteShown = hasQuotedOriginal(editor);
+  const commandState: ComposeCommandState = {
+    canSend, sendBlockedReason, plainText, importance, signatures: signature.signatures,
+    fromShown: visibility.from, fromAutomatic: visibility.fromAutomatic, checkingNames,
+    emojiOpen: popover?.kind === 'emoji', inWindow: variant === 'window',
+  };
 
   return (
     <section
@@ -569,29 +674,7 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
       }}
       className={ROOT_CLASS[variant]}
     >
-      <ComposeCommandRow
-        state={{
-          canSend, sendBlockedReason, plainText, receiptVisible: receiptOption.visible, requestReceipt, deliveryReceipt, importance,
-          signatures: signature.signatures, inWindow: variant === 'window',
-        }}
-        actions={commandActions}
-      />
-      <ComposeRibbon
-        editor={editor}
-        plain={plainText}
-        tab={visibleRibbonTab(ribbonTab, plainText)}
-        onTab={setRibbonTab}
-        signatures={signature.signatures}
-        regional={regional}
-        emojiOpen={popover?.kind === 'emoji'}
-        actions={{
-          attachFile: commandActions.attachFile,
-          insertImage: commandActions.insertImage,
-          openLink: () => setLinkDialog((editor?.getAttributes('link')['href'] as string | undefined) ?? 'https://'),
-          openEmoji: (anchor) => setPopover({ kind: 'emoji', anchor }),
-          pickSignature: commandActions.pickSignature,
-        }}
-      />
+      <ComposeCommandRow state={commandState} actions={commandActions} />
       <div className="flex-1 min-h-0 overflow-y-auto">
         <ComposeFields
           visibility={visibility}
@@ -605,6 +688,7 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
           subject={subject}
           onSubject={edited(setSubject)}
           onAnnounce={announce}
+          unresolved={unresolved}
           refs={refs}
         />
         <div className="px-3 py-2 space-y-2 border-b border-line">
@@ -614,7 +698,14 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
           </p>
           <AttachmentChips attachments={attachments} onRemove={(i) => { setAttachments((prev) => prev.filter((_, idx) => idx !== i)); touch(); }} />
         </div>
-        <EditorContent editor={editor} className={`${COMPOSE_EDITOR_CLASS} ${quoteFolded ? QUOTE_FOLDED_CLASS : ''}`} />
+        <div className="relative">
+          {editor?.isEmpty && (
+            <p aria-hidden="true" className="absolute left-4 top-3 text-sm text-fg-subtle pointer-events-none select-none">
+              {t('compose_body_placeholder')}
+            </p>
+          )}
+          <EditorContent editor={editor} className={`${COMPOSE_EDITOR_CLASS} ${quoteFolded ? QUOTE_FOLDED_CLASS : ''}`} />
+        </div>
         {quoteShown && (
           <div className="px-4 pb-4">
             <button
@@ -630,6 +721,14 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
           </div>
         )}
       </div>
+      {formatBarVisible(plainText) && (
+        <ComposeFormatBar
+          editor={editor}
+          defaultSize={composeTextDefaults(composePrefs).fontSize}
+          actions={{ openLink, insertImage: commandActions.insertImage }}
+        />
+      )}
+      <ComposeActionBar state={commandState} actions={commandActions} />
 
       {dragging && (
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-surface/90 border-2 border-dashed border-accent-fg pointer-events-none">
@@ -663,6 +762,17 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
           onConfirm={applyLink}
           onCancel={() => { setLinkDialog(null); editor?.commands.focus(); }}
         />
+      )}
+      {dialog?.kind === 'options' && (
+        <MessageOptionsDialog
+          initial={{ sensitivity, requestReceipt, deliveryReceipt }}
+          receiptVisible={receiptOption.visible}
+          onApply={applyOptions}
+          onCancel={() => setDialog(null)}
+        />
+      )}
+      {dialog?.kind === 'a11y' && (
+        <AccessibilityDialog issues={dialog.issues} onShow={showIssue} onClose={() => setDialog(null)} />
       )}
     </section>
   );

@@ -270,3 +270,18 @@ test('a structured job carries Importance / X-Priority only for high and low', a
     assert.doesNotMatch(raw, /Importance|X-Priority|Bcc: evil/i);
   }
 });
+
+test('9.4: a structured job carries the Sensitivity header only for a valid level, next to the receipt header', async () => {
+  const base = {
+    from: 'alice@corp.test', fromName: '', to: ['bob@ext.test'], cc: [], bcc: [], subject: 'Sens',
+    html: '', text: 'hi', messageId: '<s@corp.test>', date: new Date(0).toISOString(), attachments: [],
+  };
+  const both = (await buildRawFromMessage({ ...base, sensitivity: 'confidential', dispositionNotificationTo: 'alice@corp.test' })).toString();
+  assert.match(both, /^Sensitivity: Company-Confidential\r$/im);
+  assert.match(both, /^Disposition-Notification-To: alice@corp\.test\r$/im);
+  assert.match((await buildRawFromMessage({ ...base, sensitivity: 'personal' })).toString(), /^Sensitivity: Personal\r$/im);
+  for (const sensitivity of [undefined, 'normal', 'private\r\nBcc: evil@ext.test', 'Private']) {
+    const raw = (await buildRawFromMessage({ ...base, ...(sensitivity === undefined ? {} : { sensitivity }) })).toString();
+    assert.doesNotMatch(raw, /Sensitivity|Bcc: evil/i);
+  }
+});

@@ -2,7 +2,7 @@
  * Server drafts for the webmail (v8.x) — mounted at /api/v1/mail/drafts.
  *
  *   POST   /                create a draft                → { id, savedAt, attachments }
- *   GET    /:id             load a draft (compose fields incl. importance + attachments)
+ *   GET    /:id             load a draft (compose fields incl. importance, sensitivity + attachments)
  *   PUT    /:id             replace a draft (new message) → { id, savedAt, attachments }
  *   DELETE /:id             discard a draft
  *   POST   /:id/send        send it like POST /mail/send (same checks, rate limit),
@@ -43,7 +43,7 @@ import {
   prisma, parseRawMessage, storeRawMessage, truncateBodyColumn, attachmentKey, uploadBuffer,
   downloadBuffer, deleteObject, loadRawMessage, createMessage, expunge, moveMessages, touchMessages,
   nextModSeq, parseDraftFields, draftSenderMode, encodeDraftPending, DRAFTS_FOLDER, DRAFT_FLAG, DRAFT_PENDING_HEADER,
-  supersedeDraftVersion, releaseUnreferencedObjects, checkReceiveQuota, importanceMailOption,
+  supersedeDraftVersion, releaseUnreferencedObjects, checkReceiveQuota, importanceMailOption, sensitivityHeaders,
 } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import { requireAuth } from '../middleware/auth.js';
@@ -104,6 +104,8 @@ const DraftSchema = z.object({
   keepAttachmentIds: z.array(z.string().max(100)).max(MAX_SEND_FILES).default([]),
   /** 9.4: Importance / X-Priority headers of the draft (and of the mail sent from it). */
   importance: z.enum(['high', 'normal', 'low']).default('normal'),
+  /** 9.4: Sensitivity header of the draft (and of the mail sent from it). */
+  sensitivity: z.enum(['normal', 'personal', 'private', 'confidential']).default('normal'),
 });
 type DraftInput = z.infer<typeof DraftSchema>;
 
@@ -251,7 +253,10 @@ async function writeDraft(
     ...(valid(to).length ? { to: valid(to) } : {}),
     ...(valid(cc).length ? { cc: valid(cc) } : {}),
     ...(valid(bcc).length ? { bcc: valid(bcc) } : {}),     // drafts keep Bcc (stream transport keepBcc)
-    ...(pendingHeader ? { headers: { [DRAFT_PENDING_HEADER]: pendingHeader } } : {}),
+    headers: {
+      ...(pendingHeader ? { [DRAFT_PENDING_HEADER]: pendingHeader } : {}),
+      ...sensitivityHeaders(input.sensitivity),
+    },
     subject: input.subject,
     date: new Date(),
     ...(input.bodyHtml ? { html: input.bodyHtml } : {}),
@@ -306,6 +311,7 @@ async function writeDraft(
         messageId: parsed.messageId,
         inReplyTo: parsed.inReplyTo,
         ...(parsed.importance ? { importance: parsed.importance } : {}),
+        ...(parsed.sensitivity ? { sensitivity: parsed.sensitivity } : {}),
         date: parsed.date,
         bodyText: truncateBodyColumn(parsed.bodyText),
         bodyHtml: truncateBodyColumn(parsed.bodyHtml),
@@ -401,6 +407,7 @@ draftsRouter.get('/:id', async (req: Request, res: Response) => {
     sendAs: mode.sendAs,
     sendOnBehalfOf: mode.sendOnBehalfOf,
     importance: f.importance,
+    sensitivity: f.sensitivity,
     attachments: draft.attachments.map(attachmentView),
   });
 });
@@ -545,6 +552,7 @@ draftsRouter.post('/:id/send', sendRateLimiter.middleware, async (req: Request, 
       requestReceipt: parsedBody.data.requestReceipt === true,
       requestDeliveryReceipt: parsedBody.data.requestDeliveryReceipt === true,
       importance: f.importance,
+      sensitivity: f.sensitivity,
       messageId: f.messageId,
       // 8.1: inline images keep their Content-ID (cid without angle brackets)
       attachments: draft.attachments.map((a) => ({

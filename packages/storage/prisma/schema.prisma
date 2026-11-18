@@ -452,6 +452,9 @@ model Message {
   // 9.4: Importance / X-Priority of the message ("high" | "low"), null = normal.
   // Set at delivery, for drafts and their Sent copies; JMAP/EAS do not use it.
   importance       String?
+  // 9.4: Sensitivity header of the message ("personal" | "private" |
+  // "confidential"), null = normal. Set like importance; the reader shows a badge.
+  sensitivity      String?
   attachments  Attachment[]
   categories   MessageCategory[]
   createdAt    DateTime    @default(now())

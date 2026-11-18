@@ -72,7 +72,27 @@ test('i18n: compose texts in German and English; Spanish/Italian fall back to En
   assert.equal(translations.de.draft_saved_at, 'Entwurf gespeichert um {time}');
 });
 
-test('ARIA: recipient combobox + pills, ribbon tabs, live status, labelled region, drafts strip', () => {
+test('9.4 layout: command row on top, formatting toolbar and action bar below the body; no ribbon tabs', () => {
+  assert.equal(existsSync(join(src, 'components/compose/ComposeRibbon.tsx')), false, 'the ribbon is gone');
+  const pane = read('components/compose/ComposePane.tsx');
+  const order = ['<ComposeCommandRow', '<ComposeFields', '<EditorContent', '<ComposeFormatBar', '<ComposeActionBar'].map((s) => pane.indexOf(s));
+  assert.ok(order.every((i) => i > 0), 'all bars are rendered');
+  assert.deepEqual([...order].sort((a, b) => a - b), order, 'top → fields → body → formatting → actions');
+  assert.match(pane, /\{formatBarVisible\(plainText\) && \(\s*<ComposeFormatBar/, 'no formatting toolbar in plain-text format');
+  assert.match(pane, /editor\?\.isEmpty && \(/, 'body placeholder while the body is empty');
+  for (const f of ['ComposeCommandRow', 'ComposeFormatBar', 'ComposeActionBar']) {
+    const code = read(`components/compose/${f}.tsx`);
+    assert.match(code, /<CommandBar\b/, `${f} uses the shared command bar (roving focus, overflow)`);
+    assert.doesNotMatch(code, /role="tab(list|panel)?"/, f);
+  }
+  assert.match(read('components/compose/ComposeFields.tsx'), /placeholder=\{t\('compose_subject_placeholder'\)\}/);
+  assert.match(read('components/compose/ComposeActionBar.tsx'), /commandMenuItem\(item, anchor\)/, 'the chevron reuses the "…" entries');
+  assert.match(read('hooks/useComposeEditor.ts'), /'aria-placeholder': o\.placeholder/);
+  for (const f of ['MessageOptionsDialog', 'AccessibilityDialog']) assert.match(read(`components/compose/${f}.tsx`), /<Modal\b/, `${f} is an accessible modal`);
+  assert.match(read('components/MessageReader.tsx'), /<SensitivityBadge value=\{msg\.sensitivity\} \/>/);
+});
+
+test('ARIA: recipient combobox + pills, live status, labelled region, drafts strip', () => {
   const field = read('components/compose/RecipientField.tsx');
   assert.match(field, /role="combobox"/);
   assert.match(field, /aria-controls=\{listId\}/);
@@ -82,8 +102,7 @@ test('ARIA: recipient combobox + pills, ribbon tabs, live status, labelled regio
   assert.match(field, /aria-expanded=\{expanded\}/, 'pill shows the full address on click');
   assert.match(field, /aria-label=\{fmt\(t\('compose_remove_recipient'\)/);
   assert.match(field, /e\.key === 'Escape'\) \{ e\.preventDefault\(\); e\.stopPropagation\(\)/, 'Escape closes the suggestions, not the compose');
-  const ribbon = read('components/compose/ComposeRibbon.tsx');
-  for (const re of [/role="tablist"/, /role="tab"/, /aria-selected=\{id === p\.tab\}/, /role="tabpanel"/, /<CommandBar /]) assert.match(ribbon, re);
+  assert.match(field, /\{problem && <span className="sr-only">/, 'invalid / unresolved recipients are announced');
   const pane = read('components/compose/ComposePane.tsx');
   assert.match(pane, /<section\s+aria-label=\{fmt\(t\('compose_region'\)/);
   assert.match(pane, /data-shortcut-scope="compose"/);

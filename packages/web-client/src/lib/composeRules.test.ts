@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   MAX_ATTACHMENTS, MAX_INLINE_IMAGE_BYTES, MIN_SCHEDULE_LEAD_MS, addAttachments, composeFieldVisibility,
   defaultCustomSchedule, dragHasFiles, draftStatusText, formatSize, hasPendingChanges, initialFocus,
-  inlineImageProblem, insertCommands, ribbonTabs, schedulePresets, scheduleProblem, visibleRibbonTab,
+  inlineImageProblem, schedulePresets, scheduleProblem,
 } from './composeRules.ts';
 import {
   COMPOSE_EMOJI, EMOJI_COLUMNS, HIGHLIGHT_COLORS, TEXT_COLORS, dateTimeInsertOptions, gridMove,
@@ -11,12 +11,15 @@ import {
 import { createRuntimeRegistry } from './composeRuntime.ts';
 import { toLocalInput } from './datetime.ts';
 
-test('fields: Von only with a choice; Cc/Bcc when asked for or filled; toggles only for hidden rows', () => {
-  const base = { senderCount: 1, showCc: false, showBcc: false, ccCount: 0, bccCount: 0 };
-  assert.deepEqual(composeFieldVisibility(base), { from: false, cc: false, bcc: false, ccToggle: true, bccToggle: true });
-  assert.equal(composeFieldVisibility({ ...base, senderCount: 2 }).from, true);
-  assert.deepEqual(composeFieldVisibility({ ...base, ccCount: 1 }), { from: false, cc: true, bcc: false, ccToggle: false, bccToggle: true });
-  assert.deepEqual(composeFieldVisibility({ ...base, showBcc: true }), { from: false, cc: false, bcc: true, ccToggle: true, bccToggle: false });
+test('fields: Von with a choice or when asked for; Cc/Bcc when asked for or filled; toggles only for hidden rows', () => {
+  const base = { senderCount: 1, showFrom: false, showCc: false, showBcc: false, ccCount: 0, bccCount: 0 };
+  assert.deepEqual(composeFieldVisibility(base), { from: false, fromAutomatic: false, cc: false, bcc: false, ccToggle: true, bccToggle: true });
+  const choice = composeFieldVisibility({ ...base, senderCount: 2 });
+  assert.deepEqual([choice.from, choice.fromAutomatic], [true, true]);
+  const asked = composeFieldVisibility({ ...base, showFrom: true });
+  assert.deepEqual([asked.from, asked.fromAutomatic], [true, false], '"Absender anzeigen"');
+  assert.deepEqual(composeFieldVisibility({ ...base, ccCount: 1 }), { from: false, fromAutomatic: false, cc: true, bcc: false, ccToggle: false, bccToggle: true });
+  assert.deepEqual(composeFieldVisibility({ ...base, showBcc: true }), { from: false, fromAutomatic: false, cc: false, bcc: true, ccToggle: true, bccToggle: false });
   assert.equal(composeFieldVisibility({ ...base, bccCount: 2 }).bcc, true, 'a reopened draft with Bcc shows the row');
 });
 
@@ -74,16 +77,6 @@ test('custom schedule: in an hour on the full hour; at least 30 s ahead; invalid
   assert.equal(scheduleProblem('morgen', now), 'invalid');
   assert.equal(scheduleProblem(toLocalInput(new Date(now.getTime() + MIN_SCHEDULE_LEAD_MS - 60_000)), now), 'tooSoon');
   assert.equal(scheduleProblem(toLocalInput(new Date(now.getTime() - 3_600_000)), now), 'tooSoon');
-});
-
-test('ribbon: three tabs for HTML, only Einfügen (file, emoji, signature, date) for plain text', () => {
-  assert.deepEqual(ribbonTabs(false), ['message', 'insert', 'format']);
-  assert.deepEqual(ribbonTabs(true), ['insert']);
-  assert.deepEqual(insertCommands(false, true), ['file', 'image', 'table', 'link', 'emoji', 'signature', 'datetime', 'rule']);
-  assert.deepEqual(insertCommands(true, true), ['file', 'emoji', 'signature', 'datetime']);
-  assert.deepEqual(insertCommands(true, false), ['file', 'emoji', 'datetime'], 'no signatures: no picker');
-  assert.equal(visibleRibbonTab('format', true), 'insert', 'switching to plain text leaves Format');
-  assert.equal(visibleRibbonTab('format', false), 'format');
 });
 
 test('status line: loading, saving, failed, locked, saved at …', () => {

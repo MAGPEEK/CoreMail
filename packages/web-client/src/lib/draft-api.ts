@@ -7,6 +7,7 @@ import { ApiError, apiErrorFromBody } from './errors.js';
 import type { DraftAttachmentRef, SavedDraft } from './draft-autosave.js';
 import { draftConflictFromBody, saveDraftWith } from './draft-conflict.js';
 import type { Importance } from './importance.js';
+import type { Sensitivity } from './sensitivity.js';
 
 export interface DraftPayload {
   to: string[];
@@ -22,6 +23,8 @@ export interface DraftPayload {
   sendOnBehalfOf?: string;
   /** 9.4: Importance / X-Priority (normal: no header). */
   importance?: Importance;
+  /** 9.4: Sensitivity header (normal: none). */
+  sensitivity?: Sensitivity;
   /** Attachments of the current server version to keep (by id). */
   keepAttachmentIds: string[];
   /** New local files (uploaded with this save). */
@@ -48,6 +51,8 @@ export interface LoadedDraft {
   sendOnBehalfOf?: string | null;
   /** 9.4: importance stored in the draft (older servers: absent = normal) */
   importance?: Importance;
+  /** 9.4: sensitivity stored in the draft (older servers: absent = normal) */
+  sensitivity?: Sensitivity;
   attachments: DraftAttachmentRef[];
 }
 

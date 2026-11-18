@@ -613,6 +613,31 @@ test('9.4 importance: stored in the draft (headers + column), loaded back, carri
   await call('DELETE', `/drafts/${nid}`, { user: 'u1' });
 });
 
+test('9.4 sensitivity: stored in the draft (header + column), loaded back, carried to the outbound job', async () => {
+  const created = await call('POST', '/drafts', { user: 'u1', body: { to: ['sens@x.test'], subject: 'Privat', bodyText: 'x', sensitivity: 'private' } });
+  assert.equal(created.status, 201);
+  const id = String(created.json['id']);
+  assert.match(rawOf(id), /^Sensitivity: Private\r$/m);
+  assert.equal(messages.get(id)!['sensitivity'], 'private');
+  assert.equal((await call('GET', `/drafts/${id}`, { user: 'u1' })).json['sensitivity'], 'private');
+
+  const conf = await call('PUT', `/drafts/${id}`, { user: 'u1', body: { to: ['sens@x.test'], subject: 'Privat', sensitivity: 'confidential' } });
+  const confId = String(conf.json['id']);
+  assert.match(rawOf(confId), /^Sensitivity: Company-Confidential\r$/m);
+  assert.equal((await call('GET', `/drafts/${confId}`, { user: 'u1' })).json['sensitivity'], 'confidential');
+  assert.equal((await call('POST', `/drafts/${confId}/send`, { user: 'u1', body: {} })).status, 200);
+  const job = [...jobs.values()].at(-1)!;
+  assert.equal((job.data['message'] as Row)['sensitivity'], 'confidential');
+
+  const normal = await call('POST', '/drafts', { user: 'u1', body: { to: ['sens@x.test'], subject: 'Normal' } });
+  const nid = String(normal.json['id']);
+  assert.doesNotMatch(rawOf(nid), /Sensitivity/i);
+  assert.equal(messages.get(nid)!['sensitivity'] ?? null, null);
+  assert.equal((await call('GET', `/drafts/${nid}`, { user: 'u1' })).json['sensitivity'], 'normal');
+  assert.equal((await call('POST', '/drafts', { user: 'u1', body: { to: [], sensitivity: 'secret' } })).status, 400);
+  await call('DELETE', `/drafts/${nid}`, { user: 'u1' });
+});
+
 test('draft writes: refused at ProhibitSendReceive; per-user rate limit', async () => {
   Object.assign(users['u2']!, { quotaBytes: 1000n, usedBytes: 0n, quotaWarningBytes: null, quotaProhibitSendBytes: null, mailbox: { id: 'mb2' } });
   usage['u2'] = 2000;

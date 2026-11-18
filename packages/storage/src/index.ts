@@ -46,3 +46,4 @@ export * from './legacy-dn.js';
 export * from './store-raw.js';
 export * from './submission-limits.js';
 export * from './importance.js';
+export * from './sensitivity.js';

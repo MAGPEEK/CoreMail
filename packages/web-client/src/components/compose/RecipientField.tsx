@@ -2,7 +2,8 @@
  * 9.4: recipient field with pills (An / Cc / Bcc). Typed text becomes a pill on
  * `,` `;` Enter, Tab or leaving the field; a pasted list is split. A pill shows
  * the name — click shows the full address, ✕ removes it, Backspace in the empty
- * field removes the last one. Invalid addresses are marked. Suggestions come from
+ * field removes the last one. Invalid addresses and entries "Namen prüfen" could
+ * not resolve are marked (the reason as tooltip and for screen readers). Suggestions come from
  * `/contacts?q=` (ARIA combobox: ↑/↓, Enter/Tab picks, Escape closes).
  * Rules: lib/recipients.ts.
  */
@@ -14,6 +15,7 @@ import {
   addEntries, backspace, commitText, commitsOnKey, formatRecipient, parseRecipient, pillLabel, removeEntry, typeText,
   type RecipientValue,
 } from '../../lib/recipients.js';
+import type { UnresolvedReason } from '../../lib/nameCheck.js';
 import { fmt, useT } from '../../i18n/useT.js';
 
 interface ContactSuggest { id: string; displayName: string; email: string; company?: string }
@@ -21,24 +23,27 @@ interface ContactSuggest { id: string; displayName: string; email: string; compa
 const SUGGEST_DEBOUNCE_MS = 220;
 const MAX_SUGGESTIONS = 8;
 
-function RecipientPill({ entry, onRemove }: { entry: string; onRemove: () => void }) {
+const UNRESOLVED_TEXT = { ambiguous: 'compose_name_ambiguous', notFound: 'compose_name_not_found' } as const;
+
+function RecipientPill({ entry, unresolved, onRemove }: { entry: string; unresolved: UnresolvedReason | undefined; onRemove: () => void }) {
   const t = useT();
   const [expanded, setExpanded] = useState(false);
   const r = parseRecipient(entry);
   const label = pillLabel(r);
   const full = r.name ? `${r.name} <${r.address}>` : r.address;
-  const tone = r.valid ? 'bg-surface-2 border-line text-fg' : 'bg-danger-bg border-danger-line text-danger-fg';
+  const problem = unresolved ? t(UNRESOLVED_TEXT[unresolved]) : r.valid ? null : t('compose_recipient_invalid');
+  const tone = problem ? 'bg-danger-bg border-danger-line text-danger-fg' : 'bg-surface-2 border-line text-fg';
   return (
     <li className={`inline-flex items-center max-w-full rounded-full border text-xs ${tone}`}>
       <button
         type="button"
         aria-expanded={expanded}
         onClick={() => setExpanded((v) => !v)}
-        title={full}
+        title={problem ? `${full} – ${problem}` : full}
         className="pl-2.5 pr-1 py-0.5 truncate max-w-[20rem] rounded-l-full"
       >
         {expanded ? full : label}
-        {!r.valid && <span className="sr-only">{`, ${t('compose_recipient_invalid')}`}</span>}
+        {problem && <span className="sr-only">{`, ${problem}`}</span>}
       </button>
       <button
         type="button"
@@ -82,10 +87,12 @@ interface Props {
   onChange: (v: RecipientValue) => void;
   /** Polite announcement (a removed recipient). */
   onAnnounce: (text: string) => void;
+  /** Entries "Namen prüfen" could not resolve. */
+  unresolved: Readonly<Record<string, UnresolvedReason>>;
   inputRef: RefObject<HTMLInputElement | null>;
 }
 
-export function RecipientField({ id, label, value, onChange, onAnnounce, inputRef }: Props) {
+export function RecipientField({ id, label, value, onChange, onAnnounce, unresolved, inputRef }: Props) {
   const t = useT();
   const listId = useId();
   const [open, setOpen] = useState(false);
@@ -156,7 +163,7 @@ export function RecipientField({ id, label, value, onChange, onAnnounce, inputRe
         {value.entries.length > 0 && (
           <ul aria-label={fmt(t('compose_recipients_of'), { field: label })} className="flex flex-wrap gap-1 max-w-full">
             {value.entries.map((entry, i) => (
-              <RecipientPill key={`${entry}-${i}`} entry={entry} onRemove={() => remove(i)} />
+              <RecipientPill key={`${entry}-${i}`} entry={entry} unresolved={unresolved[entry]} onRemove={() => remove(i)} />
             ))}
           </ul>
         )}
