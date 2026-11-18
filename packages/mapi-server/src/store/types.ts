@@ -12,6 +12,25 @@ export interface MapiUser {
   domainId: string;
 }
 
+/** A recipient of the address book (NSPI): an active user or Shared Mailbox. */
+export interface DirectoryRecord {
+  /** User id or Shared Mailbox id (the id in its legacy DN). */
+  id: string;
+  kind: 'user' | 'shared';
+  /** Primary address, lower case. */
+  email: string;
+  displayName: string;
+  /** Active alias addresses, lower case. */
+  aliases: string[];
+  /** Hidden from the address list (mail flow policy): not listed or found by name, only by DN. */
+  hidden: boolean;
+}
+
+/** The address book a user sees: the recipients of the user's own domain. */
+export interface DirectoryStore {
+  listDirectory(user: MapiUser): Promise<DirectoryRecord[]>;
+}
+
 /** A mailbox the session logged on to. */
 export interface MailboxRef {
   mailboxId: string;
@@ -129,4 +148,14 @@ export interface MailStore {
   submissionLimits(user: MapiUser): Promise<SubmissionLimits>;
   /** Sends a message (limits, sender check, quota, queue) and files the Sent copy. */
   submit(user: MapiUser, mailbox: MailboxRef, message: ComposedMessage, opts: { saveCopy: boolean; draft: MessageSummary | null }): Promise<SubmitResult>;
+  /** Highest modSeq written in the mailbox (the message store's counter). */
+  highestModSeq(mailboxId: string): Promise<bigint>;
+  /**
+   * Live messages of the given folders that appeared in their mailbox after
+   * `sinceModSeq` (created, copied or moved in), oldest first, at most `limit`.
+   */
+  messagesCreatedSince(folderIds: readonly string[], sinceModSeq: bigint, limit: number): Promise<NewMessage[]>;
 }
+
+/** A message that appeared in a folder (NewMail notifications). */
+export interface NewMessage { folderId: string; uid: number; read: boolean; createdModSeq: bigint }

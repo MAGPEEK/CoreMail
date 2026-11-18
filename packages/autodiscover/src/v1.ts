@@ -1,8 +1,8 @@
 import type { Request, Response } from 'express';
 import { createLogger, PROTO_VERIFIED_HEADER } from '@coremail/core';
 import {
-  prisma, verifyMailCredentials, clientIpFromRequest, effectiveProtocolAccess, legacyDnFor,
-  type MailAuthUser, type ProtocolAccess,
+  prisma, verifyMailCredentials, clientIpFromRequest, effectiveProtocolAccess, legacyDnFor, mapiEndpointsFor, mapiHttpsTrusted,
+  type MailAuthUser, type MapiEndpoints, type ProtocolAccess,
 } from '@coremail/storage';
 import { getServerConfig, ServerConfigUnavailableError, type ServerConfig } from './settings.js';
 import { SMTPS_PORT } from './v2.js';
@@ -29,9 +29,15 @@ const log = createLogger('autodiscover:v1');
 //    Error 601.
 //  - 9.4: only protocols switched on for the account are announced (IMAP, else
 //    POP3; SMTP; MobileSync) — nothing left → Error 500 "No client protocol …".
+//  - 9.4: MAPI over HTTP (classic Outlook "Exchange" account): the
+//    <Protocol Type="mapiHttp" Version="1"> block (MailStore + AddressBook URLs,
+//    MS-OXDSCLI 3.2.5.1) when the client asks for it (X-MapiHttpCapability ≥ 1),
+//    the account's `mapi` switch is on and HTTPS has a trusted certificate
+//    (storage mapiHttpsTrusted). IMAP / SMTP blocks stay as they are.
 //
-// MAPI over HTTP (v6.0.0) and EWS (v7.0.0) were removed: no EXCH/EXPR/EXHTTP
-// blocks — those make Outlook attempt a binary MAPI/RPC connection (v3.18.39).
+// Never EXCH / EXPR / EXHTTP blocks (MS-OXDSCLI 3.2.5.1 forbids EXCH/EXPR next to
+// mapiHttp; they make Outlook attempt a binary MAPI/RPC connection, v3.18.39) and
+// no EWS (removed in v7.0.0).
 
 const REALM_CHALLENGE = 'Basic realm="CoreMail Autodiscover"';
 const NS_RESPONSE = 'http://schemas.microsoft.com/exchange/autodiscover/responseschema/2006';
@@ -50,15 +56,45 @@ const ERROR = {
 export type OutlookProtocol = 'IMAP' | 'POP3' | 'SMTP';
 
 /**
- * 9.4: the <Protocol> blocks of an Outlook answer for the account's protocol
- * switches — IMAP (else POP3) for incoming mail, SMTP for submission.
- * Hook point for MAPI over HTTP (switch `mapi`): the protocol is not
- * implemented yet, so no block exists; once it is, its block is announced
- * here, and only when `access.mapi` is on.
+ * 9.4: the internet-mail <Protocol> blocks of an Outlook answer for the
+ * account's protocol switches — IMAP (else POP3) for incoming mail, SMTP for
+ * submission. The mapiHttp block is decided by mapiAnnouncement().
  */
-export function outlookProtocols(access: Pick<ProtocolAccess, 'imap' | 'pop3' | 'smtp' | 'mapi'>): OutlookProtocol[] {
+export function outlookProtocols(access: Pick<ProtocolAccess, 'imap' | 'pop3' | 'smtp'>): OutlookProtocol[] {
   const incoming: OutlookProtocol[] = access.imap ? ['IMAP'] : access.pop3 ? ['POP3'] : [];
   return [...incoming, ...(access.smtp ? ['SMTP' as const] : [])];
+}
+
+/** The only mapiHttp response format CoreMail serves (MS-OXDSCLI 3.2.5.1, version 1). */
+export const MAPI_HTTP_VERSION = 1;
+
+/**
+ * MS-OXDSCLI 3.2.5.1: the X-MapiHttpCapability header is valid when it is an
+ * integer > 0 and the server supports a version ≤ it; the answer uses the
+ * highest such version. Null = no (valid) header → no mapiHttp block.
+ */
+export function mapiHttpVersion(header: string | undefined): number | null {
+  if (header === undefined || !/^\s*\d{1,9}\s*$/.test(header)) return null;
+  return parseInt(header, 10) >= MAPI_HTTP_VERSION ? MAPI_HTTP_VERSION : null;
+}
+
+/** Pure: whether the mapiHttp block goes into the answer (all conditions met). */
+export function announcesMapi(c: { switchOn: boolean; version: number | null; endpoints: MapiEndpoints | null; trusted: boolean }): boolean {
+  return c.switchOn && c.version !== null && c.endpoints !== null && c.trusted;
+}
+
+/** The mapiHttp <Protocol> block, version 1 format: MailStore + AddressBook, internal and external URL. */
+export function mapiHttpBlock(urls: MapiEndpoints, version = MAPI_HTTP_VERSION): string {
+  const pair = (url: string): string => `
+          <InternalUrl>${escapeXml(url)}</InternalUrl>
+          <ExternalUrl>${escapeXml(url)}</ExternalUrl>`;
+  return `
+      <Protocol Type="mapiHttp" Version="${version}">
+        <MailStore>${pair(urls.mailStore)}
+        </MailStore>
+        <AddressBook>${pair(urls.addressBook)}
+        </AddressBook>
+      </Protocol>`;
 }
 type AutodiscoverError = typeof ERROR[keyof typeof ERROR];
 
@@ -184,9 +220,11 @@ function outlookProtocolBlock(protocol: OutlookProtocol, email: string, cfg: Ser
  * tells Outlook which address the profile belongs to. (No redirectAddr: the
  * caller is already authenticated for this account, a redirect would only cost
  * another round trip and a client prompt.) 9.4: only `protocols` (the
- * account's enabled ones, outlookProtocols()) get a <Protocol> block.
+ * account's enabled ones, outlookProtocols()) get a <Protocol> block; `mapi`
+ * adds the mapiHttp block first (the LegacyDN is the DN the MAPI Connect
+ * names, storage legacyDnFor).
  */
-function buildOutlookResponse(user: MailAuthUser, cfg: ServerConfig, protocols: OutlookProtocol[]): string {
+export function buildOutlookResponse(user: MailAuthUser, cfg: ServerConfig, protocols: OutlookProtocol[], mapi: MapiEndpoints | null = null): string {
   // Outlook LTSC 2019/2021/2024 compatible (v3.18.38): <User><LegacyDN> is mandatory.
   // The LegacyDN carries the caller's own id — the response only ever describes
   // the authenticated account itself.
@@ -205,7 +243,7 @@ function buildOutlookResponse(user: MailAuthUser, cfg: ServerConfig, protocols: 
     <Account>
       <AccountType>email</AccountType>
       <Action>settings</Action>
-      <MicrosoftOnline>False</MicrosoftOnline>${protocols.map((p) => outlookProtocolBlock(p, email, cfg)).join('')}
+      <MicrosoftOnline>False</MicrosoftOnline>${mapi ? mapiHttpBlock(mapi) : ''}${protocols.map((p) => outlookProtocolBlock(p, email, cfg)).join('')}
       <PublicFolderInformation>
         <SmtpAddress>publicfolder@${escapeXml(webHost.replace(/^mail\./, ''))}</SmtpAddress>
       </PublicFolderInformation>
@@ -284,6 +322,23 @@ async function redirectTargetForPlainHttp(req: Request, hasAuthorization: boolea
     if (!(err instanceof ServerConfigUnavailableError)) throw err;
     return null;
   }
+}
+
+/**
+ * The MAPI endpoints to announce to this caller, or null. The certificate is
+ * only read when everything else allows the block; a database error
+ * propagates (the handler answers 503).
+ */
+async function mapiAnnouncement(req: Request, access: ProtocolAccess, cfg: ServerConfig, userId: string): Promise<MapiEndpoints | null> {
+  const version = mapiHttpVersion(req.get('X-MapiHttpCapability'));
+  const endpoints = mapiEndpointsFor(cfg);
+  if (!access.mapi || version === null || endpoints === null) return null;
+  const trusted = await mapiHttpsTrusted();
+  if (!announcesMapi({ switchOn: access.mapi, version, endpoints, trusted })) {
+    log.info({ userId }, 'Autodiscover v1: MAPI is on but HTTPS has no trusted certificate — mapiHttp not announced');
+    return null;
+  }
+  return endpoints;
 }
 
 export async function handleAutodiscoverV1(req: Request, res: Response): Promise<void> {
@@ -384,10 +439,12 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
 
   let cfg: ServerConfig;
   let access: ProtocolAccess;
+  let mapi: MapiEndpoints | null = null;
   try {
     cfg = await getServerConfig();
     // 9.4: only protocols that are switched on for the account are announced.
     access = await effectiveProtocolAccess({ id: auth.user.id, domainId: auth.user.domainId });
+    if (parsed.schema === 'outlook') mapi = await mapiAnnouncement(req, access, cfg, auth.user.id);
   } catch (err) {
     if (!(err instanceof ServerConfigUnavailableError)) log.error({ err }, 'Autodiscover v1: protocol switches not readable');
     res.set('Retry-After', '30');
@@ -395,7 +452,7 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
     return;
   }
 
-  log.info({ userId: auth.user.id, schema: parsed.schema, method: req.method }, 'Autodiscover v1 request (authenticated)');
+  log.info({ userId: auth.user.id, schema: parsed.schema, method: req.method, mapiHttp: mapi !== null }, 'Autodiscover v1 request (authenticated)');
   if (parsed.schema === 'mobilesync') {
     if (!access.activesync) return sendError(res, ERROR.protocolDisabled);
     res.set('Content-Type', 'text/xml; charset=utf-8');
@@ -403,7 +460,7 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
     return;
   }
   const protocols = outlookProtocols(access);
-  if (protocols.length === 0) return sendError(res, ERROR.protocolDisabled);
+  if (protocols.length === 0 && !mapi) return sendError(res, ERROR.protocolDisabled);
   res.set('Content-Type', 'text/xml; charset=utf-8');
-  res.send(buildOutlookResponse(auth.user, cfg, protocols));
+  res.send(buildOutlookResponse(auth.user, cfg, protocols, mapi));
 }

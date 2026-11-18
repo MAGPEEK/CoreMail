@@ -9,11 +9,13 @@ import express, { type Request, type Response, type NextFunction } from 'express
 import { readMapiHeaders, ResponseCode } from './http/envelope.js';
 import { respondFailure } from './http/responder.js';
 import { emsmdbHandler, type EmsmdbDeps } from './emsmdb/handler.js';
-import { nspiHandler } from './nspi/handler.js';
+import { nspiHandler, type NspiDeps } from './nspi/handler.js';
 
 export const MAX_BODY = 0x40000 + 0x1008 + 64;
 
-export function createApp(deps: EmsmdbDeps): express.Express {
+export type AppDeps = EmsmdbDeps & Pick<NspiDeps, 'directory' | 'endpoints'>;
+
+export function createApp(deps: AppDeps): express.Express {
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', 'loopback');

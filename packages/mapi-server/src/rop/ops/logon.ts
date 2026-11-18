@@ -1,7 +1,8 @@
 /**
  * RopLogon (MS-OXCSTOR 2.2.1.1), RopRelease (MS-OXCROPS 2.2.15.3),
  * RopGetReceiveFolder (MS-OXCSTOR 2.2.1.2) and RopRegisterNotification
- * (MS-OXCNOTIF 2.2.1.2.1 — the subscription is kept; NotificationWait delivers).
+ * (MS-OXCNOTIF 2.2.1.2.1 — the subscription is kept; the change bus queues
+ * its events, emsmdb/notify).
  */
 import { BufferWriter } from '../../wire/writer.js';
 import { Ec, RopError, RopId } from '../codes.js';
@@ -67,12 +68,13 @@ export const ropLogon = defineRop<LogonReq>({
     // Logging on with an active LogonId replaces that logon (MS-OXCROPS 2.2.3.1.1).
     ctx.session.objects.releaseLogon(req.logonId);
     ctx.session.logons.delete(req.logonId);
+    ctx.session.notifications.drop({ logonId: req.logonId });
 
     const view = new MailboxView(await ctx.store.listFolders(mailbox.mailboxId));
     const { maxMessageBytes } = await ctx.store.submissionLimits(ctx.session.user);
     const logon: LogonState = {
       logonId: req.logonId, logonFlags: req.logonFlags, mailbox, guids: storeGuids(mailbox.mailboxId), view,
-      named: namedPropertiesOf(mailbox.mailboxId), maxSubmitBytes: maxMessageBytes,
+      named: namedPropertiesOf(mailbox.mailboxId), maxSubmitBytes: maxMessageBytes, notifiedModSeq: null,
     };
     putObject(ctx, req.outputIndex, { kind: 'logon', logon }, req.logonId);
     ctx.session.logons.set(req.logonId, logon);
@@ -99,9 +101,11 @@ export const ropRelease = defineRop<IndexReq>({
     const handle = ctx.handles[req.inputIndex];
     if (handle === undefined || handle === HANDLE_UNUSED) return null;
     const released = ctx.session.objects.release(handle);
+    ctx.session.notifications.drop({ handle });
     if (released?.kind === 'logon') {
       ctx.session.objects.releaseLogon(released.logon.logonId);
       ctx.session.logons.delete(released.logon.logonId);
+      ctx.session.notifications.drop({ logonId: released.logon.logonId });
     }
     // A released stream keeps what was written (MS-OXCPRPT: release commits).
     if (released?.kind === 'stream' && released.stream.dirty) commitStream(released.stream);
@@ -148,6 +152,8 @@ export const ropRegisterNotification = defineRop<RegisterReq>({
   async execute(ctx, req) {
     objectAt(ctx, req.inputIndex);
     const logon = logonOf(ctx, req.logonId);
+    // NewMail is announced for messages that arrive after the first subscription.
+    logon.notifiedModSeq ??= await ctx.store.highestModSeq(logon.mailbox.mailboxId);
     putObject(ctx, req.outputIndex, {
       kind: 'notification',
       logon,

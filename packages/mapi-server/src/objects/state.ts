@@ -19,6 +19,11 @@ export interface LogonState {
   named: NamedPropertyMap;
   /** Submission size limit at logon (PidTagMaximumSubmitMessageSize). */
   maxSubmitBytes: number;
+  /**
+   * Mailbox modSeq up to which new messages were announced (NewMail); set when
+   * the first notification subscription of the logon is registered.
+   */
+  notifiedModSeq: bigint | null;
 }
 
 export interface RecipientState {
@@ -92,6 +97,8 @@ export interface TableState {
   position: number;
   /** Materialized rows (null = load on next use). */
   rows: PropertyBag[] | null;
+  /** Table notifications are sent (the table was not opened with NoNotifications). */
+  notify: boolean;
 }
 
 /** A RopRegisterNotification subscription (delivered by NotificationWait, see emsmdb/notification-wait.ts). */

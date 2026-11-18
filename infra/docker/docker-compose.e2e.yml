@@ -21,6 +21,8 @@ services:
     environment:
       # The e2e runner talks plain HTTP to port 3000; MAPI Basic auth is HTTPS-only otherwise.
       MAPI_ALLOW_PLAIN_HTTP: "true"
+      # No CA certificate in the e2e stack: let Autodiscover announce mapiHttp (docs/mapi.md).
+      MAPI_HTTPS_TRUSTED: "true"
     ports: !override
       - "127.0.0.1:12525:25"
       - "127.0.0.1:12465:465"

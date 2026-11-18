@@ -56,4 +56,9 @@ export class ServerObjectTable {
   all(): ServerObject[] {
     return [...this.entries.values()].map((e) => e.object);
   }
+
+  /** Open objects with their handles (notification routing). */
+  withHandles(): Array<{ handle: number; object: ServerObject }> {
+    return [...this.entries].map(([handle, e]) => ({ handle, object: e.object }));
+  }
 }

@@ -39,6 +39,15 @@ export const NSPI_REQUEST_TYPES = [
 export const MAPI_CONTENT_TYPE = 'application/mapi-http';
 export const CONTEXT_COOKIE = 'MapiContext';
 export const SEQUENCE_COOKIE = 'MapiSequence';
+/**
+ * The address book endpoint has session contexts of its own (Bind / Unbind):
+ * own cookie names on its own path, so the two contexts never mix in a
+ * client's cookie store.
+ */
+export const NSPI_CONTEXT_COOKIE = 'NspiContext';
+export const NSPI_SEQUENCE_COOKIE = 'NspiSequence';
+export const MAPI_COOKIE_PATH = '/mapi/';
+export const NSPI_COOKIE_PATH = '/mapi/nspi';
 /** Shown in X-ServerApplication; clients read the version from it (MS-OXCMAPIHTTP 2.2.3.3.7). */
 export const SERVER_APPLICATION = 'Exchange/15.02.1544.004';
 
@@ -92,12 +101,12 @@ export function isCookieValue(v: string | undefined): v is string {
   return typeof v === 'string' && /^[A-Za-z0-9_-]{43}$/.test(v);
 }
 
-export function setCookie(name: string, value: string, secure: boolean): string {
-  return `${name}=${value}; Path=/mapi/; HttpOnly; SameSite=Strict${secure ? '; Secure' : ''}`;
+export function setCookie(name: string, value: string, secure: boolean, path = MAPI_COOKIE_PATH): string {
+  return `${name}=${value}; Path=${path}; HttpOnly; SameSite=Strict${secure ? '; Secure' : ''}`;
 }
 
-export function clearCookie(name: string, secure: boolean): string {
-  return `${name}=; Path=/mapi/; Max-Age=0; HttpOnly; SameSite=Strict${secure ? '; Secure' : ''}`;
+export function clearCookie(name: string, secure: boolean, path = MAPI_COOKIE_PATH): string {
+  return `${name}=; Path=${path}; Max-Age=0; HttpOnly; SameSite=Strict${secure ? '; Secure' : ''}`;
 }
 
 export const META_PROCESSING = 'PROCESSING\r\n';

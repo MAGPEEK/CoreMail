@@ -161,9 +161,9 @@ event `protocol-access-change` with the list of protocols that are now off (`dis
 Only enabled protocols are announced:
 
 - **Autodiscover v1** (authenticated): the account's switches — IMAP, else POP3, plus SMTP; the
-  mobilesync answer only with ActiveSync on; nothing left → Error 500 "No client protocol is enabled
-  for this account." MAPI over HTTP has no block yet — `outlookProtocols()` in
-  `packages/autodiscover/src/v1.ts` is the place where it will be announced (only when `mapi` is on).
+  mobilesync answer only with ActiveSync on; the `mapiHttp` block only with `mapi` on (and a client
+  asking for it with `X-MapiHttpCapability`, a trusted HTTPS certificate — see [mapi.md](mapi.md));
+  nothing left → Error 500 "No client protocol is enabled for this account."
 - **Autodiscover v2** and **Thunderbird autoconfig** (anonymous): the switches of the mail
   domain (server + domain level, never a single account, so nothing about an account can be learned).
   A protocol that is off is `404 NoSuchProtocol` (v2) or missing from `config-v1.1.xml`.

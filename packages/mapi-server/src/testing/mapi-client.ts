@@ -209,6 +209,183 @@ export const rop = {
   },
   saveChangesMessage: (responseIndex: number, index: number): Buffer => new Writer().u8(0x0c).u8(0).u8(responseIndex).u8(index).u8(0x02).toBuffer(),
   submitMessage: (index: number): Buffer => new Writer().u8(0x32).u8(0).u8(index).u8(0).toBuffer(),
+  /** RopRegisterNotification on the whole store (types: NewMail 0x2, ObjectModified 0x10 …). */
+  registerNotification: (input: number, out: number, types: number): Buffer =>
+    new Writer().u8(0x29).u8(0).u8(input).u8(out).u16(types).u8(1).toBuffer(),
+};
+
+/** RopNotify responses (and RopPending) after the regular responses of an Execute output. */
+export function readNotifications(r: Reader): { notifications: Array<{ handle: number; logonId: number; flags: number; data: Buffer }>; pending: boolean } {
+  const notifications: Array<{ handle: number; logonId: number; flags: number; data: Buffer }> = [];
+  let pending = false;
+  while (r.remaining > 0) {
+    const ropId = r.u8();
+    if (ropId === 0x6e) { r.u16(); pending = true; continue; }
+    if (ropId !== 0x2a) throw new Error(`unexpected RopId 0x${ropId.toString(16)} among notifications`);
+    const handle = r.u32();
+    const logonId = r.u8();
+    const flags = r.buf.readUInt16LE(r.pos);
+    const type = flags & 0x0fff;
+    const start = r.pos;
+    r.u16();
+    if (type === 0x0100) r.u16();
+    else if (type === 0x0002) { r.u64(); r.u64(); r.u32(); const unicode = r.u8() === 1; if (unicode) r.utf16Z(); else r.asciiZ(); }
+    else if (type === 0x0010) { r.u64(); r.u16(); if (flags & 0x1000) r.u32(); if (flags & 0x2000) r.u32(); }
+    else throw new Error(`client cannot decode notification type 0x${type.toString(16)}`);
+    notifications.push({ handle, logonId, flags, data: r.buf.subarray(start, r.pos) });
+  }
+  return { notifications, pending };
+}
+
+// ── Address book (NSPI) ──────────────────────────────────────────────────────
+
+export const AB = {
+  TRUE: 0xff,
+  CP_WINUNICODE: 1200,
+  MID_BEGINNING_OF_TABLE: 0,
+  MID_END_OF_TABLE: 2,
+  MID_UNRESOLVED: 0,
+  MID_AMBIGUOUS: 1,
+};
+
+export interface StatFields {
+  sortType?: number; containerId?: number; currentRec?: number; delta?: number; numPos?: number;
+  totalRecs?: number; codePage?: number; templateLocale?: number; sortLocale?: number;
+}
+
+export function writeStat(w: Writer, s: StatFields = {}): Writer {
+  return w.u32(s.sortType ?? 0).u32(s.containerId ?? 0).u32(s.currentRec ?? 0).i32(s.delta ?? 0).u32(s.numPos ?? 0)
+    .u32(s.totalRecs ?? 0).u32(s.codePage ?? AB.CP_WINUNICODE).u32(s.templateLocale ?? 0x0409).u32(s.sortLocale ?? 0x0409);
+}
+
+export function readStat(r: Reader): Required<StatFields> {
+  return {
+    sortType: r.u32(), containerId: r.u32(), currentRec: r.u32(), delta: r.i32(), numPos: r.u32(),
+    totalRecs: r.u32(), codePage: r.u32(), templateLocale: r.u32(), sortLocale: r.u32(),
+  };
+}
+
+function tagArray(w: Writer, tags: number[]): Writer {
+  w.u32(tags.length);
+  for (const t of tags) w.u32(t);
+  return w;
+}
+
+export const nspiBody = {
+  bind: (stat: StatFields = {}): Buffer => writeStat(new Writer().u32(0).u8(1), stat).u32(0).toBuffer(),
+  unbind: (): Buffer => new Writer().u32(0).u32(0).toBuffer(),
+  getSpecialTable: (flags = 0x4, version: number | null = null): Buffer => {
+    const w = writeStat(new Writer().u32(flags).u8(1));
+    if (version === null) w.u8(0); else w.u8(1).u32(version);
+    return w.u32(0).toBuffer();
+  },
+  queryRows: (stat: StatFields, rowCount: number, columns: number[], explicit: number[] = []): Buffer => {
+    const w = writeStat(new Writer().u32(0).u8(1), stat).u32(explicit.length);
+    for (const m of explicit) w.u32(m);
+    return tagArray(w.u32(rowCount).u8(1), columns).u32(0).toBuffer();
+  },
+  resolveNames: (names: string[], columns: number[], stat: StatFields = {}): Buffer => {
+    const w = tagArray(writeStat(new Writer().u32(0).u8(1), stat).u8(1), columns).u8(1).u32(names.length);
+    for (const n of names) w.utf16Z(n);
+    return w.u32(0).toBuffer();
+  },
+  dnToMId: (dns: string[]): Buffer => {
+    const w = new Writer().u32(0).u8(1).u32(dns.length);
+    for (const d of dns) w.asciiZ(d);
+    return w.u32(0).toBuffer();
+  },
+  getProps: (mid: number, tags: number[] | null, flags = 0): Buffer => {
+    const w = writeStat(new Writer().u32(flags).u8(1), { currentRec: mid });
+    if (tags) tagArray(w.u8(1), tags); else w.u8(0);
+    return w.u32(0).toBuffer();
+  },
+};
+
+/** AddressBookPropertyValue of a known type (MS-OXCMAPIHTTP 2.2.1.1; 32-bit binary counts). */
+export function readAbValue(r: Reader, type: number): Value | string[] | null {
+  const stringish = type === PT.String || type === PT.String8 || type === PT.Binary;
+  if (type & 0x1000) {
+    if (r.u8() === 0) return null;
+    const n = r.u32();
+    const out: string[] = [];
+    for (let i = 0; i < n; i++) { if (r.u8() === 0) continue; out.push(r.utf16Z()); }
+    return out;
+  }
+  if (stringish && r.u8() === 0) return null;
+  if (type === PT.Binary) return r.bytes(r.u32());
+  return readValue(r, type);
+}
+
+/** AddressBookPropertyRow for known columns. */
+export function readAbRow(r: Reader, columns: number[]): Array<Value | string[] | null> {
+  const flagged = r.u8() === 1;
+  return columns.map((c) => {
+    let type = c & 0xffff;
+    if (type === PT.Unspecified) type = r.u16();
+    if (flagged) {
+      const flag = r.u8();
+      if (flag === 1) return undefined;
+      if (flag === 0x0a) return { error: r.u32() };
+    }
+    return readAbValue(r, type);
+  });
+}
+
+function readMids(r: Reader): number[] | null {
+  if (r.u8() === 0) return null;
+  const n = r.u32();
+  const mids: number[] = [];
+  for (let i = 0; i < n; i++) mids.push(r.u32());
+  return mids;
+}
+
+function readRowSet(r: Reader): { columns: number[]; rows: Array<Array<Value | string[] | null>> } | null {
+  if (r.u8() === 0) return null;
+  const n = r.u32();
+  const columns: number[] = [];
+  for (let i = 0; i < n; i++) columns.push(r.u32());
+  const count = r.u32();
+  const rows: Array<Array<Value | string[] | null>> = [];
+  for (let i = 0; i < count; i++) rows.push(readAbRow(r, columns));
+  return { columns, rows };
+}
+
+export const nspiDecode = {
+  bind: (body: Buffer): { errorCode: number; serverGuid: Buffer } => {
+    const r = new Reader(body); r.u32();
+    return { errorCode: r.u32(), serverGuid: r.bytes(16) };
+  },
+  /** QueryRows / SeekEntries. */
+  table: (body: Buffer) => {
+    const r = new Reader(body); r.u32();
+    const errorCode = r.u32();
+    const stat = r.u8() !== 0 ? readStat(r) : null;
+    return { errorCode, stat, rowSet: readRowSet(r) };
+  },
+  resolveNames: (body: Buffer) => {
+    const r = new Reader(body); r.u32();
+    const errorCode = r.u32();
+    const codePage = r.u32();
+    return { errorCode, codePage, mids: readMids(r), rowSet: readRowSet(r) };
+  },
+  dnToMId: (body: Buffer): { errorCode: number; mids: number[] | null } => {
+    const r = new Reader(body); r.u32();
+    return { errorCode: r.u32(), mids: readMids(r) };
+  },
+  getProps: (body: Buffer): { errorCode: number; values: Map<number, Value | string[] | null> | null } => {
+    const r = new Reader(body); r.u32();
+    const errorCode = r.u32();
+    r.u32();
+    if (r.u8() === 0) return { errorCode, values: null };
+    const n = r.u32();
+    const values = new Map<number, Value | string[] | null>();
+    for (let i = 0; i < n; i++) {
+      const type = r.u16();
+      const id = r.u16();
+      values.set(((id << 16) | type) >>> 0, type === PT.ErrorCode ? { error: r.u32() } : readAbValue(r, type));
+    }
+    return { errorCode, values };
+  },
 };
 
 export const HANDLE_UNUSED = 0xffffffff;

@@ -79,6 +79,7 @@ export function parseNotificationWaitRequest(body: Buffer): { flags: number } {
   return { flags };
 }
 
-export function buildNotificationWaitResponse(eventPending: boolean): Buffer {
-  return new BufferWriter(16).u32(0).u32(0).u32(eventPending ? 1 : 0).u32(0).toBuffer();
+/** StatusCode 0, ErrorCode (EcDoAsyncWaitEx return value), EventPending, no auxiliary buffer. */
+export function buildNotificationWaitResponse(eventPending: boolean, errorCode = 0): Buffer {
+  return new BufferWriter(16).u32(0).u32(errorCode).u32(eventPending ? 1 : 0).u32(0).toBuffer();
 }

@@ -14,6 +14,7 @@
  */
 import { createLogger, type LiveConnectionRegistry } from '@coremail/core';
 import { cookieDigest, MapiSession, newCookieValue, type SessionAuth } from './session.js';
+import type { Endpoint } from '../http/envelope.js';
 
 const log = createLogger('mapi:sessions');
 
@@ -50,14 +51,19 @@ export class SessionRegistry {
 
   get size(): number { return this.byDigest.size; }
 
-  /** New session; returns it with the two cookie values to send. */
-  async create(auth: SessionAuth, authStartedAt: number): Promise<{ session: MapiSession; context: string; sequence: string }> {
+  /** Live sessions of one endpoint (the notification bus routes mailbox changes to them). */
+  sessionsOf(endpoint: Endpoint): MapiSession[] {
+    return [...this.byDigest.values()].map((e) => e.session).filter((s) => !s.closed && s.endpoint === endpoint);
+  }
+
+  /** New session of an endpoint (Connect: emsmdb, Bind: nspi); returns it with the two cookie values to send. */
+  async create(auth: SessionAuth, authStartedAt: number, endpoint: Endpoint = 'emsmdb'): Promise<{ session: MapiSession; context: string; sequence: string }> {
     this.evictOldest(auth.user.userId);
     const context = newCookieValue();
     const sequence = newCookieValue();
     const digest = cookieDigest(context);
-    const session = new MapiSession(digest, auth, sequence, this.now(), this.deps.memoryLimitBytes);
-    await this.deps.redis.set(KEY_PREFIX + digest, JSON.stringify({ userId: auth.user.userId, createdAt: session.createdAt }), 'PX', this.deps.idleMs);
+    const session = new MapiSession(digest, auth, sequence, this.now(), this.deps.memoryLimitBytes, endpoint);
+    await this.deps.redis.set(KEY_PREFIX + digest, JSON.stringify({ userId: auth.user.userId, createdAt: session.createdAt, endpoint }), 'PX', this.deps.idleMs);
     const unregister = this.deps.live.register({
       userId: auth.user.userId,
       credential: auth.credential,

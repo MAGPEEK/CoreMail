@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
 import { createLogger } from '@coremail/core';
-import { domainProtocolAccess, type AccessProtocol, type ProtocolAccess } from '@coremail/storage';
+import { domainProtocolAccess, mapiEndpointsFor, mapiHttpsTrusted, type AccessProtocol, type ProtocolAccess } from '@coremail/storage';
 import { getServerConfig, ServerConfigUnavailableError, type ServerConfig } from './settings.js';
 
 const log = createLogger('autodiscover:v2');
@@ -17,7 +17,7 @@ function queryString(req: Request, name: string): string | undefined {
 // Autodiscover v2 — JSON response (Outlook 2019/2022/365). Both documented forms:
 //   GET /autodiscover/autodiscover.json/v1.0/{email}?Protocol=…
 //   GET /autodiscover/autodiscover.json?Email={email}&Protocol=…
-// Protocols: AutodiscoverV1 | IMAP | SMTP | ActiveSync. Anonymous by design: the
+// Protocols: AutodiscoverV1 | IMAP | SMTP | ActiveSync | MapiHttp. Anonymous by design: the
 // answer is the same generic server configuration for every address.
 // EWS was removed in v7.0.0: Protocol=EWS answers 404 NoSuchProtocol.
 // 9.4: a protocol switched off for the mail domain answers 404 NoSuchProtocol
@@ -88,6 +88,28 @@ export async function handleAutodiscoverV2(req: Request, res: Response): Promise
       Port: cfg.smtpPort,
       SSL: !cfg.smtpTls ? 'None' : cfg.smtpPort === SMTPS_PORT ? 'SSL' : 'STARTTLS',
     });
+    return;
+  }
+
+  // 9.4: MAPI over HTTP — the mailbox endpoint URL, only with `mapi` on for the
+  // domain and trusted HTTPS (as the v1 mapiHttp block).
+  if (protocol === 'mapihttp') {
+    if (disabled('mapi')) return;
+    const endpoints = mapiEndpointsFor(cfg);
+    let trusted: boolean;
+    try {
+      trusted = endpoints !== null && await mapiHttpsTrusted();
+    } catch (err) {
+      log.error({ err }, 'Autodiscover v2: certificate state not readable');
+      res.set('Retry-After', '30');
+      res.status(503).json({ ErrorCode: 'ServiceUnavailable', ErrorMessage: 'Try again later' });
+      return;
+    }
+    if (!endpoints || !trusted) {
+      res.status(404).json({ ErrorCode: 'NoSuchProtocol', ErrorMessage: `Protocol ${protocolParam ?? ''} is not available` });
+      return;
+    }
+    res.json({ Protocol: 'MapiHttp', Url: endpoints.mailStore });
     return;
   }
 

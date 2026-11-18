@@ -21,7 +21,11 @@ const SETTINGS = {
   autodiscoverBase: 'https://autodiscover.example.com', imapHost: 'imap.example.com', imapPort: 993, imapSsl: true,
   smtpHost: 'smtp.example.com', smtpPort: 587, smtpTls: true,
 };
-const state = { settingsDown: false, settings: { ...SETTINGS } as typeof SETTINGS | null, settingsReads: 0, systemLogs: 0 };
+const state = {
+  settingsDown: false, settings: { ...SETTINGS } as typeof SETTINGS | null, settingsReads: 0, systemLogs: 0,
+  /** 9.4: the certificate active for HTTPS (mapiHttp needs a trusted one). */
+  httpsCert: null as { type: string; status: string; acmeStaging: boolean } | null,
+};
 const user = (id: string, email: string, displayName: string) => ({
   id, email, displayName, domainId: 'd1', role: 'USER', active: true, passwordHash: 'hash:pw',
   authSource: 'LOCAL', mfa: null, mailbox: { id: `mb-${id}` },
@@ -51,6 +55,7 @@ const policies: Array<Record<string, unknown>> = [];
     },
   },
   systemLog: { create: async () => { state.systemLogs++; return {}; } },
+  certificate: { findFirst: async () => state.httpsCert },
 };
 const storage = await import('@coremail/storage');
 (globalThis as Record<string, unknown>)['__mailAuthRedis'] = storage.createMemoryAuthRedis();
@@ -287,9 +292,125 @@ test('9.4 v2 (anonymous): per mail domain — a protocol switched off for the do
   }
 });
 
-test('9.4: outlookProtocols — IMAP before POP3, SMTP, the MAPI switch announces nothing yet', async () => {
+test('9.4: outlookProtocols — IMAP before POP3, SMTP (the mapiHttp block is decided separately)', async () => {
   const { outlookProtocols } = await import('./v1.js');
-  assert.deepEqual(outlookProtocols({ imap: true, pop3: true, smtp: true, mapi: true }), ['IMAP', 'SMTP']);
-  assert.deepEqual(outlookProtocols({ imap: false, pop3: true, smtp: false, mapi: false }), ['POP3']);
-  assert.deepEqual(outlookProtocols({ imap: false, pop3: false, smtp: false, mapi: true }), []);
+  assert.deepEqual(outlookProtocols({ imap: true, pop3: true, smtp: true }), ['IMAP', 'SMTP']);
+  assert.deepEqual(outlookProtocols({ imap: false, pop3: true, smtp: false }), ['POP3']);
+  assert.deepEqual(outlookProtocols({ imap: false, pop3: false, smtp: false }), []);
+});
+
+// ── 9.4: MAPI over HTTP (mapiHttp block, MS-OXDSCLI 3.2.5.1) ────────────────
+
+const TRUSTED = { type: 'LETSENCRYPT', status: 'ACTIVE', acmeStaging: false };
+const MAPI_BLOCK = `
+      <Protocol Type="mapiHttp" Version="1">
+        <MailStore>
+          <InternalUrl>https://mail.example.com/mapi/emsmdb/</InternalUrl>
+          <ExternalUrl>https://mail.example.com/mapi/emsmdb/</ExternalUrl>
+        </MailStore>
+        <AddressBook>
+          <InternalUrl>https://mail.example.com/mapi/nspi/</InternalUrl>
+          <ExternalUrl>https://mail.example.com/mapi/nspi/</ExternalUrl>
+        </AddressBook>
+      </Protocol>`;
+
+async function postMapi(capability: string | null, auth = basic('alice@example.com')) {
+  const res = await fetch(`${base}/Autodiscover/Autodiscover.xml`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/xml', Authorization: auth, ...(capability !== null ? { 'X-MapiHttpCapability': capability } : {}) },
+    body: requestXml('alice@example.com'),
+    signal: AbortSignal.timeout(5000),
+  });
+  return { status: res.status, headers: res.headers, text: await res.text() };
+}
+
+async function withMapi(policy: Record<string, unknown>, cert: typeof state.httpsCert, fn: () => Promise<void>): Promise<void> {
+  policies.push({ id: 'p-mapi', userId: 'cuidA', domainId: null, ...policy });
+  storage.invalidateProtocolAccessCache();
+  state.httpsCert = cert;
+  try { await fn(); } finally {
+    policies.length = 0;
+    state.httpsCert = null;
+    storage.invalidateProtocolAccessCache();
+  }
+}
+
+test('9.4 mapiHttp: switch off (the default) → no block, even with X-MapiHttpCapability and a trusted certificate', async () => {
+  state.httpsCert = TRUSTED;
+  try {
+    const r = await postMapi('1');
+    assert.equal(r.status, 200);
+    assert.doesNotMatch(r.text, /mapiHttp|MailStore|AddressBook/);
+    assert.match(r.text, /<Type>IMAP<\/Type>/);
+  } finally { state.httpsCert = null; }
+});
+
+test('9.4 mapiHttp: switch on + capability + trusted HTTPS → the version 1 block before IMAP/SMTP, the MAPI LegacyDN, no EXCH/EXPR', async () => {
+  await withMapi({ mapi: 'ON' }, TRUSTED, async () => {
+    const r = await postMapi('1');
+    assert.equal(r.status, 200);
+    assert.ok(r.text.includes(`<MicrosoftOnline>False</MicrosoftOnline>${MAPI_BLOCK}\n      <Protocol>\n        <Type>IMAP</Type>`), r.text);
+    assert.match(r.text, /<Type>SMTP<\/Type>/);
+    assert.match(r.text, /<LegacyDN>\/o=CoreMail\/ou=Exchange Administrative Group \(FYDIBOHF23SPDLT\)\/cn=Recipients\/cn=cuidA<\/LegacyDN>/);
+    assert.doesNotMatch(r.text, /<Type>EXCH<\/Type>|<Type>EXPR<\/Type>|EXHTTP|ServerExclusiveConnect/);
+    assert.match((await postMapi('3')).text, /<Protocol Type="mapiHttp" Version="1">/, 'a higher capability gets version 1');
+  });
+});
+
+test('9.4 mapiHttp: no / invalid capability header, self-signed or staging certificate → no block', async () => {
+  await withMapi({ mapi: 'ON' }, TRUSTED, async () => {
+    for (const cap of [null, '0', 'abc', '-1']) assert.doesNotMatch((await postMapi(cap)).text, /mapiHttp/, `capability ${cap}`);
+  });
+  for (const cert of [null, { type: 'SELF_SIGNED', status: 'ACTIVE', acmeStaging: false }, { type: 'LETSENCRYPT', status: 'ACTIVE', acmeStaging: true }, { type: 'CUSTOM', status: 'EXPIRED', acmeStaging: false }]) {
+    await withMapi({ mapi: 'ON' }, cert, async () => {
+      const r = await postMapi('1');
+      assert.equal(r.status, 200);
+      assert.doesNotMatch(r.text, /mapiHttp/, JSON.stringify(cert));
+    });
+  }
+});
+
+test('9.4 mapiHttp: with every internet-mail protocol off the answer is mapiHttp only; a wrong password still gets the 401 challenge', async () => {
+  await withMapi({ mapi: 'ON', imap: 'OFF', pop3: 'OFF', smtp: 'OFF' }, { type: 'CUSTOM', status: 'EXPIRING', acmeStaging: false }, async () => {
+    const r = await postMapi('1');
+    assert.match(r.text, /<Protocol Type="mapiHttp" Version="1">/);
+    assert.doesNotMatch(r.text, /<Protocol>/);
+    assert.doesNotMatch(r.text, /<ErrorCode>/);
+    const wrong = await postMapi('1', basic('alice@example.com', 'nope'));
+    assert.equal(wrong.status, 401);
+    assert.equal(wrong.headers.get('www-authenticate'), 'Basic realm="CoreMail Autodiscover"');
+    assert.doesNotMatch(wrong.text, /mapi/i);
+    const unknown = await postMapi('1', basic('nobody@example.com', 'pw'));
+    assert.equal(unknown.status, 401, 'an unknown account gets the identical answer');
+  });
+});
+
+test('9.4 v2 Protocol=MapiHttp: domain switch and trusted HTTPS decide; never an account-specific answer', async () => {
+  const ask = () => fetch(`${base}/autodiscover/autodiscover.json/v1.0/alice%40example.com?Protocol=MapiHttp`);
+  state.httpsCert = TRUSTED;
+  try {
+    assert.equal((await ask()).status, 404, 'MAPI is off by default');
+    policies.push({ id: 'p-d1', domainId: 'd1', domain: { name: 'example.com' }, userId: null, mapi: 'ON' });
+    storage.invalidateProtocolAccessCache();
+    const on = await ask();
+    assert.equal(on.status, 200);
+    assert.deepEqual(await on.json(), { Protocol: 'MapiHttp', Url: 'https://mail.example.com/mapi/emsmdb/' });
+    state.httpsCert = { type: 'SELF_SIGNED', status: 'ACTIVE', acmeStaging: false };
+    const untrusted = await ask();
+    assert.equal(untrusted.status, 404);
+    assert.equal(((await untrusted.json()) as { ErrorCode: string }).ErrorCode, 'NoSuchProtocol');
+  } finally {
+    policies.length = 0;
+    state.httpsCert = null;
+    storage.invalidateProtocolAccessCache();
+  }
+});
+
+test('9.4: mapiHttpVersion (X-MapiHttpCapability) and the mapiHttp block are pure', async () => {
+  const { mapiHttpVersion, mapiHttpBlock } = await import('./v1.js');
+  assert.equal(mapiHttpVersion('1'), 1);
+  assert.equal(mapiHttpVersion(' 2 '), 1);
+  for (const v of [undefined, '', '0', 'x1', '1.5']) assert.equal(mapiHttpVersion(v), null, String(v));
+  assert.equal(mapiHttpBlock({ mailStore: 'https://h.example.com/mapi/emsmdb/', addressBook: 'https://h.example.com/mapi/nspi/?a&b' })
+    .includes('https://h.example.com/mapi/nspi/?a&amp;b'), true, 'URLs are XML-escaped');
 });

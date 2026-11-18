@@ -43,6 +43,7 @@ export * from './mail-flow.js';
 export * from './mailbox-access-audit.js';
 export * from './shared-sent-copy.js';
 export * from './legacy-dn.js';
+export * from './mapi-endpoints.js';
 export * from './store-raw.js';
 export * from './submission-limits.js';
 export * from './importance.js';

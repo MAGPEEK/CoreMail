@@ -125,6 +125,8 @@ export const ropDeleteFolder = defineRop<DeleteFolderReq>({
 
 const TABLE_ASSOCIATED = 0x02;
 const TABLE_DEPTH = 0x04;
+/** MS-OXCFOLD 2.2.1.13/14 TableFlags NoNotifications: no TableModified notifications. */
+const TABLE_NO_NOTIFICATIONS = 0x10;
 
 interface TableReq { inputIndex: number; outputIndex: number; tableFlags: number }
 
@@ -141,7 +143,10 @@ function openTable(kind: 'hierarchy' | 'contents'): RopDef {
       const source: TableSource = kind === 'hierarchy'
         ? { kind, folderCounter: counter, depth: (req.tableFlags & TABLE_DEPTH) !== 0 }
         : { kind, folderCounter: counter, associated: (req.tableFlags & TABLE_ASSOCIATED) !== 0 };
-      const table: TableState = { source, columns: [], sort: [], restriction: null, position: 0, rows: null };
+      const table: TableState = {
+        source, columns: [], sort: [], restriction: null, position: 0, rows: null,
+        notify: (req.tableFlags & TABLE_NO_NOTIFICATIONS) === 0,
+      };
       const rows = await loadTableRows(ctx, logon, table);
       putObject(ctx, req.outputIndex, { kind: 'table', logon, table }, req.logonId);
       return okResponse(kind === 'hierarchy' ? RopId.GetHierarchyTable : RopId.GetContentsTable, req.outputIndex)

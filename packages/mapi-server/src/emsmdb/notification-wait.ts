@@ -1,11 +1,10 @@
 /**
  * NotificationWait (MS-OXCMAPIHTTP 2.2.4.4, 3.2.5.5): the response is held
  * until an event is pending for the session or the 5-minute notification
- * timer expires; the session stays alive meanwhile.
- *
- * Extension point: this package answers when the timer expires or the session
- * ends (EventPending = 0). Event delivery for RopRegisterNotification
- * subscriptions plugs in as another NotificationSource.
+ * timer expires; the session stays alive meanwhile. Events are queued on the
+ * session (MapiSession.notifications) by the change bus (notify/bus.ts); the
+ * client then fetches them with an Execute, whose response carries them as
+ * RopNotify.
  */
 import type { MapiSession } from '../session/session.js';
 
@@ -17,25 +16,26 @@ export interface NotificationSource {
 }
 
 /**
- * Waits for the timer, the session's end or the signal (client gone, a newer
- * NotificationWait of the same session, session ended) — the signal ends the
- * wait at once.
+ * Waits for the session's notification queue: true at once when something is
+ * queued, else when something arrives; false when the timer expires, the
+ * session ends or the signal fires (client gone, session ended).
  */
-export function timerNotificationSource(waitMs = NOTIFICATION_WAIT_MS, pollMs = 1000): NotificationSource {
+export function queueNotificationSource(waitMs = NOTIFICATION_WAIT_MS): NotificationSource {
   return {
     wait(session, signal) {
+      if (session.notifications.pending) return Promise.resolve(true);
+      if (signal.aborted || session.closed) return Promise.resolve(false);
       return new Promise((resolve) => {
-        if (signal.aborted || session.closed) { resolve(false); return; }
-        const deadline = Date.now() + waitMs;
-        const finish = (): void => {
-          clearInterval(tick);
-          signal.removeEventListener('abort', finish);
-          resolve(false);
+        const finish = (pending: boolean): void => {
+          clearTimeout(timer);
+          cancel();
+          signal.removeEventListener('abort', onAbort);
+          resolve(pending);
         };
-        const tick = setInterval(() => {
-          if (session.closed || Date.now() >= deadline) finish();
-        }, Math.min(pollMs, waitMs));
-        signal.addEventListener('abort', finish, { once: true });
+        const onAbort = (): void => finish(false);
+        const cancel = session.notifications.onPending(() => finish(true));
+        const timer = setTimeout(() => finish(false), waitMs);
+        signal.addEventListener('abort', onAbort, { once: true });
       });
     },
   };

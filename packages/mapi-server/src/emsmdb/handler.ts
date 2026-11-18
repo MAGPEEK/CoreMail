@@ -3,7 +3,9 @@
  *  Connect          → new session context (cookies MapiContext + MapiSequence)
  *  Execute          → ROP buffer through the ROP engine
  *  Disconnect       → session ends, cookies cleared
- *  NotificationWait → long poll (see notification-wait.ts)
+ *  NotificationWait → long poll (see notification-wait.ts); a second outstanding
+ *                     wait of the session gets ecRejected; queued notifications
+ *                     ride on the next Execute response (RopNotify / RopPending)
  *  PING             → refreshes the session's idle timer
  *
  * Every request is authenticated (Basic, see http/auth.ts) and must match the
@@ -58,6 +60,10 @@ const RETRY_COUNT = 6;
 const RETRY_DELAY_MS = 10_000;
 /** szDNPrefix: the organisation part of the legacy DNs. */
 const DN_PREFIX = LEGACY_DN_PREFIX.replace(/\/cn=$/i, '');
+/** An empty Execute body: no ROPs, the default output limit. */
+const EMPTY_EXECUTE = { flags: 0, ropBuffer: Buffer.alloc(0), maxRopOut: MAX_EXTENDED_PAYLOAD + RPC_HEADER_EXT_SIZE };
+/** A ROP input buffer without ROPs and handles (RopSize 2). */
+const NO_ROPS = Buffer.from([0x02, 0x00]);
 
 export function transportOf(req: Request): TransportInfo {
   return {
@@ -121,9 +127,20 @@ export async function admit(
   return { h, auth };
 }
 
-function sameContext(session: MapiSession, auth: SessionAuth): boolean {
-  return session.user.userId === auth.user.userId && session.auth.authKey === auth.authKey;
+/** The session belongs to this endpoint and was created with these credentials (else "Context Not Found"). */
+export function sameContext(session: MapiSession, auth: SessionAuth, endpoint: Endpoint): boolean {
+  return session.endpoint === endpoint && session.user.userId === auth.user.userId && session.auth.authKey === auth.authKey;
 }
+
+/** The session a refused account's cookie names (MAPI switched off) ends. */
+export async function dropNamedSession(sessions: SessionRegistry, cookie: string | undefined, userId: string): Promise<void> {
+  if (!isCookieValue(cookie)) return;
+  const session = await sessions.lookup(cookie, (s) => s.user.userId === userId);
+  if (session) await sessions.end(session);
+}
+
+/** ecRejected (MS-OXCRPC 3.3.4.1): another NotificationWait is outstanding on the session. */
+export const EC_REJECTED = 0x000007ee;
 
 export function emsmdbHandler(deps: EmsmdbDeps): RequestHandler {
   const stream = (res: Response, h: MapiRequestHeaders, setCookies: string[], work: () => Promise<WorkResult>): Promise<void> =>
@@ -133,7 +150,7 @@ export function emsmdbHandler(deps: EmsmdbDeps): RequestHandler {
     const cookie = h.cookies[CONTEXT_COOKIE];
     if (cookie === undefined) { respondFailure(res, h, ResponseCode.MissingCookie, 'session cookie missing'); return null; }
     if (!isCookieValue(cookie)) { respondFailure(res, h, ResponseCode.InvalidContextCookie, 'invalid session cookie'); return null; }
-    const session = await deps.sessions.lookup(cookie, (s) => sameContext(s, auth));
+    const session = await deps.sessions.lookup(cookie, (s) => sameContext(s, auth, 'emsmdb'));
     if (!session) {
       const secure = secureCookies(req);
       res.setHeader('Set-Cookie', [clearCookie(CONTEXT_COOKIE, secure), clearCookie(SEQUENCE_COOKIE, secure)]);
@@ -160,7 +177,7 @@ export function emsmdbHandler(deps: EmsmdbDeps): RequestHandler {
     }
     const previous = h.cookies[CONTEXT_COOKIE];
     if (isCookieValue(previous)) {
-      const old = await deps.sessions.lookup(previous, (s) => s.user.userId === user.userId);
+      const old = await deps.sessions.lookup(previous, (s) => s.endpoint === 'emsmdb' && s.user.userId === user.userId);
       if (old) await deps.sessions.end(old);
     }
     const created = await deps.sessions.create(auth.auth, auth.startedAt);
@@ -187,7 +204,9 @@ export function emsmdbHandler(deps: EmsmdbDeps): RequestHandler {
 
   async function execute(req: Request, res: Response, h: MapiRequestHeaders, session: MapiSession): Promise<void> {
     let exec;
-    try { exec = parseExecuteRequest(bodyOf(req)); } catch {
+    // After EventPending a client with nothing else to send fetches the events
+    // with an empty Execute body (MS-OXCMAPIHTTP 2.2.4.4.2).
+    try { exec = bodyOf(req).length === 0 ? EMPTY_EXECUTE : parseExecuteRequest(bodyOf(req)); } catch {
       respondFailure(res, h, ResponseCode.InvalidRequestBody, 'invalid Execute body'); return;
     }
     const sequenceCookie = nextSequence(req, res, h, session);
@@ -204,8 +223,10 @@ export function emsmdbHandler(deps: EmsmdbDeps): RequestHandler {
     if (maxRopOut < RPC_HEADER_EXT_SIZE + 2) return buildExecuteResponse(Ec.InvalidParameter, Buffer.alloc(0));
     const maxOut = Math.min(maxRopOut - RPC_HEADER_EXT_SIZE, MAX_EXTENDED_PAYLOAD);
     try {
-      const input = readExtendedBuffer(ropBuffer);
-      const output = await executeRopBuffer(input, { session, store: deps.store, registry: deps.rops }, maxOut);
+      const input = ropBuffer.length === 0 ? NO_ROPS : readExtendedBuffer(ropBuffer);
+      const output = await executeRopBuffer(input, {
+        session, store: deps.store, registry: deps.rops, tail: (room) => session.notifications.take(room),
+      }, maxOut);
       return buildExecuteResponse(Ec.Success, writeExtendedBuffer(output));
     } catch (err) {
       if (err instanceof WireFormatError) {
@@ -234,9 +255,12 @@ export function emsmdbHandler(deps: EmsmdbDeps): RequestHandler {
     try { parseNotificationWaitRequest(bodyOf(req)); } catch {
       respondFailure(res, h, ResponseCode.InvalidRequestBody, 'invalid NotificationWait body'); return;
     }
-    // One outstanding NotificationWait per session: a newer one ends the older
-    // (EventPending 0), so a client cannot pile up held requests.
-    session.notificationWait?.abort();
+    // One outstanding NotificationWait per session: a second one is answered at
+    // once with ecRejected (MS-OXCRPC 3.3.4.1), so a client cannot pile up held requests.
+    if (session.notificationWait && !session.notificationWait.signal.aborted) {
+      await stream(res, h, [], async () => ({ responseCode: ResponseCode.Success, body: buildNotificationWaitResponse(false, EC_REJECTED) }));
+      return;
+    }
     const abort = new AbortController();
     session.notificationWait = abort;
     res.on('close', () => abort.abort());
@@ -251,13 +275,8 @@ export function emsmdbHandler(deps: EmsmdbDeps): RequestHandler {
     }
   }
 
-  /** A refused account (MAPI switched off) loses the session its cookie names. */
-  async function dropSession(h: MapiRequestHeaders, userId: string): Promise<void> {
-    const cookie = h.cookies[CONTEXT_COOKIE];
-    if (!isCookieValue(cookie)) return;
-    const session = await deps.sessions.lookup(cookie, (s) => s.user.userId === userId);
-    if (session) await deps.sessions.end(session);
-  }
+  const dropSession = (h: MapiRequestHeaders, userId: string): Promise<void> =>
+    dropNamedSession(deps.sessions, h.cookies[CONTEXT_COOKIE], userId);
 
   return async (req, res) => {
     const admitted = await admit('emsmdb', req, res, deps, dropSession);
@@ -267,7 +286,7 @@ export function emsmdbHandler(deps: EmsmdbDeps): RequestHandler {
     if (h.requestType === 'PING') {
       // Refreshes the idle timer of the caller's own session only.
       const cookie = h.cookies[CONTEXT_COOKIE];
-      if (isCookieValue(cookie)) await deps.sessions.lookup(cookie, (s) => sameContext(s, auth.auth));
+      if (isCookieValue(cookie)) await deps.sessions.lookup(cookie, (s) => sameContext(s, auth.auth, 'emsmdb'));
       await stream(res, h, [], async () => ({ responseCode: ResponseCode.Success, body: Buffer.alloc(0) }));
       return;
     }
