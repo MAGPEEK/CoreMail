@@ -309,6 +309,27 @@ export function appendPropResults(response: XmlNode, results: Array<{ prop: XmlE
 
 const STATUS_TEXT: Record<number, string> = { 200: 'OK', 403: 'Forbidden', 404: 'Not Found', 409: 'Conflict', 424: 'Failed Dependency' };
 
+/** PROPPATCH on a resource without writable properties: 403 for each property (RFC 4918 §9.2). */
+export function sendReadOnlyProppatch(req: Request, res: Response, href: string): void {
+  const ops = parseProppatch(req.body);
+  if (!ops) { res.status(400).send('Bad Request — DAV:propertyupdate expected'); return; }
+  const doc = newMultistatus();
+  const r = doc.ele('d:response');
+  r.ele('d:href').txt(href);
+  appendPropResults(r, ops.map((o) => ({ prop: o.prop, status: 403 })));
+  sendMultistatus(res, doc);
+}
+
+/** A Prisma unique-constraint violation (concurrent create with the same key). */
+export function isUniqueViolation(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 'P2002';
+}
+
+/** CALDAV:no-uid-conflict (RFC 4791 §5.3.2.1) naming the resource that holds the UID. */
+export function sendUidConflict(res: Response, href: string): void {
+  sendDavError(res, 409, 'c:no-uid-conflict', (el) => { el.ele('d:href').txt(href); });
+}
+
 /** Express 4 does not catch rejected promises — answer 500 instead of crashing/hanging. */
 export function asyncHandler(fn: (req: Request, res: Response, next: NextFunction) => Promise<void>): RequestHandler {
   return (req, res, next) => {

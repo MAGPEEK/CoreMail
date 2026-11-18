@@ -92,12 +92,23 @@ still open) in one transaction with the creation, so two concurrent or repeated 
 create the next task once. A task rule repeats at most daily (`FREQ=DAILY|WEEKLY|MONTHLY|YEARLY`
 with `NAME=value` parts); anything else is refused with 400.
 
+The writes themselves (`createTaskWithRules` / `updateTaskWithRules`) live in
+`storage/src/task-store.ts` (9.5) and are shared by the REST routes and the CalDAV task list.
+
+### CalDAV task list (9.5)
+
+Every user has one task list in the CalDAV calendar home, `/dav/calendars/<id>/tasks/`
+("Aufgaben", component set `VTODO`): Apple Reminders, Thunderbird and DAVx⁵ (jtx Board,
+Tasks.org) sync the same tasks the webmail shows, in both directions, with the status rules above.
+Mapping, preconditions and limits: [caldav.md](caldav.md#task-list-vtodo).
+
 ### Not covered
 
-CoreMail has no CalDAV task list (`VTODO`) and no ActiveSync Tasks folder; tasks are reachable in
-the webmail only. Flags of mails are visible over IMAP, JMAP (keyword) and ActiveSync.
+CoreMail has no ActiveSync Tasks folder. Flags of mails are visible over IMAP, JMAP (keyword) and
+ActiveSync; they are not tasks of the CalDAV task list.
 
 Tests: `storage/src/follow-up.test.ts`, `task-rules.test.ts`, `message-store.test.ts`,
 `activesync/src/commands/flag.test.ts`, `api-gateway/src/routes/tasks-followup.test.ts`,
-`web-client/src/lib/followUp.test.ts`; e2e `scripts/e2e/steps/imap.mjs` (IMAP flag visible in
-REST), `eas.mjs` (EAS flag both directions), `rest.mjs`.
+`web-client/src/lib/followUp.test.ts`, `caldav-server/src/caldav/vtodo.test.ts`, `tasks.test.ts`;
+e2e `scripts/e2e/steps/imap.mjs` (IMAP flag visible in REST), `eas.mjs` (EAS flag both
+directions), `rest.mjs`, `dav-tasks.mjs`.

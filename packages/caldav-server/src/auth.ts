@@ -2,6 +2,7 @@ import type { Request, Response, NextFunction } from 'express';
 import { verifyAccessToken, createLogger } from '@coremail/core';
 import { prisma, verifyMailCredentials, clientIpFromRequest, isProtocolAllowed, isWebmailFeatureEnabled } from '@coremail/storage';
 import { isAccessTokenRevokedShared } from '@coremail/storage/auth';
+import { TASK_COLLECTION_ID } from './caldav/tasks.js';
 
 const log = createLogger('caldav:auth');
 
@@ -10,9 +11,16 @@ export interface DavUser {
   email: string;
 }
 
+/** 9.5: the webmail modules the calendar home lists (set by davFeatureGate; absent = all). */
+export interface DavModules {
+  calendar: boolean;
+  tasks: boolean;
+}
+
 declare module 'express' {
   interface Request {
     davUser?: DavUser;
+    davModules?: DavModules;
   }
 }
 
@@ -100,25 +108,54 @@ export async function davAuthMiddleware(
  * /dav). Compared lower-case: Express routes case-insensitively, so
  * `/Calendars/…` reaches the CalDAV router as well.
  */
-export function davFeatureOf(rawPath: string): 'calendar' | 'contacts' | null {
+export function davFeatureOf(rawPath: string): DavFeature | null {
   const path = rawPath.toLowerCase();
-  if (path === '/calendars' || path.startsWith('/calendars/')) return 'calendar';
+  if (path === '/calendars' || path.startsWith('/calendars/')) {
+    // 9.5: /calendars/<user>/tasks… is the task list (module "tasks")
+    return path.split('/')[3] === TASK_COLLECTION_ID ? 'tasks' : 'calendar';
+  }
   if (path === '/addressbooks' || path.startsWith('/addressbooks/')) return 'contacts';
   return null;
 }
 
+export type DavFeature = 'calendar' | 'contacts' | 'tasks';
+
+/** 9.5: the calendar home itself (`/calendars[/<user>]`) — it lists the calendars and the task list. */
+export function isCalendarHomePath(rawPath: string): boolean {
+  const segments = rawPath.toLowerCase().split('/').filter(Boolean);
+  return segments[0] === 'calendars' && segments.length <= 2;
+}
+
+const DISABLED_TEXT: Record<DavFeature, string> = {
+  calendar: 'Calendars are disabled for this account',
+  contacts: 'Contacts are disabled for this account',
+  tasks: 'Tasks are disabled for this account',
+};
+
+/** Is the path's module on? The calendar home stays open while calendars or tasks are on (req.davModules says which). */
+async function featureEnabled(req: Request, userId: string, feature: DavFeature): Promise<boolean> {
+  if (feature !== 'calendar' || !isCalendarHomePath(req.path)) return isWebmailFeatureEnabled(userId, feature);
+  const [calendar, tasks] = await Promise.all([
+    isWebmailFeatureEnabled(userId, 'calendar'),
+    isWebmailFeatureEnabled(userId, 'tasks'),
+  ]);
+  req.davModules = { calendar, tasks };
+  return calendar || tasks;
+}
+
 /**
- * 9.4 webmail policy: with the calendar / contacts module off, CalDAV /
- * CardDAV refuse the calendar / address book collections with 403 (the
+ * 9.4 webmail policy: with the calendar / contacts / tasks (9.5) module off, CalDAV /
+ * CardDAV refuse the calendar / address book / task list collections with 403 (the
  * principal stays readable, so clients show "no access" instead of asking for
- * a password again). Unreadable policy → 503.
+ * a password again); the calendar home then leaves the collection out. Unreadable
+ * policy → 503.
  */
 export async function davFeatureGate(req: Request, res: Response, next: NextFunction): Promise<void> {
   const feature = davFeatureOf(req.path);
   if (!feature || !req.davUser) { next(); return; }
   let enabled: boolean;
   try {
-    enabled = await isWebmailFeatureEnabled(req.davUser.userId, feature);
+    enabled = await featureEnabled(req, req.davUser.userId, feature);
   } catch (err) {
     log.error({ err, userId: req.davUser.userId }, 'Webmail policy not readable');
     res.set('Retry-After', '30');
@@ -126,9 +163,7 @@ export async function davFeatureGate(req: Request, res: Response, next: NextFunc
     return;
   }
   if (enabled) { next(); return; }
-  res.status(403).type('text/plain').send(feature === 'calendar'
-    ? 'Calendars are disabled for this account'
-    : 'Contacts are disabled for this account');
+  res.status(403).type('text/plain').send(DISABLED_TEXT[feature]);
 }
 
 /** 9.4: CalDAV/CardDAV switched off for the account — 403, no new password prompt. */

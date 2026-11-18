@@ -8,6 +8,7 @@ import {
 import { connectDatabase, startWebmailPolicySubscriber } from '@coremail/storage';
 import { davAuthMiddleware, davFeatureGate } from './auth.js';
 import { caldavRouter } from './caldav/index.js';
+import { caldavTasksRouter } from './caldav/tasks.js';
 import { carddavRouter } from './carddav/index.js';
 import { principalRouter } from './principal/index.js';
 
@@ -40,7 +41,8 @@ async function main() {
 
   // Discovery (context path + principals), then CalDAV + CardDAV — one mount, so the
   // credentials are verified once per request (not once per router)
-  app.use('/dav', davAuthMiddleware, davFeatureGate, principalRouter, caldavRouter, carddavRouter);
+  // 9.5: the task list before the calendars (its path would match a calendar collection)
+  app.use('/dav', davAuthMiddleware, davFeatureGate, principalRouter, caldavTasksRouter, caldavRouter, carddavRouter);
 
   // v6: shared error middleware (registered last)
   app.use(errorMiddleware(log));

@@ -6,6 +6,14 @@
 import { expandOccurrences } from '@coremail/core/recurrence';
 
 export const TASK_STATUSES = ['NOT_STARTED', 'IN_PROGRESS', 'COMPLETED', 'WAITING', 'DEFERRED'] as const;
+
+/** A task repeats at most daily (the next task is created on completion); `RRULE:` prefix optional. */
+export const TASK_RRULE_PATTERN = /^(RRULE:)?FREQ=(DAILY|WEEKLY|MONTHLY|YEARLY)(;[A-Za-z]+=[A-Za-z0-9,:+-]+)*$/i;
+
+/** Stored form of a task rule: RECUR value without the `RRULE:` prefix, upper case. */
+export function normTaskRrule(v: string): string {
+  return v.replace(/^RRULE:/i, '').toUpperCase();
+}
 export type TaskStatus = typeof TASK_STATUSES[number];
 
 export interface TaskProgress {

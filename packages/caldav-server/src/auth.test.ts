@@ -177,26 +177,38 @@ test('9.4 webmail policy: calendar / contacts modules gate their DAV collections
   // review: Express routes case-insensitively — /Calendars/… reaches the CalDAV router
   assert.equal(davFeatureOf('/Calendars/u1/c1/'), 'calendar');
   assert.equal(davFeatureOf('/ADDRESSBOOKS/u1/default'), 'contacts');
+  // 9.5: the task list in the calendar home belongs to the tasks module
+  assert.equal(davFeatureOf('/calendars/u1/tasks/'), 'tasks');
+  assert.equal(davFeatureOf('/Calendars/u1/TASKS/t1.ics'), 'tasks');
+  assert.equal(davFeatureOf('/calendars/u1/'), 'calendar');
   const gate = async (path: string) => {
-    const outcome = { status: null as number | null, next: false };
+    const outcome = { status: null as number | null, next: false, modules: undefined as unknown };
     const res = {
       set: () => res, type: () => res, send: () => res,
       status: (code: number) => { outcome.status = code; return res; },
     } as unknown as Parameters<typeof davFeatureGate>[1];
     const req = { path, davUser: { userId: 'alice', email: 'alice@example.com' } } as unknown as Parameters<typeof davFeatureGate>[0];
     await davFeatureGate(req, res, () => { outcome.next = true; });
+    outcome.modules = req.davModules;
     return outcome;
   };
-  assert.deepEqual(await gate('/calendars/alice/'), { status: null, next: true });
+  assert.deepEqual(await gate('/calendars/alice/'), { status: null, next: true, modules: { calendar: true, tasks: true } });
   const model = prisma['webmailPolicy'] as { findMany: () => Promise<unknown> };
   const original = model.findMany;
   model.findMany = async () => [{ id: 'global', domainId: null, userId: null, calendar: 'OFF' }];
   storage.invalidateWebmailPolicyCache();
   try {
-    assert.deepEqual(await gate('/calendars/alice/'), { status: 403, next: false });
-    assert.deepEqual(await gate('/CALENDARS/alice/'), { status: 403, next: false });
-    assert.deepEqual(await gate('/addressbooks/alice/default'), { status: null, next: true });
-    assert.deepEqual(await gate('/principals/alice/'), { status: null, next: true });
+    assert.deepEqual(await gate('/calendars/alice/c1/'), { status: 403, next: false, modules: undefined });
+    assert.deepEqual(await gate('/CALENDARS/alice/c1'), { status: 403, next: false, modules: undefined });
+    // 9.5: the home stays open for the task list; it lists only what is on
+    assert.deepEqual(await gate('/calendars/alice/'), { status: null, next: true, modules: { calendar: false, tasks: true } });
+    assert.deepEqual(await gate('/calendars/alice/tasks/'), { status: null, next: true, modules: undefined });
+    assert.deepEqual(await gate('/addressbooks/alice/default'), { status: null, next: true, modules: undefined });
+    assert.deepEqual(await gate('/principals/alice/'), { status: null, next: true, modules: undefined });
+    model.findMany = async () => [{ id: 'global', domainId: null, userId: null, calendar: 'OFF', tasks: 'OFF' }];
+    storage.invalidateWebmailPolicyCache();
+    assert.equal((await gate('/calendars/alice/')).status, 403, 'calendars and tasks off: the home is closed');
+    assert.equal((await gate('/calendars/alice/tasks/t1.ics')).status, 403);
     model.findMany = async () => { throw new Error('db down'); };
     storage.invalidateWebmailPolicyCache();
     assert.equal((await gate('/addressbooks/alice/default')).status, 503);

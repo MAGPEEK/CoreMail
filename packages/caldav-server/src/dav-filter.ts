@@ -10,7 +10,8 @@
  * instead of silently returning a superset.
  *
  * VEVENT time ranges are evaluated per row by the CalDAV handler (database range +
- * recurrence expansion); a time-range elsewhere (VALARM, inside prop-filter) is unsupported.
+ * recurrence expansion), VTODO time ranges by the task list (caldav/tasks.ts); a
+ * time-range elsewhere (VALARM, inside prop-filter) is unsupported.
  */
 import { getProperties, unescapeText, type IcalComponent } from '@coremail/core/calendar';
 import { parseVcard, type VcardProperty } from '@coremail/core/vcard';
@@ -96,8 +97,8 @@ function compileCompFilter(el: XmlEl, depth: number): CompPredicate {
   if (el.children.some((c) => c.name === 'is-not-defined')) {
     return (parent) => !parent.components.some((c) => c.name === name);
   }
-  // Time ranges are only evaluated for the VEVENT level (by the handler, per row)
-  if (el.children.some((c) => c.name === 'time-range') && !(depth === 1 && name === 'VEVENT')) {
+  // Time ranges are only evaluated for the VEVENT / VTODO (9.5 task list) level (by the handler, per row)
+  if (el.children.some((c) => c.name === 'time-range') && !(depth === 1 && (name === 'VEVENT' || name === 'VTODO'))) {
     throw new UnsupportedFilterError('supported-filter', `time-range on ${name}`);
   }
   const props = el.children.filter((c) => c.name === 'prop-filter').map(compilePropFilter);

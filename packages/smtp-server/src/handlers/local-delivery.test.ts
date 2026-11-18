@@ -23,6 +23,11 @@ interface Booking { id: string; calendarId: string; uid: string; organizer: stri
 const bookings: Booking[] = [];
 const none = async () => null;
 const resourceLocks: string[] = [];
+// the resource settings of the BCP (9.5: the mail path applies the same rules as the event form)
+const POLICY = {
+  email: 'room@corp.test', active: true, autoAccept: true, requireApproval: false, autoDeclineConflict: false,
+  allowRecurring: true, maxDurationMinutes: null, bookingWindowDays: 3650,
+};
 (globalThis as unknown as { __prisma: unknown }).__prisma = {
   $on: () => undefined,
   $transaction: async (fn: (tx: unknown) => unknown) => fn((globalThis as unknown as { __prisma: unknown }).__prisma),
@@ -35,13 +40,14 @@ const resourceLocks: string[] = [];
   systemLog: { create: async () => ({}) },
   resourceMailbox: {
     findFirst: async ({ where }: { where: { email: string } }) => (where.email === 'room@corp.test'
-      ? { id: 'r1', autoAccept: true, requireApproval: false, autoDeclineConflict: false, calendar: { id: 'cal1' } }
+      ? { id: 'r1', ...POLICY, calendar: { id: 'cal1' } }
       : null),
   },
   resourceBooking: {
     findUnique: async ({ where }: { where: { calendarId_uid: { calendarId: string; uid: string } } }) =>
       bookings.find((b) => b.calendarId === where.calendarId_uid.calendarId && b.uid === where.calendarId_uid.uid) ?? null,
-    findFirst: async () => null,
+    // 9.5: the shared conflict check reads the resource's bookings
+    findMany: async ({ where }: { where: { calendarId: string } }) => bookings.filter((b) => b.calendarId === where.calendarId),
     create: async ({ data }: { data: Omit<Booking, 'id'> }) => { const b = { id: `b${bookings.length + 1}`, ...data }; bookings.push(b); return b; },
     update: async ({ where, data }: { where: { id: string }; data: Partial<Booking> }) => { const b = bookings.find((x) => x.id === where.id)!; Object.assign(b, data); return b; },
     delete: async ({ where }: { where: { id: string } }) => { const i = bookings.findIndex((x) => x.id === where.id); return bookings.splice(i, 1)[0]; },
