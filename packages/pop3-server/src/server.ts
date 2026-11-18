@@ -5,7 +5,7 @@ import tls from 'node:tls';
 import { createLogger, generateSelfSignedCert, tlsPemToBuffers, applyTlsToListeners, tlsMaterialEquals, installProcessGuards, startAuthInvalidationSubscriber, resolveBindAddress, listenWithRecovery, tlsServerOptions } from '@coremail/core';
 import { getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD, CHANNEL_SETTINGS_RELOAD } from '@coremail/core/redis';
 import { logTlsSocketError } from '@coremail/core/tls-errors';
-import { prisma, loadProtocolTls, selfSignedReplacement, selfSignedFallbackHostname, encryptPrivateKey, waitForObjectStorage } from '@coremail/storage';
+import { prisma, loadProtocolTls, selfSignedReplacement, selfSignedFallbackHostname, encryptPrivateKey, waitForObjectStorage, startWebmailPolicySubscriber } from '@coremail/storage';
 import { POP3Session, setPop3Hostname, pop3LiveSessions, TLS_HANDSHAKE_MS } from './session.js';
 import { admitConnection, invalidExemptEntries } from './limits.js';
 
@@ -315,6 +315,7 @@ async function main() {
   // v7.1.0: credential changes end the user's live POP3 sessions (-ERR [AUTH]).
   pop3LiveSessions.attachInvalidation();
   startAuthInvalidationSubscriber();
+  startWebmailPolicySubscriber(); // 9.4: the app-password module switch applies to POP3 logins at once
   // v7.1: never serve mails whose raw objects are missing (OBJECT_STORAGE switched without migration)
   await waitForObjectStorage('pop3-server');
   await refreshHostname();

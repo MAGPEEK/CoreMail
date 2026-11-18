@@ -5,7 +5,7 @@ import {
   createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD,
   installProcessGuards, installAsyncErrorHandling, errorMiddleware, resolveBindHost,
 } from '@coremail/core';
-import { connectDatabase, invalidateProtocolAccessCache } from '@coremail/storage';
+import { connectDatabase, invalidateProtocolAccessCache, startWebmailPolicySubscriber } from '@coremail/storage';
 import { createAutodiscoverApp } from './app.js';
 import { invalidateSettingsCache } from './settings.js';
 import { invalidateAutoconfigCache } from './autoconfig.js';
@@ -20,6 +20,7 @@ const PORT = parseInt(process.env['AUTODISCOVER_PORT'] ?? '8081', 10);
 async function main() {
   await connectDatabase();
   void initRuntimeLogLevel('autodiscover', { aliases: [] }); // BCP per-service log level
+  startWebmailPolicySubscriber(); // 9.4: the app-password module switch applies to Autodiscover logins at once
 
   // v3.18.35: on settings changes (e.g. publicHostname update via BCP)
   // invalidate the settings cache — otherwise Autodiscover returns stale URLs

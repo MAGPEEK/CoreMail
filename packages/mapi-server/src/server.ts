@@ -14,7 +14,7 @@ import {
   createFixedWindowLimiter, createLogger, envLimit, getRedisClient, installProcessGuards, initRuntimeLogLevel,
   LiveConnectionRegistry, resolveBindHost, startAuthInvalidationSubscriber, type CounterStore,
 } from '@coremail/core';
-import { connectDatabase, waitForObjectStorage } from '@coremail/storage';
+import { connectDatabase, waitForObjectStorage, startWebmailPolicySubscriber } from '@coremail/storage';
 import { createApp } from './app.js';
 import { authenticate } from './http/auth.js';
 import { SessionRegistry, type SessionRedis } from './session/registry.js';
@@ -48,6 +48,7 @@ async function main(): Promise<void> {
   const live = new LiveConnectionRegistry('mapi');
   live.attachInvalidation();
   startAuthInvalidationSubscriber();
+  startWebmailPolicySubscriber(); // 9.4: the app-password module switch applies to MAPI logins at once
 
   const sessions = new SessionRegistry({
     redis: getRedisClient() as unknown as SessionRedis, live, idleMs: IDLE_MS, memoryLimitBytes: SESSION_MEMORY_BYTES,

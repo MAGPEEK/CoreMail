@@ -7,7 +7,7 @@ import {
   generateSelfSignedCert, tlsPemToBuffers, applyTlsToListeners, tlsMaterialEquals, installProcessGuards,
   startAuthInvalidationSubscriber, resolveBindAddress, listenWithRecovery,
 } from '@coremail/core';
-import { connectDatabase, waitForObjectStorage, prisma, loadProtocolTls, selfSignedReplacement, selfSignedFallbackHostname, encryptPrivateKey, invalidateQueueSettingsCache, maxMessageBytesFrom } from '@coremail/storage';
+import { connectDatabase, waitForObjectStorage, prisma, loadProtocolTls, selfSignedReplacement, selfSignedFallbackHostname, encryptPrivateKey, invalidateQueueSettingsCache, maxMessageBytesFrom, startWebmailPolicySubscriber } from '@coremail/storage';
 import { createSmtpServer } from './core/factory.js';
 import { smtpLiveSessions } from './core/live-sessions.js';
 import { inboundTarpitMaxDelayMs } from './core/session.js';
@@ -477,6 +477,7 @@ async function main(): Promise<void> {
   // v7.1.0: credential changes end the user's authenticated submission sessions (421).
   smtpLiveSessions.attachInvalidation();
   startAuthInvalidationSubscriber();
+  startWebmailPolicySubscriber(); // 9.4: the app-password module switch applies to SMTP AUTH at once
   // v7.1: refuses to open listeners while the object storage misses the referenced objects
   await waitForObjectStorage('smtp-server');
   await refreshHostname();

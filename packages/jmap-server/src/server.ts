@@ -20,7 +20,7 @@ import {
   createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD, startAuthInvalidationSubscriber,
   installProcessGuards, installAsyncErrorHandling, resolveBindHost,
 } from '@coremail/core';
-import { connectDatabase, waitForObjectStorage, clearMessageSizeLimitCache } from '@coremail/storage';
+import { connectDatabase, waitForObjectStorage, clearMessageSizeLimitCache, startWebmailPolicySubscriber } from '@coremail/storage';
 import { jmapAuthMiddleware } from './auth.js';
 import { resolveAccounts } from './accounts.js';
 import { parseRequest, processRequest } from './dispatcher.js';
@@ -62,6 +62,7 @@ async function main(): Promise<void> {
   // WebSocket / EventSource push connections of the user end.
   jmapLiveConnections.attachInvalidation();
   startAuthInvalidationSubscriber();
+  startWebmailPolicySubscriber(); // 9.4: the app-password module switch applies to Basic logins at once
 
   try {
     const sub = getRedisClient().duplicate();

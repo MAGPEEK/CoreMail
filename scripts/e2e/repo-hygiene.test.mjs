@@ -105,3 +105,20 @@ test('no source file imports a module both by name and again as a bare side-effe
   }
   assert.deepEqual(offenders, []);
 });
+
+test('every service that checks mail credentials drops the webmail policy cache on its reload signal', async () => {
+  // 9.4 e2e: the IMAP/JMAP servers kept the module "App-Passwörter" off for 30 s
+  // after it was switched back on — switching on publishes only the reload
+  // signal (no auth event), which they did not subscribe to.
+  const { readdirSync, existsSync } = await import('node:fs');
+  const callsVerifier = (dir) => readdirSync(dir, { withFileTypes: true }).some((e) => {
+    const p = join(dir, e.name);
+    if (e.isDirectory()) return callsVerifier(p);
+    return /\.ts$/.test(e.name) && !/\.test\.ts$/.test(e.name) && /\bverifyMailCredentials\(/.test(readFileSync(p, 'utf8'));
+  });
+  const services = readdirSync(join(root, 'packages'))
+    .filter((pkg) => existsSync(join(root, 'packages', pkg, 'src', 'server.ts')) && callsVerifier(join(root, 'packages', pkg, 'src')));
+  assert.ok(services.includes('imap-server') && services.includes('jmap-server'), `services found: ${services.join(', ')}`);
+  const missing = services.filter((pkg) => !/startWebmailPolicySubscriber\(\)|isWebmailPolicyReload\(/.test(read(`packages/${pkg}/src/server.ts`)));
+  assert.deepEqual(missing, []);
+});
