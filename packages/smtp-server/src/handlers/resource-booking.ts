@@ -17,7 +17,7 @@
  * stored as PENDING (manual approval) instead of being auto-accepted.
  */
 import { createLogger } from '@coremail/core';
-import { prisma, extractCalendarParts, isAttendeeAuthenticated, type SenderAuth } from '@coremail/storage';
+import { prisma, extractCalendarParts, isAttendeeAuthenticated, lockResourceCalendar, type SenderAuth } from '@coremail/storage';
 
 const log = createLogger('smtp:resource-booking');
 
@@ -169,14 +169,14 @@ export async function processResourceMailboxes(
       continue;
     }
 
-    const save = async (status: 'PENDING' | 'DECLINED' | 'ACCEPTED'): Promise<void> => {
+    const save = async (status: 'PENDING' | 'DECLINED' | 'ACCEPTED', db: Pick<typeof prisma, 'resourceBooking'> = prisma): Promise<void> => {
       if (existing) {
-        await prisma.resourceBooking.update({
+        await db.resourceBooking.update({
           where: { id: existing.id },
           data: status === 'DECLINED' ? { status } : { dtStart, dtEnd, summary, status, icalData },
         });
       } else {
-        await prisma.resourceBooking.create({
+        await db.resourceBooking.create({
           data: { calendarId, uid, summary, organizer, dtStart, dtEnd, status, icalData },
         });
       }
@@ -189,9 +189,12 @@ export async function processResourceMailboxes(
       continue;
     }
 
-    // Check for conflicts
-    if (resource.autoDeclineConflict) {
-      const conflict = await prisma.resourceBooking.findFirst({
+    // 9.4: conflict check + booking under the resource's booking lock — two
+    // invitations (or an invitation and a booking from the event form) for the
+    // same slot never both get the resource.
+    const conflictUid = await prisma.$transaction(async (tx) => {
+      await lockResourceCalendar(tx, calendarId);
+      const conflict = !resource.autoDeclineConflict ? null : await tx.resourceBooking.findFirst({
         where: {
           calendarId,
           uid: { not: uid },
@@ -200,17 +203,11 @@ export async function processResourceMailboxes(
           dtEnd: { gt: dtStart },
         },
       });
-
-      if (conflict) {
-        log.info({ resource: email, uid, conflict: conflict.uid }, 'Resource booking declined — conflict');
-        await save('DECLINED');
-        continue;
-      }
-    }
-
-    // Auto-accept
-    await save('ACCEPTED');
-    log.info({ resource: email, uid, dtStart, dtEnd }, 'Resource booking accepted');
+      await save(conflict ? 'DECLINED' : 'ACCEPTED', tx);
+      return conflict?.uid ?? null;
+    });
+    if (conflictUid) log.info({ resource: email, uid, conflict: conflictUid }, 'Resource booking declined — conflict');
+    else log.info({ resource: email, uid, dtStart, dtEnd }, 'Resource booking accepted');
   }
   return handled;
 }

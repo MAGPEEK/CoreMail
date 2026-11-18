@@ -22,8 +22,13 @@ delete process.env['MAIL_HOSTNAME'];
 interface Booking { id: string; calendarId: string; uid: string; organizer: string; status: string }
 const bookings: Booking[] = [];
 const none = async () => null;
+const resourceLocks: string[] = [];
 (globalThis as unknown as { __prisma: unknown }).__prisma = {
   $on: () => undefined,
+  $transaction: async (fn: (tx: unknown) => unknown) => fn((globalThis as unknown as { __prisma: unknown }).__prisma),
+  resourceCalendar: {
+    update: async ({ where }: { where: { id: string } }) => { resourceLocks.push(where.id); return { id: where.id }; },
+  },
   serverSettings: { findUnique: async () => ({ publicHostname: 'MX.corp.test' }) },
   user: { findFirst: none, findMany: async () => [] },
   sharedMailbox: { findFirst: none },
@@ -76,6 +81,7 @@ test('an SRS/VERP envelope sender can update/cancel when the authenticated ORGAN
   const srs = 'SRS0=HHH=TT=ext.test=org@forwarder.example';
   await processResourceMailboxes(invite('REQUEST', 'm-1', { organizer: 'org@ext.test' }), ['room@corp.test'], srs, { verifiedDomains: ['ext.test'] });
   assert.deepEqual(bookings.map((b) => [b.organizer, b.status]), [['org@ext.test', 'ACCEPTED']]);
+  assert.deepEqual(resourceLocks, ['cal1'], '9.4 review: the auto-accept took the resource booking lock');
   // update via a VERP list address (envelope never equals the organizer)
   await processResourceMailboxes(invite('REQUEST', 'm-1', { organizer: 'org@ext.test', start: '20261202T090000Z' }), ['room@corp.test'], 'list-bounces+org=ext.test@lists.example', { verifiedDomains: ['ext.test', 'lists.example'] });
   assert.equal(bookings.length, 1);

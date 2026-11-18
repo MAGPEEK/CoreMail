@@ -53,3 +53,6 @@ export * from './importance.js';
 export * from './idn.js';
 export * from './mime/crlf.js';
 export * from './sensitivity.js';
+export * from './follow-up.js';
+export * from './task-rules.js';
+export * from './resource-lock.js';

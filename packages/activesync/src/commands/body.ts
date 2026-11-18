@@ -14,6 +14,7 @@
 import { createHash } from 'node:crypto';
 import { getText, pel, CP, type WbxmlElement } from '../wbxml.js';
 import { supports, type EasVersion } from '../protocol-version.js';
+import { flagOfMessage } from './flag.js';
 
 export type BodyType = 1 | 2 | 3 | 4; // 1 plain, 2 HTML, 3 RTF, 4 MIME
 
@@ -63,6 +64,12 @@ export interface EasMessage {
   storagePath: string | null;
   smimeMeta: string | null;
   attachments: EasAttachment[];
+  /** 9.4: follow-up flag columns (email:Flag); absent = flagged only when `\Flagged` is set. */
+  flagStatus?: string;
+  flagStartAt?: Date | null;
+  flagDueAt?: Date | null;
+  flagReminderAt?: Date | null;
+  flagCompletedAt?: Date | null;
 }
 
 export type LoadRaw = (msg: EasMessage) => Promise<Buffer>;
@@ -290,6 +297,7 @@ export async function buildEmailProperties(msg: EasMessage, pref: BodyPreference
   out.push(await buildBody(pref, msg, loadRaw, version));
   out.push(pel(E, 'MessageClass', messageClass(msg.smimeMeta)));
   out.push(pel(E, 'InternetCPID', '65001'));
+  out.push(flagOfMessage(msg));
   out.push(pel(E, 'ContentClass', 'urn:content-classes:message'));
   out.push(pel(CP.AirSyncBase, 'NativeBodyType', String(nativeBodyType(msg))));
   if (supports(version, 'email2')) {
@@ -304,6 +312,7 @@ export const EAS_MESSAGE_SELECT = {
   id: true, flags: true, subject: true, fromAddr: true, fromName: true, toAddrs: true, ccAddrs: true,
   replyTo: true, messageId: true, inReplyTo: true, threadId: true, date: true, bodyText: true, bodyHtml: true,
   storagePath: true, smimeMeta: true,
+  flagStatus: true, flagStartAt: true, flagDueAt: true, flagReminderAt: true, flagCompletedAt: true,
 } as const;
 
 export const EAS_ATTACHMENT_SELECT = { id: true, messageId: true, filename: true, mimeType: true, size: true, contentId: true, inline: true } as const;

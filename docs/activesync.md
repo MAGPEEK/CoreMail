@@ -101,6 +101,14 @@ Accounts form, …): `tagsNewerThan(buffer, version)` lists the tags of an encod
 version does not know. The unit tests and the e2e step assert that every response carries only
 tags of the negotiated version.
 
+## Follow-up flags (9.4)
+
+Every `Add` and `Change` of the Email class carries `email:Flag` (empty when the mail is not
+flagged; Tasks code page 9 for the `tasks:*` dates), and a client `Change` with `email:Flag`
+flags, completes or clears the mail through the message store — invalid flags get `Status 6` in
+`airsync:Responses`. Rules and mapping: [tasks.md](tasks.md#activesync-emailflag),
+`src/commands/flag.ts`.
+
 ## Device policy
 
 Every command except Provision needs a provisioned device whose final policy key matches the

@@ -1,17 +1,29 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  Plus, CheckCircle2, Circle, Flag, Calendar, Trash2,
-  ChevronDown, ChevronRight, AlignLeft, Bell, X, Save, Mail,
+  Plus, CheckCircle2, Circle, Flag, Calendar, Trash2, Bell, Mail, Lock, Repeat,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { api } from '../api/client.js';
-import type { Task } from '../api/types.js';
+import type { FlaggedMail, Task } from '../api/types.js';
 import toast from 'react-hot-toast';
-import { Modal } from '../components/Modal.js';
-import { localInputToIso, isoToLocalInput } from '../lib/datetime.js';
 import { PageShell } from '../components/PageShell.js';
 import { PAGE_CONTENT_PAD } from '../lib/pageShell.js';
+import { TaskForm, TASK_STATUS_LABEL, type TaskPayload } from '../components/tasks/TaskForm.js';
+import { combineItems, type CombinedItem, type ItemFilter } from '../lib/taskItems.js';
+import { instantToWallClock } from '../lib/zonedTime.js';
+import { mailPath } from '../lib/mailLinks.js';
+import { OWN_MAILBOX } from '../lib/mailboxContext.js';
+import { useRegional } from '../store/preferences.js';
+
+/**
+ * Tasks — 9.4: "Gekennzeichnete Elemente und Aufgaben": tasks and mails flagged
+ * for follow-up in one list (Aktiv / Überfällig / Abgeschlossen, by due date).
+ * Completing a flagged mail completes the flag of that mail; opening it goes to
+ * the mail. Tasks open the full task form (double-click or Enter).
+ * Reminder popups/mails are handled app-wide by hooks/useTaskReminders.ts.
+ */
 
 const PRIORITY_COLOR: Record<string, string> = {
   LOW:    'text-fg-subtle',
@@ -19,250 +31,94 @@ const PRIORITY_COLOR: Record<string, string> = {
   HIGH:   'text-danger-fg',
 };
 
-const PRIORITY_LABEL: Record<string, string> = {
-  LOW:    'Niedrig',
-  NORMAL: 'Normal',
-  HIGH:   'Hoch',
-};
+const FILTER_LABEL: Record<ItemFilter, string> = { active: 'Aktiv', overdue: 'Überfällig', completed: 'Abgeschlossen' };
 
-// Reminder popups/mails are handled app-wide by hooks/useTaskReminders.ts (Layout).
-
-/** Adds `minutes` minutes to a datetime-local string and returns an ISO timestamp (UTC). */
-function addMinutesIso(dtLocal: string, minutes: number): string {
-  const d = new Date(dtLocal);
-  d.setMinutes(d.getMinutes() + minutes);
-  return d.toISOString();
+/** Adds `minutes` minutes to an ISO instant. */
+function addMinutesIso(iso: string, minutes: number): string {
+  return new Date(new Date(iso).getTime() + minutes * 60_000).toISOString();
 }
-
-// ── Form types ─────────────────────────────────────────────────────────────────
-interface NewTaskForm {
-  subject:        string;
-  body:           string;
-  priority:       'LOW' | 'NORMAL' | 'HIGH';
-  dueDate:        string;
-  reminder:       string;
-  reminderByMail: boolean;
-}
-
-interface EditTaskForm {
-  subject:        string;
-  body:           string;
-  priority:       'LOW' | 'NORMAL' | 'HIGH';
-  dueDate:        string;
-  reminder:       string;
-  reminderByMail: boolean;
-}
-
-const EMPTY_FORM: NewTaskForm = {
-  subject: '', body: '', priority: 'NORMAL', dueDate: '', reminder: '', reminderByMail: false,
-};
-
-const EMPTY_EDIT_FORM: EditTaskForm = {
-  subject: '', body: '', priority: 'NORMAL', dueDate: '', reminder: '', reminderByMail: false,
-};
 
 export function TasksPage() {
   const qc = useQueryClient();
-  const [filter, setFilter]       = useState<'all' | 'pending' | 'completed'>('pending');
-  const [expanded, setExpanded]   = useState<Set<string>>(new Set());
-  const [form, setForm]           = useState<NewTaskForm>(EMPTY_FORM);
-  const [showForm, setShowForm]   = useState(false);
+  const navigate = useNavigate();
+  const timeZone = useRegional().timeZone;
+  const [filter, setFilter] = useState<ItemFilter>('active');
+  const [form, setForm] = useState<{ task: Task | null } | null>(null);
 
-  // Feature 1 – Edit-Modal
-  const [editingTask, setEditingTask] = useState<Task | null>(null);
-  const [editForm, setEditForm]       = useState<EditTaskForm>(EMPTY_EDIT_FORM);
-
-  const statusFilter = filter === 'pending'
-    ? ['NOT_STARTED', 'IN_PROGRESS', 'DEFERRED']
-    : filter === 'completed' ? ['COMPLETED'] : undefined;
-
-  const { data: tasks, isLoading } = useQuery({
-    queryKey: ['tasks', filter],
-    queryFn:  () => api.get<Task[]>('/tasks'),
-    select:   (all) => statusFilter ? all.filter((t) => statusFilter.includes(t.status)) : all,
+  const { data: tasks = [], isLoading } = useQuery({
+    queryKey: ['tasks', 'all'],
+    queryFn: () => api.get<Task[]>('/tasks'),
   });
+  const { data: mails = [] } = useQuery({
+    queryKey: ['follow-up', 'all'],
+    queryFn: () => api.get<FlaggedMail[]>('/mail/follow-up?status=all'),
+  });
+  const items = useMemo(() => combineItems(tasks, mails, filter, new Date(), timeZone), [tasks, mails, filter, timeZone]);
 
-  // Feature 2 – calendar sync: determine default calendar
+  // Calendar sync (best effort, as before 9.4): the due date of a new task becomes an
+  // all-day event, a changed reminder an event at the reminder time
   const { data: calendars } = useQuery({
     queryKey: ['calendars'],
-    queryFn:  () => api.get<{ id: string; name: string }[]>('/calendar'),
+    queryFn: () => api.get<{ id: string; name: string }[]>('/calendar'),
   });
+  const syncCalendar = (events: object[]) => {
+    const calendarId = calendars?.[0]?.id;
+    if (!calendarId || events.length === 0) return;
+    void Promise.allSettled(events.map((ev) => api.post('/calendar/events', { ...ev, calendarId })))
+      .then(() => qc.invalidateQueries({ queryKey: ['calendar-events'] }));
+  };
 
-  // ── Create task ───────────────────────────────────────────────────────────────
-  const createMutation = useMutation({
-    mutationFn: (data: Omit<NewTaskForm, 'subject'> & { subject: string }) =>
-      api.post('/tasks', {
-        subject:        data.subject,
-        body:           data.body     || '',
-        priority:       data.priority,
-        status:         'NOT_STARTED',
-        reminderByMail: data.reminderByMail,
-        ...(data.dueDate  ? { dueDate:  data.dueDate  } : {}),
-        // datetime-local is local wall time → send an unambiguous UTC ISO timestamp
-        ...(data.reminder ? { reminder: localInputToIso(data.reminder) } : {}),
-      }),
-    onSuccess: (_result, variables) => {
-      qc.invalidateQueries({ queryKey: ['tasks'] });
-      setForm(EMPTY_FORM);
-      setShowForm(false);
-      toast.success('Aufgabe erstellt');
+  const invalidate = () => {
+    void qc.invalidateQueries({ queryKey: ['tasks'] });
+    void qc.invalidateQueries({ queryKey: ['follow-up'] });
+  };
 
-      // Immediate feedback when a reminder was set
-      if (variables.reminder) {
-        const label = variables.reminderByMail ? 'Erinnerung + E-Mail' : 'Erinnerung';
-        toast(`🔔 ${label}: ${format(new Date(variables.reminder), 'dd.MM. HH:mm')} Uhr`, { duration: 4000 });
-      }
-
-      // Feature 2 – best-effort calendar sync
-      const calendarId = calendars?.[0]?.id;
-      if (calendarId) {
-        const syncs: Promise<unknown>[] = [];
-
-        // Due date → all-day event
-        if (variables.dueDate) {
-          syncs.push(
-            api.post('/calendar/events', {
-              summary:    variables.subject,
-              // All-day: date-only start, exclusive end (the server normalises end ≤ start to +1 day)
-              dtStart:    variables.dueDate.slice(0, 10),
-              dtEnd:      variables.dueDate.slice(0, 10),
-              calendarId,
-              allDay:     true,
-            }),
-          );
-        }
-
-        // Reminder → calendar event at the exact time (30 min duration)
-        if (variables.reminder) {
-          syncs.push(
-            api.post('/calendar/events', {
-              summary:    `🔔 Erinnerung: ${variables.subject}`,
-              dtStart:    localInputToIso(variables.reminder),
-              dtEnd:      addMinutesIso(variables.reminder, 30),
-              calendarId,
-              allDay:     false,
-            }),
-          );
-        }
-
-        if (syncs.length > 0) {
-          Promise.allSettled(syncs).then(() => {
-            qc.invalidateQueries({ queryKey: ['calendar-events'] });
-          });
-        }
-      }
+  const saveMutation = useMutation({
+    mutationFn: ({ id, payload }: { id: string | null; payload: TaskPayload }) =>
+      (id ? api.put<Task & { next?: Task }>(`/tasks/${id}`, payload) : api.post<Task>('/tasks', payload)),
+    onSuccess: (saved, { id, payload }) => {
+      invalidate();
+      toast.success(id ? 'Aufgabe gespeichert' : 'Aufgabe erstellt');
+      if ('next' in saved && saved.next) toast('Nächste Aufgabe der Serie angelegt', { icon: '🔁' });
+      const previous = form?.task?.reminder ?? null;
+      syncCalendar([
+        ...(!id && payload.dueDate ? [{ summary: payload.subject, dtStart: payload.dueDate.slice(0, 10), dtEnd: payload.dueDate.slice(0, 10), allDay: true }] : []),
+        ...(payload.reminder && payload.reminder !== previous
+          ? [{ summary: `🔔 Erinnerung: ${payload.subject}`, dtStart: payload.reminder, dtEnd: addMinutesIso(payload.reminder, 30), allDay: false }]
+          : []),
+      ]);
+      setForm(null);
     },
     onError: (err: Error) => toast.error(err.message),
   });
 
-  // ── Toggle status ─────────────────────────────────────────────────────────────
-  const toggleMutation = useMutation({
-    mutationFn: ({ id, completed }: { id: string; completed: boolean }) =>
-      api.put(`/tasks/${id}`, { status: completed ? 'COMPLETED' : 'NOT_STARTED' }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['tasks'] }),
-    onError:   (err: Error) => toast.error(err.message),
-  });
-
-  // Feature 1 – fully edit task
-  const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: Partial<EditTaskForm>; reminderChanged: boolean }) =>
-      api.put(`/tasks/${id}`, {
-        ...(data.subject        !== undefined                    ? { subject:        data.subject        } : {}),
-        ...(data.body           !== undefined                    ? { body:           data.body           } : {}),
-        ...(data.priority       !== undefined                    ? { priority:       data.priority       } : {}),
-        ...(data.reminderByMail !== undefined                    ? { reminderByMail: data.reminderByMail } : {}),
-        ...(data.dueDate  !== undefined && data.dueDate  !== '' ? { dueDate:  data.dueDate  } : {}),
-        ...(data.reminder !== undefined && data.reminder !== '' ? { reminder: localInputToIso(data.reminder) } : {}),
-      }),
-    onSuccess: (_result, variables) => {
-      qc.invalidateQueries({ queryKey: ['tasks'] });
-      setEditingTask(null);
-      setEditForm(EMPTY_EDIT_FORM);
-      toast.success('Aufgabe gespeichert');
-
-      // Only a CHANGED reminder gets feedback + a calendar entry — re-saving a task
-      // with the same reminder used to create duplicate "🔔 Erinnerung" events.
-      if (variables.data.reminder && variables.reminderChanged) {
-        const label = variables.data.reminderByMail ? 'Erinnerung + E-Mail' : 'Erinnerung';
-        toast(`🔔 ${label}: ${format(new Date(variables.data.reminder), 'dd.MM. HH:mm')} Uhr`, { duration: 4000 });
-      }
-
-      // Calendar sync for reminder after edit
-      if (variables.data.reminder && variables.reminderChanged) {
-        const calendarId = calendars?.[0]?.id;
-        if (calendarId) {
-          api.post('/calendar/events', {
-            summary:    `🔔 Erinnerung: ${variables.data.subject ?? ''}`,
-            dtStart:    localInputToIso(variables.data.reminder),
-            dtEnd:      addMinutesIso(variables.data.reminder, 30),
-            calendarId,
-            allDay:     false,
-          }).then(() => {
-            qc.invalidateQueries({ queryKey: ['calendar-events'] });
-          }).catch(() => { /* best-effort */ });
-        }
-      }
-    },
+  const completeMutation = useMutation({
+    mutationFn: ({ item, completed }: { item: CombinedItem; completed: boolean }) => (item.kind === 'task'
+      ? api.put<Task & { next?: Task }>(`/tasks/${item.id}`, { status: completed ? 'COMPLETED' : 'NOT_STARTED' })
+      // same object: completing the item completes the flag of the mail
+      : api.put('/mail/follow-up', { ids: [item.id], status: completed ? 'complete' : 'flagged' })),
+    onSuccess: invalidate,
     onError: (err: Error) => toast.error(err.message),
   });
 
-  // ── Delete task ───────────────────────────────────────────────────────────────
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => api.delete(`/tasks/${id}`),
-    onSuccess:  () => qc.invalidateQueries({ queryKey: ['tasks'] }),
-    onError:    (err: Error) => toast.error(err.message),
+    mutationFn: (item: CombinedItem) => (item.kind === 'task'
+      ? api.delete(`/tasks/${item.id}`)
+      : api.put('/mail/follow-up', { ids: [item.id], status: 'none' })),
+    onSuccess: invalidate,
+    onError: (err: Error) => toast.error(err.message),
   });
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!form.subject.trim()) return;
-    createMutation.mutate({ ...form, subject: form.subject.trim() });
+  const open = (item: CombinedItem) => {
+    if (item.kind === 'task') { setForm({ task: tasks.find((t) => t.id === item.id) ?? null }); return; }
+    const mail = mails.find((m) => m.id === item.id);
+    if (mail) navigate(mailPath(OWN_MAILBOX, mail.folderId, mail.id));
   };
 
-  // Feature 1 – double-click opens edit modal
-  const handleRowDoubleClick = (task: Task) => {
-    setEditingTask(task);
-    setEditForm({
-      subject:        task.subject,
-      body:           task.body     ?? '',
-      priority:       (task.priority as 'LOW' | 'NORMAL' | 'HIGH') ?? 'NORMAL',
-      dueDate:        task.dueDate  ? task.dueDate.slice(0, 10)  : '',
-      // Server ISO (UTC) → local wall time for datetime-local
-      reminder:       task.reminder ? isoToLocalInput(task.reminder) : '',
-      reminderByMail: task.reminderByMail ?? false,
-    });
-  };
-
-  const handleEditSave = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editingTask) return;
-    if (!editForm.subject.trim()) return;
-    const previousReminder = editingTask.reminder ? isoToLocalInput(editingTask.reminder) : '';
-    updateMutation.mutate({
-      id:   editingTask.id,
-      reminderChanged: editForm.reminder !== previousReminder,
-      data: {
-        subject:        editForm.subject.trim(),
-        body:           editForm.body,
-        priority:       editForm.priority,
-        reminderByMail: editForm.reminderByMail,
-        ...(editForm.dueDate  ? { dueDate:  editForm.dueDate  } : {}),
-        ...(editForm.reminder ? { reminder: editForm.reminder } : {}),
-      },
-    });
-  };
-
-  const handleEditClose = () => {
-    setEditingTask(null);
-    setEditForm(EMPTY_EDIT_FORM);
-  };
-
-  const toggleExpand = (id: string) => {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
+  const dueText = (item: CombinedItem): string => {
+    if (!item.dueAt) return '';
+    const date = item.kind === 'task' ? item.dueAt.slice(0, 10) : instantToWallClock(item.dueAt, timeZone).date;
+    return date.split('-').reverse().join('.');
   };
 
   return (
@@ -271,333 +127,101 @@ export function TasksPage() {
       bodyClassName="bg-surface-2"
       actions={
         <div role="group" aria-label="Filter" className="flex gap-1 bg-surface border border-line rounded p-0.5">
-          {(['pending', 'all', 'completed'] as const).map((f) => (
+          {(Object.keys(FILTER_LABEL) as ItemFilter[]).map((f) => (
             <button key={f} onClick={() => setFilter(f)} aria-pressed={filter === f}
               className={`text-xs px-3 py-1 rounded transition-colors ${filter === f ? 'bg-accent text-white' : 'text-fg-muted hover:bg-surface-2'}`}>
-              {f === 'pending' ? 'Offen' : f === 'all' ? 'Alle' : 'Erledigt'}
+              {FILTER_LABEL[f]}
             </button>
           ))}
         </div>
       }
     >
-      <div className={`w-full max-w-2xl mx-auto ${PAGE_CONTENT_PAD} flex flex-col gap-4 overflow-y-auto`}>
+      <div className={`w-full max-w-3xl mx-auto ${PAGE_CONTENT_PAD} flex flex-col gap-4 overflow-y-auto`}>
+        <button
+          type="button"
+          onClick={() => setForm({ task: null })}
+          className="flex items-center gap-2 w-full px-4 py-2.5 bg-surface border border-line border-dashed rounded-lg text-sm text-fg-subtle hover:text-accent-fg hover:border-accent-fg transition-colors"
+        >
+          <Plus size={15} />
+          Neue Aufgabe…
+        </button>
 
-        {/* ── New task ────────────────────────────────────────────────────────── */}
-        {showForm ? (
-          <form onSubmit={handleSubmit} className="bg-surface border border-accent/30 rounded-lg shadow-sm p-4 space-y-3">
-            <input
-              autoFocus
-              value={form.subject}
-              onChange={(e) => setForm((p) => ({ ...p, subject: e.target.value }))}
-              className="input w-full font-medium"
-              placeholder="Aufgabe eingeben…"
-              required
-            />
-
-            <textarea
-              value={form.body}
-              onChange={(e) => setForm((p) => ({ ...p, body: e.target.value }))}
-              className="input w-full resize-none text-sm"
-              rows={2}
-              placeholder="Notizen (optional)…"
-            />
-
-            <div className="flex flex-wrap gap-3">
-              {/* Priority */}
-              <div className="flex items-center gap-1.5">
-                <Flag size={13} className={PRIORITY_COLOR[form.priority]} />
-                <select
-                  value={form.priority}
-                  onChange={(e) => setForm((p) => ({ ...p, priority: e.target.value as 'LOW' | 'NORMAL' | 'HIGH' }))}
-                  className="input py-0.5 text-xs"
+        <section aria-labelledby="flagged-heading" className="bg-surface rounded-lg border border-line">
+          <h2 id="flagged-heading" className="px-4 py-2.5 text-sm font-semibold text-fg border-b border-line">
+            Gekennzeichnete Elemente und Aufgaben
+          </h2>
+          <ul className="divide-y divide-line">
+            {isLoading && <li className="py-8 text-center text-fg-subtle text-sm">Lade Aufgaben…</li>}
+            {!isLoading && items.length === 0 && <li className="py-10 text-center text-fg-subtle text-sm">Keine Elemente</li>}
+            {items.map((item) => {
+              const task = item.kind === 'task' ? tasks.find((t) => t.id === item.id) : undefined;
+              return (
+                <li
+                  key={`${item.kind}:${item.id}`}
+                  className="flex items-center gap-3 px-4 py-3 group hover:bg-surface-2 transition-colors"
+                  onDoubleClick={() => open(item)}
                 >
-                  {(['LOW', 'NORMAL', 'HIGH'] as const).map((p) => (
-                    <option key={p} value={p}>{PRIORITY_LABEL[p]}</option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Due date */}
-              <div className="flex items-center gap-1.5">
-                <Calendar size={13} className="text-fg-subtle" />
-                <input
-                  type="date"
-                  value={form.dueDate}
-                  onChange={(e) => setForm((p) => ({ ...p, dueDate: e.target.value }))}
-                  className="input py-0.5 text-xs"
-                />
-              </div>
-
-              {/* Reminder — date + time */}
-              <div className="flex items-center gap-1.5" title="Erinnerung: Datum und Uhrzeit → erscheint im Kalender und als Popup">
-                <Bell size={13} className="text-warning-fg" />
-                <input
-                  type="datetime-local"
-                  value={form.reminder}
-                  onChange={(e) => setForm((p) => ({ ...p, reminder: e.target.value }))}
-                  className="input py-0.5 text-xs"
-                />
-              </div>
-
-              {/* Checkbox "by email" — only visible when a reminder is set */}
-              {form.reminder && (
-                <label className="flex items-center gap-1.5 cursor-pointer select-none" title="Erinnerungsmail in dein Postfach senden">
-                  <input
-                    type="checkbox"
-                    checked={form.reminderByMail}
-                    onChange={(e) => setForm((p) => ({ ...p, reminderByMail: e.target.checked }))}
-                    className="h-3 w-3 rounded border-line-strong accent-accent"
-                  />
-                  <Mail size={12} className="text-info-fg" />
-                  <span className="text-xs text-fg-subtle">per E-Mail</span>
-                </label>
-              )}
-            </div>
-
-            <div className="flex justify-end gap-2 pt-1">
-              <button type="button" onClick={() => { setShowForm(false); setForm(EMPTY_FORM); }}
-                className="btn-secondary text-xs">Abbrechen</button>
-              <button type="submit" disabled={!form.subject.trim() || createMutation.isPending}
-                className="btn-primary text-xs disabled:opacity-50">
-                Aufgabe erstellen
-              </button>
-            </div>
-          </form>
-        ) : (
-          <button
-            type="button"
-            onClick={() => setShowForm(true)}
-            className="flex items-center gap-2 w-full px-4 py-2.5 bg-surface border border-line border-dashed rounded-lg text-sm text-fg-subtle hover:text-accent-fg hover:border-accent-fg transition-colors"
-          >
-            <Plus size={15} />
-            Neue Aufgabe hinzufügen…
-          </button>
-        )}
-
-        {/* ── Task list ───────────────────────────────────────────────────────── */}
-        <div className="bg-surface rounded-lg border border-line divide-y divide-line">
-          {isLoading && (
-            <div className="py-8 text-center text-fg-subtle text-sm">Lade Aufgaben…</div>
-          )}
-          {!isLoading && (tasks ?? []).length === 0 && (
-            <div className="py-10 text-center text-fg-subtle text-sm">Keine Aufgaben</div>
-          )}
-          {(tasks ?? []).map((task) => {
-            const done    = task.status === 'COMPLETED';
-            const isOpen  = expanded.has(task.id);
-            const hasBody = !!task.body;
-            const overdue = !done && task.dueDate && new Date(task.dueDate) < new Date();
-            return (
-              <div key={task.id}>
-                {/* Double-click opens edit modal (Feature 1) */}
-                <div
-                  className="flex items-center gap-3 px-4 py-3 group hover:bg-surface-2 transition-colors cursor-default"
-                  onDoubleClick={() => handleRowDoubleClick(task)}
-                  title="Doppelklick zum Bearbeiten"
-                >
-                  {/* Checkbox */}
-                  <button aria-label={done ? 'Als offen markieren' : 'Als erledigt markieren'}
-                    onClick={(e) => { e.stopPropagation(); toggleMutation.mutate({ id: task.id, completed: !done }); }}
-                    className="shrink-0 transition-colors"
-                    title={done ? 'Als offen markieren' : 'Als erledigt markieren'}
+                  <button
+                    aria-label={item.completed ? 'Als nicht erledigt markieren' : 'Als erledigt markieren'}
+                    title={item.completed ? 'Als nicht erledigt markieren' : 'Als erledigt markieren'}
+                    onClick={() => completeMutation.mutate({ item, completed: !item.completed })}
+                    className="shrink-0"
                   >
-                    {done
+                    {item.completed
                       ? <CheckCircle2 size={18} className="text-success-fg" />
-                      : <Circle      size={18} className="text-fg-subtle hover:text-accent-fg" />}
+                      : <Circle size={18} className="text-fg-subtle hover:text-accent-fg" />}
                   </button>
-
-                  {/* Subject + expand button */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      <p className={`text-sm ${done ? 'line-through text-fg-subtle' : 'text-fg'}`}>
-                        {task.subject}
-                      </p>
-                      {hasBody && (
-                        <button aria-label="Beschreibung ein-/ausblenden"
-                          onClick={(e) => { e.stopPropagation(); toggleExpand(task.id); }}
-                          className="text-fg-subtle hover:text-fg-muted shrink-0"
-                        >
-                          <AlignLeft size={12} />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Meta info + actions */}
+                  {item.kind === 'mail'
+                    ? <Mail size={14} className="text-fg-subtle shrink-0" aria-label="E-Mail" />
+                    : <Flag size={14} className={`${PRIORITY_COLOR[item.priority] ?? ''} shrink-0`} aria-label={`Priorität ${item.priority}`} />}
+                  <button type="button" onClick={() => open(item)} className="flex-1 min-w-0 text-left">
+                    <span className={`block text-sm truncate ${item.completed ? 'line-through text-fg-subtle' : 'text-fg'}`}>{item.subject}</span>
+                    <span className="block text-xs text-fg-subtle truncate">
+                      {item.kind === 'mail' ? item.detail : TASK_STATUS_LABEL[task?.status ?? 'NOT_STARTED']}
+                      {item.kind === 'task' && (task?.percentComplete ?? 0) > 0 && !item.completed ? ` · ${task?.percentComplete} %` : ''}
+                    </span>
+                  </button>
                   <div className="flex items-center gap-2 shrink-0">
-                    <Flag size={13} className={PRIORITY_COLOR[task.priority]} />
-                    {task.dueDate && (
-                      <span className={`text-xs flex items-center gap-1 ${overdue ? 'text-danger-fg font-medium' : 'text-fg-subtle'}`}>
+                    {task?.isPrivate && <span title="Privat"><Lock size={12} className="text-fg-subtle" /></span>}
+                    {task?.rrule && <span title="Serie"><Repeat size={12} className="text-fg-subtle" /></span>}
+                    {item.dueAt && (
+                      <span className={`text-xs flex items-center gap-1 ${item.overdue ? 'text-danger-fg font-medium' : 'text-fg-subtle'}`}>
                         <Calendar size={11} />
-                        {format(new Date(task.dueDate), 'dd.MM.yy')}
+                        {item.overdue && <span className="sr-only">Überfällig:</span>}
+                        {dueText(item)}
                       </span>
                     )}
-                    {task.reminder && (
+                    {task?.reminder && (
                       <span title={`Erinnerung: ${format(new Date(task.reminder), 'dd.MM.yy HH:mm')}${task.reminderByMail ? ' · per E-Mail' : ''}`}>
                         <Bell size={11} className="text-warning-fg" />
                       </span>
                     )}
-                    {task.reminderByMail && (
-                      <span title="E-Mail-Erinnerung aktiv">
-                        <Mail size={11} className="text-info-fg" />
-                      </span>
-                    )}
-                    <button aria-label="Aufgabe löschen"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (window.confirm(`Aufgabe „${task.subject}" löschen?`)) {
-                          deleteMutation.mutate(task.id);
-                        }
+                    <button
+                      aria-label={item.kind === 'task' ? 'Aufgabe löschen' : 'Kennzeichnung löschen'}
+                      title={item.kind === 'task' ? 'Aufgabe löschen' : 'Kennzeichnung löschen'}
+                      onClick={() => {
+                        const q = item.kind === 'task' ? `Aufgabe „${item.subject}" löschen?` : `Kennzeichnung von „${item.subject}" löschen?`;
+                        if (window.confirm(q)) deleteMutation.mutate(item);
                       }}
-                      className="opacity-0 group-hover:opacity-100 text-fg-subtle hover:text-danger-fg transition-all"
+                      className="opacity-0 group-hover:opacity-100 focus:opacity-100 text-fg-subtle hover:text-danger-fg transition-all"
                     >
                       <Trash2 size={14} />
                     </button>
-                    {hasBody && (
-                      <button aria-label={isOpen ? 'Beschreibung ausblenden' : 'Beschreibung einblenden'}
-                        onClick={(e) => { e.stopPropagation(); toggleExpand(task.id); }}
-                        className="opacity-0 group-hover:opacity-100 text-fg-subtle hover:text-fg-muted transition-all"
-                      >
-                        {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                      </button>
-                    )}
                   </div>
-                </div>
-
-                {/* Body/notes expanded */}
-                {isOpen && hasBody && (
-                  <div className="px-11 pb-3 text-sm text-fg-muted whitespace-pre-wrap leading-relaxed bg-surface-2/50">
-                    {task.body}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
       </div>
 
-      {/* ── Feature 1: Edit-Modal ─────────────────────────────────────────────── */}
-      {editingTask && (
-        <Modal
-          onClose={handleEditClose}
-          labelledBy="task-edit-title"
-          overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-scrim/40"
-          className="bg-surface rounded-2xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden"
-        >
-
-            {/* Modal header */}
-            <div className="flex items-center justify-between px-5 py-4 border-b border-line">
-              <h2 id="task-edit-title" className="text-base font-semibold text-fg">Aufgabe bearbeiten</h2>
-              <button
-                onClick={handleEditClose}
-                className="text-fg-subtle hover:text-fg-muted transition-colors"
-                title="Schließen"
-                aria-label="Schließen"
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            {/* Modal form */}
-            <form onSubmit={handleEditSave} className="p-5 flex flex-col gap-4">
-              <div>
-                <label className="block text-xs font-medium text-fg-muted mb-1">Betreff *</label>
-                <input
-                  autoFocus
-                  type="text"
-                  value={editForm.subject}
-                  onChange={(e) => setEditForm((f) => ({ ...f, subject: e.target.value }))}
-                  className="input w-full"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-fg-muted mb-1">Notizen</label>
-                <textarea
-                  value={editForm.body}
-                  onChange={(e) => setEditForm((f) => ({ ...f, body: e.target.value }))}
-                  rows={3}
-                  className="input w-full resize-none text-sm"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-fg-muted mb-1">Priorität</label>
-                  <div className="flex items-center gap-1.5">
-                    <Flag size={13} className={PRIORITY_COLOR[editForm.priority]} />
-                    <select
-                      value={editForm.priority}
-                      onChange={(e) => setEditForm((f) => ({ ...f, priority: e.target.value as 'LOW' | 'NORMAL' | 'HIGH' }))}
-                      className="input py-0.5 text-xs flex-1"
-                    >
-                      {(['LOW', 'NORMAL', 'HIGH'] as const).map((p) => (
-                        <option key={p} value={p}>{PRIORITY_LABEL[p]}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-fg-muted mb-1">Fälligkeit</label>
-                  <div className="flex items-center gap-1.5">
-                    <Calendar size={13} className="text-fg-subtle shrink-0" />
-                    <input
-                      type="date"
-                      value={editForm.dueDate}
-                      onChange={(e) => setEditForm((f) => ({ ...f, dueDate: e.target.value }))}
-                      className="input py-0.5 text-xs flex-1"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-fg-muted mb-1">Erinnerung</label>
-                <div className="flex items-center gap-1.5">
-                  <Bell size={13} className="text-warning-fg shrink-0" />
-                  <input
-                    type="datetime-local"
-                    value={editForm.reminder}
-                    onChange={(e) => setEditForm((f) => ({ ...f, reminder: e.target.value }))}
-                    className="input py-0.5 text-xs flex-1"
-                  />
-                </div>
-                {editForm.reminder && (
-                  <label className="flex items-center gap-1.5 mt-2 cursor-pointer select-none" title="Erinnerungsmail in dein Postfach senden">
-                    <input
-                      type="checkbox"
-                      checked={editForm.reminderByMail}
-                      onChange={(e) => setEditForm((f) => ({ ...f, reminderByMail: e.target.checked }))}
-                      className="h-3.5 w-3.5 rounded border-line-strong accent-accent"
-                    />
-                    <Mail size={13} className="text-info-fg" />
-                    <span className="text-xs text-fg-muted">Auch per E-Mail benachrichtigen</span>
-                  </label>
-                )}
-              </div>
-
-              {/* Actions */}
-              <div className="flex justify-end gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={handleEditClose}
-                  className="btn-secondary text-xs"
-                >
-                  Abbrechen
-                </button>
-                <button
-                  type="submit"
-                  disabled={!editForm.subject.trim() || updateMutation.isPending}
-                  className="btn-primary text-xs disabled:opacity-50 flex items-center gap-1.5"
-                >
-                  <Save size={13} />
-                  {updateMutation.isPending ? 'Speichern…' : 'Speichern'}
-                </button>
-              </div>
-            </form>
-        </Modal>
+      {form && (
+        <TaskForm
+          task={form.task}
+          pending={saveMutation.isPending}
+          onClose={() => setForm(null)}
+          onSave={(payload) => saveMutation.mutate({ id: form.task?.id ?? null, payload })}
+        />
       )}
     </PageShell>
   );

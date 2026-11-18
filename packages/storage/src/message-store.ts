@@ -41,6 +41,10 @@ import type { Prisma, Message } from '@prisma/client';
 import type { MailboxChangeKind } from '@coremail/core/realtime';
 import { cachedReferencesColumn } from './references.js';
 import { recordMailboxChange } from './realtime/change-scope.js';
+import {
+  flagsForFollowUp, followUpAfterKeywords, followUpBulkAfterKeywords, followUpColumns, followUpForNewRow, normalizeFollowUp,
+  type FollowUpState, type FollowUpStatus,
+} from './follow-up.js';
 
 /** Records a change for post-commit publishing (folders: undefined = unknown). */
 function noteChange(mailboxId: string, kind: MailboxChangeKind, modSeq: bigint, folderIds?: Iterable<string>): void {
@@ -137,6 +141,7 @@ export async function createMessages(
       data: {
         changeKey: modSeq.toString(),
         ...(refs !== undefined ? { references: refs } : {}),
+        ...followUpForNewRow(data),
         ...data, folderId, uid: firstUid + i, modSeq, createdModSeq: modSeq,
       },
     }));
@@ -216,8 +221,16 @@ export async function touchMessages(
   opts: TouchOpts = {},
 ): Promise<Map<string, bigint>> {
   const result = new Map<string, bigint>();
+  // 9.4: a keyword list keeps the follow-up flag in step (one extra statement, no reads)
+  const followUp = Array.isArray(data.flags) ? followUpBulkAfterKeywords(data.flags as string[]) : null;
   for (const [mailboxId, group] of await byMailbox(tx, ids, opts, opts.where)) {
     const modSeq = await nextModSeq(tx, mailboxId);
+    if (followUp) {
+      await tx.message.updateMany({
+        where: { ...(opts.where ?? {}), id: { in: group.ids }, flagStatus: followUp.from },
+        data: followUp.data,
+      });
+    }
     await tx.message.updateMany({
       where: { ...(opts.where ?? {}), id: { in: group.ids } },
       data: { ...data, modSeq, changeKey: modSeq.toString() },
@@ -238,9 +251,15 @@ export async function setFlags(
   const out: Array<{ id: string; flags: string[]; modSeq: bigint }> = [];
   for (const [mailboxId, group] of await byMailbox(tx, [...flagsById.keys()], opts)) {
     const modSeq = await nextModSeq(tx, mailboxId);
+    const before = new Map((await tx.message.findMany({
+      where: { id: { in: group.ids } },
+      select: { id: true, flags: true, flagStatus: true },
+    })).map((r) => [r.id, r]));
     for (const id of group.ids) {
       const flags = flagsById.get(id)!;
-      await tx.message.update({ where: { id }, data: { flags, modSeq, changeKey: modSeq.toString() } });
+      const prev = before.get(id);
+      const followUp = prev ? followUpAfterKeywords(prev, flags) : null;
+      await tx.message.update({ where: { id }, data: { flags, ...(followUp ?? {}), modSeq, changeKey: modSeq.toString() } });
       out.push({ id, flags, modSeq });
     }
     noteChange(mailboxId, 'flags', modSeq, group.folderIds);
@@ -268,17 +287,56 @@ export async function modifyFlags(
     const modSeq = await nextModSeq(tx, mailboxId);
     const rows = await tx.message.findMany({
       where: { id: { in: group.ids } },
-      select: { id: true, flags: true, modSeq: true, folderId: true },
+      select: { id: true, flags: true, modSeq: true, folderId: true, flagStatus: true },
     });
     const changedFolders = new Set<string>();
     for (const row of rows) {
       const flags = compute([...row.flags], row.modSeq, row.id);
       if (flags === null) continue;
-      await tx.message.update({ where: { id: row.id }, data: { flags, modSeq, changeKey: modSeq.toString() } });
+      const followUp = followUpAfterKeywords(row, flags);
+      await tx.message.update({ where: { id: row.id }, data: { flags, ...(followUp ?? {}), modSeq, changeKey: modSeq.toString() } });
       out.push({ id: row.id, flags, modSeq });
       changedFolders.add(row.folderId);
     }
     if (changedFolders.size > 0) noteChange(mailboxId, 'flags', modSeq, changedFolders);
+  }
+  return out;
+}
+
+/**
+ * 9.4: set the follow-up flag of messages (REST "Kennzeichnen", EAS email:Flag).
+ * The `\Flagged` keyword follows the status (see follow-up.ts) and every row gets
+ * the mailbox's next modSeq, so IMAP CONDSTORE, JMAP and EAS see the change.
+ * Dates left out of `state` keep their stored value (null clears one); the result is
+ * normalised (dates of 'none' dropped, completion time for 'complete').
+ */
+export async function setFollowUp(
+  tx: MessageStoreTx,
+  ids: string[],
+  state: Partial<FollowUpState> & { status: FollowUpStatus },
+  opts: TouchOpts & { now?: Date } = {},
+): Promise<Array<{ id: string; flags: string[]; modSeq: bigint }>> {
+  const now = opts.now ?? new Date();
+  const out: Array<{ id: string; flags: string[]; modSeq: bigint }> = [];
+  for (const [mailboxId, group] of await byMailbox(tx, ids, opts, opts.where)) {
+    const modSeq = await nextModSeq(tx, mailboxId);
+    const rows = await tx.message.findMany({
+      where: { ...(opts.where ?? {}), id: { in: group.ids } },
+      select: { id: true, flags: true, folderId: true, flagStartAt: true, flagDueAt: true, flagReminderAt: true, flagCompletedAt: true },
+    });
+    for (const row of rows) {
+      const columns = followUpColumns(normalizeFollowUp({
+        status: state.status,
+        startAt: state.startAt !== undefined ? state.startAt : row.flagStartAt,
+        dueAt: state.dueAt !== undefined ? state.dueAt : row.flagDueAt,
+        reminderAt: state.reminderAt !== undefined ? state.reminderAt : row.flagReminderAt,
+        completedAt: state.completedAt !== undefined ? state.completedAt : row.flagCompletedAt,
+      }, now));
+      const flags = flagsForFollowUp(row.flags, columns.flagStatus);
+      await tx.message.update({ where: { id: row.id }, data: { flags, ...columns, modSeq, changeKey: modSeq.toString() } });
+      out.push({ id: row.id, flags, modSeq });
+    }
+    if (rows.length > 0) noteChange(mailboxId, 'flags', modSeq, rows.map((r) => r.folderId));
   }
   return out;
 }
@@ -346,9 +404,11 @@ export async function moveMessages(
   if (ids.length === 0) return { mapping: [], modSeq: null };
   const src = await tx.message.findMany({
     where: { id: { in: ids }, NOT: { folderId: targetFolderId } },
-    select: { id: true, uid: true, folderId: true },
+    select: { id: true, uid: true, folderId: true, flags: true, flagStatus: true },
     orderBy: [{ uid: 'asc' }],
   });
+  // 9.4: new keywords with the move (JMAP, REST, mail rules) keep the follow-up flag in step
+  const newFlags = Array.isArray(opts.data?.flags) ? opts.data.flags as string[] : null;
   if (src.length === 0) return { mapping: [], modSeq: null };
   const targetMailboxId = opts.targetMailboxId ?? await mailboxOfFolder(tx, targetFolderId);
   const { firstUid, modSeq } = await allocate(tx, targetMailboxId, src.length);
@@ -361,10 +421,11 @@ export async function moveMessages(
     const newUid = firstUid + i;
     // Entering another mailbox is a creation from the target mailbox's point of view.
     const crossMailbox = mailboxByFolder.get(m.folderId) !== targetMailboxId;
+    const followUp = newFlags ? followUpAfterKeywords(m, newFlags) : null;
     await tx.message.update({
       where: { id: m.id },
       data: {
-        ...(opts.data ?? {}), folderId: targetFolderId, uid: newUid, modSeq, changeKey: modSeq.toString(),
+        ...(followUp ?? {}), ...(opts.data ?? {}), folderId: targetFolderId, uid: newUid, modSeq, changeKey: modSeq.toString(),
         ...(crossMailbox ? { createdModSeq: modSeq } : {}),
       },
     });
@@ -453,9 +514,12 @@ export async function copyMessages(
     for (const [k, v] of Object.entries(m)) if (!NON_COPY_FIELDS.has(k)) base[k] = v;
     const atts = withAttachments ? (m.attachments ?? []) : [];
     const newUid = firstUid + i;
+    const overrideFlags = opts.data?.flags;
+    const followUp = Array.isArray(overrideFlags) ? followUpAfterKeywords(m, overrideFlags) : null;
     const created = await tx.message.create({
       data: {
         ...(base as NewMessageData),
+        ...(followUp ?? {}),
         ...(opts.data ?? {}),
         folderId: targetFolderId,
         uid: newUid,

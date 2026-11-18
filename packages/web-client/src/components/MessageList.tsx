@@ -5,7 +5,7 @@ import { useDraggable } from '@dnd-kit/core';
 import {
   Paperclip, Pin, Archive, Trash2, Mail, MailOpen, Flag, FlagOff,
   Forward, Reply, ReplyAll, AlertOctagon, Clock, FolderInput, ShieldOff, Download, Code, Tag,
-  Search, X, ListFilter, Settings, ShieldAlert, CalendarClock,
+  Search, X, ListFilter, Settings, ShieldAlert, CalendarClock, CheckCircle2,
 } from 'lucide-react';
 import { RuleEditorModal } from './RuleEditorModal.js';
 import type { RulePreset } from '../api/rule-types.js';
@@ -31,7 +31,9 @@ import { READ_ONLY_HINT } from '../lib/mailboxContext.js';
 
 import { useT } from '../i18n/useT.js';
 import { usePreferences, useRegional } from '../store/preferences.js';
-import { formatListDate } from '../lib/regionalFormat.js';
+import { formatDate, formatListDate } from '../lib/regionalFormat.js';
+import { followUpStatusOf } from '../lib/followUp.js';
+import { useFollowUp } from '../hooks/useFollowUp.js';
 import { conversationKey, orderForDisplay, sortParams } from '../lib/conversationOrder.js';
 
 /** True when the query uses search operators / quotes / negation (typeahead stays for plain words). */
@@ -88,7 +90,14 @@ function MessageRow({
   const ariaKeys = useAriaKeys();
 
   const isUnread = !msg.flags.includes('\\Seen');
-  const isFlagged = msg.flags.includes('\\Flagged');
+  // 9.4: follow-up flag — flagged (with due date in the tooltip) or completed
+  const t = useT();
+  const regional = useRegional();
+  const followUp = followUpStatusOf(msg);
+  const isFlagged = followUp === 'flagged';
+  const flagTitle = followUp === 'complete' ? t('flag_completed')
+    : isFlagged && msg.flagDueAt ? t('flag_due_on').replace('{date}', formatDate(new Date(msg.flagDueAt), regional))
+      : isFlagged ? t('flag_flagged') : t('mail_cmd_flag');
   const isReplied = msg.flags.includes('\\Answered');
   const hasAttachments = msg.attachments.length > 0;
   const isPinned = !!msg.pinnedAt;
@@ -143,13 +152,15 @@ function MessageRow({
         <button
           onClick={(e) => { e.stopPropagation(); onQuickAction('flag'); }}
           disabled={readOnly}
-          title={roTitle('Kennzeichnen')}
+          title={roTitle(flagTitle)}
           className="shrink-0 transition-transform duration-150 hover:scale-125 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
-          aria-label="Kennzeichnen"
+          aria-label={flagTitle}
         >
-          {isFlagged
-            ? <Flag size={14} className="fill-danger-fg text-danger-fg" />
-            : <Flag size={14} className="text-fg-subtle hover:text-danger-fg transition-colors" />}
+          {followUp === 'complete'
+            ? <CheckCircle2 size={14} className="text-success-fg" />
+            : isFlagged
+              ? <Flag size={14} className="fill-danger-fg text-danger-fg" />
+              : <Flag size={14} className="text-fg-subtle hover:text-danger-fg transition-colors" />}
         </button>
 
         {/* Avatar with hash-based color */}
@@ -286,6 +297,7 @@ export function MessageList({ folderId }: Props) {
   const { density } = useUiPrefs();
   const t = useT();
   const { runWithUndo, deletePermanently, setState } = useMailActions();
+  const followUp = useFollowUp();
   // 9.3: own, shared or delegated mailbox — same API shapes, different base
   const mailbox = useActiveMailbox();
   const { base, readOnly, foreign } = mailbox;
@@ -607,9 +619,15 @@ export function MessageList({ folderId }: Props) {
       w({ label: isUnread ? 'Als gelesen markieren' : 'Als ungelesen markieren',
         icon: isUnread ? <MailOpen size={14} /> : <Mail size={14} />,
         onClick: () => patchMutation.mutate({ id: msg.id, body: { read: isUnread } }) }),
-      w({ label: isFlagged ? 'Kennzeichnung aufheben' : 'Kennzeichnen',
-        icon: isFlagged ? <FlagOff size={14} /> : <Flag size={14} />,
-        onClick: () => patchMutation.mutate({ id: msg.id, body: { flagged: !isFlagged } }) }),
+      // 9.4: own mailbox — "Kennzeichnen" submenu (due dates, reminder, complete); shared: toggle
+      foreign
+        ? w({ label: isFlagged ? 'Kennzeichnung aufheben' : 'Kennzeichnen',
+          icon: isFlagged ? <FlagOff size={14} /> : <Flag size={14} />,
+          onClick: () => patchMutation.mutate({ id: msg.id, body: { flagged: !isFlagged } }) })
+        : { label: 'Kennzeichnen', icon: <Flag size={14} />, children: followUp.menu([{
+            id: msg.id, flagStatus: followUpStatusOf(msg),
+            flagStartAt: msg.flagStartAt ?? null, flagDueAt: msg.flagDueAt ?? null, flagReminderAt: msg.flagReminderAt ?? null,
+          }]) },
       w({ label: isPinned ? 'Lösen' : 'Anheften',
         icon: <Pin size={14} />,
         onClick: () => bulkMutation.mutate({ ids: [msg.id], action: isPinned ? 'unpin' : 'pin' }) }),
@@ -822,6 +840,7 @@ export function MessageList({ folderId }: Props) {
       </div>
 
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />}
+      {followUp.dialog}
 
       {moveTargets && (
         <MoveToFolderDialog

@@ -5,10 +5,8 @@
  * it is not in the list any more. 9.4: the signature defaults follow the identity.
  */
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { api } from '../api/client.js';
-import { useAuthStore } from '../store/auth.js';
 import { useAccessibleMailboxes } from './useActiveMailbox.js';
+import { useOwnEmail } from './useOwnEmail.js';
 import {
   findMailboxEntry, senderKey, senderOptions, type MailboxRef, type SenderOption,
 } from '../lib/mailboxContext.js';
@@ -32,14 +30,7 @@ export interface ComposeSender {
 
 export function useComposeSender(mailbox: MailboxRef, initial: { fromKey?: string | null; draftSender?: SenderOption | undefined } = {}): ComposeSender {
   // after a reload (or in an own compose window) the store has no profile yet
-  const storeEmail = useAuthStore((s) => s.email);
-  const { data: profile } = useQuery({
-    queryKey: ['user', 'profile'],
-    queryFn: () => api.get<{ email: string }>('/user/profile'),
-    enabled: !storeEmail,
-    staleTime: 5 * 60_000,
-  });
-  const ownEmail = storeEmail ?? profile?.email ?? '';
+  const ownEmail = useOwnEmail();
   const { data: accessible } = useAccessibleMailboxes();
   const [draftSender, setDraftSender] = useState<SenderOption | undefined>(initial.draftSender);
   const [fromKey, setFromKey] = useState<string | null>(initial.fromKey ?? null);

@@ -87,6 +87,17 @@ export function calendarEventPath(id: string): string {
   return `/calendar/event/${encodeURIComponent(id)}`;
 }
 
+/** 9.4: one occurrence of a series (`occurrence` = its original start, ISO). */
+export function calendarOccurrencePath(id: string, occurrence: string): string {
+  return `${calendarEventPath(id)}?occurrence=${encodeURIComponent(occurrence)}`;
+}
+
+/** The `occurrence` of a calendar event link (location.search), null when absent or invalid. */
+export function occurrenceFromSearch(search: string): string | null {
+  const v = new URLSearchParams(search).get('occurrence');
+  return v && !isNaN(new Date(v).getTime()) ? v : null;
+}
+
 export function contactPath(id: string): string {
   return `/contacts/${encodeURIComponent(id)}`;
 }

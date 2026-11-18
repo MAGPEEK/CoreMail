@@ -521,6 +521,15 @@ model Message {
   // 9.4: Sensitivity header of the message ("personal" | "private" |
   // "confidential"), null = normal. Set like importance; the reader shows a badge.
   sensitivity      String?
+  // 9.4: follow-up flag of the message ("Zur Nachverfolgung"). 'none' | 'flagged' |
+  // 'complete'. Kept in step with the \Flagged keyword by message-store
+  // (flagged ⇔ \Flagged; complete clears \Flagged). Rows written before 9.4
+  // keep 'none' — readers derive 'flagged' from \Flagged (follow-up.ts).
+  flagStatus       String    @default("none")
+  flagStartAt      DateTime?
+  flagDueAt        DateTime?
+  flagReminderAt   DateTime?
+  flagCompletedAt  DateTime?
   attachments  Attachment[]
   categories   MessageCategory[]
   createdAt    DateTime    @default(now())
@@ -535,6 +544,7 @@ model Message {
   @@index([retentionExpiresAt])
   @@index([softDeletedAt])
   @@index([threadId])
+  @@index([flagStatus])
   @@map("messages")
 }
 
@@ -766,6 +776,9 @@ model CalendarEvent {
   //  CONFIDENTIAL → grantees do not see the event at all (completely hidden)
   // The owner sees ALL events unchanged. Maps to iCal `CLASS:` (RFC 5545 §3.8.1.3).
   classification String @default("PUBLIC")
+  // 9.4: "Anzeigen als" of the master — FREE | TENTATIVE | BUSY | OOF (iCal TRANSP +
+  // X-MICROSOFT-CDO-BUSYSTATUS in icalData; overrides carry their own value there).
+  showAs      String   @default("BUSY")
   // v3.18.25 A5: iMIP/iTIP — sequence counter is incremented on every UPDATE (subject,
   // date, attendee change). Mail clients (Outlook, Gmail) only show
   // the HIGHEST sequence — old REPLY mails with a lower sequence are
@@ -818,12 +831,23 @@ model Task {
   userId      String
   subject     String
   body        String   @default("")
-  status      String   @default("NOT_STARTED") // NOT_STARTED | IN_PROGRESS | COMPLETED | DEFERRED
+  status      String   @default("NOT_STARTED") // NOT_STARTED | IN_PROGRESS | COMPLETED | WAITING | DEFERRED
   priority    String   @default("NORMAL")       // LOW | NORMAL | HIGH
   dueDate     DateTime?
   completedAt DateTime?
   reminder       DateTime?
   reminderByMail Boolean   @default(false)
+  // 9.4: full task form (all additive)
+  startDate         DateTime?
+  percentComplete   Int       @default(0)       // 0..100, kept in step with status (task-rules.ts)
+  isPrivate         Boolean   @default(false)
+  rrule             String?                     // recurring task: RECUR value; completing creates the next one
+  totalWorkMinutes  Int?                        // "Gesamtaufwand"
+  actualWorkMinutes Int?                        // "Ist-Aufwand"
+  mileage           String    @default("")
+  billingInfo       String    @default("")
+  companies         String    @default("")
+  bodyHtml          String    @default("")      // rich-text note (sanitised on display); body = plain text
   changeKey      String    @default("")
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -1155,6 +1179,9 @@ model ResourceCalendar {
   resource   ResourceMailbox  @relation(fields: [resourceId], references: [id], onDelete: Cascade)
   resourceId String           @unique
   bookings   ResourceBooking[]
+  // 9.4: incremented under the row lock by every booking write (lockResourceCalendar) —
+  // serialises conflict check + booking per resource, so a slot is booked only once
+  bookingSeq Int              @default(0)
   createdAt  DateTime         @default(now())
 
   @@map("resource_calendars")

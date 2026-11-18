@@ -1,14 +1,15 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
-import type { Task } from '../api/types.js';
+import type { CalendarEvent, FlaggedMail, Task } from '../api/types.js';
 import { SAFETY_REFETCH_MS } from '../lib/realtimeEvents.js';
 import { tabRole } from '../lib/tabRole.js';
 import { useWebmailFeatures } from './useWebmailFeatures.js';
 import {
-  dueReminders, markSeen, parseReminderMessage, reminderMessage, type ReminderFire, type ReminderSeen,
+  dueReminders, markSeen, parseReminderMessage, reminderMessage, type ReminderFire, type ReminderSeen, type ReminderTask,
 } from '../lib/taskReminders.js';
+import { eventReminderItems, flagReminderItems } from '../lib/reminderSources.js';
 
 // ── localStorage — persist reminders ───────────────────────────────────────────
 // Keys "taskId:reminderEpochMs" (lib/taskReminders.ts reminderKey): a popup fires
@@ -43,26 +44,36 @@ function showToast(fire: Pick<ReminderFire, 'kind' | 'key' | 'subject'>): void {
   }
 }
 
-async function sendReminderMail(subject: string): Promise<void> {
+async function sendReminderMail(subject: string, itemId: string): Promise<void> {
   const profile = await api.get<{ email: string }>('/user/profile');
   if (!profile?.email) return;
+  // 9.4: event reminders ("event:…") name the appointment, task reminders the task
+  const what = itemId.startsWith('event:') ? 'Dein Termin' : 'Deine Aufgabe';
   await api.post('/mail/send', {
     to:       [profile.email],
     subject:  `🔔 Erinnerung: ${subject}`,
-    bodyText: `Deine Aufgabe „${subject}" hat die gesetzte Erinnerungszeit erreicht.`,
-    bodyHtml: `<p>Deine Aufgabe <strong>${escapeHtml(subject)}</strong> hat die gesetzte Erinnerungszeit erreicht.</p>`,
+    bodyText: `${what} „${subject}" hat die gesetzte Erinnerungszeit erreicht.`,
+    bodyHtml: `<p>${what} <strong>${escapeHtml(subject)}</strong> hat die gesetzte Erinnerungszeit erreicht.</p>`,
   });
+}
+
+/** Window of calendar events whose reminders are watched (now − 1 h … now + 8 days). */
+function reminderEventWindow(): { start: string; end: string } {
+  const hour = 60 * 60_000;
+  const now = Math.floor(Date.now() / hour) * hour;
+  return { start: new Date(now - hour).toISOString(), end: new Date(now + 8 * 24 * hour).toISOString() };
 }
 
 /**
  * Due-date + reminder watcher for tasks. Mounted once in the app Layout, so
  * reminders fire on every page (not only while /tasks is open). 9.4: only the
  * leading tab of the browser evaluates them (one toast set, one reminder mail);
- * the other tabs show what it announces (lib/taskReminders.ts).
+ * the other tabs show what it announces (lib/taskReminders.ts). Also the
+ * reminders of flagged mails and calendar events (lib/reminderSources.ts).
  */
 export function useTaskReminders() {
   const seen = useRef<ReminderSeen>({ due: new Set(), reminders: loadNotifiedReminders() });
-  const tasksRef = useRef<Task[] | undefined>(undefined);
+  const tasksRef = useRef<ReminderTask[] | undefined>(undefined);
 
   // 9.4: no reminders while the tasks module is off (webmail policy)
   const tasksEnabled = useWebmailFeatures().features.tasks;
@@ -73,7 +84,28 @@ export function useTaskReminders() {
     refetchInterval: SAFETY_REFETCH_MS, // 9.4: live via tasks events
     meta: { silentError: true },
   });
-  useEffect(() => { tasksRef.current = allTasks; }, [allTasks]);
+  // 9.4: reminders of flagged mails and of calendar events go through the same engine
+  const { data: flagged } = useQuery({
+    queryKey: ['follow-up', 'flagged'],
+    queryFn: () => api.get<FlaggedMail[]>('/mail/follow-up?status=flagged'),
+    refetchInterval: SAFETY_REFETCH_MS,
+    meta: { silentError: true },
+  });
+  const [eventWindow, setEventWindow] = useState(reminderEventWindow);
+  useEffect(() => {
+    const id = setInterval(() => setEventWindow(reminderEventWindow()), 60 * 60_000);
+    return () => clearInterval(id);
+  }, []);
+  const { data: events } = useQuery({
+    queryKey: ['calendar-events', 'reminders', eventWindow.start, eventWindow.end],
+    queryFn: () => api.get<CalendarEvent[]>(`/calendar/events?start=${encodeURIComponent(eventWindow.start)}&end=${encodeURIComponent(eventWindow.end)}`),
+    refetchInterval: SAFETY_REFETCH_MS,
+    meta: { silentError: true },
+  });
+  useEffect(() => {
+    if (!allTasks) return;
+    tasksRef.current = [...allTasks, ...flagReminderItems(flagged ?? []), ...eventReminderItems(events ?? [], new Date())];
+  }, [allTasks, flagged, events]);
 
   // Stable callback; reads data via refs (no stale closure in the interval)
   const check = useCallback(() => {
@@ -85,7 +117,7 @@ export function useTaskReminders() {
     for (const fire of fires) {
       showToast(fire);
       tabRole.broadcast(reminderMessage(fire));
-      if (fire.mail) void sendReminderMail(fire.subject).catch(() => { /* best-effort */ });
+      if (fire.mail) void sendReminderMail(fire.subject, fire.taskId).catch(() => { /* best-effort */ });
     }
   }, []);
 
@@ -107,5 +139,5 @@ export function useTaskReminders() {
     check();
     const id = setInterval(check, 30_000);
     return () => clearInterval(id);
-  }, [check, allTasks]); // allTasks as dep: check immediately when tasks change
+  }, [check, allTasks, flagged, events]); // check immediately when the reminder items change
 }

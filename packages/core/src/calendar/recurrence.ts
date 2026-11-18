@@ -154,7 +154,7 @@ export interface ExpandedInstance {
   /** Set for instances of a recurring series (ISO of the original start). */
   recurrenceId: string | null;
   /** Override VEVENT data (RECURRENCE-ID component) when this instance was modified. */
-  override: Pick<ParsedVEvent, 'summary' | 'description' | 'location'> | null;
+  override: Pick<ParsedVEvent, 'summary' | 'description' | 'location' | 'showAs' | 'classification'> | null;
 }
 
 /**
@@ -197,7 +197,7 @@ export function expandStoredEvent(ev: StoredEventLike, windowStart: Date, window
     result.push({
       dtStart: o.start, dtEnd: o.end, allDay: o.allDay,
       recurrenceId: o.recurrenceId!.date.toISOString(),
-      override: { summary: o.summary, description: o.description, location: o.location },
+      override: { summary: o.summary, description: o.description, location: o.location, showAs: o.showAs, classification: o.classification },
     });
   }
   return result.sort((a, b) => a.dtStart.getTime() - b.dtStart.getTime());

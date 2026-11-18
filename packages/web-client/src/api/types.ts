@@ -67,6 +67,30 @@ export interface MessageSummary {
   categories?: Category[];
   /** Folder of the message (always set by list + search endpoints since v6.0) */
   folderId?: string;
+  /** 9.4: follow-up flag ('none' on pre-9.4 rows — lib/followUp.ts derives it from \Flagged) */
+  flagStatus?: FollowUpStatus;
+  flagStartAt?: string | null;
+  flagDueAt?: string | null;
+  flagReminderAt?: string | null;
+  flagCompletedAt?: string | null;
+}
+
+export type FollowUpStatus = 'none' | 'flagged' | 'complete';
+
+/** 9.4: GET /mail/follow-up — flagged mails for "Gekennzeichnete Elemente und Aufgaben". */
+export interface FlaggedMail {
+  id: string;
+  folderId: string;
+  folderName: string;
+  subject: string;
+  fromName: string;
+  fromAddr: string;
+  date: string;
+  flagStatus: FollowUpStatus;
+  flagStartAt: string | null;
+  flagDueAt: string | null;
+  flagReminderAt: string | null;
+  flagCompletedAt: string | null;
 }
 
 export type BulkAction =
@@ -171,14 +195,52 @@ export interface CalendarEvent {
   // Permission info (from GET /events/:id)
   canWrite?: boolean;
   readOnly?: boolean;
+  /** 9.4: "Anzeigen als" */
+  showAs?: ShowAs;
+  /** 9.4: reminder of the owner (list: `reminder`, detail: the two fields) */
+  reminder?: { minutes: number; byMail: boolean } | null;
+  reminderMinutes?: number | null;
+  reminderByMail?: boolean;
 }
+
+export type ShowAs = 'FREE' | 'TENTATIVE' | 'BUSY' | 'OOF';
 
 export interface EventAttendee {
   email: string;
   cn?: string;
   partstat?: 'NEEDS-ACTION' | 'ACCEPTED' | 'DECLINED' | 'TENTATIVE';
-  role?: 'REQ-PARTICIPANT' | 'OPT-PARTICIPANT' | 'CHAIR';
+  role?: 'REQ-PARTICIPANT' | 'OPT-PARTICIPANT' | 'CHAIR' | 'NON-PARTICIPANT';
   rsvp?: boolean;
+  /** 9.4: ROOM / RESOURCE for booked rooms (answer in partstat, decline reason in `reason`) */
+  cutype?: string;
+  reason?: 'inactive' | 'recurring' | 'duration' | 'window' | 'conflict';
+}
+
+/** 9.4: GET /calendar/rooms */
+export interface RoomAvailability {
+  id: string;
+  email: string;
+  displayName: string;
+  resourceType: string;
+  capacity: number | null;
+  location: string;
+  available: boolean;
+  busy: Array<{ start: string; end: string; kind: 'tentative' | 'busy' | 'oof' }>;
+}
+
+/** 9.4: POST /calendar/freebusy */
+export interface FreeBusyUser {
+  email: string;
+  displayName: string | null;
+  found: boolean;
+  visible: boolean;
+  busy: Array<{ start: string; end: string; type: 'tentative' | 'busy' | 'oof'; subject?: string }>;
+}
+
+/** 9.4: POST /calendar/schedule-suggestions */
+export interface ScheduleSuggestions {
+  suggestions: Array<{ start: string; end: string; conflicts: number; tentative: number }>;
+  unknown: string[];
 }
 
 export interface Contact {
@@ -196,17 +258,30 @@ export interface Contact {
   vcardData?: string;
 }
 
+export type TaskStatus = 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED' | 'WAITING' | 'DEFERRED';
+
 export interface Task {
   id: string;
   subject: string;
   body: string;
-  status: 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED' | 'DEFERRED';
+  status: TaskStatus;
   priority: 'LOW' | 'NORMAL' | 'HIGH';
   dueDate: string | null;
   reminder: string | null;
   reminderByMail: boolean;
   completedAt: string | null;
   createdAt: string;
+  // 9.4: full task form
+  startDate?: string | null;
+  percentComplete?: number;
+  isPrivate?: boolean;
+  rrule?: string | null;
+  totalWorkMinutes?: number | null;
+  actualWorkMinutes?: number | null;
+  mileage?: string;
+  billingInfo?: string;
+  companies?: string;
+  bodyHtml?: string;
 }
 
 export interface Note {

@@ -13,9 +13,19 @@ import { RAW_MESSAGE, messageRow, ATTACHMENT_ROWS, find, findAll, clientWbxml, t
 testEnv();
 let device: { id: string; syncKeys: Record<string, string> };
 let transactions = 0;
+/** message.update data written inside transactions (setFlags / setFollowUp). */
+let writes: Array<Record<string, unknown>> = [];
+const txFake = {
+  mailbox: { update: async () => ({ uidNext: 2, highestModSeq: 6n }), updateMany: async () => ({ count: 0 }) },
+  message: {
+    aggregate: async () => ({ _max: { modSeq: 5n, uid: 1 } }),
+    findMany: async () => [{ ...messageRow(), folderId: 'inbox', flagStatus: 'none' }],
+    update: async ({ data }: { data: Record<string, unknown> }) => { writes.push(data); return {}; },
+  },
+};
 (globalThis as Record<string, unknown>)['__prisma'] = {
   $on: () => undefined,
-  $transaction: async () => { transactions++; },
+  $transaction: async (fn: (tx: unknown) => Promise<unknown>) => { transactions++; return fn(txFake); },
   $executeRaw: async (_sql: TemplateStringsArray, json: string) => { device.syncKeys = { ...device.syncKeys, ...JSON.parse(json) }; return 1; },
   folder: { findFirst: async ({ where }: { where: { id: string; mailbox: { userId: string } } }) =>
     (where.id === 'inbox' && where.mailbox.userId === 'u1' ? { id: 'inbox', mailboxId: 'mb1' } : null) },
@@ -59,7 +69,7 @@ function body(tree: ReturnType<typeof decodeWbxml>) {
   return { b, type: get('Type')?.text, size: get('EstimatedDataSize')?.text, truncated: get('Truncated')?.text, data: get('Data'), preview: get('Preview')?.text };
 }
 
-beforeEach(() => { device = { id: 'd1', syncKeys: {} }; transactions = 0; });
+beforeEach(() => { device = { id: 'd1', syncKeys: {} }; transactions = 0; writes = []; });
 
 test('Type 1 (plain): full UTF-8 text, EstimatedDataSize in bytes, no EAS 2.5 Email:Body', async () => {
   const t = await sync([PREF('1')]);
@@ -161,9 +171,12 @@ test('Sync Options are sticky: a Sync without Options reuses the last BodyPrefer
   assert.equal(body(await sync(null)).type, '1');
 });
 
-test('WindowSize and a Change without Read leaves the read state alone', async () => {
+test('WindowSize and a Change without Read leaves the read state alone (9.4: the empty Flag clears the follow-up flag)', async () => {
   await sync([PREF('1')], [[0, 0x15, '10'], [0, 0x16, [[0, 0x08, [[0, 0x0d, 'msg1'], [0, 0x1d, [[2, 0x3a]]]]]]]]);
-  assert.equal(transactions, 0, 'a Flag-only Change must not mark the message unread');
+  assert.equal(transactions, 1, 'one follow-up write, no read-state write');
+  assert.equal(writes[0]!['flagStatus'], 'none');
+  assert.deepEqual(writes[0]!['flags'], ['\\Seen'], 'a Flag-only Change must not mark the message unread');
   await sync([PREF('1')], [[0, 0x16, [[0, 0x08, [[0, 0x0d, 'msg1'], [0, 0x1d, [[2, 0x15, '0']]]]]]]]);
-  assert.equal(transactions, 1);
+  assert.equal(transactions, 2);
+  assert.deepEqual(writes[1]!['flags'], []);
 });

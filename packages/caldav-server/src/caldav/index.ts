@@ -718,6 +718,7 @@ caldavRouter.put('/calendars/:userId/:calendarId/:eventId', asyncHandler(async (
     rrule: ev.rrule,
     recurring: ev.rrule !== null || ev.rdates.length > 0,
     classification: ev.classification,
+    showAs: ev.showAs, // 9.4: TRANSP / X-MICROSOFT-CDO-BUSYSTATUS of the master
     status: ev.status ?? 'CONFIRMED',
     organizer: ev.organizer,
     attendees: ev.attendees.map((a) => ({ ...a })),
