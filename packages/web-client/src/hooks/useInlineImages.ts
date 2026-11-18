@@ -22,7 +22,8 @@ interface InlineAttachment {
 export function useInlineImages(
   html: string | undefined,
   attachments: InlineAttachment[] | undefined,
-  urlFor: (attachmentId: string) => string = (id) => `/mail/attachments/${id}`,
+  // 9.4: asked for as inline display, so the server can refuse "save only" types
+  urlFor: (attachmentId: string) => string = (id) => `/mail/attachments/${id}?inline=1`,
 ): ReadonlyMap<string, string> {
   const [map, setMap] = useState<ReadonlyMap<string, string>>(new Map());
 

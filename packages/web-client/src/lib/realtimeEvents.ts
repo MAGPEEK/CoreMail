@@ -81,13 +81,18 @@ const SETTINGS_KEYS: Record<string, QueryKey[]> = {
   mailboxes: [['user-shared-mailboxes'], ACCESSIBLE_MAILBOXES_KEY],
   // Settings → Sicherheit (components/settings/SecurityPanels.tsx): sessions list + S/MIME options
   security: [['user-sessions'], ['smime-settings']],
+  // 9.4 webmail policies (lib/webmailFeatures.ts FEATURES_QUERY_KEY) + trusted image senders;
+  // the open message re-reads its external-image decision
+  policies: [['webmail-features'], ['trusted-senders'], ['message']],
 };
 
 function settingsPlan(d: Obj): RealtimePlan {
   const section = typeof d['section'] === 'string' ? d['section'] : null;
   const known = section !== null && SETTINGS_KEYS[section] !== undefined;
   const keys = known ? SETTINGS_KEYS[section]! : Object.values(SETTINGS_KEYS).flat();
-  return { invalidate: [...keys], ...(!known || section === 'preferences' ? { refreshPreferences: true } : {}) };
+  // policies: the design (Designs module) comes with the preferences
+  const refresh = !known || section === 'preferences' || section === 'policies';
+  return { invalidate: [...keys], ...(refresh ? { refreshPreferences: true } : {}) };
 }
 
 function calendarPlan(d: Obj): RealtimePlan {

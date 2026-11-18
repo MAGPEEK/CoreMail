@@ -5,6 +5,7 @@ import { api } from '../api/client.js';
 import type { Task } from '../api/types.js';
 import { SAFETY_REFETCH_MS } from '../lib/realtimeEvents.js';
 import { tabRole } from '../lib/tabRole.js';
+import { useWebmailFeatures } from './useWebmailFeatures.js';
 import {
   dueReminders, markSeen, parseReminderMessage, reminderMessage, type ReminderFire, type ReminderSeen,
 } from '../lib/taskReminders.js';
@@ -63,9 +64,12 @@ export function useTaskReminders() {
   const seen = useRef<ReminderSeen>({ due: new Set(), reminders: loadNotifiedReminders() });
   const tasksRef = useRef<Task[] | undefined>(undefined);
 
+  // 9.4: no reminders while the tasks module is off (webmail policy)
+  const tasksEnabled = useWebmailFeatures().features.tasks;
   const { data: allTasks } = useQuery({
     queryKey: ['tasks', 'all'],
     queryFn: () => api.get<Task[]>('/tasks'),
+    enabled: tasksEnabled,
     refetchInterval: SAFETY_REFETCH_MS, // 9.4: live via tasks events
     meta: { silentError: true },
   });

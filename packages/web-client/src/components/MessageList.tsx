@@ -26,6 +26,7 @@ import { useMailActions } from '../hooks/useMailActions.js';
 import { useShortcutHandlers, useAriaKeys } from '../hooks/useShortcuts.js';
 import type { MessageLocation } from '../lib/undo-stack.js';
 import { useActiveMailbox } from '../hooks/useActiveMailbox.js';
+import { useWebmailFeatures } from '../hooks/useWebmailFeatures.js';
 import { READ_ONLY_HINT } from '../lib/mailboxContext.js';
 
 import { useT } from '../i18n/useT.js';
@@ -353,10 +354,11 @@ export function MessageList({ folderId }: Props) {
   });
 
   // Categories are personal — only offered in the own mailbox
+  const { features } = useWebmailFeatures();
   const { data: categories = [] } = useQuery({
     queryKey: ['categories'],
     queryFn: () => api.get<Category[]>('/categories'),
-    enabled: !foreign,
+    enabled: !foreign && features.categories,
   });
 
   const currentFolder = folders.find((f) => f.id === folderId);
@@ -611,8 +613,8 @@ export function MessageList({ folderId }: Props) {
       w({ label: isPinned ? 'Lösen' : 'Anheften',
         icon: <Pin size={14} />,
         onClick: () => bulkMutation.mutate({ ids: [msg.id], action: isPinned ? 'unpin' : 'pin' }) }),
-      // Categories submenu (personal — own mailbox only)
-      ...ownOnly(categories.length > 0
+      // Categories submenu (personal — own mailbox only; 9.4: module switch)
+      ...(!features.categories ? [] : ownOnly(categories.length > 0
         ? {
             label: 'Kategorisieren',
             icon: <Tag size={14} />,
@@ -635,7 +637,7 @@ export function MessageList({ folderId }: Props) {
             label: 'Kategorien anlegen …',
             icon: <Tag size={14} />,
             onClick: () => navigate('/settings#categories'),
-          }),
+          })),
       ...ownOnly({ label: isSnoozed ? 'Schlummer aufheben' : 'Schlummern bis …',
         icon: <Clock size={14} />,
         ...(isSnoozed
@@ -654,12 +656,12 @@ export function MessageList({ folderId }: Props) {
           } }),
       w({ label: 'Löschen', icon: <Trash2 size={14} />, danger: true, onClick: () => quickAction(msg, 'delete') }),
       { type: 'divider' },
-      ...ownOnly({ label: 'Regeln', icon: <ListFilter size={14} />, children: [
+      ...(!features.rules ? [] : ownOnly({ label: 'Regeln', icon: <ListFilter size={14} />, children: [
         { label: 'Regel erstellen …', icon: <ListFilter size={14} />,
           onClick: () => setRuleEditor({ open: true, preset: { fromAddr: msg.fromAddr, subject: msg.subject } }) },
         { label: 'Regeln verwalten …', icon: <Settings size={14} />,
           onClick: () => navigate('/settings#rules') },
-      ]}),
+      ]})),
       ...(foreign ? [] : [{ type: 'divider' } as ContextMenuItem]),
       { label: 'Quelltext anzeigen', icon: <Code size={14} />,
         onClick: () => {

@@ -8,8 +8,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Readable, Writable } from 'node:stream';
 import {
-  readableMailboxWhere, createAttachmentDownloadHandler, contentDisposition, safeContentType,
-  type DownloadableAttachment,
+  readableMailboxWhere, createAttachmentDownloadHandler, contentDisposition, safeContentType, attachmentVerdict,
+  type AttachmentPolicy, type DownloadableAttachment,
 } from './attachment-download.js';
 
 // ── Permission matrix: evaluate the Prisma filter against fixture mailboxes ──
@@ -121,6 +121,68 @@ test('404 for foreign/unknown attachments, rows without content and missing obje
   assert.equal((await call(null)).statusCode, 404);
   assert.equal((await call({ ...pdf, storagePath: '' })).statusCode, 404);
   assert.equal((await call(pdf, {}, {})).statusCode, 404);
+});
+
+// ── 9.4 webmail policy: blocked and save-only types ─────────────────────────
+
+function callWithPolicy(att: DownloadableAttachment, content: Buffer, policy: AttachmentPolicy, query: Record<string, string> = {}) {
+  const handler = createAttachmentDownloadHandler({
+    findAttachment: async () => att,
+    openStream: async () => Readable.from([content.subarray(0, 3), content.subarray(3)]),
+    policyFor: async () => policy,
+  });
+  const res = new FakeRes();
+  (res as unknown as { json: (v: unknown) => void }).json = (v: unknown) => res.sendJson(v);
+  const req = { apiUser: { userId: 'u1' }, params: { id: 'a1' }, query };
+  return handler(req as never, res as never).then(() => res.done).then(() => res);
+}
+
+const NONE: AttachmentPolicy = { blockedExtensions: [], downloadOnlyExtensions: [] };
+
+test('policy: a blocked extension is refused with 403 ATTACHMENT_BLOCKED', async () => {
+  const res = await callWithPolicy({ ...pdf, filename: 'setup.EXE', mimeType: 'application/octet-stream' }, Buffer.from('MZ..'), { ...NONE, blockedExtensions: ['exe'] });
+  assert.equal(res.statusCode, 403);
+  assert.deepEqual(res.json, { error: 'Dieser Dateityp ist für den Download gesperrt', code: 'ATTACHMENT_BLOCKED', extension: 'exe' });
+});
+
+test('policy: a disguised executable is found by its content (MIME sniffing)', async () => {
+  const res = await callWithPolicy({ ...pdf, filename: 'invoice.pdf' }, Buffer.from('MZ\x90\x00 rest of the binary', 'latin1'), { ...NONE, blockedExtensions: ['exe'] });
+  assert.equal(res.statusCode, 403);
+  assert.equal(attachmentVerdict({ filename: 'invoice.pdf', mimeType: 'application/pdf' }, Buffer.from('%PDF-1.7'), { ...NONE, blockedExtensions: ['exe'] }).kind, 'allow');
+});
+
+test('policy: allowed content streams completely after sniffing', async () => {
+  const body = Buffer.from('%PDF-1.7 and the rest of the document');
+  const res = await callWithPolicy(pdf, body, { ...NONE, blockedExtensions: ['exe'] });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.toString(), body.toString());
+});
+
+test('policy: save-only types are never served for inline display, but download', async () => {
+  const png = { ...pdf, filename: 'scan.png', mimeType: 'image/png' };
+  const body = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2]);
+  const policy = { ...NONE, downloadOnlyExtensions: ['png'] };
+  const inline = await callWithPolicy(png, body, policy, { inline: '1' });
+  assert.equal(inline.statusCode, 403);
+  assert.equal((inline.json as Record<string, unknown>)['code'], 'INLINE_PREVIEW_DISABLED');
+  const download = await callWithPolicy(png, body, policy);
+  assert.equal(download.statusCode, 200);
+  assert.match(download.headers['content-disposition']!, /^attachment; /);
+  const allowed = await callWithPolicy(png, body, NONE, { inline: '1' });
+  assert.match(allowed.headers['content-disposition']!, /^inline; /);
+});
+
+test('policy: an unreadable policy fails closed (503)', async () => {
+  const handler = createAttachmentDownloadHandler({
+    findAttachment: async () => pdf,
+    openStream: async () => Readable.from([Buffer.from('%PDF')]),
+    policyFor: async () => { throw new Error('db down'); },
+  });
+  const res = new FakeRes();
+  (res as unknown as { json: (v: unknown) => void }).json = (v: unknown) => res.sendJson(v);
+  await handler({ apiUser: { userId: 'u1' }, params: { id: 'a1' }, query: {} } as never, res as never);
+  await res.done;
+  assert.equal(res.statusCode, 503);
 });
 
 test('contentDisposition strips control characters and quotes', () => {

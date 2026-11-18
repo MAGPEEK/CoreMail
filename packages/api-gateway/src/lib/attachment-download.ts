@@ -10,8 +10,21 @@
  * with `X-Content-Type-Options: nosniff` and a sandboxing CSP. It is only served
  * `inline` for raster image types (the web client embeds cid: images); everything
  * else — in particular text/html and image/svg+xml — is forced to download.
+ *
+ * 9.4 webmail policy (`policyFor`): a type on the reader's block list is
+ * refused (403 ATTACHMENT_BLOCKED) — matched by file name, declared type and
+ * the content's magic bytes (storage file-types.ts); a "save only" type is
+ * never served for inline display (403 INLINE_PREVIEW_DISABLED for
+ * `?inline=1`), only as a download.
  */
 import type { Request, Response } from 'express';
+import { candidateExtensions, matchExtensionList, SNIFF_BYTES } from '@coremail/storage/file-types';
+import { peekStream } from './stream-peek.js';
+
+function destroyQuietly(stream: NodeJS.ReadableStream): void {
+  const s = stream as NodeJS.ReadableStream & { destroy?: () => void };
+  if (typeof s.destroy === 'function') s.destroy();
+}
 
 export const READ_PERMISSIONS = ['FULL_ACCESS', 'READ_ONLY'] as const;
 
@@ -55,11 +68,35 @@ export interface DownloadableAttachment {
   storagePath: string;
 }
 
+/** 9.4 webmail policy: blocked types and types that may only be saved (never shown in the browser). */
+export interface AttachmentPolicy {
+  blockedExtensions: readonly string[];
+  downloadOnlyExtensions: readonly string[];
+}
+
 export interface AttachmentDownloadDeps {
   /** The attachment if `userId` may read it, else null. */
   findAttachment(id: string, userId: string): Promise<DownloadableAttachment | null>;
   openStream(storagePath: string): Promise<NodeJS.ReadableStream>;
+  /** The reader's attachment policy (absent = nothing blocked). */
+  policyFor?(req: Request): Promise<AttachmentPolicy>;
   warn?(msg: string, err: unknown): void;
+}
+
+export type PolicyVerdict =
+  | { kind: 'allow'; downloadOnly: boolean }
+  | { kind: 'blocked'; extension: string };
+
+/** The policy verdict for one attachment (pure): name, declared type and the first bytes of the content. */
+export function attachmentVerdict(
+  att: { filename: string; mimeType: string | null | undefined },
+  head: Uint8Array,
+  policy: AttachmentPolicy,
+): PolicyVerdict {
+  const candidates = candidateExtensions({ filename: att.filename ?? '', mimeType: att.mimeType, head });
+  const blocked = matchExtensionList(candidates, policy.blockedExtensions);
+  if (blocked) return { kind: 'blocked', extension: blocked };
+  return { kind: 'allow', downloadOnly: matchExtensionList(candidates, policy.downloadOnlyExtensions) !== null };
 }
 
 export function createAttachmentDownloadHandler(deps: AttachmentDownloadDeps) {
@@ -79,8 +116,33 @@ export function createAttachmentDownloadHandler(deps: AttachmentDownloadDeps) {
       return;
     }
 
-    const contentType = safeContentType(att.mimeType);
     const wantsInline = req.query['disposition'] === 'inline' || req.query['inline'] === '1';
+    if (deps.policyFor) {
+      let verdict: PolicyVerdict;
+      try {
+        const policy = await deps.policyFor(req);
+        const peeked = await peekStream(stream, SNIFF_BYTES);
+        stream = peeked.stream;
+        verdict = attachmentVerdict(att, peeked.head, policy);
+      } catch (err) {
+        deps.warn?.('attachment policy check failed', err);
+        destroyQuietly(stream);
+        res.status(503).json({ error: 'Attachment temporarily unavailable' });
+        return;
+      }
+      if (verdict.kind === 'blocked') {
+        destroyQuietly(stream);
+        res.status(403).json({ error: 'Dieser Dateityp ist für den Download gesperrt', code: 'ATTACHMENT_BLOCKED', extension: verdict.extension });
+        return;
+      }
+      if (verdict.downloadOnly && wantsInline) {
+        destroyQuietly(stream);
+        res.status(403).json({ error: 'Dieser Dateityp kann nur gespeichert werden', code: 'INLINE_PREVIEW_DISABLED' });
+        return;
+      }
+    }
+
+    const contentType = safeContentType(att.mimeType);
     const inline = wantsInline && INLINE_SAFE_TYPES.has(contentType);
     res.status(200);
     res.setHeader('Content-Type', contentType);

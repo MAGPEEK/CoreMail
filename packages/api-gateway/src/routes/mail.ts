@@ -18,14 +18,16 @@ import {
   createAttachmentDownloadHandler, readableMailboxWhere, contentDisposition,
 } from '../lib/attachment-download.js';
 import { getRedisClient, createBullMqConnection, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
-import { requireAuth } from '../middleware/auth.js';
-import { announceFolderListChange, CRLF_STREAM_TRANSPORT, canonicalAddress, addressVariants } from '@coremail/storage';
+import { protocolSubject, requireAuth } from '../middleware/auth.js';
+import { announceFolderListChange, CRLF_STREAM_TRANSPORT, canonicalAddress, addressVariants, effectiveWebmailPolicy } from '@coremail/storage';
+import { imageDecisionFor } from '../lib/webmail-features.js';
 import { checkFolderParent, type FolderLookup } from '../lib/folder-tree.js';
 import { withBodyLimit, checkRecipients, envelopeRecipients, deliveryReceiptDsn, maxRecipients, MAX_SEND_FILES } from '../lib/send-limits.js';
 import { createUserRateLimiter, envInt } from '../lib/user-rate-limit.js';
 import { resolveReplyHeaders, prismaReplyLookup, parseClientReferences } from '../lib/reply-headers.js';
 import { rspamdControllerHeaders } from '../lib/rspamd-controller.js';
 import { createImageProxyHandler } from '../lib/image-proxy.js';
+import { enforceUploadPolicy } from '../lib/upload-policy.js';
 import { deleteFolder, folderDeleteFailure, folderDeleteOptions, folderDeleteRefusal } from '../lib/folder-delete.js';
 import { markReadRequested } from '../lib/mark-read.js';
 import { messageOrderBy } from '../lib/message-sort.js';
@@ -83,10 +85,14 @@ mailRouter.use(requireAuth);
 // 8.0.x: the WHOLE request (all files + fields) is limited to the configured
 // max. message size, and at most MAX_SEND_FILES files (was 20 × 25 MB ≈ 500 MB
 // buffered in memory per request).
-export const sendUploadMiddleware = withBodyLimit((limit) => multer({
+const multipartUpload = withBodyLimit((limit) => multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: limit, files: MAX_SEND_FILES, fields: 50, fieldSize: limit, parts: MAX_SEND_FILES + 50 },
 }).array('attachments', MAX_SEND_FILES));
+// 9.4: then the per-attachment limit of the webmail policy (lib/upload-policy.ts)
+export function sendUploadMiddleware(req: Request, res: Response, next: NextFunction): void {
+  multipartUpload(req, res, (err?: unknown) => { if (err) next(err); else enforceUploadPolicy(req, res, next); });
+}
 
 // 8.0.x: per-user send rate limit (default 30 messages / 60 s, 0 disables)
 export const sendRateLimiter = createUserRateLimiter({
@@ -601,6 +607,8 @@ mailRouter.get('/attachments/:id', createAttachmentDownloadHandler({
     select: { id: true, filename: true, mimeType: true, size: true, storagePath: true },
   }),
   openStream: getObjectStream,
+  // 9.4: blocked / save-only types of the reader's webmail policy
+  policyFor: async (req) => (await effectiveWebmailPolicy(protocolSubject(req.apiUser!))).content,
   warn: (msg, err) => log.warn({ err }, msg),
 }));
 
@@ -611,7 +619,14 @@ const imageProxyLimiter = createUserRateLimiter({
   limit: envInt('IMAGE_PROXY_RATE_LIMIT', 120),
   windowSec: Math.max(1, envInt('IMAGE_PROXY_RATE_WINDOW_SEC', 60)),
 });
-mailRouter.get('/image-proxy', createImageProxyHandler({ allow: (userId) => imageProxyLimiter.hit(userId) }));
+// 9.4: refused while the reader's webmail policy blocks external images
+const refuseBlockedImages = (req: Request, res: Response, next: NextFunction): void => {
+  effectiveWebmailPolicy(protocolSubject(req.apiUser!)).then((p) => {
+    if (p.content.externalImages !== 'block') { next(); return; }
+    res.status(403).json({ error: 'Externe Bilder sind gesperrt', code: 'EXTERNAL_IMAGES_BLOCKED' });
+  }, next);
+};
+mailRouter.get('/image-proxy', refuseBlockedImages, createImageProxyHandler({ allow: (userId) => imageProxyLimiter.hit(userId) }));
 
 // GET /api/v1/mail/messages/:id/raw — RFC 822 raw EML / source view
 mailRouter.get('/messages/:id/raw', async (req: Request, res: Response) => {
@@ -714,7 +729,8 @@ mailRouter.get('/messages/:id', async (req: Request, res: Response) => {
     });
   }
 
-  res.json(msg);
+  // 9.4: what the webmail does with external images (webmail policy + trusted senders)
+  res.json({ ...msg, externalImages: await imageDecisionFor(protocolSubject(req.apiUser!), msg.fromAddr, (err) => log.warn({ err }, 'Webmail policy not readable — external images on request')) });
 });
 
 // PATCH /api/v1/mail/messages/:id — update flags / move

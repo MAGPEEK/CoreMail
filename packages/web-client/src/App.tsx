@@ -28,6 +28,8 @@ import { useGlobalShortcuts } from './hooks/useGlobalShortcuts.js';
 import { useSendGuard } from './components/DelayedSendToast.js';
 import { useComposeRouting } from './hooks/useComposeRouting.js';
 import { usePopoutBridge } from './hooks/usePopoutBridge.js';
+import { useWebmailFeatures } from './hooks/useWebmailFeatures.js';
+import { featureForPath } from './lib/webmailFeatures.js';
 import { POPOUT_ROUTE } from './lib/composePopout.js';
 import { brandCssVars, headerHex, resolveAccentChannels } from './lib/branding.js';
 import { useBranding, useBrandingSync } from './hooks/useBranding.js';
@@ -104,6 +106,9 @@ function Layout({ children }: { children: React.ReactNode }) {
   // 9.4: compose opens inline in the mail view; drafts in their own windows talk back here
   useComposeRouting();
   usePopoutBridge();
+  const { features } = useWebmailFeatures();
+  const pageFeature = featureForPath(location.pathname);
+  const pageDisabled = pageFeature !== null && !features[pageFeature];
 
   // MessageList picks up ?q= and runs a mailbox-wide server search
   const handleSearch = (q: string) => {
@@ -118,7 +123,10 @@ function Layout({ children }: { children: React.ReactNode }) {
       <div className="flex-1 flex flex-col-reverse md:flex-row min-h-0">
         <AppRail />
         <main key={pageKey(location.pathname)} className="flex-1 flex min-h-0 min-w-0 overflow-hidden animate-page-in">
-          <ErrorBoundary resetKey={pageKey(location.pathname)}>{children}</ErrorBoundary>
+          <ErrorBoundary resetKey={pageKey(location.pathname)}>
+            {/* 9.4: pages of a module the webmail policy switched off lead to the mail view */}
+            {pageDisabled ? <Navigate to="/mail" replace /> : children}
+          </ErrorBoundary>
         </main>
       </div>
       <ShortcutHelpDialog />

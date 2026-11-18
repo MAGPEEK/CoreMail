@@ -32,6 +32,8 @@ import { useComposeSender } from '../../hooks/useComposeSender.js';
 import { useComposeOriginal, useForwardAttachments } from '../../hooks/useComposeOriginal.js';
 import { useComposeSignature } from '../../hooks/useComposeSignature.js';
 import { useComposeDraft } from '../../hooks/useComposeDraft.js';
+import { useWebmailFeatures } from '../../hooks/useWebmailFeatures.js';
+import { oversizedAttachment } from '../../lib/webmailFeatures.js';
 import { useUiPrefs, useUiStore, type ComposeAttachment, type ComposeContext, type ComposeSnapshot, type ComposeTabEntry } from '../../store/ui.js';
 import { usePreferences, useRegional } from '../../store/preferences.js';
 import { quoteMailHtml, textToQuotedHtml } from '../../lib/mailHtml.js';
@@ -140,6 +142,7 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
   const [showBcc, setShowBcc] = useState(restore?.showBcc ?? false);
   const [subject, setSubject] = useState(restore?.subject ?? subjectFor(mode, ctx.subject));
   const [attachments, setAttachments] = useState<ComposeAttachment[]>(restore?.attachments ?? []);
+  const uploadLimit = useWebmailFeatures().content.maxUploadBytes;
   const [plainText, setPlainText] = useState(restore?.plainText ?? composePrefs.format === 'plain');
   const [requestReceipt, setRequestReceipt] = useState(restore?.requestReceipt ?? receiptOption.checked);
   const [deliveryReceipt, setDeliveryReceipt] = useState(restore?.deliveryReceipt ?? false);
@@ -515,7 +518,13 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
     touch();
   };
 
-  const addFiles = (files: File[]) => {
+  const addFiles = (picked: File[]) => {
+    // 9.4 webmail policy: per-attachment size limit (the server refuses larger files too)
+    const tooLarge = oversizedAttachment(picked, uploadLimit);
+    if (tooLarge && uploadLimit !== null) {
+      toast.error(fmt(t('compose_attachment_too_large'), { name: tooLarge.name, max: Math.max(1, Math.round(uploadLimit / 1024 / 1024)) }));
+    }
+    const files = uploadLimit === null ? picked : picked.filter((f) => f.size <= uploadLimit);
     if (files.length === 0) return;
     const r = addAttachments(attachments, files, MAX_ATTACHMENTS);
     if (r.rejected) toast.error(fmt(t('compose_too_many_attachments'), { max: MAX_ATTACHMENTS, n: r.rejected }));

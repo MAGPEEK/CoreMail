@@ -2,6 +2,7 @@
 import { usePreferences } from '../../store/preferences.js';
 import type { MarkReadMode, NewMailNotification, ReceiptPolicy } from '../../lib/preferences.js';
 import { CheckField, Group, SectionHeader, SelectField } from './controls.js';
+import { TrustedSendersSettings } from './TrustedSendersSettings.js';
 
 const MARK_READ: ReadonlyArray<{ value: MarkReadMode; label: string }> = [
   { value: 'immediately', label: 'Sofort beim Öffnen' },
@@ -53,6 +54,8 @@ export function ReadingSettings() {
           onChange={(answerReceipts) => update({ reading: { answerReceipts } })}
           hint="„Immer senden“ antwortet automatisch nur an die Domäne des Absenders – sonst wird gefragt. Nachrichten im Junk-Ordner werden nie bestätigt." />
       </Group>
+
+      <TrustedSendersSettings />
 
       <Group title="Benachrichtigung bei neuer Nachricht">
         <SelectField label="Art der Benachrichtigung" value={notification} options={NOTIFY}

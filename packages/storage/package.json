@@ -12,7 +12,8 @@
     "./auth": "./dist/auth/index.js",
     "./auth/testing": "./dist/auth/testing.js",
     "./queue-options": "./dist/queue-options.js",
-    "./idn": "./dist/idn.js"
+    "./idn": "./dist/idn.js",
+    "./file-types": "./dist/file-types.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

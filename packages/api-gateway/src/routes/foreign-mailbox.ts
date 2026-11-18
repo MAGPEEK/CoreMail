@@ -46,8 +46,9 @@ import {
   reservedFolderPrefix, reservedFolderNameError, type AccessibleMailbox,
 } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
-import { requireAuth } from '../middleware/auth.js';
+import { protocolSubject, requireAuth } from '../middleware/auth.js';
 import { announceFolderListChange } from '@coremail/storage';
+import { imageDecisionFor } from '../lib/webmail-features.js';
 import { getForeignMailbox } from '../lib/mailbox-access.js';
 import { checkFolderParent, type FolderLookup } from '../lib/folder-tree.js';
 import { contentDisposition } from '../lib/attachment-download.js';
@@ -378,7 +379,8 @@ export function createForeignMailboxRouter(kind: Kind): RouterType {
       await prisma.$transaction((tx) => setFlags(tx, [{ id: msg.id, flags: [...msg.flags, '\\Seen'] }], { mailboxId: access.mailboxId }));
       await prisma.folder.update({ where: { id: msg.folderId }, data: { unreadCount: { decrement: 1 } } }).catch(() => undefined);
     }
-    res.json(msg);
+    // 9.4: external images follow the reader's webmail policy and trusted senders
+    res.json({ ...msg, externalImages: await imageDecisionFor(protocolSubject(req.apiUser!), msg.fromAddr, (err) => log.warn({ err }, 'Webmail policy not readable — external images on request')) });
   });
 
   r.get('/messages/:messageId/raw', auth, async (req: Request, res: Response) => {

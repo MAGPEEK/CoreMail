@@ -16,7 +16,7 @@ import { randomUUID } from 'node:crypto';
 import { prisma } from '@coremail/storage/prisma';
 import {
   attendeesWithResponse, buildITipReplyIcs, buildITipReplyMime, calendarObjectForInvitee,
-  announceCalendarChange, expunge, findITipRequest, findOwnAttendee, loadRawMessage, moveMessages,
+  announceCalendarChange, expunge, findITipRequest, findOwnAttendee, isWebmailFeatureEnabled, loadRawMessage, moveMessages,
   type ITipPartstat, type RawSourceMessage,
 } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
@@ -195,7 +195,15 @@ export async function handleMeetingResponse(
   protocolVersion = '14.1',
 ): Promise<Buffer> {
   const results: WbxmlElement[] = [];
+  // 9.4 webmail policy: without the calendar module nothing is written to a calendar —
+  // every request answers Status 2 (unreadable policy → 4, nothing changed).
+  const calendar = await isWebmailFeatureEnabled(userId, 'calendar').then((on) => (on ? 'on' : 'off'), () => 'error');
   for (const req of kids(body).filter((c) => c.name === 'Request')) {
+    if (calendar !== 'on') {
+      const status = calendar === 'off' ? MEETING_STATUS.INVALID_REQUEST : MEETING_STATUS.SERVER_ERROR;
+      results.push(el('Result', undefined, [el('RequestId', getText(req, 'RequestId')), el('Status', status)]));
+      continue;
+    }
     try {
       results.push(await respond(req, userId, deps, protocolVersion));
     } catch (err) {

@@ -6,6 +6,7 @@ import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api/client.js';
 import { useUiStore } from '../store/ui.js';
+import { useWebmailFeatures } from './useWebmailFeatures.js';
 import {
   mailApiBase, mailboxKey, foldersQueryKey, isForeign, isReadOnlyMailbox, findMailboxEntry,
   type AccessibleMailboxEntry, type MailboxRef,
@@ -15,10 +16,13 @@ export const ACCESSIBLE_MAILBOXES_KEY = ['accessible-mailboxes'] as const;
 
 /** Shared + delegated mailboxes the user may read (GET /user/accessible-mailboxes). */
 export function useAccessibleMailboxes() {
+  // 9.4: none while the shared-mailbox module is off (webmail policy)
+  const enabled = useWebmailFeatures().features.sharedMailboxes;
   return useQuery({
     queryKey: ACCESSIBLE_MAILBOXES_KEY,
     queryFn: () => api.get<AccessibleMailboxEntry[]>('/user/accessible-mailboxes'),
     staleTime: 60_000,
+    enabled,
   });
 }
 

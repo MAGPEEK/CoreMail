@@ -38,6 +38,7 @@ import { adminSsoRouter } from './sso.js';
 import { adminStorageRouter } from './storage.js';
 import { adminBrandingRouter } from './branding.js';
 import { adminProtocolAccessRouter } from './protocol-access.js';
+import { adminWebmailPoliciesRouter } from './webmail-policies.js';
 
 export const ADMIN_PREFIX = '/api/v1/admin';
 
@@ -78,6 +79,8 @@ export const ADMIN_MOUNTS: ReadonlyArray<readonly [string, Router]> = [
   ['/branding',             adminBrandingRouter],
   // 9.4: per-protocol access switches (server/domain: area servers, user: area recipients)
   ['/protocol-access',      adminProtocolAccessRouter],
+  // 9.4: webmail policies (same split: server/domain = servers, user = recipients)
+  ['/webmail-policies',     adminWebmailPoliciesRouter],
 ];
 
 /** Admin endpoints that are intentionally public (no auth). */

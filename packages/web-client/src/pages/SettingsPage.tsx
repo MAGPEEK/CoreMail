@@ -44,6 +44,8 @@ import { useBranding } from '../hooks/useBranding.js';
 import { accentFillChannels, hexToChannels, DEFAULT_ACCENT_RGB } from '../lib/branding.js';
 import { copyToClipboard } from '../api/clipboard.js';
 import toast from 'react-hot-toast';
+import { useWebmailFeatures } from '../hooks/useWebmailFeatures.js';
+import { isSettingsSectionVisible } from '../lib/webmailFeatures.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type Section = 'profile' | 'oof' | 'signature' | 'storage' | 'recover' | 'security' | 'password' | 'theme' | 'language' | 'calendar' | 'categories' | 'appPasswords' | 'inactivity' | 'view' | 'retention' | 'rules' | 'externalClients' | 'reading' | 'compose' | 'regional' | 'notifications';
@@ -2460,7 +2462,10 @@ export function SettingsPage() {
   const sectionFromHash = Object.prototype.hasOwnProperty.call(SECTION_MAP, hashSection) ? hashSection as Section : null;
   const [section, setSection] = useState<Section>(sectionFromHash ?? 'profile');
   useEffect(() => { if (sectionFromHash) setSection(sectionFromHash); }, [sectionFromHash]);
-  const SectionComp = SECTION_MAP[section];
+  // 9.4: sections of modules the webmail policy switched off are not offered
+  const { features } = useWebmailFeatures();
+  const shown = isSettingsSectionVisible(section, features) ? section : 'profile';
+  const SectionComp = SECTION_MAP[shown];
 
   return (
     <div className="flex flex-1 overflow-hidden bg-surface">
@@ -2469,8 +2474,8 @@ export function SettingsPage() {
         {NAV.map(({ group, items }) => (
           <div key={group} className="mb-2">
             <p className="px-4 py-1 text-xs font-semibold text-fg-subtle uppercase tracking-wide">{t(group)}</p>
-            {items.map(({ id, label, icon: Icon, indent }) => (
-              <button key={id} onClick={() => setSection(id)} className={settingsNavClass({ active: section === id, indent })}>
+            {items.filter(({ id }) => isSettingsSectionVisible(id, features)).map(({ id, label, icon: Icon, indent }) => (
+              <button key={id} onClick={() => setSection(id)} className={settingsNavClass({ active: shown === id, indent })}>
                 <Icon size={settingsNavIconSize(indent)} />
                 {t(label)}
               </button>
@@ -2481,7 +2486,7 @@ export function SettingsPage() {
 
       {/* Right content area — external clients needs more width for URLs */}
       <div className="flex-1 overflow-y-auto p-8 bg-surface">
-        <div className={section === 'externalClients' ? 'max-w-5xl' : section === 'recover' ? 'max-w-3xl' : 'max-w-xl'}>
+        <div className={shown === 'externalClients' ? 'max-w-5xl' : shown === 'recover' ? 'max-w-3xl' : 'max-w-xl'}>
           <SectionComp />
         </div>
       </div>

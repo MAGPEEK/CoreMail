@@ -5,8 +5,8 @@ import {
   createLogger, installProcessGuards, installAsyncErrorHandling, errorMiddleware, resolveBindHost,
   startAuthInvalidationSubscriber,
 } from '@coremail/core';
-import { connectDatabase } from '@coremail/storage';
-import { davAuthMiddleware } from './auth.js';
+import { connectDatabase, startWebmailPolicySubscriber } from '@coremail/storage';
+import { davAuthMiddleware, davFeatureGate } from './auth.js';
 import { caldavRouter } from './caldav/index.js';
 import { carddavRouter } from './carddav/index.js';
 import { principalRouter } from './principal/index.js';
@@ -22,6 +22,7 @@ async function main() {
   await connectDatabase();
   // v7.1.0: session revocations from other services (Bearer token checks)
   startAuthInvalidationSubscriber();
+  startWebmailPolicySubscriber(); // 9.4: calendar / contacts module switches apply at once
   void initRuntimeLogLevel('caldav-server', { aliases: ['caldav', 'carddav', 'dav'] }); // BCP per-service log level
   // v5.6.0: initJwtKeys() removed (back to HS256)
 
@@ -39,7 +40,7 @@ async function main() {
 
   // Discovery (context path + principals), then CalDAV + CardDAV — one mount, so the
   // credentials are verified once per request (not once per router)
-  app.use('/dav', davAuthMiddleware, principalRouter, caldavRouter, carddavRouter);
+  app.use('/dav', davAuthMiddleware, davFeatureGate, principalRouter, caldavRouter, carddavRouter);
 
   // v6: shared error middleware (registered last)
   app.use(errorMiddleware(log));

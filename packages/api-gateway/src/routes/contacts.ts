@@ -1,6 +1,6 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { prisma, GAL_VISIBLE_WHERE } from '@coremail/storage';
+import { prisma, GAL_VISIBLE_WHERE, isWebmailFeatureEnabled } from '@coremail/storage';
 import {
   buildVcard,
   patchVcard,
@@ -9,7 +9,7 @@ import {
   type VcardFields,
   type VcardPatch,
 } from '@coremail/core/vcard';
-import { requireAuth } from '../middleware/auth.js';
+import { protocolSubject, requireAuth } from '../middleware/auth.js';
 import { announceOnWrite } from '../lib/realtime.js';
 
 export const contactsRouter: RouterType = Router();
@@ -58,7 +58,10 @@ contactsRouter.get('/', async (req: Request, res: Response) => {
         ],
       }
     : { userId };
-  const privateContacts = await prisma.contact.findMany({
+  // 9.4: without the contacts module (webmail policy) the compose autocomplete
+  // offers address-list entries only (the gate lets only searches through).
+  const ownContacts = await isWebmailFeatureEnabled(protocolSubject(req.apiUser!), 'contacts');
+  const privateContacts = !ownContacts ? [] : await prisma.contact.findMany({
     where: privateWhere,
     orderBy: { displayName: 'asc' },
     select: CONTACT_LIST_SELECT,

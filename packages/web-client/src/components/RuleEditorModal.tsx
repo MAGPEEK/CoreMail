@@ -8,6 +8,7 @@ import type {
   MailRule, RuleCondition, RuleAction, RuleField, RuleOperator, RulePreset,
 } from '../api/rule-types.js';
 import type { Folder, Category } from '../api/types.js';
+import { useWebmailFeatures } from '../hooks/useWebmailFeatures.js';
 
 interface Props {
   rule: MailRule | null;            // null = new rule
@@ -265,6 +266,7 @@ export function RuleEditorModal({ rule, preset, onClose, onSaved }: Props) {
   const { data: categories = [] } = useQuery<Category[]>({
     queryKey: ['categories'],
     queryFn: () => api.get<Category[]>('/categories'),
+    enabled: useWebmailFeatures().features.categories, // 9.4: module switch
   });
 
   // Server-side validation message (e.g. a refused regex pattern) shown inline

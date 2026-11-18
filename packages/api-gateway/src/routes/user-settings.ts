@@ -17,9 +17,12 @@
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { prisma } from '@coremail/storage';
-import { requireAuth } from '../middleware/auth.js';
-import { PreferencesPatchSchema } from '../lib/user-preferences.js';
+import { prisma, effectiveWebmailPolicy, type WebmailFeature } from '@coremail/storage';
+import { protocolSubject, requireAuth } from '../middleware/auth.js';
+import {
+  DEFAULT_PREFERENCES, PreferencesPatchSchema, type SectionName, type UserPreferences,
+} from '../lib/user-preferences.js';
+import { featureDisabledBody } from '../lib/webmail-features.js';
 import { loadPreferences, savePreferencesPatch } from '../lib/preferences-store.js';
 import { announcePersonalSettings } from '../lib/realtime.js';
 import {
@@ -43,10 +46,30 @@ async function inactivityOf(userId: string): Promise<{ inactivityTimeoutMinutes:
   };
 }
 
+// 9.4 webmail policies: preference sections that belong to a module
+const SECTION_FEATURES = { theme: 'themes', signatures: 'signatures' } as const satisfies Partial<Record<SectionName, WebmailFeature>>;
+
+/** The first preference section of `patch` whose module is off (pure). */
+export function refusedPreferenceFeature(patch: Partial<Record<SectionName, unknown>>, features: Record<WebmailFeature, boolean>): WebmailFeature | null {
+  for (const [section, feature] of Object.entries(SECTION_FEATURES) as Array<[SectionName, WebmailFeature]>) {
+    if (patch[section] !== undefined && !features[feature]) return feature;
+  }
+  return null;
+}
+
+/** Preferences as the webmail may apply them: with Designs off the default design (pure). */
+export function preferencesUnderPolicy(prefs: UserPreferences, features: Record<WebmailFeature, boolean>): UserPreferences {
+  return features.themes ? prefs : { ...prefs, theme: { ...DEFAULT_PREFERENCES.theme } };
+}
+
+async function featuresOf(req: Request): Promise<Record<WebmailFeature, boolean>> {
+  return (await effectiveWebmailPolicy(protocolSubject(req.apiUser!))).features;
+}
+
 userSettingsRouter.get('/preferences', requireAuth, async (req: Request, res: Response) => {
   const userId = req.apiUser!.userId;
-  const [inactivity, preferences] = await Promise.all([inactivityOf(userId), loadPreferences(userId)]);
-  res.json({ ...inactivity, preferences });
+  const [inactivity, preferences, features] = await Promise.all([inactivityOf(userId), loadPreferences(userId), featuresOf(req)]);
+  res.json({ ...inactivity, preferences: preferencesUnderPolicy(preferences, features) });
 });
 
 const PreferencesBodySchema = z.object({
@@ -63,6 +86,15 @@ async function savePreferences(req: Request, res: Response): Promise<void> {
     return;
   }
   const userId = req.apiUser!.userId;
+  const features = await featuresOf(req);
+  if (parsed.data.preferences && parsed.data.migrateFromLocal === true) {
+    // the one-time import of browser values skips sections of modules that are off
+    for (const [section, feature] of Object.entries(SECTION_FEATURES) as Array<[SectionName, WebmailFeature]>) {
+      if (!features[feature]) delete (parsed.data.preferences as Partial<Record<SectionName, unknown>>)[section];
+    }
+  }
+  const refused = parsed.data.preferences ? refusedPreferenceFeature(parsed.data.preferences, features) : null;
+  if (refused) { res.status(403).json(featureDisabledBody(refused)); return; }
   if (parsed.data.inactivityTimeoutMinutes !== undefined) {
     const inactivityTimeoutMinutes = parsed.data.inactivityTimeoutMinutes;
     await prisma.userSettings.upsert({
@@ -82,7 +114,7 @@ async function savePreferences(req: Request, res: Response): Promise<void> {
   } else {
     preferences = await loadPreferences(userId);
   }
-  res.json({ ok: true, applied, ...(await inactivityOf(userId)), preferences });
+  res.json({ ok: true, applied, ...(await inactivityOf(userId)), preferences: preferencesUnderPolicy(preferences, features) });
 }
 
 userSettingsRouter.put('/preferences', requireAuth, savePreferences);

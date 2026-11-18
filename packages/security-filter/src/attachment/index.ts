@@ -1,5 +1,6 @@
 import { createLogger } from '@coremail/core';
 import type { ParsedAttachment } from '@coremail/storage';
+import { normalizeExtension, fileExtension } from '@coremail/storage/file-types';
 
 const log = createLogger('security-filter:attachment');
 
@@ -39,17 +40,8 @@ export interface AttachmentFilterResult {
   filename?: string;
 }
 
-/** 'EXE' / '.exe' / ' exe ' → 'exe'; '' for garbage. */
-export function normalizeExtension(ext: string): string {
-  return ext.trim().toLowerCase().replace(/^\.+/, '');
-}
-
-/** Extension of a filename after stripping trailing dots/spaces (Windows ignores them: "a.exe. " runs as .exe). */
-export function fileExtension(filename: string): string {
-  const name = filename.replace(/[\s.]+$/, '');
-  const dot = name.lastIndexOf('.');
-  return dot >= 0 ? name.slice(dot + 1).toLowerCase() : '';
-}
+// 9.4: shared with the webmail attachment policy (storage file-types.ts)
+export { normalizeExtension, fileExtension };
 
 export function checkAttachments(
   attachments: ParsedAttachment[],

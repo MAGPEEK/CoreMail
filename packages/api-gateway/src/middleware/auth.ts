@@ -6,6 +6,7 @@ import {
 } from '@coremail/storage/auth';
 import { canAccess, hasAdminAction, isAdminRole, isReadMethod, stricterRole, type AdminAction, type AdminArea, type UserRoleName } from '../lib/rbac.js';
 import { redeemEventTicket, type TicketPurpose } from '../lib/event-tickets.js';
+import { featureRefusal } from '../lib/webmail-features.js';
 
 // The single role → area permission map (and the narrow action map) the guards
 // below use (canAccess → areaAccess, hasAdminAction). Re-exported so routes and
@@ -198,9 +199,14 @@ function enforceWebmailSwitch(req: Request, res: Response, next: NextFunction): 
   const user = req.apiUser!;
   // Fails closed like the admin guards (database errors → 503, see webAccessRefusal).
   void webAccessRefusal({ id: user.userId, role: user.role, domainId: user.domainId }, webSurfaceOf(req.originalUrl))
+    // 9.4: then the webmail module of the path (lib/webmail-features.ts)
+    .then((refusal) => refusal ?? featureRefusal(protocolSubject(user), req))
     .then((refusal) => {
       if (!refusal) { next(); return; }
       if (!res.headersSent) res.status(refusal.status).json(refusal.body);
+    }, () => {
+      // an unexpected failure of the checks is never "allowed" (and never a hanging request)
+      if (!res.headersSent) res.status(503).json({ error: 'Service temporarily unavailable' });
     });
 }
 

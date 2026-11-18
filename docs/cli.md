@@ -218,6 +218,24 @@ SERVER_MANAGEMENT (or ORGANIZATION_MANAGEMENT), the mailbox level RECIPIENT_MANA
 level of `--jmap` is the same switch as `connector enable|disable jmap`. Details:
 [protocol-access.md](protocol-access.md).
 
+## Webmail policies (`policy`, v9.4)
+
+```bash
+coremail policy show                                           # server level
+coremail policy show --scope domain example.com                # domain level
+coremail policy set --scope user alice@example.com --calendar off --external-images block
+coremail policy set --blocked-extensions exe,js,bat --save-only-extensions pdf --max-upload-mb 20
+```
+
+Modules: `--calendar --contacts --tasks --notes --rules --signatures --categories --recover-items
+--change-password --themes --external-clients --app-passwords --shared-mailboxes`, each `on`, `off`
+or `inherit` (the server level is `on` / `off` only). Values: `--blocked-extensions` and
+`--save-only-extensions` (comma-separated list, `none` or `inherit`), `--max-upload-mb` (MB, `none` =
+no own limit on the server level, `inherit` below), `--external-images ask|contacts|block|inherit`.
+Only the given ones change. The table shows the setting, the effective value and its source
+(`default`, `global`, `domain`, `user`). RBAC as for `protocol`. Details:
+[webmail-policies.md](webmail-policies.md).
+
 ## Behavior and exit codes
 
 - Destructive commands ask for confirmation unless `--yes` is given; without a terminal (script) `--yes` is mandatory.

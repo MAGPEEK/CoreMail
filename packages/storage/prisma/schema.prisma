@@ -85,6 +85,8 @@ model Domain {
   aliases            EmailAlias[]
   // 9.4: per-protocol access switches of the domain (none = everything inherited)
   protocolPolicy     ProtocolPolicy?
+  // 9.4: webmail feature switches + attachment/content policy of the domain
+  webmailPolicy      WebmailPolicy?
   createdAt          DateTime             @default(now())
 
   @@map("domains")
@@ -139,6 +141,10 @@ model User {
   passwordResetTokens PasswordResetToken[]
   // 9.4: per-protocol access switches of the user (none = everything inherited)
   protocolPolicy      ProtocolPolicy?
+  // 9.4: webmail feature switches + attachment/content policy of the user
+  webmailPolicy       WebmailPolicy?
+  // 9.4: senders whose external images the webmail loads without asking
+  trustedImageSenders TrustedImageSender[]
   // 9.4: per-mailbox mail flow (GAL visibility, forwarding, sender lists, limits)
   mailFlowPolicy      MailFlowPolicy?
   createdAt           DateTime            @default(now())
@@ -184,6 +190,66 @@ model ProtocolPolicy {
   updatedAt  DateTime       @updatedAt
 
   @@map("protocol_policies")
+}
+
+// ─────────────────────────────────────────────
+// Webmail policies (9.4)
+// ─────────────────────────────────────────────
+
+// How the webmail treats external images in mails.
+enum ExternalImageMode {
+  ASK       // banner, the reader decides (default)
+  CONTACTS  // loaded for senders in the reader's contacts / trusted senders, else ask
+  BLOCK     // never loaded
+}
+
+// Webmail feature switches and attachment/content policy. One row per level:
+// id 'global' = the server level, otherwise exactly one of domainId / userId.
+// Feature columns: INHERIT takes the broader level (server level: built-in
+// default = on). Content columns: NULL = inherit (server level: built-in
+// default). Resolution: src/webmail-policy.ts.
+model WebmailPolicy {
+  id                     String             @id @default(cuid())
+  domainId               String?            @unique
+  domain                 Domain?            @relation(fields: [domainId], references: [id], onDelete: Cascade)
+  userId                 String?            @unique
+  user                   User?              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  calendar               ProtocolSwitch     @default(INHERIT)
+  contacts               ProtocolSwitch     @default(INHERIT)
+  tasks                  ProtocolSwitch     @default(INHERIT)
+  notes                  ProtocolSwitch     @default(INHERIT)
+  rules                  ProtocolSwitch     @default(INHERIT)
+  signatures             ProtocolSwitch     @default(INHERIT)
+  categories             ProtocolSwitch     @default(INHERIT)
+  recoverItems           ProtocolSwitch     @default(INHERIT)
+  changePassword         ProtocolSwitch     @default(INHERIT)
+  themes                 ProtocolSwitch     @default(INHERIT)
+  externalClients        ProtocolSwitch     @default(INHERIT)
+  appPasswords           ProtocolSwitch     @default(INHERIT)
+  sharedMailboxes        ProtocolSwitch     @default(INHERIT)
+  // JSON array of file extensions without dot; NULL = inherit
+  blockedExtensions      Json?
+  downloadOnlyExtensions Json?
+  // Max. size of one uploaded attachment in MB; NULL = inherit (server level: no own limit)
+  maxUploadMb            Int?
+  externalImages         ExternalImageMode?
+  updatedAt              DateTime           @updatedAt
+
+  @@map("webmail_policies")
+}
+
+// Senders (address, or "@domain") whose external images the webmail loads
+// without asking ("Bilder von diesem Absender immer anzeigen").
+model TrustedImageSender {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // lower-case address or "@domain"
+  sender    String
+  createdAt DateTime @default(now())
+
+  @@unique([userId, sender])
+  @@map("trusted_image_senders")
 }
 
 // ─────────────────────────────────────────────

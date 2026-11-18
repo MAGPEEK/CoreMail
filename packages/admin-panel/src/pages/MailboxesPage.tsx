@@ -10,6 +10,7 @@ import { api } from '../api/client.js';
 import toast from 'react-hot-toast';
 import { MailboxAliasesSection } from '../components/MailboxAliasesSection.js';
 import { ProtocolAccessEditor } from '../components/ProtocolAccessEditor.js';
+import { WebmailPolicyEditor } from '../components/WebmailPolicyEditor.js';
 import { MailFlowEditor } from '../components/MailFlowEditor.js';
 import { useT } from '../i18n/useT.js';
 import { usePermissions } from '../hooks/usePermissions.js';
@@ -851,6 +852,11 @@ function EditForm({ user, domains, onSave, isPending }:
       {/* 9.4: protocol access (user level) */}
       <div className="border-t border-line pt-4 mt-2">
         <ProtocolAccessEditor path={`/admin/protocol-access/users/${user.id}`} area="recipients" />
+      </div>
+
+      {/* 9.4: webmail policies (user level) */}
+      <div className="border-t border-line pt-4 mt-2">
+        <WebmailPolicyEditor path={`/admin/webmail-policies/users/${user.id}`} area="recipients" />
       </div>
     </div>
   );

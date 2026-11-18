@@ -27,6 +27,7 @@ import { QuarantinePage } from './pages/QuarantinePage.js';
 import { TransportRulesPage } from './pages/TransportRulesPage.js';
 import { MessageTracePage } from './pages/MessageTracePage.js';
 import { ServicesLegacyRedirect, ServicesPage } from './pages/ServicesPage.js';
+import { WebmailPoliciesPage } from './pages/WebmailPoliciesPage.js';
 // ExternalContactsPage completely removed in v3.18.33
 import { RbacPage } from './pages/RbacPage.js';
 // eDiscovery & Legal Hold completely removed in v3.18.5
@@ -251,6 +252,7 @@ createRoot(document.getElementById('root')!).render(
                   <Route path="/servers" element={<ServersPage />} />
                   <Route path="/services" element={<ServicesPage />} />
                   <Route path="/services/:sub" element={<ServicesLegacyRedirect />} />
+                  <Route path="/webmail-policies" element={<WebmailPoliciesPage />} />
                   <Route path="/certificates"    element={<CertificatesPage />} />
                   <Route path="/shared-mailboxes" element={<SharedMailboxesPage />} />
                   <Route path="/quarantine"      element={<QuarantinePage />} />

@@ -56,6 +56,34 @@ test('defaults: every existing protocol on, MAPI off', () => {
   assert.equal(a.imap && a.pop3 && a.smtp && a.activesync && a.jmap && a.dav && a.webmail, true);
 });
 
+test('review 9.4: the shared resolver (policy-levels.ts) is behaviour-identical to the pre-refactor protocol resolution', () => {
+  // The resolution before the refactor, verbatim.
+  const legacy = (levels: ReadonlyArray<Record<string, string>>, defaults: Readonly<Record<string, boolean>>) =>
+    Object.fromEntries(pa.ACCESS_PROTOCOLS.map((p) => {
+      for (let i = levels.length - 1; i >= 0; i--) {
+        const s = levels[i]![p];
+        if (s !== 'inherit') return [p, s === 'on'];
+      }
+      return [p, defaults[p]];
+    }));
+  const values = ['inherit', 'on', 'off'] as const;
+  const combos: Array<Array<typeof values[number]>> = [[]];
+  for (let depth = 1; depth <= 3; depth++) {
+    const prev = combos.filter((c) => c.length === depth - 1);
+    for (const c of prev) for (const v of values) combos.push([...c, v]);
+  }
+  for (const combo of combos) {
+    for (const protocol of pa.ACCESS_PROTOCOLS) {
+      const levels = combo.map((v) => ({ ...pa.inheritAll(), [protocol]: v }));
+      for (const defaults of [pa.PROTOCOL_DEFAULTS, { ...pa.PROTOCOL_DEFAULTS, mapi: true, imap: false }]) {
+        assert.deepEqual(pa.resolveProtocolAccess(levels, defaults), legacy(levels, defaults), `${protocol} ${combo.join('/')}`);
+      }
+    }
+  }
+  assert.deepEqual(pa.PROTOCOL_SETTINGS, ['inherit', 'on', 'off']);
+  assert.deepEqual(pa.SERVER_PROTOCOL_SETTINGS, ['on', 'off']);
+});
+
 test('the most specific non-inherit level wins', () => {
   const g = { ...pa.inheritAll(), imap: 'off' as const, mapi: 'on' as const };
   const d = { ...pa.inheritAll(), imap: 'on' as const, pop3: 'off' as const };

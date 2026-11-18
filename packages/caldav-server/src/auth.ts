@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import { verifyAccessToken, createLogger } from '@coremail/core';
-import { prisma, verifyMailCredentials, clientIpFromRequest, isProtocolAllowed } from '@coremail/storage';
+import { prisma, verifyMailCredentials, clientIpFromRequest, isProtocolAllowed, isWebmailFeatureEnabled } from '@coremail/storage';
 import { isAccessTokenRevokedShared } from '@coremail/storage/auth';
 
 const log = createLogger('caldav:auth');
@@ -93,6 +93,42 @@ export async function davAuthMiddleware(
 
   res.set('WWW-Authenticate', 'Basic realm="CoreMail CalDAV"');
   res.status(401).send('Unauthorized');
+}
+
+/**
+ * 9.4 webmail policy: the module a DAV path belongs to (pure; path relative to
+ * /dav). Compared lower-case: Express routes case-insensitively, so
+ * `/Calendars/…` reaches the CalDAV router as well.
+ */
+export function davFeatureOf(rawPath: string): 'calendar' | 'contacts' | null {
+  const path = rawPath.toLowerCase();
+  if (path === '/calendars' || path.startsWith('/calendars/')) return 'calendar';
+  if (path === '/addressbooks' || path.startsWith('/addressbooks/')) return 'contacts';
+  return null;
+}
+
+/**
+ * 9.4 webmail policy: with the calendar / contacts module off, CalDAV /
+ * CardDAV refuse the calendar / address book collections with 403 (the
+ * principal stays readable, so clients show "no access" instead of asking for
+ * a password again). Unreadable policy → 503.
+ */
+export async function davFeatureGate(req: Request, res: Response, next: NextFunction): Promise<void> {
+  const feature = davFeatureOf(req.path);
+  if (!feature || !req.davUser) { next(); return; }
+  let enabled: boolean;
+  try {
+    enabled = await isWebmailFeatureEnabled(req.davUser.userId, feature);
+  } catch (err) {
+    log.error({ err, userId: req.davUser.userId }, 'Webmail policy not readable');
+    res.set('Retry-After', '30');
+    res.status(503).send('Service Unavailable');
+    return;
+  }
+  if (enabled) { next(); return; }
+  res.status(403).type('text/plain').send(feature === 'calendar'
+    ? 'Calendars are disabled for this account'
+    : 'Contacts are disabled for this account');
 }
 
 /** 9.4: CalDAV/CardDAV switched off for the account — 403, no new password prompt. */

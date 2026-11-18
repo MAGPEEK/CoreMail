@@ -51,7 +51,7 @@ storage.configureMailAuth({
   verifyPassword: async (p: string, h: string) => h === `hash:${p}`,
   dummyHash: async () => 'hash:\0dummy',
 });
-const { davAuthMiddleware } = await import('./auth.js');
+const { davAuthMiddleware, davFeatureGate, davFeatureOf } = await import('./auth.js');
 
 type Outcome = { nextCalled: boolean; status: number | null; davUser: unknown };
 
@@ -167,6 +167,43 @@ test('9.4: CalDAV/CardDAV switched off → 403 for Basic and Bearer, a wrong pas
     storage.invalidateProtocolAccessCache();
   }
   assert.equal((await run(basic('alice@example.com', 'pw'))).nextCalled, true);
+});
+
+test('9.4 webmail policy: calendar / contacts modules gate their DAV collections', async () => {
+  assert.equal(davFeatureOf('/calendars/u1/c1/'), 'calendar');
+  assert.equal(davFeatureOf('/addressbooks/u1/default'), 'contacts');
+  assert.equal(davFeatureOf('/principals/u1/'), null);
+  assert.equal(davFeatureOf('/calendarsx'), null);
+  // review: Express routes case-insensitively — /Calendars/… reaches the CalDAV router
+  assert.equal(davFeatureOf('/Calendars/u1/c1/'), 'calendar');
+  assert.equal(davFeatureOf('/ADDRESSBOOKS/u1/default'), 'contacts');
+  const gate = async (path: string) => {
+    const outcome = { status: null as number | null, next: false };
+    const res = {
+      set: () => res, type: () => res, send: () => res,
+      status: (code: number) => { outcome.status = code; return res; },
+    } as unknown as Parameters<typeof davFeatureGate>[1];
+    const req = { path, davUser: { userId: 'alice', email: 'alice@example.com' } } as unknown as Parameters<typeof davFeatureGate>[0];
+    await davFeatureGate(req, res, () => { outcome.next = true; });
+    return outcome;
+  };
+  assert.deepEqual(await gate('/calendars/alice/'), { status: null, next: true });
+  const model = prisma['webmailPolicy'] as { findMany: () => Promise<unknown> };
+  const original = model.findMany;
+  model.findMany = async () => [{ id: 'global', domainId: null, userId: null, calendar: 'OFF' }];
+  storage.invalidateWebmailPolicyCache();
+  try {
+    assert.deepEqual(await gate('/calendars/alice/'), { status: 403, next: false });
+    assert.deepEqual(await gate('/CALENDARS/alice/'), { status: 403, next: false });
+    assert.deepEqual(await gate('/addressbooks/alice/default'), { status: null, next: true });
+    assert.deepEqual(await gate('/principals/alice/'), { status: null, next: true });
+    model.findMany = async () => { throw new Error('db down'); };
+    storage.invalidateWebmailPolicyCache();
+    assert.equal((await gate('/addressbooks/alice/default')).status, 503);
+  } finally {
+    model.findMany = original;
+    storage.invalidateWebmailPolicyCache();
+  }
 });
 
 test('9.4: an unreadable CalDAV/CardDAV switch answers a Bearer request with 503, not 401', async () => {
