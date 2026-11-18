@@ -25,7 +25,10 @@ test('typed user events map to their caches', () => {
   assert.deepEqual(realtimePlan('contacts', { type: 'contacts' }).invalidate, [['contacts']]);
   assert.deepEqual(realtimePlan('notes', {}).invalidate, [['notes'], ['note-detail']]);
   assert.deepEqual(realtimePlan('tasks', {}).invalidate, [['tasks'], ['calendar-events']]);
-  assert.deepEqual(realtimePlan('settings', { section: 'signature' }).invalidate, [['user-signature'], ['user', 'signature']]);
+  assert.deepEqual(realtimePlan('settings', { section: 'signature' }).invalidate, [['user-signature'], ['user', 'signature'], ['user', 'signatures']]);
+  assert.equal(realtimePlan('settings', { section: 'signature' }).refreshPreferences, undefined);
+  assert.equal(realtimePlan('settings', { section: 'preferences' }).refreshPreferences, true, 'roaming preferences are re-read');
+  assert.equal(realtimePlan('settings', {}).refreshPreferences, true);
   assert.ok(realtimePlan('settings', {}).invalidate.length > 5, 'no section → every settings cache');
   assert.deepEqual(realtimePlan('quota', {}).invalidate, [['user-quota'], ['user-storage'], ['shared-mailbox-quota']]);
 });

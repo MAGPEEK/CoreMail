@@ -15,7 +15,7 @@ process.env['LOG_LEVEL'] = 'error';
 const published: Array<{ channel: string; message: unknown }> = [];
 globalThis.__realtimeRedis = { publish: async (channel, message) => { published.push({ channel, message: JSON.parse(message) }); return 1; } };
 
-const { announceOnWrite, settingsSectionOf, actionOf } = await import('./realtime.js');
+const { announceOnWrite, settingsSectionOf, personalSettingsSectionOf, actionOf } = await import('./realtime.js');
 const { webManifest, DEFAULT_APP_ICONS } = await import('./branding/manifest.js');
 
 /** Runs the middleware for one request and finishes the response with `status`. */
@@ -40,6 +40,15 @@ test('settingsSectionOf: settings paths map to their area, everything else is no
   assert.equal(settingsSectionOf('/change-password'), null);
   assert.equal(settingsSectionOf('/shared-mailboxes/1/folders'), null);
   assert.deepEqual(['POST', 'PUT', 'PATCH', 'DELETE'].map(actionOf), ['create', 'update', 'update', 'delete']);
+});
+
+test('personalSettingsSectionOf: preferences and signatures of routes/user-settings.ts; the rest is left to routes/user.ts', () => {
+  assert.equal(personalSettingsSectionOf('/preferences'), 'preferences');
+  assert.equal(personalSettingsSectionOf('/signatures'), 'signature');
+  assert.equal(personalSettingsSectionOf('/signatures/sig1'), 'signature');
+  assert.equal(personalSettingsSectionOf('/signature'), null, 'legacy single signature: routes/user.ts announces it');
+  assert.equal(personalSettingsSectionOf('/profile'), null);
+  assert.equal(personalSettingsSectionOf('/sessions'), null);
 });
 
 test('announceOnWrite: successful writes reach the acting user; reads and failures do not', async () => {

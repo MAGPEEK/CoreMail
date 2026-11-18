@@ -5,6 +5,8 @@
  *                            POST/PUT/PATCH/DELETE the acting user's other tabs
  *                            and devices hear about it
  *   announceUserSettings     /api/v1/user: settings writes by area
+ *   announcePersonalSettings /api/v1/user (routes/user-settings.ts): preferences
+ *                            and signatures
  *
  * Calendar data (owner + grantees) and folder lists use the storage helpers
  * announceCalendarChange / announceFolderListChange; message changes need
@@ -63,5 +65,23 @@ export function settingsSectionOf(path: string): SettingsSection | null {
 /** /api/v1/user middleware: settings writes reach the user's other tabs and devices. */
 export const announceUserSettings: RequestHandler = announceOnWrite(({ path }) => {
   const section = settingsSectionOf(path);
+  return section ? { type: 'settings', section } : null;
+});
+
+/**
+ * Settings area of a write handled by routes/user-settings.ts (pure). That router
+ * is mounted on /api/v1/user before routes/user.ts and ends the requests it
+ * serves, so it announces its own writes; every other path is null here (the
+ * request continues to routes/user.ts, which announces it — never twice).
+ */
+export function personalSettingsSectionOf(path: string): SettingsSection | null {
+  if (path === '/preferences') return 'preferences';
+  if (path === '/signatures' || path.startsWith('/signatures/')) return 'signature';
+  return null;
+}
+
+/** routes/user-settings.ts middleware: preference and signature writes reach the user's other tabs and devices. */
+export const announcePersonalSettings: RequestHandler = announceOnWrite(({ path }) => {
+  const section = personalSettingsSectionOf(path);
   return section ? { type: 'settings', section } : null;
 });

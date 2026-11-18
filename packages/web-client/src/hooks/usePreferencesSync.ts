@@ -10,6 +10,8 @@
  *     go to the server debounced (lib/patchQueue.ts); when the tab becomes
  *     visible again without pending changes, the server copy is re-read (other
  *     devices).
+ *  A live `settings` event (section `preferences`, hooks/useRealtime.ts) re-reads
+ *  the server copy as well — another tab or device changed it.
  *  Server unreachable at start: the cached copy is used, step 1 is retried
  *  (every 30 s and when the tab becomes visible) and changes made meanwhile
  *  wait in the queue — they are sent after the server copy was loaded (and
@@ -53,6 +55,18 @@ function currentBridged(): BridgedValues {
 }
 
 let applyingRemote = false;
+
+/** Re-read of the running sync (null while signed out). */
+let remoteRefresh: (() => void) | null = null;
+
+/**
+ * 9.4 realtime: another tab or device changed the preferences — re-read the
+ * server copy unless local changes are still waiting to be sent (they win and
+ * reach the server next). No-op while the first load has not finished.
+ */
+export function refreshPreferencesFromServer(): void {
+  remoteRefresh?.();
+}
 
 /** Mirrors the server copy into the older stores without echoing it back. */
 function applyRemote(prefs: UserPreferences, ownerId: string): void {
@@ -151,12 +165,14 @@ function startSync(ownerId: string): () => void {
   };
   document.addEventListener('visibilitychange', onVisibility);
   setPreferencesSink((patch) => queue.push(patch));
+  remoteRefresh = () => { if (loaded && !queue.hasPending) void refresh(); };
   // logout waits for pending changes like for open drafts (lib/compose-flush.ts)
   const unregisterFlush = registerComposeFlush(() => queue.flush());
   void refresh();
 
   return () => {
     stopped = true;
+    remoteRefresh = null;
     if (retryTimer) clearTimeout(retryTimer);
     queue.stop();
     unregisterFlush();

@@ -21,11 +21,14 @@ import { prisma } from '@coremail/storage';
 import { requireAuth } from '../middleware/auth.js';
 import { PreferencesPatchSchema } from '../lib/user-preferences.js';
 import { loadPreferences, savePreferencesPatch } from '../lib/preferences-store.js';
+import { announcePersonalSettings } from '../lib/realtime.js';
 import {
   MAX_SIGNATURES, MAX_SIGNATURE_HTML, countSignatures, createSignature, deleteSignature, listSignatures, mirrorLegacySignature, updateSignature,
 } from '../lib/signatures.js';
 
 export const userSettingsRouter: RouterType = Router();
+// 9.4 realtime: preference and signature writes reach the user's other tabs and devices
+userSettingsRouter.use(announcePersonalSettings);
 
 // ── Preferences ──────────────────────────────────────────────────────────────
 

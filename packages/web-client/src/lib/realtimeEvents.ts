@@ -23,6 +23,8 @@ export interface RealtimePlan {
   icon?: string;
   /** Re-read the public branding. */
   refreshBranding?: boolean;
+  /** Re-read the roaming preferences (hooks/usePreferencesSync.ts — not a query). */
+  refreshPreferences?: boolean;
 }
 
 /**
@@ -72,7 +74,7 @@ function mailboxPlan(d: Obj): RealtimePlan {
 const SETTINGS_KEYS: Record<string, QueryKey[]> = {
   profile: [['user-profile'], ['user', 'profile']],
   preferences: [['user-preferences']],
-  signature: [['user-signature'], ['user', 'signature']],
+  signature: [['user-signature'], ['user', 'signature'], ['user', 'signatures']],
   oof: [['user-oof']],
   rules: [['rules']],
   categories: [['categories']],
@@ -81,8 +83,9 @@ const SETTINGS_KEYS: Record<string, QueryKey[]> = {
 
 function settingsPlan(d: Obj): RealtimePlan {
   const section = typeof d['section'] === 'string' ? d['section'] : null;
-  const keys = section && SETTINGS_KEYS[section] ? SETTINGS_KEYS[section]! : Object.values(SETTINGS_KEYS).flat();
-  return { invalidate: [...keys] };
+  const known = section !== null && SETTINGS_KEYS[section] !== undefined;
+  const keys = known ? SETTINGS_KEYS[section]! : Object.values(SETTINGS_KEYS).flat();
+  return { invalidate: [...keys], ...(!known || section === 'preferences' ? { refreshPreferences: true } : {}) };
 }
 
 function calendarPlan(d: Obj): RealtimePlan {

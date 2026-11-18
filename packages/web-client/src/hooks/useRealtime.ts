@@ -9,6 +9,7 @@ import { startTabLeader, type AppMessage, type ChannelLike } from '../lib/tabLea
 import { InvalidationBatch, REALTIME_EVENTS, hintPresentation, parseEventData, realtimePlan } from '../lib/realtimeEvents.js';
 import { playChime } from '../lib/chime.js';
 import { currentPreferences } from '../store/preferences.js';
+import { refreshPreferencesFromServer } from './usePreferencesSync.js';
 import { tabRole } from '../lib/tabRole.js';
 
 const CHANNEL_NAME = 'coremail-realtime';
@@ -76,6 +77,7 @@ export function useRealtime() {
       const plan = realtimePlan(name, data);
       batch.add(plan.invalidate);
       if (plan.refreshBranding) void refreshBranding(true);
+      if (plan.refreshPreferences) refreshPreferencesFromServer();
       // new-mail notification style (Settings → Lesen): toast, sound or none
       const how = hintPresentation(name, plan, {
         style: currentPreferences().view.newMailNotification,
