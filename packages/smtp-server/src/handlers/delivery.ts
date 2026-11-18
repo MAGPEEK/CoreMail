@@ -24,9 +24,10 @@ export interface DeliveryLedger {
 
 /**
  * Result of one local store: stored, or not storable (mailbox over its hard
- * quota / recipient gone) — the latter two need an NDR to the sender.
+ * quota / recipient gone / refused by the recipient's mail flow policy, 9.4) —
+ * the failures need an NDR to the sender.
  */
-export type LocalOutcome = 'delivered' | 'quota' | 'unknown';
+export type LocalOutcome = 'delivered' | 'quota' | 'unknown' | 'policy';
 
 export interface DeliveryDeps {
   /** `void` counts as delivered (pre-8.1 callers). */
@@ -56,6 +57,7 @@ export function ledgerOutcome(entries: Set<string>, rcpt: string): LocalOutcome 
   if (entries.has(rcpt)) return 'delivered';
   if (entries.has(`quota:${rcpt}`)) return 'quota';
   if (entries.has(`unknown:${rcpt}`)) return 'unknown';
+  if (entries.has(`policy:${rcpt}`)) return 'policy';
   return null;
 }
 
@@ -129,9 +131,9 @@ export async function deliverOnce(
 export function outcomesByOriginal(
   origins: ReadonlyMap<string, readonly string[]>,
   outcomes: ReadonlyMap<string, LocalOutcome>,
-): { delivered: string[]; quota: string[]; unknown: string[] } {
+): { delivered: string[]; quota: string[]; unknown: string[]; policy: string[] } {
   const state = new Map<string, LocalOutcome>();
-  const rank: Record<LocalOutcome, number> = { delivered: 0, quota: 1, unknown: 2 };
+  const rank: Record<LocalOutcome, number> = { delivered: 0, quota: 1, policy: 2, unknown: 3 };
   for (const [target, outcome] of outcomes) {
     for (const original of origins.get(target) ?? [target]) {
       const prev = state.get(original);
@@ -139,7 +141,7 @@ export function outcomesByOriginal(
     }
   }
   const pick = (o: LocalOutcome): string[] => [...state].filter(([, v]) => v === o).map(([k]) => k);
-  return { delivered: pick('delivered'), quota: pick('quota'), unknown: pick('unknown') };
+  return { delivered: pick('delivered'), quota: pick('quota'), unknown: pick('unknown'), policy: pick('policy') };
 }
 /** Redis ledger: a set per failed transaction, kept for the sender's retry window. */
 export const redisDeliveryLedger: DeliveryLedger = {

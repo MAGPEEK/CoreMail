@@ -58,6 +58,8 @@ const galQueries: Array<{ where: Row; skip?: number; take?: number }> = [];
 function userMatches(u: Row, where: Row): boolean {
   if (where['domainId'] !== undefined && u['domainId'] !== where['domainId']) return false;
   if (where['active'] !== undefined && u['active'] !== where['active']) return false;
+  const not = where['NOT'] as { mailFlowPolicy?: { is?: { hiddenFromGal?: boolean } } } | undefined;
+  if (not?.mailFlowPolicy?.is?.hiddenFromGal === true && u['hiddenFromGal'] === true) return false;
   const or = where['OR'] as Array<Record<string, { contains: string }>> | undefined;
   if (or && !or.some((c) => Object.entries(c).some(([k, v]) => String(u[k]).toLowerCase().includes(v.contains.toLowerCase())))) return false;
   return true;
@@ -168,4 +170,18 @@ test('GAL and autocomplete never list users of another domain (multi-tenant), /g
   const emails = auto.json.map((e: { email: string }) => e.email);
   assert.ok(emails.includes('bob@example.com'));
   assert.ok(!emails.includes('mallory@other.example'), 'autocomplete leaked another tenant');
+});
+
+test('9.4: a mailbox hidden from the address list is in neither the GAL nor the autocomplete', async () => {
+  users.push({ id: 'u4', email: 'boss@example.com', displayName: 'Hidden Boss', domainId: 'd1', active: true, hiddenFromGal: true, domain: { name: 'example.com' } });
+  try {
+    const gal = await call('GET', '/gal');
+    assert.ok(!gal.json.entries.some((e: { email: string }) => e.email === 'boss@example.com'));
+    assert.equal(gal.json.total, 2, 'not counted either');
+    const auto = await call('GET', '/?q=boss');
+    assert.ok(!auto.json.some((e: { email: string }) => e.email === 'boss@example.com'));
+    assert.ok(galQueries.at(-1)!.where['NOT'], 'the filter is part of the database query');
+  } finally {
+    users.pop();
+  }
 });

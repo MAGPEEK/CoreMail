@@ -9,7 +9,7 @@ import {
   prisma, parseRawMessage, uploadBuffer, outboundAttachKey,
   createMessage, moveMessages, setFlags, touchMessages, expunge, nextModSeq,
   loadRawMessage, storeRawMessage, truncateBodyColumn, getObjectStream, getObjectStore, downloadBuffer,
-  checkSendQuota, reservedFolderPrefix, reservedFolderNameError,
+  checkSendQuota, reservedFolderPrefix, reservedFolderNameError, sendLimitsForUser,
 } from '@coremail/storage';
 import { getOutboundJobOptions } from '@coremail/storage/queue-options';
 import {
@@ -19,7 +19,7 @@ import { getRedisClient, createBullMqConnection, CHANNEL_MAIL_NEW, createLogger 
 import { requireAuth } from '../middleware/auth.js';
 import { announceFolderListChange } from '@coremail/storage';
 import { checkFolderParent, type FolderLookup } from '../lib/folder-tree.js';
-import { withBodyLimit, checkRecipients, MAX_SEND_FILES } from '../lib/send-limits.js';
+import { withBodyLimit, checkRecipients, maxMessageBytes, maxRecipients, MAX_SEND_FILES } from '../lib/send-limits.js';
 import { createUserRateLimiter, envInt } from '../lib/user-rate-limit.js';
 import { resolveReplyHeaders, prismaReplyLookup, parseClientReferences } from '../lib/reply-headers.js';
 import { rspamdControllerHeaders } from '../lib/rspamd-controller.js';
@@ -996,6 +996,58 @@ export async function resolveSender(
   return { ok: true, fromEmail: user.email, fromName: (user.displayName ?? '').trim(), onBehalfHeader: null };
 }
 
+/**
+ * A webmail message as it is sent: the `message` of the outbound job (without
+ * attachments; smtp-server outbound/queue.ts StructuredMessage).
+ */
+export interface OutgoingMessage {
+  from: string;
+  fromName: string;
+  sender?: string;
+  to: string[];
+  cc: string[];
+  bcc: string[];
+  subject: string;
+  html: string;
+  text: string;
+  messageId: string;
+  /** ISO date */
+  date: string;
+  inReplyTo?: string;
+  references?: string;
+  /** 9.4: Disposition-Notification-To (read receipt request) — the sender's address. */
+  dispositionNotificationTo?: string;
+}
+
+/**
+ * Pure (9.4): MIME options of the sender's own Sent copy — the From, Sender,
+ * Date, Message-ID and reply fields exactly as the outbound worker builds them
+ * from the job's message (smtp-server buildRawFromMessage), plus Bcc, which
+ * only the sender's copy keeps. Mail sent as / on behalf of a Shared Mailbox
+ * therefore shows the box (and the user as Sender) in the user's Sent folder.
+ */
+export function sentCopyMailOptions(msg: OutgoingMessage, attachments: SendMailOptions['attachments'] = []): SendMailOptions {
+  return {
+    messageId: msg.messageId,
+    from:      msg.fromName ? { name: msg.fromName, address: msg.from } : msg.from,
+    ...(msg.sender ? { sender: msg.sender } : {}),
+    to:        msg.to,
+    subject:   msg.subject,
+    date:      new Date(msg.date),
+    ...(msg.cc.length  ? { cc: msg.cc }   : {}),
+    ...(msg.bcc.length ? { bcc: msg.bcc } : {}),
+    ...(msg.html       ? { html: msg.html } : {}),
+    ...(msg.text       ? { text: msg.text } : {}),
+    ...(msg.inReplyTo  ? { inReplyTo: msg.inReplyTo, references: msg.references ?? msg.inReplyTo } : {}),
+    ...(attachments && attachments.length ? { attachments } : {}),
+  };
+}
+
+/** Pure (9.4): size estimate of an outgoing webmail message for the per-mailbox send limit. */
+export function estimatedSendSize(bodyHtml: string, bodyText: string, files: ReadonlyArray<{ size: number }>): number {
+  return Buffer.byteLength(bodyHtml ?? '') + Buffer.byteLength(bodyText ?? '') + files.reduce((n, f) => n + (f.size || 0), 0);
+}
+
 /** Validates and enqueues one outgoing mail (BullMQ `smtp-outbound`) + Sent copy. */
 export async function performSend(userId: string, input: SendRequest): Promise<SendResult> {
     const { to, cc, bcc, subject, bodyHtml, bodyText, inReplyTo } = input;
@@ -1008,7 +1060,10 @@ export async function performSend(userId: string, input: SendRequest): Promise<S
     const clientRefs = parseClientReferences(input.referencesRaw);
     if (!clientRefs.ok) return fail(400, { error: clientRefs.error });
     // 8.0.x: recipient count + syntax (header injection, envelope abuse)
-    const rcptCheck = checkRecipients([to, cc, bcc]);
+    // 9.4: a per-mailbox limit (MailFlowPolicy) replaces the global one; the
+    // request body guard (global size) stays the transport's upper bound.
+    const limits = await sendLimitsForUser(userId, { maxBytes: await maxMessageBytes(), maxRecipients: maxRecipients() });
+    const rcptCheck = checkRecipients([to, cc, bcc], limits.maxRecipients);
     if (!rcptCheck.ok) {
       return fail(400, { error: rcptCheck.error, ...(rcptCheck.invalid ? { invalid: rcptCheck.invalid } : {}) });
     }
@@ -1065,6 +1120,9 @@ export async function performSend(userId: string, input: SendRequest): Promise<S
     };
 
     const files       = input.attachments;
+    if (estimatedSendSize(bodyHtml, bodyText, files) > limits.maxBytes) {
+      return fail(413, { error: 'Die Nachricht überschreitet die Größenbeschränkung des Postfachs', maxBytes: limits.maxBytes });
+    }
     const jobId       = crypto.randomUUID();
     const msgId       = input.messageId || `<${crypto.randomUUID()}@${user.domain.name}>`;
     const sendDate    = new Date();
@@ -1112,35 +1170,39 @@ export async function performSend(userId: string, input: SendRequest): Promise<S
       jobOptions.delay = holdMs;
     }
     const sendAt = scheduledAt ?? (holdMs > 0 ? new Date(now + holdMs) : null);
+    // The message as sent: the worker builds the MIME from it, and the sender's
+    // own Sent copy below is built from the same fields (sentCopyMailOptions).
+    const outgoing: OutgoingMessage = {
+      from:      effectiveFromEmail,
+      fromName:  displayName,          // empty → nodemailer omits the quoted string
+      ...(onBehalfHeader ? { sender: onBehalfHeader } : {}),  // RFC 5322 §3.6.2 „Sender:" header
+      to,
+      cc,
+      bcc,                             // only in the SMTP envelope, not in the header
+      subject,
+      html:      bodyHtml,
+      text:      bodyText,
+      messageId: msgId,
+      // For schedule-send: set the Date header to scheduledAt so that the
+      // recipient sees the scheduled send time (not the creation time)
+      date:      (scheduledAt ?? sendDate).toISOString(),
+      ...replyHeaders,
+      ...(input.requestReceipt ? { dispositionNotificationTo: effectiveFromEmail } : {}),
+    };
     try {
       await getOutboundQueue().add('send', {
         messageId:    jobId,
         from:         effectiveFromEmail,
         to:           smtpRecipients,
         senderUserId: user.id,
+        // 9.4: send as / on behalf of a Shared Mailbox → audit + its Sent copy in the worker
+        ...(input.sendAs || input.sendOnBehalfOf ? { foreignSendSource: 'webmail' } : {}),
         ...(user.domain.dkimPrivateKey ? {
           dkimDomain:     user.domain.name,
           dkimSelector:   user.domain.dkimSelector ?? 'mail',
           dkimPrivateKey: user.domain.dkimPrivateKey,
         } : {}),
-        message: {
-          from:      effectiveFromEmail,
-          fromName:  displayName,          // empty → nodemailer omits the quoted string
-          ...(onBehalfHeader ? { sender: onBehalfHeader } : {}),  // RFC 5322 §3.6.2 „Sender:" header
-          to,
-          cc,
-          bcc,                             // only in the SMTP envelope, not in the header
-          subject,
-          html:      bodyHtml,
-          text:      bodyText,
-          messageId: msgId,
-          // For schedule-send: set the Date header to scheduledAt so that the
-          // recipient sees the scheduled send time (not the creation time)
-          date:      (scheduledAt ?? sendDate).toISOString(),
-          ...replyHeaders,
-          ...(input.requestReceipt ? { dispositionNotificationTo: effectiveFromEmail } : {}),
-          attachments: queueAttachments,
-        },
+        message: { ...outgoing, attachments: queueAttachments },
       }, jobOptions);
     } catch (queueErr) {
       log.error({ err: queueErr }, 'Outbound queue add failed');
@@ -1199,23 +1261,9 @@ export async function performSend(userId: string, input: SendRequest): Promise<S
           ...(f.cid ? { cid: f.cid.replace(/^<|>$/g, '') } : {}),
           ...(f.inline ? { contentDisposition: 'inline' as const } : {}),
         })));
-        const fromAddress: SendMailOptions['from'] = displayName
-          ? { name: displayName, address: user.email }
-          : user.email;
-
-        const rawBuffer = await buildRawMime({
-          messageId: msgId,
-          from:      fromAddress,
-          to,
-          subject,
-          date:      sendDate,
-          ...(cc.length             ? { cc }                                  : {}),
-          ...(bcc.length            ? { bcc }                                 : {}),
-          ...(bodyHtml              ? { html: bodyHtml }                      : {}),
-          ...(bodyText              ? { text: bodyText }                      : {}),
-          ...replyHeaders,
-          ...(sentAttachments.length ? { attachments: sentAttachments }        : {}),
-        });
+        // 9.4: From / Sender / Date as sent (send as / on behalf of a Shared
+        // Mailbox shows the box, not the user's own address), plus Bcc.
+        const rawBuffer = await buildRawMime(sentCopyMailOptions(outgoing, sentAttachments));
 
         const parsed = await parseRawMessage(rawBuffer);
 

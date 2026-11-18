@@ -3,7 +3,8 @@ import { prisma } from '@coremail/storage/prisma';
 import {
   listAllowedSenderAddresses, createMessage, setFlags, loadRawMessage, parseRawMessage, storeRawMessage,
   truncateBodyColumn, uploadBuffer, attachmentKey, checkSendQuota, maxOutgoingMessageBytes, deferMailboxChanges,
-  type RawSourceMessage,
+  checkUserSendLimits, afterForeignSend,
+  type RawSourceMessage, type SendLimitVerdict,
 } from '@coremail/storage';
 import { createLogger, getRedisClient } from '@coremail/core';
 import { encodeWbxml, el, getChild, getText, type WbxmlElement } from '../wbxml.js';
@@ -41,7 +42,17 @@ export interface SendMailDeps {
   sendAllowed?: (userId: string) => Promise<boolean>;
   /** 9.4: maximum message size in octets. Default: storage maxOutgoingMessageBytes. */
   maxMessageBytes?: () => Promise<number>;
+  /** 9.4: per-mailbox send limits of the user. Default: storage checkUserSendLimits. */
+  sendLimits?: (userId: string, sizeBytes: number, recipients: number) => Promise<SendLimitVerdict>;
+  /** 9.4: audit + Shared Mailbox Sent copy of a send as / on behalf. Default: storage afterForeignSend. */
+  afterSend?: (userId: string, plan: EasSubmissionPlan) => Promise<unknown>;
 }
+
+const NO_GLOBAL_LIMIT = { maxBytes: Number.POSITIVE_INFINITY, maxRecipients: Number.POSITIVE_INFINITY };
+const defaultSendLimits = (userId: string, size: number, rcpts: number): Promise<SendLimitVerdict> =>
+  checkUserSendLimits(userId, NO_GLOBAL_LIMIT, size, rcpts);
+const defaultAfterSend = (userId: string, plan: EasSubmissionPlan): Promise<unknown> =>
+  afterForeignSend({ userId, raw: plan.raw, source: 'activesync' });
 
 const clientIdKey = (userId: string, clientId: string) => `eas:clientid:${userId}:${clientId}`;
 
@@ -149,10 +160,23 @@ export function composeRequestFromMime(mime: Buffer, params: EasCommandParams, d
 }
 
 /**
+ * Pure (9.4): the SendMail / SmartReply / SmartForward status of a refused
+ * per-mailbox send limit ([MS-ASCMD] 2.2.2 common status codes,
+ * https://learn.microsoft.com/en-us/openspecs/exchange_server_protocols/ms-ascmd/95cb9d7c-d33d-4b94-9366-d59911c7a060):
+ * size → 122 AttachmentIsTooLarge (the only size status); recipient count → 120
+ * MailSubmissionFailed (MS-ASCMD has no status for too many recipients — 116 is
+ * an unresolvable recipient, 160 counts availability lookups only).
+ */
+export function sendLimitStatus(kind: 'size' | 'recipients'): string {
+  return kind === 'size' ? EAS_SEND_STATUS.MESSAGE_TOO_LARGE : EAS_SEND_STATUS.SUBMISSION_FAILED;
+}
+
+/**
  * HTTP status of a 12.1 compose request — the response has no body ([MS-ASHTTP]): sent →
  * 200; a request that cannot succeed when repeated → 400 (malformed MIME, no recipient,
- * unknown source item) / 403 (sender address not allowed) / 507 (send quota); a server
- * failure → 500, so the device keeps the message and retries.
+ * unknown source item) / 403 (sender address not allowed) / 413 (over the sender's size
+ * limit) / 507 (send quota); a server failure → 500, so the device keeps the message and
+ * retries.
  */
 export function legacySendHttpStatus(status: string): number {
   switch (status) {
@@ -165,10 +189,10 @@ export function legacySendHttpStatus(status: string): number {
       return 400;
     case EAS_SEND_STATUS.ACCESS_DENIED:
       return 403;
-    case EAS_SEND_STATUS.MAILBOX_QUOTA_EXCEEDED:
-      return 507;
     case EAS_SEND_STATUS.MESSAGE_TOO_LARGE:
       return 413; // Request Entity Too Large — repeating the same message cannot succeed
+    case EAS_SEND_STATUS.MAILBOX_QUOTA_EXCEEDED:
+      return 507;
     default:
       return 500;
   }
@@ -217,7 +241,8 @@ export async function handleLegacySendMail(
  * for a short window instead (`idempotencyKey`).
  *
  * 9.4: a message (including the appended original) above the configured maximum message
- * size is refused with Status 115 (12.1: HTTP 413).
+ * size is refused with Status 122 AttachmentIsTooLarge (12.1: HTTP 413); the sender's
+ * per-mailbox send limits refuse a larger message with 122 and too many recipients with 120.
  */
 export async function submitCompose(
   request: ComposeRequest,
@@ -271,6 +296,13 @@ export async function submitCompose(
     }
     const plan = result.plan;
 
+    // 9.4: per-mailbox send limits (size, recipients)
+    const sendLimit = await (deps.sendLimits ?? defaultSendLimits)(userId, plan.raw.length, plan.recipients.length);
+    if (!sendLimit.ok) {
+      log.info({ userId, command, kind: sendLimit.kind, limit: sendLimit.limit }, 'EAS send refused: per-mailbox send limit');
+      return sendLimitStatus(sendLimit.kind);
+    }
+
     if (idem) {
       claimed = await deps.claimClientId(userId, idem.id, idem.ttlSec);
       if (!claimed) {
@@ -315,6 +347,8 @@ export async function submitCompose(
         log.error({ err, userId, jobId }, 'Saving EAS Sent copy failed (mail was sent)'),
       );
     }
+    // Send as / on behalf of a Shared Mailbox: audit + its Sent copy (never throws).
+    await (deps.afterSend ?? defaultAfterSend)(userId, plan).catch(() => undefined);
 
     return EAS_SEND_STATUS.SUCCESS;
   } catch (err) {

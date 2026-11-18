@@ -29,6 +29,11 @@ export interface AccessibleMailbox {
   readOnly: boolean;
   sharedMailboxId: string | null;
   ownerUserId: string | null;
+  /**
+   * 9.4 auto-mapping: shown in the webmail folder pane and the IMAP namespace
+   * without the user adding it (false only when every read grant has it off).
+   */
+  autoMap: boolean;
 }
 
 /** Permissions that grant access to the mailbox content. */
@@ -36,6 +41,7 @@ export const MAILBOX_READ_PERMISSIONS = ['FULL_ACCESS', 'READ_ONLY'] as const;
 
 interface SharedPermRow {
   permission: string;
+  autoMap?: boolean;
   sharedMailbox: {
     id: string; email: string; displayName: string | null; active: boolean;
     mailbox: { id: string } | null;
@@ -44,6 +50,7 @@ interface SharedPermRow {
 
 interface DelegateRow {
   permission: string;
+  autoMap?: boolean;
   mailbox: {
     id: string;
     user: { id: string; email: string; displayName: string | null; active: boolean } | null;
@@ -65,6 +72,7 @@ export async function listAccessibleMailboxes(db: MailboxAccessDb, userId: strin
     where: { userId, permission: { in: [...MAILBOX_READ_PERMISSIONS] } },
     select: {
       permission: true,
+      autoMap: true,
       sharedMailbox: {
         select: { id: true, email: true, displayName: true, active: true, mailbox: { select: { id: true } } },
       },
@@ -74,6 +82,7 @@ export async function listAccessibleMailboxes(db: MailboxAccessDb, userId: strin
     where: { granteeId: userId, permission: { in: [...MAILBOX_READ_PERMISSIONS] } },
     select: {
       permission: true,
+      autoMap: true,
       mailbox: { select: { id: true, user: { select: { id: true, email: true, displayName: true, active: true } } } },
     },
   };
@@ -95,13 +104,15 @@ export function accessFromRows(userId: string, perms: SharedPermRow[], delegatio
     if (!box || !box.active || !box.mailbox || !isRead(p.permission)) continue;
     const existing = out.get(box.mailbox.id);
     const readOnly = p.permission !== 'FULL_ACCESS';
+    const autoMap = p.autoMap !== false;
     if (existing) {
       existing.readOnly = existing.readOnly && readOnly;
+      existing.autoMap = existing.autoMap || autoMap;
       continue;
     }
     out.set(box.mailbox.id, {
       kind: 'shared', mailboxId: box.mailbox.id, email: box.email.toLowerCase(),
-      displayName: box.displayName || box.email, readOnly, sharedMailboxId: box.id, ownerUserId: null,
+      displayName: box.displayName || box.email, readOnly, sharedMailboxId: box.id, ownerUserId: null, autoMap,
     });
   }
 
@@ -112,11 +123,30 @@ export function accessFromRows(userId: string, perms: SharedPermRow[], delegatio
     out.set(d.mailbox.id, {
       kind: 'delegated', mailboxId: d.mailbox.id, email: owner.email.toLowerCase(),
       displayName: owner.displayName || owner.email, readOnly: d.permission !== 'FULL_ACCESS',
-      sharedMailboxId: null, ownerUserId: owner.id,
+      sharedMailboxId: null, ownerUserId: owner.id, autoMap: d.autoMap !== false,
     });
   }
 
   return [...out.values()].sort((a, b) => (a.kind === b.kind ? a.email.localeCompare(b.email) : a.kind.localeCompare(b.kind)));
+}
+
+// ─── Auto-mapping (9.4) ──────────────────────────────────────────────────────
+
+/** Folder-pane reference of a foreign mailbox: "shared:<sharedMailboxId>" | "delegated:<mailboxId>". */
+export function accessibleMailboxRef(a: Pick<AccessibleMailbox, 'kind' | 'mailboxId' | 'sharedMailboxId'>): string {
+  return a.kind === 'shared' ? `shared:${a.sharedMailboxId ?? ''}` : `delegated:${a.mailboxId}`;
+}
+
+/**
+ * Pure: is a foreign mailbox mapped into the user's folder pane / IMAP
+ * namespace? Auto-mapped grants always are; others only after the user added
+ * them (UserSettings.addedSharedMailboxes). Access itself never depends on it.
+ */
+export function isMailboxMapped(
+  a: Pick<AccessibleMailbox, 'kind' | 'mailboxId' | 'sharedMailboxId' | 'autoMap'>,
+  added: ReadonlySet<string>,
+): boolean {
+  return a.autoMap || added.has(accessibleMailboxRef(a));
 }
 
 // ─── Reserved folder names (IMAP namespace prefixes) ─────────────────────────

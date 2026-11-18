@@ -13,6 +13,7 @@ import { roleForFolder, SYSTEM_FOLDER_NAMES } from '../mail/keywords.js';
 import { applyPatch, assertState, pageFields, paginate, parseGetArgs, parseSetArgs, pick } from './common.js';
 import { parseMaxChanges } from './email-changes.js';
 import type { AccountContext, JsonObject } from '../types.js';
+import { auditForeignAccess, mailboxSetAccessEvents } from '../access-audit.js';
 
 type FolderRow = {
   id: string; name: string; displayName: string; parentId: string | null; sortOrder: number;
@@ -262,6 +263,7 @@ registerMethod('Mailbox/set', CAP_MAIL, async (args, ctx) => {
   }
 
   if (Object.keys(created).length || Object.keys(updated).length || destroyed.length) announceFolderListChange(account.mailboxId);
+  auditForeignAccess(ctx.user, account, mailboxSetAccessEvents({ created, updated, destroyed }));
 
   return {
     accountId: account.accountId,

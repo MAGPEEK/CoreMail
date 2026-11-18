@@ -22,6 +22,16 @@ export function getRedisClient(): Redis {
 }
 
 /**
+ * The shared client when this process already created it, else null — for
+ * optional, best-effort uses (e.g. cross-process aggregation) that must never
+ * open a connection of their own (tests and tools without Redis stay free of a
+ * reconnect loop).
+ */
+export function peekRedisClient(): Redis | null {
+  return _client;
+}
+
+/**
  * Creates a new Redis connection specifically for BullMQ.
  * BullMQ v5 requires maxRetriesPerRequest: null (blocking commands).
  * ALWAYS returns a new instance (no singleton) — BullMQ manages

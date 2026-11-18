@@ -12,7 +12,7 @@ import { tokenString, type Token } from '../server/tokenizer.js';
 import { type ImapSession, sendOk, sendNo, sendBad, sendUntagged } from '../session/state.js';
 import { displayName, displayNames, formatName, fromClient, toClient } from './mailbox-name.js';
 import {
-  FOREIGN_DELIMITER, clientNameOf, decodeClientName, findTargetFolder, foreignClientName, foreignMailboxes,
+  FOREIGN_DELIMITER, clientNameOf, decodeClientName, findTargetFolder, foreignClientName, listedForeignMailboxes,
   parseForeignName, prefixOf,
 } from './namespaces.js';
 
@@ -145,7 +145,7 @@ export async function listEntries(session: ImapSession, withForeign = true): Pro
   if (hidden > 0) warnHiddenOnce(session.userId ?? session.mailboxId ?? '', hidden);
   let foreign: AccessibleMailbox[] = [];
   try {
-    if (withForeign) foreign = await foreignMailboxes(session);
+    if (withForeign) foreign = await listedForeignMailboxes(session);
   } catch (err) {
     // The own folders are still listed; foreign ones only with a successful check.
     log.warn({ err, id: session.id }, 'IMAP LIST: shared mailbox permissions unavailable');

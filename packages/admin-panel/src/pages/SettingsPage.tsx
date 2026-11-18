@@ -31,6 +31,8 @@ interface GlobalSettings {
   apiRateLimitPerUser:         number;
   /** Rate-limit fields an API_RATE_LIMIT_* environment variable overrides (read-only). */
   apiRateLimitEnvOverrides?:   string[];
+  mailboxAccessAuditEnabled?:       boolean;
+  mailboxAccessAuditRetentionDays?: number;
   // Maintenance
   maintenanceMode:    boolean;
   maintenanceMessage: string;
@@ -156,6 +158,8 @@ export function SettingsPage() {
     selfServicePasswordReset: true,
     auditLogEnabled: true,
     ...API_RATE_LIMIT_FORM_DEFAULTS,
+    mailboxAccessAuditEnabled: true,
+    mailboxAccessAuditRetentionDays: 180,
   });
   const [maint, setMaint] = useState({
     maintenanceMode: false,
@@ -176,7 +180,9 @@ export function SettingsPage() {
              requireMfaForAdmins: cfg.requireMfaForAdmins,
              selfServicePasswordReset: cfg.selfServicePasswordReset ?? true,
              auditLogEnabled: cfg.auditLogEnabled ?? true,
-             ...rateLimitForm(cfg) });
+             ...rateLimitForm(cfg),
+             mailboxAccessAuditEnabled: cfg.mailboxAccessAuditEnabled ?? true,
+             mailboxAccessAuditRetentionDays: cfg.mailboxAccessAuditRetentionDays ?? 180 });
     setMaint({ maintenanceMode: cfg.maintenanceMode, maintenanceMessage: cfg.maintenanceMessage });
     setOrgDirty(false); setMailDirty(false); setSecDirty(false); setMaintDirty(false);
   }, [cfg]);
@@ -388,6 +394,16 @@ export function SettingsPage() {
               {rateLimitEnvNote(cfg?.apiRateLimitEnvOverrides)}
             </div>
           )}
+        </FieldGroup>
+
+        {/* 9.4: mailbox access audit (delegates / shared mailbox users) */}
+        <FieldGroup label={t('settings_sec_mbx_audit')} hint={t('settings_sec_mbx_audit_hint')}>
+          <Toggle value={sec.mailboxAccessAuditEnabled} onChange={(v) => updSec('mailboxAccessAuditEnabled', v)}
+            label={sec.mailboxAccessAuditEnabled ? t('settings_sec_mbx_audit_on') : t('status_disabled')} />
+          <div className="mt-2">
+            <NumberInput value={sec.mailboxAccessAuditRetentionDays} onChange={(v) => updSec('mailboxAccessAuditRetentionDays', v)} min={0} max={3650} unit={t('settings_sec_mbx_audit_days')} />
+            <p className="text-xs text-fg-subtle mt-1">{t('settings_sec_mbx_audit_retention_hint')}</p>
+          </div>
         </FieldGroup>
       </Section>
 

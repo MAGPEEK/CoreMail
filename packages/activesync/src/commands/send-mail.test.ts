@@ -14,7 +14,7 @@ import { installFakeDb } from '../test-support/fake-db.js';
 
 const db = installFakeDb({
   user: [{ id: 'u1', email: 'bob@example.com', active: true }],
-  emailAlias: [], sharedMailboxPerm: [],
+  emailAlias: [], sharedMailboxPerm: [], mailFlowPolicy: [],
   mailbox: [{ id: 'mb1', userId: 'u1', uidNext: 5, highestModSeq: 9n }],
   folder: [{ id: 'inbox', mailboxId: 'mb1', name: 'INBOX', totalCount: 0 }, { id: 'sent', mailboxId: 'mb1', name: 'Sent', totalCount: 0 }],
   message: [], attachment: [], systemLog: [],
@@ -160,6 +160,34 @@ test('v8.1: a mailbox over its ProhibitSendQuota gets Status 113 (SendMail/Smart
   const ok = deps({ sendAllowed: async () => true });
   assert.equal(status(await handleSendMail(composeReq('SendMail', MIME), 'u1', 'SendMail', ok.d)), SENT);
   assert.equal(ok.jobs.length, 1);
+});
+
+test('9.4: per-mailbox send limits refuse before queueing (recipients 120, size 122); a sent mail runs the foreign-send step once', async () => {
+  const seen: Array<[string, number, number]> = [];
+  const after: unknown[] = [];
+  const refused = deps({
+    sendLimits: async (u, size, rcpts) => { seen.push([u, size, rcpts]); return { ok: false, kind: 'recipients', limit: 0 }; },
+    afterSend: async (_u, plan) => { after.push(plan); },
+  });
+  assert.equal(status(await handleSendMail(composeReq('SendMail', MIME), 'u1', 'SendMail', refused.d)), '120');
+  assert.equal(refused.jobs.length, 0);
+  assert.equal(after.length, 0);
+  assert.equal(seen[0]![0], 'u1');
+  assert.equal(seen[0]![2], 1, 'recipient count of the plan');
+
+  // [MS-ASCMD] 2.2.2: 122 AttachmentIsTooLarge for the size limit; 12.1 → HTTP 413 (not retried)
+  const tooLarge = deps({ sendLimits: async () => ({ ok: false, kind: 'size', limit: 1024 }) });
+  assert.equal(status(await handleSendMail(composeReq('SendMail', MIME), 'u1', 'SendMail', tooLarge.d)), '122');
+  assert.equal(tooLarge.jobs.length, 0);
+  assert.equal(await handleLegacySendMail(MIME, { saveInSent: false }, 'u1', 'SendMail', tooLarge.d), 413);
+  assert.equal(legacySendHttpStatus('122'), 413);
+
+  const ok = deps({ sendLimits: async () => ({ ok: true }), afterSend: async (_u, plan) => { after.push(plan); } });
+  assert.equal(status(await handleSendMail(composeReq('SendMail', MIME), 'u1', 'SendMail', ok.d)), '1');
+  assert.equal(ok.jobs.length, 1);
+  assert.equal(after.length, 1, 'audit + shared Sent copy step after queueing');
+  const failing = deps({ afterSend: async () => { throw new Error('db down'); } });
+  assert.equal(status(await handleSendMail(composeReq('SendMail', MIME), 'u1', 'SendMail', failing.d)), '1', 'never fails a sent mail');
 });
 
 test('12.1 SendMail: raw MIME body queued byte-exact, HTTP 200 without body; SaveInSent from the request line', async () => {

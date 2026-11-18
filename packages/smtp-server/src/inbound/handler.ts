@@ -8,10 +8,13 @@
  */
 
 import { createLogger } from '@coremail/core';
-import { prisma, stripHeaders, INTERNAL_MAIL_HEADERS, checkReceiveQuotaForAddress, type SenderAuth } from '@coremail/storage';
+import {
+  prisma, stripHeaders, INTERNAL_MAIL_HEADERS, checkReceiveQuotaForAddress, recipientSenderRefusal, mailFlowForRecipient,
+  deliveryRefusal, headerFromAddress, type SenderAuth, type DeliveryFacts, type MailFlowSettings,
+} from '@coremail/storage';
 import { notifyLocalOutcomes } from '../handlers/local-notify.js';
 import crypto from 'crypto';
-import { storeInboundMessage } from '../handlers/message.js';
+import { storeInboundMessage, toLocalOutcome } from '../handlers/message.js';
 import { quarantineMessage } from '../handlers/quarantine.js';
 import { virusScanHeaderLine } from './virus-scan-header.js';
 import { expandRecipientsWithOrigins, isPostmasterAddress, canonicalRecipient, isLocalDomainAddress } from '../handlers/expand.js';
@@ -120,6 +123,10 @@ async function onRcptTo(
     // mailbox scan): 552 5.2.2, or 452 4.2.2 per QUOTA_FULL_PERMANENT.
     const full = await checkReceiveQuotaForAddress(canonical);
     if (full) return full;
+    // 9.4: accept-only-from / reject-from of the recipient's mailbox (envelope
+    // sender; header From: and size are checked at DATA / delivery).
+    const refused = await recipientSenderRefusal(canonical, from || null);
+    if (refused) return refused;
   } catch (err) {
     log.error({ err, to }, 'verifyRecipient error');
     return '4.3.0 Temporary failure';
@@ -268,6 +275,14 @@ async function onMessage(
   }
   const dsn = meta?.envelope?.dsn;
 
+  // 9.4: when the mailbox restrictions (header From:, receive size) of EVERY
+  // recipient refuse the message, the DATA reply refuses it (no NDR). Mixed
+  // transactions are delivered; refused recipients get an NDR from the store.
+  const dataRefusal = await refusalForAllRecipients(localDeliveries, externalDeliveries, {
+    envelopeFrom: from || null, headerFrom: headerFromAddress(delivered), sizeBytes: delivered.length,
+  });
+  if (dataRefusal) throw new Error(dataRefusal);
+
   // 3. Local storage + external forwarding. 250 only when every part is done;
   //    a failure answers 451 and the retry skips what was already delivered
   //    (RFC 5321 §6.1 — neither lost nor duplicated mail).
@@ -284,7 +299,7 @@ async function onMessage(
         senderAuth,
         ...(filterResult.spamScore !== undefined ? { spamScore: filterResult.spamScore } : {}),
       });
-      return result === 'unknown' || result === 'quota' ? result : 'delivered';
+      return toLocalOutcome(result);
     },
     enqueueExternal: async (rcpts) => {
       const jobDsn = dsnForRecipients(dsn, rcpts);
@@ -312,6 +327,29 @@ async function onMessage(
   });
 }
 
+
+/**
+ * The DATA-stage refusal when the mail flow policy of every local delivery
+ * target refuses the message and there is no external target; null otherwise
+ * (then each refused target is handled by the store → NDR). Targets without a
+ * policy-bearing mailbox (resources, postmaster) count as accepting.
+ */
+export async function refusalForAllRecipients(
+  local: readonly string[],
+  external: readonly string[],
+  facts: DeliveryFacts,
+  lookup: (rcpt: string) => Promise<{ policy: MailFlowSettings } | null> = mailFlowForRecipient,
+): Promise<string | null> {
+  if (local.length === 0 || external.length > 0) return null;
+  let first: string | null = null;
+  for (const rcpt of local) {
+    const found = await lookup(rcpt);
+    const refusal = found ? deliveryRefusal(found.policy, facts) : null;
+    if (!refusal) return null;
+    first ??= refusal;
+  }
+  return first;
+}
 
 /** Most recipients listed in X-Filter-Context (HTTP header size limit, 16 KB). */
 export const FILTER_CONTEXT_MAX_RCPTS = 100;

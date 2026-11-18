@@ -139,6 +139,8 @@ model User {
   passwordResetTokens PasswordResetToken[]
   // 9.4: per-protocol access switches of the user (none = everything inherited)
   protocolPolicy      ProtocolPolicy?
+  // 9.4: per-mailbox mail flow (GAL visibility, forwarding, sender lists, limits)
+  mailFlowPolicy      MailFlowPolicy?
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt
 
@@ -182,6 +184,38 @@ model ProtocolPolicy {
   updatedAt  DateTime       @updatedAt
 
   @@map("protocol_policies")
+}
+
+// ─────────────────────────────────────────────
+// Per-mailbox mail flow (9.4)
+// ─────────────────────────────────────────────
+
+// Mail flow settings of one user mailbox or Shared Mailbox (exactly one of
+// userId / sharedMailboxId). No row = defaults (listed in the address list, no
+// forwarding, no sender restriction, the global limits). Enforced through
+// @coremail/storage src/mail-flow.ts; see docs/mailbox-management.md.
+model MailFlowPolicy {
+  id               String         @id @default(cuid())
+  userId           String?        @unique
+  user             User?          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sharedMailboxId  String?        @unique
+  sharedMailbox    SharedMailbox? @relation(fields: [sharedMailboxId], references: [id], onDelete: Cascade)
+  // Not listed in the global address list, autocomplete and directory searches
+  hiddenFromGal    Boolean        @default(false)
+  // Admin forwarding: every delivered message is also sent to this address
+  forwardTo        String?
+  // false = forward only (the mailbox keeps no copy)
+  forwardKeepCopy  Boolean        @default(true)
+  // Lower-case addresses ("a@b.example") or domains ("b.example"); empty = no restriction
+  acceptFrom       String[]       @default([])
+  rejectFrom       String[]       @default([])
+  // null = the global limit
+  maxSendSizeMb    Int?
+  maxReceiveSizeMb Int?
+  maxRecipients    Int?
+  updatedAt        DateTime       @updatedAt
+
+  @@map("mail_flow_policies")
 }
 
 // ─────────────────────────────────────────────
@@ -498,9 +532,15 @@ model SharedMailbox {
   quotaProhibitSendBytes BigInt?
   quotaWarnedAt          DateTime?
   active      Boolean             @default(true)
+  // 9.4: copy of mail sent as / on behalf of this mailbox into its own Sent folder
+  // (in addition to the sender's own Sent; storage src/shared-sent-copy.ts)
+  sentCopySendAs       Boolean    @default(false)
+  sentCopySendOnBehalf Boolean    @default(false)
   permissions SharedMailboxPerm[]
   mailbox     Mailbox?
   aliases     EmailAlias[]        @relation("SharedMailboxAliases")
+  // 9.4: per-mailbox mail flow (GAL visibility, forwarding, sender lists, limits)
+  mailFlowPolicy MailFlowPolicy?
   createdAt   DateTime            @default(now())
 
   @@index([domainId])
@@ -545,6 +585,10 @@ model SharedMailboxPerm {
   user            User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId          String
   permission      SharedMailboxPermType
+  // 9.4: auto-mapping — the mailbox appears in the grantee's webmail folder pane
+  // and IMAP namespace on its own; false = only after the grantee adds it
+  // (UserSettings.addedSharedMailboxes). Read from the FULL_ACCESS/READ_ONLY row.
+  autoMap         Boolean              @default(true)
   grantedAt       DateTime             @default(now())
   grantedBy       String
 
@@ -566,6 +610,8 @@ model MailboxDelegate {
   grantee     User                 @relation("MailboxDelegateGrantee", fields: [granteeId], references: [id], onDelete: Cascade)
   granteeId   String
   permission  SharedMailboxPermType
+  // 9.4: auto-mapping, see SharedMailboxPerm.autoMap
+  autoMap     Boolean              @default(true)
   grantedAt   DateTime             @default(now())
   grantedBy   String
 
@@ -759,6 +805,9 @@ model UserSettings {
   // api-gateway lib/user-preferences.ts. '{}' = never written (the webmail then
   // imports its browser values once).
   preferences             Json      @default("{}")
+  // 9.4: mailboxes granted without auto-mapping that the user added to the folder
+  // pane / IMAP namespace (same ref format as hiddenSharedMailboxes)
+  addedSharedMailboxes    String[]  @default([])
   updatedAt               DateTime  @updatedAt
 
   @@map("user_settings")
@@ -1612,6 +1661,11 @@ model ServerSettings {
   requireMfaForAdmins        Boolean @default(false)
   // v3.18.30: audit log globally on/off. Default on. The toggle itself is audited.
   auditLogEnabled            Boolean @default(true)
+  // 9.4: mailbox access audit (delegates / shared mailbox users; action prefix
+  // mailbox.foreign.*) — on/off and retention in days of these entries (purged by
+  // the api-gateway mailbox-access purger; other audit entries are never purged)
+  mailboxAccessAuditEnabled       Boolean @default(true)
+  mailboxAccessAuditRetentionDays Int     @default(180)
   allowSelfRegistration      Boolean @default(false)
   // Allows users to reset their own password via an e-mail link
   selfServicePasswordReset   Boolean @default(true)

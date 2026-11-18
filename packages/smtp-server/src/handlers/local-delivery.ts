@@ -145,6 +145,45 @@ export async function bounceQuotaLocal(
   await (opts.bounce ?? sendDsnBounce)(quotaExceededDsn(raw, from, rcpts, hostname, opts.deliverExternal ?? true));
 }
 
+/** NDR diagnostic of a delivery refused by the recipient's mail flow policy (9.4). */
+export const POLICY_REFUSED_DIAGNOSTIC = '550 5.7.1 Delivery refused by the recipient\'s mailbox restrictions';
+
+/** Pure: DSN options for local recipients whose mail flow policy refused the message (5.7.1, 9.4). */
+export function policyRefusedDsn(raw: Buffer, from: string, rcpts: readonly string[], hostname: string, deliverExternal: boolean): DsnOptions {
+  const { subject, messageId } = headerInfo(raw);
+  return {
+    originalFrom: from,
+    originalTo: [...rcpts],
+    originalSubject: subject,
+    originalMessageId: messageId,
+    failureReason: 'The recipient does not accept this message (sender or size restriction of the mailbox)',
+    smtpCode: 550,
+    serverHostname: hostname,
+    recipients: rcpts.map((rcpt) => ({ rcpt, status: '5.7.1', diagnostic: POLICY_REFUSED_DIAGNOSTIC, remote: false })),
+    deliverExternal,
+  };
+}
+
+/**
+ * NDR (5.7.1) for local recipients whose accept/reject lists or receive size
+ * limit refused the message at delivery time. Never for a null-sender message.
+ */
+export async function bouncePolicyLocal(
+  raw: Buffer,
+  from: string,
+  rcpts: readonly string[],
+  opts: { hostname?: string; deliverExternal?: boolean; bounce?: (o: DsnOptions) => Promise<void> } = {},
+): Promise<void> {
+  if (rcpts.length === 0) return;
+  if (!from) {
+    log.warn({ rcpts }, 'Delivery refused by mailbox restrictions for a null-sender message — not bounced');
+    return;
+  }
+  const hostname = opts.hostname ?? (await ownAuthservIds())[0] ?? 'mail.localhost';
+  log.warn({ from, rcpts }, 'Delivery refused by the recipient mailbox restrictions — sending an NDR');
+  await (opts.bounce ?? sendDsnBounce)(policyRefusedDsn(raw, from, rcpts, hostname, opts.deliverExternal ?? true));
+}
+
 /** Tests: forget the cached authserv-ids. */
 export function resetAuthservIdCache(): void {
   cachedIds = null;

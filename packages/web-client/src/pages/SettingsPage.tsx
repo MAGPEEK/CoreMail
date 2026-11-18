@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { RulesSection } from '../components/RulesSection.js';
 import { RecoverDeletedItemsPanel } from '../components/RecoverDeletedItems.js';
+import { MailboxAccessLog } from '../components/MailboxAccessLog.js';
 import { QuotaIndicator } from '../components/QuotaIndicator.js';
 import { quotaColor, type QuotaLevel } from '../lib/quota.js';
 import { SignatureSettings } from '../components/settings/SignatureSettings.js';
@@ -1291,6 +1292,8 @@ function SecuritySection() {
         <DevicesPanel />
         <SmimeSettingsPanel />
       </div>
+      {/* 9.4: who accessed my mailbox (delegates) */}
+      <MailboxAccessLog />
 
       {reauth && (
         <PasswordPromptDialog

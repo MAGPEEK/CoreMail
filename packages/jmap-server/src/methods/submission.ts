@@ -5,7 +5,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { Queue } from 'bullmq';
-import { checkSendQuota, listAllowedSenderAddresses, prisma } from '@coremail/storage';
+import { checkSendQuota, checkUserSendLimits, listAllowedSenderAddresses, prisma, type SendLimitVerdict } from '@coremail/storage';
 import { getOutboundJobOptions } from '@coremail/storage/queue-options';
 import { createBullMqConnection, getRedisClient, createLogger } from '@coremail/core';
 import { registerMethod } from '../dispatcher.js';
@@ -148,6 +148,9 @@ async function parseCreate(obj: JsonObject, account: AccountContext, ctx: Method
   if (!rcpt.length) throw setError('noRecipients');
   const bad = rcpt.filter((r) => !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(r));
   if (bad.length) throw setError('invalidRecipients', `invalid: ${bad.join(', ')}`);
+  // 9.4: per-mailbox send limits of the submitting user (RFC 8621 §7.5 tooLarge / tooManyRecipients).
+  const limitError = sendLimitSetError(await checkUserSendLimits(ctx.user.userId, UNLIMITED, raw.length, rcpt.length));
+  if (limitError) throw limitError;
 
   const sendAt = releaseTime(mailFromParams, new Date());
   const threadId = msg.threadId ?? msg.id;
@@ -155,6 +158,29 @@ async function parseCreate(obj: JsonObject, account: AccountContext, ctx: Method
     identityId, emailId, sendAt, raw, threadId, dkimDomain: envCheck.domain,
     envelope: { mailFrom: { email: mailFrom, parameters: mailFromParams }, rcptTo: rcpt.map((e) => ({ email: e, parameters: null })) },
   };
+}
+
+/**
+ * Pure (9.4): the outbound job fields of the send-as / on-behalf step (audit +
+ * Shared Mailbox Sent copy in the worker). Personal account: audit + copy. A
+ * Shared Mailbox account keeps the sent Email in that mailbox itself
+ * (onSuccessUpdateEmail) — audit only. Delegated accounts cannot submit.
+ */
+export function foreignSendFields(account: Pick<AccountContext, 'isPersonal' | 'sharedMailboxId'>):
+  { foreignSendSource?: 'jmap'; foreignSendAuditOnly?: true } {
+  if (account.isPersonal) return { foreignSendSource: 'jmap' };
+  return account.sharedMailboxId ? { foreignSendSource: 'jmap', foreignSendAuditOnly: true } : {};
+}
+
+/** No global limit at submission time — only a per-mailbox value narrows it (9.4). */
+const UNLIMITED = { maxBytes: Number.POSITIVE_INFINITY, maxRecipients: Number.POSITIVE_INFINITY };
+
+/** Pure: the SetError of a per-mailbox send limit verdict, or null. */
+export function sendLimitSetError(verdict: SendLimitVerdict): SetError | null {
+  if (verdict.ok) return null;
+  return verdict.kind === 'size'
+    ? { ...setError('tooLarge', `message exceeds the sender's size limit of ${verdict.limit} octets`), maxSize: verdict.limit } as SetError
+    : { ...setError('tooManyRecipients', `at most ${verdict.limit} recipients`), maxRecipients: verdict.limit } as SetError;
 }
 
 /** SMTP extension parameters accepted on MAIL FROM (advertised in submissionExtensions). */
@@ -205,6 +231,7 @@ async function enqueue(account: AccountContext, ctx: MethodContext, c: CreateInp
     from: c.envelope.mailFrom.email,
     to: c.envelope.rcptTo.map((r) => r.email),
     senderUserId: account.ownerUserId ?? ctx.user.userId,
+    ...foreignSendFields(account),
     ...(domain?.dkimPrivateKey ? { dkimDomain: domain.name, dkimSelector: domain.dkimSelector, dkimPrivateKey: domain.dkimPrivateKey } : {}),
     rawMessage: stripBccHeader(c.raw).toString('base64'),
   }, { ...(await getOutboundJobOptions()), jobId, ...(delay > 0 ? { delay } : {}) });

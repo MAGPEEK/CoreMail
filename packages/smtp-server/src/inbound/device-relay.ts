@@ -33,7 +33,7 @@ import {
 } from '../handlers/trace.js';
 import { deliverOnce, deliveryKey, redisDeliveryLedger } from '../handlers/delivery.js';
 import { notifyLocalOutcomes } from '../handlers/local-notify.js';
-import { storeInboundMessage } from '../handlers/message.js';
+import { storeInboundMessage, toLocalOutcome } from '../handlers/message.js';
 import { quarantineMessage, type QuarantineInput } from '../handlers/quarantine.js';
 import { completeSubmissionHeaders } from '../submission/handler.js';
 import { callContentFilter, CONTENT_FILTER_MAX_BYTES, type ContentFilterVerdict } from './connection-filter.js';
@@ -263,7 +263,7 @@ async function deliverRelayed(d: RelayDelivery, isLocal: (a: string) => Promise<
         fromAddr: d.from, rcptTo: rcpt, toJunk: false, deliveryKey: txKey,
         senderAuth: { authenticatedSender: d.from },
       });
-      return result === 'unknown' || result === 'quota' ? result : 'delivered';
+      return toLocalOutcome(result);
     },
     enqueueExternal: async (rcpts) => {
       const jobDsn = dsnForRecipients(dsn, rcpts);

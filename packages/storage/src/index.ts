@@ -40,3 +40,6 @@ export * from './mdn.js';
 export * from './realtime/change-scope.js';
 export * from './realtime/audience.js';
 export * from './realtime/announce.js';
+export * from './mail-flow.js';
+export * from './mailbox-access-audit.js';
+export * from './shared-sent-copy.js';

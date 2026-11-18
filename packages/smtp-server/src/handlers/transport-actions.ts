@@ -185,6 +185,7 @@ export async function handleTransportOutcome(
         const result = await deps.storeLocal(extraRaw, ctx.fromAddr, addr, { skipTransportRules: true });
         if (result === 'unknown') unknown.push(addr);
         if (result === 'quota') full.push(addr);
+        if (result === 'policy') log.warn({ addr }, 'TransportRule extra recipient refused by its mailbox restrictions');
       } catch (err) {
         log.error({ err, addr }, 'TransportRule extra local delivery failed');
       }

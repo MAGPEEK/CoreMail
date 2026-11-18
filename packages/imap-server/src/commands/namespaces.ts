@@ -17,7 +17,7 @@
  * re-read without the cache on SELECT/EXAMINE and before every write, so a revoked
  * permission takes effect within 30 s for reads and immediately for writes.
  */
-import { prisma, listAccessibleMailboxes, type AccessibleMailbox, type ForeignMailboxKind } from '@coremail/storage';
+import { prisma, listAccessibleMailboxes, isMailboxMapped, type AccessibleMailbox, type ForeignMailboxKind } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import { type ImapSession, sendUntagged } from '../session/state.js';
 import { canonicalInbox, decodeMutf7, storedCandidates } from './mailbox-name.js';
@@ -132,6 +132,25 @@ export async function foreignMailboxes(session: ImapSession, fresh = false): Pro
   const list = all.filter((a) => prefixOf(a.kind) !== null && !a.email.includes(FOREIGN_DELIMITER));
   session.foreignAccess = { userId: session.userId, at: now, gen, list };
   return list;
+}
+
+/**
+ * 9.4 auto-mapping: the foreign mailboxes LIST shows — auto-mapped grants and
+ * those the user added (UserSettings.addedSharedMailboxes). SELECT / STATUS /
+ * APPEND of a name still work for every accessible mailbox (access ≠ listing).
+ */
+export async function listedForeignMailboxes(session: ImapSession): Promise<AccessibleMailbox[]> {
+  const all = await foreignMailboxes(session);
+  if (all.every((a) => a.autoMap) || !session.userId) return all;
+  let added: string[] = [];
+  try {
+    const s = await prisma.userSettings.findUnique({ where: { userId: session.userId }, select: { addedSharedMailboxes: true } });
+    added = s?.addedSharedMailboxes ?? [];
+  } catch (err) {
+    log.warn({ err, id: session.id }, 'IMAP LIST: added shared mailboxes unavailable — listing auto-mapped ones only');
+  }
+  const set = new Set(added);
+  return all.filter((a) => isMailboxMapped(a, set));
 }
 
 export function rightsOf(access: AccessibleMailbox | null): string {

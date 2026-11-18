@@ -9,6 +9,7 @@ import { api } from '../api/client.js';
 import toast from 'react-hot-toast';
 import { MailboxAliasesSection } from '../components/MailboxAliasesSection.js';
 import { ProtocolAccessEditor } from '../components/ProtocolAccessEditor.js';
+import { MailFlowEditor } from '../components/MailFlowEditor.js';
 import { useT } from '../i18n/useT.js';
 import { usePermissions } from '../hooks/usePermissions.js';
 import { Can, WriteGuard } from '../components/Can.js';
@@ -38,7 +39,9 @@ interface UserDetail extends User {
 }
 interface Domain { id: string; name: string; active: boolean }
 interface DelegateGrantee { id: string; email: string; displayName: string }
-interface Delegate { id: string; granteeId: string; permission: string; grantedAt: string; grantee: DelegateGrantee }
+interface Delegate { id: string; granteeId: string; permission: string; grantedAt: string; autoMap?: boolean; grantee: DelegateGrantee }
+/** Grant form of the delegation section (9.4: autoMap = "Automatisch einblenden"). */
+interface DelegateForm { granteeId: string; permission: PermType; autoMap: boolean }
 
 type PermType = 'FULL_ACCESS' | 'READ_ONLY' | 'SEND_AS' | 'SEND_ON_BEHALF';
 
@@ -121,7 +124,7 @@ export function MailboxesPage() {
   const [revokeAppPw, setRevokeAppPw]   = useState(false);
   const [form, setForm]                 = useState({ ...EMPTY_FORM });
   const [localPart, setLocalPart]       = useState('');
-  const [delegateForm, setDelegateForm] = useState<Record<string, { granteeId: string; permission: PermType }>>({});
+  const [delegateForm, setDelegateForm] = useState<Record<string, DelegateForm>>({});
 
   const { data: mailboxes = [], isLoading, isFetching, refetch } = useQuery<User[]>({
     queryKey: ['admin-mailboxes'],
@@ -247,11 +250,11 @@ export function MailboxesPage() {
   });
 
   const grantDelegateMutation = useMutation({
-    mutationFn: ({ userId, granteeId, permission }: { userId: string; granteeId: string; permission: string }) =>
-      api.post(`/admin/mailboxes/${userId}/delegates`, { granteeId, permission }),
+    mutationFn: ({ userId, granteeId, permission, autoMap }: { userId: string; granteeId: string; permission: string; autoMap: boolean }) =>
+      api.post(`/admin/mailboxes/${userId}/delegates`, { granteeId, permission, autoMap }),
     onSuccess: (_data, vars) => {
       toast.success(t('delegate_saved'));
-      setDelegateForm((prev) => ({ ...prev, [vars.userId]: { granteeId: '', permission: 'READ_ONLY' } }));
+      setDelegateForm((prev) => ({ ...prev, [vars.userId]: { granteeId: '', permission: 'READ_ONLY', autoMap: true } }));
       void refetchDelegates();
     },
     onError: (err: Error) => toast.error(err.message),
@@ -597,11 +600,11 @@ export function MailboxesPage() {
                 userId={active.id}
                 allUsers={mailboxes}
                 delegates={delegates}
-                delegateForm={delegateForm[active.id] ?? { granteeId: '', permission: 'READ_ONLY' }}
+                delegateForm={delegateForm[active.id] ?? { granteeId: '', permission: 'READ_ONLY', autoMap: true }}
                 onFormChange={(f) => setDelegateForm((prev) => ({ ...prev, [active.id]: f }))}
                 onGrant={() => {
                   const f = delegateForm[active.id];
-                  if (f?.granteeId) grantDelegateMutation.mutate({ userId: active.id, granteeId: f.granteeId, permission: f.permission });
+                  if (f?.granteeId) grantDelegateMutation.mutate({ userId: active.id, granteeId: f.granteeId, permission: f.permission, autoMap: f.autoMap });
                 }}
                 onRevoke={(granteeId) => revokeDelegateMutation.mutate({ userId: active.id, granteeId })}
                 isPending={grantDelegateMutation.isPending || revokeDelegateMutation.isPending}
@@ -833,6 +836,11 @@ function EditForm({ user, domains, onSave, isPending }:
         />
       </div>
 
+      {/* 9.4: per-mailbox mail flow */}
+      <div className="border-t border-line pt-4 mt-2">
+        <MailFlowEditor path={`/admin/mailboxes/${user.id}/mail-flow`} kind="user" />
+      </div>
+
       {/* 9.4: protocol access (user level) */}
       <div className="border-t border-line pt-4 mt-2">
         <ProtocolAccessEditor path={`/admin/protocol-access/users/${user.id}`} area="recipients" />
@@ -855,8 +863,8 @@ function DelegateSection({
   userId: string;
   allUsers: User[];
   delegates: Delegate[];
-  delegateForm: { granteeId: string; permission: PermType };
-  onFormChange: (f: { granteeId: string; permission: PermType }) => void;
+  delegateForm: DelegateForm;
+  onFormChange: (f: DelegateForm) => void;
   onGrant: () => void;
   onRevoke: (granteeId: string) => void;
   isPending: boolean;
@@ -893,6 +901,7 @@ function DelegateSection({
                 </td>
                 <td className="px-4 py-1.5 text-fg-muted">
                   {t((PERM_LABELS[d.permission] ?? d.permission) as Parameters<typeof t>[0])}
+                  {d.autoMap === false && <span className="ml-1 text-fg-subtle">({t('shared_perm_not_automapped')})</span>}
                 </td>
                 <td className="px-4 py-1.5 text-right">
                   <button
@@ -930,6 +939,10 @@ function DelegateSection({
             <option key={val} value={val}>{t(key as Parameters<typeof t>[0])}</option>
           ))}
         </select>
+        <label className="flex items-center gap-1.5 text-xs text-fg-muted cursor-pointer select-none" title={t('shared_perm_automap_hint')}>
+          <input type="checkbox" checked={delegateForm.autoMap} onChange={(e) => onFormChange({ ...delegateForm, autoMap: e.target.checked })} className="rounded" />
+          {t('shared_perm_automap')}
+        </label>
         <button
           onClick={onGrant}
           disabled={!delegateForm.granteeId || isPending}

@@ -1,24 +1,21 @@
 /**
- * Audit of writes in someone else's mailbox (9.3 review A3): folder create /
+ * Audit of the webmail access to someone else's mailbox: folder create /
  * rename / delete / empty and message move / delete on a Shared Mailbox or a
- * delegated user mailbox. Same shape as the recover-deleted-items audit
- * (routes/recoverable.ts): targetType `sharedMailbox` (SharedMailbox id) or
- * `mailbox` (Mailbox id of the delegating user), the mailbox id and the
- * affected folder / message counts in `changes`. Fire-and-forget (lib/audit.ts).
+ * delegated user mailbox (9.3 review A3), and — 9.4 — opening it (aggregated:
+ * one entry per user, mailbox and hour). Written through the shared mailbox
+ * access audit of @coremail/storage (mailbox-access-audit.ts, source
+ * `webmail`): targetType `sharedMailbox` (SharedMailbox id) or `mailbox`
+ * (Mailbox id of the delegating user), the mailbox id and the affected folder /
+ * message counts in `changes`. Fire-and-forget.
  *
- * Actions: mailbox.foreign.folder.create | .folder.update | .folder.delete |
- *          .folder.empty | .message.move | .message.delete
+ * Actions: mailbox.foreign.open | .folder.create | .folder.update |
+ *          .folder.delete | .folder.empty | .message.move | .message.delete
  */
 import type { Request } from 'express';
-import { audit, auditContext } from './audit.js';
+import { recordMailboxAccess, type MailboxAccessAction } from '@coremail/storage';
+import { auditContext } from './audit.js';
 
-export type ForeignAuditAction =
-  | 'mailbox.foreign.folder.create'
-  | 'mailbox.foreign.folder.update'
-  | 'mailbox.foreign.folder.delete'
-  | 'mailbox.foreign.folder.empty'
-  | 'mailbox.foreign.message.move'
-  | 'mailbox.foreign.message.delete';
+export type ForeignAuditAction = Exclude<MailboxAccessAction, 'mailbox.foreign.open' | 'mailbox.foreign.send_as' | 'mailbox.foreign.send_on_behalf'>;
 
 export interface ForeignAuditTarget {
   kind: 'shared' | 'delegated';
@@ -28,20 +25,35 @@ export interface ForeignAuditTarget {
   email?: string;
 }
 
+function record(req: Request, target: ForeignAuditTarget, action: MailboxAccessAction, changes?: Record<string, unknown>): void {
+  const ctx = auditContext(req);
+  void recordMailboxAccess({
+    actorId: req.apiUser!.userId,
+    actorEmail: req.apiUser!.email,
+    target: {
+      kind: target.kind,
+      sharedMailboxId: target.kind === 'shared' ? target.id : null,
+      mailboxId: target.mailboxId,
+      ...(target.email ? { email: target.email } : {}),
+    },
+    action,
+    source: 'webmail',
+    ...(changes ? { changes } : {}),
+    ...(ctx.ipAddress ? { ipAddress: ctx.ipAddress } : {}),
+    ...(ctx.userAgent ? { userAgent: ctx.userAgent } : {}),
+  });
+}
+
 export function auditForeignWrite(
   req: Request,
   target: ForeignAuditTarget,
   action: ForeignAuditAction,
   changes: Record<string, unknown>,
 ): void {
-  audit({
-    actorId: req.apiUser!.userId,
-    actorEmail: req.apiUser!.email,
-    action,
-    targetType: target.kind === 'shared' ? 'sharedMailbox' : 'mailbox',
-    targetId: target.id,
-    ...(target.email ? { targetName: target.email } : {}),
-    changes: { mailboxId: target.mailboxId, ...changes },
-    ...auditContext(req),
-  });
+  record(req, target, action, changes);
+}
+
+/** Opening / reading the mailbox (aggregated by the storage recorder). */
+export function auditForeignOpen(req: Request, target: ForeignAuditTarget): void {
+  record(req, target, 'mailbox.foreign.open');
 }

@@ -20,6 +20,7 @@ import { applyPatch, assertState, pageFields, paginate, parseGetArgs, parseSetAr
 import { changedMessageIds, parseMaxChanges } from './email-changes.js';
 import { parseSort, queryEmailIds } from './email-query.js';
 import type { AccountContext, EmailAddress, EmailHeader, JsonObject } from '../types.js';
+import { auditForeignAccess, emailSetAccessEvents } from '../access-audit.js';
 
 const MSG_INCLUDE = { attachments: true } as const;
 
@@ -342,7 +343,9 @@ registerMethod('Email/set', CAP_MAIL, async (args, ctx) => {
   const oldState = await emailState(account.mailboxId);
   assertState(ifInState, oldState);
   const r = await runEmailSet(account, ctx, create, update, destroy);
-  return setResponse(account.accountId, oldState, await emailState(account.mailboxId), r);
+  const response = setResponse(account.accountId, oldState, await emailState(account.mailboxId), r);
+  auditForeignAccess(ctx.user, account, emailSetAccessEvents(update, response));
+  return response;
 });
 
 // ── Email/import ─────────────────────────────────────────────────────────────

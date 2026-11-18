@@ -52,7 +52,7 @@ import { getForeignMailbox } from '../lib/mailbox-access.js';
 import { checkFolderParent, type FolderLookup } from '../lib/folder-tree.js';
 import { contentDisposition } from '../lib/attachment-download.js';
 import { deleteFolder, folderDeleteFailure, folderDeleteOptions, folderDeleteRefusal } from '../lib/folder-delete.js';
-import { auditForeignWrite, type ForeignAuditAction } from '../lib/foreign-audit.js';
+import { auditForeignOpen, auditForeignWrite, type ForeignAuditAction, type ForeignAuditTarget } from '../lib/foreign-audit.js';
 import { markReadRequested } from '../lib/mark-read.js';
 import { messageOrderBy } from '../lib/message-sort.js';
 import {
@@ -113,7 +113,18 @@ async function resolve(kind: Kind, req: Request, res: Response, mode: 'read' | '
   const access = await getForeignMailbox(req.apiUser!.userId, kind, id);
   if (!access) { res.status(403).json(NO_ACCESS); return null; }
   if (mode === 'write' && access.readOnly) { res.status(403).json(READ_ONLY); return null; }
+  // 9.4: mailbox access audit — one "opened" entry per user, mailbox and hour
+  auditForeignOpen(req, auditTarget(kind, req, access));
   return access;
+}
+
+function auditTarget(kind: Kind, req: Request, access: AccessibleMailbox): ForeignAuditTarget {
+  return {
+    kind,
+    id: kind === 'shared' ? (access.sharedMailboxId ?? String((req.params as { id?: string }).id ?? '')) : access.mailboxId,
+    mailboxId: access.mailboxId,
+    email: access.email,
+  };
 }
 
 /** A folder of the mailbox (null + 404 when it belongs elsewhere). */
@@ -133,12 +144,7 @@ function rejectFolderName(name: string | undefined, res: Response): boolean {
 
 /** Audit a write in the foreign mailbox (A3). */
 function auditWrite(kind: Kind, req: Request, access: AccessibleMailbox, action: ForeignAuditAction, changes: Record<string, unknown>): void {
-  auditForeignWrite(req, {
-    kind,
-    id: kind === 'shared' ? (access.sharedMailboxId ?? String((req.params as { id?: string }).id ?? '')) : access.mailboxId,
-    mailboxId: access.mailboxId,
-    email: access.email,
-  }, action, changes);
+  auditForeignWrite(req, auditTarget(kind, req, access), action, changes);
 }
 
 /** Route-level auth (the router is mounted next to other routers on the same prefix). */

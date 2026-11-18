@@ -14,7 +14,7 @@
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { prisma, clearMessageSizeLimitCache } from '@coremail/storage';
+import { prisma, clearMessageSizeLimitCache, invalidateMailboxAccessAuditSettings } from '@coremail/storage';
 import { requireArea } from '../../middleware/auth.js';
 import { createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 import { audit, auditContext, invalidateAuditCache } from '../../lib/audit.js';
@@ -100,6 +100,10 @@ export const SecuritySchema = z.object({
   apiRateLimitWindowMin:      z.number().int().min(API_RATE_LIMIT_BOUNDS.windowMin[0]).max(API_RATE_LIMIT_BOUNDS.windowMin[1]),
   apiRateLimitPerIp:          z.number().int().min(API_RATE_LIMIT_BOUNDS.perIp[0]).max(API_RATE_LIMIT_BOUNDS.perIp[1]),
   apiRateLimitPerUser:        z.number().int().min(API_RATE_LIMIT_BOUNDS.perUser[0]).max(API_RATE_LIMIT_BOUNDS.perUser[1]),
+  // 9.4: mailbox access audit (delegates / shared mailbox users) and the
+  // retention of its entries in days (0 = keep)
+  mailboxAccessAuditEnabled:       z.boolean(),
+  mailboxAccessAuditRetentionDays: z.number().int().min(0).max(3650),
 }).partial();
 
 export const MaintenanceSchema = z.object({
@@ -208,6 +212,7 @@ adminGlobalSettingsRouter.put('/security', async (req: Request, res: Response) =
   invalidateAuditCache();
   // 9.4: the API rate limit applies at once (otherwise within the 60 s refresh)
   await reloadApiRateLimitConfig();
+  invalidateMailboxAccessAuditSettings(); // 9.4: this process; other services re-read within 60 s
 
   log.info(parsed.data, 'Security policies updated');
   publishReload('security');

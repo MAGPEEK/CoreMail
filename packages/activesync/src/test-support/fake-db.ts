@@ -16,6 +16,8 @@ const RELATIONS: Record<string, Record<string, { table: string; local: string; f
   mailbox: { folders: { table: 'folder', local: 'id', foreign: 'mailboxId', many: true } },
   message: { folder: { table: 'folder', local: 'folderId', foreign: 'id' } },
   calendarEvent: { calendar: { table: 'calendar', local: 'calendarId', foreign: 'id' } },
+  user: { mailFlowPolicy: { table: 'mailFlowPolicy', local: 'id', foreign: 'userId' } },
+  sharedMailbox: { mailFlowPolicy: { table: 'mailFlowPolicy', local: 'id', foreign: 'sharedMailboxId' } },
 };
 
 function cmp(a: unknown, b: unknown): number {
@@ -65,7 +67,10 @@ export function createFakeDb(tables: Tables) {
       const rel = RELATIONS[model]?.[k];
       if (rel) {
         const target = related(model, row, k);
-        return !!target && !Array.isArray(target) && match(rel.table, target, c as Row);
+        // to-one relation filter `{ is: … }` (9.4 mailFlowPolicy) or the plain form
+        const cond = c && typeof c === 'object' && 'is' in (c as Row) ? (c as Row)['is'] : c;
+        if (cond === null) return !target;
+        return !!target && !Array.isArray(target) && match(rel.table, target, cond as Row);
       }
       return matchField(row[k], c);
     });
@@ -188,7 +193,7 @@ export function createFakeDb(tables: Tables) {
   }
 
   const db: Row = { $on: () => undefined, calls, tables };
-  for (const name of ['user', 'emailAlias', 'userSettings', 'activeSyncDevice', 'activeSyncItem', 'mailbox', 'folder', 'message', 'attachment', 'sharedMailbox', 'sharedMailboxPerm','contact', 'calendar', 'calendarEvent', 'systemLog']) {
+  for (const name of ['user', 'emailAlias', 'userSettings', 'activeSyncDevice', 'activeSyncItem', 'mailbox', 'folder', 'message', 'attachment', 'sharedMailbox', 'sharedMailboxPerm', 'mailFlowPolicy', 'contact', 'calendar', 'calendarEvent', 'systemLog']) {
     db[name] = model(name);
   }
   db['$transaction'] = async (fn: (tx: unknown) => Promise<unknown>) => fn(db);

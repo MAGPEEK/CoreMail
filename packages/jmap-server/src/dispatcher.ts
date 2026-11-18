@@ -8,6 +8,7 @@ import { createLogger } from '@coremail/core';
 import { MethodError, RequestError } from './errors.js';
 import { ALL_CAPABILITIES, CAP_CORE } from './capabilities.js';
 import { LIMITS } from './limits.js';
+import { auditForeignAccess } from './access-audit.js';
 import type {
   AccountContext, HandlerResult, Invocation, JmapRequest, JmapResponse, JmapUser,
   JsonObject, MethodContext, MethodDefinition, MethodHandler,
@@ -131,6 +132,8 @@ export async function processRequest(
       if (typeof accountId !== 'string') throw new MethodError('invalidArguments', 'accountId must be a String');
       const acc = accounts.get(accountId);
       if (!acc) throw new MethodError('accountNotFound');
+      // 9.4: use of a Shared Mailbox / delegated account (aggregated per hour)
+      auditForeignAccess(user, acc, [{ action: 'mailbox.foreign.open', count: 1 }]);
       return acc;
     },
   };

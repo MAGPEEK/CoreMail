@@ -3,7 +3,7 @@ import { Command } from 'commander';
 import { listUsers, resolveUser, type CoreMailClient, type UserRow } from '../client.js';
 import { fail, formatBytes, parseBytes, printJson, printTable } from '../output.js';
 
-export function registerMailbox(program: Command, api: () => CoreMailClient, json: () => boolean): void {
+export function registerMailbox(program: Command, api: () => CoreMailClient, json: () => boolean): Command {
   const mb = program.command('mailbox').description('Mailboxes: usage, quota, folders (user mailboxes; team mailboxes: `shared`)');
 
   mb.command('list').alias('ls').description('All mailboxes with usage')
@@ -75,4 +75,5 @@ export function registerMailbox(program: Command, api: () => CoreMailClient, jso
   mb.command('delete <email|id>').description('Alias for `user delete`')
     .allowUnknownOption(true)
     .action(() => fail('Use `coremail user delete <email|id>`'));
+  return mb;
 }

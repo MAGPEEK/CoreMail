@@ -54,7 +54,9 @@ interface Db {
   messages: Msg[];
   users: User[];
   shared: SharedBox[];
-  sharedPerms: Array<{ userId: string; sharedMailboxId: string; permission: string }>;
+  sharedPerms: Array<{ userId: string; sharedMailboxId: string; permission: string; autoMap?: boolean }>;
+  /** 9.4: UserSettings.addedSharedMailboxes of bob. */
+  added: string[];
   delegates: Array<{ mailboxId: string; granteeId: string; permission: string }>;
   msg(id: string): Msg;
   folder(id: string): Folder;
@@ -172,6 +174,7 @@ function install(): Db {
       return m;
     },
     accessReads: 0,
+    added: [],
   };
 
   const withMailbox = (x: Folder | undefined): Row | null => (x ? { ...x, mailbox: { ...db.mailbox(x.mailboxId) } } : null);
@@ -180,6 +183,7 @@ function install(): Db {
     domain: { findFirst: async () => ({ name: 'example.test' }) },
     user: { findFirst: async ({ where }: { where: Row }) => { await tick(); return db.users.find((u) => matches(u as unknown as Row, where)) ?? null; } },
     appPassword: { findMany: async () => [], update: async () => ({}) },
+    userSettings: { findUnique: async () => ({ addedSharedMailboxes: [...db.added] }) },
     $transaction: async <T>(fn: (tx: unknown) => Promise<T>): Promise<T> => fn(prisma),
     sharedMailboxPerm: {
       findMany: async ({ where }: { where: { userId: string; permission: { in: string[] } } }) => {
@@ -190,7 +194,7 @@ function install(): Db {
           .map((p) => {
             const box = db.shared.find((s) => s.id === p.sharedMailboxId)!;
             const mbx = db.mailboxes.find((m) => m.sharedBoxId === box.id);
-            return { permission: p.permission, sharedMailbox: { ...box, mailbox: mbx ? { id: mbx.id } : null } };
+            return { permission: p.permission, autoMap: p.autoMap, sharedMailbox: { ...box, mailbox: mbx ? { id: mbx.id } : null } };
           });
       },
     },
@@ -878,5 +882,49 @@ describe('permission changes take effect on a live session', () => {
     const r = await client.cmd('FETCH 1 (FLAGS)');
     assert.ok(r.lines.includes('* OK [CLOSED] Access to the selected mailbox was revoked'), r.raw);
     assert.match(r.tagged, /NO \[NOPERM\]/);
+  });
+});
+
+// ─── 9.4 auto-mapping and mailbox access audit ──────────────────────────────
+
+type AuditEvent = { action: string; source: string; actorId: string; target: { kind: string; sharedMailboxId: string | null; mailboxId: string }; changes?: Record<string, unknown> };
+const auditLog = (): AuditEvent[] => ((globalThis as unknown as { __coremailTest: { accessAudit?: AuditEvent[] } }).__coremailTest.accessAudit ??= []);
+
+describe('9.4: auto-mapping and the mailbox access audit', () => {
+  test('a grant without auto-mapping is not listed until the user adds it; SELECT works regardless', async (t) => {
+    const { client, db } = await login(t);
+    db.sharedPerms.find((p) => p.sharedMailboxId === 's2')!.autoMap = false;
+    invalidateAccessCaches();
+    let r = await client.cmd('LIST "" "*"');
+    assert.equal(untagged(r, /ro@example.test/).length, 0, r.raw);
+    assert.ok(untagged(r, /team@example.test/).length > 0, 'auto-mapped ones stay');
+    assert.equal((await client.cmd(`EXAMINE ${RO}`)).status, 'OK', 'access does not depend on the listing');
+    db.added = ['shared:s2'];
+    invalidateAccessCaches();
+    r = await client.cmd('LIST "" "*"');
+    assert.ok(untagged(r, /"Shared\/ro@example.test\/INBOX"$/).length === 1, r.raw);
+  });
+
+  test('SELECT, EXPUNGE, MOVE and folder changes in foreign mailboxes are audited; the own mailbox is not', async (t) => {
+    const { client } = await login(t);
+    auditLog().length = 0;
+    await client.cmd('SELECT INBOX');
+    assert.equal(auditLog().length, 0, 'own mailbox');
+    await client.cmd(`SELECT ${TEAM}`);
+    const open = auditLog().find((e) => e.action === 'mailbox.foreign.open');
+    assert.deepEqual([open?.source, open?.actorId, open?.target.kind, open?.target.sharedMailboxId, open?.target.mailboxId], ['imap', 'u1', 'shared', 's1', 'mb-team']);
+    await client.cmd('STORE 1 +FLAGS.SILENT (\\Deleted)');
+    await client.cmd('EXPUNGE');
+    const del = auditLog().find((e) => e.action === 'mailbox.foreign.message.delete');
+    assert.equal(del?.changes?.['count'], 1);
+    await client.cmd('MOVE 1 INBOX');
+    assert.equal(auditLog().find((e) => e.action === 'mailbox.foreign.message.move')?.changes?.['count'], 1);
+    await client.cmd('CREATE "Other Users/alice@example.test/Audit"');
+    const created = auditLog().find((e) => e.action === 'mailbox.foreign.folder.create');
+    assert.deepEqual([created?.target.kind, created?.target.mailboxId], ['delegated', 'mb-alice']);
+    await client.cmd('RENAME "Other Users/alice@example.test/Audit" "Other Users/alice@example.test/Audit2"');
+    await client.cmd('DELETE "Other Users/alice@example.test/Audit2"');
+    assert.ok(auditLog().some((e) => e.action === 'mailbox.foreign.folder.update'));
+    assert.ok(auditLog().some((e) => e.action === 'mailbox.foreign.folder.delete'));
   });
 });
