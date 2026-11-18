@@ -17,9 +17,10 @@
  * `changes.source` are always set.
  *
  * Reading is aggregated so it cannot flood the log: `open` is written at most
- * once per actor, mailbox and client type per hour (a bounded in-process claim
- * store — each client type is served by one process). Writes and sends are
- * written every time (one row per command, with counts).
+ * once per actor, mailbox and client type per hour — claimed with SET NX EX on
+ * the shared Redis client across all processes, with a bounded per-process
+ * store as the fallback while Redis is unavailable ({@link claimShared}).
+ * Writes and sends are written every time (one row per command, with counts).
  *
  * On/off: ServerSettings.auditLogEnabled AND mailboxAccessAuditEnabled.
  * Retention: ServerSettings.mailboxAccessAuditRetentionDays (0 = keep), purged
@@ -29,7 +30,7 @@
  * Recording never throws: an audit failure must not break mail access.
  */
 import { randomUUID } from 'node:crypto';
-import { createLogger } from '@coremail/core';
+import { createLogger, getRedisClient } from '@coremail/core';
 import { prisma } from './prisma/index.js';
 
 const log = createLogger('storage:mailbox-access-audit');
@@ -144,23 +145,92 @@ export async function mailboxAccessAuditSettings(): Promise<MailboxAccessAuditSe
 const MAX_LOCAL_CLAIMS = 50_000;
 const localClaims = new Map<string, number>();
 
-/** First claim of a key per window (true = write the event). */
-export function claimLocally(key: string, ttlSec: number, now = Date.now()): boolean {
+function isClaimedLocally(key: string, now: number): boolean {
   const until = localClaims.get(key);
-  if (until !== undefined && until > now) return false;
+  return until !== undefined && until > now;
+}
+
+function markLocally(key: string, ttlMs: number, now: number): void {
   if (localClaims.size >= MAX_LOCAL_CLAIMS) {
     for (const [k, v] of localClaims) if (v <= now) localClaims.delete(k);
     if (localClaims.size >= MAX_LOCAL_CLAIMS) localClaims.clear();
   }
-  localClaims.set(key, now + ttlSec * 1000);
+  localClaims.set(key, now + ttlMs);
+}
+
+/** First claim of a key per window in this process (true = write the event). */
+export function claimLocally(key: string, ttlSec: number, now = Date.now()): boolean {
+  if (isClaimedLocally(key, now)) return false;
+  markLocally(key, ttlSec * 1000, now);
   return true;
+}
+
+/** The Redis surface of the shared claim (SET key value EX ttl NX). */
+export interface AccessClaimRedis {
+  /** ioredis connection state; anything but 'ready' → the per-process fallback. */
+  readonly status?: string;
+  set(key: string, value: string, ex: 'EX', ttlSec: number, nx: 'NX'): Promise<'OK' | null>;
+}
+
+declare global {
+  // Test seam: an in-memory fake, or null for "no Redis" (per-process claims only).
+  // eslint-disable-next-line no-var
+  var __accessAuditRedis: AccessClaimRedis | null | undefined;
+}
+
+/** A Redis claim answer later than this falls back to the per-process store. */
+export const SHARED_CLAIM_TIMEOUT_MS = 500;
+/** A key another process holds is not asked again for this long (bounded Redis traffic). */
+const FOREIGN_CLAIM_RECHECK_MS = 5 * 60_000;
+
+function claimRedis(): AccessClaimRedis | null {
+  if (globalThis.__accessAuditRedis !== undefined) return globalThis.__accessAuditRedis;
+  return getRedisClient() as unknown as AccessClaimRedis;
+}
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Redis claim timed out after ${ms} ms`)), ms);
+    timer.unref?.();
+    p.then((v) => { clearTimeout(timer); resolve(v); }, (e: unknown) => { clearTimeout(timer); reject(e); });
+  });
+}
+
+/**
+ * First claim of an aggregation key across all processes (true = write the
+ * event): SET NX EX on the shared Redis client, so several api-gateway / IMAP /
+ * JMAP processes write one `open` per window together. A key this process
+ * already holds (or saw held elsewhere) is answered locally without Redis.
+ * Redis not ready, slow or failing → the per-process store (at most one row per
+ * process and window instead of none — the audit never stops).
+ */
+export async function claimShared(
+  key: string,
+  ttlSec: number,
+  redis: AccessClaimRedis | null = claimRedis(),
+  now = Date.now(),
+): Promise<boolean> {
+  if (isClaimedLocally(key, now)) return false;
+  if (redis && (redis.status === undefined || redis.status === 'ready')) {
+    try {
+      const got = await withTimeout(redis.set(key, '1', 'EX', ttlSec, 'NX'), SHARED_CLAIM_TIMEOUT_MS);
+      markLocally(key, got === 'OK' ? ttlSec * 1000 : Math.min(ttlSec * 1000, FOREIGN_CLAIM_RECHECK_MS), now);
+      return got === 'OK';
+    } catch (err) {
+      log.warn({ err }, 'Mailbox access audit: shared claim unavailable — aggregating in this process');
+    }
+  }
+  return claimLocally(key, ttlSec, now);
+}
+
+/** Tests: forget the per-process claims. */
+export function resetLocalAccessClaims(): void {
+  localClaims.clear();
 }
 
 const defaultDeps: AccessAuditDeps = {
   enabled: async () => (await mailboxAccessAuditSettings()).enabled,
-  // Per process: every client type is served by one process (IMAP, JMAP,
-  // api-gateway for webmail), and the key contains the client type.
-  claim: async (key, ttlSec) => claimLocally(key, ttlSec),
+  claim: (key, ttlSec) => claimShared(key, ttlSec),
   write: (row) => prisma.auditLog.create({ data: { ...row, changes: row.changes as never } }),
 };
 

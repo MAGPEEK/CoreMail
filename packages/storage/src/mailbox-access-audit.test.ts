@@ -10,10 +10,13 @@ process.env['DATABASE_URL'] ??= 'postgresql://test:test@localhost:5432/coremail_
 process.env['JWT_SECRET'] ??= 'test-jwt-secret-0123456789abcdef0123456789';
 process.env['PEPPER'] ??= 'test-pepper-0123456789abcdef0123456789abcd';
 (globalThis as unknown as { __prisma: unknown }).__prisma = { $on: () => undefined };
+// No Redis connection in this file (per-process claims; fakes are passed explicitly).
+(globalThis as unknown as { __accessAuditRedis: null }).__accessAuditRedis = null;
 
 const {
   recordMailboxAccess, accessAuditRow, accessAggregationKey, isAggregatedAccess, claimLocally, accessPurgeCutoff,
-  purgeMailboxAccessAudit, MAILBOX_ACCESS_ACTION_PREFIX, OPEN_AGGREGATION_SECONDS,
+  purgeMailboxAccessAudit, claimShared, resetLocalAccessClaims, MAILBOX_ACCESS_ACTION_PREFIX, OPEN_AGGREGATION_SECONDS,
+  SHARED_CLAIM_TIMEOUT_MS,
 } = await import('./mailbox-access-audit.js');
 
 const sharedTarget = { kind: 'shared' as const, sharedMailboxId: 'sm1', mailboxId: 'mb1', email: 'team@x.test' };
@@ -84,6 +87,63 @@ test('in-process claim fallback: one claim per key and window, bounded', () => {
   assert.equal(claimLocally('k-a', 10, 1000), true);
   assert.equal(claimLocally('k-a', 10, 5000), false);
   assert.equal(claimLocally('k-a', 10, 11_001), true);
+});
+
+/** In-memory SET NX EX (two "processes" share it; status as ioredis reports it). */
+function fakeRedis(opts: { status?: string; fail?: boolean; hang?: boolean } = {}) {
+  const keys = new Map<string, number>();
+  const calls: Array<[string, number]> = [];
+  let now = 0;
+  return {
+    calls,
+    advance: (ms: number) => { now += ms; },
+    status: opts.status ?? 'ready',
+    set: async (key: string, _v: string, _ex: 'EX', ttl: number, _nx: 'NX'): Promise<'OK' | null> => {
+      calls.push([key, ttl]);
+      if (opts.fail) throw new Error('ECONNRESET');
+      if (opts.hang) return new Promise<'OK' | null>(() => undefined);
+      const until = keys.get(key);
+      if (until !== undefined && until > now) return null;
+      keys.set(key, now + ttl * 1000);
+      return 'OK';
+    },
+  };
+}
+
+test('shared claim: SET NX EX on Redis — one row across processes; the holder answers later claims locally', async () => {
+  resetLocalAccessClaims();
+  const redis = fakeRedis();
+  assert.equal(await claimShared('k-shared', 3600, redis, 1000), true);
+  assert.deepEqual(redis.calls, [['k-shared', 3600]]);
+  assert.equal(await claimShared('k-shared', 3600, redis, 2000), false);
+  assert.equal(redis.calls.length, 1, 'held by this process: no second Redis round trip');
+  // another process (fresh local store) asks Redis and loses
+  resetLocalAccessClaims();
+  assert.equal(await claimShared('k-shared', 3600, redis, 3000), false, 'claimed by another process');
+  assert.equal(redis.calls.length, 2);
+  assert.equal(await claimShared('k-shared', 3600, redis, 4000), false);
+  assert.equal(redis.calls.length, 2, 'a key held elsewhere is not asked again at once');
+});
+
+test('shared claim: Redis not ready, failing or slow → per-process fallback (never blocks, never stops auditing)', async () => {
+  resetLocalAccessClaims();
+  const down = fakeRedis({ status: 'reconnecting' });
+  assert.equal(await claimShared('k-down', 3600, down, 1000), true);
+  assert.equal(down.calls.length, 0, 'no command is queued on a client that is not ready');
+  assert.equal(await claimShared('k-down', 3600, down, 2000), false, 'aggregated in this process');
+
+  resetLocalAccessClaims();
+  assert.equal(await claimShared('k-fail', 3600, fakeRedis({ fail: true }), 1000), true);
+  assert.equal(await claimShared('k-fail', 3600, fakeRedis({ fail: true }), 2000), false);
+
+  resetLocalAccessClaims();
+  const started = Date.now();
+  assert.equal(await claimShared('k-slow', 3600, fakeRedis({ hang: true })), true);
+  assert.ok(Date.now() - started < SHARED_CLAIM_TIMEOUT_MS + 1000, 'a hanging Redis answer times out');
+
+  resetLocalAccessClaims();
+  assert.equal(await claimShared('k-none', 3600, null, 1000), true, 'no Redis at all (test seam null)');
+  assert.equal(await claimShared('k-none', 3600, null, 2000), false);
 });
 
 test('retention: cutoff from days (0 = keep), purge deletes only mailbox.foreign.* rows older than the cutoff', async () => {
