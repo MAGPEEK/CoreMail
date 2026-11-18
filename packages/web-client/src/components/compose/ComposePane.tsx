@@ -447,7 +447,8 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
 
   const saveDraftNow = () => {
     saver.touch();
-    saver.flush().then(() => toast.success(t('draft_saved_closed')), () => toast.error(t('draft_save_failed')));
+    // the reason (e.g. too large) is shown, not only that it failed
+    saver.flush().then(() => toast.success(t('draft_saved_closed')), toastError);
   };
 
   /** "In neuem Fenster öffnen": save, open /compose/<id>, close the inline compose. */

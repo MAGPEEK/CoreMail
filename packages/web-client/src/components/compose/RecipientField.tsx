@@ -11,7 +11,7 @@ import { useQuery } from '@tanstack/react-query';
 import { X } from 'lucide-react';
 import { api } from '../../api/client.js';
 import {
-  addEntries, backspace, commitText, commitsOnKey, formatRecipient, parseRecipient, pillLabel, typeText,
+  addEntries, backspace, commitText, commitsOnKey, formatRecipient, parseRecipient, pillLabel, removeEntry, typeText,
   type RecipientValue,
 } from '../../lib/recipients.js';
 import { fmt, useT } from '../../i18n/useT.js';
@@ -117,7 +117,7 @@ export function RecipientField({ id, label, value, onChange, onAnnounce, inputRe
 
   const remove = (index: number) => {
     const entry = value.entries[index];
-    onChange({ entries: value.entries.filter((_, i) => i !== index), text: value.text });
+    onChange(removeEntry(value, index));
     if (entry) onAnnounce(fmt(t('compose_recipient_removed'), { name: pillLabel(parseRecipient(entry)) }));
     inputRef.current?.focus();
   };

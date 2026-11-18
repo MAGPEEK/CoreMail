@@ -50,6 +50,11 @@ test('the forgotten-attachment check ignores the quoted original (incl. its head
   const quote = buildQuoteHtml({ fromAddr: 'x@example.test', subject: 'Anhang anbei' }, '<p>siehe Anhang</p>', LABELS, fmtDate);
   const body = initialBodyHtml('', quote);
   assert.doesNotMatch(ownText(body), /Anhang|anbei/);
+  // a quoted reply chain nests blockquotes: text after the inner one is still quoted
+  const nested = buildQuoteHtml({ fromAddr: 'x@example.test' }, '<p>Hi</p><blockquote><p>alt</p></blockquote><p>Datei kommt im Anhang</p>', LABELS, fmtDate);
+  const reply = `<p>Danke, passt.</p>${nested}`;
+  assert.doesNotMatch(ownText(reply), /Anhang|Datei/);
+  assert.match(ownText(reply), /Danke, passt\./);
 });
 
 test('initial body: line to type in, signature block, then the quote', () => {

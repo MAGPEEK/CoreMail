@@ -14,6 +14,8 @@ export const ATTACHMENT_KEYWORDS: readonly string[] = [
 /** Plain text of the part the user wrote: quoted originals (blockquotes, "> " lines) removed. */
 export function ownText(html: string): string {
   return html
+    // 9.4: the marked quote of a reply / forward is the end of the body (it may nest blockquotes)
+    .replace(/<blockquote data-cm-quote[\s\S]*$/i, ' ')
     .replace(/<blockquote[\s\S]*?<\/blockquote>/gi, ' ')
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/gi, ' ')
