@@ -159,7 +159,11 @@ audited (`security.sender-list.*` with the entry data).
 | `SCORE_ONLY` (Score, 9.4) | The zone's weight is added to the rspamd spam score of the message; the sum is compared with the Junk / reject thresholds (the reason names the zones, e.g. `DNSBL +3: psbl.surriel.com`). Needs rspamd: when rspamd is not deployed (`RSPAMD_ENABLED=false`) the BCP disables the option. The cached connect-time lookup is reused, hits are counted once in the statistics. |
 | `TAG` (Markieren) | Only recorded in the DNSBL statistics. |
 
-A DNSWL hit (whitelist zone) skips the other connection checks and adds no score.
+A DNSWL hit (whitelist zone) skips the other connection checks and adds no score. Sessions
+authenticated with SMTP AUTH get no DNSBL score (their client address is often a listed dial-up
+address). rspamd runs its own RBL checks: do not set a zone to `SCORE_ONLY` that the rspamd RBL
+module already queries (e.g. Spamhaus ZEN) — that listing would count twice; check the RBL
+configuration of the deployed rspamd before choosing „Score“ for a zone.
 
 ## Mail rules (`regex` conditions)
 

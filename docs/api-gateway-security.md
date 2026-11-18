@@ -89,7 +89,8 @@ IP — the users of an office behind one NAT address exhausted it together. Sinc
   outside `/api/`, `/auth/`, `/jmap`, `/dav`, `/.well-known/`, Autodiscover and
   ActiveSync); the live-event stream `GET /api/v1/events` (only refused tickets or
   tokens count against the IP budget, and an address whose budget is used up gets no
-  stream); `POST /api/v1/events/ticket` with a valid token.
+  stream). `POST /api/v1/events/ticket` counts per user like any API request — every
+  stream needs a fresh one-time ticket, so this bounds the streams one token can open.
 - Fixed window per bucket; over the limit: `429` with `Retry-After` and
   `RateLimit-Limit` / `RateLimit-Remaining` / `RateLimit-Reset` on every counted response.
 - **Configuration**: BCP → Einstellungen → Sicherheit → API-Ratenbegrenzung

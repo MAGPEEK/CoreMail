@@ -28,7 +28,7 @@ test('defaults sized for webmail; BCP columns apply; a set environment variable 
   assert.deepEqual(env.envOverrides, ['apiRateLimitEnabled', 'apiRateLimitPerUser']);
 });
 
-test('classification: static assets exempt, Bearer → user, anonymous → IP, SSE / ticket special', () => {
+test('classification: static assets exempt, Bearer → user, anonymous → IP, SSE special, tickets counted', () => {
   const c = (method: string, path: string, authorization?: string) => classifyRequest({ method, path, authorization }, verify);
   assert.deepEqual(c('GET', '/assets/index-abc.js'), { kind: 'exempt' });
   assert.deepEqual(c('GET', '/bcp/assets/x.css'), { kind: 'exempt' });
@@ -40,7 +40,8 @@ test('classification: static assets exempt, Bearer → user, anonymous → IP, S
   assert.deepEqual(c('GET', '/jmap/session'), { kind: 'ip' });
   assert.deepEqual(c('GET', '/Microsoft-Server-ActiveSync'), { kind: 'ip' });
   assert.deepEqual(c('GET', '/api/v1/events'), { kind: 'sse' });
-  assert.deepEqual(c('POST', '/api/v1/events/ticket', 'Bearer ok-u1'), { kind: 'exempt' });
+  // review fix: tickets count per user — each stream needs one, so streams per token are bounded
+  assert.deepEqual(c('POST', '/api/v1/events/ticket', 'Bearer ok-u1'), { kind: 'user', userId: 'u1' });
   assert.deepEqual(c('POST', '/api/v1/events/ticket'), { kind: 'ip' });
 });
 
@@ -105,4 +106,12 @@ test('live-event stream: valid tickets never count, refused ones use the IP budg
   assert.equal((await get('/api/v1/x')).status, 429);
   cfg = { ...cfg, enabled: false };
   assert.equal((await get('/api/v1/x')).status, 200, 'switched off in the BCP');
+});
+
+test('review fix: ticket requests use the per-user budget (streams per token are bounded)', async () => {
+  cfg = { ...cfg, enabled: true };
+  now += 600_000;
+  const ticket = () => fetch(`${base}/api/v1/events/ticket`, { method: 'POST', headers: { authorization: 'Bearer ok-carol' } });
+  for (let i = 0; i < 5; i++) assert.equal((await ticket()).status, 200);
+  assert.equal((await ticket()).status, 429);
 });

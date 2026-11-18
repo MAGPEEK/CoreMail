@@ -156,6 +156,10 @@ test('DNSBL SCORE_ONLY: weights reach the spam score; DNSWL / TAG / REJECT zones
   assert.match(junk.reason, /DNSBL \+3: psbl\.example/);
   assert.equal((await runContentChecks(raw, cctx, { dnsblEnabled: false }, deps(3))).junkFolder, false, 'DNSBL off: no score');
   assert.equal((await runContentChecks(raw, cctx, {}, deps(0))).junkFolder, false);
+  // review fix: an SMTP AUTH session's client address is not scored (dial-up IPs are listed)
+  const authed = await runContentChecks(raw, { ...cctx, authUser: 'alice@corp.test' }, {}, deps(3));
+  assert.equal(authed.junkFolder, false);
+  assert.equal(authed.spamScore, 4, 'rspamd score only');
 });
 
 test('spamVerdict thresholds', () => {

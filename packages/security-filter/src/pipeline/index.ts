@@ -667,8 +667,10 @@ async function runSpamStage(
       ...(ctx.authUser ? { user: ctx.authUser } : {}),
       hostname,
     });
-    // DNSBL zones with the action SCORE_ONLY add their weight to the score (9.4)
-    const dnsbl = config.dnsblEnabled !== false && deps.dnsblScore
+    // DNSBL zones with the action SCORE_ONLY add their weight to the score (9.4) — only
+    // for unauthenticated sessions: an SMTP AUTH client's (dial-up) address says nothing
+    // about the message, like greylisting and the local-spoof check.
+    const dnsbl = config.dnsblEnabled !== false && !ctx.authUser && deps.dnsblScore
       ? await deps.dnsblScore(ctx.senderIp)
       : { score: 0, zones: [] };
     const score = spam.score + dnsbl.score;

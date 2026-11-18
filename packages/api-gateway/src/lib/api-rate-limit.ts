@@ -5,9 +5,10 @@
  *  - Signed-in requests (valid Bearer access token) count per USER, anonymous ones per
  *    client IP (IPv6 per /56) — an office behind one address no longer shares a budget.
  *  - Exempt: loopback peers (internal services), static assets / SPA pages (GET/HEAD
- *    outside the API and protocol paths), the live-event stream GET /api/v1/events
- *    (counted per IP only when its ticket/token is refused) and the ticket request
- *    POST /api/v1/events/ticket with a valid token.
+ *    outside the API and protocol paths) and the live-event stream GET /api/v1/events
+ *    (counted per IP only when its ticket/token is refused). The ticket request
+ *    POST /api/v1/events/ticket counts like any API request (per user): every stream
+ *    needs a fresh one-time ticket, so this bounds how many streams a token can open.
  *  - Configurable in BCP → Settings → Security (ServerSettings.apiRateLimit*); the
  *    environment variables API_RATE_LIMIT_ENABLED / _WINDOW_MIN / _PER_IP / _PER_USER
  *    override the stored values when set. Fixed window per bucket, in memory (one
@@ -113,7 +114,6 @@ export function classifyRequest(req: ClassifyInput, verify: (token: string) => s
   if (req.method === 'GET' && path === '/api/v1/events') return { kind: 'sse' };
   const m = /^Bearer\s+(\S+)$/i.exec(req.authorization ?? '');
   const userId = m ? verify(m[1]!) : null;
-  if (userId && req.method === 'POST' && path === '/api/v1/events/ticket') return { kind: 'exempt' };
   return userId ? { kind: 'user', userId } : { kind: 'ip' };
 }
 
