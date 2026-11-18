@@ -7,7 +7,7 @@ import { attachmentKeyword, needsAttachmentReminder } from './attachmentReminder
 import { mailPath, parseMailPath, calendarEventPath, contactPath, itemIdFromPath } from './mailLinks.ts';
 import { describeUserAgent } from './sessionDevice.ts';
 import { businessHours, hiddenDaysForWorkWeek, slotDuration } from './calendarPrefs.ts';
-import { defaultSignatureHtml, signatureIdentity } from './signaturePick.ts';
+import { defaultSignatureHtml, mayAutoSwapSignature, signatureBlockHtml, signatureIdentity } from './signaturePick.ts';
 
 test('calendar settings → FullCalendar options', () => {
   assert.deepEqual(hiddenDaysForWorkWeek([1, 2, 3, 4, 5]), [0, 6]);
@@ -33,6 +33,16 @@ test('signature pick: per identity and kind; deleted or unset → none', () => {
   assert.equal(defaultSignatureHtml(sigs, defaults, 'shared:t1', true), '');
   assert.equal(defaultSignatureHtml(sigs, defaults, 'shared:zz', false), '');
   assert.equal(defaultSignatureHtml([], defaults, 'own', false), '');
+});
+
+test('signature swap on sender change: only while the block is as inserted', () => {
+  assert.equal(signatureBlockHtml('<p>A</p>'), '<div data-cm-signature=""><p>A</p></div>');
+  assert.equal(signatureBlockHtml('  '), '');
+  assert.equal(mayAutoSwapSignature('{"a":1}', '{"a":1}'), true, 'untouched → swap');
+  assert.equal(mayAutoSwapSignature(null, null), true, 'none inserted, none there → insert the new default');
+  assert.equal(mayAutoSwapSignature('{"a":2}', '{"a":1}'), false, 'edited → keep');
+  assert.equal(mayAutoSwapSignature(null, '{"a":1}'), false, 'removed by the user → keep removed');
+  assert.equal(mayAutoSwapSignature('{"a":1}', undefined), false, 'reopened draft → unknown, keep');
 });
 
 const r = (o: Partial<RegionalSettings> = {}): RegionalSettings => ({ language: 'de', timeZone: 'UTC', dateFormat: 'dd.MM.yyyy', timeFormat: '24h', ...o });

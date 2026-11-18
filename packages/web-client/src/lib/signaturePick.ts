@@ -23,3 +23,20 @@ export function defaultSignatureHtml(
   const id = reply ? d?.replyId : d?.newId;
   return (id && signatures.find((s) => s.id === id)?.html) || '';
 }
+
+/** Marker attribute of the signature block in a compose body (editorExtensions.ts). */
+export const SIGNATURE_BLOCK_ATTR = 'data-cm-signature';
+
+/** Signature HTML wrapped as the compose body's signature block ('' stays ''). */
+export function signatureBlockHtml(html: string): string {
+  return html.trim() ? `<div ${SIGNATURE_BLOCK_ATTR}="">${html}</div>` : '';
+}
+
+/**
+ * A sender change swaps the signature only while the signature block is exactly
+ * what the webmail put there (or both are absent) — never after the user edited
+ * or removed it. `inserted` undefined = not known (reopened draft, undo send).
+ */
+export function mayAutoSwapSignature(current: string | null, inserted: string | null | undefined): boolean {
+  return inserted !== undefined && current === inserted;
+}

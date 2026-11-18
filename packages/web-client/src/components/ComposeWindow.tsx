@@ -21,9 +21,11 @@ import { api, fetchBlob } from '../api/client.js';
 import type { Message } from '../api/types.js';
 import { escapeHtml, quoteMailHtml, textToQuotedHtml } from '../lib/mailHtml.js';
 import { replyThreading, safeLinkUrl, splitRecipients } from '../lib/compose.js';
-import { FontSizeExt, InlineImageExt } from './editorExtensions.js';
+import { FontSizeExt, InlineImageExt, SignatureBlockExt, replaceSignatureBlock, signatureBlockState } from './editorExtensions.js';
 import { usePreferences } from '../store/preferences.js';
-import { defaultSignatureHtml, signatureIdentity, type NamedSignature, type SignatureDefaults } from '../lib/signaturePick.js';
+import {
+  defaultSignatureHtml, mayAutoSwapSignature, signatureBlockHtml, signatureIdentity, type NamedSignature, type SignatureDefaults,
+} from '../lib/signaturePick.js';
 import { needsAttachmentReminder } from '../lib/attachmentReminder.js';
 import { receiptRequestOption } from '../lib/readBehaviour.js';
 import { toLocalInput } from '../lib/datetime.js';
@@ -253,6 +255,9 @@ function FontFamilyDropdown({ editor }: { editor: ReturnType<typeof useEditor> }
 }
 
 // ── Divider ───────────────────────────────────────────────────────────────────
+/** Signature picker value for "no signature" (signature ids are cuids). */
+const NO_SIGNATURE = '__none__';
+
 function Sep() {
   return <div className="w-px h-5 bg-line mx-0.5 shrink-0" />;
 }
@@ -467,6 +472,8 @@ export function ComposeWindow() {
     return list;
   })();
   const selectedSender = senderChoices.find((o) => senderKey(o) === fromKey) ?? senderChoices[0];
+  // 9.4: signature defaults are per identity (own address / shared mailbox sent as)
+  const signatureKey = signatureIdentity(composeMailbox, !!selectedSender && selectedSender.mode !== 'self');
 
   const [minimized, setMinimized] = useState(false);
   const [to, setTo]           = useState(restore ? restore.to : initialTo);
@@ -481,6 +488,12 @@ export function ComposeWindow() {
   const [scheduling, setScheduling] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const signatureInserted = useRef(false);
+  /**
+   * 9.4: identity whose signature was placed (null = none placed yet / reopened
+   * body) and the block as placed (undefined = unknown → no automatic swap).
+   */
+  const signatureFor = useRef<string | null>(null);
+  const insertedSignature = useRef<string | null | undefined>(undefined);
   /** Threading headers of a reopened draft (kept on every save). */
   const draftThreading = useRef<{ inReplyTo?: string; references?: string }>({});
   /** Set once the mail was handed to the server or discarded: no save on close. */
@@ -563,6 +576,8 @@ export function ComposeWindow() {
       // quoted originals must survive (tables are not supported by the editor)
       FontSizeExt,
       InlineImageExt,
+      // 9.4: the signature as its own block (sender change / signature picker)
+      SignatureBlockExt,
     ],
     content: '',
     editorProps: {
@@ -590,8 +605,7 @@ export function ComposeWindow() {
     signatureInserted.current = true;
     const isReply   = isReplyMode;
     const isForward = isForwardMode;
-    const identity = signatureIdentity(composeMailbox, !!selectedSender && selectedSender.mode !== 'self');
-    const sig = defaultSignatureHtml(sigData.signatures, sigData.defaults, identity, isReply || isForward);
+    const sig = signatureBlockHtml(defaultSignatureHtml(sigData.signatures, sigData.defaults, signatureKey, isReply || isForward));
 
     const sourceBody = composeCtx?.bodyHtml
       || (original ? (original.bodyHtml || textToQuotedHtml(original.bodyText ?? '')) : '');
@@ -616,7 +630,27 @@ export function ComposeWindow() {
     };
     const chain = editor.chain().focus('start');
     (Object.keys(style).length > 0 ? chain.setMark('textStyle', style) : chain).run();
-  }, [editor, sigData, composeCtx, original, waitForOriginal, isReplyMode, isForwardMode, restore, loadDraftFromServer, composeMailbox, selectedSender, composePrefs, accessibleMailboxes]);
+    insertedSignature.current = signatureBlockState(editor);
+    signatureFor.current = signatureKey;
+  }, [editor, sigData, composeCtx, original, waitForOriginal, isReplyMode, isForwardMode, restore, loadDraftFromServer, composeMailbox, signatureKey, composePrefs, accessibleMailboxes]);
+
+  // 9.4: another sender → that identity's default signature, unless the user
+  // changed (or removed) the signature block in the meantime
+  useEffect(() => {
+    if (!editor || !sigData || signatureFor.current === null || signatureFor.current === signatureKey) return;
+    signatureFor.current = signatureKey;
+    if (!mayAutoSwapSignature(signatureBlockState(editor), insertedSignature.current)) return;
+    replaceSignatureBlock(editor, defaultSignatureHtml(sigData.signatures, sigData.defaults, signatureKey, isReplyMode || isForwardMode));
+    insertedSignature.current = signatureBlockState(editor);
+  }, [editor, sigData, signatureKey, isReplyMode, isForwardMode]);
+
+  /** Signature picker: puts the chosen signature (or none) in place of the current one. */
+  const pickSignature = (id: string) => {
+    if (!editor || !sigData) return;
+    replaceSignatureBlock(editor, id ? (sigData.signatures.find((s) => s.id === id)?.html ?? '') : '');
+    insertedSignature.current = signatureBlockState(editor);
+    signatureFor.current ??= signatureKey;
+  };
 
   // ── Server draft: autosave (3 s idle + close/minimise), reopen, discard ────
   /** Reads the current compose state (refs: the saver outlives renders). */
@@ -1322,6 +1356,20 @@ export function ComposeWindow() {
               </span>
             )}
           </button>
+          {/* 9.4: signature picker — replaces the inserted signature (also in plain-text format) */}
+          {(sigData?.signatures.length ?? 0) > 0 && (
+            <select
+              aria-label="Signatur einfügen"
+              title="Signatur einfügen"
+              value=""
+              onChange={(e) => { pickSignature(e.target.value === NO_SIGNATURE ? '' : e.target.value); }}
+              className="text-xs bg-transparent text-fg-muted rounded px-1 py-1 border border-transparent hover:border-line-strong focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-fg max-w-[9rem]"
+            >
+              <option value="" disabled>Signatur</option>
+              {sigData?.signatures.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              <option value={NO_SIGNATURE}>Keine Signatur</option>
+            </select>
+          )}
           {receiptOption.visible && (
             <label className="flex items-center gap-1 text-xs text-fg-muted px-1 cursor-pointer">
               <input type="checkbox" checked={requestReceipt} onChange={(e) => setRequestReceipt(e.target.checked)} />
