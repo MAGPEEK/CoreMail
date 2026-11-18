@@ -6,6 +6,7 @@ import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
 import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin from '@fullcalendar/interaction';
+import luxonPlugin from '@fullcalendar/luxon3';
 import deLocale from '@fullcalendar/core/locales/de';
 import enLocale from '@fullcalendar/core/locales/en-gb';
 import esLocale from '@fullcalendar/core/locales/es';
@@ -29,7 +30,8 @@ import toast from 'react-hot-toast';
 import { readableTextOn } from '../lib/readableText.js';
 import { PageShell } from '../components/PageShell.js';
 import { PAGE_CONTENT_PAD } from '../lib/pageShell.js';
-import { usePreferences } from '../store/preferences.js';
+import { usePreferences, useRegional } from '../store/preferences.js';
+import { calendarTimeZone, eventFetchRange, localDay } from '../lib/zonedTime.js';
 import { businessHours, hiddenDaysForWorkWeek, slotDuration } from '../lib/calendarPrefs.js';
 import { calendarEventPath, itemIdFromPath } from '../lib/mailLinks.js';
 
@@ -51,6 +53,8 @@ export function CalendarPage() {
   const [eventDialog, setEventDialog] = useState<EventDialogState>(null);
   // 9.4: Settings → Kalender (work week, week start, time grid)
   const calPrefs = usePreferences((s) => s.prefs.calendar);
+  // 9.4: the grid shows wall-clock times of the chosen zone (Settings → Region)
+  const fcTimeZone = calendarTimeZone(useRegional().timeZone);
   // 9.4: /calendar/event/<id> opens the event (shareable, back/forward)
   const location = useLocation();
   const navigate = useNavigate();
@@ -68,7 +72,8 @@ export function CalendarPage() {
   // Visible FullCalendar range — the server expands recurring events only inside it
   const [visibleRange, setVisibleRange] = useState<{ start: string; end: string } | null>(null);
   const handleDatesSet = (arg: DatesSetArg) => {
-    const next = { start: arg.start.toISOString(), end: arg.end.toISOString() };
+    // widened: with a named zone FullCalendar hands out UTC-coerced dates
+    const next = eventFetchRange(arg.start, arg.end);
     setVisibleRange((prev) => (prev && prev.start === next.start && prev.end === next.end ? prev : next));
   };
 
@@ -83,7 +88,7 @@ export function CalendarPage() {
 
   const handleSelectDate = (d: Date) => {
     setSelectedDate(d);
-    calendarRef.current?.getApi()?.gotoDate(d);
+    calendarRef.current?.getApi()?.gotoDate(localDay(d));
   };
 
   // Keyboard shortcuts (both sets): c new event, t today, d / w / m views
@@ -257,7 +262,8 @@ export function CalendarPage() {
       <div className={`flex-1 min-w-0 overflow-auto ${PAGE_CONTENT_PAD}`}>
         <FullCalendar
           ref={calendarRef}
-          plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
+          plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin, luxonPlugin]}
+          timeZone={fcTimeZone}
           initialView="dayGridMonth"
           locale={fcLocale}
           weekNumbers={calendarShowWeekNumbers}

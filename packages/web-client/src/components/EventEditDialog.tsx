@@ -9,7 +9,8 @@ import { Modal } from './Modal.js';
 import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
 import type { Calendar, CalendarEvent, EventAttendee } from '../api/types.js';
-import { currentPreferences } from '../store/preferences.js';
+import { currentPreferences, useRegional } from '../store/preferences.js';
+import { instantToWallClock, wallClockToInstant } from '../lib/zonedTime.js';
 
 /**
  * v3.18.27 — Outlook-style event dialog for the calendar (create & edit).
@@ -84,24 +85,16 @@ function allDayToParts(start: string, endExclusive: string): { startDate: string
   return { startDate, endDate: last < startDate ? startDate : last };
 }
 
-function isoToParts(iso: string): { date: string; time: string } {
+/** 9.4: date + time fields show the wall clock of the user's zone (Settings → Region, '' = browser). */
+function isoToParts(iso: string, timeZone: string): { date: string; time: string } {
   if (!iso) return { date: '', time: '' };
   // Date-only values must not go through Date (would be parsed as UTC midnight)
   if (DATE_ONLY_RE.test(iso)) return { date: iso, time: '' };
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return { date: '', time: '' };
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return {
-    date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
-    time: `${pad(d.getHours())}:${pad(d.getMinutes())}`,
-  };
+  return instantToWallClock(iso, timeZone);
 }
 
-function partsToIso(date: string, time: string): string {
-  if (!date) return '';
-  const t = time || '00:00';
-  // Local time string — the browser converts to local TZ when constructing the Date
-  return new Date(`${date}T${t}:00`).toISOString();
+function partsToIso(date: string, time: string, timeZone: string): string {
+  return date ? wallClockToInstant(date, time || '00:00', timeZone) : '';
 }
 
 function addMinutes(iso: string, mins: number): string {
@@ -116,6 +109,7 @@ export function EventEditDialog({
 }: Props) {
   const qc = useQueryClient();
   const isEdit = eventId !== null;
+  const timeZone = useRegional().timeZone;
 
   // Edit mode: load event detail
   const { data: existing, isLoading: existingLoading, refetch: refetchEvent } = useQuery<CalendarEvent>({
@@ -154,8 +148,8 @@ export function EventEditDialog({
         setStartDate(r.startDate);
         setEndDate(r.endDate);
       } else {
-        const s = isoToParts(existing.dtStart);
-        const e = isoToParts(existing.dtEnd);
+        const s = isoToParts(existing.dtStart, timeZone);
+        const e = isoToParts(existing.dtEnd, timeZone);
         setStartDate(s.date); setStartTime(s.time);
         setEndDate(e.date); setEndTime(e.time);
       }
@@ -176,14 +170,14 @@ export function EventEditDialog({
         const start = defaults?.dtStart ?? new Date(Date.now() + 60 * 60 * 1000).toISOString();
         // 9.4: default meeting duration (Settings → Kalender)
         const end = defaults?.dtEnd ?? addMinutes(start, currentPreferences().calendar.defaultEventMinutes);
-        const s = isoToParts(start);
-        const e = isoToParts(end);
+        const s = isoToParts(start, timeZone);
+        const e = isoToParts(end, timeZone);
         setStartDate(s.date); if (s.time) setStartTime(s.time);
         setEndDate(e.date); if (e.time) setEndTime(e.time);
       }
       setAllDay(defaults?.allDay ?? false);
     }
-  }, [isEdit, existing, defaults, defaultWritableCalendarId]);
+  }, [isEdit, existing, defaults, defaultWritableCalendarId, timeZone]);
 
   // ─── Attendee-Autocomplete ──────────────────────────────────────────────────
   const [debouncedQ, setDebouncedQ] = useState('');
@@ -288,8 +282,8 @@ export function EventEditDialog({
 
   const handleSave = () => {
     // All-day: plain dates, end EXCLUSIVE (last shown day + 1) — no UTC round-trip.
-    const dtStart = allDay ? startDate : partsToIso(startDate, startTime);
-    const dtEnd   = allDay ? addDays(endDate < startDate ? startDate : endDate, 1) : partsToIso(endDate, endTime);
+    const dtStart = allDay ? startDate : partsToIso(startDate, startTime, timeZone);
+    const dtEnd   = allDay ? addDays(endDate < startDate ? startDate : endDate, 1) : partsToIso(endDate, endTime, timeZone);
     const body = {
       calendarId, summary: summary.trim(),
       dtStart, dtEnd, allDay,
