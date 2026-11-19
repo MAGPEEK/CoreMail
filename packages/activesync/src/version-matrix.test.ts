@@ -123,7 +123,7 @@ for (const v of VERSIONS) {
   test(`${v} FolderSync: hierarchy with the version's tags; the Notes folder only from 14.0 (w3)`, async () => {
     const tree = valid(await handleFolderSync(req([7, 0x16, [[7, 0x12, '0']]]), 'u1', dev(v), v), v);
     const pim = kids(kid(tree, 'Changes'), 'Add').map((a) => `${kid(a, 'ServerId')?.text}/${kid(a, 'Type')?.text}`).filter((x) => x.includes(':'));
-    assert.deepEqual(pim, v === '12.1' ? ['tasks:default/7'] : ['tasks:default/7', 'notes:default/10']);
+    assert.deepEqual(pim, v === '12.1' ? ['tasks:default/7', 'contacts:default/9'] : ['tasks:default/7', 'notes:default/10', 'contacts:default/9']);
     assert.equal(kid(kid(tree, 'Changes'), 'Count')?.text, String(3 + pim.length));
   });
 }
