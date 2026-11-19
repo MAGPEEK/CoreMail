@@ -3,9 +3,9 @@
 `packages/activesync` — ActiveSync protocol versions **12.1, 14.0 and 14.1** on
 `/Microsoft-Server-ActiveSync` (port 3005 behind the api-gateway). Everything here follows the
 public Microsoft Open Specifications [MS-ASHTTP], [MS-ASCMD], [MS-ASWBXML], [MS-ASPROV],
-[MS-ASAIRS], [MS-ASEMAIL], [MS-ASCAL], [MS-ASTASK], [MS-ASNOTE] and [MS-ASDTYPE]. Accounts with
-MFA use app passwords. Classes: Email, and (w3) Calendar, Tasks and Notes — see
-[Calendar, Tasks and Notes](#calendar-tasks-and-notes-w3).
+[MS-ASAIRS], [MS-ASEMAIL], [MS-ASCAL], [MS-ASTASK], [MS-ASNOTE], [MS-ASCNTC] and [MS-ASDTYPE].
+Accounts with MFA use app passwords. Classes: Email, and (w3) Calendar, Tasks, Notes and Contacts —
+see [Calendar, Tasks and Notes](#calendar-tasks-and-notes-w3) and [Contacts](#contacts-w3).
 
 ## Versions and negotiation
 
@@ -55,7 +55,7 @@ Both encodings of [MS-ASHTTP] are accepted (`src/request.ts`):
 | GetItemEstimate request | `Class` and `airsync:FilterType` directly in the Collection; Class echoed | FilterType in `airsync:Options`, no Class | same as 14.0 |
 | Settings | Oof, DeviceInformation, UserInformation (EmailAddresses form), DevicePassword | same | + UserInformation Accounts form, RightsManagementInformation |
 | ResolveRecipients | no Availability | + Availability (Status 163: no free/busy) | same as 14.0 |
-| Classes (w3) | Email, Calendar, Tasks | + Notes (code page 23) | same as 14.0 |
+| Classes (w3) | Email, Calendar, Tasks, Contacts | + Notes (code page 23) | same as 14.0 |
 | Calendar item (w3) | no ResponseRequested / ResponseType | + ResponseRequested / ResponseType | + Recurrence FirstDayOfWeek (also Tasks) |
 | FolderSync, Ping, Search, MoveItems, MeetingResponse, GetAttachment | identical in all three versions (FolderSync / Ping: the Notes folder from 14.0) | | |
 
@@ -118,17 +118,18 @@ flags, completes or clears the mail through the message store — invalid flags 
 `src/pim/` — the PIM classes. A class module (`src/pim/types.ts` `PimClassModule`: folders,
 collection lookup, item states, render, create / update / remove, fingerprint, optional move) owns
 everything class-specific; Sync, FolderSync, Ping, GetItemEstimate, MoveItems and ItemOperations
-dispatch on the collection id (`moduleFor`, `src/pim/registry.ts`). Contacts plugs in as one more
-module of `CLASS_MODULES`.
+dispatch on the collection id (`moduleFor`, `src/pim/registry.ts`). Contacts is one more module
+of `CLASS_MODULES` (see [Contacts](#contacts-w3)).
 
 | Class | Collection ids (FolderSync Type) | Items | Writer |
 |---|---|---|---|
 | Calendar ([MS-ASCAL], page 4) | `cal:<calendarId>` — the user's **own** calendars: the default one Type 8, the others 13; no shared calendars | `CalendarEvent` (ServerId = event id, the MeetingResponse `CalendarId`) | calendar object built / patched with `@coremail/core/calendar` (`src/pim/calendar-ical.ts`), rooms booked through storage `room-booking.ts` (`src/pim/calendar-rooms.ts`), row columns derived from it, `announceCalendarChange` |
 | Tasks ([MS-ASTASK], page 9) | `tasks:default` (Type 7) | `Task` | storage `task-store.ts` `createTaskWithRules` / `updateTaskWithRules` — the one task writer of REST, CalDAV and ActiveSync (status rules, the next task of a completed recurring task exactly once, no revived rule on a completed task), `announceUserEvent` `tasks` |
 | Notes ([MS-ASNOTE], page 23, 14.0+) | `notes:default` (Type 10) | `Note` (subject, plain-text body, categories ↔ notes:Categories — normalised and capped like the REST API; the colour stays untouched) | row writes, `announceUserEvent` `notes` |
+| Contacts ([MS-ASCNTC], pages 1 and 12) | `contacts:default` (Type 9) | the user's own `Contact` rows; contact groups are not synced | storage `contact-store.ts` (the contact writer of REST, CardDAV and ActiveSync), `announceUserEvent` `contacts` |
 
 **Availability**: a class exists for a user only while its webmail module is on (9.4 policies
-`calendar` / `tasks` / `notes`) and the protocol version knows it (Notes from 14.0). Switched off:
+`calendar` / `tasks` / `notes` / `contacts`) and the protocol version knows it (Notes from 14.0). Switched off:
 the folders leave FolderSync, a Sync of such a collection answers Status 12 (hierarchy changed), a
 Ping on it Status 7; an unreadable policy → FolderSync Status 6, Sync Status 16, Ping Status 8
 (never 7 — the FolderSync it asks for would fail as well). Protocol access (`activesync` switch)
@@ -206,6 +207,65 @@ a new key with the snapshot the device then holds, so a hierarchy that went back
 leave Ping answering Status 7 forever. MeetingResponse writes the accepted meeting into the default
 calendar; the next calendar Sync delivers it with the returned `CalendarId` as ServerId.
 
+## Contacts (w3)
+
+`src/pim/contacts.ts` (module), `src/pim/contacts-view.ts` (slots, pure),
+`src/pim/contacts-codec.ts` (WBXML, pure). Code pages 1 Contacts ([MS-ASWBXML] 2.1.2.1.2) and 12
+Contacts2 (2.1.2.1.13); every element exists in 12.1, so the class is the same in all three
+versions. The folder is `contacts:default` (FolderSync Type 9, "Kontakte"); the ServerId is the
+contact id, the one REST and CardDAV use. Sync, GetItemEstimate, ItemOperations Fetch (`Class`
+Contacts) and Ping work as for the other classes; MoveItems answers Status 2 (one folder, no move
+between classes). Search does not cover contacts.
+
+**Writes**: the vCard stays the source of truth (see [contacts.md](contacts.md)). A device Add or
+Change becomes a structured contact (storage `applyContactPatch`), is written into the stored vCard
+with `applyContactCard` (only the properties whose field changed; PHOTO, `X-…`, labels, further
+ORG units — everything a CardDAV client stored — survive) and stored through
+`createContactRow` / `updateContactRow` (columns derived by `contactColumnsFromVcard`). A device
+Delete goes through `deleteContactRow`: the contact leaves every contact group. A Change that
+alters nothing writes nothing. Contact groups (`contact_groups`) are not synced: ActiveSync has no
+group item.
+
+**Mapping**
+
+| ActiveSync | Contact |
+|---|---|
+| FirstName, MiddleName, LastName, Title, Suffix, contacts2:NickName | name parts, nickname |
+| FileAs | "file as"; the derived value ("Family, Given", …) is sent when none is set, and a device sending back the derived value keeps it derived |
+| CompanyName, Department, JobTitle | company, department, job title |
+| OfficeLocation | vCard `X-OFFICE-LOCATION` (no standard property) |
+| Email1–3Address | the first three e-mail addresses (`"Name" <address>` from a device is read as the address) |
+| BusinessPhoneNumber, Business2PhoneNumber / HomePhoneNumber, Home2PhoneNumber / MobilePhoneNumber / PagerNumber | the first two `work`, two `home`, one `mobile`, one `pager` phones |
+| BusinessFaxNumber, HomeFaxNumber | `fax` phones: first the first work fax (`TEL;TYPE=WORK,FAX`) / home fax (`HOME,FAX`), a slot still free then the next `fax` phone no slot shows |
+| contacts2:CompanyMainPhone, CarPhoneNumber, RadioPhoneNumber, AssistantPhoneNumber | `other` phones: first the first number of the slot's kind (`TEL;TYPE=X-COMPANY-MAIN` / `CAR` / `X-RADIO` / `X-ASSISTANT`), a slot still free then the next `other` phone no slot shows (so an `other` phone without a kind keeps the slot it had before). A number a device enters in one of these six slots is stored with the slot's kind (REST shows it as `other` / `fax`) and comes back in the same slot |
+| Business / Home / OtherAddress Street, City, State, PostalCode, Country | the first `work` / `home` / `other` address (PO box and extended part have no element and are kept) |
+| WebPage | the first web page |
+| contacts2:IMAddress, IMAddress2, IMAddress3 | the first three chat addresses (the IMPP URI as it is) |
+| Birthday, Anniversary | dates: sent as the local midnight in the user's Settings → Region zone (UTC midnight without one), a date without year with year 1604; read as the UTC date of a UTC midnight, the date in the user's zone of a local midnight there, else the date of the nearest midnight |
+| Categories / Category | categories (trimmed, unique, capped like the REST API) |
+| airsyncbase:Body | notes (plain text; an HTML body from a device is converted; a truncated copy sent back unchanged keeps the full note) |
+| Picture | an inline JPEG / PNG / GIF PHOTO of at most 48 KiB; a larger photo or one by URL is not sent and never touched by device changes; a device picture over the bound or not an image is refused (the stored one stays and is sent back) |
+| Spouse, AssistantName, contacts2:ManagerName | the first related person of its type as text (vCard 4 `RELATED;TYPE=spouse` / `x-assistant` / `x-manager;VALUE=text`, vCard 3 `X-RELATED;TYPE=SPOUSE` …); further ones and a RELATED by reference (`urn:uuid:`, URL) stay untouched |
+| Children / Child | every `RELATED;TYPE=child;VALUE=text` (vCard 3 `X-RELATED;TYPE=CHILD`), the first 20 sent; further ones stay; a device list over 20 keeps the first 20 and is sent back |
+| YomiFirstName, YomiLastName, YomiCompanyName | `X-PHONETIC-FIRST-NAME`, `X-PHONETIC-LAST-NAME`, `X-PHONETIC-ORG` (as Apple writes them) |
+| contacts2:CustomerId, GovernmentId, AccountName | `X-CUSTOMER-ID`, `X-GOVERNMENT-ID`, `X-ACCOUNT-NAME` |
+| contacts2:MMS | the first `other` phone of kind mms (`TEL;TYPE=X-MMS`); no other number moves into this slot |
+
+Every contact element is stored: none of them is dropped, and REST / CardDAV edits leave the
+properties above untouched.
+
+**Fixed slots, more values** (`src/pim/contacts-view.ts`): a contact can hold more e-mail
+addresses, phones, addresses, web pages and chat addresses than ActiveSync has slots. Each slot
+shows one list entry (the first unassigned entry of its type, in the order of the table); a device
+Change is applied slot by slot to that entry — its value changes, its type, group and parameters
+stay; an emptied slot removes its entry; a value in an empty slot appends an entry of the slot's
+type. Entries no slot showed (a fourth e-mail address, a third work phone, a second mobile number,
+a second work address) are never changed or removed by a device. When the stored contact then
+shows something else than the device sent (an entry moved up into an emptied slot, the derived
+"file as" after a name change, a refused picture), the device gets the contact back as a Change in the same response. Absent
+elements follow the Supported rules of the other classes (cleared unless ghosted); the display
+name follows the name parts unless it was set apart from them (e.g. by a CardDAV client).
+
 ## Device policy
 
 Every command except Provision needs a provisioned device whose final policy key matches the
@@ -243,4 +303,10 @@ versions.
   rooms of phone meetings (booked / declined / released, copies and foreign UIDs untouched), a UTC
   event turned into a series across DST, the calendar FilterType window, a completed task sent
   again with its rule, FolderSync retried with the previous key, Ping with an unreadable policy;
+* `src/pim/contacts-codec.test.ts` — the Contacts / Contacts2 token tables, a byte fixture, the
+  mapping round trip (contact → Sync item → device echo → unchanged contact), values the device
+  could not see surviving its edits (overflow), ghosting, dates, pictures, "file as" / display name;
+* `src/pim/contacts-sync.test.ts` — FolderSync (type 9, module policy), Sync both ways through the
+  storage contact writer (CardDAV properties, hidden photo and groups kept, a deleted contact leaves
+  its groups), ClientId retries, normalised items, GetItemEstimate, Fetch, MoveItems, Ping;
 * e2e steps `eas-legacy` and `eas-pim` (`scripts/e2e/steps/`, see [e2e.md](e2e.md)).

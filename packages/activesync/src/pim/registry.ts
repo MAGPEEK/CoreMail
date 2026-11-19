@@ -1,8 +1,7 @@
 /**
  * The PIM class modules and which of them a user gets: the webmail module of the class must
- * be on for the user (9.4 policies — calendar / tasks / notes off → no folder, no sync) and
- * the negotiated protocol version must know the class (Notes: 14.0+). Contacts plugs in as
- * one more entry of CLASS_MODULES.
+ * be on for the user (9.4 policies — calendar / tasks / notes / contacts off → no folder, no
+ * sync) and the negotiated protocol version must know the class (Notes: 14.0+).
  */
 import { isWebmailFeatureEnabled } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
@@ -10,6 +9,7 @@ import { supports, type EasVersion } from '../protocol-version.js';
 import { calendarModule } from './calendar.js';
 import { tasksModule } from './tasks.js';
 import { notesModule } from './notes.js';
+import { contactsModule } from './contacts.js';
 import type { PimClassModule, PimCollection, PimFolder } from './types.js';
 
 const log = createLogger('activesync:pim');
@@ -18,6 +18,7 @@ export const CLASS_MODULES: readonly PimClassModule[] = [
   calendarModule as PimClassModule,
   tasksModule as PimClassModule,
   notesModule as PimClassModule,
+  contactsModule as PimClassModule,
 ];
 
 /** The module owning `collectionId` (by its prefix); undefined for a mail folder id. */

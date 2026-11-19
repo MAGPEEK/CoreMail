@@ -314,6 +314,17 @@ function canonical(v: unknown): unknown {
   return v;
 }
 
+// ─── Photos ──────────────────────────────────────────────────────────────────
+
+const PHOTO_SIGNATURES: ReadonlyArray<readonly [string, readonly number[]]> = [
+  ['image/jpeg', [0xff, 0xd8, 0xff]], ['image/png', [0x89, 0x50, 0x4e, 0x47]], ['image/gif', [0x47, 0x49, 0x46, 0x38]],
+];
+
+/** Media type of contact photo bytes by their signature (JPEG, PNG, GIF); null for anything else. */
+export function photoMediaType(data: Uint8Array): string | null {
+  return PHOTO_SIGNATURES.find(([, sig]) => sig.every((b, i) => data[i] === b))?.[0] ?? null;
+}
+
 // ─── Tolerant reading of the stored JSON columns ─────────────────────────────
 
 const asText = (v: unknown, max: number): string => (typeof v === 'string' ? v.slice(0, max) : '');
