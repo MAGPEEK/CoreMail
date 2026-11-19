@@ -1,6 +1,6 @@
 /**
  * Header row of the compose card: left the split button "Senden" (the only
- * accent-filled control; its chevron / Alt+↓ opens Senden, Später senden,
+ * accent-filled control; its chevron / Alt+↓ opens Senden, Senden planen,
  * Wichtigkeit, Nachrichtenoptionen) and quiet icon buttons (Anhängen, Bild,
  * Signatur, "Aa" for the formatting bar) and the "…" menu with everything else
  * (lib/composeToolbar.ts: headerCommands, SEND_MENU, moreMenuCommands); right
@@ -96,7 +96,7 @@ export function moreCommands(state: ComposeCommandState, actions: ComposeCommand
 }
 
 /** Entries of the chevron of "Senden". */
-function sendMenu(state: ComposeCommandState, actions: ComposeCommandActions, t: T): ContextMenuItem[] {
+export function sendMenu(state: ComposeCommandState, actions: ComposeCommandActions, t: T): ContextMenuItem[] {
   const all: Record<SendMenuId, ContextMenuItem> = {
     send: { label: t('compose_send'), icon: <Send size={14} />, onClick: actions.send },
     schedule: {
@@ -127,7 +127,7 @@ function signatureMenu(signatures: NamedSignature[], pick: (id: string) => void,
   ];
 }
 
-function headerItems(state: ComposeCommandState, actions: ComposeCommandActions, t: T): Record<HeaderId, CommandItem> {
+export function headerItems(state: ComposeCommandState, actions: ComposeCommandActions, t: T): Record<HeaderId, CommandItem> {
   return {
     attach: { id: 'attach', label: t('compose_attach_file'), icon: <Paperclip size={16} />, iconOnly: true, onClick: actions.attachFile },
     inlineImage: { id: 'inline-image', label: t('compose_insert_image'), icon: <ImageIcon size={16} />, iconOnly: true, onClick: actions.insertImage },
@@ -157,7 +157,11 @@ function StatusText({ status, inWindow }: { status: ComposeStatusLine; inWindow:
   );
 }
 
-export function ComposeCommandRow({ state, actions, status }: { state: ComposeCommandState; actions: ComposeCommandActions; status: ComposeStatusLine }) {
+export function ComposeCommandRow({ state, actions, status, compact = false }: {
+  state: ComposeCommandState; actions: ComposeCommandActions; status: ComposeStatusLine;
+  /** 10.1: the ribbon shows the compose commands — the card keeps only Senden, the status and close. */
+  compact?: boolean;
+}) {
   const t = useT();
   const header = headerItems(state, actions, t);
   const groups: CommandGroup[] = [
@@ -165,11 +169,15 @@ export function ComposeCommandRow({ state, actions, status }: { state: ComposeCo
       id: 'send', label: t('compose_send'), icon: <Send size={15} />, tone: 'primary', placement: 'pinned',
       tooltip: state.sendBlockedReason ?? t('compose_send_tip'), keyshortcuts: 'Control+Enter Meta+Enter Alt+ArrowDown',
       ...(state.canSend ? {} : { disabled: true }),
+      // 10.1: a soft ring once a recipient is there (Senden stays usable before and explains what is missing)
+      highlight: state.canSend && !state.sendBlockedReason,
       onClick: actions.send,
       menu: () => sendMenu(state, actions, t),
     }] },
-    { id: 'edit', items: headerCommands(state.plainText, state.signatures.length > 0).map((id) => header[id]) },
-    { id: 'more', items: moreCommands(state, actions, t).map((item) => ({ ...item, placement: 'overflow' as const })) },
+    ...(compact ? [] : [
+      { id: 'edit', items: headerCommands(state.plainText, state.signatures.length > 0).map((id) => header[id]) },
+      { id: 'more', items: moreCommands(state, actions, t).map((item) => ({ ...item, placement: 'overflow' as const })) },
+    ]),
   ];
   return (
     <div className="flex items-center gap-2 px-4 py-3 border-b border-line bg-surface shrink-0">

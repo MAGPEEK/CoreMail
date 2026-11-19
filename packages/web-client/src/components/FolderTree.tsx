@@ -24,6 +24,10 @@ import { useT } from '../i18n/useT.js';
 import { useLanguageStore } from '../store/language.js';
 import { SAFETY_REFETCH_MS } from '../lib/realtimeEvents.js';
 import { useWebmailFeatures } from '../hooks/useWebmailFeatures.js';
+import { useOwnEmail } from '../hooks/useOwnEmail.js';
+import { usePreferences } from '../store/preferences.js';
+import { addFavorite, favoriteFolders, isFavorite, pruneFavorites, removeFavorite } from '../lib/folderLists.js';
+import { fmt } from '../i18n/useT.js';
 
 type DialogState =
   | { kind: 'createRoot' }
@@ -148,7 +152,12 @@ export function FolderTree() {
   // no separate "My folders" section is needed anymore and old folders stay visible.
   const childrenOf = useMemo(() => buildFolderChildren(all), [all]);
 
-  const favorites = all.filter((f) => f.isFavorite);
+  // 10.1: favourites are the roaming preference folders.favorites (default: Posteingang,
+  // Gesendete Elemente, Entwürfe, Gelöschte Elemente; pre-10.1 folder flags are kept)
+  const favoriteEntries = usePreferences((s) => s.prefs.folders.favorites);
+  const updatePreferences = usePreferences((s) => s.update);
+  const favorites = favoriteFolders(favoriteEntries, all);
+  const ownEmail = useOwnEmail();
   const systemFolders = systemFoldersOf(all);
 
   const folderLabel = (folder: FolderType): string => {
@@ -184,11 +193,19 @@ export function FolderTree() {
         },
       },
       { type: 'divider' },
-      {
-        label: folder.isFavorite ? t('remove_favorite') : t('add_favorite'),
-        icon: <Star size={14} className={folder.isFavorite ? 'fill-warning-fg text-warning-fg' : ''} />,
-        onClick: () => patchFolder.mutate({ id: folder.id, body: { isFavorite: !folder.isFavorite } }),
-      },
+      (() => {
+        const fav = isFavorite(favoriteEntries, folder);
+        return {
+          label: fav ? t('remove_favorite') : t('add_favorite'),
+          icon: <Star size={14} className={fav ? 'fill-warning-fg text-warning-fg' : ''} />,
+          onClick: () => {
+            const kept = pruneFavorites(favoriteEntries, all);
+            updatePreferences({ folders: { favorites: fav ? removeFavorite(kept, folder) : addFavorite(kept, folder) } });
+            // a pre-10.1 favourite flag goes with it (else the folder would stay in Favoriten)
+            if (fav && folder.isFavorite) patchFolder.mutate({ id: folder.id, body: { isFavorite: false } });
+          },
+        };
+      })(),
       {
         label: t('new_subfolder'),
         icon: <FolderPlus size={14} />,
@@ -341,7 +358,7 @@ export function FolderTree() {
   const roving = useRovingFocus(navRef);
 
   return (
-    <aside aria-label="Postfachbereich" className="w-full h-full bg-surface-2 border-r border-line flex flex-col overflow-hidden">
+    <aside aria-label="Postfachbereich" className="w-full h-full flex flex-col overflow-hidden">
       {/* "Neue E-Mail" lives only in the mail command bar (split button) and on `n`/`c` */}
       <div className="p-3 flex items-center gap-2">
         <button
@@ -394,9 +411,10 @@ export function FolderTree() {
           </>
         )}
 
-        {/* System folders + hierarchy */}
+        {/* 10.1: the own mailbox, headed by its address — default folders + hierarchy */}
         <SectionHeader
-          label={t('folders')}
+          label={ownEmail || t('folders')}
+          plain={!!ownEmail}
           collapsed={folderTreeCollapsed}
           onToggle={toggleFolderTree}
           action={
@@ -410,7 +428,7 @@ export function FolderTree() {
           }
         />
         {!folderTreeCollapsed && (
-          <div role="tree" aria-label={t('folders')} className="space-y-0.5">
+          <div role="tree" aria-label={ownEmail ? fmt(t('folder_mailbox_section'), { address: ownEmail }) : t('folders')} className="space-y-0.5">
             {systemFolders.map((f) => renderFolderTree(f, 0))}
           </div>
         )}

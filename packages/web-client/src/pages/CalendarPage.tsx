@@ -35,7 +35,7 @@ import { PageShell } from '../components/PageShell.js';
 import { PAGE_CONTENT_PAD } from '../lib/pageShell.js';
 import { usePreferences, useRegional } from '../store/preferences.js';
 import { calendarTimeZone, eventFetchRange, localDay } from '../lib/zonedTime.js';
-import { businessHours, hiddenDaysForWorkWeek, slotDuration } from '../lib/calendarPrefs.js';
+import { businessHours, defaultWritableCalendarId, hiddenDaysForWorkWeek, slotDuration } from '../lib/calendarPrefs.js';
 import { calendarEventPath, calendarOccurrencePath, itemIdFromPath, occurrenceFromSearch } from '../lib/mailLinks.js';
 import { DayAgenda } from '../components/calendar/DayAgenda.js';
 import { OccurrenceChoice } from '../components/calendar/OccurrenceChoice.js';
@@ -153,10 +153,7 @@ export function CalendarPage() {
 
   // Default calendar for new events: prefer own default, then the first own calendar.
   // Never use shared READ-only calendars as default.
-  const defaultWritableCalId = useMemo(() => {
-    const writable = (calendars ?? []).filter((c) => c.permission !== 'READ' && !c.shared);
-    return writable.find((c) => c.isDefault)?.id ?? writable[0]?.id ?? '';
-  }, [calendars]);
+  const defaultWritableCalId = useMemo(() => defaultWritableCalendarId(calendars ?? []), [calendars]);
 
   // v3.18.27: Date selection in FullCalendar → create dialog
   const handleDateSelect = (info: DateSelectArg) => {

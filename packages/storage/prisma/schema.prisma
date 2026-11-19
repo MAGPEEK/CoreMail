@@ -151,6 +151,10 @@ model User {
   // a 512×512 JPEG re-encoded by the api-gateway); null = no photo (initials)
   photoKey            String?
   photoUpdatedAt      DateTime?
+  // 10.1: uploaded webmail background — content-addressed object key
+  // (backgrounds/<aa>/<sha256>.jpg, a JPEG re-encoded by the api-gateway); null = none
+  backgroundKey       String?
+  backgroundUpdatedAt DateTime?
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt
 
@@ -1923,6 +1927,8 @@ model Branding {
   footerLinks         Json     @default("[]")
   allowUserAccent     Boolean  @default(true)
   showPoweredBy       Boolean  @default(true)
+  // 10.1: webmail background for users without an own choice: "none" or "builtin:<id>"
+  defaultBackground   String   @default("none")
   updatedAt           DateTime @updatedAt
 
   @@map("branding")

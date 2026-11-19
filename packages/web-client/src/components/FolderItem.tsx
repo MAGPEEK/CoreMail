@@ -201,7 +201,9 @@ export function FolderItem({
           </span>
         )}
         {!noSelect && folder.unreadCount > 0 && (
-          <AnimatedCounter value={folder.unreadCount} className="text-xs font-bold text-accent-fg" />
+          <span className="ml-auto pl-1 shrink-0 tabular-nums" title={`${folder.unreadCount} ungelesen`}>
+            <AnimatedCounter value={folder.unreadCount} className="text-xs font-bold text-accent-fg" />
+          </span>
         )}
       </div>
     </div>
@@ -209,14 +211,16 @@ export function FolderItem({
 }
 
 // Module-level (never define components inside components — remounts on every render)
-export function SectionHeader({ label, collapsed, onToggle, action }: {
+export function SectionHeader({ label, collapsed, onToggle, action, plain = false }: {
   label: string; collapsed: boolean; onToggle: () => void; action?: ReactNode;
+  /** 10.1: a label as written (the mailbox address) instead of upper-case caps. */
+  plain?: boolean;
 }) {
   return (
-    <div className="flex items-center gap-1 mt-3 mb-1 px-2 text-xs font-semibold text-fg-subtle uppercase tracking-wide">
-      <button onClick={onToggle} aria-expanded={!collapsed} className="flex items-center gap-1 hover:text-fg-muted flex-1">
-        {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-        {label}
+    <div className={`flex items-center gap-1 mt-3 mb-1 px-2 text-xs font-semibold text-fg-subtle ${plain ? '' : 'uppercase tracking-wide'}`}>
+      <button onClick={onToggle} aria-expanded={!collapsed} className="flex items-center gap-1 hover:text-fg-muted flex-1 min-w-0">
+        {collapsed ? <ChevronRight size={12} className="shrink-0" /> : <ChevronDown size={12} className="shrink-0" />}
+        <span className="truncate" title={plain ? label : undefined}>{label}</span>
       </button>
       {action}
     </div>

@@ -44,6 +44,8 @@ export interface Branding {
   headerColor: string | null;
   allowUserAccent: boolean;
   showPoweredBy: boolean;
+  /** 10.1: webmail background of users without an own choice: none or builtin:<id> (lib/backgroundPrefs.ts resolves it) */
+  defaultBackground: string;
   loginText: string;
   footerLinks: FooterLink[];
   assets: BrandingAssets;
@@ -71,6 +73,7 @@ export const DEFAULT_BRANDING: Branding = Object.freeze({
   headerColor: null,
   allowUserAccent: true,
   showPoweredBy: true,
+  defaultBackground: 'none',
   loginText: '',
   footerLinks: [],
   assets: Object.freeze({ logoLight: null, logoDark: null, favicon: null, loginBackground: null }),
@@ -269,6 +272,7 @@ export function parseBranding(raw: unknown): Branding {
     headerColor: normalizeHex(o['headerColor']),
     allowUserAccent: typeof o['allowUserAccent'] === 'boolean' ? o['allowUserAccent'] : true,
     showPoweredBy: typeof o['showPoweredBy'] === 'boolean' ? o['showPoweredBy'] : true,
+    defaultBackground: typeof o['defaultBackground'] === 'string' && /^(none|builtin:[a-z]{1,20})$/.test(o['defaultBackground']) ? o['defaultBackground'] : 'none',
     loginText: str(o['loginText'], '').slice(0, 1000),
     footerLinks: links
       .filter((l): l is Record<string, unknown> => !!l && typeof l === 'object')

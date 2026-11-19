@@ -2,6 +2,7 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { z } from 'zod';
 import {
   prisma, resetQuotaCache, purgeRecoverableItems, getQuotaStatus, announceUserEvent, profilePhotoInfo, releaseProfilePhotoQuietly,
+  releaseUserBackgroundQuietly,
 } from '@coremail/storage';
 import { getMailboxPhotoHandler, deleteMailboxPhotoHandler } from '../../lib/profile-photo/admin.js';
 import { hashPassword } from '@coremail/core';
@@ -435,7 +436,7 @@ adminMailboxesRouter.put('/:id', async (req: Request, res: Response) => {
 adminMailboxesRouter.delete('/:id', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
 
-  const user = await prisma.user.findUnique({ where: { id }, select: { id: true, role: true, active: true, photoKey: true } });
+  const user = await prisma.user.findUnique({ where: { id }, select: { id: true, role: true, active: true, photoKey: true, backgroundKey: true } });
   if (!user) { res.status(404).json({ error: 'Mailbox not found' }); return; }
   if (!canManageAccount(req.apiUser?.role, user.role)) {
     forbidden(res, 'Only Organization Management may delete admin accounts'); return;
@@ -451,6 +452,8 @@ adminMailboxesRouter.delete('/:id', async (req: Request, res: Response) => {
   await revokeAllSessions(id, { reason: 'deleted' });
   // 9.5: the photo object goes with the account (unless another account shares it)
   await releaseProfilePhotoQuietly(user.photoKey);
+  // 10.1: so does the uploaded webmail background
+  await releaseUserBackgroundQuietly(user.backgroundKey);
   res.json({ ok: true });
 });
 

@@ -107,7 +107,7 @@ test('encodePng → decodePng round trip; resize averages areas with premultipli
 
 const sha = 'b'.repeat(64);
 const branding = (favicon: string | null) => ({
-  version: 1, productName: 'Example', primaryColor: null, headerColor: null, allowUserAccent: true, showPoweredBy: true,
+  version: 1, productName: 'Example', primaryColor: null, headerColor: null, allowUserAccent: true, showPoweredBy: true, defaultBackground: 'none' as const,
   loginText: '', footerLinks: [], assets: { logoLight: null, logoDark: null, favicon, loginBackground: null },
 });
 

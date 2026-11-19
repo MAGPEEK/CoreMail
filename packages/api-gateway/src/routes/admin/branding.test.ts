@@ -137,7 +137,7 @@ test('defaults: public and admin GET return the contract shape', async () => {
   assert.equal(pub.headers.get('cache-control'), 'no-cache');
   assert.deepEqual(pub.json, {
     version: 0, productName: 'CoreMail', primaryColor: '#0078d4', headerColor: null,
-    allowUserAccent: true, showPoweredBy: true, loginText: '', footerLinks: [],
+    allowUserAccent: true, showPoweredBy: true, defaultBackground: 'none', loginText: '', footerLinks: [],
     assets: { logoLight: null, logoDark: null, favicon: null, loginBackground: null },
   });
   const adm = await call('GET', A, { role: ORG });
@@ -208,6 +208,8 @@ test('PUT: validation errors → 400 {error, field}', async () => {
     [{ footerLinks: [{ label: 'x', url: 'javascript:alert(1)' }] }, 'footerLinks'],
     [{ footerLinks: Array(6).fill({ label: 'x', url: 'https://example.org' }) }, 'footerLinks'],
     [{ logoLightKey: 'branding/x' }, 'logoLightKey'],
+    [{ defaultBackground: 'custom' }, 'defaultBackground'],
+    [{ defaultBackground: 'builtin:photo' }, 'defaultBackground'],
     [{ version: 99 }, 'version'],
     [[1, 2], 'body'],
   ];
@@ -238,11 +240,12 @@ test('PUT: partial update, version++, audit + reload publish, warnings for low-c
   assert.equal(a['actorEmail'], `actor-${ORG}@ex.com`);
   assert.deepEqual((a['changes'] as Row)['productName'], { from: null, to: 'Acme Mail' });
 
-  const r2 = await call('PUT', A, { role: ORG, json: { headerColor: '#ffff00', showPoweredBy: false } });
+  const r2 = await call('PUT', A, { role: ORG, json: { headerColor: '#ffff00', showPoweredBy: false, defaultBackground: 'builtin:lake' } });
   assert.equal(r2.status, 200);
   assert.equal(r2.json['version'], 2);
   assert.equal(r2.json['productName'], 'Acme Mail', 'untouched fields kept');
   assert.equal(r2.json['showPoweredBy'], false);
+  assert.equal(r2.json['defaultBackground'], 'builtin:lake', '10.1: organisation default background');
   const w = r2.json['warnings'] as Array<Row>;
   assert.equal(w.length, 1);
   assert.equal(w[0]!['field'], 'headerColor');

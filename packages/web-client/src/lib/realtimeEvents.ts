@@ -75,7 +75,8 @@ function mailboxPlan(d: Obj): RealtimePlan {
 const SETTINGS_KEYS: Record<string, QueryKey[]> = {
   // 9.5: a new / removed profile photo changes the version the lookups return
   profile: [['user-profile'], ['user', 'profile'], [PHOTO_LOOKUP_KEY]],
-  preferences: [['user-preferences']],
+  // 10.1: the uploaded webmail background (hooks/useAppBackground.ts) changes with the preferences
+  preferences: [['user-preferences'], ['user-background']],
   signature: [['user-signature'], ['user', 'signature'], ['user', 'signatures']],
   oof: [['user-oof']],
   rules: [['rules']],

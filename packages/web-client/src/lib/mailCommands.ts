@@ -108,6 +108,40 @@ export function mailCommandStates(ctx: MailCommandContext, t: Translate): Record
   };
 }
 
+// ── 10.1: further commands of the ribbon's Start tab ────────────────────────
+export type RibbonMailCommandId = 'reply' | 'replyAll' | 'forward' | 'deletePermanent' | 'markAllRead' | 'print';
+
+export interface RibbonMailContext extends MailCommandContext {
+  /** A folder is shown (not only a search over the mailbox). */
+  hasFolder: boolean;
+  /** Unread messages of the shown folder. */
+  folderUnread: number;
+  /** A message is open in the reading pane (print acts on it). */
+  hasOpenMessage: boolean;
+}
+
+/**
+ * Enablement of the Start-tab commands that the classic command bar does not
+ * have. Reply / forward act on exactly one message; "Alle als gelesen markieren"
+ * on the shown folder; "Drucken" on the open message (the reading pane prints).
+ */
+export function ribbonMailStates(ctx: RibbonMailContext, t: Translate): Record<RibbonMailCommandId, CommandState> {
+  const { selection, readOnly } = ctx;
+  const one = selection.count === 1 ? null : t('mail_hint_one_message');
+  const write = readOnly ? t('mail_hint_read_only') : selection.count === 0 ? t('mail_hint_no_selection') : null;
+  const folderWrite = readOnly ? t('mail_hint_read_only')
+    : !ctx.hasFolder ? t('mail_hint_no_folder')
+      : ctx.folderUnread === 0 ? t('mail_hint_no_unread') : null;
+  return {
+    reply: state(t('mail_cmd_reply'), t('mail_cmd_reply'), one),
+    replyAll: state(t('mail_cmd_reply_all'), t('mail_cmd_reply_all'), one),
+    forward: state(t('mail_cmd_forward'), t('mail_cmd_forward'), one),
+    deletePermanent: state(t('mail_cmd_delete_permanent'), t('mail_cmd_delete_permanent'), write),
+    markAllRead: state(t('mail_cmd_mark_all_read'), t('mail_cmd_mark_all_read_tip'), folderWrite),
+    print: state(t('mail_cmd_print'), t('mail_cmd_print_tip'), ctx.hasOpenMessage ? null : t('mail_hint_open_message')),
+  };
+}
+
 // ── Categories (multi-select) ───────────────────────────────────────────────
 /** Does every / some / no target carry the category? */
 export function categoryCoverage(perMessage: readonly (readonly string[])[], categoryId: string): 'all' | 'some' | 'none' {

@@ -74,7 +74,7 @@ test('announceOnWrite with a function: the path seen on entry decides', async ()
 
 const branding = {
   version: 1, productName: 'Example Mail Service', primaryColor: '#123456', headerColor: null,
-  allowUserAccent: true, showPoweredBy: true, loginText: '', footerLinks: [],
+  allowUserAccent: true, showPoweredBy: true, defaultBackground: 'none' as const, loginText: '', footerLinks: [],
   assets: { logoLight: null, logoDark: null, favicon: null, loginBackground: null },
 };
 

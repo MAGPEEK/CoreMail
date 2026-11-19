@@ -13,6 +13,7 @@ import { useT } from '../i18n/useT.js';
 import { nextRovingIndex } from '../lib/toolbarNav.js';
 import { isAppEnabled } from '../lib/webmailFeatures.js';
 import { useWebmailFeatures } from '../hooks/useWebmailFeatures.js';
+import { ON_PICTURE } from '../lib/paneLayout.js';
 
 const ICONS: Record<AppId, ReactNode> = {
   mail: <Mail size={20} />,
@@ -100,7 +101,7 @@ export function AppRail() {
       aria-label={t('rail_nav_label')}
       onKeyDown={onKeyDown}
       onMouseLeave={() => setHiddenTip(null)}
-      className="shrink-0 flex md:flex-col bg-surface border-line max-md:border-t md:border-r md:w-16 md:py-2 max-md:px-1"
+      className={`shrink-0 flex md:flex-col bg-surface border-line max-md:border-t md:border-r md:w-16 md:py-2 max-md:px-1 ${ON_PICTURE}`}
     >
       <ul className="flex md:flex-col items-center gap-1 max-md:flex-1">{RAIL_ITEMS.filter((i) => isAppEnabled(i.id, features)).map(link)}</ul>
     </nav>

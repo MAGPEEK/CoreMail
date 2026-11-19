@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Plus, Calendar as CalDay, Briefcase, CalendarRange, LayoutGrid,
   Columns3, Filter, Share2, Printer, X, CalendarCheck, ListTodo,
@@ -116,7 +117,8 @@ export function CalendarToolbar({
     <>
       <CommandBar label="Kalender-Befehle" variant="ribbon" groups={groups} className="flex-1" />
 
-      {filterOpen && (
+      {/* 10.1: in <body> — the floating header card may blur a background picture (traps fixed children) */}
+      {filterOpen && createPortal(
         <>
           <div className="fixed inset-0 z-[90]" onClick={closeFilter} />
           <div
@@ -158,7 +160,8 @@ export function CalendarToolbar({
               {filterCount === 0 ? 'Keine Filter aktiv' : `${filterCount} Filter aktiv`}
             </div>
           </div>
-        </>
+        </>,
+        document.body,
       )}
     </>
   );

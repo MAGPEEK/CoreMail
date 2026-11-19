@@ -34,6 +34,8 @@ import { POPOUT_ROUTE } from './lib/composePopout.js';
 import { brandCssVars, headerHex, resolveAccentChannels } from './lib/branding.js';
 import { useBranding, useBrandingSync } from './hooks/useBranding.js';
 import { mailPageUrl, parseMailboxKey } from './lib/mailboxContext.js';
+import { useAppBackground } from './hooks/useAppBackground.js';
+import { APP_BODY_CLASS } from './lib/paneLayout.js';
 
 // ── Theme-Applier ─────────────────────────────────────────────────────────────
 function ThemeApplier() {
@@ -108,6 +110,7 @@ function Layout({ children }: { children: React.ReactNode }) {
   usePopoutBridge();
   const { features } = useWebmailFeatures();
   const pageFeature = featureForPath(location.pathname);
+  const background = useAppBackground();
   const pageDisabled = pageFeature !== null && !features[pageFeature];
 
   // MessageList picks up ?q= and runs a mailbox-wide server search
@@ -128,7 +131,9 @@ function Layout({ children }: { children: React.ReactNode }) {
       </a>
       <TopBar onSearch={handleSearch} />
       {/* App rail left (md+), bottom bar below md (column-reverse puts it last) */}
-      <div className="flex-1 flex flex-col-reverse md:flex-row min-h-0">
+      {/* 10.1: the canvas below the top bar — plain, or the background picture (Einstellungen → Darstellung) */}
+      <div className={APP_BODY_CLASS} data-bg={background.imageUrl ? 'on' : 'off'}
+        style={background.imageUrl ? { backgroundImage: `url("${background.imageUrl}")` } : undefined}>
         <AppRail />
         <main id="main-content" tabIndex={-1} key={pageKey(location.pathname)} className="flex-1 flex min-h-0 min-w-0 overflow-hidden animate-page-in outline-none">
           <ErrorBoundary resetKey={pageKey(location.pathname)}>

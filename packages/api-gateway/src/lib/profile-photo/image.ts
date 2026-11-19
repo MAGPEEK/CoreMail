@@ -42,6 +42,36 @@ const JPEG_QUALITY = 88;
  */
 const JPEG_MAX_MEMORY_MB = 128;
 
+/** 10.1 webmail background: largest stored width / height (px, downscale only). */
+export const BACKGROUND_MAX_WIDTH = 2560;
+export const BACKGROUND_MAX_HEIGHT = 2560;
+/** Largest accepted background upload (bytes) — same as a photo. */
+export const MAX_BACKGROUND_BYTES = MAX_PHOTO_BYTES;
+/** Largest decoded background (pixels): a 12-megapixel camera picture (4000×3000). */
+export const MAX_BACKGROUND_PIXELS = 12_000_000;
+/** Smallest accepted background side (px) — smaller pictures look like mud when stretched. */
+export const MIN_BACKGROUND_SIDE = 320;
+const BACKGROUND_JPEG_QUALITY = 82;
+
+/** Limits of one kind of upload (checked from the header before decoding). */
+export interface ImageLimits {
+  maxBytes: number;
+  maxPixels: number;
+  minSide: number;
+  /** jpeg-js memory cap (MB) for maxPixels. */
+  jpegMemoryMb: number;
+  /** "photo" / "background" in error messages. */
+  noun: string;
+}
+
+const PHOTO_LIMITS: ImageLimits = {
+  maxBytes: MAX_PHOTO_BYTES, maxPixels: MAX_PHOTO_PIXELS, minSide: MIN_PHOTO_SIDE, jpegMemoryMb: JPEG_MAX_MEMORY_MB, noun: 'photo',
+};
+/** Three times the photo's pixels → three times its memory cap. */
+const BACKGROUND_LIMITS: ImageLimits = {
+  maxBytes: MAX_BACKGROUND_BYTES, maxPixels: MAX_BACKGROUND_PIXELS, minSide: MIN_BACKGROUND_SIDE, jpegMemoryMb: 3 * JPEG_MAX_MEMORY_MB, noun: 'background',
+};
+
 export type PhotoErrorCode = 'SIZE' | 'TYPE' | 'UNSUPPORTED' | 'DIMENSIONS' | 'CORRUPT';
 
 /** HTTP status per error code. */
@@ -56,12 +86,12 @@ export class PhotoError extends Error {
   }
 }
 
-function decode(body: Buffer, format: 'png' | 'jpeg'): RgbaImage {
+function decode(body: Buffer, format: 'png' | 'jpeg', limits: ImageLimits): RgbaImage {
   try {
-    if (format === 'png') return decodePng(body);
+    if (format === 'png') return decodePng(body, limits.maxPixels);
     const img = jpeg.decode(body, {
       useTArray: true, formatAsRGBA: true,
-      maxResolutionInMP: MAX_PHOTO_PIXELS / 1_000_000, maxMemoryUsageInMB: JPEG_MAX_MEMORY_MB,
+      maxResolutionInMP: limits.maxPixels / 1_000_000, maxMemoryUsageInMB: limits.jpegMemoryMb,
     });
     return { width: img.width, height: img.height, data: Buffer.from(img.data.buffer, img.data.byteOffset, img.data.byteLength) };
   } catch {
@@ -144,29 +174,81 @@ function uploadDimensions(body: Buffer, format: 'png' | 'jpeg'): { width: number
   return jpg;
 }
 
-/** Validates the header of an upload; returns the format to decode. */
-function checkUpload(body: Buffer): 'png' | 'jpeg' {
+/** Validates the header of an upload against `limits`; returns the format to decode. */
+function checkUpload(body: Buffer, limits: ImageLimits): 'png' | 'jpeg' {
   if (body.length === 0) throw new PhotoError('TYPE', 'empty upload');
-  if (body.length > MAX_PHOTO_BYTES) throw new PhotoError('SIZE', `photo may be at most ${MAX_PHOTO_BYTES / 1024 / 1024} MB`);
+  if (body.length > limits.maxBytes) throw new PhotoError('SIZE', `${limits.noun} may be at most ${limits.maxBytes / 1024 / 1024} MB`);
   const format = sniffRaster(body);
   if (format === 'webp') throw new PhotoError('UNSUPPORTED', 'WebP is not accepted — upload PNG or JPEG');
   if (!format) throw new PhotoError('TYPE', 'not a PNG or JPEG image');
   const dim = uploadDimensions(body, format);
   if (!(dim.width > 0) || !(dim.height > 0)) throw new PhotoError('CORRUPT', 'unreadable image header');
-  if (dim.width * dim.height > MAX_PHOTO_PIXELS) {
-    throw new PhotoError('DIMENSIONS', `image has more than ${MAX_PHOTO_PIXELS} pixels (${dim.width}×${dim.height})`);
+  if (dim.width * dim.height > limits.maxPixels) {
+    throw new PhotoError('DIMENSIONS', `image has more than ${limits.maxPixels} pixels (${dim.width}×${dim.height})`);
   }
-  if (Math.min(dim.width, dim.height) < MIN_PHOTO_SIDE) {
-    throw new PhotoError('DIMENSIONS', `image must be at least ${MIN_PHOTO_SIDE}×${MIN_PHOTO_SIDE} px`);
+  if (Math.min(dim.width, dim.height) < limits.minSide) {
+    throw new PhotoError('DIMENSIONS', `image must be at least ${limits.minSide}×${limits.minSide} px`);
   }
   const png = format === 'png' ? readPngHeader(body) : null;
-  if (png && !isDecodable(png)) throw new PhotoError('UNSUPPORTED', 'PNG must be 8-bit and not interlaced');
+  if (png && !isDecodable(png, limits.maxPixels)) throw new PhotoError('UNSUPPORTED', 'PNG must be 8-bit and not interlaced');
   return format;
 }
 
+const encodeJpeg = (img: RgbaImage, quality: number): Buffer =>
+  Buffer.from(jpeg.encode({ width: img.width, height: img.height, data: img.data }, quality).data);
+
 /** Turns an uploaded PNG / JPEG into the stored PHOTO_SIZE² JPEG without metadata. Throws PhotoError. */
 export function processProfilePhoto(body: Buffer): Buffer {
-  const format = checkUpload(body);
-  const img = flattenOnWhite(squareAt(decode(body, format), PHOTO_SIZE));
-  return Buffer.from(jpeg.encode({ width: img.width, height: img.height, data: img.data }, JPEG_QUALITY).data);
+  const format = checkUpload(body, PHOTO_LIMITS);
+  return encodeJpeg(flattenOnWhite(squareAt(decode(body, format, PHOTO_LIMITS), PHOTO_SIZE)), JPEG_QUALITY);
+}
+
+/** Size that fits into maxW × maxH with the same aspect ratio; never larger than the source (pure). */
+export function fitSize(width: number, height: number, maxW: number, maxH: number): { width: number; height: number } {
+  const scale = Math.min(1, maxW / width, maxH / height);
+  return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
+}
+
+/** Area-average downscale of an opaque image to width × height (pure; the target must not be larger). */
+export function downscaleRgba(img: RgbaImage, width: number, height: number): RgbaImage {
+  if (width > img.width || height > img.height) throw new RangeError('downscaleRgba: target larger than the source');
+  if (width === img.width && height === img.height) return img;
+  const sx = img.width / width;
+  const sy = img.height / height;
+  const out = Buffer.alloc(width * height * 4);
+  for (let y = 0; y < height; y++) {
+    const y0 = y * sy;
+    const y1 = y0 + sy;
+    for (let x = 0; x < width; x++) {
+      const x0 = x * sx;
+      const x1 = x0 + sx;
+      let r = 0, g = 0, b = 0, w = 0;
+      for (let py = Math.floor(y0); py < Math.ceil(y1); py++) {
+        const wy = Math.min(py + 1, y1) - Math.max(py, y0);
+        for (let px = Math.floor(x0); px < Math.ceil(x1); px++) {
+          const weight = wy * (Math.min(px + 1, x1) - Math.max(px, x0));
+          const s = (py * img.width + px) * 4;
+          r += img.data[s]! * weight; g += img.data[s + 1]! * weight; b += img.data[s + 2]! * weight;
+          w += weight;
+        }
+      }
+      const o = (y * width + x) * 4;
+      out[o] = Math.round(r / w); out[o + 1] = Math.round(g / w); out[o + 2] = Math.round(b / w); out[o + 3] = 255;
+    }
+  }
+  return { width, height, data: out };
+}
+
+/**
+ * 10.1: turns an uploaded PNG / JPEG into the stored webmail background — a JPEG
+ * of at most BACKGROUND_MAX_WIDTH × BACKGROUND_MAX_HEIGHT (aspect ratio kept,
+ * never enlarged), transparency flattened onto white, no metadata (only the
+ * JFIF header). Same checks as a photo (magic bytes, header limits before
+ * decoding, JPEG structure), with the larger background limits. Throws PhotoError.
+ */
+export function processBackgroundImage(body: Buffer): Buffer {
+  const format = checkUpload(body, BACKGROUND_LIMITS);
+  const img = flattenOnWhite(decode(body, format, BACKGROUND_LIMITS));
+  const size = fitSize(img.width, img.height, BACKGROUND_MAX_WIDTH, BACKGROUND_MAX_HEIGHT);
+  return encodeJpeg(downscaleRgba(img, size.width, size.height), BACKGROUND_JPEG_QUALITY);
 }

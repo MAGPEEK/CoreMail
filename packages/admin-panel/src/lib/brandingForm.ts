@@ -59,6 +59,8 @@ export interface BrandingDraft {
   headerColor: string | null;
   allowUserAccent: boolean;
   showPoweredBy: boolean;
+  /** 10.1: webmail background of users without an own choice (none | builtin:<id>) */
+  defaultBackground: string;
   loginText: string;
   footerLinks: FooterLink[];
   /** true = the field shows and keeps the default (nothing stored, or "Standard verwenden" pressed) */
@@ -75,6 +77,7 @@ export function draftFrom(a: AdminBranding): BrandingDraft {
     headerColor: b.headerColor,
     allowUserAccent: b.allowUserAccent,
     showPoweredBy: b.showPoweredBy,
+    defaultBackground: b.defaultBackground,
     loginText: b.loginText,
     footerLinks: b.footerLinks.map((l) => ({ ...l })),
     useDefault: { productName: !a.explicit.productName, primaryColor: !a.explicit.primaryColor },
@@ -134,6 +137,7 @@ export function draftToBody(d: BrandingDraft, saved: AdminBranding): Record<stri
   if (header !== b.headerColor) body['headerColor'] = header;
   if (d.allowUserAccent !== b.allowUserAccent) body['allowUserAccent'] = d.allowUserAccent;
   if (d.showPoweredBy !== b.showPoweredBy) body['showPoweredBy'] = d.showPoweredBy;
+  if (d.defaultBackground !== b.defaultBackground) body['defaultBackground'] = d.defaultBackground;
   if (d.loginText.trim() !== b.loginText) body['loginText'] = d.loginText.trim();
   const links = trimLinks(d.footerLinks);
   if (JSON.stringify(links) !== JSON.stringify(trimLinks(b.footerLinks))) body['footerLinks'] = links;

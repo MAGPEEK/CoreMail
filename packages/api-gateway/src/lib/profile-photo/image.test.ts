@@ -11,6 +11,7 @@ import { encodePng, type RgbaImage } from '../branding/png.js';
 import { fakePng, fakeJpeg, fakeWebpLossless } from '../branding/test-fixtures.js';
 import {
   processProfilePhoto, cropCenterSquare, upscaleSquare, flattenOnWhite, squareAt, PhotoError,
+  processBackgroundImage, fitSize, downscaleRgba, BACKGROUND_MAX_WIDTH, MAX_BACKGROUND_BYTES, MAX_BACKGROUND_PIXELS, MIN_BACKGROUND_SIDE,
   PHOTO_SIZE, MAX_PHOTO_BYTES, MAX_PHOTO_PIXELS, MIN_PHOTO_SIDE, PHOTO_ERROR_STATUS,
 } from './image.js';
 import { readJpegStructure, MAX_JPEG_SCANS } from './jpeg-structure.js';
@@ -267,4 +268,41 @@ test('fuzz: random, truncated and bit-flipped uploads only ever yield a 512×512
   }
   assert.ok(inputs.length >= 400);
   assert.ok(accepted > 0, 'some bit flips still decode');
+});
+
+// ── 10.1 webmail background ────────────────────────────────────────────────────
+
+test('background: aspect ratio kept, at most 2560 px wide, never enlarged, metadata stripped', () => {
+  const wide = processBackgroundImage(encodePng(halves(3000, 1500)));
+  const w = jpeg.decode(wide, { useTArray: true });
+  assert.equal(w.width, BACKGROUND_MAX_WIDTH);
+  assert.equal(w.height, 1280);
+  assert.deepEqual(jpegMarkers(wide).filter((m) => m >= 0xe1 && m <= 0xef), []);
+  const small = jpeg.decode(processBackgroundImage(encodePng(halves(800, 600))), { useTArray: true });
+  assert.deepEqual([small.width, small.height], [800, 600]);
+  const exif = processBackgroundImage(jpegWithExif(640, 640));
+  assert.equal(exif.includes(Buffer.from('GPSLatitude')), false);
+  // left half red, right half blue survive the area-average downscale
+  const px = (x: number) => [w.data[x * 4]!, w.data[x * 4 + 2]!];
+  assert.ok(px(10)[0]! > 200 && px(10)[1]! < 60);
+  assert.ok(px(BACKGROUND_MAX_WIDTH - 10)[1]! > 200);
+});
+
+test('background: limits checked from the header (size, pixels, smallest side, type)', () => {
+  assert.equal(codeOf(() => processBackgroundImage(fakePng(5000, 3000))), 'DIMENSIONS');
+  assert.equal(codeOf(() => processBackgroundImage(fakeJpeg(30000, 30000))), 'DIMENSIONS');
+  assert.equal(codeOf(() => processBackgroundImage(encodePng(halves(MIN_BACKGROUND_SIDE - 1, 600)))), 'DIMENSIONS');
+  assert.equal(codeOf(() => processBackgroundImage(Buffer.concat([encodePng(halves(64, 64)), Buffer.alloc(MAX_BACKGROUND_BYTES)]))), 'SIZE');
+  assert.equal(codeOf(() => processBackgroundImage(fakeWebpLossless(600, 600))), 'UNSUPPORTED');
+  assert.equal(codeOf(() => processBackgroundImage(Buffer.from('<svg/>'))), 'TYPE');
+  assert.ok(MAX_BACKGROUND_PIXELS > MAX_PHOTO_PIXELS, 'a 4000×3000 camera picture is accepted');
+});
+
+test('fitSize / downscaleRgba math', () => {
+  assert.deepEqual(fitSize(4000, 3000, 2560, 2560), { width: 2560, height: 1920 });
+  assert.deepEqual(fitSize(1000, 4000, 2560, 2560), { width: 640, height: 2560 });
+  assert.deepEqual(fitSize(100, 50, 2560, 2560), { width: 100, height: 50 });
+  const img = downscaleRgba(halves(4, 2), 2, 1);
+  assert.deepEqual([...img.data], [255, 0, 0, 255, 0, 0, 255, 255]);
+  assert.throws(() => downscaleRgba(halves(4, 2), 8, 1), RangeError);
 });

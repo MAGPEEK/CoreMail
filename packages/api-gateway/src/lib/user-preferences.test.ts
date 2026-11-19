@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   DEFAULT_PREFERENCES, PreferencesPatchSchema, applyPreferencesPatch, isTimeZone, readPreferences, withoutSignature,
+  BUILTIN_BACKGROUNDS, MAX_FAVORITE_FOLDERS,
 } from './user-preferences.js';
 
 test('readPreferences: never written → defaults, not migrated', () => {
@@ -103,4 +104,49 @@ test('isTimeZone', () => {
   assert.equal(isTimeZone('UTC'), true);
   assert.equal(isTimeZone('America/New_York'), true);
   assert.equal(isTimeZone('Not/AZone'), false);
+});
+
+// ── 10.1: webmail layout (background, ribbon, favourite folders) ───────────────
+
+test('10.1 appearance.background: null = organisation default; none / custom / known built-ins only', () => {
+  assert.equal(DEFAULT_PREFERENCES.appearance.background, null);
+  for (const ok of ['none', 'custom', null, ...BUILTIN_BACKGROUNDS.map((id) => `builtin:${id}`)]) {
+    assert.equal(PreferencesPatchSchema.safeParse({ appearance: { background: ok } }).success, true, String(ok));
+  }
+  for (const bad of ['builtin:', 'builtin:photo', 'url(https://x)', 'custom ', '', 1]) {
+    assert.equal(PreferencesPatchSchema.safeParse({ appearance: { background: bad } }).success, false, String(bad));
+  }
+  assert.equal(readPreferences({ appearance: { background: 'builtin:evil' } }).appearance.background, null);
+  assert.equal(readPreferences({ appearance: { background: 'builtin:forest' } }).appearance.background, 'builtin:forest');
+});
+
+test('10.1 ribbon: collapsed boolean + simplified / classic layout', () => {
+  assert.deepEqual(DEFAULT_PREFERENCES.ribbon, { collapsed: false, layout: 'simplified' });
+  assert.equal(PreferencesPatchSchema.safeParse({ ribbon: { collapsed: true, layout: 'classic' } }).success, true);
+  assert.equal(PreferencesPatchSchema.safeParse({ ribbon: { layout: 'full' } }).success, false);
+  assert.equal(PreferencesPatchSchema.safeParse({ ribbon: { collapsed: 'yes' } }).success, false);
+  assert.equal(PreferencesPatchSchema.safeParse({ ribbon: { zoom: 1 } }).success, false);
+});
+
+test('10.1 folders.favorites: default folders by default; ids or default-folder names, unique, bounded', () => {
+  assert.deepEqual(DEFAULT_PREFERENCES.folders.favorites, ['INBOX', 'Sent', 'Drafts', 'Trash']);
+  assert.equal(PreferencesPatchSchema.safeParse({ folders: { favorites: [] } }).success, true);
+  assert.equal(PreferencesPatchSchema.safeParse({ folders: { favorites: ['INBOX', 'cm1abc'] } }).success, true);
+  assert.equal(PreferencesPatchSchema.safeParse({ folders: { favorites: ['INBOX', 'INBOX'] } }).success, false);
+  assert.equal(PreferencesPatchSchema.safeParse({ folders: { favorites: ['a/b'] } }).success, false);
+  const many = Array.from({ length: MAX_FAVORITE_FOLDERS + 1 }, (_, i) => `f${i}`);
+  assert.equal(PreferencesPatchSchema.safeParse({ folders: { favorites: many } }).success, false);
+  const p = applyPreferencesPatch(readPreferences({}), { folders: { favorites: ['Sent'] } });
+  assert.deepEqual(p.folders.favorites, ['Sent']);
+});
+
+test('10.1 both preference tables stay in step (api-gateway ↔ web-client) and the built-in ids match storage', async () => {
+  // outside this package (no compile-time import): the web client's pure modules
+  const webDir = '../../../web-client/src/lib/';
+  const web = (await import(`${webDir}preferences.ts`)) as { DEFAULT_PREFERENCES: unknown; SECTIONS: readonly string[] };
+  assert.deepEqual(web.DEFAULT_PREFERENCES, DEFAULT_PREFERENCES);
+  assert.deepEqual([...web.SECTIONS].sort(), Object.keys(DEFAULT_PREFERENCES).filter((k) => k !== 'version' && k !== 'migratedAt').sort());
+  // storage's list is checked against the web client in storage user-background.test.ts
+  const backgrounds = (await import(`${webDir}backgroundPrefs.ts`)) as { BUILTIN_BACKGROUND_IDS: readonly string[] };
+  assert.deepEqual([...backgrounds.BUILTIN_BACKGROUND_IDS], [...BUILTIN_BACKGROUNDS]);
 });

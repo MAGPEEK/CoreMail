@@ -13,7 +13,7 @@ import {
   Redo2, RemoveFormatting, Strikethrough, Subscript, Superscript, Table as TableIcon, TextQuote, Type, Underline, Undo2,
   Unlink, ALargeSmall, Smile,
 } from 'lucide-react';
-import { CommandBar, type CommandItem } from '../CommandBar.js';
+import { CommandBar, commandFromMenuItem, type CommandItem } from '../CommandBar.js';
 import type { ContextMenuItem } from '../ContextMenu.js';
 import { TEXT_DIRECTION_TYPES } from '../editorExtensions.js';
 import {
@@ -242,6 +242,26 @@ function barItems(e: Editor | null, t: T, p: Props): Record<FormatBarId, Command
     emoji: base('emoji', 'compose_emoji_title', <Smile size={ICON} />, { onClick: p.actions.openEmoji, dialogOpen: p.emojiOpen }),
   };
 }
+
+/** 10.1: the toolbar's buttons for the ribbon's compose tabs (same handlers as the card's bar). */
+export function formatBarCommands(p: FormatBarProps, t: T): Record<FormatBarId, CommandItem> {
+  return barItems(p.editor, t, p);
+}
+
+/**
+ * 10.1: the flyout's entries as ribbon commands (submenus become dropdowns,
+ * toggles stay toggles); empty without an editor. "Link entfernen" only inside a link.
+ */
+export function formatFlyoutCommands(p: FormatBarProps, t: T): Partial<Record<FlyoutEntryId, CommandItem>> {
+  const e = p.editor;
+  if (!e) return {};
+  const s = flyoutState(e);
+  const out: Partial<Record<FlyoutEntryId, CommandItem>> = {};
+  for (const entry of formatFlyout(s).flat()) out[entry.id] = commandFromMenuItem(`fmt-${entry.id}`, flyoutItem(entry, e, s, t, p));
+  return out;
+}
+
+export type FormatBarProps = Props;
 
 export function ComposeFormatBar(p: Props) {
   const t = useT();

@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 
 // Stack of open dialogs — only the topmost one reacts to Escape/Tab
 const openStack: symbol[] = [];
@@ -29,7 +30,9 @@ interface ModalProps {
 /**
  * Accessible modal wrapper: role="dialog" + aria-modal, Escape closes,
  * focus moves into the dialog on open, Tab stays inside, and focus returns
- * to the previously focused element on close.
+ * to the previously focused element on close. 10.1: rendered into <body> —
+ * the floating panes (lib/paneLayout.ts) blur a background picture, and a
+ * backdrop filter would otherwise trap the fixed overlay inside its pane.
  */
 export function Modal({
   onClose, label, labelledBy, children,
@@ -77,7 +80,7 @@ export function Modal({
     };
   }, []);
 
-  return (
+  return createPortal(
     <div
       className={overlayClassName}
       onMouseDown={(e) => { if (closeOnBackdrop && e.target === e.currentTarget) onClose(); }}
@@ -93,6 +96,7 @@ export function Modal({
       >
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

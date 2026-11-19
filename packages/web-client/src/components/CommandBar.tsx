@@ -16,6 +16,7 @@ import { ChevronDown, MoreHorizontal } from 'lucide-react';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu.js';
 import { computeOverflow, nextRovingIndex, type CommandPlacement } from '../lib/toolbarNav.js';
 import { fmt, useT } from '../i18n/useT.js';
+import { useLanguageStore } from '../store/language.js';
 
 export interface CommandItem {
   id: string;
@@ -36,6 +37,8 @@ export interface CommandItem {
   /** pinned = never in "…", overflow = always in "…", auto (default) = while it fits */
   placement?: CommandPlacement;
   tone?: 'primary' | 'danger';
+  /** 10.1: a primary command that is ready (Senden with a valid recipient) gets a soft ring. */
+  highlight?: boolean;
   /** Inline bars: the icon alone (the label is the accessible name and the tooltip; a dropdown shows no extra arrow). */
   iconOnly?: boolean;
 }
@@ -69,7 +72,9 @@ const MORE_KEY = '__more';
 const DISABLED = 'aria-disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:active:scale-100';
 
 function toneClass(item: CommandItem): string {
-  if (item.tone === 'primary') return 'bg-accent text-white hover:bg-accent-hover aria-disabled:hover:bg-accent';
+  if (item.tone === 'primary') {
+    return `bg-accent text-white hover:bg-accent-hover aria-disabled:hover:bg-accent transition-shadow ${item.highlight ? 'shadow-md ring-2 ring-accent/30' : ''}`;
+  }
   if (item.pressed) return 'bg-accent/10 text-accent-fg ring-1 ring-inset ring-accent/30';
   if (item.tone === 'danger') return 'text-danger-fg hover:bg-danger-bg aria-disabled:hover:bg-transparent';
   return 'text-fg-muted hover:bg-surface-2 hover:text-fg aria-disabled:hover:bg-transparent aria-disabled:hover:text-fg-muted';
@@ -106,11 +111,13 @@ interface ButtonProps {
 }
 
 function Label({ item, variant, arrow, iconOnly }: { item: CommandItem; variant: CommandBarVariant; arrow: boolean; iconOnly: boolean }) {
+  const lang = useLanguageStore((s) => s.lang);
   if (variant === 'ribbon') {
     return (
       <>
         <span className="h-6 flex items-center justify-center mt-0.5" aria-hidden="true">{item.icon}</span>
-        <span className="text-[11px] leading-tight text-center w-full flex items-center justify-center gap-0.5 line-clamp-2">
+        {/* 10.1: long German words (Ansichtseinstellungen) hyphenate / wrap instead of being cut off */}
+        <span lang={lang} className="text-[11px] leading-tight text-center w-full flex items-center justify-center gap-0.5 line-clamp-2 hyphens-auto [overflow-wrap:anywhere]">
           {item.label}
           {arrow && <ChevronDown size={10} className="opacity-60 shrink-0" aria-hidden="true" />}
         </span>
@@ -250,6 +257,24 @@ export function commandMenuItem(item: CommandItem, anchor: () => HTMLElement): C
     ...(item.tooltip && item.tooltip !== item.label ? { title: item.tooltip } : {}),
     ...(item.tone === 'danger' ? { danger: true } : {}),
     ...(children ? { children } : { onClick: () => item.onClick?.(anchor()) }),
+  };
+}
+
+/**
+ * A menu entry as a command (10.1: the ribbon shows entries of the compose
+ * card's menus as buttons — same handlers): a submenu becomes a dropdown, a
+ * checkable entry a toggle.
+ */
+export function commandFromMenuItem(id: string, item: ContextMenuItem): CommandItem {
+  return {
+    id,
+    label: item.label ?? id,
+    ...(item.icon ? { icon: item.icon } : {}),
+    ...(item.children ? { menu: () => item.children! } : { onClick: () => item.onClick?.() }),
+    ...(item.disabled ? { disabled: true } : {}),
+    ...(item.checked !== undefined && !item.children ? { pressed: item.checked } : {}),
+    ...(item.title ? { tooltip: item.title } : {}),
+    ...(item.danger ? { tone: 'danger' as const } : {}),
   };
 }
 
