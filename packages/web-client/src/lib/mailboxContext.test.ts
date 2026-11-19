@@ -40,7 +40,7 @@ test('API base, folder query key and page URL per mailbox kind', () => {
 });
 
 test('German permission labels (schema enum SharedMailboxPermType) — no raw enum text', () => {
-  assert.deepEqual(Object.keys(PERMISSION_LABELS).sort(), ['FULL_ACCESS', 'READ_ONLY', 'SEND_AS', 'SEND_ON_BEHALF']);
+  assert.deepEqual(Object.keys(PERMISSION_LABELS).sort(), ['FOLDER_PERMISSIONS', 'FULL_ACCESS', 'READ_ONLY', 'SEND_AS', 'SEND_ON_BEHALF']);
   assert.equal(permissionLabel('FULL_ACCESS'), 'Vollzugriff');
   assert.equal(permissionLabel('SEND_AS'), 'Senden als');
   assert.equal(permissionLabel('SEND_ON_BEHALF'), 'Senden im Auftrag');
@@ -49,6 +49,12 @@ test('German permission labels (schema enum SharedMailboxPermType) — no raw en
   assert.equal(permissionSummary(['SEND_AS', 'FULL_ACCESS', 'SEND_AS']), 'Vollzugriff · Senden als');
   assert.equal(permissionSummary(['SEND_ON_BEHALF', 'READ_ONLY']), 'Nur lesen · Senden im Auftrag');
   assert.doesNotMatch(permissionSummary(['FULL_ACCESS', 'SEND_AS', 'SEND_ON_BEHALF', 'READ_ONLY']), /_|access|bsendb|behalf/i);
+});
+
+test('w3: a folder-scoped mailbox entry reads "Ordnerberechtigungen"', () => {
+  assert.equal(permissionLabel('FOLDER_PERMISSIONS'), 'Ordnerberechtigungen');
+  assert.equal(permissionSummary(['FOLDER_PERMISSIONS']), 'Ordnerberechtigungen');
+  assert.equal(permissionSummary(['FOLDER_PERMISSIONS', 'READ_ONLY']), 'Nur lesen · Ordnerberechtigungen');
 });
 
 test('read-only: own never, foreign by entry, unknown/loading foreign = read-only', () => {

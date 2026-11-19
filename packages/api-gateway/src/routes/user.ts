@@ -680,6 +680,8 @@ userRouter.get('/shared-mailboxes/:id/quota', async (req: Request, res: Response
 // changes access. Entries of mailboxes the user lost access to are pruned on write.
 const MAILBOX_REF_RE = /^(shared|delegated):[A-Za-z0-9_-]{1,64}$/;
 const MAX_HIDDEN_MAILBOXES = 500;
+/** w3: `permissions` value of a mailbox reached only through folder permissions. */
+export const FOLDER_PERMISSIONS_GRANT = 'FOLDER_PERMISSIONS';
 
 async function accessibleMailboxView(userId: string) {
   const [list, settings] = await Promise.all([
@@ -698,9 +700,12 @@ async function accessibleMailboxView(userId: string) {
   const added = new Set(settings?.addedSharedMailboxes ?? []);
   return list.map((a) => {
     const ref = foreignMailboxRef(a);
-    const permissions = a.kind === 'shared'
-      ? [...new Set(perms.filter((p) => p.sharedMailboxId === a.sharedMailboxId).map((p) => String(p.permission)))].sort()
-      : [a.readOnly ? 'READ_ONLY' : 'FULL_ACCESS'];
+    // w3: a mailbox reached only through folder permissions — rights are per folder
+    const permissions = a.folderScoped
+      ? [FOLDER_PERMISSIONS_GRANT]
+      : a.kind === 'shared'
+        ? [...new Set(perms.filter((p) => p.sharedMailboxId === a.sharedMailboxId).map((p) => String(p.permission)))].sort()
+        : [a.readOnly ? 'READ_ONLY' : 'FULL_ACCESS'];
     return {
       ref,
       kind: a.kind,
@@ -708,6 +713,7 @@ async function accessibleMailboxView(userId: string) {
       email: a.email,
       displayName: a.displayName,
       readOnly: a.readOnly,
+      folderScoped: a.folderScoped === true,
       permissions,
       // 9.4: a grant without auto-mapping stays hidden until the user adds it
       autoMap: a.autoMap,

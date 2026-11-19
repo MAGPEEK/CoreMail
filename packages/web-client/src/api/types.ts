@@ -1,3 +1,5 @@
+import type { FolderMyRights } from '../lib/folderPermissions.js';
+
 export type RetentionTagAction =
   | 'MOVE_TO_ARCHIVE'
   | 'DELETE_AND_ALLOW_RECOVERY'
@@ -33,6 +35,10 @@ export interface Folder {
   isSystem?: boolean;
   retentionTagId?: string | null;
   retentionTag?: FolderRetentionTag | null;
+  /** w3 (foreign mailboxes): path entry or visible without read right — shown, not selectable, no counts. */
+  noSelect?: boolean;
+  /** w3 (foreign mailboxes): the user's effective rights on the folder. */
+  myRights?: FolderMyRights;
 }
 
 export interface Category {

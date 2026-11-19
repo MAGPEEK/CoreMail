@@ -78,7 +78,9 @@ const SETTINGS_KEYS: Record<string, QueryKey[]> = {
   oof: [['user-oof']],
   rules: [['rules']],
   categories: [['categories']],
-  mailboxes: [['user-shared-mailboxes'], ACCESSIBLE_MAILBOXES_KEY],
+  // w3 review: a grant change can add or take away single folders of a mailbox that stays
+  // listed — its folder pane and message lists are re-read too, not after the safety refetch
+  mailboxes: [['user-shared-mailboxes'], ACCESSIBLE_MAILBOXES_KEY, ['folders'], ['messages'], ['message']],
   // Settings → Sicherheit (components/settings/SecurityPanels.tsx): sessions list + S/MIME options
   security: [['user-sessions'], ['smime-settings']],
   // 9.4 webmail policies (lib/webmailFeatures.ts FEATURES_QUERY_KEY) + trusted image senders;

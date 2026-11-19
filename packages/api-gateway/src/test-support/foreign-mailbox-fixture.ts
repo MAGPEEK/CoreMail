@@ -27,7 +27,8 @@ const shared: Record<string, Row> = {
   sm2: { id: 'sm2', email: 'sales@ex.com', displayName: 'Sales', active: true, mailboxId: 'mb-sm2' },
   sm3: { id: 'sm3', email: 'old@ex.com', displayName: 'Old', active: false, mailboxId: 'mb-sm3' },
 };
-// dave: FULL_ACCESS on erin's mailbox and on gina's (gina deactivated); frank: READ_ONLY on erin's.
+// dave: FULL_ACCESS on erin's mailbox and on gina's (gina deactivated); frank: READ_ONLY on erin's;
+// bob: SEND_AS on erin's (no read access).
 const owners: Record<string, Row> = {
   'mb-erin': { id: 'erin', email: 'erin@ex.com', displayName: 'Erin', active: true },
   'mb-gina': { id: 'gina', email: 'gina@ex.com', displayName: 'Gina', active: false },
@@ -36,6 +37,7 @@ const delegates = [
   { granteeId: 'dave',  mailboxId: 'mb-erin', permission: 'FULL_ACCESS' },
   { granteeId: 'frank', mailboxId: 'mb-erin', permission: 'READ_ONLY' },
   { granteeId: 'dave',  mailboxId: 'mb-gina', permission: 'FULL_ACCESS' },
+  { granteeId: 'bob',   mailboxId: 'mb-erin', permission: 'SEND_AS' },
 ];
 
 export let folders: Row[] = [];
@@ -50,6 +52,24 @@ export const auditRows: Row[] = [];
 export const messageFindFirstArgs: Row[] = [];
 /** Owner of a user mailbox (own-mailbox routes match folder.mailbox.userId). */
 const mailboxOwner: Record<string, string> = { 'mb-alice': 'alice', 'mb-erin': 'erin', 'mb-gina': 'gina' };
+/** w3: FolderPermission rows ({folderId, mailboxId, granteeKey, granteeId, rights, applyToSubfolders}). */
+export const folderPerms: Row[] = [];
+const users: Row[] = ['alice', 'bob', 'carol', 'dave', 'erin', 'frank', 'gina', 'hank'].map((id) => ({
+  id, email: `${id}@ex.com`, displayName: id[0]!.toUpperCase() + id.slice(1), active: id !== 'gina',
+  domainId: id === 'carol' ? 'd2' : 'd1', // admin scope tests: carol lives in another domain
+}));
+const mailboxRows = (): Row[] => [
+  ...Object.entries(mailboxOwner).map(([id, userId]) => ({ id, userId, sharedBoxId: null })),
+  ...Object.values(shared).map((s) => ({ id: s['mailboxId'], userId: null, sharedBoxId: s['id'] })),
+];
+/** w3 test helper: a folder permission row. */
+export function addFolderPerm(folderId: string, granteeKey: string, rights: number, applyToSubfolders = false): void {
+  const folder = folders.find((x) => x['id'] === folderId)!;
+  folderPerms.push({
+    folderId, mailboxId: folder['mailboxId'], granteeKey,
+    granteeId: granteeKey.startsWith('user:') ? granteeKey.slice(5) : null, rights, applyToSubfolders,
+  });
+}
 
 export function seed(): void {
   const f = (id: string, mailboxId: string, name: string, parentId: string | null = null): Row =>
@@ -73,6 +93,7 @@ export function seed(): void {
   deletedFolderIds.length = 0;
   summarySelects.length = 0;
   auditRows.length = 0;
+  folderPerms.length = 0;
   messageFindFirstArgs.length = 0;
 }
 
@@ -159,7 +180,11 @@ installFakePrisma({
       const w = (a as { where: Row }).where;
       return delegates
         .filter((d) => d.granteeId === w['granteeId'] && matchPerm(w['permission'], d.permission))
-        .map((d) => ({ permission: d.permission, mailbox: { id: d.mailboxId, user: owners[d.mailboxId] ?? null } }));
+        .map((d) => ({
+          id: `del-${d.granteeId}-${d.mailboxId}`, grantedAt: new Date(0), permission: d.permission,
+          // folders: GET /mail/delegated-mailboxes (include mailbox.folders)
+          mailbox: { id: d.mailboxId, user: owners[d.mailboxId] ?? null, folders: folders.filter((f) => f['mailboxId'] === d.mailboxId) },
+        }));
     },
   },
   auditLog: {
@@ -233,6 +258,42 @@ installFakePrisma({
   },
   mailbox: {
     update: () => { writes.push('mailbox.update'); return { uidNext: 100, highestModSeq: 7n }; },
+    findMany: (a) => mailboxRows().filter((m) => matches(m, (a as { where: Row }).where)),
+    findUnique: (a) => mailboxRows().find((m) => m['id'] === (a as { where: Row }).where['id']) ?? null,
+  },
+  // w3: folder permissions
+  folderPermission: {
+    findMany: (a) => folderPerms.filter((p) => matches(p, (a as { where: Row }).where)).map((p) => ({ ...p })),
+    upsert: (a) => {
+      const q = a as { where: { folderId_granteeKey: { folderId: string; granteeKey: string } }; create: Row; update: Row };
+      writes.push('folderPermission.upsert');
+      const k = q.where.folderId_granteeKey;
+      const row = folderPerms.find((p) => p['folderId'] === k.folderId && p['granteeKey'] === k.granteeKey);
+      if (row) Object.assign(row, q.update); else folderPerms.push({ ...q.create });
+      return {};
+    },
+    deleteMany: (a) => {
+      writes.push('folderPermission.deleteMany');
+      const before = folderPerms.length;
+      const keep = folderPerms.filter((p) => !matches(p, (a as { where: Row }).where));
+      folderPerms.splice(0, folderPerms.length, ...keep);
+      return { count: before - keep.length };
+    },
+  },
+  user: {
+    findMany: (a) => users.filter((u) => matches(u, (a as { where: Row }).where)),
+    findUnique: (a) => {
+      const u = users.find((x) => x['id'] === (a as { where: Row }).where['id']);
+      const mbx = Object.entries(mailboxOwner).find(([, owner]) => owner === u?.['id']);
+      return u ? { ...u, role: u['id'] === 'gina' ? 'ORGANIZATION_MANAGEMENT' : 'USER', mailbox: mbx ? { id: mbx[0] } : null } : null;
+    },
+  },
+  sharedMailbox: {
+    findMany: (a) => Object.values(shared).filter((s) => matches(s, (a as { where: Row }).where)),
+    findUnique: (a) => {
+      const s = shared[String((a as { where: Row }).where['id'])];
+      return s ? { ...s, mailbox: { id: s['mailboxId'] } } : null;
+    },
   },
   userSettings: {
     findUnique: (a) => settings.get(String((a as { where: Row }).where['userId'])) ?? null,
@@ -252,6 +313,7 @@ const { sharedMailboxContentRouter, delegatedMailboxContentRouter } = await impo
 const { sharedRecoverableRouter, delegatedRecoverableRouter } = await import('../routes/recoverable.js');
 const { userRouter } = await import('../routes/user.js');
 const { mailRouter } = await import('../routes/mail.js');
+const { ownFolderPermissionsRouter } = await import('../routes/folder-permissions.js');
 
 export const tok = (sub: string) => core.signAccessToken({ sub, email: `${sub}@ex.com`, role: 'USER', domainId: 'd1', sessionId: `s-${sub}`, mfaVerified: true });
 
@@ -266,6 +328,7 @@ before(async () => {
   app.use('/api/v1/mail/delegated-mailboxes/:id/recoverable', delegatedRecoverableRouter);
   app.use('/api/v1/mail/shared-mailboxes/:id', sharedMailboxContentRouter);
   app.use('/api/v1/mail/delegated-mailboxes/:id', delegatedMailboxContentRouter);
+  app.use('/api/v1/mail', ownFolderPermissionsRouter);
   app.use('/api/v1/mail', mailRouter);
   app.use('/api/v1/user', userRouter);
   app.use(core.errorMiddleware({ error: () => undefined, warn: () => undefined }));

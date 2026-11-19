@@ -132,6 +132,7 @@ model User {
   signatures      UserSignature[]
   sharedPerms     SharedMailboxPerm[]
   delegatedAccess MailboxDelegate[]    @relation("MailboxDelegateGrantee")
+  folderPermissions FolderPermission[] @relation("FolderPermissionGrantee")
   calendarSharesGranted  CalendarShare[] @relation("CalendarShareOwner")
   calendarSharesReceived CalendarShare[] @relation("CalendarShareGrantee")
   activeSyncDevices ActiveSyncDevice[]
@@ -453,6 +454,7 @@ model Mailbox {
   highestModSeq   BigInt           @default(0)
   folders         Folder[]
   delegates       MailboxDelegate[]
+  folderPermissions FolderPermission[]
   createdAt       DateTime         @default(now())
 
   @@map("mailboxes")
@@ -468,6 +470,7 @@ model Folder {
   parentId    String?
   children    Folder[]  @relation("FolderTree")
   messages    Message[]
+  permissions FolderPermission[]
   totalCount  Int       @default(0)
   unreadCount Int       @default(0)
   changeKey   String    @default("")
@@ -560,6 +563,10 @@ model Message {
   flagDueAt        DateTime?
   flagReminderAt   DateTime?
   flagCompletedAt  DateTime?
+  // w3 folder permissions: the user (grantee of a folder permission) who created
+  // the item in a foreign folder (IMAP APPEND / COPY into it) — "own" items for
+  // the EditOwned / DeleteOwned rights. Null = not created by a grantee.
+  createdBy        String?
   attachments  Attachment[]
   categories   MessageCategory[]
   createdAt    DateTime    @default(now())
@@ -730,6 +737,37 @@ model MailboxDelegate {
   @@unique([mailboxId, granteeId])
   @@index([granteeId])
   @@map("mailbox_delegates")
+}
+
+// w3 folder permissions (Outlook "Properties → Permissions"): a role on one
+// folder of a mailbox for one user or for "Default" (every user of the
+// organisation). `rights` is the member-rights bitmask (storage
+// folder-permissions.ts). "Anonymous" is never stored (always none for mail).
+// Mailbox-level grants (SharedMailboxPerm / MailboxDelegate) stay a floor:
+// FULL_ACCESS is always full, READ_ONLY always reads; folder grants add rights.
+model FolderPermission {
+  id          String   @id @default(cuid())
+  folder      Folder   @relation(fields: [folderId], references: [id], onDelete: Cascade)
+  folderId    String
+  // Denormalised for the per-user lookups (every grant of a mailbox at once).
+  mailbox     Mailbox  @relation(fields: [mailboxId], references: [id], onDelete: Cascade)
+  mailboxId   String
+  // "default" or "user:<userId>" — one row per folder and grantee.
+  granteeKey  String
+  grantee     User?    @relation("FolderPermissionGrantee", fields: [granteeId], references: [id], onDelete: Cascade)
+  granteeId   String?
+  rights      Int
+  // Also valid for subfolders that have no entry of their own for the grantee.
+  applyToSubfolders Boolean @default(false)
+  grantedBy   String
+  grantedAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([folderId, granteeKey])
+  @@index([granteeId])
+  @@index([mailboxId])
+  @@index([granteeKey])
+  @@map("folder_permissions")
 }
 
 // ─────────────────────────────────────────────

@@ -809,12 +809,15 @@ async function dispatchCommand(session: ImapSession, segments: CommandSegment[])
  * drops every session's cached shared-mailbox access list and re-checks the
  * selected foreign mailbox of that user's IDLE sessions right away (a revoked
  * one is closed with `* OK [CLOSED]`). Other sessions re-check it before
- * their next command.
+ * their next command. w3 review: a `permission-change` wakes EVERY idling
+ * session with a foreign folder selected — a change of Default (everyone) is
+ * published for one user only and must not wait for the IDLE fallback timer.
  */
-export function applyAuthInvalidation(event: { userId: string }): void {
+export function applyAuthInvalidation(event: { userId: string; reason?: string }): void {
   invalidateAccessCaches();
+  const everyone = event.reason === 'permission-change';
   for (const session of sessions.values()) {
-    if (session.userId === event.userId && session.idleActive && session.selected?.foreign) {
+    if ((everyone || session.userId === event.userId) && session.idleActive && session.selected?.foreign) {
       notifyMailboxChanged(session);
     }
   }

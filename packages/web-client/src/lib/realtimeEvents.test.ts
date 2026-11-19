@@ -32,7 +32,8 @@ test('typed user events map to their caches', () => {
   assert.ok(realtimePlan('settings', {}).invalidate.length > 5, 'no section → every settings cache');
   // 9.4 review: ended sessions / saved S/MIME options; a grant change refreshes the folder pane
   assert.deepEqual(realtimePlan('settings', { section: 'security' }).invalidate, [['user-sessions'], ['smime-settings']]);
-  assert.deepEqual(realtimePlan('settings', { section: 'mailboxes' }).invalidate, [['user-shared-mailboxes'], ['accessible-mailboxes']]);
+  assert.deepEqual(realtimePlan('settings', { section: 'mailboxes' }).invalidate,
+    [['user-shared-mailboxes'], ['accessible-mailboxes'], ['folders'], ['messages'], ['message']], 'w3 review: folder grants too');
   assert.deepEqual(realtimePlan('quota', {}).invalidate, [['user-quota'], ['user-storage'], ['shared-mailbox-quota']]);
 });
 

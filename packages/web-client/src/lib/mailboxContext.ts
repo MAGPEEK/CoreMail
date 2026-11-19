@@ -24,6 +24,8 @@ export interface AccessibleMailboxEntry {
   readOnly: boolean;
   permissions: string[];
   hidden: boolean;
+  /** w3: reached only through folder permissions (permissions = ['FOLDER_PERMISSIONS']). */
+  folderScoped?: boolean;
 }
 
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
@@ -72,9 +74,11 @@ export const PERMISSION_LABELS: Readonly<Record<string, string>> = Object.freeze
   SEND_AS: 'Senden als',
   SEND_ON_BEHALF: 'Senden im Auftrag',
   READ_ONLY: 'Nur lesen',
+  // w3: access through folder permissions only (entry.folderScoped)
+  FOLDER_PERMISSIONS: 'Ordnerberechtigungen',
 });
 
-const PERMISSION_ORDER = ['FULL_ACCESS', 'READ_ONLY', 'SEND_AS', 'SEND_ON_BEHALF'];
+const PERMISSION_ORDER = ['FULL_ACCESS', 'READ_ONLY', 'SEND_AS', 'SEND_ON_BEHALF', 'FOLDER_PERMISSIONS'];
 
 export function permissionLabel(permission: string): string {
   return PERMISSION_LABELS[permission] ?? permission;

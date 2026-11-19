@@ -131,16 +131,25 @@ async function resolveServerReplyHeaders(
   return { inReplyTo: parentId, references: refs.slice(-MAX_REFERENCES).join(' ') };
 }
 
-/** Prisma-backed lookup: the parent must be in a mailbox the caller can read. */
+/**
+ * Prisma-backed lookup: the parent must be in a mailbox the caller can read —
+ * or (w3) in a folder `canReadFolder` allows through folder permissions.
+ */
 export function prismaReplyLookup(
   db: { message: { findFirst(args: unknown): Promise<unknown> } },
   loadRaw?: (parent: ReplyParent) => Promise<Buffer | null>,
+  canReadFolder?: (userId: string, folderId: string) => Promise<boolean>,
 ): ReplyLookup {
+  const select = { id: true, messageId: true, inReplyTo: true, storagePath: true };
   return {
-    findParent: async (id, userId) => (await db.message.findFirst({
-      where: { id, folder: { mailbox: readableMailboxWhere(userId) } },
-      select: { id: true, messageId: true, inReplyTo: true, storagePath: true },
-    })) as ReplyParent | null,
+    findParent: async (id, userId) => {
+      const viaMailbox = await db.message.findFirst({ where: { id, folder: { mailbox: readableMailboxWhere(userId) } }, select }) as ReplyParent | null;
+      if (viaMailbox || !canReadFolder) return viaMailbox;
+      const row = await db.message.findFirst({ where: { id }, select: { ...select, folderId: true } }) as (ReplyParent & { folderId: string }) | null;
+      if (!row || !(await canReadFolder(userId, row.folderId))) return null;
+      const { folderId: _folderId, ...parent } = row;
+      return parent;
+    },
     ...(loadRaw ? { loadRaw } : {}),
   };
 }

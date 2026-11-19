@@ -11,6 +11,7 @@ import { quotaLevelError, quotaLevelPatchError } from '../../lib/quota-levels.js
 import { publishPermissionChange } from '../../lib/permission-events.js';
 import { addressCollision } from '../../lib/address-collision.js';
 import { getMailFlowHandler, putMailFlowHandler } from '../../lib/mail-flow-admin.js';
+import { listFolderPermissionsHandler, getFolderPermissionsHandler, putFolderPermissionsHandler } from '../../lib/folder-permissions-admin.js';
 import { allowDomain, requireUnscoped, scopeOf, scopeParam, targetInScope } from '../../middleware/admin-scope.js';
 import { domainIdWhere } from '../../lib/admin-scope.js';
 
@@ -465,6 +466,12 @@ adminMailboxesRouter.post('/:id/revoke-sessions', async (req: Request, res: Resp
 // ── 9.4: per-mailbox mail flow (lib/mail-flow-admin.ts) ─────────────────────
 adminMailboxesRouter.get('/:id/mail-flow', getMailFlowHandler('user'));
 adminMailboxesRouter.put('/:id/mail-flow', putMailFlowHandler('user'));
+
+// ── w3: folder permissions (lib/folder-permissions-admin.ts) ────────────────
+adminMailboxesRouter.get('/:id/folder-permissions', listFolderPermissionsHandler('user'));
+adminMailboxesRouter.get('/:id/folders/:folderId/permissions', getFolderPermissionsHandler('user'));
+// 9.5: recipients write (not requireRecipientsWrite — that one is organisation-wide only); the scope is checked by param('id')
+adminMailboxesRouter.put('/:id/folders/:folderId/permissions', requireArea('recipients'), putFolderPermissionsHandler('user'));
 
 // ── Mailbox delegation (user mailbox access rights) ─────────────────────────
 

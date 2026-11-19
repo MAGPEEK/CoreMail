@@ -3,8 +3,9 @@ import { useRovingFocus } from '../hooks/useRovingFocus.js';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Plus, Star, Pencil, FolderPlus, FolderMinus,
-  CheckCheck, Eraser, Tag, PaintBucket, RefreshCw, Clock, Check, RotateCcw,
+  CheckCheck, Eraser, Tag, PaintBucket, RefreshCw, Clock, Check, RotateCcw, Shield,
 } from 'lucide-react';
+import { FolderPermissionsDialog } from './FolderPermissionsDialog.js';
 import { RecoverDeletedItemsDialog } from './RecoverDeletedItems.js';
 import { QuotaIndicator } from './QuotaIndicator.js';
 import toast from 'react-hot-toast';
@@ -46,6 +47,7 @@ export function FolderTree() {
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [dialog, setDialog] = useState<DialogState>(null);
   const [recoverOpen, setRecoverOpen] = useState(false);
+  const [permissionsFor, setPermissionsFor] = useState<FolderType | null>(null);
   // 9.4 webmail policy: shared mailboxes and "recover deleted items" can be switched off
   const { features } = useWebmailFeatures();
   const [collapsedNodes, setCollapsedNodes] = useState<Set<string>>(new Set());
@@ -251,6 +253,13 @@ export function FolderTree() {
       }],
     });
 
+    // w3: folder permissions (Outlook folder properties → Berechtigungen)
+    items.push({
+      label: 'Berechtigungen…',
+      icon: <Shield size={14} />,
+      onClick: () => setPermissionsFor(folder),
+    });
+
     if (!isSystem) {
       items.push({
         label: t('delete'),
@@ -416,6 +425,15 @@ export function FolderTree() {
 
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />}
       {recoverOpen && <RecoverDeletedItemsDialog onClose={() => setRecoverOpen(false)} />}
+      {permissionsFor && (
+        <FolderPermissionsDialog
+          base="/mail"
+          folderId={permissionsFor.id}
+          folderName={folderLabel(permissionsFor)}
+          folderLabel={(id) => { const f = all.find((x) => x.id === id); return f ? folderLabel(f) : undefined; }}
+          onClose={() => setPermissionsFor(null)}
+        />
+      )}
 
       {dialog?.kind === 'createRoot' && (
         <PromptDialog

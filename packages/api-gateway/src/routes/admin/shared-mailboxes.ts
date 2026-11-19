@@ -10,6 +10,8 @@
  * POST   /api/v1/admin/shared-mailboxes/:id/permissions        — add permission
  * DELETE /api/v1/admin/shared-mailboxes/:id/permissions/:userId — remove permission
  * GET|PUT /api/v1/admin/shared-mailboxes/:id/mail-flow         — 9.4 mail flow (lib/mail-flow-admin.ts)
+ * GET    /api/v1/admin/shared-mailboxes/:id/folder-permissions — w3 folder permissions
+ * GET|PUT /api/v1/admin/shared-mailboxes/:id/folders/:folderId/permissions (lib/folder-permissions-admin.ts)
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
@@ -21,6 +23,7 @@ import { quotaLevelPatchError } from '../../lib/quota-levels.js';
 import { publishPermissionChange, sharedMailboxGrantees } from '../../lib/permission-events.js';
 import { addressCollision } from '../../lib/address-collision.js';
 import { getMailFlowHandler, putMailFlowHandler } from '../../lib/mail-flow-admin.js';
+import { listFolderPermissionsHandler, getFolderPermissionsHandler, putFolderPermissionsHandler } from '../../lib/folder-permissions-admin.js';
 import { allowDomain, scopeOf, scopeParam, targetInScope } from '../../middleware/admin-scope.js';
 import { domainIdWhere } from '../../lib/admin-scope.js';
 
@@ -196,6 +199,11 @@ adminSharedMailboxesRouter.delete('/:id', async (req: Request, res: Response) =>
 // ── 9.4: per-mailbox mail flow (lib/mail-flow-admin.ts) ──────────────────────
 adminSharedMailboxesRouter.get('/:id/mail-flow', getMailFlowHandler('shared'));
 adminSharedMailboxesRouter.put('/:id/mail-flow', putMailFlowHandler('shared'));
+
+// ── w3: folder permissions (lib/folder-permissions-admin.ts) ─────────────────
+adminSharedMailboxesRouter.get('/:id/folder-permissions', listFolderPermissionsHandler('shared'));
+adminSharedMailboxesRouter.get('/:id/folders/:folderId/permissions', getFolderPermissionsHandler('shared'));
+adminSharedMailboxesRouter.put('/:id/folders/:folderId/permissions', putFolderPermissionsHandler('shared'));
 
 // ── GET /:id/permissions ──────────────────────────────────────────────────────
 adminSharedMailboxesRouter.get('/:id/permissions', async (req: Request, res: Response) => {

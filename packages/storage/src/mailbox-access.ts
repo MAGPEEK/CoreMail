@@ -34,6 +34,12 @@ export interface AccessibleMailbox {
    * without the user adding it (false only when every read grant has it off).
    */
   autoMap: boolean;
+  /**
+   * w3: reached only through folder permissions (no mailbox-level grant) — only
+   * folder-aware paths (storage folder-access.ts) list such entries; access is
+   * decided per folder. Always `readOnly` at mailbox level.
+   */
+  folderScoped?: boolean;
 }
 
 /** Permissions that grant access to the mailbox content. */
