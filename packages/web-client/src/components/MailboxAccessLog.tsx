@@ -32,6 +32,7 @@ export function MailboxAccessLog() {
       ) : entries.length === 0 ? (
         <p className="text-xs text-fg-subtle">Keine Zugriffe durch andere Personen.</p>
       ) : (
+        <div role="region" aria-label="Zugriffe (scrollbar)" tabIndex={0} className="overflow-x-auto">
         <table className="w-full text-xs">
           <caption className="sr-only">Zugriffe auf mein Postfach</caption>
           <thead>
@@ -53,6 +54,7 @@ export function MailboxAccessLog() {
             ))}
           </tbody>
         </table>
+        </div>
       )}
     </section>
   );

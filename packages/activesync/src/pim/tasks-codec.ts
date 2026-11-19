@@ -14,7 +14,7 @@
  * reminder) stay untouched by device changes.
  */
 import { parseDateString, utcToWallClockMs } from '@coremail/core/calendar';
-import type { TaskColumns, TaskProgressPatch, TaskRecord } from '@coremail/storage';
+import type { StoredTask, TaskColumns, TaskProgressPatch } from '@coremail/storage';
 import { pel, CP, type WbxmlElement } from '../wbxml.js';
 import { supports } from '../protocol-version.js';
 import { buildTextBody } from '../commands/body.js';
@@ -29,7 +29,7 @@ const IMPORTANCE_IN: Record<string, string> = { 0: 'LOW', 1: 'NORMAL', 2: 'HIGH'
 /** Subject of a task the device sent without one (the column is required). */
 export const NO_SUBJECT = '(no subject)';
 
-export type TaskRow = Pick<TaskRecord,
+export type TaskRow = Pick<StoredTask,
   'id' | 'subject' | 'body' | 'bodyHtml' | 'status' | 'priority' | 'startDate' | 'dueDate' | 'completedAt'
   | 'reminder' | 'isPrivate' | 'rrule' | 'updatedAt'>;
 

@@ -2,7 +2,8 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { z } from 'zod';
 import { patchSchema } from '../lib/zod-compat.js';
 import {
-  prisma, createTask, updateTask, TASK_STATUSES, type TaskColumns, type TaskProgressPatch,
+  prisma, createTaskWithRules, normTaskRrule, updateTaskWithRules, TASK_RRULE_PATTERN, TASK_STATUSES,
+  type TaskColumns, type TaskProgressPatch,
 } from '@coremail/storage';
 import { requireAuth } from '../middleware/auth.js';
 import { announceOnWrite } from '../lib/realtime.js';
@@ -32,7 +33,7 @@ const TaskSchema = z.object({
   reminderByMail:    z.boolean().optional().default(false),
   isPrivate:         z.boolean().optional(),
   // a task repeats at most daily (the next task is created on completion)
-  rrule:             z.string().max(500).regex(/^(RRULE:)?FREQ=(DAILY|WEEKLY|MONTHLY|YEARLY)(;[A-Za-z]+=[A-Za-z0-9,:+-]+)*$/i, 'Invalid RRULE').nullable().optional(),
+  rrule:             z.string().max(500).regex(TASK_RRULE_PATTERN, 'Invalid RRULE').nullable().optional(),
   totalWorkMinutes:  z.number().int().min(0).max(1_000_000).nullable().optional(),
   actualWorkMinutes: z.number().int().min(0).max(1_000_000).nullable().optional(),
   mileage:           text(500).optional(),
@@ -42,7 +43,7 @@ const TaskSchema = z.object({
 type TaskInput = z.infer<typeof TaskSchema>;
 
 const toDate = (v: string | null | undefined): Date | null | undefined => (v === undefined ? undefined : v === null ? null : new Date(v));
-const normRrule = (v: string | null | undefined): string | null | undefined => (v === undefined ? undefined : v ? v.replace(/^RRULE:/i, '').toUpperCase() : null);
+const normRrule = (v: string | null | undefined): string | null | undefined => (v === undefined ? undefined : v ? normTaskRrule(v) : null);
 
 /** Columns of the form fields that were sent (absent = keep). */
 function optionalColumns(d: { [K in keyof TaskInput]?: TaskInput[K] | undefined }): TaskColumns {
@@ -104,18 +105,14 @@ tasksRouter.post('/', async (req: Request, res: Response) => {
   const parsed = TaskSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request', details: parsed.error.issues }); return; }
 
-  const task = await createTask(
-    req.apiUser!.userId,
-    { ...optionalColumns(parsed.data), subject: parsed.data.subject },
-    progressPatch(parsed.data),
-  );
+  const task = await createTaskWithRules(req.apiUser!.userId, parsed.data.subject, optionalColumns(parsed.data), progressPatch(parsed.data));
   res.status(201).json(task);
 });
 
 // PUT /api/v1/tasks/:id
 // 9.4: status / % / completion date stay consistent (task-rules.ts); completing a
-// recurring task closes this occurrence and creates the next one (returned as `next`,
-// storage task-writer.ts — shared with ActiveSync).
+// recurring task closes this occurrence and creates the next one (returned as `next`).
+// 9.5: the write itself is storage task-store.ts, shared with the CalDAV task list and ActiveSync.
 tasksRouter.put('/:id', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
   const parsed = patchSchema(TaskSchema).safeParse(req.body);
@@ -124,10 +121,9 @@ tasksRouter.put('/:id', async (req: Request, res: Response) => {
   const task = await prisma.task.findFirst({ where: { id, userId: req.apiUser!.userId } });
   if (!task) { res.status(404).json({ error: 'Task not found' }); return; }
 
-  // only the fields that were sent (a one-field PUT must not rewrite the others)
-  const { updated, next } = await updateTask(task, optionalColumns(parsed.data), progressPatch(parsed.data));
+  const { updated, created } = await updateTaskWithRules(task, optionalColumns(parsed.data), progressPatch(parsed.data));
   if (!updated) { res.status(404).json({ error: 'Task not found' }); return; }
-  res.json(next ? { ...updated, next } : updated);
+  res.json(created ? { ...updated, next: created } : updated);
 });
 
 // DELETE /api/v1/tasks/:id

@@ -15,9 +15,28 @@
  * An existing booking is updated or cancelled only by its stored organizer,
  * and only when authenticated. A new booking from an unauthenticated sender is
  * stored as PENDING (manual approval) instead of being auto-accepted.
+ *
+ * 9.5: the request is decided by the same rules as a booking from the event form
+ * (storage resource-booking-rules.ts): the resource policy, and conflicts of EVERY
+ * occurrence of a recurring meeting (EXDATE / RECURRENCE-ID overrides applied, within
+ * the booking horizon, capped) with the resource's other bookings, recurring ones
+ * expanded. Conflicting occurrences are stored with the booking — the reason of a
+ * decline, or listed with the acceptance when the resource does not decline
+ * conflicts. A REQUEST or CANCEL for single occurrences (RECURRENCE-ID only) updates
+ * or removes those occurrences of the stored series instead of the whole booking; a
+ * declined occurrence update declines those occurrences only (cancelled exceptions,
+ * the series keeps its answer).
  */
 import { createLogger } from '@coremail/core';
-import { prisma, extractCalendarParts, isAttendeeAuthenticated, lockResourceCalendar, type SenderAuth } from '@coremail/storage';
+import {
+  getProperty, parseDateProperty, parseIcal, parseVEventComponent, serializeComponent,
+  type IcalComponent, type ParsedVEvent,
+} from '@coremail/core/calendar';
+import { excludeOccurrence } from '@coremail/core/calendar-exceptions';
+import {
+  prisma, checkLockedResourceBooking, conflictList, extractCalendarParts, isAttendeeAuthenticated, lockResourceCalendar,
+  type ResourceBookingTx, type ResourceCheck, type SenderAuth,
+} from '@coremail/storage';
 
 const log = createLogger('smtp:resource-booking');
 
@@ -25,17 +44,6 @@ export function bareAddress(addr: string): string {
   const m = /<([^>]*)>/.exec(addr);
   return (m ? m[1]! : addr).trim().replace(/^mailto:/i, '').toLowerCase();
 }
-
-const parseDtStamp = (s: string): Date => {
-  const clean = s.replace(/Z$/, '');
-  if (clean.length === 8) {
-    return new Date(`${clean.slice(0, 4)}-${clean.slice(4, 6)}-${clean.slice(6, 8)}`);
-  }
-  return new Date(
-    `${clean.slice(0, 4)}-${clean.slice(4, 6)}-${clean.slice(6, 8)}T` +
-      `${clean.slice(9, 11)}:${clean.slice(11, 13)}:${clean.slice(13, 15)}Z`,
-  );
-};
 
 /** Pure: the address of the (unfolded) RFC 5322 From header, '' when none. */
 export function headerFromAddress(raw: Buffer): string {
@@ -90,6 +98,242 @@ function findCalendar(raw: Buffer): string | null {
   return /BEGIN:VCALENDAR[\s\S]*?END:VCALENDAR/i.exec(text)?.[0] ?? null;
 }
 
+/** An invitation: its method and UID, the series master (null when only occurrences are sent). */
+export interface Invitation {
+  method: string;
+  uid: string;
+  master: ParsedVEvent | null;
+  /** RECURRENCE-IDs of the single occurrences the message carries. */
+  recurrenceIds: Date[];
+}
+
+function vevents(root: IcalComponent): IcalComponent[] {
+  return root.components.filter((c) => c.name === 'VEVENT');
+}
+
+function recurrenceIdOf(c: IcalComponent, root: IcalComponent): Date | null {
+  const p = getProperty(c, 'RECURRENCE-ID');
+  return p ? parseDateProperty(p, root)?.date ?? null : null;
+}
+
+/** Pure: the invitation of a VCALENDAR; null without VEVENT or without exactly one UID. */
+export function parseInvitation(icalData: string): Invitation | null {
+  const root = parseIcal(icalData);
+  if (!root || root.name !== 'VCALENDAR') return null;
+  const events = vevents(root);
+  const uids = new Set(events.map((c) => getProperty(c, 'UID')?.value.trim() ?? ''));
+  const uid = [...uids][0];
+  if (events.length === 0 || uids.size !== 1 || !uid) return null;
+  const masterComp = events.find((c) => !getProperty(c, 'RECURRENCE-ID'));
+  return {
+    method: (getProperty(root, 'METHOD')?.value.trim().toUpperCase()) || 'REQUEST',
+    uid,
+    master: masterComp ? parseVEventComponent(masterComp, root) : null,
+    recurrenceIds: events.flatMap((c) => { const rid = recurrenceIdOf(c, root); return rid ? [rid] : []; }),
+  };
+}
+
+/** Marks an occurrence exception the resource declined (the series itself stays booked). */
+export const DECLINED_MARK = 'X-RESOURCE-DECLINED';
+
+/** The occurrence as a cancelled exception the resource declined. */
+function declinedException(occ: IcalComponent): IcalComponent {
+  const properties = occ.properties.filter((p) => p.name !== 'STATUS' && p.name !== DECLINED_MARK);
+  properties.push({ name: 'STATUS', params: {}, value: 'CANCELLED' }, { name: DECLINED_MARK, params: {}, value: 'TRUE' });
+  return { ...occ, properties };
+}
+
+/**
+ * Pure: the stored series with the occurrences of an update (VEVENTs with
+ * RECURRENCE-ID) replaced or added, plus VTIMEZONEs the series lacks. Null when the
+ * stored object is no series master or either side is unreadable.
+ *
+ * `declined`: the resource declines these occurrences — each is stored as a cancelled
+ * exception (STATUS:CANCELLED + {@link DECLINED_MARK}): neither its original slot nor the
+ * slot it was moved to blocks the resource, the rest of the series stays booked. A later
+ * update of the occurrence replaces the exception and is checked again.
+ */
+export function applyOccurrenceUpdates(stored: string, incoming: string, opts: { declined?: boolean } = {}): string | null {
+  const root = parseIcal(stored);
+  const update = parseIcal(incoming);
+  if (!root || !update || !vevents(root).some((c) => !getProperty(c, 'RECURRENCE-ID'))) return null;
+  for (const occ of vevents(update)) {
+    const rid = recurrenceIdOf(occ, update)?.getTime();
+    if (rid === undefined) continue;
+    const entry = opts.declined ? declinedException(occ) : occ;
+    const at = root.components.findIndex((c) => c.name === 'VEVENT' && recurrenceIdOf(c, root)?.getTime() === rid);
+    if (at >= 0) root.components[at] = entry;
+    else root.components.push(entry);
+  }
+  const zones = new Set(root.components.filter((c) => c.name === 'VTIMEZONE').map((c) => getProperty(c, 'TZID')?.value));
+  for (const tz of update.components.filter((c) => c.name === 'VTIMEZONE' && !zones.has(getProperty(c, 'TZID')?.value))) {
+    root.components.unshift(tz);
+  }
+  return serializeComponent(root) + '\r\n';
+}
+
+/** Pure: the stored series without the cancelled occurrences (EXDATE); null when it is no series. */
+export function cancelOccurrences(stored: string, recurrenceIds: readonly Date[]): string | null {
+  let text: string | null = stored;
+  for (const rid of recurrenceIds) {
+    text = text ? excludeOccurrence(text, rid) : null;
+  }
+  return recurrenceIds.length > 0 ? text : null;
+}
+
+interface MeetingRequest {
+  uid: string;
+  summary: string;
+  dtStart: Date;
+  dtEnd: Date;
+  allDay: boolean;
+  rrule: string | null;
+  icalData: string;
+}
+
+/** Pure: the meeting to book from its calendar data (series master, else the single occurrence). */
+export function meetingFromCalendar(uid: string, icalData: string): MeetingRequest | null {
+  const root = parseIcal(icalData);
+  if (!root) return null;
+  const events = vevents(root);
+  const comp = events.find((c) => !getProperty(c, 'RECURRENCE-ID')) ?? events[0];
+  const main = comp ? parseVEventComponent(comp, root) : null;
+  if (!main) return null;
+  return {
+    uid, summary: main.summary.trim() || 'Meeting', dtStart: main.start, dtEnd: main.end,
+    allDay: main.allDay, rrule: main.rrule, icalData,
+  };
+}
+
+type Booking = NonNullable<Awaited<ReturnType<typeof prisma.resourceBooking.findUnique>>>;
+type Resource = NonNullable<Awaited<ReturnType<typeof findResource>>>;
+type BookingTx = ResourceBookingTx;
+
+function findResource(email: string) {
+  return prisma.resourceMailbox.findFirst({
+    where: { email: email.toLowerCase(), active: true },
+    include: { calendar: true },
+  });
+}
+
+/** What an invitation did to the resource's booking (for the log). */
+type Outcome =
+  | { kind: 'refused' }
+  | { kind: 'unusable' }
+  | { kind: 'cancelled'; occurrences: number }
+  | { kind: 'pending' }
+  | { kind: 'decided'; check: ResourceCheck }
+  | { kind: 'occurrences-declined'; check: ResourceCheck; occurrences: number };
+
+/** CANCEL: the whole booking, or only the cancelled occurrences of the stored series. */
+async function cancelBooking(tx: BookingTx, existing: Booking, invite: Invitation): Promise<Outcome> {
+  const remaining = invite.master ? null : cancelOccurrences(existing.icalData, invite.recurrenceIds);
+  if (remaining) {
+    await tx.resourceBooking.update({ where: { id: existing.id }, data: { icalData: remaining } });
+    return { kind: 'cancelled', occurrences: invite.recurrenceIds.length };
+  }
+  await tx.resourceBooking.delete({ where: { id: existing.id } });
+  return { kind: 'cancelled', occurrences: 0 };
+}
+
+/** Write the answer to the booking read under the lock. A decline of an existing booking keeps its previous slot data. */
+async function writeBooking(
+  tx: BookingTx,
+  existing: Booking | null,
+  calendarId: string,
+  meeting: MeetingRequest,
+  organizer: string,
+  status: 'ACCEPTED' | 'DECLINED' | 'PENDING',
+  conflicts: ResourceCheck['conflicts'],
+): Promise<void> {
+  const listed = conflictList(conflicts);
+  if (existing) {
+    await tx.resourceBooking.update({
+      where: { id: existing.id },
+      data: status === 'DECLINED'
+        ? { status, conflicts: listed }
+        : { dtStart: meeting.dtStart, dtEnd: meeting.dtEnd, summary: meeting.summary, status, icalData: meeting.icalData, conflicts: listed },
+    });
+    return;
+  }
+  await tx.resourceBooking.create({
+    data: {
+      calendarId, uid: meeting.uid, summary: meeting.summary, organizer, dtStart: meeting.dtStart, dtEnd: meeting.dtEnd,
+      status, icalData: meeting.icalData, conflicts: listed,
+    },
+  });
+}
+
+/**
+ * One invitation for one resource, in one transaction under the resource's booking
+ * lock: the booking is read, the organizer checked, the series merged / cancelled,
+ * the rules applied and the answer written on the same row state — two invitations
+ * for the same slot never both get the resource, two occurrence updates of one series
+ * never overwrite each other, and a booking created meanwhile is never taken over.
+ * An unauthenticated organizer's new request waits for approval.
+ */
+function handleInvitation(
+  resource: Resource,
+  calendarId: string,
+  invite: Invitation,
+  icalData: string,
+  organizer: string,
+  authenticated: boolean,
+  now: Date,
+): Promise<Outcome> {
+  return prisma.$transaction(async (tx): Promise<Outcome> => {
+    await lockResourceCalendar(tx, calendarId);
+    // v8.1: UIDs are unique per resource calendar — only this resource's booking is
+    // read, changed or deleted here.
+    const existing = await tx.resourceBooking.findUnique({ where: { calendarId_uid: { calendarId, uid: invite.uid } } });
+    if (existing && !(authenticated && bareAddress(existing.organizer) === organizer)) return { kind: 'refused' };
+    if (invite.method === 'CANCEL') return existing ? cancelBooking(tx, existing, invite) : { kind: 'unusable' };
+
+    // Occurrences only: they change the stored series (a new booking is just that occurrence)
+    const meetingIcal = !invite.master && existing ? applyOccurrenceUpdates(existing.icalData, icalData) : icalData;
+    const meeting = meetingIcal ? meetingFromCalendar(invite.uid, meetingIcal) : null;
+    if (!meeting) return { kind: 'unusable' };
+    if (!authenticated) {
+      await writeBooking(tx, null, calendarId, meeting, organizer, 'PENDING', []);
+      return { kind: 'pending' };
+    }
+    const check = await checkLockedResourceBooking(tx, calendarId, resource, meeting, now);
+    const declinedSeries = !invite.master && existing && check.decision.status === 'DECLINED'
+      ? applyOccurrenceUpdates(existing.icalData, icalData, { declined: true })
+      : null;
+    if (existing && declinedSeries) {
+      // A declined occurrence update declines those occurrences only: the series keeps its answer
+      await tx.resourceBooking.update({ where: { id: existing.id }, data: { icalData: declinedSeries, conflicts: conflictList(check.conflicts) } });
+      return { kind: 'occurrences-declined', check, occurrences: invite.recurrenceIds.length };
+    }
+    await writeBooking(tx, existing, calendarId, meeting, organizer, check.decision.status, check.conflicts);
+    return { kind: 'decided', check };
+  });
+}
+
+function logOutcome(outcome: Outcome, ctx: Record<string, unknown>): void {
+  switch (outcome.kind) {
+    case 'refused': log.warn(ctx, 'Resource booking change refused — not the authenticated organizer'); return;
+    case 'unusable': log.info(ctx, 'Resource invitation without a usable VEVENT or booking — ignored'); return;
+    case 'pending': log.info(ctx, 'Resource booking pending approval — organizer not authenticated'); return;
+    case 'cancelled':
+      log.info({ ...ctx, occurrences: outcome.occurrences }, outcome.occurrences > 0 ? 'Resource booking: occurrences cancelled' : 'Resource booking cancelled');
+      return;
+    case 'decided': {
+      const { decision, conflicts } = outcome.check;
+      const conflictDates = conflicts.map((c) => c.dtStart.toISOString());
+      if (decision.status === 'DECLINED') log.info({ ...ctx, reason: decision.reason, conflicts: conflictDates }, 'Resource booking declined');
+      else log.info({ ...ctx, status: decision.status, conflicts: conflictDates }, 'Resource booking decided');
+      return;
+    }
+    case 'occurrences-declined': {
+      const { decision, conflicts } = outcome.check;
+      log.info({ ...ctx, reason: decision.reason, occurrences: outcome.occurrences, conflicts: conflicts.map((c) => c.dtStart.toISOString()) },
+        'Resource booking: occurrence update declined — the series stays booked');
+    }
+  }
+}
+
 /**
  * Processes the calendar invitation of `rawMessage` for every resource mailbox
  * among `rcptTo`. `mailFrom` is kept for the log only. Returns the resource
@@ -101,113 +345,30 @@ export async function processResourceMailboxes(
   rcptTo: string[],
   mailFrom: string,
   senderAuth: SenderAuth | null = null,
+  now = new Date(),
 ): Promise<string[]> {
   const handled: string[] = [];
   for (const email of rcptTo) {
-    const resource = await prisma.resourceMailbox.findFirst({
-      where: { email: email.toLowerCase(), active: true },
-      include: { calendar: true },
-    });
-
+    const resource = await findResource(email);
     if (!resource) continue;
     handled.push(email);
     const calendarId = resource.calendar?.id;
     if (!calendarId) continue;
 
     const icalData = findCalendar(rawMessage);
-    if (!icalData) {
-      log.info({ resource: email, from: mailFrom }, 'Mail to a resource mailbox without an invitation — ignored');
+    const invite = icalData ? parseInvitation(icalData) : null;
+    if (!icalData || !invite) {
+      log.info({ resource: email, from: mailFrom }, 'Mail to a resource mailbox without a usable invitation — ignored');
       continue;
     }
-    const unfolded = icalData.replace(/\r?\n[ \t]/g, '');
-
-    // Extract essential fields
-    const uidMatch = /^UID:(.+)$/m.exec(unfolded);
-    const dtStartMatch = /^DTSTART[^:]*:(\d{8}T\d{6}Z?|\d{8})/m.exec(unfolded);
-    const dtEndMatch = /^DTEND[^:]*:(\d{8}T\d{6}Z?|\d{8})/m.exec(unfolded);
-    const summaryMatch = /^SUMMARY:(.+)$/m.exec(unfolded);
-    const methodMatch = /^METHOD:(.+)$/m.exec(unfolded);
-
-    if (!uidMatch || !dtStartMatch || !dtEndMatch) continue;
-
-    const uid = uidMatch[1]?.trim() ?? '';
-    if (!uid) continue;
-    const summary = summaryMatch?.[1]?.trim() ?? 'Meeting';
-    const method = methodMatch?.[1]?.trim().toUpperCase() ?? 'REQUEST';
-
-    const dtStart = parseDtStamp(dtStartMatch[1] ?? '');
-    const dtEnd = parseDtStamp(dtEndMatch[1] ?? '');
-
-    if (isNaN(dtStart.getTime()) || isNaN(dtEnd.getTime())) continue;
-
     const { organizer, authenticated } = organizerIdentity(icalData, rawMessage, senderAuth);
     if (!organizer) {
-      log.warn({ resource: email, uid, from: mailFrom }, 'Resource invitation without ORGANIZER/From — ignored');
+      log.warn({ resource: email, uid: invite.uid, from: mailFrom }, 'Resource invitation without ORGANIZER/From — ignored');
       continue;
     }
-
-    // v8.1: UIDs are unique per resource calendar — a meeting that books two
-    // rooms gets one booking in each. Only this resource's booking is read,
-    // changed or deleted here.
-    const existing = await prisma.resourceBooking.findUnique({ where: { calendarId_uid: { calendarId, uid } } });
-    const isOrganizer = !!existing && authenticated && bareAddress(existing.organizer) === organizer;
-
-    // Handle CANCEL method — remove this resource's booking (organizer only)
-    if (method === 'CANCEL') {
-      if (!existing) continue;
-      if (!isOrganizer) {
-        log.warn({ resource: email, uid, organizer, envelope: mailFrom, authenticated }, 'Resource booking CANCEL refused — not the authenticated organizer');
-        continue;
-      }
-      await prisma.resourceBooking.delete({ where: { id: existing.id } });
-      log.info({ resource: email, uid }, 'Resource booking cancelled');
-      continue;
-    }
-
-    if (existing && !isOrganizer) {
-      log.warn({ resource: email, uid, organizer, envelope: mailFrom, authenticated }, 'Resource booking update refused — not the authenticated organizer');
-      continue;
-    }
-
-    const save = async (status: 'PENDING' | 'DECLINED' | 'ACCEPTED', db: Pick<typeof prisma, 'resourceBooking'> = prisma): Promise<void> => {
-      if (existing) {
-        await db.resourceBooking.update({
-          where: { id: existing.id },
-          data: status === 'DECLINED' ? { status } : { dtStart, dtEnd, summary, status, icalData },
-        });
-      } else {
-        await db.resourceBooking.create({
-          data: { calendarId, uid, summary, organizer, dtStart, dtEnd, status, icalData },
-        });
-      }
-    };
-
-    if (!resource.autoAccept || resource.requireApproval || !authenticated) {
-      // Store as PENDING for manual approval
-      await save('PENDING');
-      log.info({ resource: email, uid, authenticated }, 'Resource booking pending approval');
-      continue;
-    }
-
-    // 9.4: conflict check + booking under the resource's booking lock — two
-    // invitations (or an invitation and a booking from the event form) for the
-    // same slot never both get the resource.
-    const conflictUid = await prisma.$transaction(async (tx) => {
-      await lockResourceCalendar(tx, calendarId);
-      const conflict = !resource.autoDeclineConflict ? null : await tx.resourceBooking.findFirst({
-        where: {
-          calendarId,
-          uid: { not: uid },
-          status: { in: ['ACCEPTED', 'TENTATIVE'] },
-          dtStart: { lt: dtEnd },
-          dtEnd: { gt: dtStart },
-        },
-      });
-      await save(conflict ? 'DECLINED' : 'ACCEPTED', tx);
-      return conflict?.uid ?? null;
-    });
-    if (conflictUid) log.info({ resource: email, uid, conflict: conflictUid }, 'Resource booking declined — conflict');
-    else log.info({ resource: email, uid, dtStart, dtEnd }, 'Resource booking accepted');
+    const outcome = await handleInvitation(resource, calendarId, invite, icalData, organizer, authenticated, now);
+    logOutcome(outcome, { resource: resource.email, uid: invite.uid, organizer, envelope: mailFrom, authenticated, method: invite.method });
   }
   return handled;
 }
+

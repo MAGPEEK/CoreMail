@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { PanelLeft, X } from 'lucide-react';
+import { Modal } from '../components/Modal.js';
 import { useShortcutHandlers } from '../hooks/useShortcuts.js';
+import { useLayoutMode } from '../hooks/useLayoutMode.js';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
@@ -73,7 +76,13 @@ export function CalendarPage() {
   const [occurrenceChoice, setOccurrenceChoice] = useState<{ eventId: string; occurrence: string; summary: string } | null>(null);
   const [agendaOpen, setAgendaOpen] = useState(false);
   const [shareDialogOpen, setShareDialogOpen] = useState(false);
-  const [view, setView] = useState<CalendarView>('dayGridMonth');
+  // 9.5: a phone starts in the day view (the month grid does not fit 320 px)
+  const compactScreen = useLayoutMode() === 'single';
+  const [calendarListOpen, setCalendarListOpen] = useState(false);
+  // the sheet belongs to the phone layout: it does not reopen when the screen shrinks again
+  useEffect(() => { if (!compactScreen) setCalendarListOpen(false); }, [compactScreen]);
+  const [initialView] = useState<CalendarView>(() => (compactScreen ? 'timeGridDay' : 'dayGridMonth'));
+  const [view, setView] = useState<CalendarView>(initialView);
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   // v3.18.21: Filter state lifted to the page so fcEvents are actually filtered
   const [filters, setFilters] = useState<Record<FilterKey, boolean>>(() => ({ ...FILTER_DEFAULT }));
@@ -270,19 +279,34 @@ export function CalendarPage() {
         />
       }
     >
-      <CalendarSidebar
-        calendars={calendars ?? []}
-        selectedDate={selectedDate}
-        onSelectDate={handleSelectDate}
-      />
+      {!compactScreen && (
+        <CalendarSidebar
+          calendars={calendars ?? []}
+          selectedDate={selectedDate}
+          onSelectDate={handleSelectDate}
+        />
+      )}
 
       {/* Main area: FullCalendar */}
-      <div className={`flex-1 min-w-0 overflow-auto ${PAGE_CONTENT_PAD}`}>
+      <div className={`flex-1 min-w-0 flex flex-col overflow-auto ${PAGE_CONTENT_PAD}`}>
+        {compactScreen && (
+          <button
+            type="button"
+            id="calendar-list-toggle"
+            onClick={() => setCalendarListOpen(true)}
+            aria-haspopup="dialog"
+            className="self-start mb-2 inline-flex items-center gap-1.5 min-h-[2rem] px-2 rounded text-sm font-medium text-accent-fg hover:bg-surface-2"
+          >
+            <PanelLeft size={16} aria-hidden="true" />
+            Kalender
+          </button>
+        )}
+        <div className="flex-1 min-h-0">
         <FullCalendar
           ref={calendarRef}
           plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin, luxonPlugin]}
           timeZone={fcTimeZone}
-          initialView="dayGridMonth"
+          initialView={initialView === 'split' ? 'dayGridMonth' : initialView === 'workWeek' ? 'timeGridWeek' : initialView}
           locale={fcLocale}
           weekNumbers={calendarShowWeekNumbers}
           weekNumberCalculation="ISO"
@@ -300,7 +324,32 @@ export function CalendarPage() {
           eventClick={handleEventClick}
           height="100%"
         />
+        </div>
       </div>
+
+      {/* Phones: the calendar list is a sheet (Modal: focus trap, Escape, focus returns to the button) */}
+      {compactScreen && calendarListOpen && (
+        <Modal
+          label="Kalender"
+          onClose={() => setCalendarListOpen(false)}
+          className="relative h-full w-72 max-w-[90%] bg-surface-2 shadow-xl overflow-y-auto"
+          overlayClassName="fixed inset-0 z-50 flex justify-start bg-scrim/50"
+        >
+          <button
+            type="button"
+            onClick={() => setCalendarListOpen(false)}
+            aria-label="Schließen"
+            className="absolute right-2 top-2 z-10 p-1.5 rounded text-fg-subtle hover:bg-surface-3"
+          >
+            <X size={16} aria-hidden="true" />
+          </button>
+          <CalendarSidebar
+            calendars={calendars ?? []}
+            selectedDate={selectedDate}
+            onSelectDate={(d) => { handleSelectDate(d); setCalendarListOpen(false); }}
+          />
+        </Modal>
+      )}
 
       {/* 9.4: day agenda of the selected day */}
       {agendaOpen && (

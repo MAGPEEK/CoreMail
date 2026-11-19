@@ -46,6 +46,8 @@ test('decideRoomBooking: policy table', () => {
     ['conflict without auto-decline → accepted', { ...policy, autoDeclineConflict: false }, slot, true, { status: 'ACCEPTED' }],
     ['inactive', { ...policy, active: false }, slot, false, { status: 'DECLINED', reason: 'inactive' }],
     ['recurring not allowed', { ...policy, allowRecurring: false }, { ...slot, recurring: true }, false, { status: 'DECLINED', reason: 'recurring' }],
+    ['series repeating more than daily', policy, { ...slot, recurring: true, tooFrequent: true }, false, { status: 'DECLINED', reason: 'too-frequent' }],
+    ['no series allowed wins over too frequent', { ...policy, allowRecurring: false }, { ...slot, recurring: true, tooFrequent: true }, false, { status: 'DECLINED', reason: 'recurring' }],
     ['too long', policy, { ...slot, end: d('2026-05-04T12:00:00Z') }, false, { status: 'DECLINED', reason: 'duration' }],
     ['beyond the booking window', { ...policy, bookingWindowDays: 1 }, slot, false, { status: 'DECLINED', reason: 'window' }],
     ['approval required → pending', { ...policy, requireApproval: true }, slot, false, { status: 'PENDING' }],

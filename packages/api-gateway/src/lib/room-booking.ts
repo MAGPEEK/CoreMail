@@ -8,84 +8,19 @@
  * window, approval) — the same ones the mail path (smtp-server
  * handlers/resource-booking.ts) applies to invitations from other clients.
  */
-import { prisma, lockResourceCalendar } from '@coremail/storage';
-import { expandStoredEvent, overlaps } from '@coremail/core/recurrence';
-import { mergeBusy, type BusyInterval } from '@coremail/core/free-busy';
+import {
+  prisma, bookingIntervals, checkResourceBooking, conflictList, type BookingRow, type RoomBookingStatus,
+  type RoomDeclineReason,
+} from '@coremail/storage';
+import { overlaps } from '@coremail/core/recurrence';
+import type { BusyInterval } from '@coremail/core/free-busy';
 
-const DAY_MS = 86_400_000;
-/** Occurrences of a recurring meeting checked for room conflicts (DoS guard). */
-const MAX_CHECKED_OCCURRENCES = 400;
-
-export interface RoomPolicy {
-  active: boolean;
-  autoAccept: boolean;
-  autoDeclineConflict: boolean;
-  allowRecurring: boolean;
-  maxDurationMinutes: number | null;
-  bookingWindowDays: number;
-  requireApproval: boolean;
-}
-
-export type RoomBookingStatus = 'ACCEPTED' | 'DECLINED' | 'PENDING';
-export type RoomDeclineReason = 'inactive' | 'recurring' | 'duration' | 'window' | 'conflict';
-
-export interface RoomDecision {
-  status: RoomBookingStatus;
-  reason?: RoomDeclineReason;
-}
-
-/**
- * Pure: the answer of a room to a booking request. Policy violations and (with
- * "decline on conflict") conflicts decline; approval or no auto-accept leave the
- * request pending.
- */
-export function decideRoomBooking(
-  room: RoomPolicy,
-  slot: { start: Date; end: Date; recurring: boolean },
-  hasConflict: boolean,
-  now: Date,
-): RoomDecision {
-  if (!room.active) return { status: 'DECLINED', reason: 'inactive' };
-  if (slot.recurring && !room.allowRecurring) return { status: 'DECLINED', reason: 'recurring' };
-  const minutes = (slot.end.getTime() - slot.start.getTime()) / 60_000;
-  if (room.maxDurationMinutes !== null && minutes > room.maxDurationMinutes) return { status: 'DECLINED', reason: 'duration' };
-  if (slot.start.getTime() > now.getTime() + room.bookingWindowDays * DAY_MS) return { status: 'DECLINED', reason: 'window' };
-  if (hasConflict && room.autoDeclineConflict) return { status: 'DECLINED', reason: 'conflict' };
-  if (room.requireApproval || !room.autoAccept) return { status: 'PENDING' };
-  return { status: 'ACCEPTED' };
-}
-
-export interface BookingRow {
-  uid: string;
-  status: string;
-  dtStart: Date;
-  dtEnd: Date;
-  icalData: string;
-}
-
-/** Pure: does the calendar data carry a recurrence rule (RRULE line)? */
-const hasRrule = (icalData: string): boolean => /\nRRULE[:;]/i.test(icalData);
-
-/** Pure: busy intervals of a room's bookings in [ws, we) — accepted and tentative only, recurring ones expanded. */
-export function bookingIntervals(bookings: readonly BookingRow[], ws: Date, we: Date, excludeUid?: string): BusyInterval[] {
-  const out: BusyInterval[] = [];
-  for (const b of bookings) {
-    if (b.uid === excludeUid) continue;
-    const status = b.status.toUpperCase();
-    if (status !== 'ACCEPTED' && status !== 'TENTATIVE') continue;
-    const instances = expandStoredEvent(
-      { dtStart: b.dtStart, dtEnd: b.dtEnd, allDay: false, recurring: hasRrule(b.icalData), rrule: null, icalData: b.icalData },
-      ws, we,
-    );
-    for (const i of instances) out.push({ start: i.dtStart, end: i.dtEnd, kind: status === 'TENTATIVE' ? 'tentative' : 'busy' });
-  }
-  return mergeBusy(out);
-}
-
-/** Pure: does any instance of the meeting overlap a busy interval of the room? */
-export function conflictsWith(instances: ReadonlyArray<{ dtStart: Date; dtEnd: Date }>, busy: readonly BusyInterval[]): boolean {
-  return instances.some((i) => busy.some((b) => overlaps(i.dtStart, i.dtEnd, b.start, b.end)));
-}
+// 9.5: the rules (policy decision, conflicts, series expansion) moved to storage
+// resource-booking-rules.ts — the mail path for invitations applies the same ones.
+export {
+  bookingIntervals, conflictsWith, decideRoomBooking,
+  type BookingRow, type RoomBookingStatus, type RoomDecision, type RoomDeclineReason, type RoomPolicy,
+} from '@coremail/storage';
 
 const ROOM_SELECT = {
   id: true, email: true, displayName: true, resourceType: true, capacity: true, location: true, active: true,
@@ -164,7 +99,7 @@ const PARTSTAT: Record<RoomBookingStatus, BookedRoom['partstat']> = { ACCEPTED: 
  * entries. Unknown or foreign-domain addresses are ignored. The booking row is
  * keyed by the meeting UID per room, so saving again updates it. Conflict check
  * and write run in one transaction under the room's booking lock
- * (lockResourceCalendar): of two concurrent bookings of the same slot exactly one
+ * (storage checkResourceBooking): of two concurrent bookings of the same slot exactly one
  * gets the room. `meeting.icalData` must be the meeting as it will be stored — its
  * DTSTART/RRULE/EXDATE/overrides decide which occurrences are checked.
  */
@@ -180,26 +115,15 @@ export async function bookRooms(
     where: { email: { in: roomEmails.map((e) => e.toLowerCase()) }, domainId },
     select: ROOM_SELECT,
   });
-  const recurring = meeting.rrule !== null || hasRrule(meeting.icalData);
-  const windowEnd = (room: { bookingWindowDays: number }) => new Date(Math.max(meeting.dtEnd.getTime(), now.getTime() + room.bookingWindowDays * DAY_MS));
   const out: BookedRoom[] = [];
   for (const room of rooms) {
     if (!room.calendar) continue;
-    const ws = meeting.dtStart;
-    const we = windowEnd(room);
     const calendarId = room.calendar.id;
-    const instances = expandStoredEvent(
-      { dtStart: meeting.dtStart, dtEnd: meeting.dtEnd, allDay: meeting.allDay, recurring, rrule: meeting.rrule, icalData: meeting.icalData },
-      ws, we,
-    ).slice(0, MAX_CHECKED_OCCURRENCES);
     const decision = await prisma.$transaction(async (tx) => {
-      await lockResourceCalendar(tx, calendarId);
-      const bookings = (await bookingsOf(tx, [calendarId], ws, we)).get(calendarId) ?? [];
-      const busy = bookingIntervals(bookings, ws, we, meeting.uid);
-      const result = decideRoomBooking(room, { start: meeting.dtStart, end: meeting.dtEnd, recurring }, conflictsWith(instances, busy), now);
+      const { decision: result, conflicts } = await checkResourceBooking(tx, calendarId, room, meeting, now);
       const data = {
         summary: meeting.summary, organizer: meeting.organizer, dtStart: meeting.dtStart, dtEnd: meeting.dtEnd,
-        status: result.status, icalData: meeting.icalData,
+        status: result.status, icalData: meeting.icalData, conflicts: conflictList(conflicts),
       };
       await tx.resourceBooking.upsert({
         where: { calendarId_uid: { calendarId, uid: meeting.uid } },

@@ -85,6 +85,7 @@ export function SignatureSettings() {
 
       {signatures.length > 0 && (
         <Group title="Standardsignaturen">
+          <div role="region" aria-label="Standardsignaturen (scrollbar)" tabIndex={0} className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-fg-muted">
@@ -113,6 +114,7 @@ export function SignatureSettings() {
               })}
             </tbody>
           </table>
+          </div>
         </Group>
       )}
     </section>

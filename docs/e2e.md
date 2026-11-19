@@ -80,7 +80,7 @@ node scripts/e2e/run.mjs imap pop3       # single steps (state is kept in state.
 node --test scripts/e2e/repo-hygiene.test.mjs   # static regression checks (no stack needed)
 ```
 
-Steps: `setup users smtp imap pop3 jmap dav eas eas-body eas-commands eas-legacy eas-pim rest webmail admin tls legacy-clients backup branding mfa live protocols policies mapi lockout restart storage schema-upgrade`.
+Steps: `setup users smtp imap pop3 jmap dav dav-tasks eas eas-body eas-commands eas-legacy eas-pim rest webmail admin tls legacy-clients backup branding mfa live protocols policies mapi lockout restart storage schema-upgrade`.
 `eas-pim` (w3): a 14.1 device provisions and its FolderSync lists the default calendar (type 8),
 `tasks:default` (7) and `notes:default` (10); an event created over REST arrives in the calendar
 Sync with the event id as ServerId; a task added by the device (ClientId → ServerId) is a task over
@@ -99,6 +99,11 @@ device pings without `X-MS-PolicyKey` (served — Status 5 for the too short hea
 FolderSync without key and an unknown device still get 142); with BCP → Settings → Mail set to 1 MB
 (applied at once through the settings reload) a 2 MB SendMail gets Status 122 (14.0) / HTTP 413
 (12.1) and a 3 MB body HTTP 413 at the request-body cap, then the limit is restored to 25 MB. See [activesync.md](activesync.md).
+`dav-tasks` (9.5): the calendar home lists the task list (`/dav/calendars/<id>/tasks/`, VTODO); a
+VTODO `PUT` is a task in `GET /api/v1/tasks/:id` (status rules applied), a webmail change shows in
+`GET` (WAITING as `NEEDS-ACTION`, `CATEGORIES` kept), a task created with `POST /api/v1/tasks` is in
+`REPORT calendar-query` (VTODO time-range), completing a recurring task over CalDAV creates the
+next one, `DELETE` honours `If-Match`. See [caldav.md](caldav.md).
 `schema-upgrade` builds a database from the 8.0.0 schema (`E2E_SCHEMA_BASE`, default `d5ad681`) and checks that schema-sync upgrades it, refuses duplicates and fails closed on a dropped column with data (`E2E_PG_CONTAINER` selects the PostgreSQL container).
 `webmail` (9.3): shared / delegated mailboxes in the mail view at API level — A lists the team
 mailbox in `GET /api/v1/user/accessible-mailboxes` (FULL_ACCESS + SEND_AS), hides and shows it

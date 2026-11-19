@@ -1,13 +1,13 @@
 /**
  * Tasks class module ([MS-ASTASK]): the user's tasks as one folder (FolderSync type 7).
- * Writes go through the storage task writer shared with the REST API (status rules,
+ * Writes go through the storage task writer (task-store.ts) shared with REST and CalDAV (status rules,
  * the next occurrence of a completed recurring task) and are announced to the user's
  * other clients (realtime `tasks` events).
  */
 import { prisma } from '@coremail/storage/prisma';
-import { announceUserEvent, createTask, updateTask } from '@coremail/storage';
+import { announceUserEvent, createTaskWithRules, updateTaskWithRules } from '@coremail/storage';
 import type { UserEventAction } from '@coremail/core';
-import { parseTask, renderTask, taskChange, type TaskRow } from './tasks-codec.js';
+import { NO_SUBJECT, parseTask, renderTask, taskChange, type TaskRow } from './tasks-codec.js';
 import { PIM_STATUS, versionOf, type PimClassModule, type PimCollection } from './types.js';
 
 export const TASKS_COLLECTION_ID = 'tasks:default';
@@ -62,7 +62,7 @@ export const tasksModule: PimClassModule<TaskRow> = {
 
   async create(col, data, ctx) {
     const { columns, patch } = taskChange(parseTask(data), null, ctx);
-    const task = await createTask(col.key, { ...columns, subject: columns.subject ?? '' }, patch, ctx.now);
+    const task = await createTaskWithRules(col.key, columns.subject ?? NO_SUBJECT, columns, patch, ctx.now);
     announce(col.key, 'create', [task.id]);
     return { ok: true, serverId: task.id, version: versionOf(task.updatedAt) };
   },
@@ -71,7 +71,7 @@ export const tasksModule: PimClassModule<TaskRow> = {
     const task = await findTask(col, serverId);
     if (!task) return { ok: false, status: PIM_STATUS.OBJECT_NOT_FOUND };
     const { columns, patch } = taskChange(parseTask(data), task, ctx);
-    const { updated, next } = await updateTask(task, columns, patch, ctx.now);
+    const { updated, created: next } = await updateTaskWithRules(task, columns, patch, ctx.now);
     if (!updated) return { ok: false, status: PIM_STATUS.OBJECT_NOT_FOUND };
     announce(col.key, 'update', [updated.id]);
     if (next) announce(col.key, 'create', [next.id]);
