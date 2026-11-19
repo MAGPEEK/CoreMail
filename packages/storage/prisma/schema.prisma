@@ -124,6 +124,7 @@ model User {
   mfa             UserMfa?
   appPasswords    AppPassword[]
   signatures      UserSignature[]
+  mailTemplates   MailTemplate[]
   sharedPerms     SharedMailboxPerm[]
   delegatedAccess MailboxDelegate[]    @relation("MailboxDelegateGrantee")
   folderPermissions FolderPermission[] @relation("FolderPermissionGrantee")
@@ -1047,6 +1048,27 @@ model UserSignature {
 
   @@index([userId])
   @@map("user_signatures")
+}
+
+/// Personal mail templates ("Vorlagen", 10.1): subject, body and recipients a
+/// new mail starts from. Own templates only; no attachments. The body is
+/// untrusted HTML — sanitised by the webmail before saving and on every display.
+model MailTemplate {
+  id        String   @id @default(cuid())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  name      String
+  subject   String   @default("")
+  bodyHtml  String   @default("")
+  bodyText  String   @default("")
+  toAddrs   String[] @default([])
+  ccAddrs   String[] @default([])
+  bccAddrs  String[] @default([])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@map("mail_templates")
 }
 
 model MailRule {

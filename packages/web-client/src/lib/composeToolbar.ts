@@ -131,14 +131,16 @@ export const SEND_MENU: readonly SendMenuId[] = ['send', 'schedule', 'importance
 
 // ── "…" menu ────────────────────────────────────────────────────────────────
 
-export type MoreMenuId = 'save' | 'showFrom' | 'checkNames' | 'datetime' | 'format' | 'formatBar' | 'a11y' | 'emoji';
+export type MoreMenuId =
+  | 'save' | 'showFrom' | 'checkNames' | 'datetime' | 'insertTemplate' | 'saveTemplate' | 'format' | 'formatBar' | 'a11y' | 'emoji';
 
 /**
  * Entries of the header's "…" menu: everything the header does not show.
  * "Formatleiste" only in HTML, "Emoji" only in plain text (HTML has it in the toolbar).
+ * 10.1: "Vorlage einfügen …" and "Als Vorlage speichern …" (mail templates) in both formats.
  */
 export function moreMenuCommands(plain: boolean): MoreMenuId[] {
-  const all: MoreMenuId[] = ['save', 'showFrom', 'checkNames', 'datetime', 'format', 'formatBar', 'a11y', 'emoji'];
+  const all: MoreMenuId[] = ['save', 'showFrom', 'checkNames', 'datetime', 'insertTemplate', 'saveTemplate', 'format', 'formatBar', 'a11y', 'emoji'];
   return all.filter((id) => !(plain && id === 'formatBar') && !(!plain && id === 'emoji'));
 }
 

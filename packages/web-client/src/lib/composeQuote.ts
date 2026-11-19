@@ -59,10 +59,13 @@ export function buildQuoteHtml(src: QuoteSource, sanitizedBody: string, labels: 
   return `<blockquote ${QUOTE_ATTR}=""><hr><p>${header}</p>${sanitizedBody || '<p></p>'}</blockquote>`;
 }
 
-/** Body of a new compose: an empty line to type in, the signature block, then the quote. */
-export function initialBodyHtml(signatureBlock: string, quoteHtml: string): string {
-  if (!signatureBlock && !quoteHtml) return '';
-  return `<p></p>${signatureBlock}${quoteHtml ? `<p></p>${quoteHtml}` : ''}`;
+/**
+ * Body of a new compose: an empty line to type in (10.1: or the body of the
+ * template the mail starts from), the signature block, then the quote.
+ */
+export function initialBodyHtml(signatureBlock: string, quoteHtml: string, leadHtml = ''): string {
+  if (!signatureBlock && !quoteHtml && !leadHtml) return '';
+  return `${leadHtml || '<p></p>'}${signatureBlock}${quoteHtml ? `<p></p>${quoteHtml}` : ''}`;
 }
 
 /** Plain text → one escaped paragraph per line (plain-text drafts, switching to plain text). */

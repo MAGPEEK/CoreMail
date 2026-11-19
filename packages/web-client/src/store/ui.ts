@@ -70,6 +70,8 @@ export interface ComposeContext {
   bodyText?: string;
   /** 9.3: mailbox the compose was opened in (reply original, From choice); default: the active one */
   mailbox?: MailboxRef;
+  /** 10.1: new mail from a template — its body (sanitised) goes before the signature, its Bcc into Bcc. */
+  template?: { bodyHtml: string; bcc: string[] };
 }
 export type ComposeTabEntry = ComposeTab<ComposeContext>;
 

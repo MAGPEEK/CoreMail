@@ -35,6 +35,7 @@ import { mailRouter } from './routes/mail.js';
 import { followUpRouter } from './routes/follow-up-flags.js';
 import { recoverableRouter, sharedRecoverableRouter, delegatedRecoverableRouter } from './routes/recoverable.js';
 import { draftsRouter } from './routes/drafts.js';
+import { mailTemplatesRouter } from './routes/mail-templates.js';
 import { sharedMailboxContentRouter, delegatedMailboxContentRouter } from './routes/foreign-mailbox.js';
 import { ownFolderPermissionsRouter } from './routes/folder-permissions.js';
 import { calendarRouter } from './routes/calendar.js';
@@ -394,6 +395,7 @@ app.use('/api/v1/mail/delegated-mailboxes/:id/recoverable', delegatedRecoverable
 app.use('/api/v1/mail/shared-mailboxes/:id', sharedMailboxContentRouter);
 app.use('/api/v1/mail/delegated-mailboxes/:id', delegatedMailboxContentRouter);
 app.use('/api/v1/mail/drafts',    draftsRouter);
+app.use('/api/v1/mail/templates', mailTemplatesRouter); // 10.1: personal mail templates
 app.use('/api/v1/mail/follow-up', followUpRouter); // 9.4: follow-up flags
 app.use('/api/v1/mail',           readReceiptRouter); // 9.4: POST /messages/:id/receipt
 app.use('/api/v1/mail',           ownFolderPermissionsRouter); // w3: GET|PUT /folders/:folderId/permissions

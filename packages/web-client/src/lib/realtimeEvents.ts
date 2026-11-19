@@ -88,6 +88,8 @@ const SETTINGS_KEYS: Record<string, QueryKey[]> = {
   // 9.4 webmail policies (lib/webmailFeatures.ts FEATURES_QUERY_KEY) + trusted image senders;
   // the open message re-reads its external-image decision
   policies: [['webmail-features'], ['trusted-senders'], ['message']],
+  // 10.1 mail templates (lib/mailTemplates.ts TEMPLATES_QUERY_KEY: list + every template)
+  templates: [['mail-templates']],
 };
 
 function settingsPlan(d: Obj): RealtimePlan {

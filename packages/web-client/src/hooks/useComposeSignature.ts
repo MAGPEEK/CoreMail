@@ -40,6 +40,8 @@ export function useComposeSignature(o: {
   replyOrForward: boolean;
   signatureKey: string;
   quoteHtml: () => string;
+  /** 10.1: body of the template a new mail starts from (sanitised), before the signature. */
+  leadHtml?: () => string;
   fontDefaults: { fontFamily: string; fontSize: string };
   initial: SignatureState | undefined;
   onBuilt: (quoteHtml: string) => void;
@@ -59,7 +61,7 @@ export function useComposeSignature(o: {
     const cur = latest.current;
     const sig = signatureBlockHtml(defaultSignatureHtml(sigData.signatures, sigData.defaults, cur.signatureKey, cur.replyOrForward));
     const quote = cur.quoteHtml();
-    const html = initialBodyHtml(sig, quote);
+    const html = initialBodyHtml(sig, quote, cur.leadHtml?.() ?? '');
     if (html) editor.commands.setContent(html);
     // default font / size for what the user types (Settings → Verfassen)
     const style = {
