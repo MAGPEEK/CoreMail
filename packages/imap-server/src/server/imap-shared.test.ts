@@ -31,6 +31,7 @@ import {
   namespaceResponse, namespaceConfig,
 } from '../commands/namespaces.js';
 import { selfSignedTestCert } from '../test-cert.js';
+import { fakeFolderPermissionModels, grant, type FakeFolderPermission } from './fake-folder-permissions.js';
 
 // ─── In-memory database ──────────────────────────────────────────────────────
 
@@ -58,6 +59,9 @@ interface Db {
   /** 9.4: UserSettings.addedSharedMailboxes of bob. */
   added: string[];
   delegates: Array<{ mailboxId: string; granteeId: string; permission: string }>;
+  /** w3: folder permissions (FolderPermission rows) and their audit rows. */
+  permissions: FakeFolderPermission[];
+  audit: Row[];
   msg(id: string): Msg;
   folder(id: string): Folder;
   mailbox(id: string): Mailbox;
@@ -175,13 +179,23 @@ function install(): Db {
     },
     accessReads: 0,
     added: [],
+    permissions: [],
+    audit: [],
   };
 
   const withMailbox = (x: Folder | undefined): Row | null => (x ? { ...x, mailbox: { ...db.mailbox(x.mailboxId) } } : null);
   const msgMailbox = (m: Msg): string => db.folder(m.folderId)?.mailboxId ?? '';
+  const principal = (p: { id: string; email: string; displayName: string | null; active: boolean }) =>
+    ({ id: p.id, email: p.email, displayName: p.displayName, active: p.active });
   const prisma: Row = {
     domain: { findFirst: async () => ({ name: 'example.test' }) },
-    user: { findFirst: async ({ where }: { where: Row }) => { await tick(); return db.users.find((u) => matches(u as unknown as Row, where)) ?? null; } },
+    user: {
+      findFirst: async ({ where }: { where: Row }) => { await tick(); return db.users.find((u) => matches(u as unknown as Row, where)) ?? null; },
+      findMany: async ({ where }: { where: Row }) => db.users.filter((u) => matches(u as unknown as Row, where)).map(principal),
+    },
+    sharedMailbox: { findMany: async ({ where }: { where: Row }) => db.shared.filter((s) => matches(s as unknown as Row, where)).map(principal) },
+    // w3: folder permissions
+    ...fakeFolderPermissionModels(db.permissions, db.audit),
     appPassword: { findMany: async () => [], update: async () => ({}) },
     userSettings: { findUnique: async () => ({ addedSharedMailboxes: [...db.added] }) },
     $transaction: async <T>(fn: (tx: unknown) => Promise<T>): Promise<T> => fn(prisma),
@@ -210,6 +224,8 @@ function install(): Db {
       },
     },
     mailbox: {
+      findMany: async ({ where }: { where: Row }) => db.mailboxes.filter((m) => matches(m as unknown as Row, where)).map((m) => ({ ...m })),
+      findUnique: async ({ where }: { where: { id: string } }) => { const m = db.mailboxes.find((x) => x.id === where.id); return m ? { ...m } : null; },
       update: async ({ where, data }: { where: { id: string }; data: Row }) => {
         await tick();
         const box = db.mailbox(where.id);
@@ -360,19 +376,25 @@ class Client {
 
 let cert: { cert: Buffer; key: Buffer } | null = null;
 
-async function login(t: TestContext): Promise<{ client: Client; db: Db }> {
+async function login(t: TestContext): Promise<{ client: Client; db: Db; loginAs(email: string): Promise<Client> }> {
   const db = install();
   const server = createImapServer((cert ??= selfSignedTestCert()));
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   const { port } = server.address() as net.AddressInfo;
-  const socket = tls.connect({ port, host: '127.0.0.1', rejectUnauthorized: false });
-  await new Promise<void>((resolve, reject) => { socket.once('secureConnect', resolve); socket.once('error', reject); });
-  const client = new Client(socket);
-  t.after(() => { client.destroy(); server.close(); });
-  await client.line();
-  const r = await client.cmd('LOGIN bob@example.test secret');
-  assert.equal(r.status, 'OK', r.tagged);
-  return { client, db };
+  t.after(() => server.close());
+  /** w3: another session on the same server and database (every fixture user's password is "secret"). */
+  const loginAs = async (email: string): Promise<Client> => {
+    const socket = tls.connect({ port, host: '127.0.0.1', rejectUnauthorized: false });
+    await new Promise<void>((resolve, reject) => { socket.once('secureConnect', resolve); socket.once('error', reject); });
+    const c = new Client(socket);
+    t.after(() => c.destroy());
+    await c.line();
+    const r = await c.cmd(`LOGIN ${email} secret`);
+    assert.equal(r.status, 'OK', r.tagged);
+    return c;
+  };
+  const client = await loginAs('bob@example.test');
+  return { client, db, loginAs };
 }
 
 const TEAM = '"Shared/team@example.test/INBOX"';
@@ -710,7 +732,7 @@ describe('CREATE/DELETE/RENAME and ACL rights', () => {
     assert.match((await client.cmd(`GETACL ${TEAM}`)).tagged, /NO \[NOPERM\]/);
     assert.deepEqual((await client.cmd(`LISTRIGHTS ${RO} bob@example.test`)).lines, ['* LISTRIGHTS "Shared/ro@example.test/INBOX" "bob@example.test" lr']);
     assert.match((await client.cmd(`LISTRIGHTS ${TEAM} carol@example.test`)).tagged, /NO \[NOPERM\]/);
-    assert.match((await client.cmd(`SETACL ${TEAM} carol@example.test lr`)).tagged, /NO \[NOPERM\].*BCP/);
+    assert.match((await client.cmd(`SETACL ${TEAM} carol@example.test lr`)).tagged, /NO \[NOPERM\]/, 'FULL_ACCESS does not administer permissions');
     assert.match((await client.cmd(`DELETEACL ${TEAM} carol@example.test`)).tagged, /NO \[NOPERM\]/);
   });
 });
@@ -926,5 +948,210 @@ describe('9.4: auto-mapping and the mailbox access audit', () => {
     await client.cmd('DELETE "Other Users/alice@example.test/Audit2"');
     assert.ok(auditLog().some((e) => e.action === 'mailbox.foreign.folder.update'));
     assert.ok(auditLog().some((e) => e.action === 'mailbox.foreign.folder.delete'));
+  });
+});
+
+// ─── w3: folder permissions ──────────────────────────────────────────────────
+
+const ROLE = { owner: 0x7fb, editor: 0x47b, author: 0x41b, reviewer: 0x401, visible: 0x400 } as const;
+const DAVE_SUB = '"Other Users/dave@example.test/Projects/Sub"';
+const DAVE_PROJ = '"Other Users/dave@example.test/Projects"';
+
+/** dave's mailbox (no mailbox-level grant for bob): INBOX, Projects, Projects.Sub, Private — one message each. */
+function daveFolders(db: Db): void {
+  db.folders.push(
+    { id: 'f-dave-proj', mailboxId: 'mb-dave', name: 'Projects', displayName: 'Projects' },
+    { id: 'f-dave-sub', mailboxId: 'mb-dave', name: 'Projects.Sub', displayName: 'Projects.Sub' },
+    { id: 'f-dave-priv', mailboxId: 'mb-dave', name: 'Private', displayName: 'Private' },
+  );
+  db.deliver('f-dave-proj', 'Dave project');
+  db.deliver('f-dave-sub', 'Dave sub');
+  db.deliver('f-dave-priv', 'TOPSECRET private');
+  invalidateAccessCaches();
+}
+
+const events = (): Array<{ changes: unknown[] }> =>
+  ((globalThis as unknown as { __coremailTest: { permissionEvents?: Array<{ changes: unknown[] }> } }).__coremailTest.permissionEvents ??= []);
+
+describe('w3: folder permissions', () => {
+  test('Reviewer on a subfolder: only that folder (+ its path) is listed and readable; nothing is writable', async (t) => {
+    const { client, db } = await login(t);
+    daveFolders(db);
+    db.permissions.push(grant('f-dave-sub', 'mb-dave', 'user:u1', ROLE.reviewer));
+    invalidateAccessCaches();
+    const list = await client.cmd('LIST "" "Other Users/dave@example.test/*"');
+    assert.deepEqual(untagged(list, /dave/).map((l) => l.replace(/^\* LIST \(([^)]*)\).*"(Other Users[^"]*)"$/, '$1 $2')), [
+      '\\HasNoChildren Other Users/dave@example.test/Projects/Sub',
+    ], list.raw);
+    assert.doesNotMatch(list.raw, /TOPSECRET|Private|dave@example.test\/INBOX/);
+    // one level: the path entry is listed as non-selectable
+    const level = await client.cmd('LIST "" "Other Users/dave@example.test/%"');
+    assert.deepEqual(untagged(level, /dave/), ['* LIST (\\Noselect \\HasChildren) "/" "Other Users/dave@example.test/Projects"'], level.raw);
+
+    const sel = await client.cmd(`SELECT ${DAVE_SUB}`);
+    assert.match(sel.tagged, /OK \[READ-ONLY\]/);
+    const fetch = await client.cmd('FETCH 1 (BODY[] FLAGS)');
+    assert.equal(fetch.status, 'OK');
+    assert.deepEqual(db.messages.find((m) => m.subject === 'Dave sub')!.flags, [], 'a reviewer does not set \\Seen');
+    assert.match((await client.cmd('STORE 1 +FLAGS (\\Flagged)')).tagged, /NO \[NOPERM\]/);
+    assert.match((await client.cmd('EXPUNGE')).tagged, /NO \[NOPERM\]/);
+    assert.match((await client.cmd(`COPY 1 ${DAVE_SUB}`)).tagged, /NO \[NOPERM\]/);
+    assert.match((await client.cmd(`MYRIGHTS ${DAVE_SUB}`)).lines[0] ?? '', /MYRIGHTS "Other Users\/dave@example.test\/Projects\/Sub" lr$/);
+    assert.match((await client.cmd(`GETACL ${DAVE_SUB}`)).tagged, /NO \[NOPERM\]/);
+    assert.match((await client.append(DAVE_SUB, 'Subject: x\r\n\r\nx')).tagged, /NO \[NOPERM\]/);
+    assert.match((await client.cmd('CREATE "Other Users/dave@example.test/Projects/Sub/New"')).tagged, /NO \[NOPERM\]/);
+    // the path entry, the other folders: like missing mailboxes
+    for (const name of [DAVE_PROJ, '"Other Users/dave@example.test/Private"', DAVE]) {
+      assert.match((await client.cmd(`SELECT ${name}`)).tagged, /NO \[NONEXISTENT\]/, name);
+      assert.match((await client.cmd(`STATUS ${name} (MESSAGES)`)).tagged, /NO \[NONEXISTENT\]/, name);
+    }
+    assert.ok(auditLog().some((e) => e.action === 'mailbox.foreign.open' && e.target.mailboxId === 'mb-dave'), 'opening is audited');
+  });
+
+  test('a visible folder without the read right is listed but cannot be selected', async (t) => {
+    const { client, db } = await login(t);
+    daveFolders(db);
+    db.permissions.push(grant('f-dave-proj', 'mb-dave', 'user:u1', ROLE.visible));
+    invalidateAccessCaches();
+    assert.match((await client.cmd('LIST "" "Other Users/dave@example.test/*"')).raw, /\\Noselect.*"Other Users\/dave@example.test\/Projects"/);
+    assert.match((await client.cmd(`SELECT ${DAVE_PROJ}`)).tagged, /NO \[NOPERM\]/);
+    assert.match((await client.cmd(`STATUS ${DAVE_PROJ} (MESSAGES)`)).tagged, /NO \[NOPERM\]/);
+  });
+
+  test('Author: APPEND / COPY create own items; STORE and EXPUNGE only on own items', async (t) => {
+    const { client, db } = await login(t);
+    daveFolders(db);
+    db.permissions.push(grant('f-dave-proj', 'mb-dave', 'user:u1', ROLE.author));
+    invalidateAccessCaches();
+    assert.equal((await client.append(DAVE_PROJ, 'Subject: mine\r\n\r\nbody')).status, 'OK');
+    const mine = db.messages.find((m) => m.subject === 'mine')!;
+    assert.equal((mine as unknown as Row)['createdBy'], 'u1');
+    await client.cmd('SELECT INBOX');
+    assert.equal((await client.cmd(`COPY 1 ${DAVE_PROJ}`)).status, 'OK');
+    assert.ok(db.messages.some((m) => m.folderId === 'f-dave-proj' && m.subject === 'Bob own mail' && (m as unknown as Row)['createdBy'] === 'u1'));
+
+    const sel = await client.cmd(`SELECT ${DAVE_PROJ}`);
+    assert.match(sel.tagged, /OK \[READ-WRITE\]/);
+    const daves = db.messages.find((m) => m.subject === 'Dave project')!;
+    assert.match((await client.cmd(`UID STORE ${daves.uid} +FLAGS (\\Flagged)`)).tagged, /NO \[NOPERM\]/, 'not the owner\'s message');
+    assert.equal((await client.cmd(`UID STORE ${mine.uid} +FLAGS (\\Flagged \\Deleted)`)).status, 'OK');
+    assert.equal((await client.cmd('EXPUNGE')).status, 'OK');
+    assert.ok(mine.deletedAt, 'own item expunged');
+    assert.equal(daves.deletedAt, null);
+    assert.match((await client.cmd(`UID MOVE ${daves.uid} INBOX`)).tagged, /NO \[NOPERM\]/, 'moving the owner\'s message out = deleting it');
+  });
+
+  test('READ_ONLY delegation + Editor folder grant: writes in that folder only', async (t) => {
+    const { client, db } = await login(t);
+    db.folders.push({ id: 'f-carol-proj', mailboxId: 'mb-carol', name: 'Projects', displayName: 'Projects' });
+    db.deliver('f-carol-proj', 'Carol project');
+    db.permissions.push(grant('f-carol-proj', 'mb-carol', 'user:u1', ROLE.editor));
+    invalidateAccessCaches();
+    assert.match((await client.cmd('MYRIGHTS "Other Users/carol@example.test/Projects"')).lines[0] ?? '', / lrswipted$/);
+    assert.match((await client.cmd(`MYRIGHTS ${CAROL}`)).lines[0] ?? '', / lr$/);
+    assert.match((await client.cmd('SELECT "Other Users/carol@example.test/Projects"')).tagged, /READ-WRITE/);
+    assert.equal((await client.cmd('STORE 1 +FLAGS (\\Flagged)')).status, 'OK');
+    assert.match((await client.cmd(`SELECT ${CAROL}`)).tagged, /READ-ONLY/);
+    assert.match((await client.cmd('STORE 1 +FLAGS (\\Flagged)')).tagged, /NO \[NOPERM\]/);
+  });
+
+  test('the owner grants over SETACL; the grantee sees it, a DELETEACL closes the selected folder', async (t) => {
+    const { client: bob, db, loginAs } = await login(t);
+    daveFolders(db);
+    const dave = await loginAs('dave@example.test');
+    events().length = 0;
+    const set = await dave.cmd('SETACL Projects bob@example.test lr');
+    assert.equal(set.status, 'OK', set.tagged);
+    assert.deepEqual(db.permissions.map((p) => [p.folderId, p.granteeKey, p.rights]), [['f-dave-proj', 'user:u1', 0x401]]);
+    assert.equal(events().length, 1, 'permission-change published');
+    assert.equal(db.audit[0]?.['action'], 'mailbox.folder.permission.set');
+    assert.deepEqual((await dave.cmd('GETACL Projects')).lines, ['* ACL "Projects" "dave@example.test" lrswipkxteacd "bob@example.test" "lr"']);
+
+    invalidateAccessCaches(); // what the permission-change event does in every IMAP process
+    assert.match((await bob.cmd(`SELECT ${DAVE_PROJ}`)).tagged, /OK \[READ-ONLY\]/);
+    assert.match((await bob.cmd(`SELECT ${DAVE_SUB}`)).tagged, /NO \[NONEXISTENT\]/, 'not inherited');
+    await bob.cmd(`SELECT ${DAVE_PROJ}`);
+
+    assert.equal((await dave.cmd('DELETEACL Projects bob@example.test')).status, 'OK');
+    assert.deepEqual(db.permissions, []);
+    applyAuthInvalidation({ userId: 'u1' });
+    const r = await bob.cmd('FETCH 1 (FLAGS)');
+    assert.ok(r.lines.includes('* OK [CLOSED] Access to the selected mailbox was revoked'), r.raw);
+    assert.match((await bob.cmd(`SELECT ${DAVE_PROJ}`)).tagged, /NO \[NONEXISTENT\]/);
+  });
+
+  test('the folder owner role administers the folder over IMAP; "anyone" = Default', async (t) => {
+    const { client, db } = await login(t);
+    daveFolders(db);
+    db.permissions.push(grant('f-dave-proj', 'mb-dave', 'user:u1', ROLE.owner, true)); // also for Projects.Sub
+    invalidateAccessCaches();
+    assert.match((await client.cmd(`MYRIGHTS ${DAVE_PROJ}`)).lines[0] ?? '', / lrswipkxteacd$/);
+    assert.equal((await client.cmd(`SETACL ${DAVE_PROJ} anyone lr`)).status, 'OK');
+    assert.match((await client.cmd(`SETACL ${DAVE_PROJ} dave@example.test lr`)).tagged, /NO \[CANNOT\]/, 'the mailbox owner');
+    const acl = await client.cmd(`GETACL ${DAVE_PROJ}`);
+    assert.deepEqual(acl.lines, ['* ACL "Other Users/dave@example.test/Projects" "dave@example.test" lrswipkxteacd "anyone" "lr" "bob@example.test" "lrswipkxteacd"']);
+    assert.equal((await client.cmd(`LISTRIGHTS ${DAVE_PROJ} carol@example.test`)).lines[0], '* LISTRIGHTS "Other Users/dave@example.test/Projects" "carol@example.test" "" l r sw ip k xa te c d');
+    db.permissions.find((p) => p.granteeKey === 'user:u1')!.applyToSubfolders = false;
+    invalidateAccessCaches();
+    assert.match((await client.cmd(`RENAME ${DAVE_PROJ} "Other Users/dave@example.test/Projekte"`)).tagged, /NO \[NOPERM\]/, 'Projects.Sub would be renamed too');
+    db.permissions.find((p) => p.granteeKey === 'user:u1')!.applyToSubfolders = true;
+    invalidateAccessCaches();
+    assert.equal((await client.cmd(`RENAME ${DAVE_PROJ} "Other Users/dave@example.test/Projekte"`)).status, 'OK', 'owner role renames');
+    assert.match((await client.cmd('CREATE "Other Users/dave@example.test/TopLevel"')).tagged, /NO \[NOPERM\]/, 'top level needs mailbox access');
+    assert.equal((await client.cmd('CREATE "Other Users/dave@example.test/Projekte/Neu"')).status, 'OK');
+  });
+
+  test('w3 review: SETACL / DELETEACL of an entry that reaches subfolders needs the owner right on all of them', async (t) => {
+    const { client, db } = await login(t);
+    daveFolders(db);
+    db.permissions.push(
+      grant('f-dave-proj', 'mb-dave', 'user:u1', ROLE.owner), // Projects only, not Projects.Sub
+      grant('f-dave-proj', 'mb-dave', 'user:u3', ROLE.reviewer, true),
+    );
+    invalidateAccessCaches();
+    assert.match((await client.cmd(`SETACL ${DAVE_PROJ} carol@example.test +swte`)).tagged, /NO \[CANNOT\]/, 'more rights below Projects');
+    assert.match((await client.cmd(`DELETEACL ${DAVE_PROJ} carol@example.test`)).tagged, /NO \[CANNOT\]/);
+    assert.equal(db.permissions.find((p) => p.granteeKey === 'user:u3')?.rights, ROLE.reviewer, 'unchanged');
+    assert.equal((await client.cmd(`SETACL ${DAVE_PROJ} alice@example.test lr`)).status, 'OK', 'an entry for Projects alone');
+    assert.match((await client.cmd(`SELECT ${DAVE_SUB}`)).tagged, /NO \[NONEXISTENT\]/);
+  });
+
+  test('w3 review: a grantee cannot pull other folders below its own by name (CREATE / RENAME / DELETE)', async (t) => {
+    const { client, db } = await login(t);
+    daveFolders(db);
+    db.folders.push(
+      { id: 'f-dave-deep', mailboxId: 'mb-dave', name: 'Projects.Deep.Secret', displayName: 'Projects.Deep.Secret' }, // no "Projects.Deep"
+      { id: 'f-dave-mine', mailboxId: 'mb-dave', name: 'Projects.Mine', displayName: 'Projects.Mine' },
+    );
+    db.deliver('f-dave-deep', 'TOPSECRET deep');
+    db.permissions.push(grant('f-dave-proj', 'mb-dave', 'user:u1', ROLE.owner, true));
+    invalidateAccessCaches();
+    const deep = '"Other Users/dave@example.test/Projects/Deep"';
+    assert.match((await client.cmd(`CREATE ${deep}`)).tagged, /NO \[NOPERM\]/, '"Projects.Deep.Secret" would move below Projects');
+    assert.match((await client.cmd(`RENAME "Other Users/dave@example.test/Projects/Mine" ${deep}`)).tagged, /NO \[NOPERM\]/);
+    assert.match((await client.cmd('SELECT "Other Users/dave@example.test/Projects/Deep/Secret"')).tagged, /NO \[NONEXISTENT\]/);
+    assert.doesNotMatch((await client.cmd('LIST "" "Other Users/dave@example.test/*"')).raw, /TOPSECRET|Deep/);
+    // deleting Projects would leave Projects.Sub / Projects.Mine without their parent
+    assert.match((await client.cmd(`DELETE ${DAVE_PROJ}`)).tagged, /NO \[NOPERM\]/);
+    assert.equal((await client.cmd('CREATE "Other Users/dave@example.test/Projects/Neu"')).status, 'OK');
+    assert.equal((await client.cmd('DELETE "Other Users/dave@example.test/Projects/Neu"')).status, 'OK');
+  });
+
+  test('w3 review: a permission-change of another user (a Default change) re-checks every IDLE session at once', async (t) => {
+    setIdlePollInterval(60_000);
+    const { client, db } = await login(t);
+    daveFolders(db);
+    db.permissions.push(grant('f-dave-proj', 'mb-dave', 'default', ROLE.reviewer));
+    invalidateAccessCaches();
+    assert.equal((await client.cmd(`EXAMINE ${DAVE_PROJ}`)).status, 'OK');
+    client.write('I3 IDLE\r\n');
+    assert.match(await client.line(), /^\+ /);
+    await new Promise((r) => setTimeout(r, 50));
+    db.permissions.length = 0;
+    // dave removed Default — the event names dave (publishFolderPermissionChange's fallback user)
+    applyAuthInvalidation({ userId: 'u4', reason: 'permission-change' });
+    assert.equal(await client.line(), '* OK [CLOSED] Access to the selected mailbox was revoked');
+    client.write('DONE\r\n');
+    assert.match(await client.line(), /^I3 OK/);
   });
 });

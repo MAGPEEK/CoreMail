@@ -16,7 +16,7 @@ use app passwords. Resource limits are described in
 | ESEARCH, SEARCHRES | 4731, 5182 | |
 | **SORT** | 5256 | keys ARRIVAL CC DATE FROM REVERSE SIZE SUBJECT TO |
 | **THREAD=ORDEREDSUBJECT, THREAD=REFERENCES** | 5256 | |
-| **ACL, RIGHTS=texk** | 4314 | read-only, see below |
+| **ACL, RIGHTS=texk** | 4314 | folder permissions, see below |
 | NAMESPACE | 2342 | personal + "Other Users/" + "Shared/" (v9.1), see below |
 | **COMPRESS=DEFLATE** | 4978 | advertised only after authentication, and no longer once active |
 | SPECIAL-USE, LIST-EXTENDED, LIST-STATUS, STATUS=SIZE | 6154, 5258, 5819, 8438 | |
@@ -248,22 +248,41 @@ reserved prefix is always allowed — and they reappear in IMAP clients.
 These client notes follow RFC 2342 / RFC 5258; they were not verified against
 live client builds in this release.
 
-## ACL (RFC 4314) — read-only
+## ACL (RFC 4314) — folder permissions (w3)
 
-Rights reflect the real permissions:
+Rights reflect the real permissions per folder (storage `folder-permissions.ts`,
+see docs/mailbox-management.md §4):
 
 | Folder | `MYRIGHTS` |
 |---|---|
 | own folder | `lrswipkxteacd` (all rights) |
-| foreign, FULL_ACCESS | `lrswipkxtecd` (everything except `a` — the ACL is administered in the BCP) |
-| foreign, READ_ONLY | `lr` (no `s`: `\Seen` cannot be changed either) |
+| foreign, FULL_ACCESS | `lrswipkxtecd` (everything except `a`) |
+| foreign, READ_ONLY | `lr` plus what folder permissions add |
+| foreign, folder permissions only | the granted rights, e.g. Reviewer `lr`, Editor `lrswipted`, Owner `lrswipkxteacd` |
+
+Letters ⇄ member rights: `l` folder visible, `r` read, `s`/`w` edit all items,
+`i`/`p` create items, `k` (and obsolete `c`) create subfolders, `x`/`a` folder owner
+(+ folder contact), `t`/`e` (and obsolete `d`) delete all items. Tied: `sw`, `ip`,
+`xa`, `te`. "Edit / delete own items" have no letter (kept by `+`/`-` changes).
 
 | Command | Answer |
 |---|---|
 | `MYRIGHTS mbox` | the caller's rights (table above) |
-| `GETACL mbox` | own folder: one entry, the login address with all rights; foreign folder: `NO [NOPERM]` (RFC 4314 §4 requires `a`; other grantees are not disclosed) |
-| `LISTRIGHTS mbox id` | own folder: the owner all rights, anyone else `""`; foreign folder: the caller's own identifier → its rights, anyone else `NO [NOPERM]` |
-| `SETACL`, `DELETEACL` | `NO [NOPERM]` — permissions are managed by administrators in the BCP |
+| `GETACL mbox` | needs `a` (own folder, or the folder owner right): the mailbox owner with all rights, `anyone` (= Default) and every user grantee by address, own and inherited entries; otherwise `NO [NOPERM]` (grantees are not disclosed) |
+| `LISTRIGHTS mbox id` | the caller's own identifier → its rights; with `a`: the mailbox owner all rights, anyone else `"" l r sw ip k xa te c d`; otherwise `NO [NOPERM]` |
+| `SETACL mbox id rights` | needs `a`: sets the folder permission of a user (login address) or `anyone` (Default); `+`/`-` add / remove, otherwise replace. `anonymous`, negative rights (`-id`), the mailbox owner and unknown users → `NO [CANNOT]`; unknown letters → `BAD` |
+| `DELETEACL mbox id` | needs `a`: removes the entry |
+
+SELECT / EXAMINE / STATUS need `r`; a visible folder without `r` is listed
+`\Noselect`, its path (ancestors the user may not see) likewise. STORE of
+`\Deleted` needs the delete right, other flags the edit right (for all items, or
+the user's own ones — `Message.createdBy`, set by APPEND / COPY / a move from another
+mailbox); EXPUNGE / CLOSE remove only the messages the user may delete; APPEND /
+COPY / MOVE into need `i`; MOVE out needs the delete right; CREATE needs `k` on
+the parent (top level: mailbox-level write access); RENAME / DELETE need `x`. A
+SETACL / DELETEACL is audited (`mailbox.folder.permission.set|remove`) and publishes
+`permission-change`: every IMAP process drops its cached rights, a revoked selected
+folder is closed with `* OK [CLOSED]` on the next command.
 
 Unknown or inaccessible mailboxes → `NO [NONEXISTENT]`.
 

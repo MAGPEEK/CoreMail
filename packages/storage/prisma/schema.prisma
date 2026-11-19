@@ -87,6 +87,8 @@ model Domain {
   protocolPolicy     ProtocolPolicy?
   // 9.4: webmail feature switches + attachment/content policy of the domain
   webmailPolicy      WebmailPolicy?
+  // 9.5: admin role assignments limited to this domain (AdminScope)
+  adminScopes        AdminScope[]
   createdAt          DateTime             @default(now())
 
   @@map("domains")
@@ -123,12 +125,14 @@ model User {
   mailbox         Mailbox?
   calendars       Calendar[]
   contacts        Contact[]
+  contactGroups   ContactGroup[]
   sessions        Session[]
   mfa             UserMfa?
   appPasswords    AppPassword[]
   signatures      UserSignature[]
   sharedPerms     SharedMailboxPerm[]
   delegatedAccess MailboxDelegate[]    @relation("MailboxDelegateGrantee")
+  folderPermissions FolderPermission[] @relation("FolderPermissionGrantee")
   calendarSharesGranted  CalendarShare[] @relation("CalendarShareOwner")
   calendarSharesReceived CalendarShare[] @relation("CalendarShareGrantee")
   activeSyncDevices ActiveSyncDevice[]
@@ -147,12 +151,39 @@ model User {
   trustedImageSenders TrustedImageSender[]
   // 9.4: per-mailbox mail flow (GAL visibility, forwarding, sender lists, limits)
   mailFlowPolicy      MailFlowPolicy?
+  // 9.5: management scope of an admin role (none = organisation-wide)
+  adminScopes         AdminScope[]
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt
 
   @@index([domainId])
   @@index([externalId])
   @@map("users")
+}
+
+// ─────────────────────────────────────────────
+// Admin management scopes (9.5)
+// ─────────────────────────────────────────────
+
+// Limits the admin role of a user to domains: one row per (admin, domain). An
+// admin without rows manages the whole organisation (backward compatible);
+// ORGANIZATION_MANAGEMENT is always organisation-wide (rows are ignored).
+// Written only through the api-gateway (organisation role-assignment routes,
+// audited, the admin's sessions are revoked). Deleting a domain that still
+// scopes an admin is refused (Restrict): a vanished last row would widen the
+// admin to the whole organisation.
+model AdminScope {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  domainId  String
+  domain    Domain   @relation(fields: [domainId], references: [id], onDelete: Restrict)
+  grantedBy String?
+  createdAt DateTime @default(now())
+
+  @@unique([userId, domainId])
+  @@index([domainId])
+  @@map("admin_scopes")
 }
 
 // ─────────────────────────────────────────────
@@ -423,6 +454,7 @@ model Mailbox {
   highestModSeq   BigInt           @default(0)
   folders         Folder[]
   delegates       MailboxDelegate[]
+  folderPermissions FolderPermission[]
   createdAt       DateTime         @default(now())
 
   @@map("mailboxes")
@@ -438,6 +470,7 @@ model Folder {
   parentId    String?
   children    Folder[]  @relation("FolderTree")
   messages    Message[]
+  permissions FolderPermission[]
   totalCount  Int       @default(0)
   unreadCount Int       @default(0)
   changeKey   String    @default("")
@@ -530,6 +563,10 @@ model Message {
   flagDueAt        DateTime?
   flagReminderAt   DateTime?
   flagCompletedAt  DateTime?
+  // w3 folder permissions: the user (grantee of a folder permission) who created
+  // the item in a foreign folder (IMAP APPEND / COPY into it) — "own" items for
+  // the EditOwned / DeleteOwned rights. Null = not created by a grantee.
+  createdBy        String?
   attachments  Attachment[]
   categories   MessageCategory[]
   createdAt    DateTime    @default(now())
@@ -702,6 +739,37 @@ model MailboxDelegate {
   @@map("mailbox_delegates")
 }
 
+// w3 folder permissions (Outlook "Properties → Permissions"): a role on one
+// folder of a mailbox for one user or for "Default" (every user of the
+// organisation). `rights` is the member-rights bitmask (storage
+// folder-permissions.ts). "Anonymous" is never stored (always none for mail).
+// Mailbox-level grants (SharedMailboxPerm / MailboxDelegate) stay a floor:
+// FULL_ACCESS is always full, READ_ONLY always reads; folder grants add rights.
+model FolderPermission {
+  id          String   @id @default(cuid())
+  folder      Folder   @relation(fields: [folderId], references: [id], onDelete: Cascade)
+  folderId    String
+  // Denormalised for the per-user lookups (every grant of a mailbox at once).
+  mailbox     Mailbox  @relation(fields: [mailboxId], references: [id], onDelete: Cascade)
+  mailboxId   String
+  // "default" or "user:<userId>" — one row per folder and grantee.
+  granteeKey  String
+  grantee     User?    @relation("FolderPermissionGrantee", fields: [granteeId], references: [id], onDelete: Cascade)
+  granteeId   String?
+  rights      Int
+  // Also valid for subfolders that have no entry of their own for the grantee.
+  applyToSubfolders Boolean @default(false)
+  grantedBy   String
+  grantedAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([folderId, granteeKey])
+  @@index([granteeId])
+  @@index([mailboxId])
+  @@index([granteeKey])
+  @@map("folder_permissions")
+}
+
 // ─────────────────────────────────────────────
 // Calendaring
 // ─────────────────────────────────────────────
@@ -814,12 +882,53 @@ model Contact {
   notes       String  @default("")
   photoUrl    String?
   changeKey   String  @default("")
+  // 9.5: structured contact fields. vcardData stays the source of truth; every
+  // column below (and the flat ones above) is derived from it in ONE place:
+  // storage contacts/contact-vcard.ts contactColumnsFromVcard().
+  uid         String   @default("")   // vCard UID without "urn:uuid:" (group members reference it)
+  givenName   String   @default("")
+  familyName  String   @default("")
+  middleName  String   @default("")
+  namePrefix  String   @default("")
+  nameSuffix  String   @default("")
+  nickname    String   @default("")
+  fileAs      String   @default("")
+  birthday    String   @default("")   // "YYYY-MM-DD" or "--MM-DD" (no year), "" = none
+  anniversary String   @default("")   // same format as birthday
+  categories  String[] @default([])
+  emails      Json     @default("[]") // [{type: work|home|other, value}]
+  phones      Json     @default("[]") // [{type: work|home|mobile|fax|pager|other, value}]
+  addresses   Json     @default("[]") // [{type, street, city, region, postalCode, country, poBox, extended}]
+  urls        Json     @default("[]") // [{type, value}]
+  ims         Json     @default("[]") // [{type, value}] (IMPP URI)
+  searchText  String   @default("")   // lower-case text of all fields (REST search)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   @@index([userId])
   @@index([email])
+  @@index([userId, uid])
   @@map("contacts")
+}
+
+// 9.5: contact groups ("Kontaktlisten"), an address object of their own in
+// CardDAV (vCard 4 KIND:group + MEMBER or the X-ADDRESSBOOKSERVER-KIND/-MEMBER
+// form). members and vcardData are kept in step by storage contacts/contact-groups.ts.
+model ContactGroup {
+  id        String   @id @default(cuid())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  uid       String   @default("")  // vCard UID without "urn:uuid:"
+  name      String
+  vcardData String
+  // [{kind: "card", uid}] (own contact or nested group) | [{kind: "address", address, name}]
+  members   Json     @default("[]")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([userId, uid])
+  @@map("contact_groups")
 }
 
 // ─────────────────────────────────────────────
@@ -868,6 +977,8 @@ model Note {
   subject   String   @default("Notiz")
   body      String   @default("")
   color     String   @default("YELLOW")
+  // 9.5: category names (the user's category list, as for mail)
+  categories String[] @default([])
   changeKey String   @default("")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

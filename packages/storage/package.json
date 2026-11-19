@@ -14,7 +14,8 @@
     "./queue-options": "./dist/queue-options.js",
     "./idn": "./dist/idn.js",
     "./file-types": "./dist/file-types.js",
-    "./follow-up": "./dist/follow-up.js"
+    "./follow-up": "./dist/follow-up.js",
+    "./contact-card": "./dist/contacts/contact-card.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

@@ -1,7 +1,7 @@
 /**
  * BCP permissions (8.x) — pure logic behind usePermissions() and <Can>.
  * Source: GET /api/v1/admin/me/permissions →
- *   `{ role, areas: { <area>: 'read'|'write' }, actions: { <area>: AdminAction[] }, mfaVerified }`
+ *   `{ role, areas: { <area>: 'read'|'write' }, actions: { <area>: AdminAction[] }, scope, mfaVerified }`
  * (the API's ROLE_PERMISSIONS + ADMIN_ACTIONS maps in api-gateway lib/rbac.ts).
  * No imports from React; unit-tested.
  */
@@ -21,13 +21,63 @@ export const ADMIN_ACTIONS = {
 export type AdminAction = keyof typeof ADMIN_ACTIONS;
 export type AdminActions = Partial<Record<AdminArea, AdminAction[]>>;
 
+/** A domain of an admin's management scope (9.5). */
+export interface ScopeDomain { id: string; name: string }
+
+/**
+ * 9.5 management scope (api-gateway lib/admin-scope.ts): organisation-wide, or
+ * limited to domains. The server filters every list and refuses other domains;
+ * the BCP only hides what such an admin cannot use.
+ */
+export type AdminScope = { kind: 'organisation' } | { kind: 'domains'; domains: ScopeDomain[] };
+
+export const ORGANISATION_SCOPE: AdminScope = { kind: 'organisation' };
+
 export interface Permissions {
   role: string | null;
   /** null = unknown (older backend / lookup failed) → previous behaviour: full access. */
   areas: AdminAreas | null;
   /** null = the server sent no actions (older backend) → derived from write access. */
   actions: AdminActions | null;
+  /** 9.5: management scope; an older backend sends none → organisation-wide. */
+  scope: AdminScope;
   mfaVerified: boolean;
+}
+
+/** Validates the `scope` of the server answer; anything unexpected → organisation-wide (the server enforces). */
+export function parseScope(src: unknown): AdminScope {
+  const obj = (src && typeof src === 'object' ? src : {}) as Record<string, unknown>;
+  if (obj['kind'] !== 'domains' || !Array.isArray(obj['domains'])) return ORGANISATION_SCOPE;
+  const domains = (obj['domains'] as unknown[]).flatMap((d) => {
+    const r = (d && typeof d === 'object' ? d : {}) as Record<string, unknown>;
+    return typeof r['id'] === 'string' && typeof r['name'] === 'string' ? [{ id: r['id'], name: r['name'] }] : [];
+  });
+  return { kind: 'domains', domains };
+}
+
+export function isScoped(scope: AdminScope): scope is Extract<AdminScope, { kind: 'domains' }> {
+  return scope.kind === 'domains';
+}
+
+/**
+ * BCP pages (first path segment) whose API is organisation-wide only (9.5,
+ * docs/rbac.md): a scoped admin keeps the page's area for other pages but never
+ * gets these (the API answers 403 SCOPE_ORG_ONLY).
+ */
+export const UNSCOPED_ONLY_PATHS: readonly string[] = ['transport-rules', 'retention'];
+
+/** Roles that can be limited to domains (mirror of SCOPABLE_ROLES in api-gateway lib/rbac.ts). */
+export const SCOPABLE_ROLES: readonly string[] = [
+  'HELP_DESK', 'RECIPIENT_MANAGEMENT', 'COMPLIANCE_MANAGEMENT', 'HYGIENE_MANAGEMENT', 'VIEW_ONLY_ORG',
+];
+
+export function isScopableRole(role: string): boolean {
+  return SCOPABLE_ROLES.includes(role);
+}
+
+/** Domain ids of a scope (empty = organisation-wide) — the body of PUT …/role-assignments/:id/scope. */
+export function scopeDomainIds(scope: AdminScope): string[] {
+  return isScoped(scope) ? scope.domains.map((d) => d.id) : [];
 }
 
 export const AREA_NAMES: readonly AdminArea[] = [
@@ -40,13 +90,14 @@ export function parsePermissions(raw: unknown): Permissions {
   const role = typeof obj['role'] === 'string' ? obj['role'] : null;
   const mfaVerified = obj['mfaVerified'] === true;
   const actions = parseActions(obj['actions']);
+  const scope = parseScope(obj['scope']);
   const src = obj['areas'] ?? obj['adminAreas'];
-  if (!src || typeof src !== 'object' || Array.isArray(src)) return { role, areas: null, actions, mfaVerified };
+  if (!src || typeof src !== 'object' || Array.isArray(src)) return { role, areas: null, actions, scope, mfaVerified };
   const areas: AdminAreas = {};
   for (const [k, v] of Object.entries(src as Record<string, unknown>)) {
     if ((AREA_NAMES as readonly string[]).includes(k) && (v === 'read' || v === 'write')) areas[k as AdminArea] = v;
   }
-  return { role, areas, actions, mfaVerified };
+  return { role, areas, actions, scope, mfaVerified };
 }
 
 function parseActions(src: unknown): AdminActions | null {
@@ -150,7 +201,10 @@ const firstSegment = (pathname: string): string =>
 export function pageAccessFor(
   areas: AdminAreas | null, actions: AdminActions | null,
   page: { path: string; access: AreaAccess | 'none' },
+  scope: AdminScope = ORGANISATION_SCOPE,
 ): AreaAccess | 'none' {
+  // 9.5: organisation-wide pages are closed to admins limited to domains
+  if (isScoped(scope) && UNSCOPED_ONLY_PATHS.includes(firstSegment(page.path))) return 'none';
   if (page.access !== 'none') return page.access;
   const via = PATH_ACTIONS[firstSegment(page.path)] ?? [];
   return via.some((a) => canAction(areas, actions, a)) ? 'read' : 'none';
@@ -182,8 +236,8 @@ export function backupCapabilities(areas: AdminAreas | null, actions: AdminActio
  */
 export function permissionsAfterError(status: number | undefined): Permissions | 'legacy' {
   if (status === 404) return 'legacy';
-  if (status === 401 || status === 403) return { role: null, areas: {}, actions: {}, mfaVerified: false };
-  return { role: null, areas: null, actions: null, mfaVerified: false };
+  if (status === 401 || status === 403) return { role: null, areas: {}, actions: {}, scope: ORGANISATION_SCOPE, mfaVerified: false };
+  return { role: null, areas: null, actions: null, scope: ORGANISATION_SCOPE, mfaVerified: false };
 }
 
 /** What <Can> renders: the children, a disabled copy (read-only), or nothing. */

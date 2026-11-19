@@ -26,6 +26,7 @@ import zlib from 'node:zlib';
 import { createImapServer } from './index.js';
 import { setIdlePollInterval } from '../commands/index.js';
 import { selfSignedTestCert } from '../test-cert.js';
+import { fakeFolderPermissionModels, type FakeFolderPermission } from './fake-folder-permissions.js';
 import { formatReferencesColumn, setFlags, prisma as storePrisma } from '@coremail/storage';
 
 // ─── In-memory database fake ─────────────────────────────────────────────────
@@ -70,6 +71,9 @@ interface FakeDb {
   byUid(uid: number): FakeMessage;
   /** Number of message.findMany calls (full folder reads). */
   messageReads: number;
+  /** w3: folder permissions of the own mailbox (SETACL / DELETEACL) and their audit rows. */
+  permissions: FakeFolderPermission[];
+  audit: Row[];
   /** Runs at the start of every transaction (simulates a concurrent writer). */
   beforeTransaction?: (() => void) | undefined;
 }
@@ -177,10 +181,16 @@ function installFakes(): { db: FakeDb; redis: RedisFake } {
       return found;
     },
     messageReads: 0,
+    permissions: [],
+    audit: [],
   };
 
   const users = [{
     id: 'u1', email: 'bob@example.test', active: true, passwordHash: 'hash:secret', mailbox: { id: 'mb1' },
+    quotaBytes: 1024n * 1024n,
+  }, {
+    // w3: a grantee for SETACL (never logs in here)
+    id: 'u2', email: 'alice@example.test', active: true, passwordHash: 'hash:other', mailbox: { id: 'mb2' },
     quotaBytes: 1024n * 1024n,
   }];
   const withMailbox = (f: FakeFolder | undefined): (FakeFolder & { mailbox: FakeMailbox }) | null =>
@@ -194,7 +204,10 @@ function installFakes(): { db: FakeDb; redis: RedisFake } {
     mailboxDelegate: { findMany: async () => [] },
     user: {
       findFirst: async ({ where }: { where: Row }) => { await tick(); return users.find((u) => matches(asRow(u), where)) ?? null; },
+      findMany: async ({ where }: { where: Row }) => users
+        .filter((u) => matches(asRow(u), where)).map((u) => ({ id: u.id, email: u.email, displayName: null, active: u.active })),
     },
+    ...fakeFolderPermissionModels(db.permissions, db.audit),
     appPassword: {
       findMany: async ({ where }: { where: { userId: string } }) =>
         where.userId === 'u1' ? [{ id: 'ap1', userId: 'u1', hash: 'hash:app-password' }] : [],
@@ -2776,7 +2789,7 @@ describe('SORT and THREAD (RFC 5256)', () => {
 
 // ─── ACL (RFC 4314) ──────────────────────────────────────────────────────────
 
-describe('ACL (RFC 4314, read-only)', () => {
+describe('ACL (RFC 4314, w3: folder permissions)', () => {
   test('MYRIGHTS, GETACL and LISTRIGHTS on the own mailbox', async (t) => {
     const { client } = await login(t);
 
@@ -2788,21 +2801,53 @@ describe('ACL (RFC 4314, read-only)', () => {
     assert.deepEqual(my.lines, ['* MYRIGHTS "INBOX" lrswipkxteacd']);
     assert.deepEqual(acl.lines, ['* ACL "Archive.2025" "bob@example.test" lrswipkxteacd']);
     assert.deepEqual(owner.lines, ['* LISTRIGHTS "INBOX" "bob@example.test" lrswipkxteacd']);
-    assert.deepEqual(other.lines, ['* LISTRIGHTS "INBOX" "anyone" ""']);
+    assert.deepEqual(other.lines, ['* LISTRIGHTS "INBOX" "anyone" "" l r sw ip k xa te c d']);
   });
 
-  test('SETACL / DELETEACL are refused with NOPERM; unknown mailboxes with NONEXISTENT', async (t) => {
-    const { client } = await login(t);
+  test('SETACL / DELETEACL change the folder permissions of the owner\'s folders (audited)', async (t) => {
+    const { client, db } = await login(t);
 
-    const set = await client.cmd('SETACL INBOX alice@example.test lr');
-    const del = await client.cmd('DELETEACL INBOX alice@example.test');
-    const missing = await client.cmd('GETACL Nope');
-    const syntax = await client.cmd('SETACL INBOX');
+    const set = await client.cmd('SETACL Archive alice@example.test lr');
+    const add = await client.cmd('SETACL Archive alice@example.test +i');
+    const acl = await client.cmd('GETACL Archive');
+    const anyone = await client.cmd('SETACL Archive anyone l');
+    assert.equal(set.status, 'OK', set.tagged);
+    assert.equal(add.status, 'OK', add.tagged);
+    assert.equal(anyone.status, 'OK', anyone.tagged);
+    assert.deepEqual(acl.lines, ['* ACL "Archive" "bob@example.test" lrswipkxteacd "alice@example.test" "lrip"']);
+    assert.deepEqual(db.permissions.map((p) => [p.folderId, p.granteeKey, p.rights]).sort(), [
+      ['f-archive', 'default', 0x400], ['f-archive', 'user:u2', 0x403],
+    ]);
+    const remove = await client.cmd('SETACL Archive alice@example.test -i');
+    assert.equal(remove.status, 'OK');
+    assert.equal(db.permissions.find((p) => p.granteeKey === 'user:u2')?.rights, 0x401, 'Reviewer again');
 
-    assert.match(set.tagged, /NO \[NOPERM\]/);
-    assert.match(del.tagged, /NO \[NOPERM\]/);
-    assert.match(missing.tagged, /NO \[NONEXISTENT\]/);
-    assert.equal(syntax.status, 'BAD');
+    const del = await client.cmd('DELETEACL Archive alice@example.test');
+    assert.equal(del.status, 'OK');
+    assert.deepEqual(db.permissions.map((p) => p.granteeKey), ['default']);
+    assert.deepEqual(db.audit.map((a) => a['action']), [
+      'mailbox.folder.permission.set', 'mailbox.folder.permission.set', 'mailbox.folder.permission.set',
+      'mailbox.folder.permission.set', 'mailbox.folder.permission.remove',
+    ]);
+  });
+
+  test('SETACL refusals: owner, anonymous, negative rights, unknown users and rights; unknown mailboxes', async (t) => {
+    const { client, db } = await login(t);
+
+    for (const [command, expected] of [
+      ['SETACL INBOX bob@example.test lr', /NO \[CANNOT\]/],
+      ['SETACL INBOX anonymous lr', /NO \[CANNOT\]/],
+      ['SETACL INBOX -alice@example.test lr', /NO \[CANNOT\]/],
+      ['SETACL INBOX nobody@example.test lr', /NO \[CANNOT\]/],
+      ['GETACL Nope', /NO \[NONEXISTENT\]/],
+      ['SETACL Nope alice@example.test lr', /NO \[NONEXISTENT\]/],
+    ] as const) {
+      const r = await client.cmd(command);
+      assert.match(r.tagged, expected, command);
+    }
+    assert.equal((await client.cmd('SETACL INBOX alice@example.test lrz')).status, 'BAD', 'unknown right');
+    assert.equal((await client.cmd('SETACL INBOX')).status, 'BAD');
+    assert.deepEqual(db.permissions, [], 'nothing stored');
   });
 
   test('ACL commands need authentication', async (t) => {

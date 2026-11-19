@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { actionOutcome, backupCapabilities, blocksWrite, can, canAction, canManageAccount, canOutcome, pageAccessFor, parsePermissions, permissionsAfterError } from './permissions.ts';
+import {
+  actionOutcome, backupCapabilities, blocksWrite, can, canAction, canManageAccount, canOutcome, isScopableRole, isScoped,
+  ORGANISATION_SCOPE, pageAccessFor, parsePermissions, parseScope, permissionsAfterError, scopeDomainIds, UNSCOPED_ONLY_PATHS,
+} from './permissions.ts';
 import { accessForPath, areaForPath, firstAllowedPath } from './adminAreas.ts';
 
 // Shapes as returned by GET /api/v1/admin/me/permissions for each role
@@ -14,7 +17,7 @@ const VIEW_ONLY = {
 
 test('parsePermissions accepts the API shape and drops unknown areas/values', () => {
   const p = parsePermissions({ role: 'HELP_DESK', areas: { ...HELP_DESK, bogus: 'write', servers: 'admin' }, mfaVerified: true });
-  assert.deepEqual(p, { role: 'HELP_DESK', areas: HELP_DESK, actions: null, mfaVerified: true });
+  assert.deepEqual(p, { role: 'HELP_DESK', areas: HELP_DESK, actions: null, scope: { kind: 'organisation' }, mfaVerified: true });
   // older backend: /user/me → adminAreas
   assert.deepEqual(parsePermissions({ adminAreas: { domains: 'read' } }).areas, { domains: 'read' });
   // nothing usable → unknown (full access, server still enforces)
@@ -57,8 +60,8 @@ test('<Can> outcomes: allow / disable (read-only) / hide (no access)', () => {
 
 test('permissionsAfterError: 404 → legacy lookup, 401/403 → nothing visible, others → unknown', () => {
   assert.equal(permissionsAfterError(404), 'legacy');
-  assert.deepEqual(permissionsAfterError(403), { role: null, areas: {}, actions: {}, mfaVerified: false });
-  assert.deepEqual(permissionsAfterError(401), { role: null, areas: {}, actions: {}, mfaVerified: false });
+  assert.deepEqual(permissionsAfterError(403), { role: null, areas: {}, actions: {}, scope: { kind: 'organisation' }, mfaVerified: false });
+  assert.deepEqual(permissionsAfterError(401), { role: null, areas: {}, actions: {}, scope: { kind: 'organisation' }, mfaVerified: false });
   const unknown = permissionsAfterError(503);
   assert.ok(unknown !== 'legacy' && unknown.areas === null);
   const none = permissionsAfterError(403);
@@ -193,4 +196,35 @@ test('assignableRoles / canAssignRoles mirror canAssignRole of the API', async (
   assert.equal(canAssignRoles('ORGANIZATION_MANAGEMENT'), true);
   assert.equal(canAssignRoles('RECIPIENT_MANAGEMENT'), false);
   assert.equal(canAssignRoles(null), false);
+});
+
+// ── 9.5 management scopes ─────────────────────────────────────────────────────
+
+test('parseScope: domains list, anything else → organisation-wide', () => {
+  const p = parsePermissions({ role: 'HELP_DESK', areas: HELP_DESK, scope: { kind: 'domains', domains: [{ id: 'd1', name: 'a.example' }, { id: 7 }] } });
+  assert.deepEqual(p.scope, { kind: 'domains', domains: [{ id: 'd1', name: 'a.example' }] });
+  assert.deepEqual(parseScope(undefined), { kind: 'organisation' }, 'older backend');
+  assert.deepEqual(parseScope({ kind: 'domains' }), { kind: 'organisation' });
+  assert.equal(isScoped(p.scope), true);
+  assert.deepEqual(scopeDomainIds(p.scope), ['d1']);
+  assert.deepEqual(scopeDomainIds(ORGANISATION_SCOPE), []);
+});
+
+test('scoped admins never see the organisation-wide pages of their areas', () => {
+  const HYGIENE = { dashboard: 'read', hygiene: 'write' } as const;
+  const scoped = parseScope({ kind: 'domains', domains: [{ id: 'd1', name: 'a.example' }] });
+  const page = (path: string, scope = ORGANISATION_SCOPE) => pageAccessFor(HYGIENE, null, { path, access: accessForPath(HYGIENE, path) }, scope);
+  assert.equal(page('/transport-rules'), 'write');
+  assert.equal(page('/transport-rules', scoped), 'none');
+  assert.equal(page('/bcp/transport-rules', scoped), 'none');
+  assert.equal(page('/quarantine', scoped), 'write', 'quarantine follows the scope instead');
+  assert.equal(page('/protection', scoped), 'write');
+  for (const p of UNSCOPED_ONLY_PATHS) {
+    assert.equal(pageAccessFor({ compliance: 'write', hygiene: 'write' }, null, { path: `/${p}`, access: 'write' }, scoped), 'none', p);
+  }
+});
+
+test('isScopableRole mirrors the API', () => {
+  for (const r of ['HELP_DESK', 'RECIPIENT_MANAGEMENT', 'COMPLIANCE_MANAGEMENT', 'HYGIENE_MANAGEMENT', 'VIEW_ONLY_ORG']) assert.equal(isScopableRole(r), true, r);
+  for (const r of ['ORGANIZATION_MANAGEMENT', 'SERVER_MANAGEMENT', 'USER']) assert.equal(isScopableRole(r), false, r);
 });

@@ -2,7 +2,9 @@ import {
   prisma, createMessage, copyMessages, moveMessages, modifyFlags, expunge, verifyMailCredentials, isMailboxWriteBlocked, OVER_QUOTA_MESSAGE,
   parseRawMessage, storeRawMessage, truncateBodyColumn, parseMimeTree, headerBytes, bodyBytes,
   attachmentKey, uploadBuffer, loadThreadReferences, deleteFolderMovingMail, announceFolderListChange,
-  type RawSourceMessage,
+  canCreateItems, canCreateSubfolder, canDeleteItem, canEditItem, canManageFolder, canReadFolder, hasAnyWriteRight,
+  hasWriteRightSomewhere, reparentedFolders,
+  type FolderAccess, type FolderTreeNode, type RawSourceMessage,
 } from '@coremail/storage';
 import { type Chunk, flagList, isValidFlag, literal, joinChunks, toBuffer } from '../fetch/imap-string.js';
 import { parseFetchItems, sectionLabel, FetchParseError, type FetchItem } from '../fetch/fetch-items.js';
@@ -34,7 +36,8 @@ import {
 } from './sort-thread.js';
 import { displayName, displayNames, formatName, fromClient, toClient } from './mailbox-name.js';
 import {
-  NOPERM, clientNameOf, findTargetFolder, namespaceResponse, reservedNamePerm, resolveMailbox, revalidateSelected, selectedWritable,
+  NOPERM, clientNameOf, findTargetFolder, folderAccessIn, mayCreateTopLevel, namespaceResponse, reservedNamePerm,
+  resolveMailbox, revalidateSelected, selectedWriteAccess, viewAccess, type MailboxTarget,
 } from './namespaces.js';
 import { runStatus } from './list.js';
 import { auditImapAccess, selectedAccess } from './access-audit.js';
@@ -49,6 +52,75 @@ export { handleMyRights, handleGetAcl, handleListRights, handleSetAcl } from './
 const log = createLogger('imap:commands');
 
 const DELIMITER = '.';
+
+// ─────────────────────────────────────────────
+// w3: folder permissions in foreign mailboxes (storage folder-permissions.ts)
+// ─────────────────────────────────────────────
+
+/**
+ * May a folder named `name` ("." hierarchy) be created in the target mailbox?
+ * Its parent needs the "create subfolders" right; a top-level folder (or one
+ * whose parent does not exist) needs mailbox-level write access.
+ */
+async function mayCreateFolderNamed(target: MailboxTarget, name: string): Promise<boolean> {
+  if (target.folders.level !== 'grants') return true;
+  const dot = name.lastIndexOf(DELIMITER);
+  if (dot <= 0) return mayCreateTopLevel(target);
+  const parent = await prisma.folder.findFirst({ where: { mailboxId: target.mailboxId, name: name.slice(0, dot) }, select: { id: true } });
+  return parent ? canCreateSubfolder(folderAccessIn(target, parent.id)) : mayCreateTopLevel(target);
+}
+
+/** Placeholder id of a folder about to be created (reshapesOthers). */
+const NEW_FOLDER = 'new:folder';
+
+/**
+ * w3 review: would a grantee's CREATE / RENAME / DELETE move OTHER folders of the
+ * mailbox (a folder's parent may come from another folder's name, storage
+ * folder-permissions.ts)? They could fall into the reach of the grantee's
+ * "apply to subfolders" grants — refused. Own mailbox / FULL_ACCESS: no limit.
+ */
+async function reshapesOthers(
+  target: Pick<MailboxTarget, 'folders' | 'mailboxId'>,
+  change: (tree: FolderTreeNode[]) => FolderTreeNode[],
+  exempt: string[] = [],
+): Promise<boolean> {
+  if (target.folders.level !== 'grants') return false;
+  const tree: FolderTreeNode[] = await prisma.folder.findMany({
+    where: { mailboxId: target.mailboxId }, select: { id: true, name: true, parentId: true },
+  });
+  return reparentedFolders(tree, change(tree), new Set(exempt)).length > 0;
+}
+
+/** Every message may be deleted: the "delete all" right, or "delete own" and all are the user's. */
+function mayDeleteAll(session: ImapSession, access: FolderAccess, rows: Array<{ createdBy?: string | null }>): boolean {
+  return rows.every((m) => canDeleteItem(access, m.createdBy === session.userId));
+}
+
+/** The \Deleted messages an EXPUNGE / CLOSE removes: all with "delete all", only own ones with "delete own". */
+function expungeable<T extends { createdBy?: string | null }>(session: ImapSession, access: FolderAccess, rows: T[]): T[] {
+  return rows.filter((m) => canDeleteItem(access, m.createdBy === session.userId));
+}
+
+/**
+ * May the user change a message's flags to `updated` (RFC 4314 §4: \Deleted
+ * needs "t", other flags "s"/"w")? \Deleted needs the delete right, any other
+ * flag the edit right — for all items, or for the user's own ones.
+ */
+function mayChangeFlags(session: ImapSession, access: FolderAccess, msg: { flags: string[]; createdBy?: string | null }, updated: string[]): boolean {
+  const own = msg.createdBy === session.userId;
+  const changed = [...msg.flags.filter((f) => !hasFlag(updated, f)), ...updated.filter((f) => !hasFlag(msg.flags, f))];
+  const isDeleted = (f: string): boolean => f.toLowerCase() === '\\deleted';
+  if (changed.some(isDeleted) && !canDeleteItem(access, own)) return false;
+  return !changed.some((f) => !isDeleted(f)) || canEditItem(access, own);
+}
+
+/**
+ * New items in a foreign folder remember their creator ("own items"); in the
+ * own mailbox the field is cleared (a copy never carries another user's claim).
+ */
+function creatorOf(session: ImapSession, target: Pick<MailboxTarget, 'foreign'>): { createdBy: string | null } {
+  return { createdBy: target.foreign && session.userId ? session.userId : null };
+}
 
 // ─────────────────────────────────────────────
 // CAPABILITY
@@ -160,9 +232,9 @@ export async function handleCreate(
   // mailbox (FULL_ACCESS only); an inaccessible or read-only one is NOPERM alike.
   const resolved = await resolveMailbox(session, rawName, true);
   if (!resolved.ok) { sendNo(session, tag, reservedNamePerm(session, rawName)); return; }
-  if (!resolved.target.writable) { sendNo(session, tag, NOPERM); return; }
   const { target } = resolved;
   const name = target.folderName;
+  if (!(await mayCreateFolderNamed(target, name))) { sendNo(session, tag, NOPERM); return; }
   if (name === 'INBOX') {
     sendNo(session, tag, '[ALREADYEXISTS] INBOX cannot be created');
     return;
@@ -176,6 +248,7 @@ export async function handleCreate(
     sendNo(session, tag, '[ALREADYEXISTS] Mailbox already exists');
     return;
   }
+  if (await reshapesOthers(target, (tree) => [...tree, { id: NEW_FOLDER, name, parentId: null }])) { sendNo(session, tag, NOPERM); return; }
   await prisma.folder.create({
     data: { mailboxId: target.mailboxId, name, displayName: name },
   });
@@ -205,7 +278,12 @@ export async function handleDeleteFolder(
     sendNo(session, tag, '[NONEXISTENT] Mailbox does not exist');
     return;
   }
-  if (!folder.target.writable) { sendNo(session, tag, NOPERM); return; }
+  if (!canManageFolder(folder.access)) { sendNo(session, tag, NOPERM); return; }
+  // w3 review: the folders linked to it move up, its inferior names lose their parent — not for a grantee
+  const reparented = (tree: FolderTreeNode[]): FolderTreeNode[] => tree
+    .filter((f) => f.id !== folder.id)
+    .map((f) => (f.parentId === folder.id ? { ...f, parentId: folder.parentId ?? null } : f));
+  if (await reshapesOthers(folder.target, reparented)) { sendNo(session, tag, NOPERM); return; }
   // Same path as the webmail: the messages go to the mailbox Trash through the
   // message store (new UID + modSeq, recoverable; expunged first when the folder is
   // below Trash) — the Message→Folder cascade would remove them for good. Only this
@@ -232,13 +310,13 @@ export async function handleRename(
 ): Promise<void> {
   if (!session.mailboxId) { sendNo(session, tag, 'Not authenticated'); return; }
   if (args.length !== 2 || !args[0] || !args[1]) { sendBad(session, tag, 'Old + new folder name required'); return; }
-  // v9.1: both names must lie in the same mailbox (own, or a foreign one with FULL_ACCESS).
+  // v9.1: both names must lie in the same mailbox (own, or a foreign one — w3: with
+  // the folder owner right on every renamed folder and the right to create the new name).
   const from = await resolveMailbox(session, args[0], true);
   const to = await resolveMailbox(session, args[1]);
   if (!from.ok) { sendNo(session, tag, '[NONEXISTENT] Mailbox does not exist'); return; }
-  if (!from.target.writable) { sendNo(session, tag, NOPERM); return; }
+  if (!hasWriteRightSomewhere(from.target.folders)) { sendNo(session, tag, NOPERM); return; }
   if (!to.ok) { sendNo(session, tag, reservedNamePerm(session, args[1])); return; }
-  if (!to.target.writable) { sendNo(session, tag, NOPERM); return; }
   if (to.target.mailboxId !== from.target.mailboxId) {
     sendNo(session, tag, '[CANNOT] A mailbox cannot be renamed into another account');
     return;
@@ -269,9 +347,23 @@ export async function handleRename(
   }
   const renames = [folder, ...folders.filter((f) => shown(f).startsWith(`${oldName}${DELIMITER}`))]
     .map((f) => ({ id: f.id, name: `${newName}${shown(f).slice(oldName.length)}` }));
+  // w3: the folder owner right on every renamed folder, and — when it moves to
+  // another parent — the right to create the new name there
+  const parentOf = (n: string): string => n.slice(0, Math.max(0, n.lastIndexOf(DELIMITER)));
+  const moves = parentOf(newName) !== parentOf(oldName);
+  if (!renames.every((r) => canManageFolder(folderAccessIn(from.target, r.id)))
+    || (moves && !(await mayCreateFolderNamed(to.target, newName)))) {
+    sendNo(session, tag, NOPERM);
+    return;
+  }
   const taken = new Set(folders.flatMap((f) => [f.name, shown(f)]));
   if (newName === 'INBOX' || renames.some((r) => taken.has(r.name))) {
     sendNo(session, tag, '[ALREADYEXISTS] Target folder exists');
+    return;
+  }
+  const newNames = new Map(renames.map((r) => [r.id, r.name]));
+  if (await reshapesOthers(from.target, (tree) => tree.map((f) => ({ ...f, name: newNames.get(f.id) ?? f.name })), [...newNames.keys()])) {
+    sendNo(session, tag, NOPERM);
     return;
   }
   await prisma.$transaction(async (tx) => {
@@ -306,7 +398,7 @@ export async function appendTargetCheck(session: ImapSession, name: string): Pro
   if (!session.mailboxId) return '[TRYCREATE] Mailbox does not exist';
   const folder = await findTargetFolder(session, name, true);
   if (!folder) return '[TRYCREATE] Mailbox does not exist';
-  if (!folder.target.writable) return NOPERM;
+  if (!canCreateItems(folder.access)) return NOPERM;
   return null;
 }
 
@@ -381,7 +473,7 @@ export async function handleAppend(
     sendNo(session, tag, '[TRYCREATE] Mailbox does not exist');
     return;
   }
-  if (!folder.target.writable) { sendNo(session, tag, NOPERM); return; }
+  if (!canCreateItems(folder.access)) { sendNo(session, tag, NOPERM); return; }
   // v8.1 hard quota (of the target mailbox) (ProhibitSendReceiveQuota): RFC 9208 §4.3 / RFC 5530 [OVERQUOTA].
   if (await isMailboxWriteBlocked(folder.mailboxId)) {
     sendNo(session, tag, `[OVERQUOTA] ${OVER_QUOTA_MESSAGE}`);
@@ -417,6 +509,7 @@ export async function handleAppend(
       messageId: parsed.messageId,
       // RFC 9051 §6.3.12: the date-time argument sets the internal date.
       ...(internalDate ? { createdAt: internalDate } : {}),
+      ...creatorOf(session, folder.target),
   }));
   const newUid = created.uid;
 
@@ -491,7 +584,7 @@ export async function handleCopy(
   // v9.1: the target may be a foreign mailbox (permission re-read without the cache).
   const target = await findTargetFolder(session, args[1], true);
   if (!target) { sendNo(session, tag, '[TRYCREATE] Target mailbox does not exist'); return; }
-  if (!target.target.writable) { sendNo(session, tag, NOPERM); return; }
+  if (!canCreateItems(target.access)) { sendNo(session, tag, NOPERM); return; }
 
   const sourceMsgs = await loadMessages(view.folderId, resolveSet(view, seqSet, byUid), false);
   if (sourceMsgs.length === 0) {
@@ -505,7 +598,7 @@ export async function handleCopy(
   }
   // Fresh UIDs + one modSeq in the target, reserved atomically (never a stale uidNext).
   const { mapping } = await prisma.$transaction((tx) => copyMessages(
-    tx, sourceMsgs.map((m) => m.id), target.id, { targetMailboxId: target.mailboxId },
+    tx, sourceMsgs.map((m) => m.id), target.id, { targetMailboxId: target.mailboxId, data: creatorOf(session, target.target) },
   ));
 
   const copyUid = `[COPYUID ${target.mailbox.uidValidity} ${mapping.map((m) => m.oldUid).join(',')} ${mapping.map((m) => m.newUid).join(',')}]`;
@@ -537,11 +630,12 @@ export async function handleMove(
   if (view.noWrite) { sendNo(session, tag, NOPERM); return; }
   // RFC 9051 §6.3.3: no permanent changes in a mailbox opened with EXAMINE.
   if (view.readOnly) { sendNo(session, tag, '[READ-ONLY] Mailbox is read-only'); return; }
-  if (!(await selectedWritable(session))) { sendNo(session, tag, NOPERM); return; }
+  const source = await selectedWriteAccess(session);
+  if (!source) { sendNo(session, tag, NOPERM); return; }
 
   const target = await findTargetFolder(session, args[1], true);
   if (!target) { sendNo(session, tag, '[TRYCREATE] Target mailbox does not exist'); return; }
-  if (!target.target.writable) { sendNo(session, tag, NOPERM); return; }
+  if (!canCreateItems(target.access)) { sendNo(session, tag, NOPERM); return; }
   const sourceMailboxId = selectedMailboxId(session, view);
 
   const matched = await loadMessages(view.folderId, resolveSet(view, seqSet, byUid), false);
@@ -549,6 +643,8 @@ export async function handleMove(
     await completeWithUpdates(session, tag, 'MOVE completed (no messages matched)');
     return;
   }
+  // w3: moving out = deleting from the source folder ("delete all", or only own items)
+  if (!mayDeleteAll(session, source, matched)) { sendNo(session, tag, NOPERM); return; }
   // A move inside the mailbox does not change its usage — never blocked — except
   // out of "Recoverable Items" (not counted) or into another mailbox.
   if (movesIntoUsage(view.folderName, target.name, sourceMailboxId, target.mailboxId)
@@ -558,9 +654,11 @@ export async function handleMove(
   }
   // RFC 6851 §4.3: the moved messages get new UIDs in the target mailbox and a new
   // modSeq; the rows keep their id.
+  // A message moved in from another mailbox is a new item of the user there ("own").
+  const crossMailbox = target.mailboxId !== sourceMailboxId;
   const { mapping } = await prisma.$transaction((tx) => moveMessages(
     tx, matched.map((m) => m.id), target.id,
-    { targetMailboxId: target.mailboxId, sourceMailboxId },
+    { targetMailboxId: target.mailboxId, sourceMailboxId, ...(crossMailbox ? { data: creatorOf(session, target.target) } : {}) },
   ));
   if (mapping.length > 0) {
     sendUntagged(session, `OK [COPYUID ${target.mailbox.uidValidity} ${mapping.map((m) => m.oldUid).join(',')} ${mapping.map((m) => m.newUid).join(',')}] Moved`);
@@ -793,16 +891,18 @@ export async function handleClose(
   // Implicitly remove messages with the \Deleted flag (not for a mailbox
   // opened with EXAMINE). The expunge bumps the modSeq.
   const closing = session.selected;
-  // v9.1: a foreign mailbox is only expunged with a current write permission.
-  if (!closing.readOnly && !closing.noWrite && (!closing.foreign || await selectedWritable(session))) {
-    const doomed = await prisma.message.findMany({
+  // v9.1: a foreign mailbox is only expunged with a current write permission —
+  // w3: the messages the user may delete (all, or only their own).
+  const access = !closing.readOnly && !closing.noWrite ? await selectedWriteAccess(session) : null;
+  if (access) {
+    const doomed = expungeable(session, access, await prisma.message.findMany({
       where: {
         folderId:  closing.folderId,
         deletedAt: null,
         flags:     { has: '\\Deleted' },
       },
-      select: { id: true },
-    });
+      select: { id: true, createdBy: true },
+    }));
     if (doomed.length > 0) {
       const mailboxId = selectedMailboxId(session, closing);
       await prisma.$transaction((tx) => expunge(tx, doomed.map((m) => m.id), { mailboxId }));
@@ -1073,10 +1173,12 @@ export async function handleSelect(
     sendNo(session, tag, '[NONEXISTENT] Mailbox does not exist');
     return;
   }
-  if (condstore) session.condstoreEnabled = true;
   const { target } = folder;
+  // w3: SELECT / EXAMINE need the "r" right (RFC 4314 §4) — a folder that is only visible is not opened.
+  if (!canReadFolder(folder.access)) { sendNo(session, tag, NOPERM); return; }
+  if (condstore) session.condstoreEnabled = true;
   // Read-only permission → EXAMINE semantics even for SELECT (RFC 4314 §4, RFC 9051 §6.3.2).
-  const noWrite = !target.writable;
+  const noWrite = !hasAnyWriteRight(folder.access);
   const effectiveReadOnly = readOnly || noWrite;
 
   const rows = await loadViewRows(folder.id);
@@ -1086,6 +1188,7 @@ export async function handleSelect(
     clientName: target.foreign ? clientNameOf(target, displayName(folder.name)) : undefined,
     delimiter: target.delimiter,
     noWrite,
+    ...(target.foreign ? { access: folder.access } : {}),
   });
   session.state = 'SELECTED';
   session.selected = view;
@@ -1211,11 +1314,13 @@ export async function handleFetch(
   // new flags are reported in the FETCH responses.
   const seenNow = new Set<string>();
   if (setsSeen && !view.readOnly && session.mailboxId) {
-    const unseen = messages.filter((m) => !hasFlag(m.flags, '\\Seen'));
-    // v9.1: a write to a foreign mailbox re-checks the permission first.
-    if (unseen.length > 0 && view.foreign && !(await selectedWritable(session))) {
+    let unseen = messages.filter((m) => !hasFlag(m.flags, '\\Seen'));
+    // v9.1: a write to a foreign mailbox re-checks the permission first —
+    // w3: only messages the user may edit (all, or their own) become \Seen.
+    if (unseen.length > 0 && view.foreign) {
+      const access = await selectedWriteAccess(session);
       if (session.selected !== view) { sendNo(session, tag, NOPERM); return; }
-      unseen.length = 0;
+      unseen = access ? unseen.filter((m) => canEditItem(access, m.createdBy === session.userId)) : [];
     }
     if (unseen.length > 0) {
       const mailboxId = selectedMailboxId(session, view);
@@ -1398,7 +1503,8 @@ export async function handleStore(
     sendNo(session, tag, '[READ-ONLY] Mailbox is read-only');
     return;
   }
-  if (!(await selectedWritable(session))) { sendNo(session, tag, NOPERM); return; }
+  const access = await selectedWriteAccess(session);
+  if (!access) { sendNo(session, tag, NOPERM); return; }
   // RFC 7162 §3.1: STORE UNCHANGEDSINCE enables CONDSTORE.
   if (unchangedSince !== null) session.condstoreEnabled = true;
 
@@ -1421,6 +1527,12 @@ export async function handleStore(
       uid: msg.uid, id: msg.id, flags: updated, modSeq: msg.modSeq, changed: differs(updated, msg.flags),
       seenBefore: view.known.get(msg.uid) === msg.modSeq,
     });
+  }
+  // w3: all or nothing — every changed message needs the right for its change.
+  const byId = new Map(messages.map((m) => [m.id, m]));
+  if (results.some((r) => r.changed && !mayChangeFlags(session, access, byId.get(r.id)!, r.flags))) {
+    sendNo(session, tag, NOPERM);
+    return;
   }
 
   // One new mailbox modSeq for the whole STORE (RFC 7162 §3.1: HIGHESTMODSEQ ≥ every MODSEQ).
@@ -1503,11 +1615,13 @@ export async function handleExpunge(session: ImapSession, tag: string, uidSet?: 
     sendNo(session, tag, '[READ-ONLY] Mailbox is read-only');
     return;
   }
-  if (!(await selectedWritable(session))) { sendNo(session, tag, NOPERM); return; }
+  const access = await selectedWriteAccess(session);
+  if (!access) { sendNo(session, tag, NOPERM); return; }
 
-  // Only messages the client knows about (its view) are candidates.
+  // Only messages the client knows about (its view) are candidates — w3: and
+  // only those the user may delete (all, or their own).
   const candidates = uidSet !== undefined ? resolveSet(view, uidSet, true) : view.uids;
-  const toDelete = (await loadMessages(view.folderId, candidates, false)).filter((m) => hasFlag(m.flags, '\\Deleted'));
+  const toDelete = expungeable(session, access, (await loadMessages(view.folderId, candidates, false)).filter((m) => hasFlag(m.flags, '\\Deleted')));
   if (toDelete.length > 0) {
     const mailboxId = selectedMailboxId(session, view);
     await prisma.$transaction((tx) => expunge(tx, toDelete.map((m) => m.id), { mailboxId }));

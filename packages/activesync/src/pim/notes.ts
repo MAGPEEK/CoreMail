@@ -11,7 +11,7 @@ import { PIM_STATUS, versionOf, type PimClassModule, type PimCollection } from '
 
 export const NOTES_COLLECTION_ID = 'notes:default';
 const FOLDER_NAME = 'Notizen';
-const NOTE_SELECT = { id: true, subject: true, body: true, updatedAt: true } as const;
+const NOTE_SELECT = { id: true, subject: true, body: true, categories: true, updatedAt: true } as const;
 
 function announce(userId: string, action: UserEventAction, ids: string[]): void {
   announceUserEvent(userId, { type: 'notes', action, ids });

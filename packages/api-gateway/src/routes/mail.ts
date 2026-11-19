@@ -19,12 +19,13 @@ import {
 } from '../lib/attachment-download.js';
 import { getRedisClient, createBullMqConnection, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
 import { protocolSubject, requireAuth } from '../middleware/auth.js';
-import { announceFolderListChange, CRLF_STREAM_TRANSPORT, canonicalAddress, addressVariants, effectiveWebmailPolicy } from '@coremail/storage';
+import { announceFolderListChange, CRLF_STREAM_TRANSPORT, canonicalAddress, addressVariants, effectiveWebmailPolicy, MAILBOX_READ_PERMISSIONS } from '@coremail/storage';
 import { imageDecisionFor } from '../lib/webmail-features.js';
 import { checkFolderParent, type FolderLookup } from '../lib/folder-tree.js';
 import { withBodyLimit, checkRecipients, envelopeRecipients, deliveryReceiptDsn, maxRecipients, MAX_SEND_FILES } from '../lib/send-limits.js';
 import { createUserRateLimiter, envInt } from '../lib/user-rate-limit.js';
 import { resolveReplyHeaders, prismaReplyLookup, parseClientReferences } from '../lib/reply-headers.js';
+import { canReadFolderOf } from '../lib/mailbox-access.js';
 import { rspamdControllerHeaders } from '../lib/rspamd-controller.js';
 import { createImageProxyHandler } from '../lib/image-proxy.js';
 import { enforceUploadPolicy } from '../lib/upload-policy.js';
@@ -39,6 +40,7 @@ import {
 export const replyLookup = prismaReplyLookup(
   prisma as unknown as Parameters<typeof prismaReplyLookup>[0],
   (p) => (p.storagePath ? loadRawMessage(p as unknown as Parameters<typeof loadRawMessage>[0], { persist: false }) : Promise.resolve(null)),
+  canReadFolderOf, // w3: replies to a message in a folder shared through folder permissions
 );
 
 const log = createLogger('api:mail');
@@ -602,10 +604,22 @@ mailRouter.delete('/messages/:id/snooze', async (req: Request, res: Response) =>
 // GET /api/v1/mail/attachments/:id — attachment download (own, shared, delegated
 // mailboxes; streamed from object storage; see lib/attachment-download.ts)
 mailRouter.get('/attachments/:id', createAttachmentDownloadHandler({
-  findAttachment: (id, userId) => prisma.attachment.findFirst({
-    where: { id, message: { deletedAt: null, folder: { mailbox: readableMailboxWhere(userId) } } },
-    select: { id: true, filename: true, mimeType: true, size: true, storagePath: true },
-  }),
+  findAttachment: async (id, userId) => {
+    const select = { id: true, filename: true, mimeType: true, size: true, storagePath: true } as const;
+    const viaMailbox = await prisma.attachment.findFirst({
+      where: { id, message: { deletedAt: null, folder: { mailbox: readableMailboxWhere(userId) } } },
+      select,
+    });
+    if (viaMailbox) return viaMailbox;
+    // w3: a folder permission on the message's folder
+    const row = await prisma.attachment.findFirst({
+      where: { id, message: { deletedAt: null } },
+      select: { ...select, message: { select: { folderId: true } } },
+    });
+    if (!row || !(await canReadFolderOf(userId, row.message.folderId))) return null;
+    const { message: _message, ...attachment } = row;
+    return attachment;
+  },
   openStream: getObjectStream,
   // 9.4: blocked / save-only types of the reader's webmail policy
   policyFor: async (req) => (await effectiveWebmailPolicy(protocolSubject(req.apiUser!))).content,
@@ -1471,7 +1485,9 @@ mailRouter.get('/search', async (req: Request, res: Response) => {
 });
 
 // GET /api/v1/mail/delegated-mailboxes
-// Returns all mailboxes the current user has access to
+// Every delegation of the current user. The folders (names + counts) are part of
+// the mailbox content: listed only for a read delegation (FULL_ACCESS / READ_ONLY)
+// of an active owner — SEND_AS / SEND_ON_BEHALF alone reveal no folders (w3 review).
 mailRouter.get('/delegated-mailboxes', async (req: Request, res: Response) => {
   const userId = req.apiUser!.userId;
   const delegates = await prisma.mailboxDelegate.findMany({
@@ -1479,19 +1495,23 @@ mailRouter.get('/delegated-mailboxes', async (req: Request, res: Response) => {
     include: {
       mailbox: {
         include: {
-          user: { select: { id: true, email: true, displayName: true } },
+          user: { select: { id: true, email: true, displayName: true, active: true } },
           folders: { select: { id: true, name: true, displayName: true, totalCount: true, unreadCount: true } },
         },
       },
     },
     orderBy: { grantedAt: 'asc' },
   });
-  res.json(delegates.map((d) => ({
-    id: d.id,
-    permission: d.permission,
-    grantedAt: d.grantedAt,
-    mailboxOwner: d.mailbox.user,
-    mailboxId: d.mailbox.id,
-    folders: d.mailbox.folders,
-  })));
+  res.json(delegates.map((d) => {
+    const { active, ...owner } = d.mailbox.user ?? { active: false };
+    const readable = active === true && (MAILBOX_READ_PERMISSIONS as readonly string[]).includes(String(d.permission));
+    return {
+      id: d.id,
+      permission: d.permission,
+      grantedAt: d.grantedAt,
+      mailboxOwner: d.mailbox.user ? owner : null,
+      mailboxId: d.mailbox.id,
+      folders: readable ? d.mailbox.folders : [],
+    };
+  }));
 });

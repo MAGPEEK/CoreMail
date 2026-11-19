@@ -22,7 +22,12 @@ import PDFDocument from 'pdfkit';
 import { prisma } from '@coremail/storage/prisma';
 import { requireArea } from '../../middleware/auth.js';
 import { csvCell, exportSignature, verifyExportSignature } from '../../lib/export-safety.js';
+import { requireUnscoped, scopeOf } from '../../middleware/admin-scope.js';
+import { andWhere, isScoped } from '../../lib/admin-scope.js';
 
+// 9.5 management scopes: a scoped admin's list and exports contain only entries
+// about objects of its domains and its own actions (auditScopeWhere); the
+// organisation-wide statistics and anomaly views are for unscoped admins only.
 export const adminAuditLogRouter: RouterType = Router();
 adminAuditLogRouter.use(requireArea('compliance'));
 
@@ -140,6 +145,60 @@ function buildWhere(filters: AuditFilters): Record<string, unknown> {
   return where;
 }
 
+/** Ids and names of the objects inside a management scope (9.5) — what scoped audit entries may be about. */
+export interface AuditScopeTargets {
+  /** ids of users, their Mailbox rows, shared mailboxes (+ Mailbox rows), resources, aliases, domains */
+  ids: readonly string[];
+  /** domain names: entries whose targetName is an address of these domains */
+  domainNames: readonly string[];
+  /** the scoped admin itself: its own actions stay visible */
+  actorId: string;
+}
+
+/**
+ * Pure (9.5): Prisma `where` of the audit entries a scoped admin may read —
+ * entries about an object of its domains (by target id, or by an address of
+ * its domains as target name) and its own actions. Combined with the request
+ * filters through AND (the filters' own OR stays intact).
+ */
+export function auditScopeWhere(t: AuditScopeTargets): Record<string, unknown> {
+  return {
+    OR: [
+      { targetId: { in: [...t.ids] } },
+      ...t.domainNames.map((d) => ({ targetName: { endsWith: `@${d}`, mode: 'insensitive' } })),
+      { actorId: t.actorId },
+    ],
+  };
+}
+
+/** I/O: the scope targets of a scoped admin (organisation-wide → null). */
+async function auditScopeTargets(req: Request): Promise<AuditScopeTargets | null> {
+  const scope = scopeOf(req);
+  if (!isScoped(scope)) return null;
+  const domainIds = scope.domains.map((d) => d.id);
+  const inDomains = { domainId: { in: domainIds } };
+  const [users, shared, resources, aliases] = await Promise.all([
+    prisma.user.findMany({ where: inDomains, select: { id: true, mailbox: { select: { id: true } } } }),
+    prisma.sharedMailbox.findMany({ where: inDomains, select: { id: true, mailbox: { select: { id: true } } } }),
+    prisma.resourceMailbox.findMany({ where: inDomains, select: { id: true } }),
+    prisma.emailAlias.findMany({ where: inDomains, select: { id: true } }),
+  ]);
+  const ids = [
+    ...domainIds,
+    ...users.flatMap((u) => [u.id, ...(u.mailbox ? [u.mailbox.id] : [])]),
+    ...shared.flatMap((s) => [s.id, ...(s.mailbox ? [s.mailbox.id] : [])]),
+    ...resources.map((r) => r.id),
+    ...aliases.map((a) => a.id),
+  ];
+  return { ids, domainNames: scope.domains.map((d) => d.name), actorId: req.apiUser!.userId };
+}
+
+/** The request's filters limited to the admin's management scope (9.5). */
+async function scopedWhere(req: Request, filters: AuditFilters): Promise<Record<string, unknown>> {
+  const targets = await auditScopeTargets(req);
+  return targets ? andWhere(buildWhere(filters), auditScopeWhere(targets)) : buildWhere(filters);
+}
+
 /** Only string query values count (a repeated parameter arrives as an array). */
 function stringQuery(q: Request['query']): Record<string, string | undefined> {
   const out: Record<string, string | undefined> = {};
@@ -182,7 +241,7 @@ adminAuditLogRouter.get('/', async (req: Request, res: Response) => {
   if (!filters) return;
   const q = stringQuery(req.query);
   const { limit, offset } = auditPage(q['limit'], q['offset']);
-  const where = buildWhere(filters);
+  const where = await scopedWhere(req, filters);
 
   const [entries, total] = await Promise.all([
     prisma.auditLog.findMany({
@@ -199,7 +258,7 @@ adminAuditLogRouter.get('/', async (req: Request, res: Response) => {
 
 // ─── GET /api/v1/admin/audit-log/stats ───────────────────────────────────────
 
-adminAuditLogRouter.get('/stats', async (_req: Request, res: Response) => {
+adminAuditLogRouter.get('/stats', requireUnscoped, async (_req: Request, res: Response) => {
   const now = Date.now();
   const since24h = new Date(now - 24 * 60 * 60 * 1000);
   const since7d  = new Date(now - 7 * 24 * 60 * 60 * 1000);
@@ -254,7 +313,7 @@ adminAuditLogRouter.get('/stats', async (_req: Request, res: Response) => {
 adminAuditLogRouter.get('/export.csv', async (req: Request, res: Response) => {
   const filters = requestFilters(req, res);
   if (!filters) return;
-  const where = buildWhere(filters);
+  const where = await scopedWhere(req, filters);
 
   const entries = await prisma.auditLog.findMany({
     where,
@@ -318,7 +377,7 @@ adminAuditLogRouter.get('/export.csv', async (req: Request, res: Response) => {
 adminAuditLogRouter.get('/export.json', async (req: Request, res: Response) => {
   const filters = requestFilters(req, res);
   if (!filters) return;
-  const where = buildWhere(filters);
+  const where = await scopedWhere(req, filters);
 
   const entries = await prisma.auditLog.findMany({
     where,
@@ -368,7 +427,7 @@ adminAuditLogRouter.get('/export.json', async (req: Request, res: Response) => {
 adminAuditLogRouter.get('/export.pdf', async (req: Request, res: Response) => {
   const filters = requestFilters(req, res);
   if (!filters) return;
-  const where = buildWhere(filters);
+  const where = await scopedWhere(req, filters);
 
   const entries = await prisma.auditLog.findMany({
     where,
@@ -535,7 +594,7 @@ interface Anomaly {
   message:  string;
 }
 
-adminAuditLogRouter.get('/anomalies', async (_req: Request, res: Response) => {
+adminAuditLogRouter.get('/anomalies', requireUnscoped, async (_req: Request, res: Response) => {
   const now = Date.now();
   const since5min = new Date(now - 5 * 60 * 1000);
   const since24h  = new Date(now - 24 * 60 * 60 * 1000);

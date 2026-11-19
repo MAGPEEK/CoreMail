@@ -4,6 +4,8 @@ import { prisma } from '@coremail/storage';
 import { createBullMqConnection, createLogger } from '@coremail/core';
 import { requireArea } from '../../middleware/auth.js';
 import { areaAccess } from '../../lib/rbac.js';
+import { scopeOf } from '../../middleware/admin-scope.js';
+import { domainIdWhere, domainRowWhere, isScoped } from '../../lib/admin-scope.js';
 import os from 'node:os';
 import v8 from 'node:v8';
 import { readFile } from 'node:fs/promises';
@@ -43,15 +45,16 @@ export interface DashboardSections {
   attacks: boolean;
 }
 
-export function dashboardSections(role: string | undefined): DashboardSections {
-  const compliance = areaAccess(role, 'compliance') !== null;
+export function dashboardSections(role: string | undefined, scoped = false): DashboardSections {
+  // 9.5: the audit, sign-in and attack widgets are organisation-wide views — not for scoped admins
+  const compliance = !scoped && areaAccess(role, 'compliance') !== null;
   return {
-    errors: areaAccess(role, 'servers') !== null,
-    storageUsers: areaAccess(role, 'recipients') !== null,
+    errors: areaAccess(role, 'servers', scoped) !== null,
+    storageUsers: areaAccess(role, 'recipients', scoped) !== null,
     audit: compliance,
     logins: compliance,
     mailFlowErrors: compliance,
-    attacks: areaAccess(role, 'hygiene') !== null,
+    attacks: !scoped && areaAccess(role, 'hygiene') !== null,
   };
 }
 
@@ -84,7 +87,11 @@ function getOutboundQueue(): Queue {
 // Aggregates all dashboard metrics in a single call.
 adminDashboardRouter.get('/', async (req: Request, res: Response) => {
   try {
-    const sections = dashboardSections(req.apiUser?.role);
+    // 9.5: a scoped admin sees the recipient and domain figures of its domains
+    // only; the anonymous server counters (messages, queue, sessions) stay.
+    const scope = scopeOf(req);
+    const sections = dashboardSections(req.apiUser?.role, isScoped(scope));
+    const inDomains = domainIdWhere(scope);
     const now = new Date();
     const sevenDaysAgo  = new Date(now.getTime() - 7  * 24 * 60 * 60 * 1000);
     const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
@@ -113,14 +120,14 @@ adminDashboardRouter.get('/', async (req: Request, res: Response) => {
       appVersion,
     ] = await Promise.all([
       // Users
-      prisma.user.count(),
-      prisma.user.count({ where: { active: true } }),
-      prisma.user.count({ where: { createdAt: { gte: sevenDaysAgo } } }),
-      prisma.user.aggregate({ _sum: { usedBytes: true } }),
+      prisma.user.count({ where: inDomains }),
+      prisma.user.count({ where: { ...inDomains, active: true } }),
+      prisma.user.count({ where: { ...inDomains, createdAt: { gte: sevenDaysAgo } } }),
+      prisma.user.aggregate({ where: inDomains, _sum: { usedBytes: true } }),
 
       // Top-10 users by storage usage (addresses: recipients area only)
       !sections.storageUsers ? Promise.resolve([]) : prisma.user.findMany({
-        where: { active: true },
+        where: { ...inDomains, active: true },
         orderBy: { usedBytes: 'desc' },
         take: 10,
         select: {
@@ -131,8 +138,9 @@ adminDashboardRouter.get('/', async (req: Request, res: Response) => {
       }),
 
       // Domains
-      prisma.domain.count(),
+      prisma.domain.count({ where: domainRowWhere(scope) }),
       prisma.domain.findMany({
+        where: domainRowWhere(scope),
         select: {
           id: true, name: true, active: true,
           _count: { select: { users: true } },
@@ -147,7 +155,7 @@ adminDashboardRouter.get('/', async (req: Request, res: Response) => {
 
       // v5.6.1: distributionGroup.count removed → always returns 0
       Promise.resolve(0),
-      prisma.sharedMailbox.count().catch(() => 0),
+      prisma.sharedMailbox.count({ where: inDomains }).catch(() => 0),
 
       // Last 10 error and warn logs (servers area; mail-flow entries only with compliance)
       !sections.errors ? Promise.resolve([]) : prisma.systemLog.findMany({

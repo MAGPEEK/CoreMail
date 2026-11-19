@@ -10,6 +10,8 @@
  * POST   /api/v1/admin/shared-mailboxes/:id/permissions        — add permission
  * DELETE /api/v1/admin/shared-mailboxes/:id/permissions/:userId — remove permission
  * GET|PUT /api/v1/admin/shared-mailboxes/:id/mail-flow         — 9.4 mail flow (lib/mail-flow-admin.ts)
+ * GET    /api/v1/admin/shared-mailboxes/:id/folder-permissions — w3 folder permissions
+ * GET|PUT /api/v1/admin/shared-mailboxes/:id/folders/:folderId/permissions (lib/folder-permissions-admin.ts)
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
@@ -21,10 +23,15 @@ import { quotaLevelPatchError } from '../../lib/quota-levels.js';
 import { publishPermissionChange, sharedMailboxGrantees } from '../../lib/permission-events.js';
 import { addressCollision } from '../../lib/address-collision.js';
 import { getMailFlowHandler, putMailFlowHandler } from '../../lib/mail-flow-admin.js';
+import { listFolderPermissionsHandler, getFolderPermissionsHandler, putFolderPermissionsHandler } from '../../lib/folder-permissions-admin.js';
+import { allowDomain, scopeOf, scopeParam, targetInScope } from '../../middleware/admin-scope.js';
+import { domainIdWhere } from '../../lib/admin-scope.js';
 
 const log = createLogger('admin:shared-mailboxes');
 export const adminSharedMailboxesRouter: RouterType = Router();
 adminSharedMailboxesRouter.use(requireArea('recipients'));
+// 9.5: a shared mailbox outside the admin's management scope is "not found" on every /:id route.
+adminSharedMailboxesRouter.param('id', scopeParam('shared'));
 
 const SELECT = {
   id: true, email: true, displayName: true, domainId: true,
@@ -47,9 +54,12 @@ adminSharedMailboxesRouter.get('/', async (req: Request, res: Response) => {
   const limitN = Math.min(500, Math.max(1, parseInt(limit, 10) || 50));
   const skip = (pageN - 1) * limitN;
 
-  const where = search
-    ? { OR: [{ email: { contains: search, mode: 'insensitive' as const } }, { displayName: { contains: search, mode: 'insensitive' as const } }] }
-    : {};
+  const where = {
+    ...domainIdWhere(scopeOf(req)), // 9.5: management scope
+    ...(search
+      ? { OR: [{ email: { contains: search, mode: 'insensitive' as const } }, { displayName: { contains: search, mode: 'insensitive' as const } }] }
+      : {}),
+  };
 
   const [items, total] = await Promise.all([
     prisma.sharedMailbox.findMany({ where, select: SELECT, orderBy: { email: 'asc' }, skip, take: limitN }),
@@ -77,6 +87,7 @@ adminSharedMailboxesRouter.post('/', async (req: Request, res: Response) => {
   const p = schema.safeParse(req.body);
   if (!p.success) { res.status(400).json({ error: 'Invalid input', details: p.error.issues }); return; }
   const email = p.data.email.trim().toLowerCase();
+  if (!allowDomain(req, res, p.data.domainId)) return; // 9.5: only in the admin's own domains
 
   const domain = await prisma.domain.findUnique({ where: { id: p.data.domainId }, select: { name: true } });
   if (!domain) { res.status(404).json({ error: 'Domain not found' }); return; }
@@ -189,6 +200,11 @@ adminSharedMailboxesRouter.delete('/:id', async (req: Request, res: Response) =>
 adminSharedMailboxesRouter.get('/:id/mail-flow', getMailFlowHandler('shared'));
 adminSharedMailboxesRouter.put('/:id/mail-flow', putMailFlowHandler('shared'));
 
+// ── w3: folder permissions (lib/folder-permissions-admin.ts) ─────────────────
+adminSharedMailboxesRouter.get('/:id/folder-permissions', listFolderPermissionsHandler('shared'));
+adminSharedMailboxesRouter.get('/:id/folders/:folderId/permissions', getFolderPermissionsHandler('shared'));
+adminSharedMailboxesRouter.put('/:id/folders/:folderId/permissions', putFolderPermissionsHandler('shared'));
+
 // ── GET /:id/permissions ──────────────────────────────────────────────────────
 adminSharedMailboxesRouter.get('/:id/permissions', async (req: Request, res: Response) => {
   const sharedMailboxId = req.params['id'] ?? '';
@@ -216,15 +232,22 @@ adminSharedMailboxesRouter.post('/:id/permissions', async (req: Request, res: Re
   if (!p.success) { res.status(400).json({ error: 'Invalid input' }); return; }
   const perms = p.data.permissions ?? (p.data.permission ? [p.data.permission] : []);
   if (perms.length === 0) { res.status(400).json({ error: 'No permission given' }); return; }
+  // 9.5: a permission is access to the box's mail — like delegations, an admin
+  // other than ORGANIZATION_MANAGEMENT never grants it to itself.
+  const actor = req.apiUser!;
+  if (p.data.userId === actor.userId && actor.role !== 'ORGANIZATION_MANAGEMENT') {
+    res.status(403).json({ error: 'Admins may not grant mailbox access to themselves', code: 'FORBIDDEN_ROLE' }); return;
+  }
 
   const [sm, grantee] = await Promise.all([
     prisma.sharedMailbox.findUnique({ where: { id: sharedMailboxId }, select: { id: true } }),
     prisma.user.findUnique({ where: { id: p.data.userId }, select: { id: true } }),
   ]);
   if (!sm) { res.status(404).json({ error: 'Shared mailbox not found' }); return; }
-  if (!grantee) { res.status(404).json({ error: 'User not found' }); return; }
+  // 9.5: a grantee outside the admin's management scope is "not found" as well
+  if (!grantee || !(await targetInScope(req, 'user', grantee.id))) { res.status(404).json({ error: 'User not found' }); return; }
 
-  const actorId = req.apiUser?.userId ?? 'system';
+  const actorId = actor.userId;
   try {
     // Replace strategy: delete all existing for (mailbox, user), then set anew
     await prisma.$transaction([

@@ -2,7 +2,8 @@ import type { Request, Response } from 'express';
 import { createLogger, type AuthInvalidationEvent } from '@coremail/core';
 import { getSseHub, startSseHub } from './lib/sse-hub.js';
 import { registerSseConnection } from './lib/live-sse.js';
-import type { ApiUser } from './middleware/auth.js';
+import { currentAdminState, type ApiUser } from './middleware/auth.js';
+import { isScoped } from './lib/admin-scope.js';
 
 const log = createLogger('api:sse');
 
@@ -12,13 +13,33 @@ export interface SseDeps {
   start: () => void;
   addClient: (client: { userId: string; isAdmin: boolean; send: (event: string, data: unknown) => void }) => () => void;
   register: (user: ApiUser, terminate: (event: AuthInvalidationEvent) => void) => () => void;
+  /** Does the stream get the organisation-wide admin events (security:attack)? */
+  adminFeed?: (user: ApiUser) => Promise<boolean>;
   heartbeatMs?: number;
+}
+
+/**
+ * Admin events are server-wide: admin roles only, and (9.5) not for admins
+ * limited to domains. Role and scope come from the database like on every admin
+ * route (middleware/auth.ts currentAdminState — not the token role alone, which
+ * may predate a demotion). A failed lookup gives no admin events (fail closed).
+ */
+async function defaultAdminFeed(user: ApiUser): Promise<boolean> {
+  if (!ADMIN_ROLES.includes(user.role)) return false;
+  try {
+    const { role, scope } = await currentAdminState(user.userId);
+    return role !== null && ADMIN_ROLES.includes(role) && !isScoped(scope);
+  } catch (err) {
+    log.warn({ err, userId: user.userId }, 'Admin scope lookup failed — no admin events on this stream');
+    return false;
+  }
 }
 
 const defaultDeps: SseDeps = {
   start: () => { void startSseHub(); }, // idempotent — normally already started at boot
   addClient: (client) => getSseHub().add(client),
   register: registerSseConnection,
+  adminFeed: defaultAdminFeed,
 };
 
 /**
@@ -52,8 +73,15 @@ export function createSseHandler(deps: SseDeps = defaultDeps) {
       res.write(':heartbeat\n\n');
     }, deps.heartbeatMs ?? 25_000);
 
-    const remove = deps.addClient({ userId, isAdmin: ADMIN_ROLES.includes(user.role), send });
+    // 9.5: joins the admin feed only once confirmed (fail closed: an admin limited
+    // to domains, or a failed lookup, never gets the organisation-wide events)
     let closed = false;
+    let remove = deps.addClient({ userId, isAdmin: false, send });
+    void (deps.adminFeed ?? defaultAdminFeed)(user).then((admin) => {
+      if (!admin || closed) return;
+      remove();
+      remove = deps.addClient({ userId, isAdmin: true, send });
+    });
     const cleanup = () => {
       if (closed) return false;
       closed = true;

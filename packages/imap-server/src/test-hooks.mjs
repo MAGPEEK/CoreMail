@@ -44,6 +44,13 @@ export * from '${storageUrl('raw-message.ts')}';
 export * from '${storageUrl('mailbox-access.ts')}';
 export * from '${storageUrl('references.ts')}';
 export * from '${storageUrl('folder-delete.ts')}';
+// w3 folder permissions: the real rights model and access check; published
+// changes are collected in globalThis.__coremailTest.permissionEvents.
+export * from '${storageUrl('folder-permissions.ts')}';
+export * from '${storageUrl('folder-access.ts')}';
+export const publishFolderPermissionChange = async (changes, fallbackUserId) => {
+  (g.permissionEvents ??= []).push({ changes, fallbackUserId });
+};
 import { splitReferences } from '${storageUrl('references.ts')}';
 // v9.1 THREAD=REFERENCES: the stored column of the (fake) message rows; no backfill here.
 export const loadThreadReferences = async (folderId, ids) => {

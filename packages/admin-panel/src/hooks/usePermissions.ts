@@ -5,7 +5,10 @@ import { api } from '../api/client.js';
 import { ApiError } from '../lib/errors.js';
 import { useAccessStore } from '../store/access.js';
 import { accessForPath, areaForPath, type AdminArea, type AreaAccess } from '../lib/adminAreas.js';
-import { can as canPure, canAction as canActionPure, canManageAccount, pageAccessFor, parsePermissions, permissionsAfterError, type AdminAction } from '../lib/permissions.js';
+import {
+  can as canPure, canAction as canActionPure, canManageAccount, isScoped, pageAccessFor, parsePermissions, permissionsAfterError,
+  type AdminAction, type AdminScope,
+} from '../lib/permissions.js';
 
 /**
  * Loads the admin's permissions once per session: GET /admin/me/permissions
@@ -42,6 +45,9 @@ export function usePermissionsLoader(): void {
 export interface PermissionsApi {
   role: string | null;
   mfaVerified: boolean;
+  /** 9.5: management scope; `scoped` = limited to `scope.domains` (the server filters and refuses the rest). */
+  scope: AdminScope;
+  scoped: boolean;
   /** false while the permissions are still loading */
   ready: boolean;
   /** May the admin do `access` (default read) on `area`? */
@@ -67,6 +73,7 @@ export function usePermissions(): PermissionsApi {
   const actions = useAccessStore((s) => s.actions);
   const role = useAccessStore((s) => s.role);
   const mfaVerified = useAccessStore((s) => s.mfaVerified);
+  const scope = useAccessStore((s) => s.scope);
   const status = useAccessStore((s) => s.status);
   const { pathname } = useLocation();
   const can = useCallback((area: AdminArea, access: AreaAccess = 'read') => canPure(areas, area, access), [areas]);
@@ -74,12 +81,14 @@ export function usePermissions(): PermissionsApi {
   return {
     role,
     mfaVerified,
+    scope,
+    scoped: isScoped(scope),
     ready: status === 'ready',
     can,
     canAction,
     canManage: (targetRole: string | undefined) => canManageAccount(role, targetRole),
     pageArea: areaForPath(pathname) ?? null,
-    pageAccess: pageAccessFor(areas, actions, { path: pathname, access: accessForPath(areas, pathname) }),
-    canSeePath: (path: string) => pageAccessFor(areas, actions, { path, access: accessForPath(areas, path) }) !== 'none',
+    pageAccess: pageAccessFor(areas, actions, { path: pathname, access: accessForPath(areas, pathname) }, scope),
+    canSeePath: (path: string) => pageAccessFor(areas, actions, { path, access: accessForPath(areas, path) }, scope) !== 'none',
   };
 }

@@ -2,6 +2,7 @@ import { createContext, useContext, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { errorMessage } from '../lib/errors.js';
 import { WriteGuard } from '../components/Can.js';
+import { usePermissions } from '../hooks/usePermissions.js';
 import { protectionFeatureMatrix } from '../lib/protectionStatus.js';
 import {
   visibleSections, resolveSection, scannerNotice, scannerNotices, absentScanners,
@@ -1037,10 +1038,14 @@ function AttachmentsSection({ settings, onSave }: { settings: SecuritySettings; 
 export function ProtectionPage() {
   const [section, setSection] = useState<Section>('overview');
   const qc = useQueryClient();
+  // 9.5: an admin limited to domains manages only the sender lists of its domains —
+  // the filter engines and their settings are organisation-wide (API: 403 SCOPE_ORG_ONLY).
+  const { scoped } = usePermissions();
 
   const { data: settings } = useQuery({
     queryKey: ['admin', 'security', 'settings'],
     queryFn:  () => api.get<SecuritySettings>('/admin/security/settings'),
+    enabled: !scoped,
   });
 
   // 9.3: rspamd / ClamAV deployment state — sections of absent scanners are hidden.
@@ -1050,6 +1055,7 @@ export function ProtectionPage() {
     queryFn:  () => api.get<ScannerCapabilities>('/admin/security/capabilities'),
     refetchInterval: 60_000,
     retry: false,
+    enabled: !scoped,
   });
   const nav = visibleSections(SUB_NAV, caps);
   const active = resolveSection(section, nav);
@@ -1069,6 +1075,14 @@ export function ProtectionPage() {
 
   function handleSave(data: Partial<SecuritySettings>) {
     saveMut.mutate(data);
+  }
+
+  if (scoped) {
+    return (
+      <div className="h-full overflow-y-auto p-6">
+        <WriteGuard area="hygiene"><SenderListsSection /></WriteGuard>
+      </div>
+    );
   }
 
   return (

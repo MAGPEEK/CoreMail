@@ -50,7 +50,7 @@ const db = installFakeDb({
   ],
   task: [{ id: 't1', userId: 'u1', subject: 'Steuer', body: '', bodyHtml: '', status: 'NOT_STARTED', priority: 'NORMAL', percentComplete: 0,
     startDate: null, dueDate: new Date('2026-11-30T16:00:00Z'), completedAt: null, reminder: null, isPrivate: false, rrule: null, updatedAt: new Date('2026-11-01T00:00:00Z') }],
-  note: [{ id: 'n1', userId: 'u1', subject: 'Idee', body: 'Text', color: 'YELLOW', updatedAt: new Date('2026-11-01T00:00:00Z') }],
+  note: [{ id: 'n1', userId: 'u1', subject: 'Idee', body: 'Text', color: 'YELLOW', categories: ['Privat'], updatedAt: new Date('2026-11-01T00:00:00Z') }],
   activeSyncDevice: [
     { id: 'd1', userId: 'u1', deviceId: 'dev1', status: 'OK', policyKey: '42', protocolVersion: '14.1', syncKeys: {} },
     { id: 'd12', userId: 'u1', deviceId: 'dev12', status: 'OK', policyKey: '42', protocolVersion: '12.1', syncKeys: {} },
@@ -268,6 +268,7 @@ test('notes: 14.1 Sync Add / device Add; 12.1 has no Notes class (Status 12, hie
   const first = await sync('notes:default', p.key);
   assert.deepEqual([first.cls, first.adds], ['Notes', ['n1']]);
   assert.equal(kid(first.data('n1'), 'MessageClass')?.text, 'IPM.StickyNote');
+  assert.equal(kid(kid(first.data('n1'), 'Categories'), 'Category')?.text, 'Privat', '9.5 note categories');
   const r = await sync('notes:default', first.key, { commands: [A(0x07, [A(0x0c, 'cn'), A(0x1d, [[23, 0x05, 'Einkauf'], B(0x0a, [B(0x06, '1'), B(0x0b, 'Brot')])])])] });
   const id = kid(r.responses[0], 'ServerId')!.text!;
   assert.deepEqual([row('note', id)['subject'], row('note', id)['body']], ['Einkauf', 'Brot']);

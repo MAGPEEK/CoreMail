@@ -1,13 +1,21 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  filterEntries, importErrorText, linesToList, envOverrideNote, dnsblActionOptions, patternPlaceholder, spoofFormFrom, spoofPayload,
+  creatableScopes, effectiveScope, filterEntries, importErrorText, linesToList, envOverrideNote, dnsblActionOptions, patternPlaceholder, spoofFormFrom, spoofPayload,
   type SenderListEntry,
 } from './senderLists.ts';
 
 const e = (over: Partial<SenderListEntry>): SenderListEntry => ({
   id: 'x', listType: 'BLOCK', scope: 'GLOBAL', scopeId: null, target: '', patternType: 'EXACT',
   pattern: 'a@spam.example', comment: '', active: true, ...over,
+});
+
+test('creatableScopes / effectiveScope: no GLOBAL entries for an admin limited to domains (9.5)', () => {
+  assert.deepEqual(creatableScopes(false), ['GLOBAL', 'DOMAIN', 'USER']);
+  assert.deepEqual(creatableScopes(true), ['DOMAIN', 'USER']);
+  assert.equal(effectiveScope('GLOBAL', creatableScopes(true)), 'DOMAIN', 'the GLOBAL default falls back to DOMAIN');
+  assert.equal(effectiveScope('USER', creatableScopes(true)), 'USER');
+  assert.equal(effectiveScope('GLOBAL', creatableScopes(false)), 'GLOBAL');
 });
 
 test('filterEntries: by list type and search text (pattern, target, comment)', () => {

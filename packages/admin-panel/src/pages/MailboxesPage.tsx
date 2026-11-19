@@ -12,6 +12,7 @@ import { MailboxAliasesSection } from '../components/MailboxAliasesSection.js';
 import { ProtocolAccessEditor } from '../components/ProtocolAccessEditor.js';
 import { WebmailPolicyEditor } from '../components/WebmailPolicyEditor.js';
 import { MailFlowEditor } from '../components/MailFlowEditor.js';
+import { FolderPermissionsSection } from '../components/FolderPermissionsSection.js';
 import { useT } from '../i18n/useT.js';
 import { usePermissions } from '../hooks/usePermissions.js';
 import { Can, WriteGuard } from '../components/Can.js';
@@ -847,6 +848,11 @@ function EditForm({ user, domains, onSave, isPending }:
       {/* 9.4: per-mailbox mail flow */}
       <div className="border-t border-line pt-4 mt-2">
         <MailFlowEditor path={`/admin/mailboxes/${user.id}/mail-flow`} kind="user" />
+      </div>
+
+      {/* w3: folder permissions */}
+      <div className="border-t border-line pt-4 mt-2">
+        <FolderPermissionsSection basePath={`/admin/mailboxes/${user.id}`} ownerUserId={user.id} />
       </div>
 
       {/* 9.4: protocol access (user level) */}

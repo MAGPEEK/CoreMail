@@ -1,4 +1,4 @@
-import type { AccessibleMailbox } from '@coremail/storage';
+import type { AccessibleMailbox, FolderAccess, MailboxFolderAccess } from '@coremail/storage';
 
 /**
  * The transport a session writes to: a plain TCP socket, a TLS socket, or the
@@ -46,6 +46,8 @@ export interface SelectedMailbox {
   delimiter?: string | undefined;
   /** v9.1: the user's rights do not permit changes (read-only permission) → NO [NOPERM]. */
   noWrite?: boolean | undefined;
+  /** w3: the user's rights on the selected foreign folder (undefined = the own mailbox: everything). */
+  access?: FolderAccess | undefined;
 }
 
 export interface ImapSession {
@@ -100,6 +102,8 @@ export interface ImapSession {
   onAuthenticated?: () => void;
   // v9.1: cached foreign mailbox permissions (commands/namespaces.ts, ≤ 30 s)
   foreignAccess?: { userId: string; at: number; gen: number; list: AccessibleMailbox[] } | undefined;
+  // w3: cached folder rights per foreign mailbox (same lifetime as foreignAccess)
+  folderAccess?: Map<string, { gen: number; at: number; value: MailboxFolderAccess }> | undefined;
 }
 
 function buildCapabilities(isTls: boolean, starttlsAvailable = false, authenticated = false, compressActive = false): string[] {

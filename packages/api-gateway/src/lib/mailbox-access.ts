@@ -17,7 +17,10 @@
  * Each returns null when the caller lacks the right (or the mailbox does not
  * exist) — callers answer 403/404 without telling the two apart.
  */
-import { prisma, listAccessibleMailboxes, accessibleMailboxRef, type AccessibleMailbox, type MailboxAccessDb } from '@coremail/storage';
+import {
+  prisma, listAccessibleMailboxes, listVisibleForeignMailboxes, accessibleMailboxRef, folderAccessForUser, canReadFolder,
+  type AccessibleMailbox, type FolderAccessDb, type MailboxAccessDb,
+} from '@coremail/storage';
 
 export interface SharedMailboxAccess {
   mailboxId: string;
@@ -27,6 +30,11 @@ export interface SharedMailboxAccess {
 
 async function accessible(userId: string): Promise<AccessibleMailbox[]> {
   return listAccessibleMailboxes(prisma as unknown as MailboxAccessDb, userId);
+}
+
+/** w3: mailbox-level grants plus the mailboxes reached through folder permissions (`folderScoped`). */
+async function visible(userId: string): Promise<AccessibleMailbox[]> {
+  return listVisibleForeignMailboxes(prisma as unknown as FolderAccessDb, userId);
 }
 
 /** Read access (FULL_ACCESS or READ_ONLY) to an active shared mailbox. */
@@ -51,18 +59,19 @@ export async function getWritableSharedMailbox(userId: string, sharedMailboxId: 
 /**
  * 9.3: one foreign mailbox by its webmail reference — `kind` 'shared' with the
  * SharedMailbox id, or 'delegated' with the Mailbox id (GET /mail/delegated-mailboxes
- * → mailboxId). Read access (FULL_ACCESS or READ_ONLY); `readOnly` tells callers
- * whether write operations are allowed. null when the caller has no access.
+ * → mailboxId). Mailbox-level read access (FULL_ACCESS or READ_ONLY) or — w3 —
+ * folder permissions (`folderScoped`); what the caller may do is decided per
+ * folder (storage loadMailboxFolderAccess). null when the caller has no access.
  */
 export async function getForeignMailbox(userId: string, kind: 'shared' | 'delegated', id: string): Promise<AccessibleMailbox | null> {
   if (!id) return null;
-  return (await accessible(userId)).find((a) =>
+  return (await visible(userId)).find((a) =>
     a.kind === kind && (kind === 'shared' ? a.sharedMailboxId === id : a.mailboxId === id)) ?? null;
 }
 
-/** Every foreign mailbox the caller may read (9.3 webmail folder pane). */
+/** Every foreign mailbox with a folder the caller may see (9.3 webmail folder pane; w3 incl. folder permissions). */
 export async function listForeignMailboxes(userId: string): Promise<AccessibleMailbox[]> {
-  return accessible(userId);
+  return visible(userId);
 }
 
 /** Webmail reference of a foreign mailbox: "shared:<sharedMailboxId>" | "delegated:<mailboxId>". */
@@ -78,4 +87,15 @@ export async function getFullAccessDelegatedMailbox(userId: string, mailboxId: s
   if (!mailboxId) return null;
   const entry = (await accessible(userId)).find((a) => a.kind === 'delegated' && a.mailboxId === mailboxId && !a.readOnly);
   return entry ? { mailboxId: entry.mailboxId } : null;
+}
+
+/**
+ * w3: may the caller read the messages of this folder (own folder, mailbox-level
+ * grant or folder permission)? The second chance of lookups whose Prisma filter
+ * knows only the mailbox-level grants (`readableMailboxWhere`): attachment
+ * download, reply/forward headers of a foreign message.
+ */
+export async function canReadFolderOf(userId: string, folderId: string): Promise<boolean> {
+  const hit = await folderAccessForUser(prisma as unknown as FolderAccessDb, userId, folderId);
+  return hit !== null && canReadFolder(hit.access);
 }

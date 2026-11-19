@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import type { Folder as FolderType } from '../api/types.js';
 import { AnimatedCounter } from './AnimatedCounter.js';
+import { ROOT_KEY } from '../lib/folderTree.js';
 
 export const SYSTEM_ORDER = ['INBOX', 'Drafts', 'Sent', 'Trash', 'Junk', 'Archive'] as const;
 export const SYSTEM_SET = new Set(SYSTEM_ORDER as readonly string[]);
@@ -27,6 +28,9 @@ export const ICON_MAP: Record<string, React.ElementType> = {
   Archive: Archive,
 };
 
+/** w3: tooltip / screen-reader hint of a folder that is only shown as part of a path. */
+export const NO_SELECT_HINT = 'Kein Lesezugriff auf diesen Ordner';
+
 export const SYSTEM_LABEL_KEY: Record<string, 'inbox' | 'drafts' | 'sent' | 'trash' | 'junk' | 'archive'> = {
   INBOX:   'inbox',
   Drafts:  'drafts',
@@ -38,13 +42,13 @@ export const SYSTEM_LABEL_KEY: Record<string, 'inbox' | 'drafts' | 'sent' | 'tra
 
 /**
  * Children per parent id. Custom folders without parentId hang virtually under
- * INBOX (no separate "My folders" section); system folders sit at '__root__'.
+ * INBOX (no separate "My folders" section); system folders sit at ROOT_KEY.
  */
 export function buildFolderChildren(all: FolderType[]): Map<string, FolderType[]> {
   const byParent = new Map<string, FolderType[]>();
   const inbox = all.find((f) => f.name === 'INBOX');
   for (const f of all) {
-    const key = f.parentId ? f.parentId : (!SYSTEM_SET.has(f.name) && inbox) ? inbox.id : '__root__';
+    const key = f.parentId ? f.parentId : (!SYSTEM_SET.has(f.name) && inbox) ? inbox.id : ROOT_KEY;
     const arr = byParent.get(key) ?? [];
     arr.push(f);
     byParent.set(key, arr);
@@ -100,13 +104,18 @@ export function FolderItem({
   // and the main render do not collide
   const dndId = contextKey ? `${contextKey}|${folder.id}` : folder.id;
   // Outer = drop target (every folder can be a target)
+  // w3: a path folder of a folder-scoped mailbox (visible, but no read right) —
+  // shown muted, not selectable, no counts, no drop target; still expandable.
+  const noSelect = folder.noSelect === true;
   const { isOver, setNodeRef: setDropRef } = useDroppable({
     id: `folder-drop:${dndId}`,
     data: { kind: 'folder', folderId: folder.id, folderName: folder.name, mailbox: mailboxKey },
+    disabled: noSelect,
   });
 
   // Inner = drag source (custom folders only + not in the favorites mirror)
-  const dragDisabled = isSystem || !!isDragDisabled;
+  const dragDisabled = isSystem || !!isDragDisabled || noSelect;
+  const select = noSelect ? () => {} : onSelect;
   const { attributes, listeners, setNodeRef: setDragRef, isDragging } = useDraggable({
     id: `folder-drag:${dndId}`,
     data: { kind: 'folder-source', folderId: folder.id, folderName: folder.name, mailbox: mailboxKey },
@@ -130,30 +139,33 @@ export function FolderItem({
         ref={setDragRef}
         {...(dragDisabled ? {} : attributes)}
         {...(dragDisabled ? {} : listeners)}
-        onClick={onSelect}
+        onClick={select}
         onKeyDown={(e) => {
           // role="button": Enter / Space select like a click; arrows open/close subfolders
           if (e.target !== e.currentTarget) return;
-          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(); }
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select(); }
           else if (hasChildren && e.key === 'ArrowRight' && !expanded) { e.preventDefault(); onToggleExpand(); }
           else if (hasChildren && e.key === 'ArrowLeft' && expanded) { e.preventDefault(); onToggleExpand(); }
         }}
         onContextMenu={onContextMenu}
         style={{ paddingLeft: 6 + indent * 14 }}
         className={`group w-full flex items-center gap-1.5 pr-3 py-1.5 text-sm rounded-sm transition-all duration-150 ${
-          dragDisabled ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'
+          noSelect ? 'cursor-default' : dragDisabled ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'
         } ${
-          selected ? 'bg-accent/10 text-accent-fg font-medium' : 'text-fg-muted hover:bg-surface-2 hover:translate-x-0.5'
+          noSelect ? 'text-fg-subtle italic'
+            : selected ? 'bg-accent/10 text-accent-fg font-medium' : 'text-fg-muted hover:bg-surface-2 hover:translate-x-0.5'
         } ${isDragging ? 'opacity-40' : ''}`}
-        // the three undefined props drop the button semantics dnd-kit's `attributes` add
+        // the undefined props drop the button semantics dnd-kit's `attributes` add;
+        // aria-disabled stays only for a non-selectable path parent
         role="treeitem"
         aria-level={indent + 1}
-        aria-selected={selected}
+        aria-selected={selected && !noSelect}
         aria-roledescription={undefined}
         aria-pressed={undefined}
-        aria-disabled={undefined}
+        aria-disabled={noSelect ? true : undefined}
         // roving tabindex: hooks/useRovingFocus.ts makes one item of the tree tabbable
         tabIndex={-1}
+        {...(noSelect ? { title: NO_SELECT_HINT } : {})}
         {...(hasChildren ? { 'aria-expanded': expanded } : {})}
       >
         {hasChildren ? (
@@ -179,6 +191,7 @@ export function FolderItem({
           />
         )}
         <span className="flex-1 text-left truncate">{label}</span>
+        {noSelect && <span className="sr-only">{`, ${NO_SELECT_HINT}`}</span>}
         {folder.retentionTag && (
           <span
             title={`${folder.retentionTag.name} (${folder.retentionTag.retentionDays}d)`}
@@ -187,7 +200,7 @@ export function FolderItem({
             <Clock size={11} />
           </span>
         )}
-        {folder.unreadCount > 0 && (
+        {!noSelect && folder.unreadCount > 0 && (
           <AnimatedCounter value={folder.unreadCount} className="text-xs font-bold text-accent-fg" />
         )}
       </div>

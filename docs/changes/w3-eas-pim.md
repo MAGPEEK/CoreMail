@@ -24,7 +24,8 @@ ActiveSync mail behaviour is unchanged (see "Changed" for the two protocol-visib
   status and response type.
 - Tasks mapping: importance, start / due dates (UTC and local), completion (the task status rules
   apply; completing a recurring task on the phone creates the next one), reminder, privacy,
-  recurrence. Notes: subject and body.
+  recurrence. Notes: subject, body and (with the 9.5 note categories) notes:Categories both ways —
+  trimmed, unique and capped like the REST API (storage `@coremail/storage/contact-card` export).
 - GetItemEstimate, ItemOperations Fetch and Ping for the new collections; MoveItems moves an event
   between the user's own calendars. MeetingResponse keeps working: the accepted meeting reaches
   the phone's calendar with the returned CalendarId as its ServerId.

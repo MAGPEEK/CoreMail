@@ -425,7 +425,9 @@ export async function moveMessages(
     await tx.message.update({
       where: { id: m.id },
       data: {
-        ...(followUp ?? {}), ...(opts.data ?? {}), folderId: targetFolderId, uid: newUid, modSeq, changeKey: modSeq.toString(),
+        // w3: the creator claim ("own items" of folder permissions) never travels to another mailbox
+        ...(followUp ?? {}), ...(crossMailbox ? { createdBy: null } : {}), ...(opts.data ?? {}),
+        folderId: targetFolderId, uid: newUid, modSeq, changeKey: modSeq.toString(),
         ...(crossMailbox ? { createdModSeq: modSeq } : {}),
       },
     });
@@ -485,8 +487,11 @@ export interface CopyOpts {
   withAttachments?: boolean;
 }
 
-/** Fields that identify a row or are derived per copy and must not be duplicated. */
-const NON_COPY_FIELDS = new Set(['id', 'folderId', 'uid', 'modSeq', 'createdModSeq', 'changeKey', 'createdAt', 'threadId', 'attachments']);
+/**
+ * Fields that identify a row or are derived per copy and must not be duplicated
+ * (w3: `createdBy` — a copy is a new item, its creator is set by the caller).
+ */
+const NON_COPY_FIELDS = new Set(['id', 'folderId', 'uid', 'modSeq', 'createdModSeq', 'changeKey', 'createdAt', 'threadId', 'attachments', 'createdBy']);
 
 /**
  * Copy messages into `targetFolderId` with fresh UIDs (never the source UIDs) and

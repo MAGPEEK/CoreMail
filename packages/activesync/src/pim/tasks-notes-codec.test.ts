@@ -104,18 +104,27 @@ test('device task Change: absent elements cleared, ghosted ones kept; same text 
 });
 
 test('byte fixture: note on code page 23 (Subject 0x05, MessageClass 0x06, LastModifiedDate 0x07)', () => {
-  const buf = encodeWbxml(el('ApplicationData', undefined, renderNote({ id: 'n1', subject: 'Idee', body: '', updatedAt: new Date('2026-11-18T10:00:00Z') }, render())));
+  const buf = encodeWbxml(el('ApplicationData', undefined, renderNote({ id: 'n1', subject: 'Idee', body: '', categories: [], updatedAt: new Date('2026-11-18T10:00:00Z') }, render())));
   assert.deepEqual([...buf], [
     0x03, 0x01, 0x6a, 0x00, 0x00, 0x00, 0x5d, 0x00, 0x17, 0x45, ...s('Idee'), ...BODY_EMPTY,
     0x00, 0x17, 0x46, ...s('IPM.StickyNote'), 0x47, ...s('2026-11-18T10:00:00.000Z'), 0x01,
   ]);
   assert.deepEqual(tagsNewerThan(buf, '12.1').map((x) => x.name), ['Subject', 'MessageClass', 'LastModifiedDate'], 'Notes is a 14.0 class');
+  // 9.5: note categories as notes:Categories / Category (0x08 / 0x09)
+  const tagged = encodeWbxml(el('ApplicationData', undefined, renderNote({ id: 'n1', subject: 'Idee', body: '', categories: ['Privat'], updatedAt: new Date('2026-11-18T10:00:00Z') }, render())));
+  assert.deepEqual([...tagged], [
+    0x03, 0x01, 0x6a, 0x00, 0x00, 0x00, 0x5d, 0x00, 0x17, 0x45, ...s('Idee'), ...BODY_EMPTY,
+    0x00, 0x17, 0x48, 0x49, ...s('Privat'), 0x01, 0x46, ...s('IPM.StickyNote'), 0x47, ...s('2026-11-18T10:00:00.000Z'), 0x01,
+  ]);
 });
 
 test('device note Add / Change: subject default, HTML body as text, absent body cleared unless ghosted', () => {
   assert.deepEqual(noteChange(appData([N(0x05, 'Liste'), B(0x0a, [B(0x06, '2'), B(0x0b, '<div>Brot<br>Käse</div>')]), N(0x06, 'IPM.StickyNote')]), null, write()),
-    { subject: 'Liste', body: 'Brot\nKäse' });
-  assert.deepEqual(noteChange(appData([B(0x0a, [B(0x06, '1'), B(0x0b, 'x')])]), null, write()), { subject: DEFAULT_NOTE_SUBJECT, body: 'x' });
-  assert.deepEqual(noteChange(appData([N(0x05, 'Liste')]), { body: 'alt' }, write()), { subject: 'Liste', body: '' });
+    { subject: 'Liste', body: 'Brot\nKäse', categories: [] });
+  assert.deepEqual(noteChange(appData([B(0x0a, [B(0x06, '1'), B(0x0b, 'x')])]), null, write()), { subject: DEFAULT_NOTE_SUBJECT, body: 'x', categories: [] });
+  assert.deepEqual(noteChange(appData([N(0x05, 'Liste')]), { body: 'alt' }, write()), { subject: 'Liste', body: '', categories: [] });
   assert.deepEqual(noteChange(appData([N(0x05, 'Liste')]), { body: 'alt' }, write({ supported: new Set(['Subject']) })), { subject: 'Liste' });
+  // 9.5: categories trimmed, unique (case-insensitive), capped like the REST API
+  const cats = noteChange(appData([N(0x05, 'Liste'), N(0x08, [N(0x09, ' Privat '), N(0x09, 'privat'), N(0x09, 'x'.repeat(80)), N(0x09, '')])]), { body: 'alt' }, write({ supported: new Set(['Subject', 'Categories']) }));
+  assert.deepEqual(cats, { subject: 'Liste', categories: ['Privat', 'x'.repeat(60)] });
 });

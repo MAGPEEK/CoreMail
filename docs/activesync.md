@@ -125,7 +125,7 @@ module of `CLASS_MODULES`.
 |---|---|---|---|
 | Calendar ([MS-ASCAL], page 4) | `cal:<calendarId>` — the user's **own** calendars: the default one Type 8, the others 13; no shared calendars | `CalendarEvent` (ServerId = event id, the MeetingResponse `CalendarId`) | calendar object built / patched with `@coremail/core/calendar` (`src/pim/calendar-ical.ts`), rooms booked through storage `room-booking.ts` (`src/pim/calendar-rooms.ts`), row columns derived from it, `announceCalendarChange` |
 | Tasks ([MS-ASTASK], page 9) | `tasks:default` (Type 7) | `Task` | storage `task-store.ts` `createTaskWithRules` / `updateTaskWithRules` — the one task writer of REST, CalDAV and ActiveSync (status rules, the next task of a completed recurring task exactly once, no revived rule on a completed task), `announceUserEvent` `tasks` |
-| Notes ([MS-ASNOTE], page 23, 14.0+) | `notes:default` (Type 10) | `Note` (subject, plain-text body; no categories in the model) | row writes, `announceUserEvent` `notes` |
+| Notes ([MS-ASNOTE], page 23, 14.0+) | `notes:default` (Type 10) | `Note` (subject, plain-text body, categories ↔ notes:Categories — normalised and capped like the REST API; the colour stays untouched) | row writes, `announceUserEvent` `notes` |
 
 **Availability**: a class exists for a user only while its webmail module is on (9.4 policies
 `calendar` / `tasks` / `notes`) and the protocol version knows it (Notes from 14.0). Switched off:
