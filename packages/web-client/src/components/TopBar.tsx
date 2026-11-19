@@ -12,6 +12,7 @@ import { insertSearchToken } from '../lib/searchInput.js';
 import { GLOBAL_SEARCH_INPUT_ID } from '../hooks/useGlobalShortcuts.js';
 import { BrandLogo } from './BrandLogo.js';
 import { useBranding } from '../hooks/useBranding.js';
+import { useOwnPhoto } from '../hooks/useUserPhoto.js';
 
 interface Props {
   onSearch: (q: string) => void;
@@ -29,6 +30,7 @@ export function TopBar({ onSearch }: Props) {
   const queryClient = useQueryClient();
   const { displayName, email } = useAuthStore();
   const { productName } = useBranding();
+  const photoUrl = useOwnPhoto();
   const [search, setSearch] = useState('');
   const [profileOpen, setProfileOpen] = useState(false);
   const [sharedOpen, setSharedOpen]   = useState(false);
@@ -88,7 +90,7 @@ export function TopBar({ onSearch }: Props) {
             className="flex items-center gap-1.5 ml-1 px-2 py-1 rounded text-header-fg focus-visible:outline-header-fg hover:bg-header-overlay/20 transition-all duration-150"
           >
             <div className="ring-2 ring-transparent hover:ring-header-fg/40 rounded-full transition-all duration-150">
-              <Avatar seed={email || displayName || 'user'} initials={(displayName?.charAt(0) || email?.charAt(0) || '?').toUpperCase()} size="sm" />
+              <Avatar seed={email || displayName || 'user'} name={displayName} photoUrl={photoUrl} size="sm" />
             </div>
             <ChevronDown size={13} className="transition-transform duration-150" style={{ transform: profileOpen ? 'rotate(180deg)' : 'rotate(0)' }} />
           </button>
@@ -96,7 +98,7 @@ export function TopBar({ onSearch }: Props) {
           {profileOpen && (
             <div className="absolute right-0 top-full mt-1 w-60 bg-surface shadow-lg border border-line rounded py-1 z-50 animate-fly-in origin-top-right">
               <div className="px-3 py-3 border-b border-line flex items-center gap-2.5">
-                <Avatar seed={email || displayName || 'user'} initials={(displayName?.charAt(0) || email?.charAt(0) || '?').toUpperCase()} size="md" />
+                <Avatar seed={email || displayName || 'user'} name={displayName} photoUrl={photoUrl} size="md" />
                 <div className="min-w-0">
                   <p className="font-medium text-sm text-fg truncate">{displayName}</p>
                   <p className="text-xs text-fg-subtle truncate">{email}</p>

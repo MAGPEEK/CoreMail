@@ -80,7 +80,7 @@ node scripts/e2e/run.mjs imap pop3       # single steps (state is kept in state.
 node --test scripts/e2e/repo-hygiene.test.mjs   # static regression checks (no stack needed)
 ```
 
-Steps: `setup users smtp imap pop3 jmap dav dav-tasks contacts eas eas-body eas-commands eas-legacy eas-pim rest webmail admin tls legacy-clients backup branding mfa live protocols policies scopes mapi lockout restart storage schema-upgrade`.
+Steps: `setup users smtp imap pop3 jmap dav dav-tasks contacts eas eas-body eas-commands eas-legacy eas-pim rest webmail admin tls legacy-clients backup branding profile-photo mfa live protocols policies scopes mapi lockout restart storage schema-upgrade`.
 `eas-pim` (w3): a 14.1 device provisions and its FolderSync lists the default calendar (type 8),
 `tasks:default` (7) and `notes:default` (10); an event created over REST arrives in the calendar
 Sync with the event id as ServerId; a task added by the device (ClientId → ServerId) is a task over
@@ -170,6 +170,12 @@ warning), uploads a generated PNG logo and an SVG favicon, checks the public
 name), refuses hostile SVGs (onload, script, external href, DOCTYPE/XXE) with 400 `SVG_UNSAFE`,
 checks the injected `<title>`, colour variable, favicon and `#cm-branding` JSON in `/` and `/bcp/`,
 and ends with `POST /api/v1/admin/branding/reset` (defaults back, old assets 404).
+`profile-photo` (9.5): user A uploads a PNG that carries an `eXIf` chunk with GPS text; the stored
+photo (`GET /api/v1/users/<id>/photo`) must be a 512×512 JPEG without an APP1 segment or any of the
+metadata, served `private` with a content-hash ETag; user B of the same domain gets it, revalidates
+it (304) and finds A through `POST /api/v1/users/photos/lookup`; an SVG body is refused (415
+`TYPE`); A's `DELETE /api/v1/user/photo` and an admin's `DELETE /api/v1/admin/mailboxes/<id>/photo`
+each end in 404.
 `live`: B keeps an IMAP IDLE connection, an authenticated SMTP submission session and a
 POP3 session open, changes the password in the web client and expects `* BYE`, `421 4.7.0` and
 `-ERR [AUTH]` right away; A's IDLE connection (app password) stays usable. The new password of B

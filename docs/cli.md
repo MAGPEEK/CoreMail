@@ -228,7 +228,7 @@ coremail policy set --blocked-extensions exe,js,bat --save-only-extensions pdf -
 ```
 
 Modules: `--calendar --contacts --tasks --notes --rules --signatures --categories --recover-items
---change-password --themes --external-clients --app-passwords --shared-mailboxes`, each `on`, `off`
+--change-password --themes --external-clients --app-passwords --shared-mailboxes --profile-photo`, each `on`, `off`
 or `inherit` (the server level is `on` / `off` only). Values: `--blocked-extensions` and
 `--save-only-extensions` (comma-separated list, `none` or `inherit`), `--max-upload-mb` (MB, `none` =
 no own limit on the server level, `inherit` below), `--external-images ask|contacts|block|inherit`.

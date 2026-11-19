@@ -10,6 +10,9 @@ import {
   PHONE_TYPE_LABEL, PLACE_TYPE_LABEL, addressLines, formatGermanDate, formFromContact, isWebUrl, type ContactDetail,
 } from '../../lib/contactForm.js';
 import { CategoryChips } from '../CategoryPicker.js';
+import { AvatarPhoto } from '../Avatar.js';
+import { getInitials } from '../../lib/initials.js';
+import { usePhotoForAddress } from '../../hooks/useUserPhoto.js';
 
 function DetailRow({ icon, label, children }: { icon: ReactNode; label: string; children: ReactNode }) {
   return (
@@ -21,8 +24,15 @@ function DetailRow({ icon, label, children }: { icon: ReactNode; label: string; 
   );
 }
 
-export const initials = (name: string): string =>
-  name.split(/\s+/).filter(Boolean).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
+/** Round contact picture: the profile photo of an internal address (9.5), else the initials. */
+export function ContactAvatar({ name, email, className }: { name: string; email?: string | null | undefined; className: string }) {
+  const photoUrl = usePhotoForAddress(email);
+  return (
+    <div className={`${className} rounded-full bg-accent flex items-center justify-center text-white font-bold shrink-0 overflow-hidden`} aria-hidden="true">
+      {photoUrl ? <AvatarPhoto src={photoUrl} /> : getInitials(name, email)}
+    </div>
+  );
+}
 
 interface Props {
   contact: ContactDetail;
@@ -37,9 +47,7 @@ export function ContactDetails({ contact, onEdit, onDelete, onMail }: Props) {
   return (
     <div className="p-6 max-w-2xl">
       <div className="flex items-start gap-4 mb-6">
-        <div className="w-16 h-16 rounded-full bg-accent flex items-center justify-center text-white text-xl font-bold shrink-0" aria-hidden="true">
-          {initials(contact.displayName)}
-        </div>
+        <ContactAvatar name={contact.displayName} email={primary} className="w-16 h-16 text-xl" />
         <div className="flex-1 min-w-0">
           <h2 className="text-xl font-semibold text-fg leading-tight">{contact.displayName}</h2>
           {(contact.jobTitle || contact.department) && (

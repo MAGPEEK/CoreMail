@@ -36,6 +36,7 @@ import { followUpStatusOf } from '../lib/followUp.js';
 import { useFollowUp } from '../hooks/useFollowUp.js';
 import { conversationKey, orderForDisplay, sortParams } from '../lib/conversationOrder.js';
 import { listTarget, tabStopIndex } from '../lib/rovingFocus.js';
+import { usePhotoForAddress } from '../hooks/useUserPhoto.js';
 
 /** True when the query uses search operators / quotes / negation (typeahead stays for plain words). */
 function hasOperatorSyntax(q: string): boolean {
@@ -93,6 +94,7 @@ function MessageRow({
 
   const avatarRef = useRef<HTMLDivElement>(null);
   const [showCard, setShowCard] = useState(false);
+  const senderPhoto = usePhotoForAddress(msg.fromAddr);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const ariaKeys = useAriaKeys();
 
@@ -194,10 +196,10 @@ function MessageRow({
           onClick={(e) => e.stopPropagation()}
           className="shrink-0 cursor-default"
         >
-          <Avatar seed={msg.fromAddr} size="sm" className="transition-transform duration-150 group-hover:scale-105" />
+          <Avatar seed={msg.fromAddr} name={msg.fromName} photoUrl={senderPhoto} size="sm" className="transition-transform duration-150 group-hover:scale-105" />
         </div>
         {showCard && (
-          <ContactHoverCard email={msg.fromAddr} anchorRef={avatarRef} onClose={() => setShowCard(false)} />
+          <ContactHoverCard email={msg.fromAddr} name={msg.fromName} anchorRef={avatarRef} onClose={() => setShowCard(false)} />
         )}
 
         <div className="flex-1 min-w-0">

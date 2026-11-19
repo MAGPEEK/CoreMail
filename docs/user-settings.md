@@ -17,6 +17,7 @@ and how each setting takes effect.
 | Signatures (several, named) | table `user_signatures` | webmail compose |
 | Default signature per identity (own address, shared mailboxes) and kind (new / reply) | `preferences.signatures.defaults` | webmail compose |
 | Out of office, rules, categories, inactivity timeout, hidden shared mailboxes | unchanged (own columns / tables) | server / webmail |
+| Profile photo (9.5) | `User.photoKey` + object store `profile-photos/` | webmail avatars of the organisation (see [Profile photo](#profile-photo)) |
 | Panel widths, collapsed folder sections, expanded shared mailboxes | browser only | webmail (they depend on the screen) |
 
 `UserSettings.preferences` is one JSON column with a version. The api-gateway
@@ -128,6 +129,65 @@ removes it), also in plain-text format. The compose area itself: [compose.md](co
 With "Gelöschte Elemente beim Abmelden leeren" a webmail logout (`POST /auth/logout` from the
 webmail) moves the content of Deleted Items to the recoverable items — they can still be restored
 for the retention period.
+
+## Profile photo
+
+Settings → E-Mail-Konto shows the own avatar (96 px) with "Foto hochladen…" / "Foto ändern…" and
+"Foto entfernen". A picked JPEG, PNG or WebP file (max. 5 MB) opens a crop dialog: the image lies
+behind a round mask, is moved by dragging (mouse, touch) or the arrow keys (Shift: larger steps)
+and zoomed with the "Zoom" slider, the mouse wheel or + / −; it always covers the circle. Previews
+show the result at 96, 40 and 28 px. "Übernehmen" renders the circle's square as a 512×512 PNG in
+the browser (the circle is only the display mask) and uploads it.
+
+```
+PUT    /api/v1/user/photo               raw PNG / JPEG body, or multipart field `photo` (max. 5 MB)
+                                        → { photo: { userId, version, updatedAt } }
+DELETE /api/v1/user/photo               → { removed }
+POST   /api/v1/users/photos/lookup      { addresses: [...] } (max. 100) → { photos: { <address>: { userId, version } } }
+GET    /api/v1/users/:id/photo          image/jpeg, ETag (If-None-Match → 304), Cache-Control: private, no-cache
+GET    /api/v1/user/profile             … photo: { userId, version, updatedAt } | null
+```
+
+**Processing.** The server never stores the uploaded bytes: it checks the type by magic bytes (PNG
+or JPEG — WebP and everything else → 415 `UNSUPPORTED` / `TYPE`), reads the dimensions from the
+header before decoding (more than 2048 × 2048 pixels or a side under 32 px → 422 `DIMENSIONS`;
+more than 5 MB → 413 `SIZE`; undecodable data → 422 `CORRUPT`), decodes it (pure JavaScript, PNG
+8-bit non-interlaced, JPEG with resolution and memory caps), crops the centre square, scales it to
+512×512, flattens transparency onto white and encodes a new baseline JPEG — no EXIF, GPS, ICC or
+comment segments survive. The EXIF orientation of a JPEG sent by an API client is not applied (the
+webmail always uploads its own rendering). Uploads are limited per user
+(`PROFILE_PHOTO_UPLOAD_LIMIT`, default 20 per `PROFILE_PHOTO_UPLOAD_WINDOW_SEC` = 600 s; 0 disables).
+
+**Storage.** `getObjectStore()` under the content-addressed key `profile-photos/<aa>/<sha256>.jpg`
+(never a file name); `User.photoKey` / `photoUpdatedAt` point to it (storage `profile-photo.ts`). A
+replaced or removed photo is deleted once no account references it; deleting the account removes
+it too.
+
+**Who sees it.** Every signed-in user of the same domain — the boundary of the address list — sees
+the photos of the active accounts listed there, and everyone sees the own photo; other requests are
+404 (no hint whether an account or photo exists). The webmail shows photos for internal senders in
+the message list and the reading pane, on the contact card, in the contact list and on meeting
+attendees: the addresses on screen are resolved in one batched lookup (aliases included), each
+photo is loaded once per version as a `blob:` URL (Authorization header, never a token in a URL).
+External senders keep their initials. Photos are not served over CardDAV, ActiveSync or MAPI.
+
+**Initials** (no photo): first letter of the first and of the last word of the display name ("Erika
+Mustermann" → "EM", "Mustermann, Erika" → "EM", parenthesised parts ignored); one word → one letter;
+no name → the first letter of the address' local part (`lib/initials.ts`). The colour still comes from
+the address.
+
+**Changes.** The own change announces the user event `settings` / `profile` (the top bar and own
+messages update at once); other users get the new version with their next lookup (cached for five
+minutes) and revalidate the image by ETag.
+
+**Webmail policy.** The module `profilePhoto` (server → domain → user, docs/webmail-policies.md)
+switches upload and change: off → the buttons are hidden and `PUT /user/photo` answers 403
+`FEATURE_DISABLED`. An existing photo stays visible, and the owner can still remove it.
+
+**Admin.** The BCP mailbox detail shows the photo with "Foto entfernen" (area `recipients`, write;
+management scope of the admin): `GET` / `DELETE /api/v1/admin/mailboxes/:id/photo`. Removing the
+photo of an admin account needs a role that may manage it. The removal is audited as
+`mailbox.photo.remove`. Directory synchronisation (LDAP / OIDC) does not set photos.
 
 ## Deep links
 

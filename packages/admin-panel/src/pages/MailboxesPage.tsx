@@ -9,6 +9,7 @@ import {
 import { api } from '../api/client.js';
 import toast from 'react-hot-toast';
 import { MailboxAliasesSection } from '../components/MailboxAliasesSection.js';
+import { MailboxPhotoSection, type MailboxPhoto } from '../components/MailboxPhotoSection.js';
 import { ProtocolAccessEditor } from '../components/ProtocolAccessEditor.js';
 import { WebmailPolicyEditor } from '../components/WebmailPolicyEditor.js';
 import { MailFlowEditor } from '../components/MailFlowEditor.js';
@@ -39,6 +40,8 @@ interface UserDetail extends User {
   /** v8.1: effective levels (explicit or server default) + current level */
   quotaLimits?: { warningBytes: number; prohibitSendBytes: number; prohibitSendReceiveBytes: number };
   quotaLevel?: QuotaLevel;
+  /** 9.5: profile photo (null = none) */
+  photo?: MailboxPhoto | null;
 }
 interface Domain { id: string; name: string; active: boolean }
 interface DelegateGrantee { id: string; email: string; displayName: string }
@@ -517,6 +520,10 @@ export function MailboxesPage() {
               </div>
             }
           >
+            {detail?.id === active.id && detail.photo && (
+              <MailboxPhotoSection userId={active.id} email={active.email} photo={detail.photo} />
+            )}
+
             {/* Quota / usage */}
             <section aria-label={t('mbox_detail_total_storage')} className="space-y-2">
               <h3 className="text-xs font-medium text-fg-subtle flex items-center gap-1.5">

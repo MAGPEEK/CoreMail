@@ -45,6 +45,7 @@ deleted with the domain or user) and `trusted_image_senders`. The schema change 
 | `externalClients` | settings section                                    | `/api/v1/user/client-config`, `/api/v1/user/apple-profile`            |
 | `appPasswords`    | settings section                                    | `GET`/`POST /auth/app-passwords` (revoking stays possible); **existing app passwords stop working on every mail protocol** — see below |
 | `sharedMailboxes` | shared / delegated mailboxes in the folder pane     | `/api/v1/user/shared-mailboxes/*`, `/api/v1/mail/shared-mailboxes/*`, `/api/v1/mail/delegated-mailboxes/*`, `/api/v1/user/accessible-mailboxes/*` |
+| `profilePhoto`    | "Foto hochladen…" / "Foto ändern…" in Settings → E-Mail-Konto (9.5) | `PUT /api/v1/user/photo` only — an existing photo stays visible and its owner can still remove it (`DELETE`) |
 
 A request to a module that is off answers **403** `{ "code": "FEATURE_DISABLED", "feature": "<switch>" }`
 (checked in `requireAuth` after the webmail protocol switch; a policy that cannot be read is a 503,

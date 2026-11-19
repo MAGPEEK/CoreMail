@@ -14,6 +14,8 @@ import { useOwnEmail } from '../hooks/useOwnEmail.js';
 import { RecurrenceField } from './calendar/RecurrenceField.js';
 import { RoomPicker } from './calendar/RoomPicker.js';
 import { SchedulingAssistant } from './calendar/SchedulingAssistant.js';
+import { Avatar } from './Avatar.js';
+import { usePhotoForAddress } from '../hooks/useUserPhoto.js';
 
 /**
  * Event dialog of the calendar (create & edit).
@@ -78,6 +80,28 @@ const REMINDERS: Array<[number, string]> = [
   [60, '1 Stunde vorher'], [120, '2 Stunden vorher'], [1440, '1 Tag vorher'], [2880, '2 Tage vorher'], [10080, '1 Woche vorher'],
 ];
 const NO_REMINDER = 'none';
+
+/** One attendee: photo / initials (9.5), name, reply status and — when editable — remove. */
+function AttendeeChip({ attendee, onRemove }: { attendee: EventAttendee; onRemove: (() => void) | null }) {
+  const photoUrl = usePhotoForAddress(attendee.email);
+  const badge = PARTSTAT_BADGE[attendee.partstat ?? 'NEEDS-ACTION']!;
+  return (
+    <div className="inline-flex items-center gap-1.5 pl-1 pr-1 py-1 bg-surface-2 rounded text-xs">
+      <Avatar seed={attendee.email} name={attendee.cn !== attendee.email ? attendee.cn : null} photoUrl={photoUrl} size="xs" />
+      <span className="font-medium text-fg truncate max-w-[160px]">
+        {attendee.cn && attendee.cn !== attendee.email ? `${attendee.cn}` : attendee.email}
+      </span>
+      <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded ${badge.color}`} title={badge.label}>
+        {badge.icon}
+      </span>
+      {onRemove && (
+        <button aria-label={`Gast ${attendee.email} entfernen`} onClick={onRemove} className="p-0.5 text-fg-subtle hover:text-danger-fg ml-0.5">
+          <X size={11} />
+        </button>
+      )}
+    </div>
+  );
+}
 
 const isRoom = (a: EventAttendee) => a.cutype === 'ROOM' || a.cutype === 'RESOURCE';
 
@@ -488,24 +512,9 @@ export function EventEditDialog({
               <div className="flex-1 min-w-0">
                 {attendees.length > 0 && (
                   <div className="flex flex-wrap gap-1.5 mb-2">
-                    {attendees.map((a) => {
-                      const badge = PARTSTAT_BADGE[a.partstat ?? 'NEEDS-ACTION']!;
-                      return (
-                        <div key={a.email} className="inline-flex items-center gap-1.5 pl-2 pr-1 py-1 bg-surface-2 rounded text-xs">
-                          <span className="font-medium text-fg truncate max-w-[160px]">
-                            {a.cn && a.cn !== a.email ? `${a.cn}` : a.email}
-                          </span>
-                          <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded ${badge.color}`} title={badge.label}>
-                            {badge.icon}
-                          </span>
-                          {!readOnly && (
-                            <button aria-label={`Gast ${a.email} entfernen`} onClick={() => removeAttendee(a.email)} className="p-0.5 text-fg-subtle hover:text-danger-fg ml-0.5">
-                              <X size={11} />
-                            </button>
-                          )}
-                        </div>
-                      );
-                    })}
+                    {attendees.map((a) => (
+                      <AttendeeChip key={a.email} attendee={a} onRemove={readOnly ? null : () => removeAttendee(a.email)} />
+                    ))}
                   </div>
                 )}
                 {!readOnly && (

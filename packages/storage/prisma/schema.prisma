@@ -153,6 +153,10 @@ model User {
   mailFlowPolicy      MailFlowPolicy?
   // 9.5: management scope of an admin role (none = organisation-wide)
   adminScopes         AdminScope[]
+  // 9.5: profile photo — content-addressed object key (profile-photos/<aa>/<sha256>.jpg,
+  // a 512×512 JPEG re-encoded by the api-gateway); null = no photo (initials)
+  photoKey            String?
+  photoUpdatedAt      DateTime?
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt
 
@@ -258,6 +262,8 @@ model WebmailPolicy {
   externalClients        ProtocolSwitch     @default(INHERIT)
   appPasswords           ProtocolSwitch     @default(INHERIT)
   sharedMailboxes        ProtocolSwitch     @default(INHERIT)
+  // 9.5: upload / change of the own profile photo
+  profilePhoto           ProtocolSwitch     @default(INHERIT)
   // JSON array of file extensions without dot; NULL = inherit
   blockedExtensions      Json?
   downloadOnlyExtensions Json?

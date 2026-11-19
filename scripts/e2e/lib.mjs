@@ -5,6 +5,7 @@ import { createHmac, randomBytes } from 'node:crypto';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { deflateSync } from 'node:zlib';
 
 export const HOST = process.env.E2E_HOST ?? '127.0.0.1';
 export const PORTS = {
@@ -73,6 +74,35 @@ export function flushResults(name) {
   return failed;
 }
 export function assert(cond, msg) { if (!cond) throw new Error(msg); }
+
+const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
+  let c = n;
+  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  return c >>> 0;
+});
+function crc32(buf) {
+  let c = 0xffffffff;
+  for (const b of buf) c = CRC_TABLE[(c ^ b) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+/** One PNG chunk (length, type, data, CRC). */
+export function pngChunk(type, data) {
+  const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+  const td = Buffer.concat([Buffer.from(type, 'latin1'), data]);
+  const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(td));
+  return Buffer.concat([len, td, crc]);
+}
+/** A real (decodable) RGBA PNG of w×h in one colour; `extra` chunks go before the image data. */
+export function makePng(w, h, [r, g, b], extra = []) {
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr[8] = 8; ihdr[9] = 6;
+  const row = Buffer.concat([Buffer.from([0]), Buffer.from(Array.from({ length: w }, () => [r, g, b, 255]).flat())]);
+  const idat = deflateSync(Buffer.concat(Array.from({ length: h }, () => row)));
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), pngChunk('IHDR', ihdr), ...extra,
+    pngChunk('IDAT', idat), pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+}
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export async function waitFor(fn, { timeout = 20000, interval = 500, what = 'condition' } = {}) {
   const end = Date.now() + timeout;

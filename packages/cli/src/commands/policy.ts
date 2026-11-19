@@ -6,7 +6,7 @@
  *   coremail policy set --blocked-extensions exe,js,bat --max-upload-mb 20
  * Modules: --calendar --contacts --tasks --notes --rules --signatures --categories
  * --recover-items --change-password --themes --external-clients --app-passwords
- * --shared-mailboxes, each on | off | inherit (the server level is on | off only).
+ * --shared-mailboxes --profile-photo, each on | off | inherit (the server level is on | off only).
  * Values: --blocked-extensions / --save-only-extensions <list|inherit>,
  * --max-upload-mb <MB|inherit|none> (none = no own limit, server level only),
  * --external-images ask|contacts|block|inherit.
@@ -18,7 +18,7 @@ import { levelPath, parseScope, settingsForScope, type ProtocolScope } from './p
 
 export const FEATURES = [
   'calendar', 'contacts', 'tasks', 'notes', 'rules', 'signatures', 'categories', 'recoverItems',
-  'changePassword', 'themes', 'externalClients', 'appPasswords', 'sharedMailboxes',
+  'changePassword', 'themes', 'externalClients', 'appPasswords', 'sharedMailboxes', 'profilePhoto',
 ] as const;
 export type Feature = typeof FEATURES[number];
 type Setting = 'inherit' | 'on' | 'off';

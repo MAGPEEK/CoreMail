@@ -21,6 +21,7 @@ import { useMailActions } from '../hooks/useMailActions.js';
 import { useShortcutHandlers, useAriaKeys } from '../hooks/useShortcuts.js';
 import { Avatar } from './Avatar.js';
 import { ContactHoverCard } from './ContactHoverCard.js';
+import { usePhotoForAddress } from '../hooks/useUserPhoto.js';
 import { MessageReaderSkeleton } from './Skeleton.js';
 import { Modal } from './Modal.js';
 import { translate, useT } from '../i18n/useT.js';
@@ -121,6 +122,7 @@ export function MessageReader({ messageId }: Props) {
     // 9.4: the reader marks read itself (immediately / after a delay / manually)
     queryFn: () => api.get<Message>(`${base}/messages/${messageId}?markRead=false`),
   });
+  const senderPhoto = usePhotoForAddress(msg?.fromAddr); // 9.5: internal senders' profile photo
 
   const { data: folders = [] } = useQuery({
     queryKey: mailbox.foldersKey,
@@ -402,7 +404,7 @@ export function MessageReader({ messageId }: Props) {
               hoverTimer.current = setTimeout(() => setShowAvatarCard(false), 200);
             }}
           >
-            <Avatar seed={msg.fromAddr} size="lg" className="transition-transform duration-150 hover:scale-105 cursor-default" />
+            <Avatar seed={msg.fromAddr} name={msg.fromName} photoUrl={senderPhoto} size="lg" className="transition-transform duration-150 hover:scale-105 cursor-default" />
           </div>
           <div className="flex-1 min-w-0 space-y-0.5 text-sm">
             <p className="font-medium text-fg">{msg.fromName || msg.fromAddr.split('@')[0]}</p>

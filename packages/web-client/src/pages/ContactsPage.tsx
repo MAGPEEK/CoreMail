@@ -15,7 +15,7 @@ import {
   type ContactGroupDetail, type ContactGroupSummary, type GroupExpansion, type GroupMember,
 } from '../lib/contactGroups.js';
 import { ContactEditor } from '../components/contacts/ContactEditor.js';
-import { ContactDetails, initials } from '../components/contacts/ContactDetails.js';
+import { ContactAvatar, ContactDetails } from '../components/contacts/ContactDetails.js';
 import { ContactGroupDetails, ContactGroupEditor } from '../components/contacts/ContactGroupPanel.js';
 
 type Tab = 'contacts' | 'groups';
@@ -201,9 +201,7 @@ export function ContactsPage() {
                   aria-current={contactId === c.id ? 'true' : undefined}
                   className={`w-full text-left flex items-center gap-3 px-3 py-2.5 border-b border-line hover:bg-surface-2 transition-colors ${contactId === c.id ? 'bg-accent/5' : ''}`}
                 >
-                  <div className="w-9 h-9 rounded-full bg-accent flex items-center justify-center text-white text-xs font-bold shrink-0" aria-hidden="true">
-                    {initials(c.displayName)}
-                  </div>
+                  <ContactAvatar name={c.displayName} email={c.email} className="w-9 h-9 text-xs" />
                   <div className="min-w-0">
                     <p className="text-sm font-medium text-fg truncate">{c.displayName}</p>
                     <p className="text-xs text-fg-subtle truncate">{c.jobTitle || c.email}</p>

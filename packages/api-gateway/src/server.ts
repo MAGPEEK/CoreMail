@@ -44,6 +44,7 @@ import { notesRouter } from './routes/notes.js';
 import { userRouter } from './routes/user.js';
 import { userSettingsRouter } from './routes/user-settings.js';
 import { userPolicyRouter } from './routes/user-policy.js';
+import { ownPhotoRouter, usersPhotoRouter } from './routes/profile-photo.js';
 import { readReceiptRouter } from './routes/read-receipts.js';
 import { appleProfileRouter } from './routes/apple-profile.js';
 import { categoriesRouter } from './routes/categories.js';
@@ -401,6 +402,8 @@ app.use('/api/v1/calendar',       calendarRouter);
 app.use('/api/v1/contacts',       contactsRouter);
 app.use('/api/v1/tasks',          tasksRouter);
 app.use('/api/v1/notes',          notesRouter);
+app.use('/api/v1/user/photo',     ownPhotoRouter);     // 9.5: own profile photo (PUT/DELETE)
+app.use('/api/v1/users',          usersPhotoRouter);   // 9.5: photos of the organisation (lookup, GET /:id/photo)
 app.use('/api/v1/user',           userSettingsRouter); // 9.4: preferences, sessions, signatures
 app.use('/api/v1/user',           userPolicyRouter);   // 9.4: webmail features + trusted image senders
 app.use('/api/v1/user',           userRouter);
