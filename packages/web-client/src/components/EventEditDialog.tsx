@@ -616,7 +616,7 @@ export function EventEditDialog({
               type="text"
               value={location}
               onChange={(e) => setLocation(e.target.value)}
-              placeholder="Hinzufügen eines Raums oder Standorts"
+              placeholder="Ort hinzufügen"
               aria-label="Ort"
               disabled={readOnly}
               className="flex-1 border-b border-line-strong focus:border-accent-fg bg-transparent px-1 py-1.5 text-sm focus:outline-none placeholder:text-fg-subtle"
