@@ -49,6 +49,16 @@ const ROLE_BY_NAME: Readonly<Record<string, FolderRole>> = {
   INBOX: 'inbox', Drafts: 'drafts', Sent: 'sent', Trash: 'trash', Junk: 'junk', Archive: 'archive',
 };
 
+/**
+ * Display names of the role folders as Outlook knows them. They never come from
+ * the database row: its displayName depends on how the mailbox was provisioned
+ * (admin API "Sent Items", setup wizard "Gesendet", restored or older rows the
+ * IMAP name) — and role folders cannot be renamed over MAPI.
+ */
+export const ROLE_DISPLAY_NAME: Readonly<Record<FolderRole, string>> = {
+  inbox: 'Inbox', drafts: 'Drafts', sent: 'Sent Items', trash: 'Deleted Items', junk: 'Junk Email', archive: 'Archive',
+};
+
 export class MailboxView {
   private readonly nodes = new Map<bigint, FolderNode>();
   private readonly byRecord = new Map<string, FolderNode>();
@@ -65,14 +75,14 @@ export class MailboxView {
     const counters = new Map(visible.map((r) => [r.id, r.clientId ?? folderCounterForRow(r.id)]));
     for (const r of visible) {
       const parentCounter = r.parentId !== null ? counters.get(r.parentId) : undefined;
-      const parentKnown = parentCounter !== undefined;
+      const role = parentCounter !== undefined ? null : (ROLE_BY_NAME[r.name] ?? null);
       const node: FolderNode = {
         counter: counters.get(r.id)!,
         parentCounter: parentCounter ?? SpecialCounter.IpmSubtree,
-        displayName: r.displayName || r.name,
+        displayName: role ? ROLE_DISPLAY_NAME[role] : (r.displayName || r.name),
         record: r,
         special: null,
-        role: parentKnown ? null : (ROLE_BY_NAME[r.name] ?? null),
+        role,
         hidden: false,
         containerClass: 'IPF.Note',
       };

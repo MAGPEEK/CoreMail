@@ -8,7 +8,7 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsx watch src/server.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --import tsx --import ./src/test-env.ts --test src/wire/wire.test.ts src/props/props.test.ts src/rop/buffer.test.ts src/rop/handles.test.ts src/rop/ops/ops.test.ts src/objects/footprint.test.ts src/http/envelope.test.ts src/emsmdb/bodies.test.ts src/session/session.test.ts src/store/prisma-store.test.ts src/nspi/nspi.test.ts src/emsmdb/notify/notify.test.ts src/app.test.ts src/ics/ics.test.ts src/http/auth.test.ts src/session/foreign-access.test.ts",
+    "test": "node --import tsx --import ./src/test-env.ts --test src/wire/wire.test.ts src/props/props.test.ts src/rop/buffer.test.ts src/rop/handles.test.ts src/rop/ops/ops.test.ts src/objects/footprint.test.ts src/objects/mailbox-view.test.ts src/http/envelope.test.ts src/emsmdb/bodies.test.ts src/session/session.test.ts src/store/prisma-store.test.ts src/nspi/nspi.test.ts src/emsmdb/notify/notify.test.ts src/app.test.ts src/ics/ics.test.ts src/http/auth.test.ts src/session/foreign-access.test.ts",
     "start": "node dist/server.js"
   },
   "dependencies": {

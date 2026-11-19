@@ -4,6 +4,7 @@
 // Steps run in order; state (ids, tokens) is persisted in $E2E_STATE_DIR/state.json
 // so single steps can be re-run.
 import { flushResults, loadState, saveState } from './lib.mjs';
+import { resultsFileName } from './results-name.mjs';
 
 const ALL = ['setup', 'users', 'smtp', 'imap', 'pop3', 'jmap', 'dav', 'dav-tasks', 'contacts', 'eas', 'eas-body', 'eas-commands', 'eas-legacy', 'eas-pim', 'rest', 'webmail', 'mailbox-mgmt', 'folder-permissions', 'admin', 'tls', 'legacy-clients', 'backup', 'branding', 'profile-photo', 'mfa', 'live', 'protocols', 'policies', 'scopes', 'mapi', 'lockout', 'restart', 'storage', 'schema-upgrade'];
 const steps = process.argv.slice(2).length ? process.argv.slice(2) : ALL;
@@ -21,5 +22,5 @@ for (const name of steps) {
     saveState(state);
   }
 }
-const failed = flushResults(steps.join('+'));
+const failed = flushResults(resultsFileName(steps, ALL));
 process.exit(failed ? 1 : 0);

@@ -54,7 +54,13 @@ runs `coremail-schema-sync` (`infra/docker/schema-sync.sh`):
    - **Only new unique constraints** (e.g. 8.0.0 → 9.0: `resource_bookings`
      `UNIQUE (calendarId, uid)` instead of `UNIQUE (uid)`): nothing is deleted.
      For every new constraint a duplicate check runs (`SELECT … GROUP BY …
-     HAVING count(*) > 1`). Without duplicates the change is applied
+     HAVING count(*) > 1`). A constraint over a column the same update adds
+     as an optional column without a default (e.g. 9.4 → 9.5: `tasks`
+     `UNIQUE (userId, uid)` with the new `uid`) needs no check — the column is
+     NULL in every existing row and NULLs never conflict; the target
+     `schema.prisma` tells which columns are optional. A column the check
+     cannot read for another reason stops the start (fail-closed).
+     Without duplicates the change is applied
      automatically; a pre-migration dump is written first when `pg_dump`, the
      server version and the free space allow it (otherwise skipped with a
      warning). With duplicates the start **stops**, names the table and prints

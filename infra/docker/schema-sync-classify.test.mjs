@@ -7,8 +7,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { classify, classifyWarning, format, parseWarnings, schemaFromUrl } from './schema-sync-classify.mjs';
+import {
+  classify, classifyWarning, format, guardSql, loadOptionalColumns, optionalColumnsWithoutDefault, parseWarnings, schemaFromUrl,
+} from './schema-sync-classify.mjs';
 
 const UPGRADE_8_0 = `Prisma schema loaded from prisma/schema.prisma
 Datasource "db": PostgreSQL database "coremail", schema "public" at "postgres:5432"
@@ -57,6 +60,18 @@ Use the --force-reset flag to drop the database before push like prisma db push 
 All data will be lost.
 `;
 
+// 9.4.0 → 9.5: Task gets the optional column uid and @@unique([userId, uid]).
+const UPGRADE_9_4 = `
+⚠️  There might be data loss when applying the changes:
+
+  • A unique constraint covering the columns \`[userId,uid]\` on the table \`tasks\` will be added. If there are existing duplicate values, this will fail.
+
+
+Error: Use the --accept-data-loss flag to ignore the data loss warnings like prisma db push --accept-data-loss
+`;
+
+const TARGET_SCHEMA = readFileSync(fileURLToPath(new URL('../../packages/storage/prisma/schema.prisma', import.meta.url)), 'utf8');
+
 test('8.0.0 → current: the new composite unique constraint is safe, with a duplicate check', () => {
   const r = classify(UPGRADE_8_0);
   assert.equal(r.verdict, 'safe');
@@ -66,6 +81,57 @@ test('8.0.0 → current: the new composite unique constraint is safe, with a dup
   assert.equal(u.table, 'resource_bookings');
   assert.deepEqual(u.columns, ['calendarId', 'uid']);
   assert.equal(u.sql, 'SELECT count(*) FROM (SELECT 1 FROM "public"."resource_bookings" WHERE "calendarId" IS NOT NULL AND "uid" IS NOT NULL GROUP BY "calendarId", "uid" HAVING count(*) > 1) AS d');
+  // both columns exist in 8.0.0 — the guard only looks for the table
+  assert.equal(u.guard, `SELECT CASE WHEN to_regclass('"public"."resource_bookings"') IS NULL THEN 'new-table' ELSE 'check' END`);
+});
+
+test('9.4.0 → current: a unique constraint over the new optional Task.uid column is skipped while the column is missing', () => {
+  const r = classify(UPGRADE_9_4, 'public', optionalColumnsWithoutDefault(TARGET_SCHEMA));
+  assert.equal(r.verdict, 'safe');
+  const [u] = r.items;
+  assert.equal(u.table, 'tasks');
+  assert.deepEqual(u.columns, ['userId', 'uid']);
+  assert.equal(u.guard, `SELECT CASE WHEN to_regclass('"public"."tasks"') IS NULL THEN 'new-table' WHEN (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'tasks' AND column_name IN ('uid')) < 1 THEN 'new-column' ELSE 'check' END`);
+  // once the column exists (a re-run) the real duplicate check runs
+  assert.match(u.sql, /GROUP BY "userId", "uid" HAVING count\(\*\) > 1/);
+});
+
+test('without the target schema no column counts as optional (fail-closed: the duplicate check must run)', () => {
+  const [u] = classify(UPGRADE_9_4).items;
+  assert.ok(!u.guard.includes('new-column'));
+  assert.equal(loadOptionalColumns('does/not/exist.prisma').size, 0);
+});
+
+test('optional columns: only `Type?` without @default, @map/@@map honoured, relations and comments ignored', () => {
+  const cols = optionalColumnsWithoutDefault(`
+model Foo {
+  id      String  @id @default(cuid())
+  a       String?
+  b       String? @default("x")
+  c       String  // looks optional? no: String?
+  d       Int?    @map("d_col") // @default(1) in a comment does not count
+  e       String[]
+  owner   User?   @relation(fields: [a], references: [id])
+  @@unique([a, b])
+  @@map("foos")
+}
+
+model Bar {
+  x String?
+}
+`);
+  assert.deepEqual([...cols.get('foos')].sort(), ['a', 'd_col']);
+  assert.deepEqual([...cols.get('Bar')], ['x']);
+  // the real schema: Task.uid / icalData are optional without default, Contact.uid has a default
+  const real = optionalColumnsWithoutDefault(TARGET_SCHEMA);
+  assert.ok(real.get('tasks').has('uid') && real.get('tasks').has('icalData'));
+  assert.ok(!real.get('contacts').has('uid'));
+  assert.ok(!real.get('resource_bookings').has('uid'));
+});
+
+test('guard SQL for a constraint without optional columns only checks the table', () => {
+  assert.equal(guardSql('s', 't', []), `SELECT CASE WHEN to_regclass('"s"."t"') IS NULL THEN 'new-table' ELSE 'check' END`);
+  assert.match(guardSql('s', 't', ['a', 'b']), /column_name IN \('a', 'b'\)\) < 2 THEN 'new-column'/);
 });
 
 test('dropped column / dropped table stay unsafe even next to unique constraints', () => {
@@ -117,5 +183,16 @@ test('CLI output format (read by schema-sync.sh)', () => {
   const lines = out.trimEnd().split('\n');
   assert.equal(lines[0], 'verdict\tunsafe');
   assert.equal(lines.filter((l) => l.startsWith('unique\t')).length, 2);
-  assert.ok(lines.filter((l) => l.startsWith('unique\t')).every((l) => l.split('\t').length === 4));
+  assert.ok(lines.filter((l) => l.startsWith('unique\t')).every((l) => l.split('\t').length === 5));
+});
+
+test('CLI reads the target schema from COREMAIL_PRISMA_SCHEMA_FILE', () => {
+  const script = fileURLToPath(new URL('./schema-sync-classify.mjs', import.meta.url));
+  const schemaFile = fileURLToPath(new URL('../../packages/storage/prisma/schema.prisma', import.meta.url));
+  const out = execFileSync(process.execPath, [script, 'public'], {
+    input: UPGRADE_9_4, encoding: 'utf8', env: { ...process.env, COREMAIL_PRISMA_SCHEMA_FILE: schemaFile },
+  });
+  const [kind, table, columns, guard] = out.trimEnd().split('\n')[1].split('\t');
+  assert.deepEqual([kind, table, columns], ['unique', 'tasks', 'userId,uid']);
+  assert.match(guard, /THEN 'new-column'/);
 });
