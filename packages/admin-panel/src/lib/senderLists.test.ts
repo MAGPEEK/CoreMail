@@ -19,6 +19,18 @@ test('filterEntries: by list type and search text (pattern, target, comment)', (
   assert.deepEqual(filterEntries(all, 'BLOCK', 'rechnung').map((x) => x.id), ['4']);
 });
 
+test('filterEntries finds international domains by U-label and A-label', () => {
+  const all = [
+    e({ id: '1', patternType: 'WILDCARD', pattern: '*@xn--mller-kva.de' }),
+    e({ id: '2', scope: 'DOMAIN', target: 'xn--bcher-kva.example', pattern: 'a@xn--bcher-kva.example' }),
+    e({ id: '3', patternType: 'REGEX', pattern: '^xn--mller-kva$' }),
+    e({ id: '4' }),
+  ];
+  assert.deepEqual(filterEntries(all, 'BLOCK', 'müller').map((x) => x.id), ['1']);
+  assert.deepEqual(filterEntries(all, 'BLOCK', 'xn--mller').map((x) => x.id), ['1', '3']);
+  assert.deepEqual(filterEntries(all, 'BLOCK', 'bücher').map((x) => x.id), ['2']);
+});
+
 test('importErrorText: at most five lines, rest counted', () => {
   const errs = Array.from({ length: 7 }, (_, i) => ({ line: i + 2, error: 'kaputt' }));
   const text = importErrorText(errs);
