@@ -11,11 +11,23 @@
 // It is safe as long as the table holds no duplicates. For every such
 // constraint schema-sync runs the guard query printed below and, when the guard
 // answers "check", the duplicate-check query, before it applies the change
-// automatically. EVERY other warning — dropped table ("You are about to drop the
-// `x` table, which is not empty (N rows)."), dropped column ("You are about to
-// drop the column `c` on the `t` table, which still contains N non-null
-// values."), type change, removed enum value, primary key change, anything
-// unknown — is "unsafe" and stays fail-closed (COREMAIL_ALLOW_SCHEMA_DATA_LOSS).
+// automatically.
+//
+// RETIRED TABLES (10.0.0): the tables of a feature CoreMail removed on purpose
+// (RETIRED_TABLES below — the room/equipment mailboxes) are dropped as well:
+//   • You are about to drop the `resource_bookings` table, which is not empty (3 rows).
+// schema-sync writes its pre-migration dump FIRST (mandatory, like
+// COREMAIL_ALLOW_SCHEMA_DATA_LOSS) and logs every retired table; only a table
+// on that list qualifies, and only when every other warning is a safe unique
+// constraint (and the database schema name is a plain identifier). Data of a
+// retired table that lives in kept tables (RETIREMENT_CLEANUP: the room
+// mailboxes' own mailbox rows) is deleted after the dump, before the drop.
+//
+// EVERY other warning — dropped table ("You are about to drop the `x` table,
+// which is not empty (N rows)."), dropped column ("You are about to drop the
+// column `c` on the `t` table, which still contains N non-null values."), type
+// change, removed enum value, primary key change, anything unknown — is "unsafe"
+// and stays fail-closed (COREMAIL_ALLOW_SCHEMA_DATA_LOSS).
 //
 // The constraint may cover a column the same update creates (9.4 → 9.5:
 // Task.uid String? with @@unique([userId, uid])). The duplicate check cannot
@@ -32,19 +44,62 @@
 // readable schema no column counts as optional (fail-closed).
 //
 // Output (tab-separated lines, read by schema-sync.sh):
-//   verdict<TAB>safe|unsafe|none
+//   verdict<TAB>safe|retire|unsafe|none
 //   unique<TAB><table><TAB><col,col><TAB><guard SQL><TAB><SQL returning the number of duplicate groups>
+//   retired<TAB><table><TAB><rows><TAB><why the table is retired>
+//   cleanup<TAB><table><TAB><what><TAB><SQL deleting it, answering a one-line count summary>
 //   unsafe<TAB><warning text>
-// "none" = no warning bullet recognised (schema-sync treats it as unsafe).
+// "safe" = only new unique constraints; "retire" = retired tables (and maybe new
+// unique constraints); "none" = no warning bullet recognised (schema-sync treats
+// it as unsafe).
 // No dependencies; Node 18+. Tests: node --test infra/docker/schema-sync-classify.test.mjs
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const UNIQUE_RE = /^A unique constraint covering the columns `\[([^\]]+)\]` on the table `([^`]+)` will be added\. If there are existing duplicate values, this will fail\.$/;
+const DROP_TABLE_RE = /^You are about to drop the `([^`]+)` table, which is not empty \((\d+) rows?\)\.$/;
+
+/**
+ * Tables of features CoreMail removed on purpose: schema-sync drops them after its
+ * pre-migration dump without COREMAIL_ALLOW_SCHEMA_DATA_LOSS. Only ever add a table
+ * whose model is gone from schema.prisma for good.
+ */
+export const RETIRED_TABLES = Object.freeze({
+  resource_mailboxes: 'room/equipment mailboxes, removed in CoreMail 10.0.0',
+  resource_calendars: 'room/equipment booking calendars, removed in CoreMail 10.0.0',
+  resource_bookings: 'room/equipment bookings, removed in CoreMail 10.0.0',
+});
 
 const q = (id) => `"${id}"`;
 const lit = (id) => `'${id}'`;
+
+/**
+ * SQL: deletes the mailbox rows of the room/equipment mailboxes (resource_mailboxes.mailboxId)
+ * — their folders, messages, attachments, delegates and folder permissions follow through
+ * the ON DELETE CASCADE foreign keys. Only owner-less rows (no user, no shared mailbox) are
+ * touched. One statement = one transaction; it answers "<n> mailbox(es), <n> folder(s),
+ * <n> message(s)" (counted on the statement's snapshot, i.e. before the delete). Run again
+ * it deletes nothing (idempotent). The raw-message / attachment objects stay in the object
+ * store, unreferenced (no row points at them, so no API can serve them).
+ */
+export function roomMailboxCleanupSql(schema) {
+  const t = (table) => `${q(schema)}.${q(table)}`;
+  const doomed = `SELECT m."id" FROM ${t('mailboxes')} m JOIN ${t('resource_mailboxes')} r ON r."mailboxId" = m."id" WHERE m."userId" IS NULL AND m."sharedBoxId" IS NULL`;
+  const folders = `SELECT f."id" FROM ${t('folders')} f WHERE f."mailboxId" IN (SELECT "id" FROM doomed)`;
+  return `WITH doomed AS (${doomed}), gone AS (DELETE FROM ${t('mailboxes')} WHERE "id" IN (SELECT "id" FROM doomed) RETURNING "id") `
+    + `SELECT (SELECT count(*) FROM gone) || ' mailbox(es), ' || (SELECT count(*) FROM (${folders}) AS fo) || ' folder(s), ' `
+    + `|| (SELECT count(*) FROM ${t('messages')} WHERE "folderId" IN (${folders})) || ' message(s)'`;
+}
+
+/**
+ * Data of a retired table that lives in tables CoreMail keeps — removed after the
+ * pre-migration dump and BEFORE the push drops the table (schema-sync.sh). 10.0.0: the
+ * room/equipment mailboxes' own mailbox rows, which would otherwise stay without owner.
+ */
+export const RETIREMENT_CLEANUP = Object.freeze({
+  resource_mailboxes: Object.freeze({ what: 'mailboxes of the former room/equipment mailboxes', sql: roomMailboxCleanupSql }),
+});
 
 /** Splits Prisma's output into warning bullets ("•" lines plus their continuation lines). */
 export function parseWarnings(text) {
@@ -120,11 +175,21 @@ export function guardSql(schema, table, optional) {
 }
 
 /**
- * Classifies one warning: { kind: 'unique', table, columns, guard, sql } or
- * { kind: 'unsafe', text }. `optionalColumns` = optionalColumnsWithoutDefault()
- * of the target schema.
+ * Classifies one warning: { kind: 'unique', table, columns, guard, sql },
+ * { kind: 'retired', table, rows, reason } or { kind: 'unsafe', text }.
+ * `optionalColumns` = optionalColumnsWithoutDefault() of the target schema.
  */
 export function classifyWarning(text, schema = 'public', optionalColumns = new Map()) {
+  const drop = DROP_TABLE_RE.exec(text.trim());
+  // The clean-up SQL quotes the schema name — an unusual one is not auto-applied.
+  if (drop && Object.hasOwn(RETIRED_TABLES, drop[1]) && IDENT.test(schema)) {
+    const table = drop[1];
+    const cleanup = Object.hasOwn(RETIREMENT_CLEANUP, table) ? RETIREMENT_CLEANUP[table] : null;
+    return {
+      kind: 'retired', table, rows: Number(drop[2]), reason: RETIRED_TABLES[table],
+      ...(cleanup ? { cleanup: { what: cleanup.what, sql: cleanup.sql(schema) } } : {}),
+    };
+  }
   const m = UNIQUE_RE.exec(text.trim());
   if (m) {
     const table = m[2];
@@ -138,15 +203,31 @@ export function classifyWarning(text, schema = 'public', optionalColumns = new M
   return { kind: 'unsafe', text: text.trim() };
 }
 
-/** Classifies a whole Prisma output. verdict: safe (only new unique constraints) | unsafe | none. */
+/**
+ * Classifies a whole Prisma output. verdict: safe (only new unique constraints) |
+ * retire (retired tables, otherwise only new unique constraints) | unsafe | none.
+ */
 export function classify(output, schema = 'public', optionalColumns = new Map()) {
   const items = parseWarnings(output).map((w) => classifyWarning(w, schema, optionalColumns));
   // "We found changes that cannot be executed" — never auto-applied.
   const unexecutable = /cannot be executed/i.test(String(output));
   let verdict = 'none';
-  if (items.length > 0) verdict = !unexecutable && items.every((i) => i.kind === 'unique') ? 'safe' : 'unsafe';
-  else if (unexecutable) verdict = 'unsafe';
+  if (items.length > 0) {
+    const automatic = !unexecutable && items.every((i) => i.kind === 'unique' || i.kind === 'retired');
+    verdict = !automatic ? 'unsafe' : items.some((i) => i.kind === 'retired') ? 'retire' : 'safe';
+  } else if (unexecutable) verdict = 'unsafe';
   return { verdict, items };
+}
+
+/** Pure: one output line per classified warning (tabs / newlines of free text flattened). */
+function formatItem(i) {
+  const flat = (s) => String(s).replace(/[\t\n]/g, ' ');
+  if (i.kind === 'unique') return `unique\t${i.table}\t${i.columns.join(',')}\t${i.guard}\t${i.sql}`;
+  if (i.kind === 'retired') {
+    const line = `retired\t${i.table}\t${i.rows}\t${flat(i.reason)}`;
+    return i.cleanup ? `${line}\ncleanup\t${i.table}\t${flat(i.cleanup.what)}\t${flat(i.cleanup.sql)}` : line;
+  }
+  return `unsafe\t${flat(i.text)}`;
 }
 
 /** Database schema from a Prisma DATABASE_URL (?schema=…), default public. */
@@ -165,13 +246,7 @@ export function loadOptionalColumns(file) {
 }
 
 export function format(result) {
-  const lines = [`verdict\t${result.verdict}`];
-  for (const i of result.items) {
-    lines.push(i.kind === 'unique'
-      ? `unique\t${i.table}\t${i.columns.join(',')}\t${i.guard}\t${i.sql}`
-      : `unsafe\t${i.text.replace(/[\t\n]/g, ' ')}`);
-  }
-  return `${lines.join('\n')}\n`;
+  return `${[`verdict\t${result.verdict}`, ...result.items.map(formatItem)].join('\n')}\n`;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

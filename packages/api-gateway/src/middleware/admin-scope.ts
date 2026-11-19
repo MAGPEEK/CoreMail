@@ -44,7 +44,7 @@ export async function redactorOf(req: Request): Promise<AddressRedactor> {
 }
 
 /** Object kinds an admin route addresses by id. */
-export type ScopeTarget = 'user' | 'shared' | 'resource' | 'domain' | 'alias' | 'device' | 'quarantine' | 'senderList';
+export type ScopeTarget = 'user' | 'shared' | 'domain' | 'alias' | 'device' | 'quarantine' | 'senderList';
 
 /** Is the object `id` of `kind` visible inside `scope`? Unknown ids → false. */
 const VISIBLE: Readonly<Record<ScopeTarget, (id: string, scope: DomainScope) => Promise<boolean>>> = {
@@ -52,8 +52,6 @@ const VISIBLE: Readonly<Record<ScopeTarget, (id: string, scope: DomainScope) => 
   user: async (id, scope) => inScope(scope, (await prisma.user.findUnique({ where: { id }, select: { domainId: true } }))?.domainId),
   shared: async (id, scope) =>
     inScope(scope, (await prisma.sharedMailbox.findUnique({ where: { id }, select: { domainId: true } }))?.domainId),
-  resource: async (id, scope) =>
-    inScope(scope, (await prisma.resourceMailbox.findUnique({ where: { id }, select: { domainId: true } }))?.domainId),
   alias: async (id, scope) => {
     const a = await prisma.emailAlias.findUnique({
       where: { id },

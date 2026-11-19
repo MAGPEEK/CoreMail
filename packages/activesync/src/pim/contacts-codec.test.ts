@@ -18,7 +18,7 @@ import {
 import { contactView, CHILDREN_MAX, type ContactItem } from './contacts-view.js';
 import type { PimUser, RenderContext, WriteContext } from './types.js';
 
-const USER: PimUser = { id: 'u1', email: 'bob@example.com', displayName: 'Bob', addresses: ['bob@example.com'], timeZone: 'Europe/Berlin', domainId: null };
+const USER: PimUser = { id: 'u1', email: 'bob@example.com', displayName: 'Bob', addresses: ['bob@example.com'], timeZone: 'Europe/Berlin' };
 const UTC_USER: PimUser = { ...USER, timeZone: null };
 const render = (version: '12.1' | '14.1' = '14.1', user = USER): RenderContext => ({ version, bodyPref: DEFAULT_BODY_PREFERENCE, user });
 const write = (over: Partial<WriteContext> = {}): WriteContext => ({ version: '14.1', user: USER, now: new Date('2026-11-18T12:00:00Z'), supported: null, ...over });

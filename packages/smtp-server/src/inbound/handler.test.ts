@@ -18,7 +18,6 @@ const none = async () => null;
   domain: { findFirst: async ({ where }: { where: { name: string } }) => (where.name === 'corp.test' ? { id: 'd1' } : null) },
   user: { findFirst: none },
   sharedMailbox: { findFirst: none },
-  resourceMailbox: { findFirst: none },
   emailAlias: { findFirst: none },
   systemLog: { create: async () => ({}) },
 };
@@ -35,6 +34,13 @@ test('<Postmaster> and postmaster@<local domain> are accepted at RCPT even witho
   assert.equal(await inboundHandlers.onRcptTo('PostMaster@corp.test', 'a@ext.test', null), null);
   assert.equal(await inboundHandlers.onRcptTo('postmaster@other.test', 'a@ext.test', null), '5.1.1 User unknown');
   assert.equal(await inboundHandlers.onRcptTo('nobody@corp.test', 'a@ext.test', null), '5.1.1 User unknown');
+});
+
+test('10.0: a former room address is an unknown recipient at RCPT (550 5.1.1) — no resource lookup any more', async () => {
+  const prisma = (globalThis as unknown as { __prisma: Record<string, unknown> }).__prisma;
+  assert.equal('resourceMailbox' in prisma, false, 'the fake has no resource model — a lookup would throw (4xx), not 5.1.1');
+  assert.equal(await inboundHandlers.onRcptTo('raum-1@corp.test', 'a@ext.test', null), '5.1.1 User unknown');
+  assert.equal(await inboundHandlers.onRcptTo('Beamer@Corp.Test', 'a@ext.test', null), '5.1.1 User unknown');
 });
 
 test('a message with more than 100 Received: fields is rejected as a loop (554 5.4.6)', async () => {

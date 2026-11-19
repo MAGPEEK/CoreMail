@@ -164,7 +164,10 @@ app:
   # Images <= 8.0.0 have no coremail-schema-sync: the init container then falls
   # back to a plain `prisma db push` without --accept-data-loss (logged).
   # New unique constraints are applied automatically after a duplicate check
-  # (best-effort dump to backupClaim if mounted). A schema change that would
+  # (best-effort dump to backupClaim if mounted). 9.5 → 10.0 with rooms: the
+  # retired room tables are dropped without allowDataLoss, but the dump is
+  # mandatory — set backupClaim (or skipBackup after your own backup) for that
+  # rollout, otherwise the init container stops unchanged. A schema change that would
   # DELETE data stops the rollout (init container fails, nothing changed) until
   # allowDataLoss is set. With allowDataLoss a pg_dump is written first to the
   # PVC backupClaim (mounted at /backups) — or set skipBackup when you made your

@@ -17,7 +17,15 @@
 #         is applied automatically (best-effort pg_dump first, skipped with a
 #         warning when pg_dump/space/version do not allow it). With duplicates
 #         the start stops and names the table — clean them up first.
-#      b) Anything else (dropped table/column with rows, type change, removed
+#      b) 10.0.0: RETIRED tables of a removed feature (the room/equipment
+#         mailboxes — RETIRED_TABLES in schema-sync-classify.mjs), optionally
+#         next to new unique constraints: every retired table is logged, the
+#         duplicate check runs, then the pre-migration dump is written FIRST
+#         (mandatory, as for COREMAIL_ALLOW_SCHEMA_DATA_LOSS); after it
+#         succeeded the rooms' own mailbox rows (folders, messages) are deleted
+#         (retire_cleanup, one transaction) and the push drops the tables. No
+#         opt-in needed.
+#      c) Anything else (dropped table/column with rows, type change, removed
 #         enum value, unknown warning) FAILS CLOSED with a clear message —
 #         nothing is changed. The operator backs up and re-starts with
 #         COREMAIL_ALLOW_SCHEMA_DATA_LOSS=true; then a pg_dump is written to
@@ -179,7 +187,9 @@ pre_migrate_dump() {
   fi
   if ! dump_preflight; then
     log "ERROR: cannot write the pre-migration dump: ${DUMP_PROBLEM}."
-    log "       Schema NOT changed. Back up yourself and set COREMAIL_SCHEMA_BACKUP=skip to continue."
+    log "       Schema NOT changed. Back up yourself and set COREMAIL_SCHEMA_BACKUP=skip to continue"
+    log "       (Helm: mount a PVC with app.schemaSync.backupClaim, or app.schemaSync.skipBackup=true"
+    log "       after your own backup)."
     exit 1
   fi
   if ! write_dump; then
@@ -249,6 +259,34 @@ check_duplicates() {
   return ${dup_rc}
 }
 
+log_retired_tables() {
+  while IFS="${TAB}" read -r kind table rows reason; do
+    [ "${kind}" = "retired" ] || continue
+    log "Retiring table ${table} (${rows} rows): ${reason}. The rows are kept in the pre-migration dump."
+  done < "${CLS}"
+}
+
+# Data of a retired table that lives in kept tables (10.0.0: the room mailboxes'
+# own mailbox rows with their folders and messages) — deleted after the dump and
+# before the push drops the table. One statement per line = one transaction; run
+# again it deletes nothing. Any error stops the start (the push has not run).
+retire_cleanup() {
+  [ -f "${CLS}" ] && grep -q "^cleanup${TAB}" "${CLS}" || return 0
+  if ! have psql; then
+    log "ERROR: psql is not available — cannot remove the data of the retired tables. Schema NOT changed."
+    exit 1
+  fi
+  while IFS="${TAB}" read -r kind table what query; do
+    [ "${kind}" = "cleanup" ] || continue
+    if ! result="$(psql "${DB_URL}" -tAXq -v ON_ERROR_STOP=1 -c "${query}" 2>&1)"; then
+      log "ERROR: removing the ${what} (retired table ${table}) failed: ${result}"
+      log "       Nothing was deleted and the schema was NOT changed."
+      exit 1
+    fi
+    log "Removed the ${what} (retired table ${table}): ${result}. Their stored objects stay unreferenced in the object store."
+  done < "${CLS}"
+}
+
 refuse_duplicates() {
   log "════════════════════════════════════════════════════════════════════"
   log "ERROR: the schema update adds UNIQUE constraints, but the table holds"
@@ -288,11 +326,25 @@ while true; do
       fi
       refuse_duplicates
     fi
+    if [ "${verdict}" = "retire" ]; then
+      log "The warnings above only drop RETIRED tables of removed features (and add unique constraints)."
+      log_retired_tables
+      if grep -q "^unique${TAB}" "${CLS}"; then check_duplicates || refuse_duplicates; fi
+      pre_migrate_dump
+      retire_cleanup
+      if prisma_push --accept-data-loss; then
+        log "Schema applied: retired tables dropped (their rows are in the pre-migration dump)."
+        exit 0
+      fi
+      log "ERROR: schema push dropping the retired tables failed (see the Prisma output above)"
+      exit 1
+    fi
     if [ "${ALLOW_LOSS}" != "true" ]; then
       refuse
     fi
     log "COREMAIL_ALLOW_SCHEMA_DATA_LOSS=true — destructive schema change permitted"
     pre_migrate_dump
+    retire_cleanup
     if prisma_push --accept-data-loss; then
       log "Schema applied with --accept-data-loss. Remove COREMAIL_ALLOW_SCHEMA_DATA_LOSS again."
       exit 0

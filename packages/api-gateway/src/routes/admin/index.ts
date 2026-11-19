@@ -16,7 +16,6 @@ import { adminDomainsRouter } from './domains.js';
 import { adminQueuesRouter } from './queues.js';
 import { adminLogsRouter } from './logs.js';
 import { adminBackupsRouter } from './backups.js';
-import { adminResourcesRouter } from './resources.js';
 import { adminEmsRouter } from './ems.js';
 import { adminRetentionRouter } from './retention.js';
 import { adminAuditLogRouter } from './audit-log.js';
@@ -54,7 +53,6 @@ export const ADMIN_MOUNTS: ReadonlyArray<readonly [string, Router]> = [
   ['/queues',               adminQueuesRouter],
   ['/backups',              adminBackupsRouter],
   ['/logs',                 adminLogsRouter],
-  ['/resources',            adminResourcesRouter],
   ['/ems',                  adminEmsRouter],
   ['/compliance/retention', adminRetentionRouter],
   ['/audit-log',            adminAuditLogRouter],

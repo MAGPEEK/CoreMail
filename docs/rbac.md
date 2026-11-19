@@ -65,12 +65,12 @@ ORGANIZATION_MANAGEMENT assigns roles and changes admin accounts
    — the same status and body as an unknown id. The scope check runs before the
    handler (`router.param` / `requireInScope`), so there is no existence oracle.
 5. **A write that would place something in another domain → `403 OUT_OF_SCOPE`**
-   (create a mailbox / shared mailbox / resource with a domain or address of
+   (create a mailbox / shared mailbox with a domain or address of
    another domain, an alias address in another domain, a GLOBAL or other-domain
    sender-list entry). Domain names are public DNS facts, so this reveals
    nothing; the 404 rule applies to object ids.
 6. Domains are never moved: no admin route changes the `domainId` of an
-   existing mailbox, shared mailbox, resource or alias, and a domain with
+   existing mailbox, shared mailbox or alias, and a domain with
    mailboxes cannot be renamed (existing rule).
 
 The admin guard reads the scope from the database together with the current
@@ -154,17 +154,13 @@ matrix already limits the route to ORGANIZATION_MANAGEMENT (never scoped) ·
 | `GET /shared-mailboxes` | filter |
 | `POST /shared-mailboxes` | OUT_OF_SCOPE (domainId) |
 | `GET/PUT/DELETE /shared-mailboxes/:id`, `/:id/provision`, `/:id/mail-flow`, `/:id/permissions…` | 404; permission grantee outside → 404 `User not found`; listed grantees of other domains redacted |
-| `GET /resources` | filter |
-| `POST /resources` | OUT_OF_SCOPE (domainId and the address's domain) |
-| `GET/PUT/DELETE /resources/:id`, `GET /:id/bookings`, `DELETE /:id/bookings/:bookingId` | 404; a booking must belong to the resource of the path (was not checked before 9.5); organizers / attendees of other domains in bookings redacted |
-| `GET /resources/freebusy/query?email=` | 404 for a resource outside the scope |
 | `GET /aliases` | filter (alias domain and target domain) |
 | `GET/POST /mailboxes/:id/aliases`, `GET/POST /shared-mailboxes/:id/aliases` | 404 for the owner; alias address in another domain → OUT_OF_SCOPE; list filtered |
 | `PATCH/DELETE /aliases/:aliasId` | 404 unless alias domain and target are in the scope |
 | `GET /mobile/devices` | filter (device user's domain) |
 | `GET /mobile/devices/:id`, `PATCH /:id/status`, `POST /:id/wipe`, `DELETE /:id` | 404; writes on a device of an admin account → `FORBIDDEN_ROLE` |
 | `GET/PUT /protocol-access/users/:id`, `GET/PUT /webmail-policies/users/:id` | 404 |
-| `/ems/mailboxes…`, `/ems/mailbox-statistics`, `/ems/resource-mailboxes` | org (cmdlet bridge addresses objects organisation-wide) |
+| `/ems/mailboxes…`, `/ems/mailbox-statistics` | org (cmdlet bridge addresses objects organisation-wide) |
 
 ### domains
 
@@ -194,7 +190,7 @@ matrix already limits the route to ORGANIZATION_MANAGEMENT (never scoped) ·
 
 | Route | Decision |
 |---|---|
-| `GET /audit-log`, `/export.csv`, `/export.json`, `/export.pdf` | filter: entries whose `targetId` is an object of the scope (user, its mailbox, shared mailbox and its mailbox, resource, alias, domain), whose `targetName` names an address of the scope's domains, or whose actor is the admin itself; addresses of other domains redacted (see "Addresses of other domains") |
+| `GET /audit-log`, `/export.csv`, `/export.json`, `/export.pdf` | filter: entries whose `targetId` is an object of the scope (user, its mailbox, shared mailbox and its mailbox, alias, domain), whose `targetName` names an address of the scope's domains, or whose actor is the admin itself; addresses of other domains redacted (see "Addresses of other domains") |
 | `GET /audit-log/stats`, `GET /audit-log/anomalies` | org |
 | `POST /audit-log/verify-export` | unchanged (checks a file, returns no data) |
 | `GET /message-trace`, `GET /message-trace/export` (mail-flow log) | filter: sender or a recipient in the scope's domains (always the filtered scan, `TRACE_SCAN_LIMIT`); addresses of other domains redacted |
@@ -227,7 +223,7 @@ Every route of `/settings` (except the public `GET /settings/public`),
 - `api-gateway/src/lib/admin-scope.test.ts` — scope rules, `where` builders,
   scope-aware areas/actions, `scopeAssignmentError`, fail-closed `scopeOf`.
 - `api-gateway/src/routes/admin/admin-scope.test.ts` — every router family
-  (mailboxes, domains, shared, resources, aliases, mobile, sender lists,
+  (mailboxes, domains, shared, aliases, mobile, sender lists,
   quarantine, audit, message trace, protocol access / webmail policies,
   server-wide routes), 404 = unknown id, OUT_OF_SCOPE creates, scope
   assignment (audit, session revocation, cache) and escalation.
@@ -270,7 +266,6 @@ unredacted view).
 | `GET …/folder-permissions`, `GET/PUT …/folders/:folderId/permissions` (mailboxes, shared mailboxes) | folder-permission grantees (own and inherited entries) |
 | `GET /quarantine`, `GET /quarantine/:id` | other recipients (`details`), the sender, preview headers; `search` never matches a hidden sender |
 | `GET /message-trace`, `GET /message-trace/export` | metadata (sender, recipients, …) and message text; the sender / recipient / subject filters match the redacted row |
-| `GET /resources/:id`, `GET /resources/:id/bookings` | booking organizer, attendees and every iCalendar line naming such an address (its `CN` display name removed as well) |
 | `GET /audit-log`, `/export.csv`, `/export.json`, `/export.pdf` | actor e-mail, target name, error text and every string, list element and key of `changes`; `actorEmail` / `searchText` filters run on the redacted entries over the newest 5000 entries of the scope (`truncated: true` in the list when the scan was capped) |
 
 **Audit log scope filter**: an entry belongs to the scope when its `targetId` is

@@ -48,8 +48,6 @@ export interface PimUser {
   addresses: string[];
   /** Settings → Region time zone (IANA), null when not set. */
   timeZone: string | null;
-  /** Domain of the user: rooms of this domain are booked by the user's meetings (none without). */
-  domainId: string | null;
 }
 
 export interface RenderContext {

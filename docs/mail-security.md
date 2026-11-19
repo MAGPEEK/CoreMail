@@ -121,19 +121,10 @@ uses); it is updated together with the dependency.
   passed DMARC/SPF/DKIM for a domain aligned with the attendee's domain, or the
   envelope sender is the authenticated local user (SMTP submission, REST, JMAP,
   ActiveSync). The mail itself is still delivered.
-* **Resource mailboxes**: bookings are scoped to the resource's calendar
-  (unique per calendar + iCal UID since 9.0, so one meeting can book several
-  rooms). The organizer is the iCal `ORGANIZER` (`mailto:`), else the header
-  `From` — never the envelope sender, so updates through mailing lists or
-  forwarders with SRS/VERP return paths work (9.0). An existing booking is
-  updated or cancelled only by its stored organizer, and only when that
-  identity is authenticated (domain aligned with a verified domain, or the
-  authenticated local sender). A new request from an unauthenticated sender is
-  stored as `PENDING` (manual approval) instead of being auto-accepted.
-  Invitations from local users (MWA, JMAP, ActiveSync, SMTP submission) reach
-  rooms as well (9.0) — they are processed on every delivery path. A local
-  recipient that does not exist (anymore) at delivery time is never dropped
-  silently: the sender gets an NDR (`5.1.1`).
+* **Resource mailboxes**: removed in 10.0.0 — a former room address is an
+  unknown recipient (550 5.1.1 at RCPT on port 25). A local recipient that does
+  not exist (anymore) at delivery time is never dropped silently: the sender
+  gets an NDR (`5.1.1`).
 
 ## Sender lists (block / allow, 9.4)
 

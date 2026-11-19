@@ -31,7 +31,6 @@ let domainLookups = 0;
     findMany: async () => [],
   },
   sharedMailbox: { findFirst: async () => null },
-  resourceMailbox: { findFirst: async () => null },
   emailAlias: { findFirst: async () => null },
 };
 

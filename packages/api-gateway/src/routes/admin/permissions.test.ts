@@ -173,7 +173,6 @@ const MOUNT_AREAS: Record<string, { area: AdminArea | null; get: string; write?:
   '/queues':               { area: 'servers',      get: '/settings', write: ['PUT', '/settings'] },
   '/backups':              { area: 'servers',      get: '/jobs' },
   '/logs':                 { area: 'servers',      get: '/levels' },
-  '/resources':            { area: 'recipients',   get: '/', write: ['POST', '/'] },
   '/compliance/retention': { area: 'compliance',   get: '/', write: ['POST', '/'] },
   '/audit-log':            { area: 'compliance',   get: '/stats' },
   '/servers':              { area: 'servers',      get: '/settings', write: ['PUT', '/settings'] },

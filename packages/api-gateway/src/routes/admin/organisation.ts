@@ -210,7 +210,7 @@ adminOrganisationRouter.get('/gal', async (req: Request, res: Response) => {
       ]}
     : {};
 
-  const [users, sharedBoxes, groups, resources] = await Promise.all([
+  const [users, sharedBoxes, groups] = await Promise.all([
     prisma.user.findMany({
       where: { active: true, ...where },
       take: parseInt(limit), orderBy: { displayName: 'asc' },
@@ -223,18 +223,12 @@ adminOrganisationRouter.get('/gal', async (req: Request, res: Response) => {
     }),
     // v5.6.1: distributionGroup search removed
     Promise.resolve([] as Array<{ id: string; email: string; displayName: string }>),
-    prisma.resourceMailbox.findMany({
-      where: { active: true, ...where },
-      take: parseInt(limit), orderBy: { displayName: 'asc' },
-      select: { id: true, email: true, displayName: true, resourceType: true },
-    }),
   ]);
 
   res.json({
     users:     users.map(u => ({ ...u, type: 'USER' })),
     shared:    sharedBoxes.map(s => ({ ...s, type: 'SHARED' })),
     groups:    groups.map(g => ({ ...g, type: 'GROUP' })),
-    resources: resources.map(r => ({ ...r, type: r.resourceType })),
-    total: users.length + sharedBoxes.length + groups.length + resources.length,
+    total: users.length + sharedBoxes.length + groups.length,
   });
 });

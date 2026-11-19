@@ -26,7 +26,7 @@ export const adminEmsRouter: RouterType = Router();
 // v6 RBAC: the EMS bridge spans several areas — guard per cmdlet family.
 // Anything not listed: ORGANIZATION_MANAGEMENT only (fail closed).
 const EMS_AREAS: Array<[RegExp, AdminArea]> = [
-  [/^\/(mailboxes|mailbox-statistics|resource-mailboxes)(\/|$)/, 'recipients'],
+  [/^\/(mailboxes|mailbox-statistics)(\/|$)/, 'recipients'],
   [/^\/accepted-domains(\/|$)/, 'domains'],
   [/^\/transport-rules(\/|$)/, 'hygiene'],
 ];
@@ -336,34 +336,3 @@ adminEmsRouter.get('/mailbox-statistics', async (req: Request, res: Response) =>
     LastLogoffTime: new Date().toISOString(),
   });
 });
-
-// ──────────────────────────────────────────────────────────────────
-// Get-ResourceMailbox
-// ──────────────────────────────────────────────────────────────────
-
-adminEmsRouter.get('/resource-mailboxes', async (req: Request, res: Response) => {
-  const { identity } = req.query as { identity?: string };
-  if (identity) {
-    const r = await prisma.resourceMailbox.findFirst({ where: { OR: [{ email: identity }, { id: identity }] } });
-    if (!r) { res.status(404).json({ error: `Resource '${identity}' not found.` }); return; }
-    res.json([formatResource(r)]);
-    return;
-  }
-  const resources = await prisma.resourceMailbox.findMany({ orderBy: { displayName: 'asc' } });
-  res.json(resources.map(formatResource));
-});
-
-function formatResource(r: { id: string; email: string; displayName: string; resourceType: string; capacity: number | null; location: string; active: boolean }) {
-  return {
-    Identity: r.id,
-    Alias: r.email.split('@')[0],
-    DisplayName: r.displayName,
-    PrimarySmtpAddress: r.email,
-    ResourceType: r.resourceType,
-    Capacity: r.capacity,
-    Location: r.location,
-    IsEnabled: r.active,
-    RecipientType: 'UserMailbox',
-    RecipientTypeDetails: r.resourceType === 'ROOM' ? 'RoomMailbox' : 'EquipmentMailbox',
-  };
-}

@@ -3,7 +3,7 @@
  * the `globalThis.__prisma` seam of @coremail/storage. Supports the query shapes
  * the commands use: equality, in/contains/equals (mode ignored → case-insensitive),
  * gt/lt/lte, OR/AND/NOT, relation filters (folder.mailbox, message.folder,
- * calendarEvent.calendar, resourceBooking.calendar.resource), select/include of those
+ * calendarEvent.calendar), select/include of those
  * relations, compound unique keys (findUnique / upsert), increment updates,
  * count/aggregate and `$transaction(fn)`; `updatedAt` of calendar events, tasks, notes,
  * contacts and contact groups is set on every write. Every call is logged in `calls`.
@@ -25,10 +25,6 @@ const RELATIONS: Record<string, Record<string, { table: string; local: string; f
   calendar: { shares: { table: 'calendarShare', local: 'id', foreign: 'calendarId', many: true } },
   user: { mailFlowPolicy: { table: 'mailFlowPolicy', local: 'id', foreign: 'userId' } },
   sharedMailbox: { mailFlowPolicy: { table: 'mailFlowPolicy', local: 'id', foreign: 'sharedMailboxId' } },
-  // rooms booked by calendar writes (storage room-booking.ts)
-  resourceMailbox: { calendar: { table: 'resourceCalendar', local: 'id', foreign: 'resourceId' } },
-  resourceCalendar: { resource: { table: 'resourceMailbox', local: 'resourceId', foreign: 'id' } },
-  resourceBooking: { calendar: { table: 'resourceCalendar', local: 'calendarId', foreign: 'id' } },
 };
 
 /** `{ a_b: { a, b } }` compound unique keys of findUnique / upsert as plain equality. */
@@ -221,8 +217,7 @@ export function createFakeDb(tables: Tables) {
   }
 
   const db: Row = { $on: () => undefined, calls, tables };
-  for (const name of ['user', 'emailAlias', 'userSettings', 'activeSyncDevice', 'activeSyncItem', 'mailbox', 'folder', 'message', 'attachment', 'sharedMailbox', 'sharedMailboxPerm', 'mailFlowPolicy', 'contact', 'contactGroup', 'calendar', 'calendarShare', 'calendarEvent', 'task', 'note', 'systemLog', 'webmailPolicy',
-    'resourceMailbox', 'resourceCalendar', 'resourceBooking']) {
+  for (const name of ['user', 'emailAlias', 'userSettings', 'activeSyncDevice', 'activeSyncItem', 'mailbox', 'folder', 'message', 'attachment', 'sharedMailbox', 'sharedMailboxPerm', 'mailFlowPolicy', 'contact', 'contactGroup', 'calendar', 'calendarShare', 'calendarEvent', 'task', 'note', 'systemLog', 'webmailPolicy']) {
     db[name] = model(name);
   }
   db['$transaction'] = async (fn: (tx: unknown) => Promise<unknown>) => fn(db);

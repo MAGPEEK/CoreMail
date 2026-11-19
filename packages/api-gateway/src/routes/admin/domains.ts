@@ -137,12 +137,11 @@ adminDomainsRouter.put('/:id', async (req: Request, res: Response) => {
     if (clash) { res.status(409).json({ error: 'Domain already exists' }); return; }
     // Addresses are stored in full (user@old-domain): a rename would leave every
     // mailbox, alias and shared mailbox on a domain that no longer exists.
-    const [users, shared, resources] = await Promise.all([
+    const [users, shared] = await Promise.all([
       prisma.user.count({ where: { domainId: id } }),
       prisma.sharedMailbox.count({ where: { domainId: id } }),
-      prisma.resourceMailbox.count({ where: { domainId: id } }),
     ]);
-    if (users + shared + resources > 0) {
+    if (users + shared > 0) {
       res.status(409).json({
         error: 'The domain has mailboxes and cannot be renamed. Add the new domain and move the mailboxes instead.',
         code: 'DOMAIN_IN_USE',
@@ -224,12 +223,11 @@ adminDomainsRouter.delete('/:id', async (req: Request, res: Response) => {
   const domain = await prisma.domain.findUnique({ where: { id } });
   if (!domain) { res.status(404).json({ error: 'Domain not found' }); return; }
   if (domain.primary) { res.status(409).json({ error: 'Primary domain cannot be deleted' }); return; }
-  // v6: every FK with onDelete Restrict is checked up front (shared/resource
+  // v6: every FK with onDelete Restrict is checked up front (shared
   // mailboxes used to crash the service with an unhandled Prisma P2003).
-  const [userCount, sharedCount, resourceCount, ldapCount, oidcCount, scopeCount] = await Promise.all([
+  const [userCount, sharedCount, ldapCount, oidcCount, scopeCount] = await Promise.all([
     prisma.user.count({ where: { domainId: id } }),
     prisma.sharedMailbox.count({ where: { domainId: id } }),
-    prisma.resourceMailbox.count({ where: { domainId: id } }),
     prisma.ldapConfig.count({ where: { domainId: id } }),
     prisma.oidcProvider.count({ where: { domainId: id } }),
     prisma.adminScope.count({ where: { domainId: id } }),
@@ -242,7 +240,6 @@ adminDomainsRouter.delete('/:id', async (req: Request, res: Response) => {
   }
   if (userCount > 0) { res.status(409).json({ error: 'Domain has active mailboxes' }); return; }
   if (sharedCount > 0) { res.status(409).json({ error: 'Domain has shared mailboxes' }); return; }
-  if (resourceCount > 0) { res.status(409).json({ error: 'Domain has resource mailboxes' }); return; }
   if (ldapCount > 0 || oidcCount > 0) {
     res.status(409).json({ error: 'Domain has an LDAP or SSO configuration — remove it first' }); return;
   }

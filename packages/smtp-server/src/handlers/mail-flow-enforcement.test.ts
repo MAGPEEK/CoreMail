@@ -38,7 +38,6 @@ let created = 0;
     findUnique: async ({ where }: { where: W }) => (where['id'] === 'u1' ? { ...user, mailbox: { id: 'mb1' } } : null),
   },
   sharedMailbox: { findFirst: none, findUnique: none },
-  resourceMailbox: { findFirst: none },
   emailAlias: { findFirst: none, findMany: async () => [] },
   sharedMailboxPerm: { findMany: async () => [] },
   mailFlowPolicy: { findUnique: async ({ where }: { where: W }) => (where['userId'] === 'u1' ? policyRow : null) },
@@ -92,11 +91,11 @@ test('DATA: refused only when EVERY local recipient refuses and there is no exte
   const facts = { envelopeFrom: 'x@ext.test', headerFrom: 'x@ext.test', sizeBytes: 10 };
   const refusing = { policy: storage.mailFlowFromRow({ rejectFrom: ['ext.test'] }) };
   const open = { policy: storage.mailFlowFromRow(null) };
-  const lookup = async (r: string) => (r.startsWith('no') ? refusing : r.startsWith('res') ? null : open);
+  const lookup = async (r: string) => (r.startsWith('no') ? refusing : r.startsWith('postmaster') ? null : open);
   assert.equal(await refusalForAllRecipients(['no1@corp.test', 'no2@corp.test'], [], facts, lookup), storage.SENDER_REFUSED_REPLY);
   assert.equal(await refusalForAllRecipients(['no1@corp.test', 'yes@corp.test'], [], facts, lookup), null, 'one accepts → NDR path');
   assert.equal(await refusalForAllRecipients(['no1@corp.test'], ['x@ext2.test'], facts, lookup), null, 'external targets are delivered');
-  assert.equal(await refusalForAllRecipients(['res@corp.test'], [], facts, lookup), null, 'a resource mailbox accepts');
+  assert.equal(await refusalForAllRecipients(['postmaster@corp.test'], [], facts, lookup), null, 'a target without a policy-bearing mailbox accepts');
   assert.equal(await refusalForAllRecipients([], [], facts, lookup), null);
 });
 

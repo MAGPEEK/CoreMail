@@ -2,8 +2,7 @@
  * iTIP REQUEST → REPLY for invitees (RFC 5546 §3.2.3, iMIP RFC 6047).
  *
  * Used by protocols where the server answers an invitation on behalf of the
- * user (ActiveSync MeetingResponse) and by resource mailboxes that answer invitations
- * by mail (smtp-server handlers/resource-reply.ts, 9.5). Dependency-free counterpart of the
+ * user (ActiveSync MeetingResponse). Dependency-free counterpart of the
  * organizer-side helper in api-gateway `lib/imip.ts`:
  *  - `findITipRequest()`        — the METHOD:REQUEST VCALENDAR of a raw mail
  *  - `calendarObjectForInvitee()` — the stored calendar object (no METHOD, own PARTSTAT)
@@ -122,16 +121,6 @@ function mailboxHeader(m: { email: string; name?: string }): string {
   return name.startsWith('=?') ? `${name} <${addr}>` : `"${name.replace(/["\\]/g, '')}" <${addr}>`;
 }
 
-/** Header names the MIME builder writes itself — never taken from `headers`. */
-const OWN_HEADERS = new Set(['from', 'to', 'subject', 'date', 'message-id', 'mime-version', 'content-type', 'x-coremail-calendar-method']);
-
-/** Pure: `Name: value` lines of extra header fields — token names only, control characters removed from values. */
-function extraHeaderLines(headers: Readonly<Record<string, string>>): string[] {
-  return Object.entries(headers)
-    .filter(([name]) => /^[A-Za-z0-9-]+$/.test(name) && !OWN_HEADERS.has(name.toLowerCase()))
-    .map(([name, value]) => `${name}: ${value.replace(/[\x00-\x1f\x7f]/g, ' ').trim()}`);
-}
-
 function base64Lines(data: string): string {
   return (Buffer.from(data, 'utf8').toString('base64').match(/.{1,76}/g) ?? []).join('\r\n');
 }
@@ -150,12 +139,6 @@ export function buildITipReplyMime(args: {
   now?: Date;
   /** Boundary / Message-ID seed (deterministic tests). */
   seed?: string;
-  /** 9.5: subject instead of "<Verb>: <summary>" (resource replies are written in German). */
-  subject?: string;
-  /** 9.5: text part instead of the default one-line English sentence. */
-  text?: string;
-  /** 9.5: extra header fields (e.g. Auto-Submitted, In-Reply-To); unsafe names are dropped, values single-line. */
-  headers?: Readonly<Record<string, string>>;
 }): Buffer {
   const verb = SUBJECT_PREFIX[args.partstat];
   const action = args.partstat === 'TENTATIVE' ? 'tentatively accepted' : verb.toLowerCase();
@@ -167,12 +150,11 @@ export function buildITipReplyMime(args: {
   const lines = [
     `From: ${mailboxHeader(args.from)}`,
     `To: ${bareAddr(args.to)}`,
-    `Subject: ${headerText(args.subject ?? `${verb}: ${args.summary}`)}`,
+    `Subject: ${headerText(`${verb}: ${args.summary}`)}`,
     `Date: ${(args.now ?? new Date()).toUTCString().replace('GMT', '+0000')}`,
     `Message-ID: <${seed}@${domain}>`,
     'MIME-Version: 1.0',
     'X-Coremail-Calendar-Method: REPLY',
-    ...extraHeaderLines(args.headers ?? {}),
     `Content-Type: multipart/mixed; boundary="${mixed}"`,
     '',
     `--${mixed}`,
@@ -182,7 +164,7 @@ export function buildITipReplyMime(args: {
     'Content-Type: text/plain; charset=UTF-8',
     'Content-Transfer-Encoding: base64',
     '',
-    base64Lines(args.text ?? `${who} has ${action} the invitation "${args.summary}".`),
+    base64Lines(`${who} has ${action} the invitation "${args.summary}".`),
     `--${alt}`,
     'Content-Type: text/calendar; charset=UTF-8; method=REPLY',
     'Content-Transfer-Encoding: base64',

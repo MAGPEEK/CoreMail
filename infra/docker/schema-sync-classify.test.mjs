@@ -3,7 +3,8 @@
 // The fixtures are the verbatim output of `prisma db push` (Prisma 5.22.0,
 // postgres:16-alpine), captured from the 8.0.0 → current schema change and from
 // a scratch schema with dropped columns/tables, removed enum values and a new
-// required column.
+// required column. UPGRADE_9_5 (10.0.0: the room tables are retired) uses the
+// same "drop the `x` table" wording as the captured DROPS fixture.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -11,7 +12,24 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
   classify, classifyWarning, format, guardSql, loadOptionalColumns, optionalColumnsWithoutDefault, parseWarnings, schemaFromUrl,
+  RETIRED_TABLES, RETIREMENT_CLEANUP, roomMailboxCleanupSql,
 } from './schema-sync-classify.mjs';
+
+// 9.5.x → 10.0.0: the room/equipment tables hold rows and are dropped.
+const UPGRADE_9_5 = `
+⚠️  There might be data loss when applying the changes:
+
+  • You are about to drop the \`resource_bookings\` table, which is not empty (2 rows).
+
+  • You are about to drop the \`resource_calendars\` table, which is not empty (1 rows).
+
+  • You are about to drop the \`resource_mailboxes\` table, which is not empty (1 rows).
+
+
+Error: Use the --accept-data-loss flag to ignore the data loss warnings like prisma db push --accept-data-loss
+`;
+const dropTable = (table, rows = 1) => `  • You are about to drop the \`${table}\` table, which is not empty (${rows} rows).`;
+const warnings = (...bullets) => `\n⚠️  There might be data loss when applying the changes:\n\n${bullets.join('\n\n')}\n\n\nError: Use the --accept-data-loss flag\n`;
 
 const UPGRADE_8_0 = `Prisma schema loaded from prisma/schema.prisma
 Datasource "db": PostgreSQL database "coremail", schema "public" at "postgres:5432"
@@ -126,7 +144,7 @@ model Bar {
   const real = optionalColumnsWithoutDefault(TARGET_SCHEMA);
   assert.ok(real.get('tasks').has('uid') && real.get('tasks').has('icalData'));
   assert.ok(!real.get('contacts').has('uid'));
-  assert.ok(!real.get('resource_bookings').has('uid'));
+  assert.ok(!real.has('resource_bookings'), '10.0: the retired room tables are gone from the schema');
 });
 
 test('guard SQL for a constraint without optional columns only checks the table', () => {
@@ -195,4 +213,112 @@ test('CLI reads the target schema from COREMAIL_PRISMA_SCHEMA_FILE', () => {
   const [kind, table, columns, guard] = out.trimEnd().split('\n')[1].split('\t');
   assert.deepEqual([kind, table, columns], ['unique', 'tasks', 'userId,uid']);
   assert.match(guard, /THEN 'new-column'/);
+});
+
+// ── 10.0.0: retired tables ───────────────────────────────────────────────────
+
+test('9.5.x → 10.0.0: dropping the room tables is a retirement (dump first, no opt-in)', () => {
+  const r = classify(UPGRADE_9_5);
+  assert.equal(r.verdict, 'retire');
+  assert.deepEqual(r.items.map((i) => [i.kind, i.table, i.rows]), [
+    ['retired', 'resource_bookings', 2], ['retired', 'resource_calendars', 1], ['retired', 'resource_mailboxes', 1],
+  ]);
+  assert.match(r.items[0].reason, /removed in CoreMail 10\.0\.0/);
+  assert.deepEqual(Object.keys(RETIRED_TABLES).sort(), ['resource_bookings', 'resource_calendars', 'resource_mailboxes']);
+});
+
+test('retired tables next to new unique constraints: still a retirement, the unique items keep their duplicate check', () => {
+  const r = classify(`${UPGRADE_9_5}\n${UPGRADE_9_4}`);
+  assert.equal(r.verdict, 'retire');
+  assert.deepEqual(r.items.map((i) => i.kind).sort(), ['retired', 'retired', 'retired', 'unique']);
+});
+
+test('any other drop next to a retired table stays fail-closed', () => {
+  assert.equal(classify(warnings(dropTable('resource_bookings'), dropTable('users', 3))).verdict, 'unsafe');
+  assert.equal(classify(warnings(dropTable('resource_bookings'),
+    '  • You are about to drop the column `extra` on the `foos` table, which still contains 2 non-null values.')).verdict, 'unsafe');
+  // a column drop inside a retired table is not a table retirement
+  assert.equal(classify(warnings('  • You are about to drop the column `uid` on the `resource_bookings` table, which still contains 2 non-null values.')).verdict, 'unsafe');
+  assert.equal(classify(`${UPGRADE_9_5}\n${ENUM}`).verdict, 'unsafe');
+  assert.equal(classify(`${UPGRADE_9_5}\nError: We found changes that cannot be executed`).verdict, 'unsafe');
+});
+
+test('only exact retired table names qualify (no look-alikes, no qualified names, no prototype keys)', () => {
+  for (const table of ['resource_bookings_old', 'public.resource_bookings', 'Resource_Bookings', 'constructor', 'toString', 'bars']) {
+    assert.equal(classifyWarning(dropTable(table).replace(/^\s*•\s*/, '')).kind, 'unsafe', table);
+  }
+  // a different (future) wording is not trusted
+  assert.equal(classifyWarning('You are about to drop the `resource_bookings` table.').kind, 'unsafe');
+});
+
+test('CLI output lists the retired tables for schema-sync.sh', () => {
+  const script = fileURLToPath(new URL('./schema-sync-classify.mjs', import.meta.url));
+  const out = execFileSync(process.execPath, [script, 'public'], { input: UPGRADE_9_5, encoding: 'utf8' });
+  const lines = out.trimEnd().split('\n');
+  assert.equal(lines[0], 'verdict\tretire');
+  const retired = lines.filter((l) => l.startsWith('retired\t')).map((l) => l.split('\t'));
+  assert.deepEqual(retired.map((f) => [f[1], f[2]]), [['resource_bookings', '2'], ['resource_calendars', '1'], ['resource_mailboxes', '1']]);
+  assert.ok(retired.every((f) => f.length === 4 && /10\.0\.0/.test(f[3])));
+  assert.equal(out, format(classify(UPGRADE_9_5)));
+});
+
+test('10.0: the room mailboxes\' own mailbox rows are cleaned up before resource_mailboxes is dropped', () => {
+  const r = classify(UPGRADE_9_5, 'tenant_a');
+  const rooms = r.items.find((i) => i.table === 'resource_mailboxes');
+  assert.equal(rooms.cleanup.what, 'mailboxes of the former room/equipment mailboxes');
+  assert.equal(rooms.cleanup.sql, roomMailboxCleanupSql('tenant_a'));
+  // only the room tables' data lives elsewhere: calendars / bookings need no clean-up
+  assert.deepEqual(r.items.filter((i) => i.cleanup).map((i) => i.table), ['resource_mailboxes']);
+  assert.deepEqual(Object.keys(RETIREMENT_CLEANUP), ['resource_mailboxes']);
+  assert.ok(Object.keys(RETIREMENT_CLEANUP).every((t) => Object.hasOwn(RETIRED_TABLES, t)), 'clean-up only for retired tables');
+});
+
+test('room mailbox clean-up SQL: schema-qualified, only owner-less mailboxes of a room, one statement, counted before the delete', () => {
+  const sql = roomMailboxCleanupSql('tenant_a');
+  assert.ok(!sql.includes(';'), 'a single statement (one transaction)');
+  assert.match(sql, /^WITH doomed AS \(SELECT m\."id" FROM "tenant_a"\."mailboxes" m JOIN "tenant_a"\."resource_mailboxes" r ON r\."mailboxId" = m\."id" WHERE m\."userId" IS NULL AND m\."sharedBoxId" IS NULL\)/);
+  assert.match(sql, /DELETE FROM "tenant_a"\."mailboxes" WHERE "id" IN \(SELECT "id" FROM doomed\) RETURNING "id"/);
+  // nothing but mailboxes is deleted directly — folders / messages follow the ON DELETE CASCADE keys
+  assert.equal((sql.match(/DELETE FROM/g) ?? []).length, 1);
+  assert.match(sql, /' mailbox\(es\), '.*' folder\(s\), '.*' message\(s\)'$/);
+  for (const t of ['mailboxes', 'resource_mailboxes', 'folders', 'messages']) {
+    assert.ok(!new RegExp(`(?<![.])"${t}"`).test(sql), `${t} is always schema-qualified`);
+  }
+});
+
+test('the clean-up relies on cascading foreign keys of the current schema (mailbox → folders → messages → attachments)', () => {
+  const schema = readFileSync(new URL('../../packages/storage/prisma/schema.prisma', import.meta.url), 'utf8').replace(/\r/g, '');
+  const modelBody = (name) => new RegExp(`^model ${name} \\{([\\s\\S]*?)^\\}`, 'm').exec(schema)[1];
+  assert.match(modelBody('Mailbox'), /^\s*userId\s+String\?/m);
+  assert.match(modelBody('Mailbox'), /^\s*sharedBoxId\s+String\?/m);
+  assert.match(modelBody('Mailbox'), /@@map\("mailboxes"\)/);
+  assert.match(modelBody('Folder'), /^\s*mailboxId\s+String\s*$/m);
+  assert.match(modelBody('Folder'), /@@map\("folders"\)/);
+  assert.match(modelBody('Message'), /^\s*folderId\s+String\s*$/m);
+  assert.match(modelBody('Message'), /@@map\("messages"\)/);
+  // every required relation to Mailbox / Folder / Message cascades — a RESTRICT one would block the delete
+  const required = [...schema.matchAll(/^\s*\w+\s+(Mailbox|Folder|Message)\s+@relation\(([^)]*)\)/gm)];
+  assert.ok(required.length >= 6, `found ${required.length} relations`);
+  for (const [line, , args] of required) assert.match(args, /onDelete: Cascade/, line.trim());
+  // optional relations to them never restrict (Prisma's default for an optional relation is SET NULL)
+  for (const [line, , args] of schema.matchAll(/^\s*\w+\s+(Mailbox|Folder|Message)\?\s+@relation\(([^)]*)\)/gm)) {
+    assert.doesNotMatch(args, /onDelete: (Restrict|NoAction)/, line.trim());
+  }
+});
+
+test('a retired drop in a schema with an unusual name is not auto-applied (the clean-up SQL quotes it)', () => {
+  assert.equal(classify(UPGRADE_9_5, 'bad"name').verdict, 'unsafe');
+  assert.equal(classify(UPGRADE_9_5, 'public').verdict, 'retire');
+});
+
+test('CLI output: a cleanup line follows the resource_mailboxes retired line', () => {
+  const script = fileURLToPath(new URL('./schema-sync-classify.mjs', import.meta.url));
+  const out = execFileSync(process.execPath, [script, 'public'], { input: UPGRADE_9_5, encoding: 'utf8' });
+  const lines = out.trimEnd().split('\n');
+  const at = lines.findIndex((l) => l.startsWith('retired\tresource_mailboxes\t'));
+  const cleanup = lines[at + 1].split('\t');
+  assert.equal(cleanup.length, 4);
+  assert.deepEqual(cleanup.slice(0, 3), ['cleanup', 'resource_mailboxes', 'mailboxes of the former room/equipment mailboxes']);
+  assert.equal(cleanup[3], roomMailboxCleanupSql('public'));
+  assert.equal(lines.filter((l) => l.startsWith('cleanup\t')).length, 1);
 });

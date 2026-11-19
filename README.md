@@ -80,7 +80,7 @@
 | Shared Mailbox reader in MWA — "Open another mailbox" via account dropdown | ✅ |
 | Folder CRUD in Shared Mailboxes (new folder, rename, delete, default folders protected) | ✅ |
 | Email aliases per user mailbox and Shared Mailbox | ✅ |
-| Room and equipment mailboxes with auto-accept | ⚠️ managed via the REST/EMS API only (no BCP page); see room booking below |
+| Room and equipment mailboxes | ❌ removed in 10.0.0 — use a shared mailbox or a shared calendar ([upgrade notes](docs/changes/remove-resources.md)) |
 | Out-of-office assistant (automatic replies per RFC 3834) | ✅ |
 | Inbox rules & transport rules + 9 Exchange templates (disclaimer, CEO phishing, PCI-DSS, …) | ⚠️ transport rules run only on local delivery (not on mail to external recipients); a reject sends a DSN only to local senders |
 | Mailbox search in MWA (subject, sender, body; folder or whole mailbox, paged) | ⚠️ substring match without a full-text index |
@@ -88,7 +88,7 @@
 | SMTP gateway mode (relay to upstream MTA) | ✅ |
 | Retention policies, Exchange 2019 compliant (DPT/RPT/personal tags · 8 templates · Recoverable Items) | ✅ |
 | Managed Folder Assistant (tag hierarchy, soft/hard delete) | ✅ |
-| EMS-style REST admin bridge (`/api/v1/admin/ems/` — Mailbox/Domain/TransportRule/ResourceMailbox) | ✅ |
+| EMS-style REST admin bridge (`/api/v1/admin/ems/` — Mailbox/Domain/TransportRule) | ✅ |
 
 ### Calendar & Collaboration
 
@@ -98,16 +98,14 @@
 | Shared team calendars | ✅ |
 | Meeting requests (iCal standard) | ✅ |
 | Free/busy lookup (incl. recurring events) | ⚠️ only your own calendars and calendars shared with you |
-| Room and resource booking with auto-accept | ⚠️ only for invitations arriving via inbound SMTP; the organizer gets no reply; pending bookings cannot be approved; time zones are not handled reliably |
 | CalDAV (iOS, Android, Thunderbird — REPORT, MKCALENDAR, ETag/If-Match, TZID/RRULE) | ✅ |
 | Contacts & CardDAV (incl. REPORT) | ✅ |
 | Tasks & notes | ✅ |
-| Calendar: recurrence editor, edit/delete a single occurrence of a series, scheduling assistant with suggested times, rooms with conflict check, show-as (free / tentative / busy / away), reminders (also by mail) — [docs/calendar.md](docs/calendar.md) | ✅ |
+| Calendar: recurrence editor, edit/delete a single occurrence of a series, scheduling assistant with suggested times, show-as (free / tentative / busy / away), reminders (also by mail) — [docs/calendar.md](docs/calendar.md) | ✅ |
 | Tasks with the full task form, follow-up flags on mail (with dates and reminders, also over ActiveSync), "flagged items and tasks" list — [docs/tasks.md](docs/tasks.md) | ✅ |
 | CalDAV task list (VTODO) synced both ways with Apple Reminders, Thunderbird and DAVx⁵ — [docs/caldav.md](docs/caldav.md) | ✅ |
 | Contacts with several typed e-mail addresses, phone numbers, postal addresses, web and chat addresses, structured name, birthday / anniversary and categories; contact groups ("Kontaktlisten", also over CardDAV); note categories — [docs/contacts.md](docs/contacts.md) | ✅ |
 | Folder permissions like Outlook (roles per folder for a user or "Default"; webmail, BCP, REST, IMAP ACL) — [docs/mailbox-management.md](docs/mailbox-management.md) | ✅ |
-| Rooms answer mailed invitations with an iMIP reply; recurring room invitations are checked occurrence by occurrence | ✅ |
 | Global Address List (GAL) | ✅ |
 
 ### Security

@@ -1,10 +1,6 @@
 /**
  * v8.1 review — local delivery paths:
- *  - booking updates/cancels match the iCal ORGANIZER / header From (not the
- *    SRS/VERP envelope) and need an aligned-authenticated domain or the
- *    authenticated local sender
- *  - room invitations from local senders (submission, worker) are processed
- *    inside storeInboundMessage; unknown recipients produce an NDR
+ *  - unknown recipients produce an NDR (10.0: including former room addresses)
  *  - our own Authentication-Results are stripped on every local path
  *  - the X-Filter-Context recipient list is capped
  * Run: node --import tsx --test src/handlers/local-delivery.test.ts  (in packages/smtp-server)
@@ -19,42 +15,16 @@ process.env['LOG_LEVEL'] = 'error';
 delete process.env['SMTP_HOSTNAME'];
 delete process.env['MAIL_HOSTNAME'];
 
-interface Booking { id: string; calendarId: string; uid: string; organizer: string; status: string }
-const bookings: Booking[] = [];
 const none = async () => null;
-const resourceLocks: string[] = [];
-// the resource settings of the BCP (9.5: the mail path applies the same rules as the event form)
-const POLICY = {
-  email: 'room@corp.test', active: true, autoAccept: true, requireApproval: false, autoDeclineConflict: false,
-  allowRecurring: true, maxDurationMinutes: null, bookingWindowDays: 3650,
-};
 (globalThis as unknown as { __prisma: unknown }).__prisma = {
   $on: () => undefined,
   $transaction: async (fn: (tx: unknown) => unknown) => fn((globalThis as unknown as { __prisma: unknown }).__prisma),
-  resourceCalendar: {
-    update: async ({ where }: { where: { id: string } }) => { resourceLocks.push(where.id); return { id: where.id }; },
-  },
   serverSettings: { findUnique: async () => ({ publicHostname: 'MX.corp.test' }) },
   user: { findFirst: none, findMany: async () => [] },
   sharedMailbox: { findFirst: none },
   systemLog: { create: async () => ({}) },
-  resourceMailbox: {
-    findFirst: async ({ where }: { where: { email: string } }) => (where.email === 'room@corp.test'
-      ? { id: 'r1', ...POLICY, calendar: { id: 'cal1' } }
-      : null),
-  },
-  resourceBooking: {
-    findUnique: async ({ where }: { where: { calendarId_uid: { calendarId: string; uid: string } } }) =>
-      bookings.find((b) => b.calendarId === where.calendarId_uid.calendarId && b.uid === where.calendarId_uid.uid) ?? null,
-    // 9.5: the shared conflict check reads the resource's bookings
-    findMany: async ({ where }: { where: { calendarId: string } }) => bookings.filter((b) => b.calendarId === where.calendarId),
-    create: async ({ data }: { data: Omit<Booking, 'id'> }) => { const b = { id: `b${bookings.length + 1}`, ...data }; bookings.push(b); return b; },
-    update: async ({ where, data }: { where: { id: string }; data: Partial<Booking> }) => { const b = bookings.find((x) => x.id === where.id)!; Object.assign(b, data); return b; },
-    delete: async ({ where }: { where: { id: string } }) => { const i = bookings.findIndex((x) => x.id === where.id); return bookings.splice(i, 1)[0]; },
-  },
 };
 
-const { processResourceMailboxes, organizerIdentity, icalOrganizer, headerFromAddress } = await import('./resource-booking.js');
 const { storeInboundMessage } = await import('./message.js');
 const {
   stripForLocalDelivery, stripOwnAuthResultsAll, authservIdsFrom, bounceUnknownLocal, unknownRecipientDsn,
@@ -62,67 +32,19 @@ const {
 const { localDeliveryBuffer, deliverOutboundJob } = await import('../outbound/queue.js');
 const { filterContext, FILTER_CONTEXT_MAX_RCPTS } = await import('../inbound/handler.js');
 
-const invite = (method: string, uid: string, opts: { organizer?: string; from?: string; start?: string } = {}) => Buffer.from([
-  ...(opts.from ? [`From: ${opts.from}`] : []), 'Subject: Room', '', 'BEGIN:VCALENDAR', `METHOD:${method}`, 'BEGIN:VEVENT', `UID:${uid}`,
-  ...(opts.organizer ? [`ORGANIZER;CN=Org:mailto:${opts.organizer}`] : []),
-  `DTSTART:${opts.start ?? '20261201T090000Z'}`, 'DTEND:20261201T100000Z', 'SUMMARY:Sync', 'END:VEVENT', 'END:VCALENDAR', '',
+const invite = (uid: string) => Buffer.from([
+  'From: alice@corp.test', 'Subject: Room', '', 'BEGIN:VCALENDAR', 'METHOD:REQUEST', 'BEGIN:VEVENT', `UID:${uid}`,
+  'ORGANIZER;CN=Alice:mailto:alice@corp.test', 'DTSTART:20261201T090000Z', 'DTEND:20261201T100000Z', 'SUMMARY:Sync',
+  'END:VEVENT', 'END:VCALENDAR', '',
 ].join('\r\n'));
 
-// ── Finding 6: organizer identity ────────────────────────────────────────────
+// ── Finding 7: unknown recipients ────────────────────────────────────────────
 
-test('organizer identity: iCal ORGANIZER, else header From; folded lines and quoted params', () => {
-  assert.equal(icalOrganizer('BEGIN:VEVENT\r\nORGANIZER;CN="Doe: J";SENT-BY="mailto:x@y.test":\r\n mailto:Org@Ext.Test\r\nEND:VEVENT'), 'org@ext.test');
-  assert.equal(icalOrganizer('BEGIN:VEVENT\r\nEND:VEVENT'), '');
-  assert.equal(headerFromAddress(Buffer.from('From: "Org, Team" <org@ext.test>\r\n\r\nx')), 'org@ext.test');
-  assert.equal(headerFromAddress(Buffer.from('From: org@ext.test\r\n\r\nx')), 'org@ext.test');
-  const raw = Buffer.from('From: alice@corp.test\r\n\r\nx');
-  assert.deepEqual(organizerIdentity('', raw, { authenticatedSender: 'alice@corp.test' }), { organizer: 'alice@corp.test', authenticated: true });
-  assert.deepEqual(organizerIdentity('', raw, null), { organizer: 'alice@corp.test', authenticated: false });
-  assert.deepEqual(organizerIdentity('ORGANIZER:mailto:org@ext.test', raw, { verifiedDomains: ['mail.ext.test'] }), { organizer: 'org@ext.test', authenticated: true });
-  assert.deepEqual(organizerIdentity('ORGANIZER:mailto:org@ext.test', raw, { verifiedDomains: ['lists.example'] }), { organizer: 'org@ext.test', authenticated: false });
-  // a sibling registrable domain under a public suffix never authenticates the organizer
-  assert.deepEqual(organizerIdentity('ORGANIZER:mailto:org@partner.co.uk', raw, { verifiedDomains: ['evil.co.uk'] }), { organizer: 'org@partner.co.uk', authenticated: false });
-  assert.deepEqual(organizerIdentity('ORGANIZER:mailto:org@partner.co.uk', raw, { verifiedDomains: ['mail.partner.co.uk'] }), { organizer: 'org@partner.co.uk', authenticated: true });
-});
-
-test('an SRS/VERP envelope sender can update/cancel when the authenticated ORGANIZER matches', async () => {
-  bookings.length = 0;
-  const srs = 'SRS0=HHH=TT=ext.test=org@forwarder.example';
-  await processResourceMailboxes(invite('REQUEST', 'm-1', { organizer: 'org@ext.test' }), ['room@corp.test'], srs, { verifiedDomains: ['ext.test'] });
-  assert.deepEqual(bookings.map((b) => [b.organizer, b.status]), [['org@ext.test', 'ACCEPTED']]);
-  assert.deepEqual(resourceLocks, ['cal1'], '9.4 review: the auto-accept took the resource booking lock');
-  // update via a VERP list address (envelope never equals the organizer)
-  await processResourceMailboxes(invite('REQUEST', 'm-1', { organizer: 'org@ext.test', start: '20261202T090000Z' }), ['room@corp.test'], 'list-bounces+org=ext.test@lists.example', { verifiedDomains: ['ext.test', 'lists.example'] });
-  assert.equal(bookings.length, 1);
-  // the forwarder's own domain authenticated, the organizer's not → refused
-  await processResourceMailboxes(invite('CANCEL', 'm-1', { organizer: 'org@ext.test' }), ['room@corp.test'], srs, { verifiedDomains: ['forwarder.example'] });
-  assert.equal(bookings.length, 1);
-  // authenticated organizer cancels through SRS
-  await processResourceMailboxes(invite('CANCEL', 'm-1', { organizer: 'org@ext.test' }), ['room@corp.test'], srs, { verifiedDomains: ['ext.test'] });
-  assert.equal(bookings.length, 0);
-});
-
-test('a local authenticated organizer (no ORGANIZER line) books, updates and cancels via the header From', async () => {
-  bookings.length = 0;
-  const auth = { authenticatedSender: 'alice@corp.test' };
-  await processResourceMailboxes(invite('REQUEST', 'l-1', { from: 'Alice <alice@corp.test>' }), ['room@corp.test'], 'alice@corp.test', auth);
-  assert.deepEqual(bookings.map((b) => [b.organizer, b.status]), [['alice@corp.test', 'ACCEPTED']]);
-  // another local user cannot cancel alice's booking
-  await processResourceMailboxes(invite('CANCEL', 'l-1', { from: 'bob@corp.test' }), ['room@corp.test'], 'bob@corp.test', { authenticatedSender: 'bob@corp.test' });
-  assert.equal(bookings.length, 1);
-  await processResourceMailboxes(invite('CANCEL', 'l-1', { from: 'alice@corp.test' }), ['room@corp.test'], 'alice@corp.test', auth);
-  assert.equal(bookings.length, 0);
-});
-
-// ── Finding 7: room invitations on local paths, unknown recipients ───────────
-
-test('storeInboundMessage processes a room invitation from a local sender and reports unknown recipients', async () => {
-  bookings.length = 0;
-  const r = await storeInboundMessage(invite('REQUEST', 'w-1', { from: 'alice@corp.test' }), {
+test('storeInboundMessage reports unknown recipients; 10.0: an invitation to a former room address is unknown too', async () => {
+  const r = await storeInboundMessage(invite('w-1'), {
     fromAddr: 'alice@corp.test', rcptTo: 'Room@corp.test', toJunk: false, senderAuth: { authenticatedSender: 'alice@corp.test' },
   });
-  assert.equal(r, 'resource');
-  assert.deepEqual(bookings.map((b) => [b.uid, b.status]), [['w-1', 'ACCEPTED']]);
+  assert.equal(r, 'unknown');
   assert.equal(await storeInboundMessage(Buffer.from('Subject: x\r\n\r\nb'), { fromAddr: 'alice@corp.test', rcptTo: 'typo@corp.test', toJunk: false }), 'unknown');
 });
 

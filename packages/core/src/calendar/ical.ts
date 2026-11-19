@@ -664,7 +664,7 @@ export interface AttendeeInput {
   partstat?: string;
   role?: string;
   rsvp?: boolean;
-  /** CUTYPE parameter (ROOM / RESOURCE for booked rooms); omitted = individual. */
+  /** CUTYPE parameter (e.g. ROOM / RESOURCE of an imported meeting); omitted = individual. */
   cutype?: string;
 }
 

@@ -137,3 +137,28 @@ test('every service that checks mail credentials drops the webmail policy cache 
   const missing = services.filter((pkg) => !/startWebmailPolicySubscriber\(\)|isWebmailPolicyReload\(/.test(read(`packages/${pkg}/src/server.ts`)));
   assert.deepEqual(missing, []);
 });
+
+test('10.0: the room/equipment resource feature stays removed (schema, code, admin API)', async () => {
+  // Removed like distribution groups (v5.6.1), public folders and eDiscovery: no
+  // model, table, Prisma accessor, booking module or admin route may come back.
+  // Only schema-sync's RETIRED_TABLES (infra/docker) and the upgrade e2e step name them.
+  const { readdirSync } = await import('node:fs');
+  const FORBIDDEN = /\bmodel Resource(Mailbox|Calendar|Booking)\b|\benum ResourceType\b|resource_(mailboxes|calendars|bookings)|\.resource(Mailbox|Calendar|Booking)\b|\bResource(Mailbox|Calendar|Booking)\b|room-booking|resource-booking|calendar-rooms|RoomPicker|\/admin\/resources\b|\/calendar\/rooms\b/;
+  const offenders = [];
+  const walk = (dir) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      if (e.name === 'node_modules' || e.name === 'dist') continue;
+      const p = join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (/\.(ts|tsx|mjs|js|prisma)$/.test(e.name) && FORBIDDEN.test(readFileSync(p, 'utf8'))) offenders.push(p.slice(root.length + 1));
+      else if (/^(room-booking|resource-booking|resource-reply|resource-lock|calendar-rooms|RoomPicker)\b/.test(e.name)) offenders.push(p.slice(root.length + 1));
+    }
+  };
+  for (const pkg of readdirSync(join(root, 'packages'))) {
+    try { walk(join(root, 'packages', pkg, 'src')); } catch { /* package without src */ }
+  }
+  walk(join(root, 'packages', 'storage', 'prisma'));
+  assert.deepEqual(offenders, []);
+  // the retirement list itself must keep naming the dropped tables
+  assert.match(read('infra/docker/schema-sync-classify.mjs'), /resource_mailboxes:[\s\S]*resource_calendars:[\s\S]*resource_bookings:/);
+});

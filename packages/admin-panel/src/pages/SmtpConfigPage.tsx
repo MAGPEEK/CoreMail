@@ -315,7 +315,6 @@ function DeliverySection({ s, onSave, pending }: { s: SmtpSettings; onSave: (d: 
           </div>
           <ul className="space-y-1 text-xs text-fg-subtle">
             <li>• Empfänger werden gegen lokale Postfächer geprüft</li>
-            <li>• Ressourcenpostfächer (Räume) akzeptiert</li>
             <li>• Shared Mailboxes erreichbar</li>
           </ul>
         </div>

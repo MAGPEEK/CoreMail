@@ -33,9 +33,7 @@ function matches(row: Row, where: Row | undefined): boolean {
 }
 
 const events: Row[] = [];
-const roomBookings: Row[] = [];
-// 9.5 review: room releases and iMIP sends (organizer lookup of notifyAttendees) are recorded
-const bookingDeletes: Row[] = [];
+// 9.5 review: iMIP sends (organizer lookup of notifyAttendees) are recorded
 const notified: Row[] = [];
 let seq = 0;
 // 9.4: alice's stored preferences (default reminder)
@@ -50,30 +48,6 @@ let alicePrefs: Row = {};
     findMany: async (a: { where: Row }) => (a.where['userId'] === 'alice'
       ? [{ id: 'cal1', name: 'Work', color: '#000', icon: null, sortOrder: 0, isDefault: true, userId: 'alice' }]
       : a.where['userId'] === 'bob' ? [{ id: 'calBob' }] : []), // bob shared calBob with alice
-  },
-  // 9.4 review: one room of alice's domain with its bookings
-  resourceMailbox: {
-    findMany: async (a: { where: Row }) => (a.where['domainId'] === 'd1' ? [{
-      id: 'r1', email: 'raum@example.com', displayName: 'Raum', resourceType: 'ROOM', capacity: 6, location: '', active: true,
-      autoAccept: true, autoDeclineConflict: true, allowRecurring: true, maxDurationMinutes: null, bookingWindowDays: 3650,
-      requireApproval: false, calendar: { id: 'rc1' },
-    }] : []),
-  },
-  resourceCalendar: { update: async () => ({ id: 'rc1' }) },
-  resourceBooking: {
-    findMany: async () => roomBookings.map((b) => ({ ...b })),
-    findUnique: async (a: { where: { calendarId_uid: { uid: string } } }) => roomBookings.find((b) => b['uid'] === a.where.calendarId_uid.uid) ?? null,
-    upsert: async (a: { where: { calendarId_uid: { uid: string } }; create: Row; update: Row }) => {
-      const existing = roomBookings.find((b) => b['uid'] === a.where.calendarId_uid.uid);
-      if (existing) Object.assign(existing, a.update); else roomBookings.push({ calendarId: 'rc1', ...a.create });
-      return null;
-    },
-    updateMany: async (a: { where: { uid: string }; data: Row }) => {
-      const rows = roomBookings.filter((b) => b['uid'] === a.where.uid);
-      for (const b of rows) Object.assign(b, a.data);
-      return { count: rows.length };
-    },
-    deleteMany: async (a: { where: Row }) => { bookingDeletes.push(a.where); return { count: 0 }; },
   },
   // alice holds a WRITE share on bob's calendar "calBob"
   calendarShare: {
@@ -406,44 +380,11 @@ test('9.4 review: a PRIVATE occurrence of a PUBLIC series is masked in the list 
   assert.ok(!JSON.stringify(fb.json).includes('Salary talk'));
 });
 
-test('9.4 review: rooms are checked against the moved series, a moved occurrence and a deleted occurrence', async () => {
-  roomBookings.length = 0;
-  roomBookings.push({ calendarId: 'rc1', uid: 'blocker', status: 'ACCEPTED', dtStart: new Date('2026-12-14T11:00:00Z'), dtEnd: new Date('2026-12-14T12:00:00Z'), icalData: '' });
-  const created = await call('POST', '/events', {
-    calendarId: 'cal1', summary: 'Jour fixe', dtStart: '2026-12-07T09:00:00.000Z', dtEnd: '2026-12-07T10:00:00.000Z',
-    rrule: 'FREQ=WEEKLY;COUNT=2', rooms: ['raum@example.com'], reminderMinutes: null,
-  });
-  assert.equal(created.status, 201);
-  const room = () => (events.find((e) => e['id'] === created.json.id)!['attendees'] as Row[]).find((a) => a['email'] === 'raum@example.com')!;
-  assert.equal(room()['partstat'], 'ACCEPTED');
-
-  // the series moves to 11:00 — its second week now hits the blocker
-  const moved = await call('PUT', `/events/${created.json.id}`, { dtStart: '2026-12-07T11:00:00.000Z', dtEnd: '2026-12-07T12:00:00.000Z' });
-  assert.equal(moved.status, 200);
-  assert.equal(room()['partstat'], 'DECLINED', 'checked against the new times, not the stored calendar data');
-
-  // back to 09:00 (free), then only the second occurrence moves into the blocker
-  await call('PUT', `/events/${created.json.id}`, { dtStart: '2026-12-07T09:00:00.000Z', dtEnd: '2026-12-07T10:00:00.000Z' });
-  assert.equal(room()['partstat'], 'ACCEPTED');
-  const occ = await call('PUT', `/events/${created.json.id}?occurrence=2026-12-14T09:00:00.000Z`, { dtStart: '2026-12-14T11:30:00.000Z', dtEnd: '2026-12-14T12:30:00.000Z' });
-  assert.equal(occ.status, 200);
-  assert.equal(room()['partstat'], 'DECLINED', 'a moved occurrence re-checks the room');
-  assert.match(String(events.find((e) => e['id'] === created.json.id)!['icalData']), /PARTSTAT=DECLINED/);
-
-  // deleting an occurrence gives the room booking the EXDATE (slot free again)
-  assert.equal((await call('DELETE', `/events/${created.json.id}?occurrence=2026-12-07T09:00:00.000Z`)).status, 200);
-  const booking = roomBookings.find((b) => b['uid'] !== 'blocker')!;
-  assert.match(String(booking['icalData']), /EXDATE:20261207T090000Z/);
-});
-
-/** A stored meeting with a room entry (as an invitation or the organizer's save leaves it). */
+/** A stored meeting of someone else (as an invitation leaves it in the attendee's calendar). */
 function storedMeeting(id: string, calendarId: string, organizer: string, people: string[], start: string) {
   const s = new Date(start);
   const e = new Date(s.getTime() + 3_600_000);
-  const attendees = [
-    ...people.map((email) => ({ email, cn: email, partstat: 'NEEDS-ACTION', role: 'REQ-PARTICIPANT', rsvp: true })),
-    { email: 'raum@example.com', cn: 'Raum', cutype: 'ROOM', partstat: 'ACCEPTED', role: 'NON-PARTICIPANT', rsvp: false },
-  ];
+  const attendees = people.map((email) => ({ email, cn: email, partstat: 'NEEDS-ACTION', role: 'REQ-PARTICIPANT', rsvp: true }));
   const row = {
     id, calendarId, uid: `${id}@ext.test`, summary: id, description: '', location: '', dtStart: s, dtEnd: e, allDay: false,
     recurring: false, rrule: null, classification: 'PUBLIC', showAs: 'BUSY', status: 'CONFIRMED', sequence: 0, organizer, attendees,
@@ -451,41 +392,91 @@ function storedMeeting(id: string, calendarId: string, organizer: string, people
     createdAt: new Date(), updatedAt: new Date(),
   };
   events.push(row);
-  roomBookings.push({ calendarId: 'rc1', uid: row.uid, organizer, status: 'ACCEPTED', dtStart: s, dtEnd: e, icalData: row.icalData });
   return row;
 }
 
-test('9.5 review: an attendee\'s copy changes only itself — no room rebooking or release, no iMIP in the organizer\'s name', async () => {
-  roomBookings.length = 0;
-  bookingDeletes.length = 0;
+test('9.5 review: an attendee\'s copy changes only itself — no iMIP in the organizer\'s name', async () => {
   notified.length = 0;
-  // olga's meeting with a room, as alice's calendar holds it after the invitation
+  // olga's meeting, as alice's calendar holds it after the invitation
   const copy = storedMeeting('copy-1', 'cal1', 'olga@ext.test', ['alice@example.com', 'carl@ext.test'], '2026-12-21T09:00:00Z');
-  const moved = await call('PUT', `/events/${copy.id}`, { dtStart: '2026-12-21T13:00:00.000Z', dtEnd: '2026-12-21T14:00:00.000Z', rooms: [] });
+  const moved = await call('PUT', `/events/${copy.id}`, { dtStart: '2026-12-21T13:00:00.000Z', dtEnd: '2026-12-21T14:00:00.000Z' });
   assert.equal(moved.status, 200);
-  const booking = roomBookings.find((b) => b['uid'] === copy.uid)!;
-  assert.deepEqual([(booking['dtStart'] as Date).toISOString(), booking['status']], ['2026-12-21T09:00:00.000Z', 'ACCEPTED'], 'the organizer\'s booking is untouched');
-  const room = (copy.attendees as Row[]).find((a) => a['email'] === 'raum@example.com');
-  assert.equal(room?.['partstat'], 'ACCEPTED', 'the copy keeps the room entry it got');
+  assert.equal((copy.dtStart as Date).toISOString(), '2026-12-21T13:00:00.000Z', 'the copy itself moved');
   const deleted = await call('DELETE', `/events/${copy.id}`);
   assert.equal(deleted.status, 200);
   assert.equal(events.some((e) => e['id'] === copy.id), false, 'the copy is gone');
-  assert.deepEqual(bookingDeletes, [], 'no room released');
-  assert.ok(roomBookings.some((b) => b['uid'] === copy.uid), 'the organizer still has the room');
   await new Promise((r) => setTimeout(r, 20)); // notifyAttendees runs fire-and-forget
   assert.deepEqual(notified, [], 'no REQUEST / CANCEL sent from the attendee\'s copy');
 });
 
-test('9.5 review: a delegate with WRITE on the organizer\'s calendar still rebooks and releases its rooms', async () => {
-  roomBookings.length = 0;
-  bookingDeletes.length = 0;
-  // bob's own meeting (rooms only — no people, so no iMIP) in bob's calendar, shared WRITE with alice
-  const own = storedMeeting('bob-1', 'calBob', 'bob@example.com', [], '2026-12-22T09:00:00Z');
+/** notifyAttendees runs fire-and-forget: wait until no new organizer lookup arrives for 30 ms. */
+async function notifiedSettled(): Promise<void> {
+  let seen = -1;
+  for (let i = 0; i < 50 && seen !== notified.length; i++) {
+    seen = notified.length;
+    await new Promise((r) => setTimeout(r, 30));
+  }
+}
+
+test('9.5 review (10.0 kept): a delegate with WRITE on the organizer\'s calendar still sends the update and the cancellation', async () => {
+  notified.length = 0;
+  // bob's own meeting in bob's calendar, shared WRITE with alice
+  const own = storedMeeting('bob-1', 'calBob', 'bob@example.com', ['carl@ext.test'], '2026-12-22T09:00:00Z');
   const moved = await call('PUT', `/events/${own.id}`, { dtStart: '2026-12-22T13:00:00.000Z', dtEnd: '2026-12-22T14:00:00.000Z' });
   assert.equal(moved.status, 200);
-  const booking = roomBookings.find((b) => b['uid'] === own.uid)!;
-  assert.equal((booking['dtStart'] as Date).toISOString(), '2026-12-22T13:00:00.000Z', 'rebooked for the new time');
+  await notifiedSettled();
+  const afterUpdate = notified.length;
+  assert.ok(afterUpdate > 0, 'REQUEST update sent');
+  assert.ok(notified.every((w) => w['email'] === 'bob@example.com'), 'in bob\'s name');
   assert.equal((await call('DELETE', `/events/${own.id}`)).status, 200);
-  assert.equal(bookingDeletes.length, 1, 'the room is released');
-  assert.equal((bookingDeletes[0]!['organizer'] as Row)['equals'], 'bob@example.com');
+  await notifiedSettled();
+  assert.ok(notified.length > afterUpdate, 'CANCEL sent');
+  assert.ok(notified.every((w) => w['email'] === 'bob@example.com'), 'in bob\'s name');
+});
+
+test('10.0: a CUTYPE=ROOM attendee of another client is an ordinary attendee — kept, invited, no crash', async () => {
+  notified.length = 0;
+  const s = new Date('2026-12-23T09:00:00Z');
+  const attendees = [
+    { email: 'carl@ext.test', cn: 'Carl', partstat: 'NEEDS-ACTION', role: 'REQ-PARTICIPANT', rsvp: true },
+    { email: 'room-7@ext.test', cn: 'Room 7', partstat: 'ACCEPTED', role: 'NON-PARTICIPANT', rsvp: false, cutype: 'ROOM' },
+  ];
+  const row = {
+    id: 'own-room', calendarId: 'cal1', uid: 'own-room@example.com', summary: 'Review', description: '', location: '',
+    dtStart: s, dtEnd: new Date(s.getTime() + 3_600_000), allDay: false, recurring: false, rrule: null, classification: 'PUBLIC',
+    showAs: 'BUSY', status: 'CONFIRMED', sequence: 0, organizer: 'alice@example.com', attendees,
+    icalData: buildVCalendar({ uid: 'own-room@example.com', summary: 'Review', start: s, end: new Date(s.getTime() + 3_600_000),
+      organizer: { email: 'alice@example.com' }, attendees }),
+    createdAt: new Date(), updatedAt: new Date(),
+  };
+  events.push(row);
+  const moved = await call('PUT', `/events/${row.id}`, { dtStart: '2026-12-23T13:00:00.000Z', dtEnd: '2026-12-23T14:00:00.000Z' });
+  assert.equal(moved.status, 200);
+  assert.equal(row.sequence, 1);
+  assert.deepEqual((row.attendees as Array<{ email: string }>).map((a) => a.email), ['carl@ext.test', 'room-7@ext.test'], 'attendee list unchanged');
+  const main = parseCalendarObject(String(row.icalData))!.main;
+  assert.deepEqual(main.attendees.map((a) => [a.email, a.cutype]), [['carl@ext.test', 'INDIVIDUAL'], ['room-7@ext.test', 'ROOM']]);
+  await notifiedSettled();
+  assert.ok(notified.length > 0 && notified.every((w) => w['email'] === 'alice@example.com'), 'the update goes out (room attendee included)');
+  // the webmail form sends the attendee list without CUTYPE — the calendar object keeps it
+  const edited = await call('PUT', `/events/${row.id}`, {
+    attendees: [{ email: 'carl@ext.test', cn: 'Carl' }, { email: 'room-7@ext.test', cn: 'Room 7', partstat: 'ACCEPTED' }],
+  });
+  assert.equal(edited.status, 200);
+  const kept = parseCalendarObject(String(row.icalData))!.main.attendees.find((a) => a.email === 'room-7@ext.test');
+  assert.equal(kept?.cutype, 'ROOM');
+});
+
+test('10.0: rooms are gone — a `rooms` field is ignored and the room routes answer 404', async () => {
+  const created = await call('POST', '/events', {
+    calendarId: 'cal1', summary: 'Jour fixe', dtStart: '2026-12-07T09:00:00.000Z', dtEnd: '2026-12-07T10:00:00.000Z',
+    rooms: ['raum@example.com'], reminderMinutes: null,
+  });
+  assert.equal(created.status, 201);
+  assert.deepEqual(created.json.attendees, [], 'no room attendee is added');
+  assert.doesNotMatch(String(created.json.icalData), /raum@example\.com|CUTYPE=ROOM/);
+  const rooms = await fetch(`${base}/rooms?start=2026-12-07T00:00:00.000Z&end=2026-12-08T00:00:00.000Z`, {
+    headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10_000),
+  });
+  assert.equal(rooms.status, 404);
 });

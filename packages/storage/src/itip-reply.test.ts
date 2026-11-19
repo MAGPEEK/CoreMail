@@ -87,22 +87,3 @@ test('instance REQUEST → REPLY carries RECURRENCE-ID; a REQUEST without ORGANI
   assert.equal(parseITipReply(ics)?.recurrenceId?.date.toISOString(), '2026-11-27T09:00:00.000Z');
   assert.equal(findITipRequest(RAW.replace('ORGANIZER;CN=Olga:mailto:olga@ext.test\r\n', '')), null);
 });
-
-test('9.5: subject, text part and extra headers can be given; unsafe or own header names are dropped', () => {
-  const req = findITipRequest(RAW)!;
-  const ics = buildITipReplyIcs(req, { email: 'room@example.com' }, 'DECLINED');
-  const raw = buildITipReplyMime({
-    ics, from: { email: 'room@example.com', name: 'Raum' }, to: 'olga@ext.test', summary: 'Planning', partstat: 'DECLINED', seed: 's1',
-    subject: 'Abgelehnt: Planning', text: 'Raum hat Ihre Buchung abgelehnt.',
-    headers: { 'Auto-Submitted': 'auto-replied', 'In-Reply-To': '<a@ext.test>\r\nBcc: victim@x', 'Bad Name': 'x', Subject: 'forged', 'X-Ok': 'v' },
-  }).toString('utf8');
-  const headBlock = raw.split('\r\n\r\n')[0]!;
-  assert.match(headBlock, /^Subject: Abgelehnt: Planning$/m);
-  assert.equal(headBlock.match(/^Subject:/gm)?.length, 1);
-  assert.match(headBlock, /^Auto-Submitted: auto-replied$/m);
-  assert.match(headBlock, /^In-Reply-To: <a@ext\.test>  Bcc: victim@x$/m);
-  assert.ok(!/^Bcc:/m.test(headBlock));
-  assert.ok(!/^Bad Name:/m.test(headBlock));
-  assert.match(headBlock, /^X-Ok: v$/m);
-  assert.ok(raw.includes(Buffer.from('Raum hat Ihre Buchung abgelehnt.', 'utf8').toString('base64')));
-});

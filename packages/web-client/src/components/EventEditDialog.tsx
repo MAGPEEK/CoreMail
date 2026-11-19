@@ -7,12 +7,11 @@ import {
 import { Modal } from './Modal.js';
 import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
-import type { Calendar, CalendarEvent, EventAttendee, RoomAvailability, ShowAs } from '../api/types.js';
+import type { Calendar, CalendarEvent, EventAttendee, ShowAs } from '../api/types.js';
 import { currentPreferences, usePreferences, useRegional } from '../store/preferences.js';
 import { instantToWallClock, wallClockToInstant } from '../lib/zonedTime.js';
 import { useOwnEmail } from '../hooks/useOwnEmail.js';
 import { RecurrenceField } from './calendar/RecurrenceField.js';
-import { RoomPicker } from './calendar/RoomPicker.js';
 import { SchedulingAssistant } from './calendar/SchedulingAssistant.js';
 import { Avatar } from './Avatar.js';
 import { usePhotoForAddress } from '../hooks/useUserPhoto.js';
@@ -20,7 +19,7 @@ import { usePhotoForAddress } from '../hooks/useUserPhoto.js';
 /**
  * Event dialog of the calendar (create & edit).
  *
- *  - Title, attendees (live PARTSTAT badge), date + time, location, rooms, notes,
+ *  - Title, attendees (live PARTSTAT badge), date + time, location, notes,
  *    classification (private), "Anzeigen als", reminder (+ per e-mail), recurrence
  *  - 9.4: tab "Terminplanungs-Assistent" — attendees' free/busy for the day and
  *    suggested times; adding attendees turns the appointment into a meeting
@@ -103,8 +102,6 @@ function AttendeeChip({ attendee, onRemove }: { attendee: EventAttendee; onRemov
   );
 }
 
-const isRoom = (a: EventAttendee) => a.cutype === 'ROOM' || a.cutype === 'RESOURCE';
-
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -182,7 +179,6 @@ export function EventEditDialog({
   const [reminderMinutes, setReminderMinutes] = useState<number | null>(null);
   const [reminderByMail, setReminderByMail]   = useState(false);
   const [rrule, setRrule]             = useState<string | null>(null);
-  const [rooms, setRooms]             = useState<Array<{ email: string; displayName: string }>>([]);
 
   // Initialize form with existing or defaults — only once per open
   const initialized = useRef(false);
@@ -207,9 +203,7 @@ export function EventEditDialog({
       setLocation(existing.location ?? '');
       setDescription(existing.description ?? '');
       setClassification(existing.classification ?? 'PUBLIC');
-      const all = existing.attendees ?? [];
-      setAttendees(all.filter((a) => !isRoom(a)));
-      setRooms(all.filter(isRoom).map((a) => ({ email: a.email, displayName: a.cn ?? a.email })));
+      setAttendees(existing.attendees ?? []);
       setShowAs(existing.showAs ?? 'BUSY');
       setReminderMinutes(existing.reminderMinutes ?? null);
       setReminderByMail(existing.reminderByMail ?? false);
@@ -302,14 +296,6 @@ export function EventEditDialog({
     setAttendees((prev) => prev.filter((a) => a.email !== email));
   };
 
-  // 9.4: a room added to the meeting fills an empty location
-  const toggleRoom = (room: RoomAvailability, add: boolean) => {
-    setRooms((prev) => (add
-      ? [...prev.filter((r) => r.email !== room.email), { email: room.email, displayName: room.displayName }]
-      : prev.filter((r) => r.email.toLowerCase() !== room.email.toLowerCase())));
-    if (add && !location.trim()) setLocation(room.displayName);
-  };
-
   // ─── Save Mutations ─────────────────────────────────────────────────────────
   const invalidate = () => {
     void qc.invalidateQueries({ queryKey: ['calendar-events'] });
@@ -351,7 +337,7 @@ export function EventEditDialog({
   // All-day: plain dates, end EXCLUSIVE (last shown day + 1) — no UTC round-trip.
   const dtStart = allDay ? startDate : partsToIso(startDate, startTime, timeZone);
   const dtEnd   = allDay ? addDays(endDate < startDate ? startDate : endDate, 1) : partsToIso(endDate, endTime, timeZone);
-  // instants of the slot for rooms and the scheduling assistant
+  // instants of the slot for the scheduling assistant
   const slotStart = allDay ? wallClockToInstant(startDate, '00:00', timeZone) : dtStart;
   const slotEnd = allDay ? wallClockToInstant(dtEnd, '00:00', timeZone) : dtEnd;
 
@@ -364,7 +350,6 @@ export function EventEditDialog({
       reminderMinutes,
       reminderByMail: reminderMinutes !== null && reminderByMail,
       rrule: rrule ?? null,
-      rooms: rooms.map((r) => r.email),
       attendees: attendees.map((a) => ({
         email: a.email,
         ...(a.cn ? { cn: a.cn } : {}),
@@ -390,7 +375,6 @@ export function EventEditDialog({
   // page. Hence all hooks moved to the top and the loading `return` AFTER the hooks.
   const readOnly = isEdit && existing?.canWrite === false;
   const currentCal = useMemo(() => calendars.find((c) => c.id === calendarId), [calendars, calendarId]);
-  const roomAnswers = (existing?.attendees ?? []).filter(isRoom);
   const title = isOccurrence ? 'Ereignis der Serie bearbeiten' : isEdit ? 'Termin bearbeiten' : attendees.length > 0 ? 'Neue Besprechung' : 'Neuer Termin';
 
   // Loading spinner for edit mode during GET
@@ -454,14 +438,12 @@ export function EventEditDialog({
             <SchedulingAssistant
               organizerEmail={existing?.organizer || ownEmail}
               attendees={attendees}
-              rooms={rooms}
               startIso={slotStart}
               endIso={slotEnd}
               date={startDate}
               timeZone={timeZone}
               workStart={calPrefs.workStart}
               workEnd={calPrefs.workEnd}
-              {...(existing?.uid ? { uid: existing.uid } : {})}
               onPick={pickSlot}
             />
           )}
@@ -469,7 +451,7 @@ export function EventEditDialog({
           {tab === 'details' && <>
           {isOccurrence && (
             <p className="text-xs text-info-fg bg-info-bg rounded px-3 py-2">
-              Änderungen gelten nur für dieses Ereignis. Wiederholung, Teilnehmer, Räume und Erinnerung gehören zur Serie.
+              Änderungen gelten nur für dieses Ereignis. Wiederholung, Teilnehmer und Erinnerung gehören zur Serie.
             </p>
           )}
 
@@ -640,19 +622,6 @@ export function EventEditDialog({
               className="flex-1 border-b border-line-strong focus:border-accent-fg bg-transparent px-1 py-1.5 text-sm focus:outline-none placeholder:text-fg-subtle"
             />
           </div>
-
-          {/* 9.4: rooms and resources (series only) */}
-          {!isOccurrence && (
-            <RoomPicker
-              startIso={slotStart}
-              endIso={slotEnd}
-              selected={rooms.map((r) => r.email)}
-              answers={roomAnswers}
-              {...(existing?.uid ? { uid: existing.uid } : {})}
-              disabled={readOnly}
-              onToggle={toggleRoom}
-            />
-          )}
 
           {/* 9.4: show as, reminder, classification */}
           <div className="flex items-start gap-3">

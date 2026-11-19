@@ -73,7 +73,7 @@ export async function resolvePostmaster(address: string): Promise<string | null>
  *  1. Email aliases (EmailAlias) → target primary address (User or SharedMailbox)
  *  2. postmaster (bare or at a local domain) without an own mailbox → an
  *     administrator (RFC 5321 §4.5.1: postmaster MUST be accepted and delivered)
- *  3. Regular recipients (User/SharedMailbox/ResourceMailbox) → unchanged
+ *  3. Regular recipients (User/SharedMailbox) → unchanged
  *
  * Resolution is single-level (an alias always targets a mailbox), so there is
  * no cycle to guard against; the same alias given twice resolves both times
@@ -138,7 +138,7 @@ async function expandOne(email: string): Promise<string[]> {
       }
     }
 
-    // 3. Regular recipient (User / SharedMailbox / ResourceMailbox)
+    // 3. Regular recipient (User / SharedMailbox)
     result.push(normalised);
   }
   return result;

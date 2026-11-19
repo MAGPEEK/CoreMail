@@ -5,7 +5,7 @@
  * of the Public Suffix List.
  *
  * Every relaxed-alignment decision in CoreMail (local-spoof checks, sender-list
- * allow entries, iTIP/iMIP replies, room booking requests) goes through this
+ * allow entries, iTIP/iMIP replies) goes through this
  * module, so a domain under a public suffix never vouches for a different
  * registrable domain: `evil.co.uk` is not aligned with `co.uk`, and
  * `a.github.io` is not aligned with `b.github.io`.

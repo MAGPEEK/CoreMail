@@ -29,7 +29,7 @@ import {
 import { excludeOccurrence, isSeriesOccurrence, upsertOccurrence } from '@coremail/core/calendar-exceptions';
 import { expandStoredEvent } from '../lib/recurrence.js';
 import { busyForUser, freeBusyDirectory } from '../lib/calendar-busy.js';
-import { bookRooms, isOrganizerCopy, isRoomAttendee, refreshRoomBookings, releaseRooms, type BookedRoom } from '../lib/room-booking.js';
+import { isOrganizerCopy } from '../lib/organizer-copy.js';
 import { calendarSchedulingRouter } from './calendar-scheduling.js';
 
 /**
@@ -83,13 +83,10 @@ function occurrenceParam(req: Request): Date | null | undefined {
   return isNaN(d.getTime()) ? null : d;
 }
 
-/** Stored attendee list → people and rooms (rooms carry CUTYPE ROOM/RESOURCE). */
-function splitAttendees(list: unknown): { people: Array<Record<string, unknown>>; rooms: Array<Record<string, unknown>> } {
-  const all = (Array.isArray(list) ? list : []).filter((a): a is Record<string, unknown> => typeof a === 'object' && a !== null);
-  return { people: all.filter((a) => !isRoomAttendee(a)), rooms: all.filter((a) => isRoomAttendee(a)) };
+/** Stored attendee list (JSON column) → its entries. */
+function attendeeEntries(list: unknown): Array<Record<string, unknown>> {
+  return (Array.isArray(list) ? list : []).filter((a): a is Record<string, unknown> => typeof a === 'object' && a !== null);
 }
-
-const roomEmail = (a: Record<string, unknown>): string => String(a['email'] ?? '').toLowerCase();
 
 interface OccurrenceView {
   dtStart: Date;
@@ -134,7 +131,7 @@ calendarRouter.use(announceOnWrite(({ method, path }) =>
   (method === 'POST' && (path === '/' || path === '/reorder')) || path.startsWith('/mine-shares/')
     ? { type: 'calendar', action: method === 'POST' && path === '/' ? 'create' : 'update' }
     : null));
-// 9.4: rooms + meeting-time suggestions of the scheduling assistant
+// 9.4: meeting-time suggestions of the scheduling assistant
 calendarRouter.use(calendarSchedulingRouter);
 
 function escapeHtml(s: string): string {
@@ -178,11 +175,7 @@ async function sendInvitations(opts: {
   /** 9.4: only this occurrence (its original start) changed / was cancelled. */
   recurrenceId?: Date;
 }): Promise<void> {
-  const rawAttendees = Array.isArray(opts.ev.attendees) ? opts.ev.attendees : [];
-  const attendees: AttendeeData[] = rawAttendees
-    .filter((a): a is Record<string, unknown> => typeof a === 'object' && a !== null)
-    // rooms are booked directly (lib/room-booking.ts) — no invitation mail to them
-    .filter((a) => !isRoomAttendee(a))
+  const attendees: AttendeeData[] = attendeeEntries(opts.ev.attendees)
     .filter((a) => typeof a['email'] === 'string' && a['email'].includes('@'))
     .map((a): AttendeeData => ({
       email: a['email'] as string,
@@ -967,8 +960,6 @@ const EventSchema = z.object({
   reminderByMail: z.boolean().optional(),
   // 9.4: "Anzeigen als"
   showAs: z.enum(['FREE', 'TENTATIVE', 'BUSY', 'OOF']).optional(),
-  // 9.4: rooms/resources to book (resource mailbox addresses of the user's domain)
-  rooms: z.array(z.string().email()).max(10).optional(),
 });
 
 calendarRouter.post('/events', async (req: Request, res: Response) => {
@@ -1005,7 +996,7 @@ calendarRouter.post('/events', async (req: Request, res: Response) => {
   const uid = buildEventUid(rawEventId, settings?.publicHostname ?? 'coremail.local');
 
   // Store attendees as a JSON array
-  const peopleJson = attendees.map((a) => ({
+  const attendeesJson = attendees.map((a) => ({
     email: a.email,
     cn: a.cn ?? a.email,
     partstat: a.partstat ?? 'NEEDS-ACTION',
@@ -1014,22 +1005,15 @@ calendarRouter.post('/events', async (req: Request, res: Response) => {
   }));
   const showAs: ShowAs = parsed.data.showAs ?? 'BUSY';
 
-  const fields = {
+  const icalData = buildVCalendar({
     uid, summary, description, location, allDay, classification, showAs,
     start: range.start, end: range.end,
     sequence: 0,
     ...(rruleValue ? { rrule: rruleValue } : {}),
     organizer: { email: organizer.email, ...(organizer.displayName ? { cn: organizer.displayName } : {}) },
+    attendees: attendeesJson,
     alarm: alarmFrom(reminderMinutes, parsed.data.reminderByMail === true, organizer.email),
-  };
-  const draft = buildVCalendar({ ...fields, attendees: peopleJson });
-  // 9.4: rooms are booked right away; their answer becomes their attendee entry
-  const roomJson = await bookRooms(
-    { uid, summary, organizer: organizer.email, dtStart: range.start, dtEnd: range.end, allDay, rrule: rruleValue, icalData: draft },
-    parsed.data.rooms ?? [], req.apiUser!.domainId,
-  );
-  const attendeesJson = [...peopleJson, ...roomJson];
-  const icalData = roomJson.length > 0 ? buildVCalendar({ ...fields, attendees: attendeesJson }) : draft;
+  });
 
   const event = await prisma.calendarEvent.create({
     data: {
@@ -1090,11 +1074,11 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
     res.status(403).json({ error: 'Private Termine kann nur der Eigentümer ändern' });
     return;
   }
-  // 9.5: an attendee's copy of someone else's meeting changes only itself — no room
-  // (re)booking, no invitation update in the organizer's name
+  // 9.5: an attendee's copy of someone else's meeting changes only itself — no
+  // invitation update in the organizer's name
   const organizerCopy = await isOrganizerCopy(event.organizer, { userId, email: req.apiUser!.email, calendarOwnerId: access.ownerId });
   if (occurrence) {
-    await updateOccurrence(res, event, occurrence, parsed.data, req.apiUser!, organizerCopy);
+    await updateOccurrence(res, event, occurrence, parsed.data, organizerCopy);
     return;
   }
 
@@ -1120,8 +1104,8 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
     ? event.rrule
     : (rrule ? rrule.replace(/^RRULE:/i, '').toUpperCase() : null);
 
-  const stored = splitAttendees(event.attendees);
-  const newPeople: Array<Record<string, unknown>> = attendees
+  const storedAttendees = attendeeEntries(event.attendees);
+  const newAttendees: Array<Record<string, unknown>> = attendees
     ? attendees.map((a) => ({
         email: a.email,
         cn: a.cn ?? a.email,
@@ -1129,7 +1113,7 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
         role: 'REQ-PARTICIPANT',
         rsvp: true,
       }))
-    : stored.people;
+    : storedAttendees;
 
   const attendeeKey = (list: unknown): string => JSON.stringify(
     (Array.isArray(list) ? list : [])
@@ -1147,15 +1131,9 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
     effectiveAllDay !== event.allDay ||
     effectiveRrule !== event.rrule ||
     (location !== undefined && location !== event.location) ||
-    (attendees !== undefined && attendeeKey(newPeople) !== attendeeKey(stored.people));
+    (attendees !== undefined && attendeeKey(newAttendees) !== attendeeKey(storedAttendees));
   const newSequence = event.sequence + (willSendUpdate ? 1 : 0);
-
-  // 9.4: rooms are (re)booked when they, the time or the recurrence changed; removed rooms are released.
-  // 9.5: only on the organizer's copy — an attendee's copy keeps the room entries it got
-  const wantedRooms = (organizerCopy ? parsed.data.rooms?.map((e) => e.toLowerCase()) : undefined) ?? stored.rooms.map(roomEmail);
-  const roomsTouched = organizerCopy && (stored.rooms.length > 0 || wantedRooms.length > 0)
-    && (parsed.data.rooms !== undefined || datesTouched || rrule !== undefined);
-  const attendeesChanged = attendees !== undefined || roomsTouched;
+  const attendeesChanged = attendees !== undefined;
 
   // 9.4: reminder (owner only — alarms are the calendar owner's) and show-as
   const currentAlarm = eventReminder(event.icalData);
@@ -1181,9 +1159,9 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
     ...(alarm !== undefined ? { alarm } : {}),
     sequence: newSequence,
   };
-  type AttendeeList = Array<{ email: string; cn?: string; partstat?: string }>;
-  const icalWith = (list: AttendeeList): string => patchVEvent(event.icalData, {
-    ...patch, ...(attendeesChanged ? { attendees: list } : {}),
+  const attendeeList = newAttendees as Array<{ email: string; cn?: string; partstat?: string }>;
+  const icalData = patchVEvent(event.icalData, {
+    ...patch, ...(attendeesChanged ? { attendees: attendeeList } : {}),
   }) ?? buildVCalendar({
     uid: event.uid,
     summary: summary ?? event.summary,
@@ -1196,25 +1174,10 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
     sequence: newSequence,
     ...(effectiveRrule ? { rrule: effectiveRrule } : {}),
     ...(event.organizer ? { organizer: { email: event.organizer } } : {}),
-    attendees: list,
+    attendees: attendeeList,
     ...(parsed.data.showAs !== undefined ? { showAs: parsed.data.showAs } : {}),
     ...(alarm ? { alarm } : {}),
   });
-
-  // Rooms are checked against the meeting as it will be stored (new DTSTART/RRULE),
-  // not the old calendar data.
-  let roomJson: Array<Record<string, unknown> | BookedRoom> = stored.rooms;
-  if (roomsTouched) {
-    await releaseRooms(event.uid, stored.rooms.map(roomEmail).filter((e) => !wantedRooms.includes(e)), event.organizer ?? req.apiUser!.email);
-    roomJson = await bookRooms(
-      { uid: event.uid, summary: summary ?? event.summary, organizer: event.organizer ?? req.apiUser!.email,
-        dtStart: range.start, dtEnd: range.end, allDay: effectiveAllDay, rrule: effectiveRrule,
-        icalData: icalWith([...newPeople, ...stored.rooms] as AttendeeList) },
-      wantedRooms, req.apiUser!.domainId,
-    );
-  }
-  const newAttendeesJson = [...newPeople, ...roomJson];
-  const icalData = icalWith(newAttendeesJson as AttendeeList);
 
   const updated = await prisma.calendarEvent.update({
     where: { id },
@@ -1230,13 +1193,13 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
       icalData,
       classification: effectiveClass,
       ...(parsed.data.showAs !== undefined ? { showAs: parsed.data.showAs } : {}),
-      ...(attendeesChanged ? { attendees: newAttendeesJson as object[] } : {}),
+      ...(attendeesChanged ? { attendees: newAttendees as object[] } : {}),
       sequence: newSequence,
     },
   });
 
-  // v3.18.25 A5: send REQUEST update to the people (with incremented SEQUENCE); a
-  // meeting with rooms only sends nothing (rooms are booked directly); never from an attendee's copy
+  // v3.18.25 A5: send REQUEST update to the attendees (with incremented SEQUENCE);
+  // never from an attendee's copy
   if (willSendUpdate && organizerCopy) void notifyAttendees(updated, 'REQUEST');
 
   announceCalendarChange([event.calendarId], { action: 'update', ids: [id] });
@@ -1261,8 +1224,8 @@ calendarRouter.delete('/events/:id', async (req: Request, res: Response) => {
     res.status(403).json({ error: 'Private Termine kann nur der Eigentümer löschen' });
     return;
   }
-  // 9.5: deleting an attendee's copy of someone else's meeting removes only that copy — the
-  // organizer's room bookings stay, nobody gets a cancellation in the organizer's name
+  // 9.5: deleting an attendee's copy of someone else's meeting removes only that copy —
+  // nobody gets a cancellation in the organizer's name
   const organizerCopy = await isOrganizerCopy(event.organizer, { userId, email: req.apiUser!.email, calendarOwnerId: access.ownerId });
 
   // 9.4: "only this occurrence" → EXDATE on the series, CANCEL for that occurrence
@@ -1272,22 +1235,15 @@ calendarRouter.delete('/events/:id', async (req: Request, res: Response) => {
     if (!view || !icalData) { res.status(404).json({ error: 'Occurrence not found' }); return; }
     const updated = await prisma.calendarEvent.update({ where: { id }, data: { icalData, sequence: event.sequence + 1 } });
     announceCalendarChange([event.calendarId], { action: 'update', ids: [id] });
-    if (organizerCopy) {
-      // the rooms' bookings get the EXDATE too, so the occurrence's slot is free again
-      await refreshRoomBookings(event.uid, splitAttendees(event.attendees).rooms.map(roomEmail), icalData, event.organizer ?? req.apiUser!.email);
-      void notifyAttendees(updated, 'CANCEL', { ...occurrenceFields(view, event), recurrenceId: occurrence });
-    }
+    if (organizerCopy) void notifyAttendees(updated, 'CANCEL', { ...occurrenceFields(view, event), recurrenceId: occurrence });
     res.json({ ok: true });
     return;
   }
 
   await prisma.calendarEvent.delete({ where: { id } });
   announceCalendarChange([event.calendarId], { action: 'delete', ids: [id] });
-  if (organizerCopy) {
-    await releaseRooms(event.uid, splitAttendees(event.attendees).rooms.map(roomEmail), event.organizer ?? req.apiUser!.email);
-    // v3.18.25 A5: CANCEL mails to all attendees (with sequence+1)
-    void notifyAttendees({ ...event, sequence: event.sequence + 1 }, 'CANCEL');
-  }
+  // v3.18.25 A5: CANCEL mails to all attendees (with sequence+1)
+  if (organizerCopy) void notifyAttendees({ ...event, sequence: event.sequence + 1 }, 'CANCEL');
 
   res.json({ ok: true });
 });
@@ -1304,13 +1260,13 @@ type StoredEvent = {
   sequence: number; organizer: string | null; attendees: unknown; icalData: string; showAs: string;
 };
 
-/** iMIP to the people of a meeting (rooms are skipped in sendInvitations); no-op without attendees. */
+/** iMIP to the attendees of a meeting; no-op without attendees. */
 async function notifyAttendees(
   ev: StoredEvent,
   method: 'REQUEST' | 'CANCEL',
   occurrence?: Pick<StoredEvent, 'summary' | 'description' | 'location' | 'dtStart' | 'dtEnd'> & { recurrenceId: Date },
 ): Promise<void> {
-  if (!ev.organizer || splitAttendees(ev.attendees).people.length === 0) return;
+  if (!ev.organizer || attendeeEntries(ev.attendees).length === 0) return;
   // called fire-and-forget: a failed lookup must not become an unhandled rejection
   const organizerUser = await prisma.user.findFirst({ where: { email: ev.organizer }, select: { displayName: true } })
     .catch(() => null);
@@ -1335,40 +1291,17 @@ function occurrenceFields(view: OccurrenceView, master: StoredEvent) {
 }
 
 /**
- * 9.4: the series' rooms after one occurrence moved — booked again against the
- * new calendar data (the moved occurrence may now collide); returns the data with
- * the rooms' answers on the master, null when the meeting has no rooms.
- */
-async function recheckRooms(
-  event: StoredEvent,
-  icalData: string,
-  user: { email: string; domainId?: string },
-): Promise<{ icalData: string; attendees: Array<Record<string, unknown>> } | null> {
-  const stored = splitAttendees(event.attendees);
-  if (stored.rooms.length === 0) return null;
-  const roomJson = await bookRooms(
-    { uid: event.uid, summary: event.summary, organizer: event.organizer ?? user.email,
-      dtStart: event.dtStart, dtEnd: event.dtEnd, allDay: event.allDay, rrule: event.rrule, icalData },
-    stored.rooms.map(roomEmail), user.domainId,
-  );
-  const attendees = [...stored.people, ...roomJson] as Array<Record<string, unknown>>;
-  const patched = patchVEvent(icalData, { attendees: attendees as Array<{ email: string; cn?: string; partstat?: string }> });
-  return { icalData: patched ?? icalData, attendees };
-}
-
-/**
  * 9.4: PUT ?occurrence= — change one occurrence (override with RECURRENCE-ID).
  * Text, time, show-as and classification of the occurrence; recurrence, attendees
- * and the reminder belong to the series and are not changed here. A moved
- * occurrence re-checks the series' rooms — on the organizer's copy only (9.5); an
- * attendee's copy changes only itself and notifies nobody.
+ * and the reminder belong to the series and are not changed here. The attendees
+ * are notified from the organizer's copy only (9.5); an attendee's copy changes
+ * only itself and notifies nobody.
  */
 async function updateOccurrence(
   res: Response,
   event: StoredEvent,
   occurrence: Date,
   data: { [K in keyof z.infer<typeof EventSchema>]?: z.infer<typeof EventSchema>[K] | undefined },
-  user: { email: string; domainId?: string },
   organizerCopy: boolean,
 ): Promise<void> {
   const view = isSeriesOccurrence(event.icalData, occurrence) ? occurrenceView(event, occurrence) : null;
@@ -1391,11 +1324,7 @@ async function updateOccurrence(
     sequence,
   });
   if (!icalData) { res.status(404).json({ error: 'Occurrence not found' }); return; }
-  const rooms = datesTouched && organizerCopy ? await recheckRooms(event, icalData, user) : null;
-  const updated = await prisma.calendarEvent.update({
-    where: { id: event.id },
-    data: { icalData: rooms?.icalData ?? icalData, sequence, ...(rooms ? { attendees: rooms.attendees as object[] } : {}) },
-  });
+  const updated = await prisma.calendarEvent.update({ where: { id: event.id }, data: { icalData, sequence } });
   const changed = occurrenceView(updated, occurrence) ?? view;
   announceCalendarChange([event.calendarId], { action: 'update', ids: [event.id] });
   if (organizerCopy) void notifyAttendees(updated, 'REQUEST', { ...occurrenceFields(changed, updated), recurrenceId: occurrence });

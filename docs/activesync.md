@@ -123,7 +123,7 @@ of `CLASS_MODULES` (see [Contacts](#contacts-w3)).
 
 | Class | Collection ids (FolderSync Type) | Items | Writer |
 |---|---|---|---|
-| Calendar ([MS-ASCAL], page 4) | `cal:<calendarId>` — the user's **own** calendars: the default one Type 8, the others 13; no shared calendars | `CalendarEvent` (ServerId = event id, the MeetingResponse `CalendarId`) | calendar object built / patched with `@coremail/core/calendar` (`src/pim/calendar-ical.ts`), rooms booked through storage `room-booking.ts` (`src/pim/calendar-rooms.ts`), row columns derived from it, `announceCalendarChange` |
+| Calendar ([MS-ASCAL], page 4) | `cal:<calendarId>` — the user's **own** calendars: the default one Type 8, the others 13; no shared calendars | `CalendarEvent` (ServerId = event id, the MeetingResponse `CalendarId`) | calendar object built / patched with `@coremail/core/calendar` (`src/pim/calendar-ical.ts`), row columns derived from it, `announceCalendarChange` |
 | Tasks ([MS-ASTASK], page 9) | `tasks:default` (Type 7) | `Task` | storage `task-store.ts` `createTaskWithRules` / `updateTaskWithRules` — the one task writer of REST, CalDAV and ActiveSync (status rules, the next task of a completed recurring task exactly once, no revived rule on a completed task), `announceUserEvent` `tasks` |
 | Notes ([MS-ASNOTE], page 23, 14.0+) | `notes:default` (Type 10) | `Note` (subject, plain-text body, categories ↔ notes:Categories — normalised and capped like the REST API; the colour stays untouched) | row writes, `announceUserEvent` `notes` |
 | Contacts ([MS-ASCNTC], pages 1 and 12) | `contacts:default` (Type 9) | the user's own `Contact` rows; contact groups are not synced | storage `contact-store.ts` (the contact writer of REST, CardDAV and ActiveSync), `announceUserEvent` `contacts` |
@@ -154,7 +154,7 @@ ClientIds of earlier requests are never matched, devices reuse them. A priming S
 ServerId gets Status 8. The device's
 own writes are recorded as held at their new version (no echo); an item the server normalised (a
 completed recurring task, an Add whose UID the calendar already has — the existing event is updated,
-a meeting whose rooms answered, an event moved into another zone than the device's TimeZone) is
+an event moved into another zone than the device's TimeZone) is
 recorded at version 0 and comes back as a Change. Change semantics ([MS-ASCMD]
 airsync:Supported): an element missing from a Change is cleared, unless the client listed a
 Supported set in its priming Sync and the element is not in it (ghosted). A body the device got
@@ -174,21 +174,13 @@ Interval, Occurrences, Until, FirstDayOfWeek); an RRULE without an ActiveSync fo
 kept on device changes. Exceptions: EXDATEs and cancelled overrides are deleted exceptions, other
 RECURRENCE-ID overrides changed ones; a device's exception list is applied with
 `excludeOccurrence` / `upsertOccurrence` / `restoreOccurrence` (`@coremail/core/calendar-exceptions`).
-Attendees (AttendeeStatus / AttendeeType, rooms as type 3), reminder (VALARM minutes), BusyStatus ↔
+Attendees (AttendeeStatus / AttendeeType, `CUTYPE=ROOM` / `RESOURCE` as type 3), reminder (VALARM minutes), BusyStatus ↔
 show-as, Sensitivity ↔ CLASS, MeetingStatus (own / received / cancelled), ResponseType (14.0+).
 Invitations are sent by the device itself (SendMail with text/calendar) — the server does not send
 iMIP for device writes.
 
-**Rooms** (`src/pim/calendar-rooms.ts`, the booking path of the REST event form — storage
-`room-booking.ts` with the resource policy, every occurrence checked, the room's booking lock): an
-attendee whose address is a room / resource mailbox of the user's domain is a room, whatever
-AttendeeType the device gave it. Only the user's own meetings (organizer = an own address, or none)
-book; a copy of another organizer's meeting never touches a room. Rooms are (re)booked when the room
-list or the timing (start, end, all-day, rule, exceptions) changed, a removed room and the rooms of
-a deleted meeting are released; the rooms' answers replace whatever the device sent for them
-(PARTSTAT, CUTYPE ROOM / RESOURCE, NON-PARTICIPANT — a phone cannot mark a declined room accepted)
-and the device gets the meeting back. A booking of the same UID by another organizer is never
-changed or released (answer: declined) — device UIDs are client-chosen.
+**Rooms**: removed in 10.0.0 — an attendee with a former room address is an ordinary attendee;
+nothing is booked or released (see [calendar.md](calendar.md#rooms-and-resources-removed-in-1000)).
 
 **Tasks mapping** (`src/pim/tasks-codec.ts`): Importance ↔ priority, UtcStartDate / UtcDueDate (the
 local StartDate / DueDate in the user's zone), Complete + DateCompleted ↔ status COMPLETED (the
@@ -300,7 +292,7 @@ versions.
 * `src/pim/pim-sync.test.ts` — FolderSync, Sync both ways with the item state, policies, Notes
   from 14.0, GetItemEstimate, MoveItems, ItemOperations, Ping, MeetingResponse (in-memory Prisma);
 * `src/pim/pim-review.test.ts` — ClientIds of earlier requests, re-priming without Supported,
-  rooms of phone meetings (booked / declined / released, copies and foreign UIDs untouched), a UTC
+  a former room address in a phone meeting (an ordinary attendee since 10.0), a UTC
   event turned into a series across DST, the calendar FilterType window, a completed task sent
   again with its rule, FolderSync retried with the previous key, Ping with an unreadable policy;
 * `src/pim/contacts-codec.test.ts` — the Contacts / Contacts2 token tables, a byte fixture, the
