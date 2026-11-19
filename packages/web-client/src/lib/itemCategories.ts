@@ -33,3 +33,13 @@ export function categoryOptions(defs: readonly CategoryDef[], selected: readonly
   for (const s of selected) if (!out.some((o) => norm(o.name) === norm(s))) out.push({ name: s, color: null });
   return out;
 }
+
+/**
+ * The list after toggling `name`, computed on the newest known list of the item
+ * (`newest`, e.g. the cache that a pending save already updated) and only falling
+ * back to the list the menu was drawn with — so toggles that follow each other
+ * faster than a save returns merge instead of replacing one another.
+ */
+export function categoriesAfterToggle(newest: readonly string[] | null | undefined, drawn: readonly string[], name: string): string[] {
+  return toggleCategory(newest ?? drawn, name);
+}

@@ -16,7 +16,7 @@ import {
   expansionNotice, memberInput, recipientEntries,
   type ContactGroupDetail, type ContactGroupSummary, type GroupExpansion, type GroupMember,
 } from '../lib/contactGroups.js';
-import { categoryOptions, toggleCategory } from '../lib/itemCategories.js';
+import { categoriesAfterToggle, categoryOptions } from '../lib/itemCategories.js';
 import {
   ALL_CONTACTS_VIEW, categoryCounts, contactInfoLines, countLabel, filterByCategory, isOwnContact, primaryPhone, sortContacts, telHref,
   type ContactSortKey, type DirectoryEntry, type SidebarView,
@@ -130,10 +130,24 @@ export function ContactsPage() {
     },
     onError: fail,
   });
+  // Toggles can follow each other faster than a save returns: the list is merged on the
+  // newest known contact (cache, updated optimistically) and the saves run one after another.
+  const detailKey = (id: string) => ['contacts', 'detail', id] as const;
   const assignCategories = useMutation({
-    mutationFn: (categories: string[]) => api.put<ContactDetail>(`/contacts/${contactId!}`, contactPayload({ ...formFromContact(contact!), categories })),
-    onSuccess: () => void refresh(),
+    scope: { id: 'contact-categories' },
+    mutationFn: ({ id, categories }: { id: string; categories: string[] }) => {
+      const latest = qc.getQueryData<ContactDetail>(detailKey(id));
+      if (!latest) throw new Error('Kontakt nicht geladen');
+      return api.put<ContactDetail>(`/contacts/${id}`, contactPayload({ ...formFromContact(latest), categories }));
+    },
+    onMutate: ({ id, categories }) => {
+      qc.setQueryData<ContactDetail>(detailKey(id), (c) => (c ? { ...c, categories } : c));
+    },
     onError: fail,
+    onSettled: () => {
+      const pending = qc.isMutating({ predicate: (m) => m.options.scope?.id === 'contact-categories' });
+      if (pending <= 1) void refresh();
+    },
   });
   const deleteContact = useMutation({
     mutationFn: (id: string) => api.delete(`/contacts/${id}`),
@@ -261,13 +275,17 @@ export function ContactsPage() {
   };
 
   const categoryMenu = (): ContextMenuItem[] => {
-    const current = contactForm?.categories ?? [];
+    const newest = (): string[] | undefined => {
+      const latest = contactId ? qc.getQueryData<ContactDetail>(detailKey(contactId)) : undefined;
+      return latest ? formFromContact(latest).categories : undefined;
+    };
+    const current = newest() ?? contactForm?.categories ?? [];
     const options = categoryOptions(categoryDefs, current);
     if (options.length === 0) return [{ label: 'Noch keine Kategorien', disabled: true }];
     return options.map((o) => ({
       label: o.name,
       checked: current.some((n) => n.toLowerCase() === o.name.toLowerCase()),
-      onClick: () => assignCategories.mutate(toggleCategory(current, o.name)),
+      onClick: () => { if (contactId) assignCategories.mutate({ id: contactId, categories: categoriesAfterToggle(newest(), current, o.name) }); },
     }));
   };
 

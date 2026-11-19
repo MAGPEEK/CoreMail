@@ -82,10 +82,10 @@ function toneClass(item: CommandItem): string {
 
 const SHAPE: Record<CommandBarVariant, { main: string; arrow: string; group: string; more: string }> = {
   ribbon: {
-    main: 'flex flex-col items-center justify-between w-[80px] h-[62px] px-1 py-1.5 rounded',
-    arrow: 'flex items-end justify-center w-5 h-[62px] pb-2 rounded',
+    main: 'flex flex-col items-center justify-between w-[84px] h-[78px] px-1 py-1.5 rounded',
+    arrow: 'flex items-end justify-center w-5 h-[78px] pb-2 rounded',
     group: 'flex flex-col items-center px-3 py-1',
-    more: 'flex flex-col items-center justify-center w-[52px] h-[62px] rounded',
+    more: 'flex flex-col items-center justify-center w-[52px] h-[78px] rounded',
   },
   inline: {
     main: 'inline-flex items-center gap-1.5 h-8 px-2.5 rounded text-sm whitespace-nowrap',
@@ -115,12 +115,12 @@ function Label({ item, variant, arrow, iconOnly }: { item: CommandItem; variant:
   if (variant === 'ribbon') {
     return (
       <>
-        <span className="h-6 flex items-center justify-center mt-0.5" aria-hidden="true">{item.icon}</span>
-        {/* 10.1: long German words (Ansichtseinstellungen) hyphenate / wrap instead of being cut off */}
-        <span lang={lang} className="text-[11px] leading-tight text-center w-full flex items-center justify-center gap-0.5 line-clamp-2 hyphens-auto [overflow-wrap:anywhere]">
-          {item.label}
-          {arrow && <ChevronDown size={10} className="opacity-60 shrink-0" aria-hidden="true" />}
+        <span className="h-6 flex items-center justify-center gap-0.5 mt-0.5" aria-hidden="true">
+          {item.icon}
+          {arrow && <ChevronDown size={10} className="opacity-60 shrink-0" />}
         </span>
+        {/* 10.1: long German words (Ansichtseinstellungen) hyphenate / wrap instead of being cut off */}
+        <span lang={lang} className="text-[11px] leading-tight text-center w-full line-clamp-3 hyphens-auto [overflow-wrap:break-word]">{item.label}</span>
       </>
     );
   }
