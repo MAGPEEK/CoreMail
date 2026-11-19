@@ -7,14 +7,17 @@
  *   usePhotoUrl(entry)           blob: URL of a known photo
  *
  * Photos are fetched with the Authorization header (never a token in a URL) and
- * shown as blob: URLs of image/jpeg only. One blob per user and photo version;
- * the URL of an older version of the same user is revoked when a newer one
- * loads. External addresses resolve to null and keep their initials.
+ * shown as blob: URLs of image/jpeg only. One blob per user and photo version
+ * (lib/photoDirectory.ts PhotoUrlRegistry); a URL is revoked only when the
+ * query cache drops its image query, so an avatar still showing an older
+ * version never points at a revoked URL. External addresses resolve to null
+ * and keep their initials.
  */
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { api, fetchBlob } from '../api/client.js';
 import {
-  PhotoLookupBatcher, PHOTO_IMAGE_KEY, PHOTO_LOOKUP_KEY, normalizeAddress, photoPath, type PhotoEntry,
+  PhotoLookupBatcher, PhotoUrlRegistry, PHOTO_IMAGE_KEY, PHOTO_LOOKUP_KEY, normalizeAddress, photoImageKeyParts, photoPath,
+  type PhotoEntry,
 } from '../lib/photoDirectory.js';
 import { rasterImageType } from '../lib/imageTypes.js';
 
@@ -23,21 +26,30 @@ const LOOKUP_STALE_MS = 5 * 60_000;
 const batcher = new PhotoLookupBatcher(async (addresses) =>
   (await api.post<{ photos: Record<string, PhotoEntry> }>('/users/photos/lookup', { addresses })).photos);
 
-/** userId → [version, blob URL] of the newest photo loaded in this tab. */
-const objectUrls = new Map<string, [string, string]>();
+const objectUrls = new PhotoUrlRegistry();
+const watchedClients = new WeakSet<QueryClient>();
+
+/** Revokes a photo's blob: URL once its image query leaves the cache (once per QueryClient). */
+function releaseUrlsOnRemoval(qc: QueryClient): void {
+  if (watchedClients.has(qc)) return;
+  watchedClients.add(qc);
+  qc.getQueryCache().subscribe((event) => {
+    if (event.type !== 'removed') return;
+    const parts = photoImageKeyParts(event.query.queryKey);
+    if (parts) objectUrls.release(...parts);
+  });
+}
 
 async function loadPhoto(entry: PhotoEntry): Promise<string | null> {
-  const previous = objectUrls.get(entry.userId);
-  if (previous?.[0] === entry.version) return previous[1];
+  const known = objectUrls.get(entry.userId, entry.version);
+  if (known) return known;
   const blob = await fetchBlob(photoPath(entry));
   if (rasterImageType(blob.type) !== 'image/jpeg') return null;
-  const url = URL.createObjectURL(blob);
-  if (previous) URL.revokeObjectURL(previous[1]);
-  objectUrls.set(entry.userId, [entry.version, url]);
-  return url;
+  return objectUrls.add(entry.userId, entry.version, blob);
 }
 
 export function usePhotoUrl(entry: PhotoEntry | null | undefined): string | null {
+  releaseUrlsOnRemoval(useQueryClient());
   const { data } = useQuery({
     queryKey: [PHOTO_IMAGE_KEY, entry?.userId ?? '', entry?.version ?? ''],
     queryFn: () => loadPhoto(entry!),

@@ -12,7 +12,7 @@ import { insertSearchToken } from '../lib/searchInput.js';
 import { GLOBAL_SEARCH_INPUT_ID } from '../hooks/useGlobalShortcuts.js';
 import { BrandLogo } from './BrandLogo.js';
 import { useBranding } from '../hooks/useBranding.js';
-import { useOwnPhoto } from '../hooks/useUserPhoto.js';
+import { useOwnPhoto, useOwnProfile } from '../hooks/useUserPhoto.js';
 
 interface Props {
   onSearch: (q: string) => void;
@@ -28,8 +28,13 @@ const HEADER_BTN = 'p-1.5 rounded text-header-fg focus-visible:outline-header-fg
 export function TopBar({ onSearch }: Props) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { displayName, email } = useAuthStore();
+  const auth = useAuthStore();
   const { productName } = useBranding();
+  // A session restored from the cookie (page reload) has no name / address in the
+  // auth store — only the login answer sets them — so the profile fills the gap.
+  const { data: profile } = useOwnProfile();
+  const displayName = auth.displayName || profile?.displayName || '';
+  const email = auth.email || profile?.email || '';
   const photoUrl = useOwnPhoto();
   const [search, setSearch] = useState('');
   const [profileOpen, setProfileOpen] = useState(false);

@@ -3,8 +3,8 @@
   "configurations": [
     {
       "name": "owa",
-      "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["--filter", "@coremail/web-client", "dev"],
+      "runtimeExecutable": "corepack",
+      "runtimeArgs": ["pnpm", "--filter", "@coremail/web-client", "dev"],
       "port": 4000
     }
   ]

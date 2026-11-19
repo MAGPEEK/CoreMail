@@ -1,6 +1,7 @@
 // Step (9.5): profile photos — user A uploads a PNG carrying EXIF/GPS metadata; the stored
 // photo is a 512×512 JPEG without any metadata; user B (same domain) can GET it and finds it
-// through the batched address lookup; ETag revalidation answers 304; A removes it → 404;
+// through the batched address lookup; ETag revalidation answers 304; a JPEG scan bomb is refused (415);
+// A removes it → 404;
 // an admin removes a re-uploaded photo (DELETE /admin/mailboxes/:id/photo) → 404 again.
 import { check, assert, creds, http, session, makePng, pngChunk } from '../lib.mjs';
 
@@ -26,6 +27,28 @@ function jpegSize(buf) {
     i += 2 + buf.readUInt16BE(i + 2);
   }
   return null;
+}
+
+/** JPEG marker segment with its length. */
+function segment(marker, body) {
+  const h = Buffer.from([0xff, marker, 0, 0]);
+  h.writeUInt16BE(body.length + 2, 2);
+  return Buffer.concat([h, body]);
+}
+
+/** Progressive 2048×2048 JPEG of `scans` tiny end-of-band AC scans (each walks the whole frame when decoded). */
+function scanBombJpeg(scans) {
+  const lengths = Buffer.alloc(16);
+  lengths[0] = 1;
+  const dht = segment(0xc4, Buffer.concat([Buffer.from([0x10]), lengths, Buffer.from([0xe0])]));
+  const bits = ('0' + '1'.repeat(14)).repeat(3).padEnd(48, '1');
+  const data = Buffer.from(bits.match(/.{8}/g).flatMap((b) => (b === '11111111' ? [0xff, 0x00] : [parseInt(b, 2)])));
+  const scan = Buffer.concat([segment(0xda, Buffer.from([1, 1, 0x00, 1, 63, 0])), data]);
+  return Buffer.concat([
+    Buffer.from([0xff, 0xd8]), segment(0xdb, Buffer.concat([Buffer.from([0]), Buffer.alloc(64, 1)])),
+    segment(0xc2, Buffer.from([8, 0x08, 0x00, 0x08, 0x00, 1, 1, 0x11, 0])), dht,
+    ...Array.from({ length: scans }, () => scan), Buffer.from([0xff, 0xd9]),
+  ]);
 }
 
 async function getPhoto(token, userId, headers = {}) {
@@ -89,6 +112,13 @@ export async function run(state) {
     const r = await http('PUT', '/api/v1/user/photo', { token: A, body: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'), headers: { 'Content-Type': 'image/png' } });
     assert(r.status === 415 && r.json?.code === 'TYPE', `${r.status} ${r.text.slice(0, 200)}`);
     assert((await getPhoto(B, aId)).status === 200, 'old photo still there');
+  });
+
+  await check('profile photo: JPEG scan bomb refused before decoding (415 UNSUPPORTED)', async () => {
+    const t0 = Date.now();
+    const r = await http('PUT', '/api/v1/user/photo', { token: A, body: scanBombJpeg(2000), headers: { 'Content-Type': 'image/jpeg' } });
+    assert(r.status === 415 && r.json?.code === 'UNSUPPORTED', `${r.status} ${r.text.slice(0, 200)}`);
+    return `${Date.now() - t0} ms`;
   });
 
   await check('profile photo: DELETE by the owner → 404 for everyone', async () => {

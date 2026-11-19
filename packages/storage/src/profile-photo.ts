@@ -17,7 +17,7 @@
 import { createHash } from 'node:crypto';
 import { createLogger } from '@coremail/core/logger';
 import { prisma } from './prisma/index.js';
-import { getObjectStore } from './object-store/index.js';
+import { getObjectStore, isNotFound } from './object-store/index.js';
 
 const log = createLogger('profile-photo');
 
@@ -67,12 +67,31 @@ export interface ProfilePhotoState {
   updatedAt: Date;
 }
 
-/** Deletes `key` from the object store unless a user still references it. */
+async function isReferenced(key: string): Promise<boolean> {
+  return (await prisma.user.count({ where: { photoKey: key } })) > 0;
+}
+
+/**
+ * Deletes `key` from the object store unless a user still references it.
+ *
+ * Two users may share one object (same bytes), so a save of the same photo can
+ * point a user at the key between the reference check and the delete. The
+ * bytes are therefore read first and put back when a reference shows up after
+ * the delete; saveProfilePhoto covers the opposite order (delete before its
+ * swap) by writing the object again after the swap.
+ */
 export async function releaseProfilePhoto(key: string | null | undefined): Promise<void> {
-  if (!isProfilePhotoKey(key)) return;
-  const users = await prisma.user.count({ where: { photoKey: key } });
-  if (users > 0) return;
-  await getObjectStore().delete(key);
+  if (!isProfilePhotoKey(key) || (await isReferenced(key))) return;
+  const store = getObjectStore();
+  let bytes: Buffer;
+  try {
+    bytes = await store.get(key);
+  } catch (err) {
+    if (isNotFound(err)) return;
+    throw err;
+  }
+  await store.delete(key);
+  if (await isReferenced(key)) await store.put(key, bytes, { contentType: PROFILE_PHOTO_CONTENT_TYPE });
 }
 
 /** releaseProfilePhoto that logs instead of throwing (the row is already consistent; an orphan is only wasted space). */
@@ -110,12 +129,17 @@ async function swapPhotoKey(userId: string, next: string | null, now: Date): Pro
  */
 export async function saveProfilePhoto(userId: string, jpeg: Buffer, now: Date = new Date()): Promise<ProfilePhotoState | null> {
   const key = profilePhotoKey(jpeg);
-  await getObjectStore().put(key, jpeg, { contentType: PROFILE_PHOTO_CONTENT_TYPE });
+  const store = getObjectStore();
+  await store.put(key, jpeg, { contentType: PROFILE_PHOTO_CONTENT_TYPE });
   const swapped = await swapPhotoKey(userId, key, now);
   if (!swapped) {
     await releaseProfilePhotoQuietly(key);
     return null;
   }
+  // Another user's release of the same bytes may have deleted the object between
+  // the put and the swap (see releaseProfilePhoto); content-addressed, so writing
+  // it again is idempotent (the filesystem driver skips an existing object).
+  await store.put(key, jpeg, { contentType: PROFILE_PHOTO_CONTENT_TYPE });
   if (swapped.prev !== key) await releaseProfilePhotoQuietly(swapped.prev);
   return { key, version: profilePhotoVersion(key)!, updatedAt: now };
 }

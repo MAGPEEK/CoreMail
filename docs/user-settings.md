@@ -151,8 +151,11 @@ GET    /api/v1/user/profile             … photo: { userId, version, updatedAt 
 **Processing.** The server never stores the uploaded bytes: it checks the type by magic bytes (PNG
 or JPEG — WebP and everything else → 415 `UNSUPPORTED` / `TYPE`), reads the dimensions from the
 header before decoding (more than 2048 × 2048 pixels or a side under 32 px → 422 `DIMENSIONS`;
-more than 5 MB → 413 `SIZE`; undecodable data → 422 `CORRUPT`), decodes it (pure JavaScript, PNG
-8-bit non-interlaced, JPEG with resolution and memory caps), crops the centre square, scales it to
+more than 5 MB → 413 `SIZE`; undecodable data → 422 `CORRUPT`), walks the JPEG markers before
+decoding (exactly one baseline / progressive frame, at most 32 scans and 512 segments, else 415
+`UNSUPPORTED` — every scan makes the decoder walk the whole frame again, so thousands of tiny scans
+would block the gateway for minutes), decodes it (pure JavaScript, PNG 8-bit non-interlaced, JPEG
+with resolution and 128 MB memory caps), crops the centre square, scales it to
 512×512, flattens transparency onto white and encodes a new baseline JPEG — no EXIF, GPS, ICC or
 comment segments survive. The EXIF orientation of a JPEG sent by an API client is not applied (the
 webmail always uploads its own rendering). Uploads are limited per user
@@ -161,14 +164,17 @@ webmail always uploads its own rendering). Uploads are limited per user
 **Storage.** `getObjectStore()` under the content-addressed key `profile-photos/<aa>/<sha256>.jpg`
 (never a file name); `User.photoKey` / `photoUpdatedAt` point to it (storage `profile-photo.ts`). A
 replaced or removed photo is deleted once no account references it; deleting the account removes
-it too.
+it too. Accounts with byte-identical photos share one object: the release reads the bytes, deletes
+and puts them back if a reference appeared meanwhile, and a save writes the object again after
+switching the key, so a concurrent save of the same photo never points at a deleted object.
 
 **Who sees it.** Every signed-in user of the same domain — the boundary of the address list — sees
 the photos of the active accounts listed there, and everyone sees the own photo; other requests are
 404 (no hint whether an account or photo exists). The webmail shows photos for internal senders in
 the message list and the reading pane, on the contact card, in the contact list and on meeting
 attendees: the addresses on screen are resolved in one batched lookup (aliases included), each
-photo is loaded once per version as a `blob:` URL (Authorization header, never a token in a URL).
+photo is loaded once per version as a `blob:` URL (Authorization header, never a token in a URL),
+revoked only when its cached image query is dropped.
 External senders keep their initials. Photos are not served over CardDAV, ActiveSync or MAPI.
 
 **Initials** (no photo): first letter of the first and of the last word of the display name ("Erika

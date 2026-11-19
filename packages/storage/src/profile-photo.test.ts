@@ -16,7 +16,9 @@ type Row = { id: string; photoKey: string | null; photoUpdatedAt: Date | null };
 const users = new Map<string, Row>();
 const objects = new Map<string, Buffer>();
 /** Runs once before the next updateMany (simulates a concurrent change). */
-let beforeUpdate: (() => void) | null = null;
+let beforeUpdate: (() => void | Promise<void>) | null = null;
+/** Runs once before the next object delete (simulates a concurrent save). */
+let beforeDelete: (() => Promise<void>) | null = null;
 
 (globalThis as Record<string, unknown>)['__prisma'] = {
   $on: () => undefined,
@@ -26,7 +28,7 @@ let beforeUpdate: (() => void) | null = null;
     updateMany: async (a: { where: { id: string; photoKey: string | null }; data: Partial<Row> }) => {
       const hook = beforeUpdate;
       beforeUpdate = null;
-      hook?.();
+      await hook?.();
       const r = users.get(a.where.id);
       if (!r || r.photoKey !== a.where.photoKey) return { count: 0 };
       Object.assign(r, a.data);
@@ -38,7 +40,7 @@ let beforeUpdate: (() => void) | null = null;
   driver: 'filesystem', location: 'memory',
   async put(k: string, d: Buffer) { objects.set(k, Buffer.from(d)); },
   async get(k: string) { const v = objects.get(k); if (!v) throw Object.assign(new Error('NoSuchKey'), { code: 'NoSuchKey' }); return v; },
-  async delete(k: string) { objects.delete(k); },
+  async delete(k: string) { const hook = beforeDelete; beforeDelete = null; await hook?.(); objects.delete(k); },
 };
 
 const {
@@ -54,6 +56,7 @@ beforeEach(() => {
   users.clear();
   objects.clear();
   beforeUpdate = null;
+  beforeDelete = null;
   users.set('u1', { id: 'u1', photoKey: null, photoUpdatedAt: null });
   users.set('u2', { id: 'u2', photoKey: null, photoUpdatedAt: null });
 });
@@ -110,6 +113,29 @@ test('a concurrent change is retried against the current key — no object is or
   await saveProfilePhoto('u1', C);
   assert.equal(users.get('u1')!.photoKey, profilePhotoKey(C));
   assert.equal(objects.has(profilePhotoKey(B)), false, 'the concurrently written photo is released');
+});
+
+test('race (same bytes): another user saves the photo while it is being released — the object is put back', async () => {
+  await saveProfilePhoto('u2', A);
+  // u2 removes it; after the reference check, before the delete, u1 saves the same photo completely
+  beforeDelete = async () => { assert.ok(await saveProfilePhoto('u1', A)); };
+  assert.equal(await removeProfilePhoto('u2'), true);
+  assert.equal(users.get('u1')!.photoKey, profilePhotoKey(A));
+  assert.deepEqual(objects.get(profilePhotoKey(A)), A, 'u1 must not point at a deleted object');
+});
+
+test('race (same bytes): the release deletes between the save\'s upload and its key swap — the save writes it again', async () => {
+  await saveProfilePhoto('u2', A);
+  // u1 has uploaded A; before its swap, u2 removes A (no reference yet → deleted)
+  beforeUpdate = async () => { assert.equal(await removeProfilePhoto('u2'), true); };
+  assert.ok(await saveProfilePhoto('u1', A));
+  assert.equal(users.get('u1')!.photoKey, profilePhotoKey(A));
+  assert.deepEqual(objects.get(profilePhotoKey(A)), A, 'u1 must not point at a deleted object');
+});
+
+test('release of an object that is already gone is a no-op', async () => {
+  await assert.doesNotReject(releaseProfilePhoto(profilePhotoKey(A)));
+  assert.equal(objects.size, 0);
 });
 
 test('release ignores foreign keys and keeps referenced ones', async () => {

@@ -5,7 +5,9 @@
  *   1. size limit (MAX_PHOTO_BYTES) and type by magic bytes (PNG or JPEG; the
  *      declared Content-Type is ignored);
  *   2. dimensions from the header BEFORE decoding — more than MAX_PHOTO_PIXELS
- *      (decompression bomb) or a side below MIN_PHOTO_SIDE is refused;
+ *      (decompression bomb) or a side below MIN_PHOTO_SIDE is refused; a JPEG
+ *      must have exactly one decodable frame and at most MAX_JPEG_SCANS scans
+ *      (jpeg-structure.ts: CPU bomb of many tiny scans);
  *   3. decode (PNG: the pure-JS codec of lib/branding/png.ts, 8-bit
  *      non-interlaced; JPEG: jpeg-js with resolution and memory caps);
  *   4. centre square crop, scale to PHOTO_SIZE × PHOTO_SIZE (area average down,
@@ -20,8 +22,9 @@
  * webmail renders its crop).
  */
 import jpeg from 'jpeg-js';
-import { sniffRaster, rasterDimensions } from '../branding/image.js';
+import { sniffRaster } from '../branding/image.js';
 import { decodePng, isDecodable, readPngHeader, resizeRgba, type RgbaImage } from '../branding/png.js';
+import { readJpegStructure, MAX_JPEG_SCANS, MAX_JPEG_SEGMENTS } from './jpeg-structure.js';
 
 /** Edge length of every stored photo (px). */
 export const PHOTO_SIZE = 512;
@@ -33,6 +36,11 @@ export const MAX_PHOTO_PIXELS = 2048 * 2048;
 export const MIN_PHOTO_SIDE = 32;
 /** JPEG quality of the stored photo. */
 const JPEG_QUALITY = 88;
+/**
+ * Memory cap of jpeg-js. A MAX_PHOTO_PIXELS CMYK frame without subsampling needs
+ * about 100 MB (coefficient blocks, component planes, RGBA output).
+ */
+const JPEG_MAX_MEMORY_MB = 128;
 
 export type PhotoErrorCode = 'SIZE' | 'TYPE' | 'UNSUPPORTED' | 'DIMENSIONS' | 'CORRUPT';
 
@@ -53,7 +61,7 @@ function decode(body: Buffer, format: 'png' | 'jpeg'): RgbaImage {
     if (format === 'png') return decodePng(body);
     const img = jpeg.decode(body, {
       useTArray: true, formatAsRGBA: true,
-      maxResolutionInMP: MAX_PHOTO_PIXELS / 1_000_000, maxMemoryUsageInMB: 256,
+      maxResolutionInMP: MAX_PHOTO_PIXELS / 1_000_000, maxMemoryUsageInMB: JPEG_MAX_MEMORY_MB,
     });
     return { width: img.width, height: img.height, data: Buffer.from(img.data.buffer, img.data.byteOffset, img.data.byteLength) };
   } catch {
@@ -120,6 +128,22 @@ export function squareAt(img: RgbaImage, size: number): RgbaImage {
   return square.width > size ? resizeRgba(square, size) : upscaleSquare(square, size);
 }
 
+/** Width and height of a PNG (IHDR) or JPEG (its single frame) upload; refuses JPEGs jpeg-js must not decode. */
+function uploadDimensions(body: Buffer, format: 'png' | 'jpeg'): { width: number; height: number } {
+  if (format === 'png') {
+    const png = readPngHeader(body);
+    if (!png) throw new PhotoError('CORRUPT', 'unreadable image header');
+    return png;
+  }
+  const jpg = readJpegStructure(body);
+  if (!jpg || jpg.frames === 0) throw new PhotoError('CORRUPT', 'unreadable image header');
+  if (jpg.frames > 1 || !jpg.decodable) throw new PhotoError('UNSUPPORTED', 'JPEG must be a single baseline or progressive image');
+  if (jpg.scans > MAX_JPEG_SCANS || jpg.segments > MAX_JPEG_SEGMENTS) {
+    throw new PhotoError('UNSUPPORTED', `JPEG has too many scans or segments (at most ${MAX_JPEG_SCANS} scans)`);
+  }
+  return jpg;
+}
+
 /** Validates the header of an upload; returns the format to decode. */
 function checkUpload(body: Buffer): 'png' | 'jpeg' {
   if (body.length === 0) throw new PhotoError('TYPE', 'empty upload');
@@ -127,8 +151,8 @@ function checkUpload(body: Buffer): 'png' | 'jpeg' {
   const format = sniffRaster(body);
   if (format === 'webp') throw new PhotoError('UNSUPPORTED', 'WebP is not accepted — upload PNG or JPEG');
   if (!format) throw new PhotoError('TYPE', 'not a PNG or JPEG image');
-  const dim = rasterDimensions(body, format);
-  if (!dim || !(dim.width > 0) || !(dim.height > 0)) throw new PhotoError('CORRUPT', 'unreadable image header');
+  const dim = uploadDimensions(body, format);
+  if (!(dim.width > 0) || !(dim.height > 0)) throw new PhotoError('CORRUPT', 'unreadable image header');
   if (dim.width * dim.height > MAX_PHOTO_PIXELS) {
     throw new PhotoError('DIMENSIONS', `image has more than ${MAX_PHOTO_PIXELS} pixels (${dim.width}×${dim.height})`);
   }

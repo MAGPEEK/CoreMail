@@ -177,7 +177,8 @@ and ends with `POST /api/v1/admin/branding/reset` (defaults back, old assets 404
 `profile-photo` (9.5): user A uploads a PNG that carries an `eXIf` chunk with GPS text; the stored
 photo (`GET /api/v1/users/<id>/photo`) must be a 512×512 JPEG without an APP1 segment or any of the
 metadata, served `private` with a content-hash ETag; user B of the same domain gets it, revalidates
-it (304) and finds A through `POST /api/v1/users/photos/lookup`; an SVG body is refused (415
+it (304) and finds A through `POST /api/v1/users/photos/lookup`; a progressive JPEG of 2 000 tiny
+scans is refused (415 `UNSUPPORTED`) without being decoded; an SVG body is refused (415
 `TYPE`); A's `DELETE /api/v1/user/photo` and an admin's `DELETE /api/v1/admin/mailboxes/<id>/photo`
 each end in 404.
 `live`: B keeps an IMAP IDLE connection, an authenticated SMTP submission session and a

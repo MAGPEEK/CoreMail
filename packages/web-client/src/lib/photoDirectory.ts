@@ -37,6 +37,59 @@ export function chunk<T>(items: readonly T[], size: number): T[][] {
   return out;
 }
 
+/** The [userId, version] of a PHOTO_IMAGE_KEY query key, or null for any other key (pure). */
+export function photoImageKeyParts(queryKey: readonly unknown[]): [string, string] | null {
+  const [kind, userId, version] = queryKey;
+  return kind === PHOTO_IMAGE_KEY && typeof userId === 'string' && typeof version === 'string' && userId && version
+    ? [userId, version] : null;
+}
+
+/**
+ * blob: URLs of loaded photos, one per user AND version. A URL stays valid as
+ * long as its image query is cached — an avatar that still shows an older
+ * version (e.g. a lookup of an alias not refreshed yet) never ends up with a
+ * revoked URL. `release` is called when the query cache drops the entry.
+ */
+export class PhotoUrlRegistry {
+  private readonly urls = new Map<string, string>();
+  private readonly create: (blob: Blob) => string;
+  private readonly revoke: (url: string) => void;
+
+  constructor(
+    create: (blob: Blob) => string = (b) => URL.createObjectURL(b),
+    revoke: (url: string) => void = (u) => URL.revokeObjectURL(u),
+  ) {
+    this.create = create;
+    this.revoke = revoke;
+  }
+
+  private static id(userId: string, version: string): string { return `${userId}\n${version}`; }
+
+  get(userId: string, version: string): string | null {
+    return this.urls.get(PhotoUrlRegistry.id(userId, version)) ?? null;
+  }
+
+  /** URL of this version's blob (the existing one when it was loaded before). */
+  add(userId: string, version: string, blob: Blob): string {
+    const id = PhotoUrlRegistry.id(userId, version);
+    const known = this.urls.get(id);
+    if (known) return known;
+    const url = this.create(blob);
+    this.urls.set(id, url);
+    return url;
+  }
+
+  release(userId: string, version: string): void {
+    const id = PhotoUrlRegistry.id(userId, version);
+    const url = this.urls.get(id);
+    if (!url) return;
+    this.urls.delete(id);
+    this.revoke(url);
+  }
+
+  get size(): number { return this.urls.size; }
+}
+
 interface Waiter { resolve: (e: PhotoEntry | null) => void }
 
 /**

@@ -132,6 +132,7 @@ export function PhotoCropDialog({ src, busy, onCancel, onApply }: Props) {
         <div
           ref={stageRef}
           tabIndex={0}
+          role="application"
           aria-label="Bildausschnitt"
           aria-describedby={hintId}
           onPointerDown={onPointerDown}

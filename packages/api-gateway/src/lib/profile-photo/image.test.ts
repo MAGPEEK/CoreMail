@@ -1,6 +1,7 @@
 /**
  * 9.5 profile photo processing: magic bytes, size / pixel limits checked before
- * decoding, re-encoding to a 512×512 JPEG without metadata, crop and scale math.
+ * decoding, re-encoding to a 512×512 JPEG without metadata, crop and scale math;
+ * review 9.5: JPEG scan / frame / segment limits (CPU bomb), memory cap, fuzzing.
  * Run: node --import tsx --test src/lib/profile-photo/image.test.ts  (in packages/api-gateway)
  */
 import { test } from 'node:test';
@@ -12,6 +13,7 @@ import {
   processProfilePhoto, cropCenterSquare, upscaleSquare, flattenOnWhite, squareAt, PhotoError,
   PHOTO_SIZE, MAX_PHOTO_BYTES, MAX_PHOTO_PIXELS, MIN_PHOTO_SIDE, PHOTO_ERROR_STATUS,
 } from './image.js';
+import { readJpegStructure, MAX_JPEG_SCANS } from './jpeg-structure.js';
 
 /** w × h image: left half red, right half blue, alpha `a`. */
 function halves(w: number, h: number, a = 255): RgbaImage {
@@ -134,4 +136,135 @@ test('transparent pixels are flattened onto white', () => {
   assert.deepEqual([...img.data], [255, 255, 255, 255, 255, 255, 255, 255]);
   const half = flattenOnWhite({ width: 1, height: 1, data: Buffer.from([0, 0, 0, 128]) });
   assert.deepEqual([...half.data], [127, 127, 127, 255]);
+});
+
+// ── Hostile input: CPU bombs, odd frames, fuzzing ────────────────────────────
+
+/** A baseline JPEG split into the part before its scan, the scan (SOS + data) and the EOI. */
+function jpegParts(w: number, h: number): { head: Buffer; scan: Buffer; eoi: Buffer } {
+  const buf = Buffer.from(jpeg.encode({ width: w, height: h, data: halves(w, h).data }, 80).data);
+  const sos = buf.indexOf(Buffer.from([0xff, 0xda]));
+  const eoi = buf.lastIndexOf(Buffer.from([0xff, 0xd9]));
+  return { head: buf.subarray(0, sos), scan: buf.subarray(sos, eoi), eoi: buf.subarray(eoi) };
+}
+
+test('JPEG structure walk: frame size, scan and segment counts of an encoded image', () => {
+  const { head, scan, eoi } = jpegParts(96, 64);
+  const s = readJpegStructure(Buffer.concat([head, scan, eoi]));
+  assert.ok(s);
+  assert.deepEqual([s.frames, s.decodable, s.width, s.height, s.scans], [1, true, 96, 64, 1]);
+  assert.equal(readJpegStructure(Buffer.from('not a jpeg')), null);
+  assert.equal(readJpegStructure(head.subarray(0, head.length - 3)), null, 'segment cut short');
+});
+
+test('CPU bomb: a JPEG with more than MAX_JPEG_SCANS scans is refused before decoding, in linear time', () => {
+  const { head, scan, eoi } = jpegParts(64, 64);
+  const atLimit = Buffer.concat([head, ...Array.from({ length: MAX_JPEG_SCANS }, () => scan), eoi]);
+  assert.ok(processProfilePhoto(atLimit).length > 0, 'up to the limit the image decodes');
+  const over = Buffer.concat([head, ...Array.from({ length: MAX_JPEG_SCANS + 1 }, () => scan), eoi]);
+  assert.equal(codeOf(() => processProfilePhoto(over)), 'UNSUPPORTED');
+  // ~5 MB of repeated scans: jpeg-js would walk every block once per scan
+  const copies = Math.floor((MAX_PHOTO_BYTES - head.length - eoi.length) / scan.length);
+  const bomb = Buffer.concat([head, ...Array.from({ length: copies }, () => scan), eoi]);
+  const t0 = performance.now();
+  assert.equal(codeOf(() => processProfilePhoto(bomb)), 'UNSUPPORTED');
+  const ms = performance.now() - t0;
+  assert.ok(ms < 2000, `refused in ${Math.round(ms)} ms`);
+});
+
+/** Marker segment FFxx with its length. */
+function segment(marker: number, body: Buffer): Buffer {
+  const h = Buffer.from([0xff, marker, 0, 0]);
+  h.writeUInt16BE(body.length + 2, 2);
+  return Buffer.concat([h, body]);
+}
+
+/**
+ * Progressive 2048×2048 JPEG of `scans` AC scans of 16 bytes each: three
+ * end-of-band runs cover all 65 536 blocks, so every scan makes jpeg-js walk the
+ * whole frame (measured: 2 000 scans = 38 KB ≈ 0.5 s; 5 MB ≈ 70 s of blocked event loop).
+ */
+function progressiveScanBomb(scans: number): Buffer {
+  const sof = Buffer.from([8, 0x08, 0x00, 0x08, 0x00, 1, 1, 0x11, 0]);
+  const lengths = Buffer.alloc(16);
+  lengths[0] = 1; // one AC code "0" → symbol 0xE0 (EOBRUN, 14 extra bits)
+  const dht = segment(0xc4, Buffer.concat([Buffer.from([0x10]), lengths, Buffer.from([0xe0])]));
+  const bits = ('0' + '1'.repeat(14)).repeat(3).padEnd(48, '1');
+  const data = Buffer.from(bits.match(/.{8}/g)!.flatMap((b) => (b === '11111111' ? [0xff, 0x00] : [parseInt(b, 2)])));
+  const scan = Buffer.concat([segment(0xda, Buffer.from([1, 1, 0x00, 1, 63, 0])), data]);
+  return Buffer.concat([
+    Buffer.from([0xff, 0xd8]), segment(0xdb, Buffer.concat([Buffer.from([0]), Buffer.alloc(64, 1)])), segment(0xc2, sof), dht,
+    ...Array.from({ length: scans }, () => scan), Buffer.from([0xff, 0xd9]),
+  ]);
+}
+
+test('CPU bomb: progressive JPEG of thousands of end-of-band scans is refused from the marker walk', () => {
+  const bomb = progressiveScanBomb(2000);
+  assert.equal(readJpegStructure(bomb)?.scans, 2000);
+  const t0 = performance.now();
+  assert.equal(codeOf(() => processProfilePhoto(bomb)), 'UNSUPPORTED');
+  assert.ok(performance.now() - t0 < 400, 'refused without decoding (decoding takes ~0.5 s)');
+});
+
+test('JPEG frames: a second frame header, a frame type jpeg-js cannot decode or too many segments are UNSUPPORTED', () => {
+  const { head, scan, eoi } = jpegParts(64, 64);
+  const sofAt = head.indexOf(Buffer.from([0xff, 0xc0]));
+  const sof = head.subarray(sofAt, sofAt + 2 + head.readUInt16BE(sofAt + 2));
+  assert.equal(codeOf(() => processProfilePhoto(Buffer.concat([head, sof, scan, eoi]))), 'UNSUPPORTED');
+  const lossless = Buffer.concat([head, scan, eoi]);
+  lossless[sofAt + 1] = 0xc3;
+  assert.equal(codeOf(() => processProfilePhoto(lossless)), 'UNSUPPORTED');
+  const comments = Array.from({ length: 600 }, () => Buffer.from([0xff, 0xfe, 0, 2]));
+  const many = Buffer.concat([head.subarray(0, 2), ...comments, head.subarray(2), scan, eoi]);
+  assert.equal(codeOf(() => processProfilePhoto(many)), 'UNSUPPORTED');
+});
+
+test('memory cap: the largest accepted JPEG (MAX_PHOTO_PIXELS) still decodes', () => {
+  const side = Math.sqrt(MAX_PHOTO_PIXELS);
+  const big = Buffer.from(jpeg.encode({ width: side, height: side, data: Buffer.alloc(side * side * 4, 200) }, 50).data);
+  assert.equal(jpeg.decode(processProfilePhoto(big)).width, PHOTO_SIZE);
+});
+
+/** Deterministic PRNG (mulberry32). */
+function rng(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+test('fuzz: random, truncated and bit-flipped uploads only ever yield a 512×512 JPEG or a PhotoError', () => {
+  const rand = rng(0x5eed);
+  const int = (n: number) => Math.floor(rand() * n);
+  const bytes = (n: number) => Buffer.from(Array.from({ length: n }, () => int(256)));
+  const validPng = encodePng(halves(80, 72));
+  const validJpeg = Buffer.from(jpeg.encode({ width: 80, height: 72, data: halves(80, 72).data }, 85).data);
+  const inputs: Buffer[] = [];
+  for (let i = 0; i < 80; i++) inputs.push(Buffer.concat([validPng.subarray(0, 8), bytes(int(400))]));
+  for (let i = 0; i < 80; i++) inputs.push(Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), bytes(int(400))]));
+  for (let i = 0; i < 60; i++) inputs.push(validPng.subarray(0, int(validPng.length)));
+  for (let i = 0; i < 60; i++) inputs.push(validJpeg.subarray(0, int(validJpeg.length)));
+  for (const valid of [validPng, validJpeg]) {
+    for (let i = 0; i < 80; i++) {
+      const b = Buffer.from(valid);
+      for (let k = 1 + int(8); k > 0; k--) b[int(b.length)] = int(256);
+      inputs.push(b);
+    }
+  }
+  let accepted = 0;
+  for (const [n, input] of inputs.entries()) {
+    try {
+      const img = jpeg.decode(processProfilePhoto(input));
+      assert.deepEqual([img.width, img.height], [PHOTO_SIZE, PHOTO_SIZE], `input ${n}`);
+      accepted++;
+    } catch (err) {
+      assert.ok(err instanceof PhotoError, `input ${n}: ${(err as Error).stack}`);
+    }
+  }
+  assert.ok(inputs.length >= 400);
+  assert.ok(accepted > 0, 'some bit flips still decode');
 });
