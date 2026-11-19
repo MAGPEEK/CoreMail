@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildVcard, countVcards, parseVcard, patchVcard, structuredName, vcardFields, vcardUid } from './vcard.js';
+import { countVcards, parseVcard, serializeVcard, splitStructured, vcardProperty, vcardUid } from './vcard.js';
 import { expandCalendarData, eventOverlapsRange, limitRecurrenceSet } from './recurrence.js';
 
 const CARD = [
@@ -11,43 +11,19 @@ const CARD = [
   'ORG:ACME\\; Inc;Sales;EMEA', 'NOTE:line1\\nline2', 'X-CUSTOM;FOO="a:b":value', 'END:VCARD', '',
 ].join('\r\n');
 
-test('vcardFields reads every indexed column (groups, TYPE lists, escaping)', () => {
-  assert.deepEqual(vcardFields(CARD), {
-    displayName: 'Jane Doe', email: 'jane@example.com', email2: '', phone: '+49 30 1', mobile: '+49 170 2',
-    company: 'ACME; Inc', department: 'Sales', jobTitle: '', notes: 'line1\nline2',
-  });
+// 9.5: the field mapping and patching moved to @coremail/storage contacts/ (tested there)
+test('parseVcard: groups, TYPE lists, quoted parameters; serializeVcard writes the source lines back', () => {
+  const doc = parseVcard(CARD)!;
+  const email = doc.properties.find((p) => p.name === 'EMAIL')!;
+  assert.deepEqual([email.group, email.types, email.value], ['ITEM1', ['INTERNET', 'PREF'], 'jane@example.com']);
+  assert.deepEqual(doc.properties.find((p) => p.name === 'TEL')!.types, ['WORK', 'VOICE']);
+  assert.equal(doc.properties.find((p) => p.name === 'X-CUSTOM')!.params['FOO'], 'a:b');
+  assert.deepEqual(splitStructured(doc.properties.find((p) => p.name === 'ORG')!.value), ['ACME\\; Inc', 'Sales', 'EMEA']);
+  assert.equal(serializeVcard(doc), CARD);
+  assert.equal(vcardProperty('item2.URL;type=pref:https://x.example')!.group, 'ITEM2');
   assert.equal(vcardUid(CARD), 'urn:uuid:keep-me');
   assert.equal(countVcards(CARD + CARD), 2);
   assert.equal(parseVcard('nothing'), null);
-});
-
-test('patchVcard rewrites only the changed fields and keeps every other property verbatim', () => {
-  const out = patchVcard(CARD, { displayName: 'Jane Q. Public', email: 'jq@example.com', mobile: '', department: 'R&D', jobTitle: 'CTO, Ops; Lead\nX-EVIL:1' });
-  const lines = out.replace(/\r\n /g, '').split('\r\n');
-  for (const kept of ['UID:urn:uuid:keep-me', 'item1.X-ABLabel:Work', 'TEL;TYPE=WORK;TYPE=VOICE:+49 30 1',
-    'ADR;TYPE=HOME:;;Main St 1;Berlin;;10115;DE', 'PHOTO;ENCODING=b;TYPE=JPEG:AAAABBBBCCCC', 'NOTE:line1\\nline2', 'X-CUSTOM;FOO="a:b":value']) {
-    assert.ok(lines.includes(kept), `lost ${kept}`);
-  }
-  assert.ok(lines.includes('FN:Jane Q. Public'));
-  assert.ok(lines.includes('N:Public;Jane Q.;;;'));
-  assert.ok(lines.includes('item1.EMAIL;TYPE=INTERNET,pref:jq@example.com'), 'group + parameters kept');
-  assert.ok(lines.includes('ORG:ACME\\; Inc;R&D;EMEA'));
-  assert.ok(!lines.some((l) => l.startsWith('TEL;TYPE=CELL')), 'emptied field removed');
-  assert.ok(lines.includes('TITLE:CTO\\, Ops\\; Lead\\nX-EVIL:1'), 'escaped, no property injection');
-  assert.ok(!lines.some((l) => l.startsWith('X-EVIL')));
-  assert.equal(vcardFields(out).jobTitle, 'CTO, Ops; Lead\nX-EVIL:1');
-});
-
-test('buildVcard: escaped FN, structured N (family;given;;;) and a UID', () => {
-  const v = buildVcard({ displayName: 'Anna Maria, von Berg', email: 'a@example.com', phone: '1', mobile: '2', company: 'X;Y' });
-  const f = vcardFields(v);
-  assert.equal(f.displayName, 'Anna Maria, von Berg');
-  assert.equal(f.company, 'X;Y');
-  assert.deepEqual([f.phone, f.mobile], ['1', '2']);
-  assert.match(v, /^N:Berg;Anna Maria\\, von;;;$/m);
-  assert.ok(vcardUid(v)?.startsWith('urn:uuid:'));
-  assert.equal(structuredName('Cher'), 'Cher;;;;');
-  assert.equal(countVcards(v), 1);
 });
 
 const SERIES = [

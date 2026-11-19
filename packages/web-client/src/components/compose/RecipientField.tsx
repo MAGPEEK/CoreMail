@@ -5,20 +5,23 @@
  * field removes the last one. Invalid addresses and entries "Namen prüfen" could
  * not resolve are marked (the reason as tooltip and for screen readers). Suggestions come from
  * `/contacts?q=` (ARIA combobox: ↑/↓, Enter/Tab picks, Escape closes).
- * Rules: lib/recipients.ts.
+ * 9.5: contact groups are suggested too; picking one adds its expanded members.
+ * Rules: lib/recipients.ts, lib/contactGroups.ts.
  */
-import { useEffect, useId, useState, type RefObject } from 'react';
+import { useEffect, useId, useRef, useState, type RefObject } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { X } from 'lucide-react';
+import { Users, X } from 'lucide-react';
+import toast from 'react-hot-toast';
 import { api } from '../../api/client.js';
 import {
   addEntries, backspace, commitText, commitsOnKey, formatRecipient, parseRecipient, pillLabel, removeEntry, typeText,
   type RecipientValue,
 } from '../../lib/recipients.js';
+import { groupIdOfSuggestion, recipientEntries, type GroupExpansion } from '../../lib/contactGroups.js';
 import type { UnresolvedReason } from '../../lib/nameCheck.js';
 import { fmt, useT } from '../../i18n/useT.js';
 
-interface ContactSuggest { id: string; displayName: string; email: string; company?: string }
+interface ContactSuggest { id: string; displayName: string; email: string; company?: string; kind?: 'group'; memberCount?: number }
 
 const SUGGEST_DEBOUNCE_MS = 220;
 const MAX_SUGGESTIONS = 8;
@@ -59,6 +62,28 @@ function RecipientPill({ entry, unresolved, onRemove }: { entry: string; unresol
 }
 
 function SuggestionOption({ c, id, active, onPick }: { c: ContactSuggest; id: string; active: boolean; onPick: () => void }) {
+  const t = useT();
+  if (groupIdOfSuggestion(c)) {
+    return (
+      <li
+        id={id}
+        role="option"
+        aria-selected={active}
+        onMouseDown={(e) => { e.preventDefault(); onPick(); }}
+        className={`px-3 py-2 flex items-center gap-2.5 cursor-pointer ${active ? 'bg-accent/10' : 'hover:bg-surface-2'}`}
+      >
+        <span className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 bg-accent/15 text-accent-fg" aria-hidden="true">
+          <Users size={14} />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm font-medium text-fg truncate">{c.displayName}</span>
+          <span className="block text-xs text-fg-subtle truncate">
+            {`${t('compose_group_label')} · ${fmt(t('compose_group_members'), { count: c.memberCount ?? 0 })}`}
+          </span>
+        </span>
+      </li>
+    );
+  }
   return (
     <li
       id={id}
@@ -108,18 +133,41 @@ export function RecipientField({ id, label, value, onChange, onAnnounce, unresol
 
   const { data } = useQuery({
     queryKey: ['contact-suggest', query],
-    queryFn: () => api.get<ContactSuggest[]>(`/contacts?q=${encodeURIComponent(query)}`),
+    queryFn: () => api.get<ContactSuggest[]>(`/contacts?q=${encodeURIComponent(query)}&groups=1`),
     enabled: query.length >= 1,
     staleTime: 30_000,
   });
   const taken = new Set(value.entries.map((e) => parseRecipient(e).address.toLowerCase()));
-  const suggestions = (data ?? []).filter((c) => c.email && !taken.has(c.email.toLowerCase())).slice(0, MAX_SUGGESTIONS);
+  const suggestions = (data ?? [])
+    .filter((c) => (c.email ? !taken.has(c.email.toLowerCase()) : !!groupIdOfSuggestion(c)))
+    .slice(0, MAX_SUGGESTIONS);
   const showList = open && value.text.trim().length > 0 && suggestions.length > 0;
   const optionId = (i: number) => `${listId}-o${i}`;
+  // The group expansion answers later: it is added to the field as it is then
+  const latest = useRef(value);
+  latest.current = value;
+
+  const addGroup = async (groupId: string) => {
+    try {
+      const exp = await api.get<GroupExpansion>(`/contacts/groups/${encodeURIComponent(groupId)}/expand`);
+      const entries = recipientEntries(exp);
+      if (entries.length === 0) { toast.error(t('compose_group_empty')); return; }
+      onChange({ ...latest.current, entries: addEntries(latest.current.entries, entries) });
+      if (exp.skipped.length > 0) toast(fmt(t('compose_group_skipped'), { count: exp.skipped.length }));
+    } catch (err) {
+      toast.error((err as Error).message);
+    }
+  };
 
   const pick = (c: ContactSuggest) => {
-    onChange({ entries: addEntries(value.entries, [formatRecipient(c.displayName, c.email)]), text: '' });
     setOpen(false);
+    const groupId = groupIdOfSuggestion(c);
+    if (groupId) {
+      onChange({ entries: value.entries, text: '' });
+      void addGroup(groupId);
+      return;
+    }
+    onChange({ entries: addEntries(value.entries, [formatRecipient(c.displayName, c.email)]), text: '' });
   };
 
   const remove = (index: number) => {

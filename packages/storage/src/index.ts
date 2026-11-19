@@ -58,3 +58,4 @@ export * from './task-rules.js';
 export * from './task-store.js';
 export * from './resource-lock.js';
 export * from './resource-booking-rules.js';
+export * from './contacts/index.js';

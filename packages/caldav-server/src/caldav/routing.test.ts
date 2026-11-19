@@ -94,6 +94,7 @@ const db = {
   ], () => ({})),
   calendarEvent: table([], () => ({ classification: 'PUBLIC', recurring: false, rrule: null, allDay: false })),
   contact: table([], () => ({ email: '', company: '' })),
+  contactGroup: table([], () => ({ members: [] })), // 9.5: contact groups share the address book
   user: table([{ id: 'alice', email: 'alice@example.com', displayName: 'Alice' }], () => ({})),
   emailAlias: table([{ targetUserId: 'alice', active: true, address: 'team@example.com' }], () => ({})),
   task: table([], () => ({})), // 9.5: the calendar home lists the task list

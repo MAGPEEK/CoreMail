@@ -6,6 +6,7 @@ import toast from 'react-hot-toast';
 import { Modal } from '../components/Modal.js';
 import { PageShell } from '../components/PageShell.js';
 import { PAGE_CONTENT_PAD } from '../lib/pageShell.js';
+import { CategoryChips, CategoryPicker } from '../components/CategoryPicker.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -15,6 +16,8 @@ interface NoteListItem {
   id: string;
   subject: string;
   color: NoteColor;
+  /** 9.5: category names */
+  categories?: string[];
   updatedAt: string;
 }
 
@@ -70,10 +73,11 @@ function NoteEditor({ noteId, onClose }: { noteId: string | null; onClose: () =>
   const qc = useQueryClient();
   const isNew = noteId === null;
 
-  const [form, setForm] = useState<{ subject: string; body: string; color: NoteColor }>({
+  const [form, setForm] = useState<{ subject: string; body: string; color: NoteColor; categories: string[] }>({
     subject: '',
     body: '',
     color: 'YELLOW',
+    categories: [],
   });
 
   // Load existing note
@@ -84,7 +88,7 @@ function NoteEditor({ noteId, onClose }: { noteId: string | null; onClose: () =>
   });
 
   useEffect(() => {
-    if (noteData) setForm({ subject: noteData.subject, body: noteData.body, color: noteData.color });
+    if (noteData) setForm({ subject: noteData.subject, body: noteData.body, color: noteData.color, categories: noteData.categories ?? [] });
   }, [noteData]);
 
   const save = useMutation({
@@ -148,6 +152,7 @@ function NoteEditor({ noteId, onClose }: { noteId: string | null; onClose: () =>
             aria-label="Notiz"
             rows={10} className="w-full bg-transparent text-sm text-fg-muted placeholder-fg-subtle focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-fg rounded-sm resize-none"
             placeholder="Notiz eingeben…" />
+          <CategoryPicker value={form.categories} onChange={(categories) => setForm(f => ({ ...f, categories }))} />
         </div>
       </>
       )}
@@ -227,6 +232,7 @@ export function NotesPage() {
                 {/* Note body */}
                 <div className="px-3 py-2.5 min-h-[100px]">
                   <p className="text-sm font-medium text-fg line-clamp-2 leading-snug">{note.subject || '(Kein Betreff)'}</p>
+                  {note.categories && note.categories.length > 0 && <div className="mt-2"><CategoryChips names={note.categories} /></div>}
                   <p className="text-xs text-fg-subtle mt-2">{fmtDate(note.updatedAt)}</p>
                 </div>
               </div>
