@@ -6,7 +6,7 @@
  */
 import {
   prisma, announceUserEvent, contactColumnsFromVcard, contactGroupColumnsFromVcard, contactGroupData, contactRowData,
-  detachCardFromGroups, isGroupVcard, membersFromJson, uidKey, vcardUidKey,
+  detachCardFromGroups, findContactUidOwner, isGroupVcard, membersFromJson, vcardUidKey,
 } from '@coremail/storage';
 import { collectionTag } from '../dav-utils.js';
 
@@ -59,14 +59,8 @@ export async function findAnyObject(id: string): Promise<AddressObjectRef | null
 }
 
 /** Resource id of another object of the user that already uses `uid` (null when unique). */
-export async function findUidOwner(userId: string, uid: string, selfId: string): Promise<string | null> {
-  const key = uidKey(uid);
-  const [byColumn, groups] = await Promise.all([
-    prisma.contact.findMany({ where: { userId, OR: [{ uid: key }, { vcardData: { contains: uid } }] }, select: { id: true, vcardData: true } }),
-    prisma.contactGroup.findMany({ where: { userId, uid: key }, select: { id: true } }),
-  ]);
-  const contact = byColumn.find((c) => c.id !== selfId && vcardUidKey(c.vcardData) === key);
-  return contact?.id ?? groups.find((g) => g.id !== selfId)?.id ?? null;
+export function findUidOwner(userId: string, uid: string, selfId: string): Promise<string | null> {
+  return findContactUidOwner(userId, uid, selfId);
 }
 
 export type PutOutcome =

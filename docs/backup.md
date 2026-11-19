@@ -4,7 +4,7 @@ CoreMail has two layers of backup. Use both:
 
 | Layer | What | Where | Restore |
 |---|---|---|---|
-| **Built-in backups** (backup-service, BCP → Backup & Restore) | Mailboxes (original messages with attachments, folders, flags; contacts/calendar files) and the database (`pg_dump`) | Bucket `coremail-backups` (bundled MinIO or `S3_*`), AES-256-GCM encrypted | Mailboxes: BCP → Wiederherstellen. Database: `pg_restore` (below) |
+| **Built-in backups** (backup-service, BCP → Backup & Restore) | Mailboxes (original messages with attachments, folders, flags, received times; contacts, contact groups, calendar files) and the database (`pg_dump`) | Bucket `coremail-backups` (bundled MinIO or `S3_*`), AES-256-GCM encrypted | Mailboxes: BCP → Wiederherstellen. Database: `pg_restore` (below) |
 | **Volume / infrastructure backup** (you) | The mail object store (`coremail-data` volume or S3 bucket), the `.env` file with all secrets, optionally an off-site copy of the backup bucket | wherever your backup tool writes | [docker-compose.md → Backup and restore](docker-compose.md#backup-and-restore), [storage.md](storage.md#backup-and-restore) |
 
 Nothing in the first layer copies the `.env` secrets. Keep `BACKUP_ENCRYPTION_KEY` (and
@@ -45,10 +45,18 @@ without heartbeat for 15 minutes is marked `FAILED`. Jobs of the restarted host 
 
 ## 2. Mailbox backups
 
-- **ZIP** (`mail/<folder>/<uid>.eml` = the original raw message, `contacts/*.vcf`,
+- **ZIP** (`mail/<folder>/<uid>.eml` = the original raw message, `contacts/<id>.vcf`,
   `calendar/<name>/*.ics`, and since 9.3 `coremail-manifest.json` with the exact folder name and
-  the flags of every message).
-- **MBOX** (mboxrd, original messages of all folders; no folders, no flags).
+  the flags of every message). Since 9.5 the manifest also holds the **internal date** of every
+  message (`internalDate`, when it arrived in the mailbox) and the display names of the plain-address
+  members of contact groups (`contactGroups`); both are optional, so older archives stay valid.
+- **Address book (9.5):** `contacts/<id>.vcf` holds every contact **and every contact group** as
+  CardDAV serves it — the stored vCard verbatim; a group is a vCard 4 `KIND:group` +
+  `MEMBER:urn:uuid:<uid>` / `MEMBER:mailto:<address>` card, or the
+  `X-ADDRESSBOOKSERVER-KIND:group` form when the group was created that way (see
+  [contacts.md](contacts.md#groups)).
+- **MBOX** (mboxrd, original messages of all folders; no folders, no flags). Since 9.5 the
+  `From ` separator line carries the internal date (before: the Date header).
 - Object keys: `mailbox/<userId>/<epochMs>.zip|mbox.enc`, full backups
   `full-backup/<day>/<runId>/<email>.zip.enc`.
 - Download in the BCP (decrypted on the fly) or offline:
@@ -85,9 +93,24 @@ Rules:
 - Flags from the ZIP manifest are restored except `\Deleted` and `\Recent`; archives without
   flag information (MBOX, ZIPs from before 9.3) restore as `\Seen`.
 - One restore per target mailbox at a time (409 otherwise).
-- Contacts and calendar files of ZIP backups are **not** restored (counted as
-  „Kontakt-/Kalenderdateien nicht übernommen") — import them in a client.
-- Restored messages get the restore time as received time (retention policies count from it).
+- **Contacts and contact groups (9.5)** of a ZIP backup go into the address book of the target
+  mailbox's owner (in every mode; a shared mailbox has none). Like a CardDAV PUT the vCard decides
+  (group vCard → group); each entry must hold exactly one vCard (≤ 1 MiB), stored verbatim with its
+  columns derived by the storage contact mapping. Contacts are restored first, then the groups:
+  members reference cards by UID and the restored contacts keep their UIDs, so the members resolve
+  again — also to a contact the target already had with that UID. Address members get their names
+  from the manifest. **Idempotent:** an object whose UID the address book already uses (contact or
+  group) is skipped, one without UID when the identical vCard is already stored; an existing
+  contact is never overwritten. Job result: `contactsImported`, `contactsDuplicates`,
+  `contactGroupsImported`, `contactGroupsDuplicates`, `addressBookFailed`.
+- Calendar files of ZIP backups are **not** restored (counted as `otherEntries`) — import them in
+  a client.
+- **Received time (9.5):** a restored message keeps its original internal date (IMAP
+  INTERNALDATE, the webmail's received time; retention policies count from it). Order: the date in
+  the archive (ZIP manifest `internalDate`; MBOX separator line) → the date of the topmost
+  `Received` header → the `Date` header → the restore time. A date before 1970 or more than one
+  day in the future is skipped. (Before 9.5 every restored message got the restore time.) A second
+  restore still adds nothing — duplicates are found by content, not by date.
 - Limits: `BACKUP_RESTORE_MAX_BYTES` (decrypted archive, default 20 GiB — the container's temp
   directory needs that much space), `BACKUP_RESTORE_MAX_MESSAGE_BYTES` (default 150 MiB per message).
 - MBOX cannot represent a message without a final line break; such messages come back with CRLF
@@ -104,7 +127,7 @@ Scope `system` writes, encrypted, to `system/<day>/<jobId>/`:
 
 - `coremail-db.dump.enc` — `pg_dump --format=custom` of the CoreMail database: users, password
   hashes, settings, certificates and their private keys, DKIM keys, rules, calendars, contacts,
-  mail metadata. Connection data come from `DATABASE_URL` (as PG* environment variables, never on
+  contact groups, mail metadata (every table). Connection data come from `DATABASE_URL` (as PG* environment variables, never on
   the command line). The app image ships `pg_dump` 16 — a newer PostgreSQL server cannot be
   dumped with it (the job fails with the pg_dump message).
 - `objects-manifest.tsv.enc` — key and size of every object in the mail object store at that
@@ -138,9 +161,10 @@ If only mailboxes are lost, a restore from the mailbox backups (section 3) is en
 ## 6. Tests
 
 - `packages/backup-service`: `restore/restore-roundtrip.test.ts` (export → encrypt → restore into an
-  empty mailbox, byte-exact, folders, flags, attachments, second run deduplicated),
-  `restore/readers.test.ts` (ZIP/ZIP64/CRC, mboxrd), `restore/source.test.ts`,
+  empty mailbox, byte-exact, folders, flags, attachments, internal dates, contacts + groups,
+  second run deduplicated), `restore/internal-date.test.ts` (internal date order, mbox separator
+  date, manifest additions), `restore/readers.test.ts` (ZIP/ZIP64/CRC, mboxrd), `restore/source.test.ts`,
   `scheduler/automation.test.ts`.
 - e2e step `backup` (docs/e2e.md): mailbox backup of B → restore of the stored archive into A →
-  IMAP sees the messages byte-exact with flags, re-run and upload add nothing, recommended schedules,
+  IMAP sees the messages byte-exact with flags and the original INTERNALDATE, re-run and upload add nothing, recommended schedules,
   system backup run-now (`PGDMP`).

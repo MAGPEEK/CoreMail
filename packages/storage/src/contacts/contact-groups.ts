@@ -126,3 +126,19 @@ export function contactRowData(c: ReturnType<typeof contactColumnsFromVcard>): O
 } {
   return { ...c, emails: c.emails, phones: c.phones, addresses: c.addresses, urls: c.urls, ims: c.ims };
 }
+
+/**
+ * Id of another contact or group of the user that already uses `uid` (null when
+ * the UID is unique in the address book; `selfId` = the object being written).
+ * A pre-9.5 contact row may still have an empty `uid` column — its vCard is checked too.
+ */
+export async function findContactUidOwner(userId: string, uid: string, selfId = ''): Promise<string | null> {
+  const key = uidKey(uid);
+  if (!key) return null;
+  const [byColumn, groups] = await Promise.all([
+    prisma.contact.findMany({ where: { userId, OR: [{ uid: key }, { vcardData: { contains: key } }] }, select: { id: true, vcardData: true } }),
+    prisma.contactGroup.findMany({ where: { userId, uid: key }, select: { id: true } }),
+  ]);
+  const contact = byColumn.find((c) => c.id !== selfId && vcardUidKey(c.vcardData) === key);
+  return contact?.id ?? groups.find((g) => g.id !== selfId)?.id ?? null;
+}

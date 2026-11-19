@@ -9,7 +9,7 @@ import {
   connectDatabase, prisma, migrateMailboxCounters,
   getObjectStore, getStorageHealth, peekStorageHealth, startObjectStorageCleaner, type CleanerRedis,
   startDeletedItemsPurger, type PurgeRedis, startMailboxAccessAuditPurger, type AccessPurgeRedis,
-  startReferencesBackfill, type BackfillRedis,
+  startReferencesBackfill, type BackfillRedis, startContactBackfill, type ContactBackfillRedis,
   migratePrivateKeysAtRestLocked, type PrivateKeyMigrationRedis,
   startWebmailPolicySubscriber,
 } from '@coremail/storage';
@@ -617,6 +617,11 @@ async function start() {
   // 9.1: background backfill of Message References for older mail (IMAP THREAD /
   // threading); REFERENCES_BACKFILL=on (default) | off. Redis-locked.
   startReferencesBackfill(getRedisClient() as unknown as BackfillRedis);
+
+  // 9.5: one-time backfill of the structured contact columns of contacts stored
+  // before 9.5 (updatedAt / changeKey kept: no client-visible change). Redis-locked,
+  // resumable, stops for good once a pass is complete.
+  startContactBackfill(getRedisClient() as unknown as ContactBackfillRedis);
 }
 
 /**

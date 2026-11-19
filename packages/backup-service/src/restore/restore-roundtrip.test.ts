@@ -43,7 +43,26 @@ const { createFake, emptyDb } = await import('../../../storage/src/test-support/
 const db = emptyDb();
 const fake = createFake(db) as Record<string, unknown>;
 const jobs: Array<Record<string, unknown>> = [];
-fake['contact'] = { findMany: async () => [] };
+// address book tables: just enough of the Prisma surface the export + restore use
+type Row = Record<string, unknown>;
+const contactRows: Row[] = [];
+const groupRows: Row[] = [];
+function whereMatches(row: Row, where: Row): boolean {
+  return Object.entries(where).every(([k, c]) => {
+    if (k === 'OR') return (c as Row[]).some((w) => whereMatches(row, w));
+    if (c && typeof c === 'object' && 'contains' in (c as Row)) return String(row[k]).includes(String((c as Row)['contains']));
+    return row[k] === c;
+  });
+}
+const pick = (row: Row, select?: Row): Row => (select ? Object.fromEntries(Object.keys(select).map((k) => [k, row[k]])) : row);
+let addrSeq = 0;
+const addressTable = (rows: Row[], prefix: string) => ({
+  findMany: async (a: { where: Row; select?: Row }) => rows.filter((r) => whereMatches(r, a.where)).map((r) => pick(r, a.select)),
+  findFirst: async (a: { where: Row; select?: Row }) => { const r = rows.find((x) => whereMatches(x, a.where)); return r ? pick(r, a.select) : null; },
+  create: async (a: { data: Row; select?: Row }) => { const row = { id: `${prefix}${++addrSeq}`, ...a.data }; rows.push(row); return pick(row, a.select); },
+});
+fake['contact'] = addressTable(contactRows, 'ct');
+fake['contactGroup'] = addressTable(groupRows, 'cg');
 fake['calendar'] = { findMany: async () => [] };
 fake['backupJob'] = {
   create: async ({ data }: { data: Record<string, unknown> }) => { const row = { id: `job${jobs.length + 1}`, createdAt: new Date(), ...data }; jobs.push(row); return row; },
@@ -103,25 +122,43 @@ const SOURCE_MESSAGES: Array<{ folder: string; raw: Buffer | null; flags: string
 
 const src = addMailbox('alice', [{ name: 'INBOX' }, { name: 'Projekte' }, { name: 'Projekte.2026', parent: 'Projekte' }]);
 const expectedRaw = new Map<string, Buffer>(); // message subject → raw octets
+const expectedInternal = new Map<string, Date>(); // message subject → internal date (createdAt)
 let uid = 0;
 for (const m of SOURCE_MESSAGES) {
   const row: Record<string, unknown> = {
     id: `src-${++uid}`, folderId: src.folders[m.folder], uid, modSeq: BigInt(uid), flags: m.flags,
     toAddrs: ['bob@x.test'], ccAddrs: [], bccAddrs: [], replyTo: null, inReplyTo: null,
-    bodyText: '', bodyHtml: '', deletedAt: null, createdAt: new Date(),
+    bodyText: '', bodyHtml: '', deletedAt: null, createdAt: new Date(Date.UTC(2026, 9, uid, 9, 30, 15)),
   };
   if (m.legacy) {
     Object.assign(row, { storagePath: null, subject: 'Legacy row', fromAddr: 'old@x.test', fromName: 'Old', messageId: '<legacy-4@x.test>', date: new Date('2025-01-01T00:00:00Z'), bodyText: 'legacy text', rawSize: 0 });
     db.messages.push(row);
     expectedRaw.set('Legacy row', await reconstructRawMessage({ ...row, attachments: [] } as never));
+    expectedInternal.set('Legacy row', row['createdAt'] as Date);
   } else {
     const stored = await storeRawMessage(m.raw!);
     const subject = /Subject: (.*)\r\n/.exec(m.raw!.toString('latin1'))![1]!;
     Object.assign(row, { storagePath: stored.storagePath, subject, fromAddr: 'x@x.test', fromName: '', messageId: null, date: new Date('2026-11-02T10:00:00Z'), rawSize: m.raw!.length });
     db.messages.push(row);
     expectedRaw.set(subject, m.raw!);
+    expectedInternal.set(subject, row['createdAt'] as Date);
   }
 }
+
+// alice's address book: contacts (vCard 3 with UID, vCard 4, one without UID) and a group
+const CONTACT_A = 'BEGIN:VCARD\r\nVERSION:3.0\r\nUID:urn:uuid:card-a\r\nN:Muster;Erika;;;\r\nFN:Erika Muster\r\nEMAIL;TYPE=INTERNET:erika@x.test\r\nCATEGORIES:Kunden\r\nEND:VCARD\r\n';
+const CONTACT_B = 'BEGIN:VCARD\r\nVERSION:4.0\r\nUID:card-b\r\nFN:Bernd Beispiel\r\nN:Beispiel;Bernd;;;\r\nTEL;TYPE=cell:+49 170 1\r\nEND:VCARD\r\n';
+const CONTACT_NO_UID = 'BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Ohne Uid\r\nEMAIL:ohne@x.test\r\nEND:VCARD\r\n';
+const GROUP = [
+  'BEGIN:VCARD', 'VERSION:3.0', 'N:Team', 'FN:Team', 'X-ADDRESSBOOKSERVER-KIND:group', 'UID:group-1',
+  'X-ADDRESSBOOKSERVER-MEMBER:urn:uuid:card-a', 'X-ADDRESSBOOKSERVER-MEMBER:urn:uuid:card-b',
+  'X-ADDRESSBOOKSERVER-MEMBER:mailto:info@lieferant.test', 'END:VCARD', '',
+].join('\r\n');
+for (const vcardData of [CONTACT_A, CONTACT_B, CONTACT_NO_UID]) contactRows.push({ id: `src-ct-${contactRows.length}`, userId: 'alice', vcardData });
+groupRows.push({
+  id: 'src-group-1', userId: 'alice', vcardData: GROUP, uid: 'group-1', name: 'Team',
+  members: [{ kind: 'card', uid: 'card-a' }, { kind: 'card', uid: 'card-b' }, { kind: 'address', address: 'info@lieferant.test', name: 'Info Lieferant' }],
+});
 db.mailboxes[0]!['uidNext'] = uid + 1;
 db.mailboxes[0]!['highestModSeq'] = BigInt(uid);
 
@@ -154,7 +191,10 @@ test('ZIP: export → encrypt → restore into an empty mailbox (original folder
 
   const dst = addMailbox('bob', [{ name: 'INBOX' }]);
   const counts = await restorePrepared({ path: plain.path, format: 'zip', mailboxId: dst.id, mode: 'original', folderId: null, rootName: ROOT }, cfg);
-  assert.deepEqual(counts, { total: 4, imported: 4, duplicates: 0, failed: 0, otherEntries: 0, foldersCreated: 2 });
+  assert.deepEqual(counts, {
+    total: 4, imported: 4, duplicates: 0, failed: 0, otherEntries: 0, foldersCreated: 2,
+    contactsImported: 3, contactsDuplicates: 0, contactGroupsImported: 1, contactGroupsDuplicates: 0, addressBookFailed: 0,
+  });
 
   // folders: hierarchy with parentId + displayName of the last segment
   const names = foldersOf(dst.id).map((f) => f['name']).sort();
@@ -170,6 +210,8 @@ test('ZIP: export → encrypt → restore into an empty mailbox (original folder
     assert.ok(want, `unexpected message ${m['subject']}`);
     assert.ok(objects.get(m['storagePath'] as string)!.equals(want), `raw of "${m['subject']}" byte-exact`);
     assert.equal(m['rawSize'], want.length);
+    // 9.5: the internal date comes from the manifest, not the restore time
+    assert.equal((m['createdAt'] as Date).toISOString(), expectedInternal.get(m['subject'] as string)!.toISOString(), `internal date of "${m['subject']}"`);
   }
   const bySubject = (s: string) => restored.find((m) => m['subject'] === s)!;
   assert.equal(folderName(bySubject('Quarterly figures')['folderId']), 'INBOX');
@@ -194,10 +236,33 @@ test('ZIP: export → encrypt → restore into an empty mailbox (original folder
   // unread counter: only "quoting" is unread
   assert.equal(foldersOf(dst.id).find((f) => f['name'] === 'INBOX')!['unreadCount'], 1);
 
+  // 9.5: address book — contacts verbatim with derived columns, the group after them,
+  // members by UID, the address member's name from the manifest
+  const bobContacts = contactRows.filter((c) => c['userId'] === 'bob');
+  assert.deepEqual(bobContacts.map((c) => c['vcardData']).sort(), [CONTACT_A, CONTACT_B, CONTACT_NO_UID].sort());
+  const erika = bobContacts.find((c) => c['uid'] === 'card-a')!;
+  assert.equal(erika['givenName'], 'Erika');
+  assert.deepEqual(erika['categories'], ['Kunden']);
+  assert.match(String(erika['searchText']), /erika@x\.test/);
+  const bobGroups = groupRows.filter((g) => g['userId'] === 'bob');
+  assert.equal(bobGroups.length, 1);
+  assert.equal(bobGroups[0]!['vcardData'], GROUP, 'group vCard verbatim');
+  assert.equal(bobGroups[0]!['uid'], 'group-1');
+  assert.deepEqual(bobGroups[0]!['members'], [
+    { kind: 'card', uid: 'card-a' }, { kind: 'card', uid: 'card-b' }, { kind: 'address', address: 'info@lieferant.test', name: 'Info Lieferant' },
+  ]);
+  const memberUids = (bobGroups[0]!['members'] as Array<{ uid?: string }>).flatMap((m) => (m.uid ? [m.uid] : []));
+  assert.ok(memberUids.every((u) => bobContacts.some((c) => c['uid'] === u)), 'every card member resolves to a restored contact');
+
   // idempotent: the same archive again restores nothing
   const again = await restorePrepared({ path: plain.path, format: 'zip', mailboxId: dst.id, mode: 'original', folderId: null, rootName: ROOT }, cfg);
-  assert.deepEqual(again, { total: 4, imported: 0, duplicates: 4, failed: 0, otherEntries: 0, foldersCreated: 0 });
+  assert.deepEqual(again, {
+    total: 4, imported: 0, duplicates: 4, failed: 0, otherEntries: 0, foldersCreated: 0,
+    contactsImported: 0, contactsDuplicates: 3, contactGroupsImported: 0, contactGroupsDuplicates: 1, addressBookFailed: 0,
+  });
   assert.equal(messagesOf(dst.id).length, 4);
+  assert.equal(contactRows.filter((c) => c['userId'] === 'bob').length, 3);
+  assert.equal(groupRows.filter((g) => g['userId'] === 'bob').length, 1);
 });
 
 test('ZIP restore into a restore folder keeps the structure below "Wiederhergestellt <date>"', async () => {
@@ -221,7 +286,10 @@ test('MBOX: export → restore (restore folder, \\Seen) byte-exact; second run d
   assert.equal(await detectFormat(mboxPath), 'mbox');
   const dst = addMailbox('dave', [{ name: 'INBOX' }]);
   const counts = await restorePrepared({ path: mboxPath, format: 'mbox', mailboxId: dst.id, mode: 'subfolder', folderId: null, rootName: ROOT }, cfg);
-  assert.deepEqual({ ...counts, foldersCreated: 0 }, { total: 4, imported: 4, duplicates: 0, failed: 0, otherEntries: 0, foldersCreated: 0 });
+  assert.deepEqual({ ...counts, foldersCreated: 0 }, {
+    total: 4, imported: 4, duplicates: 0, failed: 0, otherEntries: 0, foldersCreated: 0,
+    contactsImported: 0, contactsDuplicates: 0, contactGroupsImported: 0, contactGroupsDuplicates: 0, addressBookFailed: 0,
+  });
   const restored = messagesOf(dst.id);
   assert.ok(restored.every((m) => folderName(m['folderId']) === ROOT), 'MBOX has no folders: everything in the restore folder');
   assert.ok(restored.every((m) => (m['flags'] as string[]).join() === '\\Seen'));
@@ -230,6 +298,8 @@ test('MBOX: export → restore (restore folder, \\Seen) byte-exact; second run d
     // reconstruction) comes back byte-exact (separator marker cm-noeol).
     const want = expectedRaw.get(m['subject'] as string)!;
     assert.ok(objects.get(m['storagePath'] as string)!.equals(want), `mbox raw of "${m['subject']}" byte-exact`);
+    // 9.5: the separator line carries the internal date (second precision)
+    assert.equal((m['createdAt'] as Date).toISOString(), expectedInternal.get(m['subject'] as string)!.toISOString(), `mbox internal date of "${m['subject']}"`);
   }
   assert.equal(restored.filter((m) => m['subject'] !== 'Legacy row').length, 3);
   const again = await restorePrepared({ path: mboxPath, format: 'mbox', mailboxId: dst.id, mode: 'subfolder', folderId: null, rootName: ROOT }, cfg);
@@ -266,7 +336,8 @@ test('pre-9.3 ZIP without manifest: folders from the paths, flags \\Seen, contac
     a.pipe(out);
     a.append(IN_SUBFOLDER, { name: 'mail/Projekte.2026/7.eml' });
     a.append(WITH_ATTACHMENT, { name: 'mail/INBOX/8.eml' });
-    a.append('BEGIN:VCARD\r\nEND:VCARD\r\n', { name: 'contacts/c1.vcf' });
+    a.append(CONTACT_A, { name: 'contacts/c1.vcf' });
+    a.append(`${CONTACT_A}${CONTACT_B}`, { name: 'contacts/two-in-one.vcf' }); // not exactly one vCard → failed
     a.append('BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n', { name: 'calendar/Kalender/e1.ics' });
     void a.finalize();
   });
@@ -274,10 +345,45 @@ test('pre-9.3 ZIP without manifest: folders from the paths, flags \\Seen, contac
   const dst = addMailbox('frank', [{ name: 'INBOX' }]);
   const counts = await restorePrepared({ path: zipPath, format: 'zip', mailboxId: dst.id, mode: 'original', folderId: null, rootName: ROOT }, cfg);
   assert.equal(counts.imported, 2);
-  assert.equal(counts.otherEntries, 2);
+  assert.equal(counts.otherEntries, 1, 'only the calendar file is left unrestored');
+  assert.equal(counts.contactsImported, 1);
+  assert.equal(counts.addressBookFailed, 1);
   const restored = messagesOf(dst.id);
   assert.equal(folderName(restored.find((m) => m['subject'] === 'Projekt 2026')!['folderId']), 'Projekte.2026');
   assert.ok(restored.every((m) => (m['flags'] as string[]).join() === '\\Seen'));
+  // no manifest, no Received header: the internal date falls back to the Date header
+  assert.equal((restored.find((m) => m['subject'] === 'Projekt 2026')!['createdAt'] as Date).toISOString(), '2026-11-04T10:00:00.000Z');
+});
+
+test('address book: groups after contacts whatever the entry order; an existing UID is kept (duplicate) and still resolves', async () => {
+  const zipPath = join(dir, 'groups-first.zip');
+  await new Promise<void>((resolve, reject) => {
+    const out = createWriteStream(zipPath);
+    const a = archiver('zip', { zlib: { level: 6 } });
+    out.on('close', () => resolve());
+    a.on('error', reject);
+    a.pipe(out);
+    a.append(GROUP, { name: 'contacts/a-group.vcf' });
+    a.append(CONTACT_A, { name: 'contacts/b-contact.vcf' });
+    a.append(CONTACT_B, { name: 'contacts/c-contact.vcf' });
+    void a.finalize();
+  });
+  const dst = addMailbox('kim', [{ name: 'INBOX' }]);
+  // kim already has a (changed) contact with card-a's UID: it is not overwritten
+  const own = 'BEGIN:VCARD\r\nVERSION:3.0\r\nUID:card-a\r\nFN:Erika (eigene)\r\nEND:VCARD\r\n';
+  contactRows.push({ id: 'kim-own', userId: 'kim', vcardData: own, uid: 'card-a' });
+  const counts = await restorePrepared({ path: zipPath, format: 'zip', mailboxId: dst.id, mode: 'subfolder', folderId: null, rootName: ROOT }, cfg);
+  assert.equal(counts.contactsImported, 1);
+  assert.equal(counts.contactsDuplicates, 1);
+  assert.equal(counts.contactGroupsImported, 1);
+  const kimContacts = contactRows.filter((c) => c['userId'] === 'kim');
+  assert.equal(kimContacts.find((c) => c['id'] === 'kim-own')!['vcardData'], own, 'existing contact untouched');
+  const group = groupRows.find((g) => g['userId'] === 'kim')!;
+  // no manifest: the address member has no name, card members resolve by UID
+  assert.deepEqual(group['members'], [
+    { kind: 'card', uid: 'card-a' }, { kind: 'card', uid: 'card-b' }, { kind: 'address', address: 'info@lieferant.test', name: '' },
+  ]);
+  for (const uid of ['card-a', 'card-b']) assert.ok(kimContacts.some((c) => c['uid'] === uid), `member ${uid} resolves`);
 });
 
 test('mode folder: the folder must belong to the target mailbox', async () => {

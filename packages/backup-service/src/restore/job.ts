@@ -22,9 +22,10 @@ import { looksLikeZip, openZip } from './zip-reader.js';
 import { MANIFEST_NAME } from '../export/manifest.js';
 import { looksLikeMbox } from './mbox-reader.js';
 import {
-  DEFAULT_MAX_MESSAGE_BYTES, DEFAULT_MAX_RESTORE_FOLDERS, MAX_MANIFEST_BYTES, emptyCounts, mboxItems, restoreItems, zipItems,
+  DEFAULT_MAX_MESSAGE_BYTES, DEFAULT_MAX_RESTORE_FOLDERS, MAX_MANIFEST_BYTES, RestoreAbortedError, emptyCounts, mboxItems, restoreItems, zipItems,
   type RestoreCounts, type RestorePlan,
 } from './engine.js';
+import { restoreAddressBook } from './address-book.js';
 import { archiveKeyInfo, restoreFolderName, type ArchiveFormat, type RestoreMode } from './source.js';
 import { JobHeartbeat } from '../scheduler/job-progress.js';
 
@@ -220,7 +221,15 @@ export async function restorePrepared(
   const counts = emptyCounts();
   const limits = { maxMessageBytes: cfg.maxMessageBytes };
   const items = p.format === 'zip' ? zipItems(p.path, limits, counts) : mboxItems(p.path, limits);
-  return restoreItems(items, { ...planFor(p), ...(cfg.maxFolders ? { maxFolders: cfg.maxFolders } : {}) }, counts, onProgress, signal);
+  await restoreItems(items, { ...planFor(p), ...(cfg.maxFolders ? { maxFolders: cfg.maxFolders } : {}) }, counts, onProgress, signal);
+  if (p.format === 'zip') {
+    // 9.5: contacts, then contact groups, into the address book of the mailbox owner
+    // (a shared mailbox has no address book).
+    const owner = await prisma.mailbox.findUnique({ where: { id: p.mailboxId }, select: { userId: true } });
+    if (owner?.userId) await restoreAddressBook(p.path, owner.userId, counts, () => signal?.aborted === true);
+    if (signal?.aborted) throw new RestoreAbortedError();
+  }
+  return counts;
 }
 
 /**
@@ -239,8 +248,10 @@ export function restoreOutcome(c: RestoreCounts): { status: 'COMPLETED' | 'FAILE
   if (c.failed > 0 && c.imported === 0 && c.duplicates === 0) {
     return { status: 'FAILED', errorMsg: `Keine Nachricht wiederhergestellt (${c.failed} fehlgeschlagen)` };
   }
-  if (c.failed > 0) return { status: 'COMPLETED', errorMsg: `${c.failed} von ${c.total} Nachrichten konnten nicht wiederhergestellt werden` };
-  return { status: 'COMPLETED', errorMsg: null };
+  const notes: string[] = [];
+  if (c.failed > 0) notes.push(`${c.failed} von ${c.total} Nachrichten konnten nicht wiederhergestellt werden`);
+  if (c.addressBookFailed > 0) notes.push(`${c.addressBookFailed} Kontakte/Kontaktlisten konnten nicht wiederhergestellt werden`);
+  return { status: 'COMPLETED', errorMsg: notes.length ? notes.join('; ') : null };
 }
 
 /** Creates the job row (RUNNING) for a prepared restore. */

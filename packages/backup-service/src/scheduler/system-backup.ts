@@ -1,7 +1,7 @@
 /**
  * System backup (9.3, schedule / job scope "system"): the PostgreSQL database
- * (users, settings, certificates, DKIM keys, rules, calendars, contacts, mail
- * metadata) as a `pg_dump` custom-format dump, plus a manifest of the mail
+ * (users, settings, certificates, DKIM keys, rules, calendars, contacts, contact
+ * groups, mail metadata — every table) as a `pg_dump` custom-format dump, plus a manifest of the mail
  * object store (key + size of every object), both encrypted into the backup
  * store under `system/<day>/<jobId>/`.
  *
