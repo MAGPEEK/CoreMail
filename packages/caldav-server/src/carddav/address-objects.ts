@@ -92,7 +92,8 @@ export async function putAddressObject(userId: string, id: string, vcardData: st
     saved = existing ? await updateContactRow(id, vcardData) : await createContactRow(userId, vcardData, id);
   }
   announceUserEvent(userId, { type: 'contacts', action: existing ? 'update' : 'create', ids: [id] });
-  return { status: existing ? 'updated' : 'created', ...saved };
+  // (the contact writer returns the whole row: only its id and version leave this function)
+  return { status: existing ? 'updated' : 'created', id: saved.id, updatedAt: saved.updatedAt };
 }
 
 /** Delete an address object; a deleted card also leaves every group it was a member of. */

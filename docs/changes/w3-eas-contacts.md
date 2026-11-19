@@ -22,6 +22,11 @@ for the calendar, tasks and notes folders.
   chat addresses) stay on the server: a phone edit changes only the entries it saw, keeps their
   types and vCard parameters, and never removes an entry it could not see. When the stored contact
   then shows something else than the device sent, the device gets it back as a Change.
+- Phone kinds without a CoreMail type (car, radio, assistant, company main, work / home fax) keep
+  their kind in the vCard TEL TYPE (`CAR`, `X-RADIO`, `X-ASSISTANT`, `X-COMPANY-MAIN`, `WORK,FAX`,
+  `HOME,FAX`) and return to the same ActiveSync slot; REST shows them as `other` / `fax` as before
+  and keeps the kind when the number changes. Storage: `vcardPhoneKinds()`, `ContactPhoneKind`,
+  `applyContactCard(vcard, card, { phoneKinds })`.
 - Sync, GetItemEstimate, ItemOperations Fetch and Ping for the contacts folder with the per-device
   item state of the other classes (ClientId retries, no echo, airsync:Supported ghosting, truncated
   bodies); MoveItems refuses moves between the contacts folder and any other class.

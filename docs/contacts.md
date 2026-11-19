@@ -71,6 +71,7 @@ path the REST API and CardDAV take. ActiveSync does exactly this
 | company / department | `ORG` (further units kept) | `ORG` | |
 | e-mail | `EMAIL;TYPE=INTERNET[,WORK\|HOME]` | `EMAIL[;TYPE=work\|home]` | |
 | phone | `TEL;TYPE=WORK,VOICE` / `HOME,VOICE` / `CELL` / `FAX` / `PAGER` / `VOICE` | same, lower case | `tel:` URIs, quoted TYPE lists |
+| phone kind (ActiveSync slots, not in the card: `vcardPhoneKinds()`, `applyContactCard(…, { phoneKinds })`) | `other` numbers `TEL;TYPE=CAR,VOICE` / `X-RADIO,VOICE` / `X-ASSISTANT,VOICE` / `X-COMPANY-MAIN,VOICE`; fax numbers `WORK,FAX` / `HOME,FAX` | same, lower case | REST and CardDAV keep the kind: a changed number keeps its line |
 | address | `ADR[;TYPE=WORK\|HOME]` (PO box; extended; street; city; region; code; country) | same | |
 | web page | `URL[;TYPE=…]` | same | Apple's escaped `http\://` |
 | chat | `IMPP[;TYPE=…]:<scheme>:<handle>` | same | |
@@ -111,7 +112,9 @@ groups it was a member of (new ETag), so clients pick the change up.
 The own contacts sync with phones as the folder `contacts:default` (ActiveSync
 Contacts class, see [activesync.md](activesync.md#contacts-w3)); the webmail
 module "Kontakte" switches it off like the REST API. ActiveSync has fixed slots
-(three e-mail addresses, one phone per kind, three addresses, one web page);
+(three e-mail addresses, one phone per kind, three addresses, one web page;
+a car, radio, assistant, company main or work / home fax number keeps its kind
+in the vCard and returns to its slot);
 values beyond them stay on the server and are never changed or removed by a
 phone. Contact groups are not synced over ActiveSync (there is no group item);
 a contact deleted on a phone leaves its groups like a REST or CardDAV delete.

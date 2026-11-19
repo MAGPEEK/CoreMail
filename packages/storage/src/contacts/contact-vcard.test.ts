@@ -10,7 +10,7 @@ import {
 } from './contact-card.js';
 import {
   applyContactCard, buildContactVcard, contactCardFromVcard, contactColumnsFromVcard, setVcardPhoto, setVcardText, uidKey, vcardPhoto,
-  vcardSaysCard, vcardText, OFFICE_LOCATION_PROPERTY,
+  vcardPhoneKinds, vcardSaysCard, vcardText, OFFICE_LOCATION_PROPERTY,
 } from './contact-vcard.js';
 
 const lines = (vcard: string): string[] => vcard.replace(/\r\n[ \t]/g, '').split('\r\n').filter(Boolean);
@@ -243,4 +243,38 @@ test('vCard photo: inline v3 / 2.1 / v4 data URI read, URL and non-image ignored
   assert.ok(v4.includes(`PHOTO:data:image/png;base64,${png.toString('base64')}`));
   const none = lines(setVcardPhoto(card('VERSION:3.0', `PHOTO;ENCODING=b;TYPE=JPEG:${jpeg.toString('base64')}`), null));
   assert.ok(!none.some((l) => l.startsWith('PHOTO')));
+});
+
+test('phone kinds (ActiveSync slots): read from TEL TYPE, written in the version spelling, kept by REST / CardDAV edits', () => {
+  const card = (...l: string[]) => ['BEGIN:VCARD', ...l, 'FN:A', 'UID:u1', 'END:VCARD', ''].join('\r\n');
+  const v3 = card('VERSION:3.0', 'TEL;TYPE=CAR:1', 'TEL;TYPE=X-RADIO,VOICE:2', 'TEL;type=X-ASSISTANT:3', 'TEL;TYPE=X-COMPANY-MAIN:4',
+    'TEL;TYPE=WORK,FAX:5', 'TEL;TYPE=HOME;TYPE=FAX:6', 'TEL;TYPE=FAX:7', 'TEL;TYPE=VOICE:8', 'TEL;TYPE=WORK,CAR:9', 'TEL;TYPE=CAR:');
+  assert.deepEqual(vcardPhoneKinds(v3), ['car', 'radio', 'assistant', 'company-main', 'work-fax', 'home-fax', '', '', ''],
+    'aligned with the card numbers (the empty one is no entry); a work number stays a work number');
+  assert.deepEqual(contactCardFromVcard(v3).phones.map((p) => p.type), ['other', 'other', 'other', 'other', 'fax', 'fax', 'fax', 'other', 'work']);
+  assert.deepEqual(vcardPhoneKinds('kein vCard'), []);
+
+  const base = card('VERSION:3.0', 'TEL;TYPE=VOICE:8');
+  const phones = (...p: Array<[string, string]>) => ({ ...contactCardFromVcard(base), phones: p.map(([type, value]) => ({ type, value })) as ContactCard['phones'] });
+  const written = lines(applyContactCard(base, phones(['other', '8'], ['other', '1'], ['fax', '5'], ['fax', '6'], ['other', '4'], ['mobile', '0']),
+    { phoneKinds: ['', 'car', 'work-fax', 'home-fax', 'company-main', 'car'] }));
+  assert.deepEqual(written.filter((l) => l.startsWith('TEL')),
+    ['TEL;TYPE=VOICE:8', 'TEL;TYPE=CAR,VOICE:1', 'TEL;TYPE=WORK,FAX:5', 'TEL;TYPE=HOME,FAX:6', 'TEL;TYPE=X-COMPANY-MAIN,VOICE:4', 'TEL;TYPE=CELL:0'],
+    'a kind the type cannot have (a car mobile) is none');
+  assert.deepEqual(vcardPhoneKinds(written.join('\r\n')),['', 'car', 'work-fax', 'home-fax', 'company-main', '']);
+  const v4 = lines(applyContactCard(card('VERSION:4.0'), phones(['other', '2']), { phoneKinds: ['radio'] }));
+  assert.ok(v4.includes('TEL;TYPE=x-radio,voice:2'), v4.join(' | '));
+
+  // only the kind changes (a number moved to another slot): the line is rewritten
+  const moved = lines(applyContactCard(v3, contactCardFromVcard(v3), { phoneKinds: ['radio', ...vcardPhoneKinds(v3).slice(1)] }));
+  assert.deepEqual(vcardPhoneKinds(moved.join('\r\n')).slice(0, 2), ['radio', 'radio']);
+  // a removed plain number does not lend its line to a new car number at its position
+  const swapped = lines(applyContactCard(base, phones(['other', '1']), { phoneKinds: ['car'] }));
+  assert.deepEqual(swapped.filter((l) => l.startsWith('TEL')), ['TEL;TYPE=CAR,VOICE:1']);
+  // REST / CardDAV (no kinds): a changed number keeps its line head and so its kind; kinds stay untouched
+  const rest = applyContactCard(v3, { ...contactCardFromVcard(v3), phones: contactCardFromVcard(v3).phones.map((p, i) => (i === 0 ? { ...p, value: '11' } : p)) });
+  assert.ok(lines(rest).includes('TEL;TYPE=CAR:11'));
+  assert.deepEqual(vcardPhoneKinds(rest), vcardPhoneKinds(v3));
+  assert.equal(applyContactCard(v3, contactCardFromVcard(v3), { phoneKinds: vcardPhoneKinds(v3) }), applyContactCard(v3, contactCardFromVcard(v3)),
+    'the same kinds: nothing rewritten');
 });

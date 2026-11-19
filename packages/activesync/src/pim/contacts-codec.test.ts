@@ -29,7 +29,7 @@ const Ct = (t: number, k?: WNode[] | string): WNode => [1, t, k];
 const C2 = (t: number, k?: WNode[] | string): WNode => [12, t, k];
 const B = (t: number, k?: WNode[] | string): WNode => [17, t, k];
 const card = (over: Partial<ContactCard>): ContactCard => finalizeContactCard({ ...emptyContactCard(), ...over });
-const item = (over: Partial<ContactCard>, extra: Partial<ContactItem> = {}): ContactItem => ({ card: card(over), officeLocation: '', picture: '', ...extra });
+const item = (over: Partial<ContactCard>, extra: Partial<ContactItem> = {}): ContactItem => ({ card: card(over), officeLocation: '', picture: '', phoneKinds: [], ...extra });
 /** The Sync item the device got, decoded the way the device sends it back. */
 const echo = (it: ContactItem, user = USER): WbxmlElement => decodeWbxml(encodeWbxml(el('ApplicationData', undefined, renderContact(it, render('14.1', user)))));
 const JPEG = (size: number) => Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(size - 4, 7)]);
@@ -164,7 +164,7 @@ test('ghosting: elements outside the priming Supported list keep their values', 
     'Title, dates, categories, body, office and picture are ghosted');
 });
 
-test('device Add: new entries get the slot type; kinds without a CoreMail type are `other` and the device gets the stored layout back', () => {
+test('device Add: new entries get the slot type; kinds without a CoreMail type are `other` with their kind and stay in their slot', () => {
   const add = contactChange(appData([
     Ct(0x1f, 'Alex'), Ct(0x29, 'Beispiel'), Ct(0x1b, '"Alex B" <alex@example.org>'), Ct(0x27, '+49 40 1'), Ct(0x12, '+49 40 2'),
     Ct(0x21, 'Hamburg'), Ct(0x2d, 'Kiel'), C2(0x07, 'sip:alex@voip.example'), Ct(0x15, [Ct(0x16, 'Team'), Ct(0x16, 'team')]),
@@ -178,11 +178,42 @@ test('device Add: new entries get the slot type; kinds without a CoreMail type a
   assert.deepEqual([c.ims, c.categories, c.notes, c.birthday], [[{ type: 'other', value: 'sip:alex@voip.example' }], ['Team'], 'Notiz', '1990-01-02']);
   assert.equal(add.normalized, false, 'the merged duplicate category is not part of the slot view');
   const radio = contactChange(appData([Ct(0x1f, 'R'), Ct(0x33, '+49 1')]), null, write());
-  assert.deepEqual(radio.item.card.phones, [{ type: 'other', value: '+49 1' }]);
-  assert.equal(contactView(radio.item)['CompanyMainPhone'], '+49 1');
-  assert.equal(radio.normalized, true, 'RadioPhone → stored as `other` → shown as CompanyMainPhone: the device gets it back');
+  assert.deepEqual([radio.item.card.phones, radio.item.phoneKinds], [[{ type: 'other', value: '+49 1' }], ['radio']]);
+  assert.deepEqual([contactView(radio.item)['RadioPhoneNumber'], contactView(radio.item)['CompanyMainPhone']], ['+49 1', '']);
+  assert.equal(radio.normalized, false, 'RadioPhone → `other` of kind radio → shown as RadioPhoneNumber again');
   const nameless = contactChange(appData([Ct(0x2b, '+49 170 5')]), null, write());
   assert.equal(nameless.item.card.displayName, '+49 170 5', 'a contact with only a number is named after it');
+});
+
+test('phone kinds: every phone slot round-trips to the same slot; numbers without a kind fill the free slots as before', () => {
+  const PHONES: Array<[number, string, string, string, string]> = [
+    [0x13, 'BusinessPhoneNumber', '+1 1', 'work', ''], [0x27, 'HomePhoneNumber', '+1 2', 'home', ''],
+    [0x2b, 'MobilePhoneNumber', '+1 3', 'mobile', ''], [0x12, 'BusinessFaxNumber', '+1 4', 'fax', 'work-fax'],
+    [0x26, 'HomeFaxNumber', '+1 5', 'fax', 'home-fax'], [0x32, 'PagerNumber', '+1 6', 'pager', ''],
+    [0x14, 'CarPhoneNumber', '+1 8', 'other', 'car'], [0x33, 'RadioPhoneNumber', '+1 9', 'other', 'radio'],
+    [0x07, 'AssistantPhoneNumber', '+1 10', 'other', 'assistant'],
+  ];
+  const add = contactChange(appData([Ct(0x1f, 'Kim'), C2(0x0b, '+1 7'), ...PHONES.map(([t, , v]) => Ct(t, v))]), null, write());
+  assert.equal(add.normalized, false, 'every number is shown in the slot the device used');
+  const view = contactView(add.item);
+  for (const [, slotName, value] of PHONES) assert.equal(view[slotName], value, slotName);
+  assert.equal(view['CompanyMainPhone'], '+1 7');
+  const kinds = add.item.card.phones.map((p, i) => `${p.value}=${p.type}/${add.item.phoneKinds[i]}`);
+  for (const [, , value, type, kind] of [...PHONES, [0, '', '+1 7', 'other', 'company-main'] as const]) assert.ok(kinds.includes(`${value}=${type}/${kind}`), kinds.join(' '));
+  const back = contactChange(echo(add.item), add.item, write());
+  assert.equal(back.normalized, false);
+  assert.deepEqual([back.item.card.phones, back.item.phoneKinds], [add.item.card.phones, add.item.phoneKinds], 'the echo changes nothing');
+
+  // stored before the kinds (or by a client without them): plain `other` / `fax` numbers keep their slots
+  const plain = item({ phones: [{ type: 'other', value: 'P1' }, { type: 'other', value: 'C' }, { type: 'other', value: 'P2' }, { type: 'fax', value: 'F' }] },
+    { phoneKinds: ['', 'car', '', ''] });
+  const pv = contactView(plain);
+  assert.deepEqual(['CompanyMainPhone', 'CarPhoneNumber', 'RadioPhoneNumber', 'AssistantPhoneNumber', 'BusinessFaxNumber', 'HomeFaxNumber'].map((e) => pv[e]),
+    ['P1', 'C', 'P2', '', 'F', ''], 'the car number takes its slot first, the plain ones fill the free slots in order');
+  const edit = contactChange(appData([Ct(0x14, 'C'), C2(0x0b, 'P1'), Ct(0x33, 'P2 neu'), Ct(0x12, 'F'), Ct(0x07, 'A')]), plain, write());
+  assert.equal(edit.normalized, false);
+  assert.deepEqual(edit.item.card.phones.map((p, i) => `${p.value}/${edit.item.phoneKinds[i]}`), ['P1/', 'C/car', 'P2 neu/', 'F/', 'A/assistant'],
+    'an edited number keeps its (missing) kind; the new one gets the slot kind');
 });
 
 test('file as and display name: derived values follow the names; values set apart stay', () => {

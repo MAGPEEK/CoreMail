@@ -13,10 +13,14 @@
  * Slot assignment (the first unassigned entry the slot accepts, in this order):
  *   Email1–3Address   the first three e-mail addresses (any type)
  *   Business(2)Phone  the first two `work` phones      Home(2)Phone  the first two `home` phones
- *   MobilePhone       the first `mobile` phone         Business/HomeFax  the first two `fax` phones
+ *   MobilePhone       the first `mobile` phone         Business/HomeFax  `fax` phones (below)
  *   Pager             the first `pager` phone
- *   CompanyMainPhone, CarPhone, RadioPhone, AssistantPhone — the first four `other` phones
- *     (CoreMail has no type for these kinds: a number a device puts there is stored as `other`)
+ *   CompanyMainPhone, CarPhone, RadioPhone, AssistantPhone — `other` phones; Business/HomeFax —
+ *     `fax` phones. The card has no type for these kinds; the vCard keeps the kind of a number
+ *     (storage ContactPhoneKind, e.g. TEL;TYPE=CAR, TYPE=WORK,FAX). A slot first shows the
+ *     first number of its kind; a slot still free then shows the next number of its card type
+ *     no slot shows yet (e.g. an `other` / `fax` number a CardDAV client stored without a kind). A number a
+ *     device puts into an empty slot is stored with the slot's kind and comes back there.
  *   Business/Home/OtherAddress  the first `work` / `home` / `other` address
  *   WebPage           the first web page              IMAddress1–3  the first three chat addresses
  */
@@ -24,6 +28,7 @@ import {
   ADDRESS_FIELDS, applyContactPatch, displayNameFromParts, emptyAddress, fileAsOf,
   type ContactAddress, type ContactAddressType, type ContactCard, type ContactName,
 } from '@coremail/storage/contact-card';
+import type { ContactPhoneKind } from '@coremail/storage';
 
 /** A contact as ActiveSync sees it: the card plus the vCard properties outside it. */
 export interface ContactItem {
@@ -32,6 +37,8 @@ export interface ContactItem {
   officeLocation: string;
   /** Base64 of the inline photo when it is within the picture bound, else '' (no or hidden photo). */
   picture: string;
+  /** The kind of each `card.phones` entry (same order; missing = none) — vcardPhoneKinds(). */
+  phoneKinds: readonly ContactPhoneKind[];
 }
 
 /** Element name → value (text, dates as the card spells them, e-mail as the bare address). */
@@ -46,20 +53,22 @@ export interface ListSlot {
   type?: string;
   /** Type of an entry a device creates through the slot. */
   newType: string;
+  /** Phone kind the slot stands for (its numbers are stored with it). */
+  kind?: ContactPhoneKind;
 }
 
-const slot = (element: string, list: ListName, newType: string, type?: string): ListSlot =>
-  ({ element, list, newType, ...(type ? { type } : {}) });
+const slot = (element: string, list: ListName, newType: string, type?: string, kind?: ContactPhoneKind): ListSlot =>
+  ({ element, list, newType, ...(type ? { type } : {}), ...(kind ? { kind } : {}) });
 
 export const LIST_SLOTS: readonly ListSlot[] = [
   slot('Email1Address', 'emails', 'other'), slot('Email2Address', 'emails', 'other'), slot('Email3Address', 'emails', 'other'),
   slot('BusinessPhoneNumber', 'phones', 'work', 'work'), slot('Business2PhoneNumber', 'phones', 'work', 'work'),
   slot('HomePhoneNumber', 'phones', 'home', 'home'), slot('Home2PhoneNumber', 'phones', 'home', 'home'),
   slot('MobilePhoneNumber', 'phones', 'mobile', 'mobile'),
-  slot('BusinessFaxNumber', 'phones', 'fax', 'fax'), slot('HomeFaxNumber', 'phones', 'fax', 'fax'),
+  slot('BusinessFaxNumber', 'phones', 'fax', 'fax', 'work-fax'), slot('HomeFaxNumber', 'phones', 'fax', 'fax', 'home-fax'),
   slot('PagerNumber', 'phones', 'pager', 'pager'),
-  slot('CompanyMainPhone', 'phones', 'other', 'other'), slot('CarPhoneNumber', 'phones', 'other', 'other'),
-  slot('RadioPhoneNumber', 'phones', 'other', 'other'), slot('AssistantPhoneNumber', 'phones', 'other', 'other'),
+  slot('CompanyMainPhone', 'phones', 'other', 'other', 'company-main'), slot('CarPhoneNumber', 'phones', 'other', 'other', 'car'),
+  slot('RadioPhoneNumber', 'phones', 'other', 'other', 'radio'), slot('AssistantPhoneNumber', 'phones', 'other', 'other', 'assistant'),
   slot('WebPage', 'urls', 'other'),
   slot('IMAddress', 'ims', 'other'), slot('IMAddress2', 'ims', 'other'), slot('IMAddress3', 'ims', 'other'),
 ];
@@ -99,13 +108,21 @@ interface SlotAssignment {
   addresses: Map<string, number>;
 }
 
-function assignSlots(card: ContactCard): SlotAssignment {
+/** The kind of list entry `n` (only phones have kinds). */
+const kindOf = (item: ContactItem, list: ListName, n: number): ContactPhoneKind => (list === 'phones' ? item.phoneKinds[n] ?? '' : '');
+
+function assignSlots(item: ContactItem): SlotAssignment {
+  const { card } = item;
   const used: Record<ListName, Set<number>> = { emails: new Set(), phones: new Set(), urls: new Set(), ims: new Set() };
   const lists = new Map<string, number>();
-  for (const s of LIST_SLOTS) {
-    const i = card[s.list].findIndex((e, n) => !used[s.list].has(n) && (s.type === undefined || e.type === s.type));
+  const take = (s: ListSlot, ofKind: boolean): void => {
+    const i = card[s.list].findIndex((e, n) => !used[s.list].has(n) && (s.type === undefined || e.type === s.type)
+      && (!ofKind || kindOf(item, s.list, n) === s.kind));
     if (i >= 0) { used[s.list].add(i); lists.set(s.element, i); }
-  }
+  };
+  // a kind slot shows a number of its kind first; a slot still free then any number of its type
+  for (const s of LIST_SLOTS) take(s, s.kind !== undefined);
+  for (const s of LIST_SLOTS) if (s.kind !== undefined && !lists.has(s.element)) take(s, false);
   const addresses = new Map<string, number>();
   for (const a of ADDRESS_SLOTS) {
     const i = card.addresses.findIndex((x) => x.type === a.type);
@@ -119,7 +136,7 @@ export function contactView(item: ContactItem): ContactView {
   const view: ContactView = { FileAs: fileAsOf(card), OfficeLocation: item.officeLocation, Picture: item.picture };
   for (const [e, f] of NAME_ELEMENTS) view[e] = card.name[f];
   for (const [e, f] of CARD_ELEMENTS) view[e] = card[f];
-  const slots = assignSlots(card);
+  const slots = assignSlots(item);
   for (const s of LIST_SLOTS) {
     const i = slots.lists.get(s.element);
     view[s.element] = i === undefined ? '' : card[s.list][i]!.value;
@@ -148,18 +165,24 @@ function derivedDisplayName(card: ContactCard): string {
 }
 
 type Entry = { type: string; value: string };
+type KindedEntry = { entry: Entry; kind: ContactPhoneKind };
 
-/** The list after the device's slot values: changed in place, emptied ones removed, new ones appended. */
-function applyListSlots(list: readonly Entry[], name: ListName, slots: SlotAssignment, view: ContactView): Entry[] {
-  const out: Array<Entry | null> = list.map((e) => ({ ...e }));
+/**
+ * The list after the device's slot values: changed in place (type and kind kept), emptied ones
+ * removed, new ones appended with the slot's type and kind.
+ */
+function applyListSlots(item: ContactItem, name: ListName, slots: SlotAssignment, view: ContactView): KindedEntry[] {
+  const out: Array<KindedEntry | null> = (item.card[name] as readonly Entry[]).map((e, n) => ({ entry: { ...e }, kind: kindOf(item, name, n) }));
   for (const s of LIST_SLOTS.filter((x) => x.list === name)) {
     const value = view[s.element] ?? '';
     const i = slots.lists.get(s.element);
-    if (i !== undefined) out[i] = value ? { ...out[i]!, value } : null;
-    else if (value) out.push({ type: s.newType, value });
+    if (i !== undefined) out[i] = value ? { ...out[i]!, entry: { ...out[i]!.entry, value } } : null;
+    else if (value) out.push({ entry: { type: s.newType, value }, kind: s.kind ?? '' });
   }
-  return out.filter((e): e is Entry => e !== null);
+  return out.filter((e): e is KindedEntry => e !== null);
 }
+
+const entries = (list: readonly KindedEntry[]): Entry[] => list.map((e) => e.entry);
 
 function applyAddressSlots(list: readonly ContactAddress[], slots: SlotAssignment, view: ContactView): ContactAddress[] {
   const out = list.map((a) => ({ ...a }));
@@ -189,16 +212,17 @@ function fileAsFromDevice(old: ContactCard, next: ContactCard, fileAs: string): 
  */
 export function buildContact(stored: ContactItem, desired: DesiredContact): ContactItem {
   const old = stored.card;
-  const slots = assignSlots(old);
+  const slots = assignSlots(stored);
   const v = desired.view;
   const name = { ...old.name };
   for (const [e, f] of NAME_ELEMENTS) name[f] = v[e] ?? '';
   const scalars = Object.fromEntries(CARD_ELEMENTS.map(([e, f]) => [f, v[e] ?? ''])) as Partial<ContactCard>;
+  const phones = applyListSlots(stored, 'phones', slots, v);
   const lists = {
-    emails: applyListSlots(old.emails, 'emails', slots, v) as ContactCard['emails'],
-    phones: applyListSlots(old.phones, 'phones', slots, v) as ContactCard['phones'],
-    urls: applyListSlots(old.urls, 'urls', slots, v) as ContactCard['urls'],
-    ims: applyListSlots(old.ims, 'ims', slots, v) as ContactCard['ims'],
+    emails: entries(applyListSlots(stored, 'emails', slots, v)) as ContactCard['emails'],
+    phones: entries(phones) as ContactCard['phones'],
+    urls: entries(applyListSlots(stored, 'urls', slots, v)) as ContactCard['urls'],
+    ims: entries(applyListSlots(stored, 'ims', slots, v)) as ContactCard['ims'],
     addresses: applyAddressSlots(old.addresses, slots, v),
   };
   const base: ContactCard = { ...old, ...scalars, ...lists, name, fileAs: '', categories: desired.categories, notes: desired.notes };
@@ -206,7 +230,8 @@ export function buildContact(stored: ContactItem, desired: DesiredContact): Cont
   const nameSetApart = old.displayName.trim() !== '' && old.displayName.trim() !== derivedDisplayName(old);
   const displayName = nameSetApart ? old.displayName : derivedDisplayName(withFileAs);
   const card = applyContactPatch(old, { ...withFileAs, displayName, name });
-  return { card, officeLocation: v['OfficeLocation'] ?? '', picture: v['Picture'] ?? '' };
+  // (no number is empty here, so the card keeps every entry of `phones` in order)
+  return { card, officeLocation: v['OfficeLocation'] ?? '', picture: v['Picture'] ?? '', phoneKinds: phones.map((p) => p.kind) };
 }
 
 /**

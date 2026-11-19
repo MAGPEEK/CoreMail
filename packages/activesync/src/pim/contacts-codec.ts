@@ -38,7 +38,7 @@ const CONTACTS2 = new Set(['NickName', 'CompanyMainPhone', 'IMAddress', 'IMAddre
 const pageOf = (element: string): number => (CONTACTS2.has(element) ? CP.Contacts2 : CP.Contacts);
 const DATE_ELEMENTS = new Set(['Birthday', 'Anniversary']);
 
-export const EMPTY_CONTACT: ContactItem = { card: finalizeContactCard(emptyContactCard()), officeLocation: '', picture: '' };
+export const EMPTY_CONTACT: ContactItem = { card: finalizeContactCard(emptyContactCard()), officeLocation: '', picture: '', phoneKinds: [] };
 
 // ─── Values ──────────────────────────────────────────────────────────────────
 

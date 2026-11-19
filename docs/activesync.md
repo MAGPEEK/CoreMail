@@ -235,8 +235,9 @@ group item.
 | CompanyName, Department, JobTitle | company, department, job title |
 | OfficeLocation | vCard `X-OFFICE-LOCATION` (no standard property) |
 | Email1–3Address | the first three e-mail addresses (`"Name" <address>` from a device is read as the address) |
-| BusinessPhoneNumber, Business2PhoneNumber / HomePhoneNumber, Home2PhoneNumber / MobilePhoneNumber / BusinessFaxNumber, HomeFaxNumber / PagerNumber | the first two `work`, two `home`, one `mobile`, two `fax`, one `pager` phones |
-| contacts2:CompanyMainPhone, CarPhoneNumber, RadioPhoneNumber, AssistantPhoneNumber | the first four `other` phones (CoreMail has no type for these kinds: a number a device enters there is stored as `other`) |
+| BusinessPhoneNumber, Business2PhoneNumber / HomePhoneNumber, Home2PhoneNumber / MobilePhoneNumber / PagerNumber | the first two `work`, two `home`, one `mobile`, one `pager` phones |
+| BusinessFaxNumber, HomeFaxNumber | `fax` phones: first the first work fax (`TEL;TYPE=WORK,FAX`) / home fax (`HOME,FAX`), a slot still free then the next `fax` phone no slot shows |
+| contacts2:CompanyMainPhone, CarPhoneNumber, RadioPhoneNumber, AssistantPhoneNumber | `other` phones: first the first number of the slot's kind (`TEL;TYPE=X-COMPANY-MAIN` / `CAR` / `X-RADIO` / `X-ASSISTANT`), a slot still free then the next `other` phone no slot shows (so an `other` phone without a kind keeps the slot it had before). A number a device enters in one of these six slots is stored with the slot's kind (REST shows it as `other` / `fax`) and comes back in the same slot |
 | Business / Home / OtherAddress Street, City, State, PostalCode, Country | the first `work` / `home` / `other` address (PO box and extended part have no element and are kept) |
 | WebPage | the first web page |
 | contacts2:IMAddress, IMAddress2, IMAddress3 | the first three chat addresses (the IMPP URI as it is) |
@@ -255,9 +256,8 @@ Change is applied slot by slot to that entry — its value changes, its type, gr
 stay; an emptied slot removes its entry; a value in an empty slot appends an entry of the slot's
 type. Entries no slot showed (a fourth e-mail address, a third work phone, a second mobile number,
 a second work address) are never changed or removed by a device. When the stored contact then
-shows something else than the device sent (an entry moved up into an emptied slot, a number
-entered as car phone shown as company main phone, the derived "file as" after a name change, a
-refused picture), the device gets the contact back as a Change in the same response. Absent
+shows something else than the device sent (an entry moved up into an emptied slot, the derived
+"file as" after a name change, a refused picture), the device gets the contact back as a Change in the same response. Absent
 elements follow the Supported rules of the other classes (cleared unless ghosted); the display
 name follows the name parts unless it was set apart from them (e.g. by a CardDAV client).
 

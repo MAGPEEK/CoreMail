@@ -159,7 +159,7 @@ test('device Change of the CardDAV card: only the values it saw change — 4th e
 });
 
 let added = '';
-test('device Add: a contact row with vCard + derived columns; a retry gets the same ServerId; an unmapped phone kind comes back as Change', async () => {
+test('device Add: a contact row with vCard + derived columns; a retry gets the same ServerId; a radio number keeps its slot (no echo)', async () => {
   const add = A(0x07, [A(0x0c, 'client-1'), A(0x1d, [Ct(0x1f, 'Alex'), Ct(0x29, 'Beispiel'), Ct(0x1b, 'alex@example.org'), Ct(0x33, '+49 40 9')])]);
   const r = await sync(key, { commands: [add] });
   added = kid(r.responses[0], 'ServerId')!.text!;
@@ -172,8 +172,10 @@ test('device Add: a contact row with vCard + derived columns; a retry gets the s
   assert.deepEqual([c['userId'], c['displayName'], c['email'], c['familyName'], c['phone']], ['u1', 'Alex Beispiel', 'alex@example.org', 'Beispiel', '+49 40 9']);
   assert.equal(storage.contactCardFromVcard(String(c['vcardData'])).emails[0]?.value, 'alex@example.org', 'the vCard is the source of truth');
   assert.ok(storage.vcardUidKey(String(c['vcardData'])), 'with a UID (groups reference it)');
-  assert.deepEqual(r.changes, [added], 'stored as `other` → shown as CompanyMainPhone: sent back');
-  assert.equal(kid(r.data(added), 'CompanyMainPhone')?.text, '+49 40 9');
+  assert.ok(lines(c['vcardData']).includes('TEL;TYPE=X-RADIO,VOICE:+49 40 9'), 'the kind is kept in the vCard');
+  assert.deepEqual(r.changes, [], 'shown as RadioPhoneNumber again: nothing to send back');
+  const other = await sync((await sync('0', { dev: 'dev12', version: '12.1' })).key, { dev: 'dev12', version: '12.1' });
+  assert.deepEqual(['RadioPhoneNumber', 'CompanyMainPhone'].map((n) => kid(other.data(added), n)?.text), ['+49 40 9', undefined], 'another device sees it in the same slot');
   const next = await sync(retry.key);
   assert.deepEqual(next.changes, []);
   key = next.key;

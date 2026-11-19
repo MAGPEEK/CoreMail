@@ -240,7 +240,7 @@ export async function run(state) {
     const family = `E2EPhone${Date.now()}`;
     const r = await sync('contacts:default', keys.contacts, [A(0x16, [A(0x07, [A(0x0c, 'e2e-contact-1'), A(0x1d, [
       Ct(0x1f, 'Alex'), Ct(0x29, family), Ct(0x1b, 'alex@phone-e2e.test'), Ct(0x13, '+49 30 5550102'),
-      Ct(0x11, 'Hauptstr. 1'), Ct(0x0d, 'Berlin'), C2(0x0d, 'Lex'), B(0x0a, [B(0x06, '1'), B(0x0b, 'vom Telefon')]),
+      Ct(0x14, '+49 171 5550103'), Ct(0x11, 'Hauptstr. 1'), Ct(0x0d, 'Berlin'), C2(0x0d, 'Lex'), B(0x0a, [B(0x06, '1'), B(0x0b, 'vom Telefon')]),
     ])])])]);
     const id = kid(r.responses[0], 'ServerId')?.text;
     assert(kid(r.responses[0], 'Status')?.text === '1' && id, `Add response ${JSON.stringify(r.responses)}`);
@@ -250,9 +250,13 @@ export async function run(state) {
     assert(rest.status === 200 && x.name?.family === family && x.nickname === 'Lex' && x.notes === 'vom Telefon'
       && x.emails?.[0]?.value === 'alex@phone-e2e.test' && x.phones?.[0]?.type === 'work' && x.addresses?.[0]?.city === 'Berlin',
       `REST contact ${rest.status} ${rest.text.slice(0, 300)}`);
+    // a car number (no CoreMail type) is `other` over REST and stays in its slot: no Change back
+    assert(x.phones?.some((p) => p.type === 'other' && p.value === '+49 171 5550103') && !r.changes.some((ch) => kid(ch, 'ServerId')?.text === id),
+      `car number: ${JSON.stringify(x.phones)}, ${r.changes.length} Change(s)`);
     const dav = await http('GET', `/dav/addressbooks/${state.users.b.id}/default/${id}.vcf`, { headers: { Authorization: auth } });
     const vcard = dav.text.replace(/\r?\n[ \t]/g, '');
-    assert(dav.status === 200 && vcard.includes(`N:${family};Alex;;;`) && /^UID:/m.test(vcard) && vcard.includes('alex@phone-e2e.test'),
+    assert(dav.status === 200 && vcard.includes(`N:${family};Alex;;;`) && /^UID:/m.test(vcard) && vcard.includes('alex@phone-e2e.test')
+      && vcard.includes('TEL;TYPE=CAR,VOICE:+49 171 5550103'),
       `CardDAV ${dav.status}:\n${vcard.slice(0, 400)}`);
     keys.contacts = r.key;
     return `contact ${id}`;

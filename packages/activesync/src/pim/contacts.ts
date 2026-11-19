@@ -9,7 +9,7 @@
 import { prisma } from '@coremail/storage/prisma';
 import {
   announceUserEvent, applyContactCard, contactCardFromRow, createContactRow, deleteContactRow, photoMediaType, sameContactCard,
-  setVcardPhoto, setVcardText, updateContactRow, vcardPhoto, vcardText, vcardUidKey, OFFICE_LOCATION_PROPERTY,
+  setVcardPhoto, setVcardText, updateContactRow, vcardPhoneKinds, vcardPhoto, vcardText, vcardUidKey, OFFICE_LOCATION_PROPERTY,
 } from '@coremail/storage';
 import type { UserEventAction } from '@coremail/core';
 import { contactChange, renderContact, PICTURE_MAX_BYTES } from './contacts-codec.js';
@@ -41,12 +41,13 @@ export function contactItemOf(row: ContactRow): ContactItem {
     card: contactCardFromRow(row),
     officeLocation: vcardText(row.vcardData, OFFICE_LOCATION_PROPERTY),
     picture: photo && photo.data.length <= PICTURE_MAX_BYTES ? photo.data.toString('base64') : '',
+    phoneKinds: vcardPhoneKinds(row.vcardData),
   };
 }
 
 /** The stored vCard with `item` written into it (only what differs from `stored`). */
 export function contactVcard(vcard: string, stored: ContactItem | null, item: ContactItem): string {
-  let out = applyContactCard(vcard, item.card);
+  let out = applyContactCard(vcard, item.card, { phoneKinds: item.phoneKinds });
   if (item.officeLocation !== (stored?.officeLocation ?? '')) out = setVcardText(out, OFFICE_LOCATION_PROPERTY, item.officeLocation);
   if (item.picture !== (stored?.picture ?? '')) {
     const data = Buffer.from(item.picture, 'base64');
@@ -56,8 +57,10 @@ export function contactVcard(vcard: string, stored: ContactItem | null, item: Co
   return out;
 }
 
+const kindsOf = (item: ContactItem): string => item.card.phones.map((_, i) => item.phoneKinds[i] ?? '').join(',');
+
 const sameItem = (a: ContactItem, b: ContactItem): boolean =>
-  sameContactCard(a.card, b.card) && a.officeLocation === b.officeLocation && a.picture === b.picture;
+  sameContactCard(a.card, b.card) && a.officeLocation === b.officeLocation && a.picture === b.picture && kindsOf(a) === kindsOf(b);
 
 async function findContact(col: PimCollection, id: string): Promise<ContactRow | null> {
   return prisma.contact.findFirst({ where: { id, userId: col.key }, select: CONTACT_SELECT });
