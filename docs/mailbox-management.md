@@ -9,6 +9,8 @@ Three features for user mailboxes and Shared Mailboxes:
 3. **Mailbox access audit** — what delegates and Shared Mailbox users do in a
    mailbox that is not their own, from every client, with aggregation and a
    retention setting; the owner sees it in webmail Settings → Sicherheit.
+4. **Folder permissions** (w3) — a role on one folder for another user or for
+   everyone in the organisation, like a folder's "Permissions" in Outlook.
 
 ## 1. Shared mailbox grants
 
@@ -184,6 +186,105 @@ the delegating user); `changes` holds `mailboxId`, `source`
 Reads of single messages are not logged separately — the hourly `open` covers
 read access.
 
+## 4. Folder permissions (w3)
+
+A mailbox owner grants another user — or **Standard** (Default = every user of
+the organisation) — a role on one of their folders. **Anonym** (Anonymous) is
+shown but always "Keine": mail folders are never shared anonymously.
+
+Model `FolderPermission` (folder, mailbox, grantee `user:<id>` or `default`,
+`rights`, `applyToSubfolders`); `Message.createdBy` marks items a grantee
+created in a foreign folder (IMAP APPEND / COPY, a move from another mailbox) —
+the "own items". Logic: `packages/storage/src/folder-permissions.ts` (rights,
+roles, combination — pure) and `folder-access.ts` (the central access check).
+
+### Rights and roles
+
+Member-rights bitmask of the public MS-OXCPERM specification:
+
+| Bit | Right | | Bit | Right |
+|---|---|---|---|---|
+| 0x1 | read items | | 0x80 | create subfolders |
+| 0x2 | create items | | 0x100 | folder owner (rename / move / delete the folder, administer its permissions) |
+| 0x8 / 0x20 | edit own / all items | | 0x200 | folder contact |
+| 0x10 / 0x40 | delete own / all items | | 0x400 | folder visible |
+
+| Role (webmail) | Rights |
+|---|---|
+| Besitzer (Owner) | 0x7FB — everything |
+| Veröffentlichender Bearbeiter (Publishing Editor) | 0x4FB — all items + subfolders |
+| Bearbeiter (Editor) | 0x47B — read, create, edit / delete all |
+| Veröffentlichender Autor (Publishing Author) | 0x49B — read, create, edit / delete own, subfolders |
+| Autor (Author) | 0x41B — read, create, edit / delete own |
+| Nicht bearbeitender Autor (Nonediting Author) | 0x413 — read, create, delete own |
+| Prüfer (Reviewer) | 0x401 — read |
+| Mitwirkender (Contributor) | 0x402 — create only |
+| Keine (None) | 0 — nothing, not even visible |
+
+Any other combination is "Benutzerdefiniert" (Custom). "All" implies "own".
+
+### Effective rights
+
+1. the own mailbox → everything;
+2. mailbox **FULL_ACCESS** (Shared Mailbox permission or delegation) → everything
+   except administering permissions — folder grants change nothing;
+3. otherwise the user's folder grant — the folder's own entry, else the nearest
+   ancestor entry with "Auch für Unterordner" — or, when the user has none, the
+   Default grant found the same way (the user-specific entry wins, so a user
+   entry "Keine" excludes that user from Default); plus the mailbox
+   **READ_ONLY** floor (read + visible on every folder) when the user holds it.
+
+Mailbox-level grants are a floor that folder grants only add to. Paths that
+know only mailbox-level grants (JMAP, MAPI, the pre-9.3 REST routes,
+recover deleted items) therefore never grant more than the folder rules allow;
+a user who reaches a mailbox only through folder grants does not see it there.
+
+The parent of a folder is its `parentId` (webmail), else the folder whose name
+is its "." prefix (IMAP, `Projects.2026` → `Projects`). A webmail folder without
+parent is not a subfolder of INBOX for the permissions (the webmail only shows
+it there).
+
+### Where it is enforced
+
+| Path | Behaviour |
+|---|---|
+| Webmail folder pane (`GET /user/accessible-mailboxes`) | mailboxes with a visible folder appear (`folderScoped`, permissions `FOLDER_PERMISSIONS`); auto-mapped when a grant names the user, Default-only mailboxes are added by the user ("Postfach öffnen") |
+| REST `/mail/{shared,delegated}-mailboxes/:id/…` | folder list = visible folders + their path (`noSelect`, no counts), `myRights` per folder; every read / write checked per folder; no access → 403 `NO_ACCESS`, write without any write right → 403 `READ_ONLY`, else 403 `NO_PERMISSION`; invisible folder / message → 404 |
+| Attachment download, reply / forward headers | the folder's read right (`canReadFolderOf`) |
+| IMAP `Other Users/`, `Shared/` | see docs/imap.md "ACL"; SETACL / DELETEACL map to folder permissions |
+| Realtime | user grantees get `mailbox` events for their readable folders only; Default grantees refresh on the safety refetch |
+| JMAP, MAPI | mailbox-level grants only (open point); ActiveSync serves the own mailbox only |
+
+Every foreign access is audited as before (`mailbox.foreign.*` through
+`recordMailboxAccess()`); every permission change as
+`mailbox.folder.permission.set` / `.remove` (targetType `folder`, `changes`:
+mailbox, grantee, before / after role, source `webmail|imap|admin`) — always,
+independent of the audit switches. A change publishes `permission-change` for
+the grantees (for a Default change once): IMAP drops its cached rights and
+closes a selected folder whose read right is gone (`* OK [CLOSED]`), REST checks
+every request anyway.
+
+### API, webmail, BCP
+
+```
+GET|PUT /api/v1/mail/folders/:folderId/permissions                 own folders (module "Freigegebene Postfächer")
+GET|PUT /api/v1/mail/{shared,delegated}-mailboxes/:id/folders/:folderId/permissions   folder owner right
+GET     /api/v1/admin/mailboxes/:id/folder-permissions             every folder with its entries (area recipients)
+GET|PUT /api/v1/admin/mailboxes/:id/folders/:folderId/permissions
+GET     /api/v1/admin/shared-mailboxes/:id/folder-permissions
+GET|PUT /api/v1/admin/shared-mailboxes/:id/folders/:folderId/permissions
+```
+
+GET answers `{ folderId, folderName, entries, inherited }` — Default and
+Anonymous first. PUT takes the complete list `{ entries: [{ grantee:
+"default" | "anonymous" | {userId} | {email}, role? | rights?, applyToSubfolders? }] }`
+(400 for unknown users, the mailbox owner, Anonymous with rights). Admin
+mailboxes: ORGANIZATION_MANAGEMENT only (403 `FORBIDDEN`).
+
+Webmail: folder context menu → "Berechtigungen…" (own folders; foreign folders
+with the folder owner right). BCP: Postfächer / Freigegebene Postfächer →
+Bearbeiten → "Ordnerberechtigungen".
+
 ## Tests
 
 * storage: `mail-flow.test.ts`, `mailbox-access-audit.test.ts`, `shared-sent-copy.test.ts`, `mailbox-access.test.ts`
@@ -192,4 +293,9 @@ read access.
 * jmap-server: `mailbox-mgmt.test.ts`; activesync: `commands/directory-hidden.test.ts`, `commands/send-mail.test.ts`
 * api-gateway: `routes/mailbox-mgmt.test.ts`, `routes/contacts.test.ts`; cli: `commands/mail-flow.test.ts`
 * BCP `lib/mailFlow.test.ts`, webmail `lib/mailboxAccessLog.test.ts`
+* w3 folder permissions: storage `folder-permissions.test.ts` (rights table, roles, inheritance),
+  `folder-access.test.ts` (listing, per-folder rights, writer + audit, realtime audience);
+  api-gateway `routes/folder-permissions.test.ts`; imap-server `commands/acl-rights.test.ts`,
+  `server/imap-shared.test.ts` ("w3: folder permissions"), `server/imap-protocol.test.ts` (SETACL);
+  webmail / BCP `lib/folderPermissions.test.ts`; e2e step `folder-permissions`
 * e2e step `mailbox-mgmt` (GAL hidden, forwarding with / without copy, reject-from 550 on port 25, send-as copy in `Shared/<box>/Sent`, From of the own Sent copy of a webmail send as, audit filter, auto-mapping)

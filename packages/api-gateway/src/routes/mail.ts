@@ -25,6 +25,7 @@ import { checkFolderParent, type FolderLookup } from '../lib/folder-tree.js';
 import { withBodyLimit, checkRecipients, envelopeRecipients, deliveryReceiptDsn, maxRecipients, MAX_SEND_FILES } from '../lib/send-limits.js';
 import { createUserRateLimiter, envInt } from '../lib/user-rate-limit.js';
 import { resolveReplyHeaders, prismaReplyLookup, parseClientReferences } from '../lib/reply-headers.js';
+import { canReadFolderOf } from '../lib/mailbox-access.js';
 import { rspamdControllerHeaders } from '../lib/rspamd-controller.js';
 import { createImageProxyHandler } from '../lib/image-proxy.js';
 import { enforceUploadPolicy } from '../lib/upload-policy.js';
@@ -39,6 +40,7 @@ import {
 export const replyLookup = prismaReplyLookup(
   prisma as unknown as Parameters<typeof prismaReplyLookup>[0],
   (p) => (p.storagePath ? loadRawMessage(p as unknown as Parameters<typeof loadRawMessage>[0], { persist: false }) : Promise.resolve(null)),
+  canReadFolderOf, // w3: replies to a message in a folder shared through folder permissions
 );
 
 const log = createLogger('api:mail');
@@ -602,10 +604,22 @@ mailRouter.delete('/messages/:id/snooze', async (req: Request, res: Response) =>
 // GET /api/v1/mail/attachments/:id — attachment download (own, shared, delegated
 // mailboxes; streamed from object storage; see lib/attachment-download.ts)
 mailRouter.get('/attachments/:id', createAttachmentDownloadHandler({
-  findAttachment: (id, userId) => prisma.attachment.findFirst({
-    where: { id, message: { deletedAt: null, folder: { mailbox: readableMailboxWhere(userId) } } },
-    select: { id: true, filename: true, mimeType: true, size: true, storagePath: true },
-  }),
+  findAttachment: async (id, userId) => {
+    const select = { id: true, filename: true, mimeType: true, size: true, storagePath: true } as const;
+    const viaMailbox = await prisma.attachment.findFirst({
+      where: { id, message: { deletedAt: null, folder: { mailbox: readableMailboxWhere(userId) } } },
+      select,
+    });
+    if (viaMailbox) return viaMailbox;
+    // w3: a folder permission on the message's folder
+    const row = await prisma.attachment.findFirst({
+      where: { id, message: { deletedAt: null } },
+      select: { ...select, message: { select: { folderId: true } } },
+    });
+    if (!row || !(await canReadFolderOf(userId, row.message.folderId))) return null;
+    const { message: _message, ...attachment } = row;
+    return attachment;
+  },
   openStream: getObjectStream,
   // 9.4: blocked / save-only types of the reader's webmail policy
   policyFor: async (req) => (await effectiveWebmailPolicy(protocolSubject(req.apiUser!))).content,

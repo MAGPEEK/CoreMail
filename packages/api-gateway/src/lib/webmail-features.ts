@@ -50,6 +50,9 @@ function under(path: string, prefix: string): boolean {
 /** Recover deleted items of a shared / delegated mailbox needs that module too. */
 const FOREIGN_RECOVERABLE = /^\/api\/v1\/(user\/shared-mailboxes|mail\/delegated-mailboxes)\/[^/]+\/recoverable(\/|$)/;
 
+/** w3: sharing an own folder (folder permissions) belongs to the shared-mailboxes module. */
+const OWN_FOLDER_PERMISSIONS = /^\/api\/v1\/mail\/folders\/[^/]+\/permissions$/;
+
 /**
  * The modules a request needs (pure; empty = none). `query` matters for one
  * exception: GET /api/v1/contacts with a search term is the compose
@@ -66,6 +69,7 @@ export function featuresForRequest(method: string, originalUrl: string | undefin
   const autocomplete = method === 'GET' && path === '/api/v1/contacts' && String(query['q'] ?? '').trim().length >= 2;
   if (hit && !autocomplete) out.push(hit[1]);
   if (FOREIGN_RECOVERABLE.test(path)) out.push('recoverItems');
+  if (OWN_FOLDER_PERMISSIONS.test(path)) out.push('sharedMailboxes');
   return out;
 }
 

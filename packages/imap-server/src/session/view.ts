@@ -50,7 +50,7 @@ export function createView(
   folder: { id: string; name: string; uidValidity: number },
   rows: ViewRow[],
   readOnly: boolean,
-  extra: Pick<SelectedMailbox, 'mailboxId' | 'foreign' | 'clientName' | 'delimiter' | 'noWrite'> = {},
+  extra: Pick<SelectedMailbox, 'mailboxId' | 'foreign' | 'clientName' | 'delimiter' | 'noWrite' | 'access'> = {},
 ): SelectedMailbox {
   return {
     folderId: folder.id,

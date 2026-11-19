@@ -6,6 +6,7 @@ import { Inbox, Plus, Trash2, Pencil, UserPlus, X, Loader2, Shield, RefreshCw, H
 import { api } from '../api/client.js';
 import { MailboxAliasesSection } from '../components/MailboxAliasesSection.js';
 import { MailFlowEditor } from '../components/MailFlowEditor.js';
+import { FolderPermissionsSection } from '../components/FolderPermissionsSection.js';
 import { useT } from '../i18n/useT.js';
 import type { TranslationKey } from '../i18n/translations.js';
 import { Can, WriteGuard } from '../components/Can.js';
@@ -385,6 +386,12 @@ function SharedMailboxModal({ item, onClose }: { item?: SharedMailbox; onClose: 
           {item && (
             <div className="border-t border-line pt-4 mt-2">
               <MailFlowEditor path={`/admin/shared-mailboxes/${item.id}/mail-flow`} kind="shared" />
+            </div>
+          )}
+          {/* w3: folder permissions — edit mode only */}
+          {item && (
+            <div className="border-t border-line pt-4 mt-2">
+              <FolderPermissionsSection basePath={`/admin/shared-mailboxes/${item.id}`} />
             </div>
           )}
         </div>

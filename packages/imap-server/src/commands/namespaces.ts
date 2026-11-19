@@ -12,12 +12,20 @@
  * addresses contain "." (the personal delimiter); folder names that contain "/"
  * themselves cannot be expressed and are not listed there.
  *
- * Access follows @coremail/storage `listAccessibleMailboxes` (the JMAP/REST policy).
- * It is cached per session for at most IMAP_SHARED_ACCESS_CACHE_MS (≤ 30 s) and
- * re-read without the cache on SELECT/EXAMINE and before every write, so a revoked
- * permission takes effect within 30 s for reads and immediately for writes.
+ * Access follows @coremail/storage `listVisibleForeignMailboxes` (mailbox-level
+ * grants — the JMAP/REST policy — plus, w3, mailboxes reached through folder
+ * permissions); what the user may do in a folder is decided per folder by the
+ * central check `loadMailboxFolderAccess` (folder-access.ts). Both are cached
+ * per session for at most IMAP_SHARED_ACCESS_CACHE_MS (≤ 30 s) and re-read
+ * without the cache on SELECT/EXAMINE and before every write; a
+ * `permission-change` event drops every cache, so a revoked permission takes
+ * effect with the next command.
  */
-import { prisma, listAccessibleMailboxes, isMailboxMapped, type AccessibleMailbox, type ForeignMailboxKind } from '@coremail/storage';
+import {
+  prisma, listVisibleForeignMailboxes, isMailboxMapped, loadMailboxFolderAccess, accessToFolder,
+  canSeeFolder, canReadFolder, hasAnyWriteRight,
+  type AccessibleMailbox, type FolderAccess, type FolderAccessDb, type ForeignMailboxKind, type MailboxFolderAccess,
+} from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import { type ImapSession, sendUntagged } from '../session/state.js';
 import { canonicalInbox, decodeMutf7, storedCandidates } from './mailbox-name.js';
@@ -27,18 +35,12 @@ const log = createLogger('imap:namespaces');
 export const PERSONAL_DELIMITER = '.';
 export const FOREIGN_DELIMITER = '/';
 
-/**
- * RFC 4314 §2.1 rights plus the obsolete RFC 2086 "c" and "d" that §2.1.1 asks
- * servers to report for compatibility.
- */
-export const OWNER_RIGHTS = 'lrswipkxteacd';
-/** FULL_ACCESS: everything except administering the ACL ("a"). */
-export const FULL_ACCESS_RIGHTS = 'lrswipkxtecd';
-/**
- * READ_ONLY: lookup + read. No "s": the \Seen state cannot be changed either
- * (the mailbox is always opened read-only, like EXAMINE).
- */
+export { OWNER_RIGHTS, FULL_ACCESS_RIGHTS } from './acl-rights.js';
+/** READ_ONLY: lookup + read (no "s": the \Seen state cannot be changed either). */
 export const READ_ONLY_RIGHTS = 'lr';
+
+/** The user's own mailbox: every right on every folder. */
+const OWN_MAILBOX_ACCESS = (mailboxId: string): MailboxFolderAccess => ({ mailboxId, level: 'owner', rights: null });
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 
@@ -128,10 +130,28 @@ export async function foreignMailboxes(session: ImapSession, fresh = false): Pro
     return cached.list;
   }
   const gen = generation;
-  const all = await listAccessibleMailboxes(prisma as never, session.userId);
+  const all = await listVisibleForeignMailboxes(prisma as unknown as FolderAccessDb, session.userId);
   const list = all.filter((a) => prefixOf(a.kind) !== null && !a.email.includes(FOREIGN_DELIMITER));
   session.foreignAccess = { userId: session.userId, at: now, gen, list };
+  session.folderAccess = new Map();
   return list;
+}
+
+/**
+ * w3: the user's rights on the folders of a foreign mailbox (cached per
+ * session like the access list; `fresh` bypasses the cache). `access` null =
+ * the own mailbox.
+ */
+export async function mailboxFolderAccess(session: ImapSession, access: AccessibleMailbox | null, fresh = false): Promise<MailboxFolderAccess> {
+  if (!access) return OWN_MAILBOX_ACCESS(session.mailboxId ?? '');
+  const cache = session.folderAccess ??= new Map();
+  const hit = cache.get(access.mailboxId);
+  const now = Date.now();
+  if (!fresh && hit && hit.gen === generation && now - hit.at < config.cacheMs) return hit.value;
+  const gen = generation;
+  const value = await loadMailboxFolderAccess(prisma as unknown as FolderAccessDb, session.userId ?? '', access);
+  cache.set(access.mailboxId, { gen, at: now, value });
+  return value;
 }
 
 /**
@@ -151,11 +171,6 @@ export async function listedForeignMailboxes(session: ImapSession): Promise<Acce
   }
   const set = new Set(added);
   return all.filter((a) => isMailboxMapped(a, set));
-}
-
-export function rightsOf(access: AccessibleMailbox | null): string {
-  if (!access) return OWNER_RIGHTS;
-  return access.readOnly ? READ_ONLY_RIGHTS : FULL_ACCESS_RIGHTS;
 }
 
 // ─── Names ───────────────────────────────────────────────────────────────────
@@ -229,9 +244,18 @@ export interface MailboxTarget {
   foreign: AccessibleMailbox | null;
   /** Hierarchy delimiter of the name on the wire. */
   delimiter: string;
-  rights: string;
-  /** Writes (STORE, EXPUNGE, APPEND, COPY/MOVE into, folder changes) are permitted. */
-  writable: boolean;
+  /** w3: the user's rights on the folders of the target mailbox. */
+  folders: MailboxFolderAccess;
+}
+
+/** The rights of the user on one folder of a target mailbox. */
+export function folderAccessIn(target: Pick<MailboxTarget, 'folders'>, folderId: string): FolderAccess {
+  return accessToFolder(target.folders, folderId);
+}
+
+/** Top-level folders of a foreign mailbox need mailbox-level write access (own / FULL_ACCESS). */
+export function mayCreateTopLevel(target: Pick<MailboxTarget, 'folders'>): boolean {
+  return target.folders.level !== 'grants';
 }
 
 export type ResolveResult =
@@ -253,7 +277,7 @@ export async function resolveMailbox(session: ImapSession, raw: string, fresh = 
       ok: true,
       target: {
         mailboxId: session.mailboxId, folderName, storedName: await storedNameIn(session.mailboxId, folderName),
-        foreign: null, delimiter: PERSONAL_DELIMITER, rights: OWNER_RIGHTS, writable: true,
+        foreign: null, delimiter: PERSONAL_DELIMITER, folders: OWN_MAILBOX_ACCESS(session.mailboxId),
       },
     };
   }
@@ -265,12 +289,16 @@ export async function resolveMailbox(session: ImapSession, raw: string, fresh = 
     ok: true,
     target: {
       mailboxId: access.mailboxId, folderName: foreign.path, storedName: await storedNameIn(access.mailboxId, foreign.path),
-      foreign: access, delimiter: FOREIGN_DELIMITER, rights: rightsOf(access), writable: !access.readOnly,
+      foreign: access, delimiter: FOREIGN_DELIMITER, folders: await mailboxFolderAccess(session, access, fresh),
     },
   };
 }
 
-/** Resolves a name and loads its folder (with the mailbox row); null when it does not exist / is not accessible. */
+/**
+ * Resolves a name and loads its folder (with the mailbox row) and the user's
+ * rights on it; null when it does not exist or — w3 — is a foreign folder the
+ * user can neither see nor read (reported like a missing mailbox, no oracle).
+ */
 export async function findTargetFolder(session: ImapSession, raw: string, fresh = false) {
   const resolved = await resolveMailbox(session, raw, fresh);
   if (!resolved.ok) return null;
@@ -279,7 +307,10 @@ export async function findTargetFolder(session: ImapSession, raw: string, fresh 
     where: { mailboxId: target.mailboxId, name: target.storedName },
     include: { mailbox: true },
   });
-  return folder ? { ...folder, target } : null;
+  if (!folder) return null;
+  const access = folderAccessIn(target, folder.id);
+  if (!canSeeFolder(access) && !canReadFolder(access)) return null;
+  return { ...folder, target, access };
 }
 
 /** Client (decoded) name of a target folder after a rename etc. */
@@ -290,43 +321,55 @@ export function clientNameOf(target: Pick<MailboxTarget, 'foreign'>, folderName:
 // ─── The selected foreign mailbox ────────────────────────────────────────────
 
 /**
- * Re-checks the permission for a selected foreign mailbox. A downgrade to
- * read-only makes the view read-only; a revocation closes the mailbox
- * (`* OK [CLOSED]`, RFC 7162 §3.2.11 / RFC 9051 §7.1) and returns false.
+ * Re-checks the permission for a selected foreign folder. A downgrade to
+ * read-only makes the view read-only; a revocation of the right to read the
+ * folder closes it (`* OK [CLOSED]`, RFC 7162 §3.2.11 / RFC 9051 §7.1) and
+ * returns false.
  */
 export async function revalidateSelected(session: ImapSession, fresh: boolean): Promise<boolean> {
   const view = session.selected;
   if (!view?.foreign) return true;
-  let access: AccessibleMailbox | undefined;
+  let folderAccess: FolderAccess | null = null;
   try {
-    access = (await foreignMailboxes(session, fresh)).find((a) => a.mailboxId === view.mailboxId && a.kind === view.foreign!.kind);
+    const access = (await foreignMailboxes(session, fresh)).find((a) => a.mailboxId === view.mailboxId && a.kind === view.foreign!.kind);
+    if (access) folderAccess = accessToFolder(await mailboxFolderAccess(session, access, fresh), view.folderId);
   } catch (err) {
     // Fail closed: no access without a successful check.
     log.warn({ err, id: session.id }, 'IMAP: shared mailbox permission check failed');
-    access = undefined;
+    folderAccess = null;
   }
   if (session.selected !== view) return true;
-  if (!access) {
+  if (!folderAccess || !canReadFolder(folderAccess)) {
     session.selected = null;
     if (session.state === 'SELECTED') session.state = 'AUTHENTICATED';
     sendUntagged(session, 'OK [CLOSED] Access to the selected mailbox was revoked');
     log.info({ id: session.id, mailboxId: view.mailboxId }, 'IMAP: selected shared mailbox closed — permission revoked');
     return false;
   }
-  if (access.readOnly && !view.noWrite) {
+  view.access = folderAccess;
+  if (!hasAnyWriteRight(folderAccess) && !view.noWrite) {
     view.noWrite = true;
     view.readOnly = true;
   }
   return true;
 }
 
-/** Fresh permission check before a write to the selected mailbox (true for the own mailbox). */
-export async function selectedWritable(session: ImapSession): Promise<boolean> {
+/** The user's current rights on the selected folder (the own mailbox: everything). */
+export function viewAccess(view: NonNullable<ImapSession['selected']>): FolderAccess {
+  return view.access ?? { level: 'owner', rights: 0 };
+}
+
+/**
+ * Fresh permission check before a write to the selected folder: its current
+ * rights, or null when the view is read-only (EXAMINE, no write right) or the
+ * permission is gone.
+ */
+export async function selectedWriteAccess(session: ImapSession): Promise<FolderAccess | null> {
   const view = session.selected;
-  if (!view) return false;
-  if (!view.foreign) return !view.readOnly;
-  if (!(await revalidateSelected(session, true))) return false;
-  return session.selected === view && !view.noWrite && !view.readOnly;
+  if (!view) return null;
+  if (view.foreign && !(await revalidateSelected(session, true))) return null;
+  if (session.selected !== view || view.noWrite || view.readOnly) return null;
+  return viewAccess(view);
 }
 
 export const NOPERM = '[NOPERM] Permission denied';

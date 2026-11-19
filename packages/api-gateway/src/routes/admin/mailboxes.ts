@@ -11,6 +11,7 @@ import { quotaLevelError, quotaLevelPatchError } from '../../lib/quota-levels.js
 import { publishPermissionChange } from '../../lib/permission-events.js';
 import { addressCollision } from '../../lib/address-collision.js';
 import { getMailFlowHandler, putMailFlowHandler } from '../../lib/mail-flow-admin.js';
+import { listFolderPermissionsHandler, getFolderPermissionsHandler, putFolderPermissionsHandler } from '../../lib/folder-permissions-admin.js';
 
 export const adminMailboxesRouter: RouterType = Router();
 // v6 RBAC: area 'recipients'. HELP_DESK may additionally PUT /:id (password
@@ -455,6 +456,11 @@ adminMailboxesRouter.post('/:id/revoke-sessions', async (req: Request, res: Resp
 // ── 9.4: per-mailbox mail flow (lib/mail-flow-admin.ts) ─────────────────────
 adminMailboxesRouter.get('/:id/mail-flow', getMailFlowHandler('user'));
 adminMailboxesRouter.put('/:id/mail-flow', putMailFlowHandler('user'));
+
+// ── w3: folder permissions (lib/folder-permissions-admin.ts) ────────────────
+adminMailboxesRouter.get('/:id/folder-permissions', listFolderPermissionsHandler('user'));
+adminMailboxesRouter.get('/:id/folders/:folderId/permissions', getFolderPermissionsHandler('user'));
+adminMailboxesRouter.put('/:id/folders/:folderId/permissions', requireRecipientsWrite, putFolderPermissionsHandler('user'));
 
 // ── Mailbox delegation (user mailbox access rights) ─────────────────────────
 

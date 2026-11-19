@@ -6,14 +6,14 @@
  * Subscriptions are not stored: every existing mailbox counts as subscribed
  * (SUBSCRIBE/UNSUBSCRIBE are accepted as no-ops).
  */
-import { prisma, type AccessibleMailbox } from '@coremail/storage';
+import { prisma, listableFolders, canReadFolder, type AccessibleMailbox } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import { tokenString, type Token } from '../server/tokenizer.js';
 import { type ImapSession, sendOk, sendNo, sendBad, sendUntagged } from '../session/state.js';
 import { displayName, displayNames, formatName, fromClient, toClient } from './mailbox-name.js';
 import {
-  FOREIGN_DELIMITER, clientNameOf, decodeClientName, findTargetFolder, foreignClientName, listedForeignMailboxes,
-  parseForeignName, prefixOf,
+  FOREIGN_DELIMITER, NOPERM, clientNameOf, decodeClientName, findTargetFolder, foreignClientName, listedForeignMailboxes,
+  mailboxFolderAccess, parseForeignName, prefixOf,
 } from './namespaces.js';
 
 const DELIMITER = '.';
@@ -151,18 +151,28 @@ export async function listEntries(session: ImapSession, withForeign = true): Pro
     log.warn({ err, id: session.id }, 'IMAP LIST: shared mailbox permissions unavailable');
   }
   if (foreign.length > 0) {
-    const rows: Array<FolderRow & { mailboxId: string }> = await prisma.folder.findMany({
+    const rows: Array<FolderRow & { mailboxId: string; parentId: string | null }> = await prisma.folder.findMany({
       where: { mailboxId: { in: foreign.map((a) => a.mailboxId) } },
-      select: { id: true, name: true, mailboxId: true },
+      select: { id: true, name: true, mailboxId: true, parentId: true },
       orderBy: { name: 'asc' },
     });
     for (const access of foreign) {
       const folders = rows.filter((r) => r.mailboxId === access.mailboxId);
+      // w3: folder permissions — the visible folders; their path (and visible
+      // folders without the read right) as non-selectable entries
+      let listable: Map<string, boolean>;
+      try {
+        listable = new Map(listableFolders(folders, await mailboxFolderAccess(session, access)).map((l) => [l.id, l.noSelect]));
+      } catch (err) {
+        log.warn({ err, id: session.id, mailboxId: access.mailboxId }, 'IMAP LIST: folder permissions unavailable');
+        continue;
+      }
       const shown = displayNames(folders.map((f) => f.name));
       for (const f of folders) {
+        if (!listable.has(f.id)) continue;
         const name = foreignClientName(access, shown.get(f.name) ?? f.name);
         if (name === null || entries.has(name)) continue;
-        entries.set(name, { name, delimiter: FOREIGN_DELIMITER, folderId: f.id, special: null });
+        entries.set(name, { name, delimiter: FOREIGN_DELIMITER, folderId: listable.get(f.id) ? null : f.id, special: null });
       }
     }
   }
@@ -408,6 +418,8 @@ export async function runStatus(session: ImapSession, tag: string, args: string[
   // v9.1: also folders of shared / delegated mailboxes (current permission required).
   const folder = await findTargetFolder(session, args[0]);
   if (!folder) { sendNo(session, tag, '[NONEXISTENT] Mailbox does not exist'); return false; }
+  // w3: the counts of a folder need the "r" right (RFC 4314 §4)
+  if (!canReadFolder(folder.access)) { sendNo(session, tag, NOPERM); return false; }
   // RFC 7162 §3.1: STATUS HIGHESTMODSEQ is a CONDSTORE-enabling command.
   if (items.includes('HIGHESTMODSEQ')) session.condstoreEnabled = true;
   // The response names the mailbox the way the client asked for it.

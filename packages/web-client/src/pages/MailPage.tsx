@@ -25,6 +25,7 @@ import {
   type AccessibleMailboxEntry,
 } from '../lib/mailboxContext.js';
 import { MAIL_VIEW_COLUMN_CLASS, MAIL_VIEW_ROOT_CLASS } from '../lib/mailLayout.js';
+import { defaultFolderOf } from '../lib/folderTree.js';
 
 // ── Persistent panel widths ───────────────────────────────────────────────────
 const PANEL_STORAGE_KEY = 'coremail:panel-widths';
@@ -133,10 +134,11 @@ export function MailPage() {
 
   // Auto-select INBOX on first load / after switching the mailbox. Reads the store:
   // a deep link (useMailDeepLink, same commit) may just have selected a folder.
+  // w3: a folder-scoped mailbox may show INBOX only as a path entry (lib/folderTree.ts).
   useEffect(() => {
     if (!useUiStore.getState().selectedFolderId && folders?.length) {
-      const inbox = folders.find((f) => f.name === 'INBOX');
-      if (inbox) setSelectedFolder(inbox.id, 'tree', useUiStore.getState().activeMailbox);
+      const first = defaultFolderOf(folders);
+      if (first) setSelectedFolder(first.id, 'tree', useUiStore.getState().activeMailbox);
     }
   }, [folders, selectedFolderId, setSelectedFolder]);
 

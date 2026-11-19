@@ -10,7 +10,7 @@ import { useState, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Plus, Users, User, ChevronRight, ChevronDown, EyeOff, CheckCheck, FolderPlus, Pencil,
-  FolderMinus, Eraser, RotateCcw,
+  FolderMinus, Eraser, RotateCcw, Shield,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
@@ -35,18 +35,22 @@ import { RecoverDeletedItemsDialog } from './RecoverDeletedItems.js';
 import { QuotaIndicator } from './QuotaIndicator.js';
 import { OpenSharedMailboxModal } from './OpenSharedMailboxModal.js';
 import { SAFETY_REFETCH_MS } from '../lib/realtimeEvents.js';
+import { folderMenuAccess } from '../lib/folderPermissions.js';
+import { paneRootFolders } from '../lib/folderTree.js';
+import { FolderPermissionsDialog } from './FolderPermissionsDialog.js';
 
 type DialogState =
   | { kind: 'create'; parentId: string | null; parentLabel: string }
   | { kind: 'rename'; folder: FolderType }
+  | { kind: 'permissions'; folder: FolderType }
   | null;
 
 const refOf = (e: AccessibleMailboxEntry): MailboxRef => ({ kind: e.kind, id: e.id });
 const validateName = (v: string) => (/[/\\]/.test(v) ? 'Keine / oder \\ erlaubt' : null);
 
-/** Write item of a context menu: disabled with the read-only tooltip when needed. */
-function writeItem(readOnly: boolean, item: ContextMenuItem): ContextMenuItem {
-  return readOnly ? { ...item, disabled: true, title: READ_ONLY_HINT } : item;
+/** Write item of a context menu: disabled with the read-only tooltip when the action is not allowed. */
+function writeItem(blocked: boolean, item: ContextMenuItem): ContextMenuItem {
+  return blocked ? { ...item, disabled: true, title: READ_ONLY_HINT } : item;
 }
 
 export function SharedMailboxTree() {
@@ -135,6 +139,8 @@ function ForeignMailboxNode({ entry, expanded, onToggle, onHide }: {
   });
   const all = useMemo(() => (folders ?? []).filter((f) => !HIDDEN_FOLDER_NAMES.has(f.name)), [folders]);
   const childrenOf = useMemo(() => buildFolderChildren(all), [all]);
+  // w3: a folder-scoped mailbox may list folders whose parent is not visible — they become roots
+  const roots = useMemo(() => paneRootFolders(systemFoldersOf(all), childrenOf, all), [all, childrenOf]);
   const inbox = all.find((f) => f.name === 'INBOX');
 
   const label = (f: FolderType) => {
@@ -167,8 +173,11 @@ function ForeignMailboxNode({ entry, expanded, onToggle, onHide }: {
     label: t('recover_title'), icon: <RotateCcw size={14} />, onClick: () => setRecoverOpen(true),
   })] : []);
 
+  // w3: per-folder rights (myRights) when the server sends them, else the mailbox read-only flag
+  const accessOf = (f: FolderType | undefined) => folderMenuAccess(f?.myRights, readOnly);
+
   const rootMenu = (): ContextMenuItem[] => [
-    writeItem(readOnly, {
+    writeItem(!accessOf(inbox).createSubfolder, {
       label: 'Neuer Ordner', icon: <FolderPlus size={14} />,
       onClick: () => setDialog({ kind: 'create', parentId: inbox?.id ?? null, parentLabel: title }),
     }),
@@ -179,21 +188,25 @@ function ForeignMailboxNode({ entry, expanded, onToggle, onHide }: {
 
   const folderMenu = (f: FolderType): ContextMenuItem[] => {
     const isSystem = f.isSystem ?? SYSTEM_SET.has(f.name);
+    const access = accessOf(f);
     const items: ContextMenuItem[] = [
-      writeItem(readOnly, {
-        label: t('mark_all_read'), icon: <CheckCheck size={14} />, disabled: f.unreadCount === 0,
+      writeItem(!access.markAllRead, {
+        label: t('mark_all_read'), icon: <CheckCheck size={14} />, disabled: f.noSelect === true || f.unreadCount === 0,
         onClick: () => void run(markAllRead(f.id)),
       }),
       { type: 'divider' },
-      writeItem(readOnly, {
+      writeItem(!access.createSubfolder, {
         label: t('new_subfolder'), icon: <FolderPlus size={14} />,
         onClick: () => setDialog({ kind: 'create', parentId: f.id, parentLabel: label(f) }),
       }),
     ];
+    if (access.permissions) {
+      items.push({ label: 'Berechtigungen…', icon: <Shield size={14} />, onClick: () => setDialog({ kind: 'permissions', folder: f }) });
+    }
     if (!isSystem) {
       items.push(
-        writeItem(readOnly, { label: t('rename'), icon: <Pencil size={14} />, onClick: () => setDialog({ kind: 'rename', folder: f }) }),
-        writeItem(readOnly, {
+        writeItem(!access.manage, { label: t('rename'), icon: <Pencil size={14} />, onClick: () => setDialog({ kind: 'rename', folder: f }) }),
+        writeItem(!access.manage, {
           label: t('delete'), icon: <FolderMinus size={14} />, danger: true,
           onClick: () => {
             const query = confirmFolderDelete(t, `${label(f)} (${title})`, f.id, folders ?? []);
@@ -209,7 +222,7 @@ function ForeignMailboxNode({ entry, expanded, onToggle, onHide }: {
     if (f.name === 'Trash' || f.name === 'Junk') {
       items.push({ type: 'divider' });
       if (f.name === 'Trash') items.push(...recoverItems());
-      items.push(writeItem(readOnly, {
+      items.push(writeItem(!access.empty, {
         label: t('empty_folder'), icon: <Eraser size={14} />, danger: true,
         onClick: () => {
           if (!window.confirm(`${t('empty_folder')}?`)) return;
@@ -250,7 +263,7 @@ function ForeignMailboxNode({ entry, expanded, onToggle, onHide }: {
           indent={indent}
           contextKey={entry.ref}
           mailboxKey={entry.ref}
-          isDragDisabled={readOnly}
+          isDragDisabled={!accessOf(f).manage}
         />
         {children.length > 0 && open && children.map((c) => renderFolder(c, indent + 1))}
       </div>
@@ -295,7 +308,7 @@ function ForeignMailboxNode({ entry, expanded, onToggle, onHide }: {
         <div className="space-y-0.5" role="group" aria-label={title}>
           {isLoading && <p className="pl-8 py-1 text-xs text-fg-subtle">Lade Ordner…</p>}
           {isError && <p role="alert" className="pl-8 py-1 text-xs text-danger-fg">Ordner konnten nicht geladen werden.</p>}
-          {systemFoldersOf(all).map((f) => renderFolder(f, 1))}
+          {roots.map((f) => renderFolder(f, 1))}
           {entry.kind === 'shared' && (
             <QuotaIndicator sharedMailboxId={entry.id} className="pl-8 pr-3 py-1" />
           )}
@@ -322,6 +335,15 @@ function ForeignMailboxNode({ entry, expanded, onToggle, onHide }: {
             await run(api.post(`${base}/folders`, { name, parentId: dialog.parentId }), t('folder_created'));
             setDialog(null);
           }}
+        />
+      )}
+      {dialog?.kind === 'permissions' && (
+        <FolderPermissionsDialog
+          base={base}
+          folderId={dialog.folder.id}
+          folderName={`${label(dialog.folder)} (${title})`}
+          folderLabel={(id) => { const f = all.find((x) => x.id === id); return f ? label(f) : undefined; }}
+          onClose={() => setDialog(null)}
         />
       )}
       {dialog?.kind === 'rename' && (

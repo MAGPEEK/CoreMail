@@ -64,6 +64,19 @@ export interface MailboxSsePayload {
   sharedMailboxId?: string;
 }
 
+/**
+ * Pure (w3): the folder ids of a mailbox change a member may hear about. A
+ * member limited to some folders (folder permissions) gets only those — a
+ * change without folder ids becomes one about the member's folders; undefined
+ * = no limit (forward as published).
+ */
+export function visibleFolderIds(changed: string[] | undefined, allowed: string[] | undefined): string[] | undefined {
+  if (!allowed) return changed;
+  if (!changed) return allowed;
+  const set = new Set(allowed);
+  return changed.filter((id) => set.has(id));
+}
+
 export class SseHub {
   private readonly byUser = new Map<string, Set<SseConnection>>();
   private readonly admins = new Set<SseConnection>();
@@ -147,10 +160,12 @@ export class SseHub {
       return;
     }
     await Promise.all(audience.filter((m) => this.byUser.has(m.userId)).map((m) => {
+      const folderIds = visibleFolderIds(change.folderIds, m.folderIds);
+      if (folderIds && folderIds.length === 0) return undefined; // only folders the member may not read
       const payload: MailboxSsePayload = {
         mailbox: m.mailboxKey,
         kinds: change.kinds,
-        ...(change.folderIds ? { folderIds: change.folderIds } : {}),
+        ...(folderIds ? { folderIds } : {}),
         ...(m.sharedMailboxId ? { sharedMailboxId: m.sharedMailboxId } : {}),
       };
       return this.deliver(m.userId, 'mailbox', payload);
