@@ -14,10 +14,11 @@ test('tabs are Start, Ansicht, Hilfe with German labels', () => {
   assert.deepEqual(CALENDAR_RIBBON.map((t) => t.label), ['Start', 'Ansicht', 'Hilfe']);
 });
 
-test('Start offers the new-event split with Ereignis and E-Mail', () => {
+test('Start offers the new-event split with all event kinds, then E-Mail', () => {
   const c = cmd(base, 'start', 'new')!;
   assert.equal(c.action, 'new-event');
-  assert.deepEqual(c.options!.map((o) => [o.label, o.action]), [['Ereignis', 'new-event'], ['E-Mail', 'new-mail']]);
+  assert.deepEqual(c.options!.map((o) => [o.label, o.action]), [['Ereignis', 'new-event'], ['Besprechung', 'new-meeting'], ['Ganztägiges Ereignis', 'new-allday'], ['E-Mail', 'new-mail']]);
+  assert.deepEqual(c.options!.filter((o) => o.separatorBefore).map((o) => o.id), ['mail'], 'separator only before E-Mail');
 });
 
 test('the pressed view command follows the page view', () => {
@@ -71,7 +72,7 @@ test('parseAction separates parameterised actions', () => {
 });
 
 test('every action of the ribbon is one the page dispatches', () => {
-  const known = new Set(['new-event', 'new-mail', 'today', 'filter', 'share', 'print', 'agenda', 'settings', 'shortcuts', 'about']);
+  const known = new Set(['new-event', 'new-meeting', 'new-allday', 'new-mail', 'today', 'filter', 'share', 'print', 'agenda', 'settings', 'shortcuts', 'about']);
   for (const t of resolveRibbon({ ...base, aboutAvailable: true })) {
     for (const c of t.commands) {
       for (const a of [c.action, ...(c.options ?? []).map((o) => o.action)]) {

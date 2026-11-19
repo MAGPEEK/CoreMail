@@ -10,7 +10,7 @@
 import type { ReactNode } from 'react';
 import {
   Plus, CalendarPlus, Mail, CalendarCheck, Calendar as CalDay, Briefcase, Columns3, LayoutGrid,
-  Filter, Share2, Printer, Clock, Settings, Keyboard, Info, ListTodo,
+  Filter, Share2, Printer, Clock, Settings, Keyboard, Info, ListTodo, Users, Sun,
 } from 'lucide-react';
 import type { CommandGroup, CommandItem } from '../CommandBar.js';
 import {
@@ -19,7 +19,7 @@ import {
 
 export const ICONS: Record<string, React.ElementType> = {
   Plus, CalendarPlus, Mail, CalendarCheck, Calendar: CalDay, Briefcase, Columns3, LayoutGrid,
-  Filter, Share2, Printer, Clock, Settings, Keyboard, Info, ListTodo,
+  Filter, Share2, Printer, Clock, Settings, Keyboard, Info, ListTodo, Users, Sun,
 };
 
 export type RibbonDispatch = (action: CalendarAction, anchor?: HTMLElement) => void;
@@ -46,7 +46,10 @@ function toItem(c: ResolvedCommand, dispatch: RibbonDispatch, popover?: RibbonPo
     ...(isNew ? { placement: 'pinned' as const } : {}),
     ...(action ? { onClick: (anchor: HTMLElement) => dispatch(action, anchor) } : {}),
     ...(options ? {
-      menu: () => options.map((o) => ({ label: o.label, icon: icon(o.icon, 14), onClick: () => dispatch(o.action) })),
+      menu: () => options.flatMap((o) => [
+        ...(o.separatorBefore ? [{ type: 'divider' as const }] : []),
+        { label: o.label, icon: icon(o.icon, 14), onClick: () => dispatch(o.action) },
+      ]),
     } : {}),
   };
 }

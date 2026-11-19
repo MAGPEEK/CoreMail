@@ -275,7 +275,9 @@ export function CalendarPage() {
     if (parsed.kind === 'view') { changeView(parsed.view); return; }
     if (parsed.kind === 'slot') { updatePrefs({ calendar: { slotMinutes: parsed.minutes } }); return; }
     switch (parsed.action) {
-      case 'new-event': setEventDialog({ mode: 'create', defaults: { calendarId: defaultWritableCalId } }); break;
+      // "Besprechung" opened the same form as "Ereignis" before (attendees are part of that form)
+      case 'new-event': case 'new-meeting': setEventDialog({ mode: 'create', defaults: { calendarId: defaultWritableCalId } }); break;
+      case 'new-allday': setEventDialog({ mode: 'create', defaults: { calendarId: defaultWritableCalId, allDay: true } }); break;
       case 'new-mail': openCompose({ mode: 'new' }); navigate('/mail'); break;
       case 'today': handleSelectDate(new Date()); break;
       case 'share': shareCalendar(); break;
