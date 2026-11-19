@@ -29,7 +29,7 @@ import {
 import { excludeOccurrence, isSeriesOccurrence, upsertOccurrence } from '@coremail/core/calendar-exceptions';
 import { expandStoredEvent } from '../lib/recurrence.js';
 import { busyForUser, freeBusyDirectory } from '../lib/calendar-busy.js';
-import { bookRooms, isRoomAttendee, refreshRoomBookings, releaseRooms, type BookedRoom } from '../lib/room-booking.js';
+import { bookRooms, isOrganizerCopy, isRoomAttendee, refreshRoomBookings, releaseRooms, type BookedRoom } from '../lib/room-booking.js';
 import { calendarSchedulingRouter } from './calendar-scheduling.js';
 
 /**
@@ -1090,8 +1090,11 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
     res.status(403).json({ error: 'Private Termine kann nur der Eigentümer ändern' });
     return;
   }
+  // 9.5: an attendee's copy of someone else's meeting changes only itself — no room
+  // (re)booking, no invitation update in the organizer's name
+  const organizerCopy = await isOrganizerCopy(event.organizer, { userId, email: req.apiUser!.email, calendarOwnerId: access.ownerId });
   if (occurrence) {
-    await updateOccurrence(res, event, occurrence, parsed.data, req.apiUser!);
+    await updateOccurrence(res, event, occurrence, parsed.data, req.apiUser!, organizerCopy);
     return;
   }
 
@@ -1147,9 +1150,10 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
     (attendees !== undefined && attendeeKey(newPeople) !== attendeeKey(stored.people));
   const newSequence = event.sequence + (willSendUpdate ? 1 : 0);
 
-  // 9.4: rooms are (re)booked when they, the time or the recurrence changed; removed rooms are released
-  const wantedRooms = parsed.data.rooms?.map((e) => e.toLowerCase()) ?? stored.rooms.map(roomEmail);
-  const roomsTouched = (stored.rooms.length > 0 || wantedRooms.length > 0)
+  // 9.4: rooms are (re)booked when they, the time or the recurrence changed; removed rooms are released.
+  // 9.5: only on the organizer's copy — an attendee's copy keeps the room entries it got
+  const wantedRooms = (organizerCopy ? parsed.data.rooms?.map((e) => e.toLowerCase()) : undefined) ?? stored.rooms.map(roomEmail);
+  const roomsTouched = organizerCopy && (stored.rooms.length > 0 || wantedRooms.length > 0)
     && (parsed.data.rooms !== undefined || datesTouched || rrule !== undefined);
   const attendeesChanged = attendees !== undefined || roomsTouched;
 
@@ -1232,8 +1236,8 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
   });
 
   // v3.18.25 A5: send REQUEST update to the people (with incremented SEQUENCE); a
-  // meeting with rooms only sends nothing (rooms are booked directly)
-  if (willSendUpdate) void notifyAttendees(updated, 'REQUEST');
+  // meeting with rooms only sends nothing (rooms are booked directly); never from an attendee's copy
+  if (willSendUpdate && organizerCopy) void notifyAttendees(updated, 'REQUEST');
 
   announceCalendarChange([event.calendarId], { action: 'update', ids: [id] });
   res.json(updated);
@@ -1257,6 +1261,9 @@ calendarRouter.delete('/events/:id', async (req: Request, res: Response) => {
     res.status(403).json({ error: 'Private Termine kann nur der Eigentümer löschen' });
     return;
   }
+  // 9.5: deleting an attendee's copy of someone else's meeting removes only that copy — the
+  // organizer's room bookings stay, nobody gets a cancellation in the organizer's name
+  const organizerCopy = await isOrganizerCopy(event.organizer, { userId, email: req.apiUser!.email, calendarOwnerId: access.ownerId });
 
   // 9.4: "only this occurrence" → EXDATE on the series, CANCEL for that occurrence
   if (occurrence) {
@@ -1264,20 +1271,23 @@ calendarRouter.delete('/events/:id', async (req: Request, res: Response) => {
     const icalData = view ? excludeOccurrence(event.icalData, occurrence) : null;
     if (!view || !icalData) { res.status(404).json({ error: 'Occurrence not found' }); return; }
     const updated = await prisma.calendarEvent.update({ where: { id }, data: { icalData, sequence: event.sequence + 1 } });
-    // the rooms' bookings get the EXDATE too, so the occurrence's slot is free again
-    await refreshRoomBookings(event.uid, splitAttendees(event.attendees).rooms.map(roomEmail), icalData, event.organizer ?? req.apiUser!.email);
     announceCalendarChange([event.calendarId], { action: 'update', ids: [id] });
-    void notifyAttendees(updated, 'CANCEL', { ...occurrenceFields(view, event), recurrenceId: occurrence });
+    if (organizerCopy) {
+      // the rooms' bookings get the EXDATE too, so the occurrence's slot is free again
+      await refreshRoomBookings(event.uid, splitAttendees(event.attendees).rooms.map(roomEmail), icalData, event.organizer ?? req.apiUser!.email);
+      void notifyAttendees(updated, 'CANCEL', { ...occurrenceFields(view, event), recurrenceId: occurrence });
+    }
     res.json({ ok: true });
     return;
   }
 
   await prisma.calendarEvent.delete({ where: { id } });
   announceCalendarChange([event.calendarId], { action: 'delete', ids: [id] });
-  await releaseRooms(event.uid, splitAttendees(event.attendees).rooms.map(roomEmail), event.organizer ?? req.apiUser!.email);
-
-  // v3.18.25 A5: CANCEL mails to all attendees (with sequence+1)
-  void notifyAttendees({ ...event, sequence: event.sequence + 1 }, 'CANCEL');
+  if (organizerCopy) {
+    await releaseRooms(event.uid, splitAttendees(event.attendees).rooms.map(roomEmail), event.organizer ?? req.apiUser!.email);
+    // v3.18.25 A5: CANCEL mails to all attendees (with sequence+1)
+    void notifyAttendees({ ...event, sequence: event.sequence + 1 }, 'CANCEL');
+  }
 
   res.json({ ok: true });
 });
@@ -1350,7 +1360,8 @@ async function recheckRooms(
  * 9.4: PUT ?occurrence= — change one occurrence (override with RECURRENCE-ID).
  * Text, time, show-as and classification of the occurrence; recurrence, attendees
  * and the reminder belong to the series and are not changed here. A moved
- * occurrence re-checks the series' rooms.
+ * occurrence re-checks the series' rooms — on the organizer's copy only (9.5); an
+ * attendee's copy changes only itself and notifies nobody.
  */
 async function updateOccurrence(
   res: Response,
@@ -1358,6 +1369,7 @@ async function updateOccurrence(
   occurrence: Date,
   data: { [K in keyof z.infer<typeof EventSchema>]?: z.infer<typeof EventSchema>[K] | undefined },
   user: { email: string; domainId?: string },
+  organizerCopy: boolean,
 ): Promise<void> {
   const view = isSeriesOccurrence(event.icalData, occurrence) ? occurrenceView(event, occurrence) : null;
   if (!view) { res.status(404).json({ error: 'Occurrence not found' }); return; }
@@ -1379,14 +1391,14 @@ async function updateOccurrence(
     sequence,
   });
   if (!icalData) { res.status(404).json({ error: 'Occurrence not found' }); return; }
-  const rooms = datesTouched ? await recheckRooms(event, icalData, user) : null;
+  const rooms = datesTouched && organizerCopy ? await recheckRooms(event, icalData, user) : null;
   const updated = await prisma.calendarEvent.update({
     where: { id: event.id },
     data: { icalData: rooms?.icalData ?? icalData, sequence, ...(rooms ? { attendees: rooms.attendees as object[] } : {}) },
   });
   const changed = occurrenceView(updated, occurrence) ?? view;
   announceCalendarChange([event.calendarId], { action: 'update', ids: [event.id] });
-  void notifyAttendees(updated, 'REQUEST', { ...occurrenceFields(changed, updated), recurrenceId: occurrence });
+  if (organizerCopy) void notifyAttendees(updated, 'REQUEST', { ...occurrenceFields(changed, updated), recurrenceId: occurrence });
   res.json({ ...updated, recurrenceId: occurrence.toISOString(), dtStart: changed.dtStart, dtEnd: changed.dtEnd });
 }
 

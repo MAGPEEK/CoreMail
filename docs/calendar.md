@@ -88,7 +88,11 @@ Rooms selected in the event form (`rooms: [addresses]` on `POST`/`PUT /calendar/
 booked when the event is saved — no invitation mail goes to them. Meetings written by an
 ActiveSync phone book their rooms the same way (storage `room-booking.ts`, 9.5 — see
 [activesync.md](activesync.md#calendar-tasks-and-notes-w3)); a booking of a UID belongs to its
-organizer and is never changed or released by another one. The resource settings decide
+organizer and is never changed or released by another one. Only the organizer's copy of a
+meeting books, rebooks or releases rooms and sends invitation updates / cancellations — saved by
+the organizer or by a delegate with write access to the organizer's calendar
+(`isOrganizerCopy`, `api-gateway/src/lib/room-booking.ts`); an attendee who moves or deletes
+their copy changes only that copy. The resource settings decide
 (storage `resource-booking-rules.ts`, used by `room-booking.ts` and the mail path):
 
 | Setting | Effect |
