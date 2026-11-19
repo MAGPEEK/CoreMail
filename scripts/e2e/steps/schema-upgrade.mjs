@@ -16,12 +16,16 @@
 //     tasks_userId_uid_key went missing) → refused, nothing changed — not even the
 //     retired room tables next to it.
 //  C  a dropped column that holds data → still fail-closed next to the retired
-//     room tables (refused, column and room rows kept).
+//     room tables (refused, column, room rows and the room's mailbox kept); the
+//     run with COREMAIL_ALLOW_SCHEMA_DATA_LOSS then removes the room's mailbox too.
 //  D  9.4.0 → current: tasks UNIQUE (userId, uid) over the new optional column
 //     uid is applied without a duplicate check, the tasks are kept.
 //  E  10.0.0: 9.5.x → current with room rows: the retired room tables are dropped
 //     WITHOUT COREMAIL_ALLOW_SCHEMA_DATA_LOSS, after the mandatory pre-migration
-//     dump (which holds the room rows); tables and enum gone, other data kept.
+//     dump (which holds the room rows); the room's own owner-less mailbox row
+//     with its folder, message and attachment is deleted after the dump (a
+//     user's mailbox a room row points at, and other mailboxes, are kept);
+//     tables and enum gone, other data kept.
 import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -93,6 +97,25 @@ function insertRoom(db) {
   ].join(' '));
 }
 
+/**
+ * 10.0 lead decision: the room's own mailbox row (with a folder, a message and an
+ * attachment) is deleted with the room. A second room points at a USER's mailbox
+ * (drifted data) — that mailbox must survive; so must an unrelated owner-less one.
+ */
+function insertRoomMailboxes(db) {
+  psql(db, [
+    'SET session_replication_role = replica;',
+    `INSERT INTO mailboxes(id) VALUES ('mb-room');`,
+    `INSERT INTO mailboxes(id,"userId") VALUES ('mb-user','user1');`,
+    `INSERT INTO mailboxes(id) VALUES ('mb-orphan');`,
+    `INSERT INTO folders(id,"mailboxId",name,"displayName") VALUES ('f-room','mb-room','INBOX','Posteingang'),('f-user','mb-user','INBOX','Posteingang');`,
+    `INSERT INTO messages(id,"folderId",uid,"modSeq",date) VALUES ('m-room','f-room',1,1,now()),('m-user','f-user',1,1,now());`,
+    `INSERT INTO attachments(id,"messageId",filename,"mimeType",size,sha256,"storagePath") VALUES ('a-room','m-room','plan.pdf','application/pdf',1,'00','attachments/m-room/00');`,
+    `UPDATE resource_mailboxes SET "mailboxId" = 'mb-room' WHERE id = 'r1';`,
+    `INSERT INTO resource_mailboxes(id,email,"displayName","domainId","delegateIds","updatedAt","mailboxId") VALUES ('r2','beamer@e2e-upgrade.test','Beamer','d1','{}',now(),'mb-user');`,
+  ].join(' '));
+}
+
 function schemaSync(db, env = {}) {
   return inApp('/usr/local/bin/coremail-schema-sync', {
     DATABASE_URL: urlFor(db), MAX_ATTEMPTS: '3', COREMAIL_SCHEMA_BACKUP_DIR: BACKUP_DIR,
@@ -158,12 +181,20 @@ export async function run() {
       psql(db, 'ALTER TABLE tasks ADD COLUMN e2e_extra text');
       psql(db, `SET session_replication_role = replica; INSERT INTO tasks(id,"userId",subject,"updatedAt",e2e_extra) VALUES ('t1','user1','a',now(),'keep-me')`);
       insertRoom(db);
+      insertRoomMailboxes(db);
       const r = schemaSync(db);
       assert(r.code !== 0, 'schema-sync applied a destructive change without COREMAIL_ALLOW_SCHEMA_DATA_LOSS');
       assert(/would DELETE DATA/.test(r.out), `no data-loss refusal: ${r.out.slice(-500)}`);
       assert(psql(db, 'SELECT e2e_extra FROM tasks') === 'keep-me', 'column data lost');
       assert(tableCount(db, ROOM_TABLES) === 3 && psql(db, 'SELECT count(*) FROM resource_bookings') === '2', 'room tables dropped by a refused update');
-      return 'refused, column, data and room rows kept';
+      assert(psql(db, 'SELECT count(*) FROM mailboxes') === '3' && psql(db, 'SELECT count(*) FROM messages') === '2', 'room mailbox deleted by a refused update');
+      // the operator's opt-in: the room mailbox goes with the room tables on this path too
+      const allowed = schemaSync(db, { COREMAIL_ALLOW_SCHEMA_DATA_LOSS: 'true' });
+      assert(allowed.code === 0, `opt-in run exit ${allowed.code}: ${allowed.out.slice(-600)}`);
+      assert(/Removed the mailboxes of the former room\/equipment mailboxes .*: 1 mailbox\(es\)/.test(allowed.out), `no clean-up on the opt-in path: ${allowed.out.slice(-600)}`);
+      assert(psql(db, `SELECT string_agg(id, ',' ORDER BY id) FROM mailboxes`) === 'mb-orphan,mb-user', 'wrong mailboxes deleted on the opt-in path');
+      assert(tableCount(db, ROOM_TABLES) === 0, 'room tables still present after the opt-in run');
+      return 'refused, column, data and room rows kept; the opt-in run removed the room mailbox';
     });
 
     await check('schema-upgrade: 9.4.0 → current — tasks UNIQUE (userId, uid) over the new optional column is applied, tasks kept', async () => {
@@ -185,18 +216,28 @@ export async function run() {
       freshDb(db, OLD_SCHEMA_9_5);
       insertTasks(db);
       insertRoom(db);
+      insertRoomMailboxes(db);
       inApp(`rm -rf ${BACKUP_DIR}`);
       const r = schemaSync(db);   // without COREMAIL_ALLOW_SCHEMA_DATA_LOSS
       assert(r.code === 0, `schema-sync exit ${r.code}: ${r.out.slice(-800)}`);
       for (const t of ROOM_TABLES) assert(new RegExp(`Retiring table ${t} \\(\\d+ rows\\)`).test(r.out), `${t} not logged as retired: ${r.out.slice(-600)}`);
+      assert(/Removed the mailboxes of the former room\/equipment mailboxes \(retired table resource_mailboxes\): 1 mailbox\(es\), 1 folder\(s\), 1 message\(s\)/.test(r.out),
+        `room mailbox clean-up not logged: ${r.out.slice(-600)}`);
+      assert(r.out.indexOf('Dump complete') < r.out.indexOf('Removed the mailboxes'), 'clean-up ran before the dump');
       assert(/retired tables dropped/.test(r.out), `no retirement result: ${r.out.slice(-400)}`);
       assert(tableCount(db, ROOM_TABLES) === 0, 'room tables still present');
+      assert(psql(db, `SELECT string_agg(id, ',' ORDER BY id) FROM mailboxes`) === 'mb-orphan,mb-user', 'wrong mailboxes deleted');
+      assert(psql(db, `SELECT string_agg(id, ',' ORDER BY id) FROM folders`) === 'f-user', 'room folder kept or user folder lost');
+      assert(psql(db, `SELECT string_agg(id, ',' ORDER BY id) FROM messages`) === 'm-user', 'room message kept or user message lost');
+      assert(psql(db, 'SELECT count(*) FROM attachments') === '0', 'room attachment row kept');
       assert(psql(db, `SELECT count(*) FROM pg_type WHERE typname = 'ResourceType'`) === '0', 'enum ResourceType still present');
       assert(psql(db, 'SELECT count(*) FROM tasks') === '2', 'tasks lost');
       const files = dumps();
       assert(files.length === 1, `expected one pre-migration dump, got ${files.join(', ')}`);
       const inDump = inApp(`zcat ${BACKUP_DIR}/${files[0]} | grep -c -E "^COPY public\\.resource_(mailboxes|calendars|bookings) "`);
       assert(inDump.out.trim() === '3', `dump does not hold the room tables: ${inDump.out.slice(-200)}`);
+      const roomMailboxInDump = inApp(`zcat ${BACKUP_DIR}/${files[0]} | grep -c -E "^(mb-room|m-room)[[:space:]]"`);
+      assert(roomMailboxInDump.out.trim() === '2', `dump does not hold the room mailbox / message: ${roomMailboxInDump.out.slice(-200)}`);
       const again = schemaSync(db);
       assert(again.code === 0 && /Schema applied \(attempt 1/.test(again.out), `re-run: ${again.out.slice(-300)}`);
       return `room tables retired, dump ${files[0]}`;

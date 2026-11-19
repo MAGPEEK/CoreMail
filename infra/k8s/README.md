@@ -221,9 +221,11 @@ the right owner or use `objectStorage.filesystem.existingClaim`.
   duplicates stop the rollout with the table and the query to find them. The
   10.0.0 room/equipment tables (`resource_mailboxes`, `resource_calendars`,
   `resource_bookings`) are **retired**: dropped without `allowDataLoss`, but only
-  after the mandatory pre-migration dump — set `app.schemaSync.backupClaim` (or
-  `app.schemaSync.skipBackup=true` after your own backup) for the 9.5 → 10.0
-  rollout, otherwise the init container stops without changes. Any
+  after the mandatory pre-migration dump (the rooms' own mailboxes with their
+  folders and messages are deleted with them) — set `app.schemaSync.backupClaim`
+  (or `app.schemaSync.skipBackup=true` after your own backup) for the 9.5 → 10.0
+  rollout when rooms exist, otherwise the init container stops without changes
+  and its log names these two values. Any
   other warning (dropped table/column with data, type change, removed enum
   value) fails the init container and nothing is changed. After a backup, set
   `app.schemaSync.allowDataLoss=true` plus either `app.schemaSync.backupClaim`

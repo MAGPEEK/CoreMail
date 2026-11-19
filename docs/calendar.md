@@ -91,8 +91,9 @@ CoreMail 10.0.0 removed room and equipment mailboxes completely: no resource mai
 bookings, no room picker in the event form, no `GET /calendar/rooms`, no `/admin/resources`.
 A former room address is an unknown recipient (550 5.1.1). An attendee with
 `CUTYPE=ROOM` / `RESOURCE` written by another client (e.g. a room of another organisation) is an
-ordinary attendee: it is stored and invited like any other. The room tables are dropped by
-schema-sync after its pre-migration dump — see [changes/remove-resources.md](changes/remove-resources.md)
+ordinary attendee: it is stored and invited like any other. The room tables — and the rooms'
+own mailbox rows with their folders and messages — are removed by schema-sync after its
+pre-migration dump — see [changes/remove-resources.md](changes/remove-resources.md)
 for the upgrade notes.
 
 ### Reminders

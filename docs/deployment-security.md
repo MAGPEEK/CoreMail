@@ -73,6 +73,10 @@ runs `coremail-schema-sync` (`infra/docker/schema-sync.sh`):
      with its row count; the pre-migration dump is **mandatory** (as in step 3:
      no dump → the start stops, nothing changed; `COREMAIL_SCHEMA_BACKUP=skip`
      if you made your own backup) and the push runs only after it succeeded.
+     Between dump and push the rooms' own owner-less mailbox rows (with their
+     folders, messages and attachments) are deleted in one transaction and
+     counted in the log; their stored objects stay unreferenced in the object
+     store.
    - **Anything else** (dropped table/column that still has rows, type change,
      removed enum value, a warning schema-sync does not recognise): the start
      **stops**, nothing is changed, and the log says what to do. Before, such

@@ -409,6 +409,64 @@ test('9.5 review: an attendee\'s copy changes only itself — no iMIP in the org
   assert.deepEqual(notified, [], 'no REQUEST / CANCEL sent from the attendee\'s copy');
 });
 
+/** notifyAttendees runs fire-and-forget: wait until no new organizer lookup arrives for 30 ms. */
+async function notifiedSettled(): Promise<void> {
+  let seen = -1;
+  for (let i = 0; i < 50 && seen !== notified.length; i++) {
+    seen = notified.length;
+    await new Promise((r) => setTimeout(r, 30));
+  }
+}
+
+test('9.5 review (10.0 kept): a delegate with WRITE on the organizer\'s calendar still sends the update and the cancellation', async () => {
+  notified.length = 0;
+  // bob's own meeting in bob's calendar, shared WRITE with alice
+  const own = storedMeeting('bob-1', 'calBob', 'bob@example.com', ['carl@ext.test'], '2026-12-22T09:00:00Z');
+  const moved = await call('PUT', `/events/${own.id}`, { dtStart: '2026-12-22T13:00:00.000Z', dtEnd: '2026-12-22T14:00:00.000Z' });
+  assert.equal(moved.status, 200);
+  await notifiedSettled();
+  const afterUpdate = notified.length;
+  assert.ok(afterUpdate > 0, 'REQUEST update sent');
+  assert.ok(notified.every((w) => w['email'] === 'bob@example.com'), 'in bob\'s name');
+  assert.equal((await call('DELETE', `/events/${own.id}`)).status, 200);
+  await notifiedSettled();
+  assert.ok(notified.length > afterUpdate, 'CANCEL sent');
+  assert.ok(notified.every((w) => w['email'] === 'bob@example.com'), 'in bob\'s name');
+});
+
+test('10.0: a CUTYPE=ROOM attendee of another client is an ordinary attendee — kept, invited, no crash', async () => {
+  notified.length = 0;
+  const s = new Date('2026-12-23T09:00:00Z');
+  const attendees = [
+    { email: 'carl@ext.test', cn: 'Carl', partstat: 'NEEDS-ACTION', role: 'REQ-PARTICIPANT', rsvp: true },
+    { email: 'room-7@ext.test', cn: 'Room 7', partstat: 'ACCEPTED', role: 'NON-PARTICIPANT', rsvp: false, cutype: 'ROOM' },
+  ];
+  const row = {
+    id: 'own-room', calendarId: 'cal1', uid: 'own-room@example.com', summary: 'Review', description: '', location: '',
+    dtStart: s, dtEnd: new Date(s.getTime() + 3_600_000), allDay: false, recurring: false, rrule: null, classification: 'PUBLIC',
+    showAs: 'BUSY', status: 'CONFIRMED', sequence: 0, organizer: 'alice@example.com', attendees,
+    icalData: buildVCalendar({ uid: 'own-room@example.com', summary: 'Review', start: s, end: new Date(s.getTime() + 3_600_000),
+      organizer: { email: 'alice@example.com' }, attendees }),
+    createdAt: new Date(), updatedAt: new Date(),
+  };
+  events.push(row);
+  const moved = await call('PUT', `/events/${row.id}`, { dtStart: '2026-12-23T13:00:00.000Z', dtEnd: '2026-12-23T14:00:00.000Z' });
+  assert.equal(moved.status, 200);
+  assert.equal(row.sequence, 1);
+  assert.deepEqual((row.attendees as Array<{ email: string }>).map((a) => a.email), ['carl@ext.test', 'room-7@ext.test'], 'attendee list unchanged');
+  const main = parseCalendarObject(String(row.icalData))!.main;
+  assert.deepEqual(main.attendees.map((a) => [a.email, a.cutype]), [['carl@ext.test', 'INDIVIDUAL'], ['room-7@ext.test', 'ROOM']]);
+  await notifiedSettled();
+  assert.ok(notified.length > 0 && notified.every((w) => w['email'] === 'alice@example.com'), 'the update goes out (room attendee included)');
+  // the webmail form sends the attendee list without CUTYPE — the calendar object keeps it
+  const edited = await call('PUT', `/events/${row.id}`, {
+    attendees: [{ email: 'carl@ext.test', cn: 'Carl' }, { email: 'room-7@ext.test', cn: 'Room 7', partstat: 'ACCEPTED' }],
+  });
+  assert.equal(edited.status, 200);
+  const kept = parseCalendarObject(String(row.icalData))!.main.attendees.find((a) => a.email === 'room-7@ext.test');
+  assert.equal(kept?.cutype, 'ROOM');
+});
+
 test('10.0: rooms are gone — a `rooms` field is ignored and the room routes answer 404', async () => {
   const created = await call('POST', '/events', {
     calendarId: 'cal1', summary: 'Jour fixe', dtStart: '2026-12-07T09:00:00.000Z', dtEnd: '2026-12-07T10:00:00.000Z',

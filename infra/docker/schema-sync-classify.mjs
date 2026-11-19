@@ -19,7 +19,9 @@
 // schema-sync writes its pre-migration dump FIRST (mandatory, like
 // COREMAIL_ALLOW_SCHEMA_DATA_LOSS) and logs every retired table; only a table
 // on that list qualifies, and only when every other warning is a safe unique
-// constraint.
+// constraint (and the database schema name is a plain identifier). Data of a
+// retired table that lives in kept tables (RETIREMENT_CLEANUP: the room
+// mailboxes' own mailbox rows) is deleted after the dump, before the drop.
 //
 // EVERY other warning — dropped table ("You are about to drop the `x` table,
 // which is not empty (N rows)."), dropped column ("You are about to drop the
@@ -45,6 +47,7 @@
 //   verdict<TAB>safe|retire|unsafe|none
 //   unique<TAB><table><TAB><col,col><TAB><guard SQL><TAB><SQL returning the number of duplicate groups>
 //   retired<TAB><table><TAB><rows><TAB><why the table is retired>
+//   cleanup<TAB><table><TAB><what><TAB><SQL deleting it, answering a one-line count summary>
 //   unsafe<TAB><warning text>
 // "safe" = only new unique constraints; "retire" = retired tables (and maybe new
 // unique constraints); "none" = no warning bullet recognised (schema-sync treats
@@ -70,6 +73,33 @@ export const RETIRED_TABLES = Object.freeze({
 
 const q = (id) => `"${id}"`;
 const lit = (id) => `'${id}'`;
+
+/**
+ * SQL: deletes the mailbox rows of the room/equipment mailboxes (resource_mailboxes.mailboxId)
+ * — their folders, messages, attachments, delegates and folder permissions follow through
+ * the ON DELETE CASCADE foreign keys. Only owner-less rows (no user, no shared mailbox) are
+ * touched. One statement = one transaction; it answers "<n> mailbox(es), <n> folder(s),
+ * <n> message(s)" (counted on the statement's snapshot, i.e. before the delete). Run again
+ * it deletes nothing (idempotent). The raw-message / attachment objects stay in the object
+ * store, unreferenced (no row points at them, so no API can serve them).
+ */
+export function roomMailboxCleanupSql(schema) {
+  const t = (table) => `${q(schema)}.${q(table)}`;
+  const doomed = `SELECT m."id" FROM ${t('mailboxes')} m JOIN ${t('resource_mailboxes')} r ON r."mailboxId" = m."id" WHERE m."userId" IS NULL AND m."sharedBoxId" IS NULL`;
+  const folders = `SELECT f."id" FROM ${t('folders')} f WHERE f."mailboxId" IN (SELECT "id" FROM doomed)`;
+  return `WITH doomed AS (${doomed}), gone AS (DELETE FROM ${t('mailboxes')} WHERE "id" IN (SELECT "id" FROM doomed) RETURNING "id") `
+    + `SELECT (SELECT count(*) FROM gone) || ' mailbox(es), ' || (SELECT count(*) FROM (${folders}) AS fo) || ' folder(s), ' `
+    + `|| (SELECT count(*) FROM ${t('messages')} WHERE "folderId" IN (${folders})) || ' message(s)'`;
+}
+
+/**
+ * Data of a retired table that lives in tables CoreMail keeps — removed after the
+ * pre-migration dump and BEFORE the push drops the table (schema-sync.sh). 10.0.0: the
+ * room/equipment mailboxes' own mailbox rows, which would otherwise stay without owner.
+ */
+export const RETIREMENT_CLEANUP = Object.freeze({
+  resource_mailboxes: Object.freeze({ what: 'mailboxes of the former room/equipment mailboxes', sql: roomMailboxCleanupSql }),
+});
 
 /** Splits Prisma's output into warning bullets ("•" lines plus their continuation lines). */
 export function parseWarnings(text) {
@@ -151,8 +181,14 @@ export function guardSql(schema, table, optional) {
  */
 export function classifyWarning(text, schema = 'public', optionalColumns = new Map()) {
   const drop = DROP_TABLE_RE.exec(text.trim());
-  if (drop && Object.hasOwn(RETIRED_TABLES, drop[1])) {
-    return { kind: 'retired', table: drop[1], rows: Number(drop[2]), reason: RETIRED_TABLES[drop[1]] };
+  // The clean-up SQL quotes the schema name — an unusual one is not auto-applied.
+  if (drop && Object.hasOwn(RETIRED_TABLES, drop[1]) && IDENT.test(schema)) {
+    const table = drop[1];
+    const cleanup = Object.hasOwn(RETIREMENT_CLEANUP, table) ? RETIREMENT_CLEANUP[table] : null;
+    return {
+      kind: 'retired', table, rows: Number(drop[2]), reason: RETIRED_TABLES[table],
+      ...(cleanup ? { cleanup: { what: cleanup.what, sql: cleanup.sql(schema) } } : {}),
+    };
   }
   const m = UNIQUE_RE.exec(text.trim());
   if (m) {
@@ -187,7 +223,10 @@ export function classify(output, schema = 'public', optionalColumns = new Map())
 function formatItem(i) {
   const flat = (s) => String(s).replace(/[\t\n]/g, ' ');
   if (i.kind === 'unique') return `unique\t${i.table}\t${i.columns.join(',')}\t${i.guard}\t${i.sql}`;
-  if (i.kind === 'retired') return `retired\t${i.table}\t${i.rows}\t${flat(i.reason)}`;
+  if (i.kind === 'retired') {
+    const line = `retired\t${i.table}\t${i.rows}\t${flat(i.reason)}`;
+    return i.cleanup ? `${line}\ncleanup\t${i.table}\t${flat(i.cleanup.what)}\t${flat(i.cleanup.sql)}` : line;
+  }
   return `unsafe\t${flat(i.text)}`;
 }
 

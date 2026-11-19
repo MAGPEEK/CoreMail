@@ -36,7 +36,12 @@ behaviour (mail to room addresses is refused).
   (`infra/docker/schema-sync-classify.mjs`: the three room tables) are dropped without
   `COREMAIL_ALLOW_SCHEMA_DATA_LOSS`, but only when every other warning is a safe new unique
   constraint, each table is logged with its row count, and only after the **mandatory**
-  pre-migration dump succeeded. Any other data loss stays fail-closed.
+  pre-migration dump succeeded. Data of a retired table kept in other tables
+  (`RETIREMENT_CLEANUP`: the rooms' own owner-less mailbox rows with their folders, messages
+  and attachments) is deleted after the dump and before the drop, in one transaction — also on
+  the `COREMAIL_ALLOW_SCHEMA_DATA_LOSS` path. Any other data loss stays fail-closed. Without a
+  dump location the start stops with the Helm values to set (`app.schemaSync.backupClaim` /
+  `skipBackup`).
 
 ## Upgrade notes (9.5.x → 10.0.0)
 
@@ -55,8 +60,14 @@ behaviour (mail to room addresses is refused).
    calendar shared with the people who book it) or a **shared calendar** per room, and let
    attendees check it with the scheduling assistant / free-busy. There is no automatic
    accept/decline any more.
-4. The empty mailbox rows that belonged to rooms stay (unreachable, no owner) — the same state a
-   room deleted in 9.x left behind.
+4. **The rooms' own mailboxes are deleted with them.** After the dump and before the tables are
+   dropped, schema-sync deletes the mailbox rows that `resource_mailboxes` points at — only
+   owner-less ones (no user, no shared mailbox) — together with their folders, messages and
+   attachments (one transaction; the log shows the counts; a failure stops the start with
+   nothing changed). The raw messages / attachment files of those mailboxes stay in the object
+   store without any row pointing at them: no API can serve them, they only take space (they
+   are in no backup either). A mailbox row left behind by a room deleted in 9.x (no
+   `resource_mailboxes` row any more) is not touched.
 5. Clients of the removed APIs (`/api/v1/admin/resources`, `/api/v1/calendar/rooms`, EMS
    `resource-mailboxes`) get 404.
 
@@ -64,10 +75,19 @@ behaviour (mail to room addresses is refused).
 
 - `infra/docker/schema-sync-classify.test.mjs`: retired drop → `retire`; retired + unique →
   `retire`; retired next to any other drop / removed enum value / unexecutable change → `unsafe`;
-  look-alike, qualified or prototype table names are not retired; CLI `retired` lines.
+  look-alike, qualified or prototype table names are not retired; CLI `retired` lines; the
+  `cleanup` line of `resource_mailboxes` (one schema-qualified statement deleting only
+  owner-less room mailboxes; the FK cascade chain mailbox → folders → messages → attachments is
+  checked against schema.prisma); an unusual database schema name is not auto-applied.
 - e2e `schema-upgrade`: a 9.5.x database with room rows is upgraded without opt-in, every table
-  logged, dump written first (holds the room rows), tables + enum gone, other data kept; with a
-  duplicate unique constraint or a dropped column next to it, nothing is changed.
+  logged, dump written first (holds the room rows and the room's mailbox), the room's own
+  mailbox with folder / message / attachment deleted while a user's mailbox a room row points at
+  and an unrelated owner-less mailbox are kept, tables + enum gone, other data kept; with a
+  duplicate unique constraint or a dropped column next to it, nothing is changed (room mailbox
+  kept); the opt-in run then removes the room mailbox too.
+- api-gateway calendar route: a delegate with WRITE on the organizer's calendar still sends the
+  update / cancellation; a meeting with a `CUTYPE=ROOM` attendee is moved without error, the
+  attendee keeps its entry and is notified like any other.
 - e2e `rest` (`/calendar/rooms` → 404), `smtp` (`/admin/resources` → 404, room address → 550
   5.1.1); room checks removed from `eas-pim` and `smtp`.
 - Unit: smtp-server (RCPT 5.1.1 for a former room address, `resourceReply` lends no auth, store
