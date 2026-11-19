@@ -85,7 +85,9 @@ free/busy access.
 domain (BCP → Ressourcen) with capacity, location, `available` for the slot and their busy time.
 
 Rooms selected in the event form (`rooms: [addresses]` on `POST`/`PUT /calendar/events`) are
-booked when the event is saved — no invitation mail goes to them. Meetings written by an
+booked when the event is saved — no invitation mail goes to them, and the room sends no reply
+mail: its answer is written straight into the room's attendee entry, which the form shows (see
+[Invitations by mail](#invitations-by-mail) for the mailed answer). Meetings written by an
 ActiveSync phone book their rooms the same way (storage `room-booking.ts`, 9.5 — see
 [activesync.md](activesync.md#calendar-tasks-and-notes-w3)); a booking of a UID belongs to its
 organizer and is never changed or released by another one. Only the organizer's copy of a
@@ -140,8 +142,55 @@ read as UTC:
 | `CANCEL` with only `RECURRENCE-ID` occurrences | those occurrences get an `EXDATE`, their slots are free; the answer stays |
 
 Only the authenticated organizer of a booking changes or cancels it; a request from an
-unauthenticated organizer stays pending. The room sends no reply mail; its answer is the booking
-status (`GET /api/v1/admin/resources/:id/bookings`, with `conflicts`).
+unauthenticated organizer stays pending. The answer is stored as the booking status
+(`GET /api/v1/admin/resources/:id/bookings`, with `conflicts`) and, since 9.5, mailed to the
+organizer. `REPLY`, `COUNTER`, `DECLINECOUNTER` and `REFRESH` messages sent to a room are ignored
+(no booking change, no answer) — before 9.5 they were treated like a `REQUEST`.
+
+##### The room's answer (9.5)
+
+A decided `REQUEST` is answered with an iMIP `REPLY` to the organizer, like the rooms of other
+calendar servers (smtp-server `handlers/resource-reply.ts`, REPLY format from storage
+`itip-reply.ts`, the builder of ActiveSync meeting responses):
+
+| Booking | `PARTSTAT` of the room | Subject |
+|---------|------------------------|---------|
+| accepted (conflicting dates listed when the room does not decline conflicts) | `ACCEPTED` | `Angenommen: …` |
+| declined | `DECLINED` | `Abgelehnt: …` |
+| waiting for approval (approval / no auto-accept) | `TENTATIVE` | `Mit Vorbehalt angenommen: …` |
+
+- The `VCALENDAR` carries `METHOD:REPLY` and the room as the only `ATTENDEE` (with its display
+  name), plus `UID`, `SEQUENCE` and `ORGANIZER` of the request.
+- The answer mirrors the request: a request with the series (or a single meeting) gets one
+  `REPLY` for the series. A request with only single occurrences (`RECURRENCE-ID`) gets one
+  `REPLY` per occurrence (at most 10), each with its `RECURRENCE-ID`; a declined occurrence update
+  is a `DECLINED` reply for exactly those occurrences while the series keeps the answer it had
+  (iTIP allows several `VEVENT`s in one `REPLY`; one occurrence per mail is understood by every
+  client, including CoreMail's own reply processing, which reads one component).
+- The subject shows at most 120 characters of the meeting title.
+- German text part: accepted / declined with the reason — the conflicting dates (up to 20 listed),
+  outside the booking window, longer than allowed, series not allowed, series repeats too often,
+  not bookable — or "muss noch genehmigt werden". Times are shown in the meeting's time zone.
+- Sent through the outbound queue (`smtp-outbound`) with the room as envelope sender and `From`;
+  the worker signs with the DKIM key of the room's domain. Headers `Auto-Submitted: auto-replied`,
+  `X-Auto-Response-Suppress: All`, `In-Reply-To` / `References` = the request's `Message-ID`.
+  The job carries `resourceReply`, so a local delivery counts as sent by the room and the
+  organizer's CoreMail calendar applies the answer (attendee status of the room).
+
+No answer is sent (loop and backscatter safety) for `CANCEL`, `PUBLISH` and other non-`REQUEST`
+methods, an unauthenticated organizer (pending, no mail to a possibly forged address), a null
+envelope sender, mail with `Auto-Submitted` other than `no`, `Precedence: bulk|list|junk`,
+mailing-list headers or `X-Auto-Response-Suppress: All|AutoReply`, automated senders
+(MAILER-DAEMON, noreply …), an organizer that is not one plain address (e.g. a list
+`a@x,b@y` in `ORGANIZER`), an organizer that is the room itself or another resource mailbox,
+more than 30 answers of one room to one organizer within an hour (Redis counter; the booking is
+still decided, only the mail is skipped; no Redis = no mail), and rooms whose **send replies**
+setting is off (`ResourceMailbox.sendReplies`, default on;
+`POST`/`PUT /api/v1/admin/resources[/:id]` field `sendReplies`). A failed answer is logged and
+never fails the delivery.
+
+Bookings from the event form and from ActiveSync phones (organizer in the same organisation) send
+no reply mail — the room's answer is shown in the form and on the phone right away.
 
 Conflict check and booking run in one transaction under the room's booking lock
 (storage `lockResourceCalendar`, row lock on `ResourceCalendar.bookingSeq`) on both paths: of
@@ -179,5 +228,7 @@ shared) are shown on top of each other; the sidebar hides single calendars.
 
 Tests: `core/src/calendar/exceptions.test.ts`, `free-busy.test.ts`,
 `api-gateway/src/routes/calendar.test.ts`, `lib/room-booking.test.ts`,
-`web-client/src/lib/recurrence.test.ts`, `scheduling.test.ts`; e2e `scripts/e2e/steps/dav.mjs`
-(series exception via CalDAV ⇄ REST) and `rest.mjs`.
+`web-client/src/lib/recurrence.test.ts`, `scheduling.test.ts`,
+`smtp-server/src/handlers/resource-booking-recurring.test.ts`, `resource-reply.test.ts` (the
+room's mailed answer); e2e `scripts/e2e/steps/dav.mjs` (series exception via CalDAV ⇄ REST),
+`rest.mjs` and `smtp.mjs` (mailed invitation to a room → the organizer receives its REPLY).

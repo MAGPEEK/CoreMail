@@ -102,6 +102,13 @@ export interface OutboundJob {
    * delivery strips all internal headers (storage INTERNAL_MAIL_HEADERS).
    */
   ruleForward?:   boolean;
+  /**
+   * 9.5: the automatic iMIP REPLY of a resource mailbox (handlers/resource-reply.ts).
+   * Its envelope sender is the resource itself, so its local delivery counts as sent
+   * by that resource (the organizer's calendar applies the answer). Only internal
+   * producers can set job fields.
+   */
+  resourceReply?: boolean;
   dkimDomain?:    string;
   dkimSelector?:  string;
   dkimPrivateKey?: string;
@@ -566,9 +573,13 @@ export function finalBounceRecipients(data: OutboundJob, err: unknown): Recipien
  * Pure: sender authentication for a locally delivered queue job. Only jobs of
  * an authenticated user (REST/JMAP/EAS/SMTP submission set `senderUserId`,
  * after their sender-identity check) count — not rule forwards/redirects
- * (they carry someone else's message) and not quarantine releases.
+ * (they carry someone else's message) and not quarantine releases. 9.5: a resource
+ * mailbox's own REPLY (`resourceReply`, envelope = the resource) counts as well.
  */
 export function senderAuthForJob(job: OutboundJob, raw: Buffer): { senderAuth: SenderAuth } | Record<string, never> {
+  if (job.resourceReply === true && job.from && !job.senderUserId && !isRuleForwardJob(job) && !job.quarantineReleaseId) {
+    return { senderAuth: { authenticatedSender: job.from } };
+  }
   if (!job.senderUserId || job.ruleRedirect || job.ruleForward || job.quarantineReleaseId) return {};
   if (isRuleForwardedAlready(raw)) return {};   // rule forwards queued before 9.4 carry no job flag
   return { senderAuth: { authenticatedSender: job.from } };

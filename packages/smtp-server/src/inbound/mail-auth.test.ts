@@ -177,6 +177,15 @@ test('queue jobs: only an authenticated user job (not rule forwards / redirects 
   assert.deepEqual(senderAuthForJob({ ...base, senderUserId: 'u1' }, Buffer.from('X-CoreMail-RuleForwarded: u1\r\nSubject: x\r\n\r\nb')), {});
 });
 
+test('9.5: a resource reply job is sent by the resource itself; the flag never lends a forward or a null sender authentication', () => {
+  const base = { messageId: 'm', from: 'room@corp.test', to: ['alice@corp.test'] };
+  const raw = Buffer.from('Subject: x\r\n\r\nb');
+  assert.deepEqual(senderAuthForJob({ ...base, resourceReply: true }, raw), { senderAuth: { authenticatedSender: 'room@corp.test' } });
+  assert.deepEqual(senderAuthForJob({ ...base, resourceReply: true, from: '' }, raw), {});
+  assert.deepEqual(senderAuthForJob({ ...base, resourceReply: true, ruleForward: true }, raw), {});
+  assert.deepEqual(senderAuthForJob({ ...base, resourceReply: true, quarantineReleaseId: 'q' }, raw), {});
+});
+
 // ── outbound: MX SSRF ─────────────────────────────────────────────────────────
 
 test('MX hosts resolving to loopback/private/link-local addresses are refused (5.4.4)', async () => {

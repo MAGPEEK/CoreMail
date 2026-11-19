@@ -6,7 +6,7 @@
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../prisma/index.js';
 import {
-  applyContactCard, contactCardFromRow, contactColumnsFromVcard, uidKey, vcardUidKey, type ContactRowFlat,
+  contactColumnsFromVcard, uidKey, vcardUidKey,
 } from './contact-vcard.js';
 import {
   applyContactGroup, contactGroupFromVcard, expandGroupMembers, membersFromJson, uniqueMembers, GROUP_NESTING_LIMIT,
@@ -106,23 +106,30 @@ export async function expandContactGroup(userId: string, members: readonly Conta
   return expandGroupMembers(members, (uid) => cards.get(uid));
 }
 
-/**
- * UID of a contact as a group member references it. A contact without a UID
- * (created before 7.1) gets one written into its vCard; a pre-9.5 row gets
- * its `uid` column filled.
- */
-export async function ensureContactUid(contact: { id: string; uid: string } & ContactRowFlat): Promise<string> {
-  if (contact.uid) return contact.uid;
-  const existing = vcardUidKey(contact.vcardData);
-  const vcardData = existing ? contact.vcardData : applyContactCard(contact.vcardData, contactCardFromRow(contact));
-  const columns = contactColumnsFromVcard(vcardData);
-  await prisma.contact.update({ where: { id: contact.id }, data: { vcardData, ...contactRowData(columns) } });
-  return columns.uid;
-}
-
 /** Prisma data of the derived contact columns (JSON lists typed for Prisma). */
 export function contactRowData(c: ReturnType<typeof contactColumnsFromVcard>): Omit<typeof c, 'emails' | 'phones' | 'addresses' | 'urls' | 'ims'> & {
   emails: Prisma.InputJsonValue; phones: Prisma.InputJsonValue; addresses: Prisma.InputJsonValue; urls: Prisma.InputJsonValue; ims: Prisma.InputJsonValue;
 } {
   return { ...c, emails: c.emails, phones: c.phones, addresses: c.addresses, urls: c.urls, ims: c.ims };
+}
+
+/**
+ * Id of another contact or group of the user that already uses `uid` (null when
+ * the UID is unique in the address book; `selfId` = the object being written).
+ * A pre-9.5 contact row may still have an empty `uid` column (until the backfill
+ * reached it) — only such rows are matched by their vCard text, so a short UID
+ * never loads every card that merely contains it.
+ */
+export async function findContactUidOwner(userId: string, uid: string, selfId = ''): Promise<string | null> {
+  const key = uidKey(uid);
+  if (!key) return null;
+  const [byColumn, groups] = await Promise.all([
+    prisma.contact.findMany({
+      where: { userId, OR: [{ uid: key }, { uid: '', vcardData: { contains: key } }] },
+      select: { id: true, vcardData: true },
+    }),
+    prisma.contactGroup.findMany({ where: { userId, uid: key }, select: { id: true } }),
+  ]);
+  const contact = byColumn.find((c) => c.id !== selfId && vcardUidKey(c.vcardData) === key);
+  return contact?.id ?? groups.find((g) => g.id !== selfId)?.id ?? null;
 }

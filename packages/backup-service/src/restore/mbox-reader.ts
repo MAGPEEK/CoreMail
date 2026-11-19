@@ -22,6 +22,22 @@ export interface MboxMessage {
   size: number;
   /** 1-based position in the file. */
   index: number;
+  /** 9.5: date of the "From " separator line (the internal date for CoreMail exports), null when unreadable. */
+  separatorDate: Date | null;
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const ASCTIME_RE = /^From \S+\s+(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) +([A-Z][a-z]{2}) +(\d{1,2}) (\d{2}):(\d{2}):(\d{2}) (\d{4})(?:\s|$)/;
+
+/** asctime() date of an mbox separator line ("From sender Tue Feb  3 10:20:30 2026", UTC), or null. */
+export function separatorLineDate(line: Buffer | string): Date | null {
+  const text = typeof line === 'string' ? line : line.toString('latin1');
+  const m = ASCTIME_RE.exec(text.replace(/\r?\n$/, ''));
+  if (!m) return null;
+  const month = MONTHS.indexOf(m[1]!);
+  if (month < 0) return null;
+  const d = new Date(Date.UTC(Number(m[6]), month, Number(m[2]), Number(m[3]), Number(m[4]), Number(m[5])));
+  return Number.isNaN(d.getTime()) || d.getUTCDate() !== Number(m[2]) ? null : d;
 }
 
 const FROM = Buffer.from('From ', 'latin1');
@@ -91,6 +107,7 @@ export async function* readMbox(path: string, opts: { maxMessageBytes: number })
   let oversized = false;
   let started = false;
   let noEol = false;
+  let sepDate: Date | null = null;
   let prevBlank = true; // the first line of the file may be a separator
   let index = 0;
   let carry: Buffer = Buffer.alloc(0);
@@ -102,7 +119,7 @@ export async function* readMbox(path: string, opts: { maxMessageBytes: number })
     if (!oversized && msgLines.length > 0 && isBlank(msgLines[msgLines.length - 1]!)) msgLines = msgLines.slice(0, -1);
     let raw: Buffer | null = oversized ? null : Buffer.concat(msgLines.map(unquote));
     if (raw && noEol) raw = stripAddedEol(raw);
-    const out = { raw, size, index };
+    const out = { raw, size, index, separatorDate: sepDate };
     lines = [];
     size = 0;
     oversized = false;
@@ -115,6 +132,7 @@ export async function* readMbox(path: string, opts: { maxMessageBytes: number })
       done = finish();
       started = true;
       noEol = hasNoEolMarker(line);
+      sepDate = separatorLineDate(line);
       prevBlank = false;
       return done;
     }

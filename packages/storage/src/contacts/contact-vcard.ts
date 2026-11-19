@@ -19,7 +19,7 @@ import {
 } from '@coremail/core/vcard';
 import {
   emptyContactCard, finalizeContactCard, flatContactColumns, contactSearchText, namePartsFromDisplayName, normalizeContactDate,
-  sameContactCard, sameJson as same,
+  photoMediaType, sameContactCard, sameJson as same,
   type ContactAddress, type ContactAddressType, type ContactCard, type ContactEmail, type ContactEmailType, type ContactIm,
   type ContactName, type ContactPhone, type ContactPhoneType, type ContactUrl, type FlatContactColumns,
 } from './contact-card.js';
@@ -80,6 +80,38 @@ function phoneType(types: string[]): ContactPhoneType {
   return placeType(types);
 }
 
+/**
+ * Kinds of numbers the card has no type of their own for (ActiveSync has a slot for each):
+ * the card shows car / radio / assistant / company main / MMS numbers as `other` and both
+ * fax kinds as `fax`; the vCard keeps the kind in a TEL TYPE value (vCard 3 CAR, x-names for
+ * the rest; WORK / HOME next to FAX), so the number comes back in the same slot.
+ */
+export const CONTACT_PHONE_KINDS = ['car', 'radio', 'assistant', 'company-main', 'mms', 'work-fax', 'home-fax'] as const;
+/** A phone kind; '' = none beyond the card type. */
+export type ContactPhoneKind = typeof CONTACT_PHONE_KINDS[number] | '';
+
+/** The kinds of an `other` number: the TYPE value that marks it and the TYPE list written for it. */
+const OTHER_KINDS: Readonly<Record<string, { mark: string; param: string }>> = {
+  car: { mark: 'CAR', param: 'car,voice' },
+  radio: { mark: 'X-RADIO', param: 'x-radio,voice' },
+  assistant: { mark: 'X-ASSISTANT', param: 'x-assistant,voice' },
+  'company-main': { mark: 'X-COMPANY-MAIN', param: 'x-company-main,voice' },
+  mms: { mark: 'X-MMS', param: 'x-mms' },
+};
+
+function phoneKind(types: string[]): ContactPhoneKind {
+  const type = phoneType(types);
+  if (type === 'fax') return types.includes('WORK') ? 'work-fax' : types.includes('HOME') ? 'home-fax' : '';
+  if (type !== 'other') return '';
+  return CONTACT_PHONE_KINDS.find((k) => OTHER_KINDS[k] !== undefined && types.includes(OTHER_KINDS[k].mark)) ?? '';
+}
+
+/** True when a number of card type `type` can have `kind`. */
+function kindFits(type: ContactPhoneType, kind: ContactPhoneKind): boolean {
+  if (kind === '') return true;
+  return kind.endsWith('-fax') ? type === 'fax' : type === 'other';
+}
+
 /** Label of an Apple grouped property (`item1.X-ABLabel:_$!<Anniversary>!$_`). */
 function appleLabel(doc: VcardDocument, group: string | null): string {
   if (!group) return '';
@@ -123,6 +155,8 @@ function readAddress(p: VcardProperty): ContactAddress {
 
 const readEmail = (p: VcardProperty): ContactEmail => ({ type: placeType(p.types) as ContactEmailType, value: text(p) });
 const readPhone = (p: VcardProperty): ContactPhone => ({ type: phoneType(p.types), value: text(p).replace(/^tel:/i, '').trim() });
+/** The TEL properties behind `card.phones` (an empty number is no entry). */
+const phoneProps = (props: readonly VcardProperty[]): VcardProperty[] => props.filter((p) => p.name === 'TEL' && readPhone(p).value !== '');
 const readUrl = (p: VcardProperty): ContactUrl => ({ type: placeType(p.types), value: uriText(p) });
 const readIm = (p: VcardProperty): ContactIm => ({ type: placeType(p.types), value: uriText(p) });
 
@@ -203,8 +237,9 @@ function emailLine(e: ContactEmail, v4: boolean): string {
   const param = v4 ? placeParam(e.type, true) : `;TYPE=INTERNET${e.type === 'other' ? '' : `,${e.type.toUpperCase()}`}`;
   return `EMAIL${param}:${escapeText(e.value)}`;
 }
-function phoneLine(p: ContactPhone, v4: boolean): string {
-  const t = PHONE_TYPE_PARAM[p.type];
+function phoneLine(p: ContactPhone, v4: boolean, kind: ContactPhoneKind = ''): string {
+  const t = kind === '' || !kindFits(p.type, kind) ? PHONE_TYPE_PARAM[p.type]
+    : kind.endsWith('-fax') ? `${kind.slice(0, -4)},fax` : OTHER_KINDS[kind]!.param;
   return `TEL;TYPE=${v4 ? t : t.toUpperCase()}:${escapeText(p.value)}`;
 }
 function addressLine(a: ContactAddress, v4: boolean): string {
@@ -253,12 +288,17 @@ class PropertyList {
    * Rebuild the `name` properties from `desired`. An unchanged entry keeps its
    * source line; an entry whose value changed at the same position and type
    * keeps the line's group and parameters (PREF, labels); the rest is new.
+   * With `kinds` (phones written by ActiveSync) a kept line also needs the same kind.
    */
-  reconcile<E extends { type: string }>(name: string, read: (p: VcardProperty) => E, desired: E[], line: (e: E) => string): void {
+  reconcile<E extends { type: string }>(
+    name: string, read: (p: VcardProperty) => E, desired: E[], line: (e: E, i: number) => string,
+    kinds?: { of: (p: VcardProperty) => string; want: readonly string[] },
+  ): void {
     const existing = this.props.filter((p) => p.name === name);
     const used = new Set<VcardProperty>();
-    const exact = desired.map((d) => {
-      const hit = existing.find((p) => !used.has(p) && same(read(p), d));
+    const sameKind = (p: VcardProperty, i: number): boolean => !kinds || kinds.of(p) === (kinds.want[i] ?? '');
+    const exact = desired.map((d, i) => {
+      const hit = existing.find((p) => !used.has(p) && same(read(p), d) && sameKind(p, i));
       if (hit) used.add(hit);
       return hit;
     });
@@ -267,12 +307,12 @@ class PropertyList {
       if (hit) return hit;
       const slot = existing[i];
       // (not for VALUE=uri lines: `tel:` URIs have their own syntax)
-      if (slot && !used.has(slot) && !slot.params['VALUE'] && read(slot).type === d.type) {
+      if (slot && !used.has(slot) && !slot.params['VALUE'] && read(slot).type === d.type && sameKind(slot, i)) {
         used.add(slot);
-        const fresh = line(d);
+        const fresh = line(d, i);
         return prop(`${headOf(slot)}:${fresh.slice(fresh.indexOf(':') + 1)}`);
       }
-      return prop(line(d));
+      return prop(line(d, i));
     });
     const at = this.props.findIndex((p) => p.name === name);
     const rest = this.props.filter((p) => p.name !== name);
@@ -315,18 +355,37 @@ function writeDate(list: PropertyList, field: 'birthday' | 'anniversary', value:
   else list.props.push(prop(line));
 }
 
+/** Options of applyContactCard. */
+export interface ApplyContactOptions {
+  /**
+   * The kind of each `card.phones` entry (same order; missing = none). Without it the kinds
+   * stay as the vCard has them (REST, CardDAV); with it (ActiveSync) they are written too.
+   */
+  phoneKinds?: readonly ContactPhoneKind[];
+}
+
+/** The kinds of the numbers finalizeContactCard keeps (it drops empty ones); a kind the type cannot have is none. */
+function keptPhoneKinds(phones: readonly ContactPhone[], kinds: readonly ContactPhoneKind[]): ContactPhoneKind[] {
+  return phones.flatMap((p, i) => {
+    const kind = kinds[i] ?? '';
+    return p.value.trim() ? [kindFits(p.type, kind) ? kind : ''] : [];
+  });
+}
+
 /**
  * Write `card` into the stored vCard `vcard` (a new vCard 3.0 when it holds
  * none). Only the fields that differ from what `vcard` already says are
  * rewritten; a missing VERSION / FN / N / UID is added.
  */
-export function applyContactCard(vcard: string, card: ContactCard): string {
+export function applyContactCard(vcard: string, card: ContactCard, options: ApplyContactOptions = {}): string {
   const doc = parseVcard(vcard) ?? parseVcard(EMPTY_V3)!;
   const before = cardFromDoc(doc);
   const next = finalizeContactCard(card);
   const v4 = isVcard4(doc);
   const list = new PropertyList([...doc.properties]);
   const changed = <K extends keyof ContactCard>(k: K): boolean => !same(before[k], next[k]);
+  const kinds = options.phoneKinds ? keptPhoneKinds(card.phones, options.phoneKinds) : undefined;
+  const kindsChanged = kinds !== undefined && !same(phoneProps(doc.properties).map((p) => phoneKind(p.types)), kinds);
 
   if (changed('displayName')) list.setValue('FN', escapeText(next.displayName), () => `FN:${escapeText(next.displayName)}`);
   const hasParts = Object.values(next.name).some((v) => v.trim());
@@ -344,7 +403,10 @@ export function applyContactCard(vcard: string, card: ContactCard): string {
   if (changed('anniversary')) writeDate(list, 'anniversary', next.anniversary, v4);
 
   if (changed('emails')) list.reconcile('EMAIL', readEmail, next.emails, (e) => emailLine(e, v4));
-  if (changed('phones')) list.reconcile('TEL', readPhone, next.phones, (p) => phoneLine(p, v4));
+  if (changed('phones') || kindsChanged) {
+    const byKind = kinds && { of: (p: VcardProperty) => phoneKind(p.types), want: kinds };
+    list.reconcile('TEL', readPhone, next.phones, (p, i) => phoneLine(p, v4, kinds?.[i]), byKind);
+  }
   if (changed('addresses')) list.reconcile('ADR', readAddress, next.addresses, (a) => addressLine(a, v4));
   if (changed('urls')) list.reconcile('URL', readUrl, next.urls, (u) => urlLine(u, v4));
   if (changed('ims')) list.reconcile('IMPP', readIm, next.ims, (i) => imLine(i, v4));
@@ -359,6 +421,125 @@ export function applyContactCard(vcard: string, card: ContactCard): string {
 /** A fresh vCard 3.0 for `card` (FN, N, UID + every non-empty field). */
 export function buildContactVcard(card: ContactCard): string {
   return applyContactCard(EMPTY_V3, card);
+}
+
+// ─── Properties outside the card (ActiveSync fields) ─────────────────────────
+
+/** Office location of a contact (ActiveSync OfficeLocation; no standard vCard property). */
+export const OFFICE_LOCATION_PROPERTY = 'X-OFFICE-LOCATION';
+
+/** Single-value text properties outside the card (ActiveSync fields; phonetic names as Apple writes them). */
+export const CONTACT_TEXT_PROPERTIES = {
+  officeLocation: OFFICE_LOCATION_PROPERTY,
+  phoneticGiven: 'X-PHONETIC-FIRST-NAME',
+  phoneticFamily: 'X-PHONETIC-LAST-NAME',
+  phoneticCompany: 'X-PHONETIC-ORG',
+  customerId: 'X-CUSTOMER-ID',
+  governmentId: 'X-GOVERNMENT-ID',
+  accountName: 'X-ACCOUNT-NAME',
+} as const;
+
+/** RELATED types of the related persons CoreMail reads and writes as text (spouse, children, assistant, manager). */
+export const CONTACT_RELATED_TYPES = { spouse: 'spouse', child: 'child', assistant: 'x-assistant', manager: 'x-manager' } as const;
+
+const docOf = (vcard: string): VcardDocument => parseVcard(vcard) ?? parseVcard(EMPTY_V3)!;
+
+/**
+ * A related person given as text: vCard 4 `RELATED;TYPE=<type>;VALUE=text`, the vCard 3 form
+ * `X-RELATED;TYPE=<type>` (like X-ANNIVERSARY for ANNIVERSARY). A RELATED by reference
+ * (`urn:uuid:` of another card, a URL) is not a name: it is neither read nor touched.
+ */
+function isRelatedText(p: VcardProperty, type: string): boolean {
+  if (!p.types.includes(type.toUpperCase()) || text(p) === '') return false;
+  const value = (p.params['VALUE'] ?? '').toUpperCase();
+  if (p.name === 'X-RELATED') return value !== 'URI';
+  return p.name === 'RELATED' && value === 'TEXT';
+}
+
+/** The names of the related persons of `type` (CONTACT_RELATED_TYPES), in vCard order. */
+export function vcardRelated(vcard: string, type: string): string[] {
+  return (parseVcard(vcard)?.properties ?? []).filter((p) => isRelatedText(p, type)).map((p) => text(p));
+}
+
+/**
+ * `vcard` with the related persons of `type` set to `names`: the n-th stored one keeps its
+ * line (group, parameters) and gets the n-th name, surplus ones are removed, further names
+ * are added in the spelling of the vCard version. Everything else is untouched.
+ */
+export function setVcardRelated(vcard: string, type: string, names: readonly string[]): string {
+  const doc = docOf(vcard);
+  const wanted = names.map((n) => n.trim()).filter(Boolean);
+  let next = 0;
+  const props: VcardProperty[] = [];
+  for (const p of doc.properties) {
+    if (!isRelatedText(p, type)) { props.push(p); continue; }
+    const name = wanted[next++];
+    if (name !== undefined) props.push(text(p) === name ? p : prop(`${headOf(p)}:${escapeText(name)}`));
+  }
+  const fresh = (name: string): string => (isVcard4(doc)
+    ? `RELATED;TYPE=${type.toLowerCase()};VALUE=text:${escapeText(name)}`
+    : `X-RELATED;TYPE=${type.toUpperCase()}:${escapeText(name)}`);
+  for (const name of wanted.slice(next)) props.push(prop(fresh(name)));
+  return serializeVcard({ properties: props });
+}
+
+/** Unescaped text of the first `name` property ("" when absent). */
+export function vcardText(vcard: string, name: string): string {
+  return text(parseVcard(vcard)?.properties.find((p) => p.name === name));
+}
+
+/**
+ * `vcard` with its `name` property set to `value`: the first one keeps its group and
+ * parameters, further ones are dropped; "" removes them all. Everything else is untouched.
+ */
+export function setVcardText(vcard: string, name: string, value: string): string {
+  const list = new PropertyList([...docOf(vcard).properties]);
+  const escaped = escapeText(value.trim());
+  list.setValue(name, escaped, () => `${name}:${escaped}`, true);
+  return serializeVcard({ properties: list.props });
+}
+
+/** An inline contact photo. */
+export type VcardPhoto = { mediaType: string; data: Buffer };
+
+/** Base64 text → bytes; null unless it is strict base64 of an image CoreMail recognises. */
+function decodePhoto(b64: string): VcardPhoto | null {
+  const clean = b64.replace(/\s+/g, '');
+  if (!clean || !/^[A-Za-z0-9+/]+={0,2}$/.test(clean)) return null;
+  const data = Buffer.from(clean, 'base64');
+  const mediaType = photoMediaType(data);
+  return mediaType ? { mediaType, data } : null;
+}
+
+/**
+ * The inline PHOTO of a vCard: vCard 3 `PHOTO;ENCODING=b` (also 2.1 `ENCODING=BASE64`) or a
+ * vCard 4 `data:` URI. Null for none, a photo by reference (URL) or unrecognised data.
+ */
+export function vcardPhoto(vcard: string): VcardPhoto | null {
+  const p = parseVcard(vcard)?.properties.find((x) => x.name === 'PHOTO');
+  if (!p) return null;
+  const dataUri = /^data:[^,]*;base64,(.*)$/is.exec(p.value.trim());
+  if (dataUri) return decodePhoto(dataUri[1]!);
+  const encoding = (p.params['ENCODING'] ?? '').toUpperCase();
+  return encoding === 'B' || encoding === 'BASE64' ? decodePhoto(p.value) : null;
+}
+
+/** `vcard` with its PHOTO replaced by `photo` (in the spelling of the vCard version); null removes it. */
+export function setVcardPhoto(vcard: string, photo: VcardPhoto | null): string {
+  const doc = docOf(vcard);
+  const list = new PropertyList([...doc.properties]);
+  const b64 = photo?.data.toString('base64') ?? '';
+  const subtype = photo?.mediaType.split('/')[1]?.toUpperCase() ?? 'JPEG';
+  const line = isVcard4(doc) ? `PHOTO:data:${photo?.mediaType};base64,${b64}` : `PHOTO;ENCODING=b;TYPE=${subtype}:${b64}`;
+  list.remove((p) => p.name === 'PHOTO');
+  if (photo) list.props.push(prop(line));
+  return serializeVcard({ properties: list.props });
+}
+
+/** The kind of each number of `contactCardFromVcard(vcard).phones` (same order; [] without a vCard). */
+export function vcardPhoneKinds(vcard: string): ContactPhoneKind[] {
+  const doc = parseVcard(vcard);
+  return doc ? phoneProps(doc.properties).map((p) => phoneKind(p.types)) : [];
 }
 
 /** True when `card` says the same as the stored vCard (nothing to write). */

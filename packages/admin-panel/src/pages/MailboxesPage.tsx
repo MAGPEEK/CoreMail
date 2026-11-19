@@ -4,7 +4,7 @@ import { Modal as AccessibleModal } from '../components/Modal.js';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Plus, Pencil, Trash2, X, KeyRound, ChevronDown,
-  UserCheck, UserX, Mail, Shield, HardDrive, Loader2, RefreshCw, Folder, Users, LogOut,
+  UserCheck, UserX, Mail, Shield, HardDrive, Loader2, RefreshCw, Users, LogOut,
 } from 'lucide-react';
 import { api } from '../api/client.js';
 import toast from 'react-hot-toast';
@@ -13,6 +13,7 @@ import { MailboxPhotoSection, type MailboxPhoto } from '../components/MailboxPho
 import { ProtocolAccessEditor } from '../components/ProtocolAccessEditor.js';
 import { WebmailPolicyEditor } from '../components/WebmailPolicyEditor.js';
 import { MailFlowEditor } from '../components/MailFlowEditor.js';
+import { EditPanel, ReportDirty, type EditPanelTab } from '../components/EditPanel.js';
 import { FolderPermissionsSection } from '../components/FolderPermissionsSection.js';
 import { useT } from '../i18n/useT.js';
 import { usePermissions } from '../hooks/usePermissions.js';
@@ -23,7 +24,6 @@ import { gbInputToBytes, bytesToGbInput, gbInputValid, quotaOptions, quotaLabel 
 import { assignableRoles } from '../lib/permissions.js';
 
 // ── Types ────────────────────────────────────────────────────────────────────
-interface FolderInfo { id: string; name: string; displayName: string; totalCount: number; unreadCount: number }
 interface User {
   id: string; email: string; displayName: string; role: string;
   active: boolean; quotaBytes: number; usedBytes: number;
@@ -36,7 +36,6 @@ interface User {
 }
 type QuotaLevel = 'ok' | 'warning' | 'prohibitSend' | 'prohibitSendReceive';
 interface UserDetail extends User {
-  mailbox?: { folders: FolderInfo[] };
   /** v8.1: effective levels (explicit or server default) + current level */
   quotaLimits?: { warningBytes: number; prohibitSendBytes: number; prohibitSendReceiveBytes: number };
   quotaLevel?: QuotaLevel;
@@ -127,7 +126,7 @@ export function MailboxesPage() {
   const [domainFilter, setDomainFilter] = useState('');
   const [activeId, setActiveId]         = useState<string | null>(null);
   const [showCreate, setShowCreate]     = useState(false);
-  const [editUser, setEditUser]         = useState<User | null>(null);
+  const [editUserId, setEditUserId]     = useState<string | null>(null);
   const [showResetPw, setShowResetPw]   = useState<User | null>(null);
   const [newPassword, setNewPassword]   = useState('');
   const [revokeAppPw, setRevokeAppPw]   = useState(false);
@@ -148,6 +147,8 @@ export function MailboxesPage() {
   });
 
   const active = mailboxes.find((u) => u.id === activeId) ?? null;
+  // The panel reads the live row: after a save the list refetches and the form compares against the saved state.
+  const editUser = mailboxes.find((u) => u.id === editUserId) ?? null;
 
   // Detail query for the selected user (folders + storage)
   const { data: detail, isFetching: detailLoading } = useQuery<UserDetail>({
@@ -188,7 +189,6 @@ export function MailboxesPage() {
     onSuccess: () => {
       toast.success(t('mbox_saved_toast'));
       invalidate();
-      setEditUser(null);
     },
     onError: (err: Error) => toast.error(err.message),
   });
@@ -365,7 +365,7 @@ export function MailboxesPage() {
       cell: (u) => (
         <Can area="recipients" access="write">
           <div className="flex items-center gap-1">
-            <button onClick={() => setEditUser(u)} className="btn-ghost p-1.5 rounded" title={t('mbox_btn_edit_title')} aria-label={`${t('mbox_btn_edit_title')}: ${u.email}`}>
+            <button onClick={() => setEditUserId(u.id)} className="btn-ghost p-1.5 rounded" title={t('mbox_btn_edit_title')} aria-label={`${t('mbox_btn_edit_title')}: ${u.email}`}>
               <Pencil size={13} className="text-fg-subtle" />
             </button>
             <button onClick={() => confirmDelete(u)} className="btn-ghost p-1.5 rounded" title={t('mbox_btn_delete_title')} aria-label={`${t('mbox_btn_delete_title')}: ${u.email}`}>
@@ -427,7 +427,7 @@ export function MailboxesPage() {
                 <Can area="recipients" access="write">
                   <button className="btn-secondary flex items-center gap-1.5 text-xs disabled:opacity-40"
                     disabled={selectedRows.length !== 1}
-                    onClick={() => selectedRows[0] && setEditUser(selectedRows[0])}>
+                    onClick={() => selectedRows[0] && setEditUserId(selectedRows[0].id)}>
                     <Pencil size={13} aria-hidden="true" /> {t('tb_edit')}
                   </button>
                 </Can>
@@ -480,7 +480,7 @@ export function MailboxesPage() {
               <div className="flex flex-wrap gap-1.5">
                 {/* Each quick action follows its own right (HELP_DESK: reset / enable-disable / sign out). */}
                 <Can area="recipients" access="write">
-                  <button className="btn-secondary text-xs flex items-center gap-1" onClick={() => setEditUser(active)}>
+                  <button className="btn-secondary text-xs flex items-center gap-1" onClick={() => setEditUserId(active.id)}>
                     <Pencil size={12} aria-hidden="true" /> {t('tb_edit')}
                   </button>
                 </Can>
@@ -569,36 +569,11 @@ export function MailboxesPage() {
               <dd className="text-fg-muted">{new Date(active.createdAt).toLocaleDateString()}</dd>
             </dl>
 
-            {/* Folders */}
-            {detailLoading && detail?.id !== active.id ? (
+            {detailLoading && detail?.id !== active.id && (
               <p className="flex items-center gap-2 text-fg-subtle text-xs" role="status">
                 <Loader2 size={12} className="animate-spin" aria-hidden="true" /> {t('mbox_detail_loading')}
               </p>
-            ) : detail?.id === active.id && detail.mailbox?.folders && detail.mailbox.folders.length > 0 ? (
-              <div className="border border-line rounded-lg overflow-hidden">
-                <table className="w-full text-xs">
-                  <caption className="text-left text-xs font-medium text-fg-subtle px-3 py-2 bg-surface-2 border-b border-line">
-                    <span className="inline-flex items-center gap-1.5"><Folder size={12} aria-hidden="true" /> {t('mbox_detail_folders')}</span>
-                  </caption>
-                  <thead>
-                    <tr className="border-b border-line">
-                      <th scope="col" className="text-left px-3 py-1.5 text-fg-subtle font-medium">{t('mbox_detail_col_folder')}</th>
-                      <th scope="col" className="text-right px-3 py-1.5 text-fg-subtle font-medium">{t('mbox_detail_col_messages')}</th>
-                      <th scope="col" className="text-right px-3 py-1.5 text-fg-subtle font-medium">{t('mbox_detail_col_unread')}</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-line">
-                    {detail.mailbox.folders.map((f) => (
-                      <tr key={f.id}>
-                        <th scope="row" className="px-3 py-1.5 text-left font-normal text-fg-muted">{f.displayName || f.name}</th>
-                        <td className="px-3 py-1.5 text-right text-fg-muted">{f.totalCount}</td>
-                        <td className="px-3 py-1.5 text-right">{f.unreadCount > 0 ? <span className="font-semibold text-accent-fg">{f.unreadCount}</span> : <span className="text-fg-subtle">—</span>}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : null}
+            )}
 
             {/* Aliases (existing component; write actions are gated by the area) */}
             <WriteGuard area="recipients">
@@ -704,15 +679,12 @@ export function MailboxesPage() {
         </Modal>
       )}
 
-      {/* ── Dialog: Edit ───────────────────────────────────────────────────── */}
+      {/* ── Panel: Edit ────────────────────────────────────────────────────── */}
       {editUser && (
-        <Modal title={`${editUser.displayName} ${t('mbox_edit_title')}`} onClose={() => setEditUser(null)}>
-          <WriteGuard area="recipients">
-            <EditForm user={editUser} domains={domains}
-              onSave={(data) => updateMutation.mutate({ id: editUser.id, data })}
-              isPending={updateMutation.isPending} />
-          </WriteGuard>
-        </Modal>
+        <UserEditPanel user={editUser} domains={domains}
+          onSave={(data) => updateMutation.mutate({ id: editUser.id, data })}
+          isPending={updateMutation.isPending}
+          onClose={() => setEditUserId(null)} />
       )}
 
       {/* ── Dialog: Password reset ─────────────────────────────────────────── */}
@@ -769,9 +741,9 @@ function Modal({ title, children, onClose }: { title: string; children: React.Re
   );
 }
 
-// ── Edit form ────────────────────────────────────────────────────────────────
-function EditForm({ user, domains, onSave, isPending }:
-  { user: User; domains: Domain[]; onSave: (d: Record<string, unknown>) => void; isPending: boolean }
+// ── Edit panel ───────────────────────────────────────────────────────────────
+function UserEditPanel({ user, domains, onSave, isPending, onClose }:
+  { user: User; domains: Domain[]; onSave: (d: Record<string, unknown>) => void; isPending: boolean; onClose: () => void }
 ) {
   const t = useT();
   const [displayName, setDisplayName] = useState(user.displayName);
@@ -783,96 +755,98 @@ function EditForm({ user, domains, onSave, isPending }:
   const levelsValid = gbInputValid(warningGb) && gbInputValid(sendGb);
   const domainLabel = `@${domains.find((d) => d.id === user.domainId)?.name ?? user.domainId}`;
 
-  return (
-    <div className="space-y-4">
-      <div>
-        <label className="field-label">{t('mbox_edit_email')}</label>
-        <input className="input w-full bg-surface-2 cursor-not-allowed" value={user.email} disabled />
-      </div>
-      <div>
-        <label className="field-label">{t('mbox_edit_domain')}</label>
-        <input className="input w-full bg-surface-2 cursor-not-allowed" value={domainLabel} disabled />
-      </div>
-      <div>
-        <label className="field-label">{t('mbox_edit_displayname')}</label>
-        <input className="input w-full" value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="field-label">{t('mbox_create_role')}</label>
-          <select className="input w-full" value={role} onChange={(e) => setRole(e.target.value)}>
-            {assignableRoles(ROLE_KEYS, actorRole, user.role).map((v) => <option key={v} value={v}>{roleLabel(t, v)}</option>)}
-          </select>
-        </div>
-        <div>
-          <label className="field-label flex items-center gap-1"><HardDrive size={12} /> {t('mbox_create_quota')}</label>
-          <select className="input w-full" value={quotaBytes} onChange={(e) => setQuotaBytes(parseInt(e.target.value))}>
-            <QuotaOptions current={user.quotaBytes} />
-          </select>
-        </div>
-      </div>
-      {/* v8.1: quota levels (warning / prohibit send / prohibit send+receive) */}
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="field-label" htmlFor="mbox-quota-warning">{t('mbox_quota_warning')}</label>
-          <input id="mbox-quota-warning" className="input w-full" inputMode="decimal" value={warningGb}
-            placeholder={t('mbox_quota_default_hint')} onChange={(e) => setWarningGb(e.target.value)} />
-        </div>
-        <div>
-          <label className="field-label" htmlFor="mbox-quota-send">{t('mbox_quota_prohibit_send')}</label>
-          <input id="mbox-quota-send" className="input w-full" inputMode="decimal" value={sendGb}
-            placeholder={t('mbox_quota_default_hint')} onChange={(e) => setSendGb(e.target.value)} />
-        </div>
-        {/* a typo used to be saved silently as "server default" */}
-        {!levelsValid && <p className="col-span-2 text-xs text-danger-fg" role="alert">{t('mbox_quota_invalid')}</p>}
-      </div>
-      <div className="flex justify-end pt-1">
-        <button
-          onClick={() => onSave({
-            displayName: displayName.trim(), quotaBytes,
-            // role only when changed — a role change ends the account's sessions
-            ...(role !== user.role ? { role } : {}),
-            quotaWarningBytes: gbInputToBytes(warningGb),
-            quotaProhibitSendBytes: gbInputToBytes(sendGb),
-          })}
-          disabled={!displayName.trim() || !levelsValid || isPending}
-          className="btn-primary disabled:opacity-50 flex items-center gap-2"
-        >
-          {isPending && <Loader2 size={14} className="animate-spin" />}
-          {t('action_save')}
-        </button>
-      </div>
+  const dirty = displayName !== user.displayName || role !== user.role || quotaBytes !== user.quotaBytes
+    || warningGb !== bytesToGbInput(user.quotaWarningBytes) || sendGb !== bytesToGbInput(user.quotaProhibitSendBytes);
 
-      <div className="border-t border-line pt-4 mt-2">
-        <MailboxAliasesSection
-          mailboxType="user"
-          mailboxId={user.id}
-          defaultDomainId={user.domainId}
-          allDomains={domains.map((d) => ({ id: d.id, name: d.name }))}
-        />
-      </div>
-
-      {/* 9.4: per-mailbox mail flow */}
-      <div className="border-t border-line pt-4 mt-2">
-        <MailFlowEditor path={`/admin/mailboxes/${user.id}/mail-flow`} kind="user" />
-      </div>
-
-      {/* w3: folder permissions */}
-      <div className="border-t border-line pt-4 mt-2">
-        <FolderPermissionsSection basePath={`/admin/mailboxes/${user.id}`} ownerUserId={user.id} />
-      </div>
-
-      {/* 9.4: protocol access (user level) */}
-      <div className="border-t border-line pt-4 mt-2">
-        <ProtocolAccessEditor path={`/admin/protocol-access/users/${user.id}`} area="recipients" />
-      </div>
-
-      {/* 9.4: webmail policies (user level) */}
-      <div className="border-t border-line pt-4 mt-2">
-        <WebmailPolicyEditor path={`/admin/webmail-policies/users/${user.id}`} area="recipients" />
-      </div>
+  const save = (
+    <div className="flex justify-end pt-1">
+      <button
+        onClick={() => onSave({
+          displayName: displayName.trim(), quotaBytes,
+          // role only when changed — a role change ends the account's sessions
+          ...(role !== user.role ? { role } : {}),
+          quotaWarningBytes: gbInputToBytes(warningGb),
+          quotaProhibitSendBytes: gbInputToBytes(sendGb),
+        })}
+        disabled={!displayName.trim() || !levelsValid || isPending}
+        className="btn-primary disabled:opacity-50 flex items-center gap-2"
+      >
+        {isPending && <Loader2 size={14} className="animate-spin" />}
+        {t('action_save')}
+      </button>
     </div>
   );
+
+  const tabs: EditPanelTab[] = [
+    {
+      id: 'general', label: t('mbox_tab_general'),
+      content: (
+        <WriteGuard area="recipients">
+          <ReportDirty dirty={dirty} />
+          <div className="space-y-4">
+            <div>
+              <label className="field-label" htmlFor="mbox-edit-email">{t('mbox_edit_email')}</label>
+              <input id="mbox-edit-email" className="input w-full bg-surface-2 cursor-not-allowed" value={user.email} disabled />
+            </div>
+            <div>
+              <label className="field-label" htmlFor="mbox-edit-domain">{t('mbox_edit_domain')}</label>
+              <input id="mbox-edit-domain" className="input w-full bg-surface-2 cursor-not-allowed" value={domainLabel} disabled />
+            </div>
+            <div>
+              <label className="field-label" htmlFor="mbox-edit-name">{t('mbox_edit_displayname')}</label>
+              <input id="mbox-edit-name" className="input w-full" value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
+            </div>
+            <div>
+              <label className="field-label" htmlFor="mbox-edit-role">{t('mbox_create_role')}</label>
+              <select id="mbox-edit-role" className="input w-full" value={role} onChange={(e) => setRole(e.target.value)}>
+                {assignableRoles(ROLE_KEYS, actorRole, user.role).map((v) => <option key={v} value={v}>{roleLabel(t, v)}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="field-label flex items-center gap-1" htmlFor="mbox-edit-quota"><HardDrive size={12} aria-hidden="true" /> {t('mbox_create_quota')}</label>
+              <select id="mbox-edit-quota" className="input w-full" value={quotaBytes} onChange={(e) => setQuotaBytes(parseInt(e.target.value))}>
+                <QuotaOptions current={user.quotaBytes} />
+              </select>
+            </div>
+            {/* v8.1: quota levels (warning / prohibit send / prohibit send+receive) */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="field-label" htmlFor="mbox-quota-warning">{t('mbox_quota_warning')}</label>
+                <input id="mbox-quota-warning" className="input w-full" inputMode="decimal" value={warningGb}
+                  placeholder={t('mbox_quota_default_hint')} onChange={(e) => setWarningGb(e.target.value)} />
+              </div>
+              <div>
+                <label className="field-label" htmlFor="mbox-quota-send">{t('mbox_quota_prohibit_send')}</label>
+                <input id="mbox-quota-send" className="input w-full" inputMode="decimal" value={sendGb}
+                  placeholder={t('mbox_quota_default_hint')} onChange={(e) => setSendGb(e.target.value)} />
+              </div>
+              {/* a typo used to be saved silently as "server default" */}
+              {!levelsValid && <p className="col-span-2 text-xs text-danger-fg" role="alert">{t('mbox_quota_invalid')}</p>}
+            </div>
+            {save}
+            <div className="border-t border-line pt-4">
+              <MailboxAliasesSection
+                mailboxType="user"
+                mailboxId={user.id}
+                defaultDomainId={user.domainId}
+                allDomains={domains.map((d) => ({ id: d.id, name: d.name }))}
+              />
+            </div>
+          </div>
+        </WriteGuard>
+      ),
+    },
+    // 9.4: per-mailbox mail flow
+    { id: 'flow', label: t('mbox_tab_flow'), content: <MailFlowEditor path={`/admin/mailboxes/${user.id}/mail-flow`} kind="user" /> },
+    // w3: folder permissions
+    { id: 'folders', label: t('mbox_tab_folders'), content: <FolderPermissionsSection basePath={`/admin/mailboxes/${user.id}`} ownerUserId={user.id} /> },
+    // 9.4: protocol access (user level)
+    { id: 'protocols', label: t('mbox_tab_protocols'), content: <ProtocolAccessEditor path={`/admin/protocol-access/users/${user.id}`} area="recipients" /> },
+    // 9.4: webmail policies (user level)
+    { id: 'webmail', label: t('mbox_tab_webmail'), content: <WebmailPolicyEditor path={`/admin/webmail-policies/users/${user.id}`} area="recipients" /> },
+  ];
+
+  return <EditPanel kind="mailbox" title={user.displayName} subtitle={user.email} tabs={tabs} onClose={onClose} />;
 }
 
 // ── Delegate Section ─────────────────────────────────────────────────────────

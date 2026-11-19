@@ -12,8 +12,10 @@ and get categories.
 `vcardData` stays the **source of truth** of a contact: whatever a CardDAV
 client stored is kept, and every column of the `contacts` table is derived from
 it in one place — `contactColumnsFromVcard()` in
-`packages/storage/src/contacts/contact-vcard.ts`. REST and CardDAV writes both
-go through it; nothing writes contact columns by hand.
+`packages/storage/src/contacts/contact-vcard.ts`. REST, CardDAV and ActiveSync
+writes all go through the contact writer `contacts/contact-store.ts`
+(`createContactRow` / `updateContactRow` / `deleteContactRow`), which stores the
+vCard with the columns derived from it; nothing writes contact columns by hand.
 
 | Column | Content |
 |--------|---------|
@@ -28,9 +30,26 @@ go through it; nothing writes contact columns by hand.
 Type labels: e-mail / address / web page / chat `work | home | other`; phone
 `work | home | mobile | fax | pager | other`. At most 20 entries per list.
 
-Contacts stored before 9.5 keep empty structured columns until their next
-write; the REST API reads the structured fields from `vcardData`, so they show
-completely anyway. Search falls back to the flat columns for them.
+Contacts stored before 9.5 have empty structured columns at first. A one-time
+background backfill fills them (`packages/storage/src/contacts/contact-backfill.ts`,
+started by the api-gateway 30 s after start-up):
+
+- a row needs it while `searchText` is empty; the 9.5 columns (`uid`, name parts,
+  `nickname`, `fileAs`, dates, `categories`, the typed lists, `searchText`) are
+  derived through the same mapping (`contactCardFromRow` → `contactColumns`) — from
+  the vCard, or from the flat columns for a row without a vCard. The vCard and the
+  flat columns are not touched;
+- `updatedAt` and `changeKey` are kept, so the CardDAV ETag / sync-token / ctag and
+  ActiveSync / MAPI see no change; a row written meanwhile (other `updatedAt`) is
+  left to its writer;
+- batches of 200 in id order, one instance at a time (Redis lock
+  `storage:contacts-backfill:lock`), resumable (`storage:contacts-backfill:cursor`
+  = last id done), one-time (`storage:contacts-backfill:done` once a pass reached
+  the end; the job then stops for good). Deleting the two keys re-runs it, which is
+  harmless (idempotent).
+
+Until a row is filled, the REST API reads the structured fields from
+`vcardData`, so they show completely anyway, and search falls back to the flat columns.
 
 `contact_groups`: `name`, `uid`, `vcardData` (the group's own vCard) and
 `members` (JSON `[{kind: "card", uid}]` = own contact or nested group,
@@ -41,19 +60,24 @@ contact or group leaves every group it was a member of (`detachCardFromGroups`).
 `notes.categories` holds category names; `color` is one of
 `YELLOW BLUE GREEN PINK PURPLE`.
 
-### Storage modules (reuse them — e.g. for ActiveSync contacts)
+### Storage modules (reuse them — e.g. for ActiveSync or MAPI contacts)
 
 | Module | Purpose |
 |--------|---------|
-| `contacts/contact-card.ts` | the `ContactCard` model, type lists, limits, `applyContactPatch()` (structured fields + the legacy single slots `email`/`email2`/`phone`/`mobile`), `flatContactColumns()`, `contactSearchText()`, date normalisation, tolerant JSON readers |
-| `contacts/contact-vcard.ts` | `contactCardFromVcard()`, `applyContactCard()` (writes only changed properties), `buildContactVcard()`, `contactColumnsFromVcard()` |
+| `contacts/contact-card.ts` | the `ContactCard` model, type lists, limits, `applyContactPatch()` (structured fields + the legacy single slots `email`/`email2`/`phone`/`mobile`), `flatContactColumns()`, `contactSearchText()`, date normalisation, tolerant JSON readers, `photoMediaType()` |
+| `contacts/contact-vcard.ts` | `contactCardFromVcard()`, `applyContactCard()` (writes only changed properties), `buildContactVcard()`, `contactColumnsFromVcard()`; properties outside the card: `vcardText()` / `setVcardText()` (e.g. `OFFICE_LOCATION_PROPERTY`), `vcardPhoto()` / `setVcardPhoto()` (inline PHOTO in the spelling of the vCard version) |
+| `contacts/contact-store.ts` | the contact row writer: `createContactRow()`, `updateContactRow()` (vCard + derived columns), `deleteContactRow()` (also leaves every group), `ensureContactUid()` — realtime announcements stay with the caller |
 | `contacts/contact-group-vcard.ts` | group vCards (both spellings), `applyContactGroup()`, `expandGroupMembers()` (pure) |
-| `contacts/contact-groups.ts` | group columns, `detachCardFromGroups()`, `resolveCards()`, `expandContactGroup()`, `ensureContactUid()` |
+| `contacts/contact-groups.ts` | group columns, `detachCardFromGroups()`, `resolveCards()`, `expandContactGroup()`, `findContactUidOwner()` (UID unique across contacts and groups — CardDAV, backup restore) |
+| `contacts/contact-backfill.ts` | one-time backfill of the 9.5 columns for older rows (see above) |
 
-An ActiveSync (or MAPI) contact implementation maps its item to a
-`ContactPatch`, applies it with `applyContactPatch(contactCardFromVcard(row.vcardData), patch)`,
-writes `applyContactCard(row.vcardData, card)` and stores
-`contactRowData(contactColumnsFromVcard(vcard))` — the same path the REST API takes.
+A protocol implementation maps its item to a `ContactPatch`, applies it with
+`applyContactPatch(contactCardFromRow(row), patch)`, writes
+`applyContactCard(row.vcardData, card)` and stores the vCard with
+`updateContactRow(row.id, vcard)` (`createContactRow` for a new one) — the same
+path the REST API and CardDAV take. ActiveSync does exactly this
+(`packages/activesync/src/pim/contacts.ts`, see
+[activesync.md](activesync.md#contacts-w3)).
 
 ## vCard mapping
 
@@ -65,12 +89,18 @@ writes `applyContactCard(row.vcardData, card)` and stores
 | company / department | `ORG` (further units kept) | `ORG` | |
 | e-mail | `EMAIL;TYPE=INTERNET[,WORK\|HOME]` | `EMAIL[;TYPE=work\|home]` | |
 | phone | `TEL;TYPE=WORK,VOICE` / `HOME,VOICE` / `CELL` / `FAX` / `PAGER` / `VOICE` | same, lower case | `tel:` URIs, quoted TYPE lists |
+| phone kind (ActiveSync slots, not in the card: `vcardPhoneKinds()`, `applyContactCard(…, { phoneKinds })`) | `other` numbers `TEL;TYPE=CAR,VOICE` / `X-RADIO,VOICE` / `X-ASSISTANT,VOICE` / `X-COMPANY-MAIN,VOICE` / `X-MMS`; fax numbers `WORK,FAX` / `HOME,FAX` | same, lower case | REST and CardDAV keep the kind: a changed number keeps its line |
 | address | `ADR[;TYPE=WORK\|HOME]` (PO box; extended; street; city; region; code; country) | same | |
 | web page | `URL[;TYPE=…]` | same | Apple's escaped `http\://` |
 | chat | `IMPP[;TYPE=…]:<scheme>:<handle>` | same | |
 | birthday | `BDAY:1980-05-17`, year-less `BDAY;X-APPLE-OMIT-YEAR=1604:1604-05-17` | `BDAY:19800517` / `--0517` | any of these spellings, a time part |
 | anniversary | `X-ANNIVERSARY` | `ANNIVERSARY` | Apple `itemN.X-ABDATE` labelled `_$!<Anniversary>!$_` |
 | categories | `CATEGORIES` (one line; several lines are merged) | same | |
+| office location (ActiveSync only, not in the card) | `X-OFFICE-LOCATION` | same | |
+| phonetic names (ActiveSync Yomi names, not in the card) | `X-PHONETIC-FIRST-NAME`, `X-PHONETIC-LAST-NAME`, `X-PHONETIC-ORG` | same | |
+| customer id / government id / account name (ActiveSync only) | `X-CUSTOMER-ID`, `X-GOVERNMENT-ID`, `X-ACCOUNT-NAME` | same | |
+| spouse / children / assistant / manager (ActiveSync only, `vcardRelated()` / `setVcardRelated()`) | `X-RELATED;TYPE=SPOUSE` / `CHILD` / `X-ASSISTANT` / `X-MANAGER` (the vCard 3 form, like `X-ANNIVERSARY`) | `RELATED;TYPE=spouse;VALUE=text` / `child` / `x-assistant` / `x-manager` | only text values are names: a RELATED by reference (`urn:uuid:`, URL) is neither read nor changed |
+| photo (ActiveSync Picture, not in the card) | `PHOTO;ENCODING=b;TYPE=JPEG:<base64>` | `PHOTO:data:image/jpeg;base64,<base64>` | vCard 2.1 `ENCODING=BASE64`; a photo by URL is kept but not read |
 
 A webmail edit rewrites only the properties whose field changed. Within a
 list an unchanged entry keeps its line verbatim (group, `PREF`, Apple labels);
@@ -97,6 +127,27 @@ vCard becomes a group, everything else a contact. A resource keeps its kind
 (a contact PUT onto a group resource → 409), the UID is unique across contacts
 and groups (409 `no-uid-conflict`). Deleting a contact or a group rewrites the
 groups it was a member of (new ETag), so clients pick the change up.
+
+## Backup and restore
+
+Mailbox backups (ZIP) contain the address book as CardDAV serves it: every
+contact and every group as its stored vCard in `contacts/<id>.vcf`, plus the
+names of address members in the archive manifest. A restore puts contacts back
+first, then groups (members resolve by UID), and skips every object whose UID
+the address book already uses — see [backup.md](backup.md#3-restore-bcp--backup--restore--wiederherstellen).
+The system backup (database dump) contains both tables anyway.
+
+## ActiveSync
+
+The own contacts sync with phones as the folder `contacts:default` (ActiveSync
+Contacts class, see [activesync.md](activesync.md#contacts-w3)); the webmail
+module "Kontakte" switches it off like the REST API. ActiveSync has fixed slots
+(three e-mail addresses, one phone per kind, three addresses, one web page;
+a car, radio, assistant, company main or work / home fax number keeps its kind
+in the vCard and returns to its slot);
+values beyond them stay on the server and are never changed or removed by a
+phone. Contact groups are not synced over ActiveSync (there is no group item);
+a contact deleted on a phone leaves its groups like a REST or CardDAV delete.
 
 ## REST
 
@@ -139,7 +190,7 @@ canonical; a colour a note already has from before 9.5 is kept when sent back
 unchanged), `GET /?category=<name>` filters.
 
 Every write announces the realtime event `contacts` / `notes`
-(`announceOnWrite`); CardDAV writes announce `contacts` too.
+(`announceOnWrite`); CardDAV and ActiveSync writes announce `contacts` too.
 
 ## Webmail
 
@@ -156,8 +207,10 @@ Logic: `web-client/src/lib/contactForm.ts`, `lib/contactGroups.ts`,
 
 ## Tests
 
-- storage: `src/contacts/contact-vcard.test.ts`, `src/contacts/contact-groups.test.ts`
+- storage: `src/contacts/contact-vcard.test.ts`, `src/contacts/contact-groups.test.ts`, `src/contacts/contact-backfill.test.ts`
+- backup-service: `src/restore/restore-roundtrip.test.ts` (contacts + groups export → restore)
 - api-gateway: `src/routes/contacts.test.ts`, `src/routes/contacts-structured.test.ts`, `src/routes/notes.test.ts`
 - caldav-server: `src/carddav/carddav.test.ts`
+- activesync: `src/pim/contacts-codec.test.ts`, `src/pim/contacts-sync.test.ts`
 - web-client: `src/lib/contactForm.test.ts`
-- e2e: step `contacts` (`scripts/e2e/steps/contacts.mjs`)
+- e2e: step `contacts` (`scripts/e2e/steps/contacts.mjs`); ActiveSync contacts in step `eas-pim`

@@ -13,7 +13,7 @@ const log = createLogger('backup:mbox');
 const MESSAGE_SELECT = {
   id: true, uid: true, storagePath: true, subject: true, fromAddr: true, fromName: true,
   toAddrs: true, ccAddrs: true, replyTo: true, messageId: true, inReplyTo: true, date: true,
-  bodyText: true, bodyHtml: true, flags: true,
+  bodyText: true, bodyHtml: true, flags: true, createdAt: true,
   attachments: { select: { filename: true, mimeType: true, storagePath: true, contentId: true, inline: true } },
 } as const;
 
@@ -42,6 +42,11 @@ async function folderIdsOf(userId: string, folderIds: string[] | null): Promise<
   if (!mailbox) return null;
   return folderIds ??
     (await prisma.folder.findMany({ where: { mailboxId: mailbox.id }, select: { id: true } })).map((f: { id: string }) => f.id);
+}
+
+/** Internal date of an exported row (`createdAt`; the Date header for a row without one). */
+function internalDateOf(msg: { createdAt?: Date | null; date: Date }): Date {
+  return new Date(msg.createdAt ?? msg.date);
 }
 
 /** asctime() date of the mbox "From " separator line: "Tue Feb  3 10:20:30 2026". */
@@ -103,7 +108,9 @@ export async function exportMbox(
         log.error({ err, messageId: msg.id }, 'MBOX export: raw message unavailable — skipped');
         continue;
       }
-      const chunk = mboxEntry(raw, msg.fromAddr, new Date(msg.date));
+      // 9.5: the separator line carries the internal date (arrival in the mailbox),
+      // the restore takes it from there (restore/mbox-reader.ts).
+      const chunk = mboxEntry(raw, msg.fromAddr, internalDateOf(msg));
       sizeBytes += chunk.length;
       messageCount++;
       if (!ws.write(chunk)) await new Promise<void>((resolve) => ws.once('drain', resolve));
@@ -130,6 +137,8 @@ export interface EmlEntry {
   folder: string;
   flags: string[];
   date: Date;
+  /** 9.5: internal date (arrival in the mailbox) — manifest + restore. */
+  internalDate: Date;
 }
 
 /**
@@ -160,7 +169,7 @@ export async function* exportEmlStream(
       }
       yield {
         filename: `${folderName}/${msg.uid}.eml`, content, folder: exactName,
-        flags: Array.isArray(msg.flags) ? msg.flags : [], date: new Date(msg.date),
+        flags: Array.isArray(msg.flags) ? msg.flags : [], date: new Date(msg.date), internalDate: internalDateOf(msg),
       };
     }
   }

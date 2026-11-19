@@ -77,7 +77,7 @@ const foldersOf = (mailboxId: string) => db.folders.filter((f) => f['mailboxId']
 
 async function* itemsOf(list: Array<{ raw: Buffer; folder?: string | null }>) {
   let i = 0;
-  for (const x of list) yield { raw: x.raw, folder: x.folder ?? null, flags: null, ref: `#${++i}` };
+  for (const x of list) yield { raw: x.raw, folder: x.folder ?? null, flags: null, ref: `#${++i}`, internalDate: null };
 }
 
 async function makeZip(name: string, entries: Array<{ name: string; data: Buffer }>): Promise<string> {

@@ -11,7 +11,12 @@
  *  - folders are created as needed ("." hierarchy, parentId chain);
  *  - flags come from the archive manifest (sanitized), else \Seen.
  *
- * Contacts / calendar files of a ZIP backup are counted but not restored.
+ *  - 9.5: the internal (received) date is the original one (restoredInternalDate:
+ *    archive date, else Received / Date header), not the restore time; the row
+ *    carries `restoredAt` so retention policies do not act on it right away.
+ *
+ * Contacts and contact groups of a ZIP backup are restored by address-book.ts
+ * (job.ts restorePrepared); calendar files are counted but not restored.
  */
 import { createHash } from 'node:crypto';
 import {
@@ -23,6 +28,8 @@ import { openZip, ZipEntryTooLargeError, type ZipEntry } from './zip-reader.js';
 import { readMbox } from './mbox-reader.js';
 import { MANIFEST_NAME, parseManifest, type ManifestLookup } from '../export/manifest.js';
 import { folderSegments, sanitizeFlags, targetFolderName, validRestoreFolder, type RestoreMode } from './source.js';
+import { restoredInternalDate } from './internal-date.js';
+import { emptyAddressBookCounts, isAddressBookEntry, type AddressBookCounts } from './address-book.js';
 
 const log = createLogger('backup:restore');
 
@@ -37,16 +44,18 @@ export interface RestoreItem {
   ref: string;
   /** Why `raw` is null. */
   error?: string;
+  /** 9.5: internal date stored in the archive (ZIP manifest / mbox separator line); null = none. */
+  internalDate: Date | null;
 }
 
-export interface RestoreCounts {
+export interface RestoreCounts extends AddressBookCounts {
   /** Messages read from the archive. */
   total: number;
   imported: number;
   /** Already present in the target folder (idempotent re-run). */
   duplicates: number;
   failed: number;
-  /** Contacts / calendar entries of a ZIP backup (not restored). */
+  /** Calendar files and other non-mail entries of a ZIP backup (not restored). */
   otherEntries: number;
   foldersCreated: number;
 }
@@ -71,7 +80,7 @@ export const DEFAULT_MAX_MESSAGE_BYTES = 150 * 1024 * 1024;
 export const MAX_MANIFEST_BYTES = 16 * 1024 * 1024;
 
 export function emptyCounts(): RestoreCounts {
-  return { total: 0, imported: 0, duplicates: 0, failed: 0, otherEntries: 0, foldersCreated: 0 };
+  return { total: 0, imported: 0, duplicates: 0, failed: 0, otherEntries: 0, foldersCreated: 0, ...emptyAddressBookCounts() };
 }
 
 /** Archive entries → restore items (ZIP: manifest folders/flags, else path-derived folder + \Seen). */
@@ -88,7 +97,7 @@ export async function* zipItems(path: string, limits: RestoreLimits, counts: Res
       }
     }
     for (const entry of zip.entries) {
-      if (entry.name === MANIFEST_NAME || entry.name.endsWith('/')) continue;
+      if (entry.name === MANIFEST_NAME || entry.name.endsWith('/') || isAddressBookEntry(entry.name)) continue;
       if (!entry.name.startsWith('mail/') || !entry.name.toLowerCase().endsWith('.eml')) {
         counts.otherEntries++;
         continue;
@@ -111,18 +120,19 @@ async function zipItem(
   const segs = entry.name.split('/');
   const pathFolder = segs.length >= 3 ? segs.slice(1, -1).join('/') : null;
   const folder = m?.folder ?? pathFolder;
+  const internalDate = m?.internalDate ?? null;
   try {
-    return { raw: await read(entry, limits.maxMessageBytes), folder, flags: m ? m.flags : null, ref: entry.name };
+    return { raw: await read(entry, limits.maxMessageBytes), folder, flags: m ? m.flags : null, ref: entry.name, internalDate };
   } catch (err) {
     const error = err instanceof ZipEntryTooLargeError ? 'message too large' : (err instanceof Error ? err.message : String(err));
-    return { raw: null, folder, flags: null, ref: entry.name, error };
+    return { raw: null, folder, flags: null, ref: entry.name, error, internalDate };
   }
 }
 
 export async function* mboxItems(path: string, limits: RestoreLimits): AsyncGenerator<RestoreItem> {
   for await (const m of readMbox(path, { maxMessageBytes: limits.maxMessageBytes })) {
     yield {
-      raw: m.raw, folder: null, flags: null, ref: `#${m.index}`,
+      raw: m.raw, folder: null, flags: null, ref: `#${m.index}`, internalDate: m.separatorDate,
       ...(m.raw ? {} : { error: 'message too large' }),
     };
   }
@@ -276,6 +286,7 @@ export async function restoreItems(
 
       const { storagePath } = await storeRawMessage(raw);
       const flags = sanitizeFlags(item.flags);
+      const restoredAt = new Date();
       const created = await prisma.$transaction((tx) => createMessage(tx, plan.mailboxId, folderId, {
         flags,
         subject: parsed.subject,
@@ -292,6 +303,9 @@ export async function restoreItems(
         bodyHtml: truncateBodyColumn(parsed.bodyHtml),
         rawSize: raw.length,
         storagePath,
+        createdAt: restoredInternalDate(item.internalDate, raw, restoredAt),
+        // Retention gives the restored item a grace period from now (retention/expiry.ts)
+        restoredAt,
       }));
       for (const [index, att] of parsed.attachments.entries()) {
         const attKey = attachmentKey(created.id, `${index}-${att.sha256.slice(0, 16)}`);

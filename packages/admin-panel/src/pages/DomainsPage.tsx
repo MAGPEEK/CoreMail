@@ -9,6 +9,7 @@ import { Toggle } from '../components/Toggle.js';
 import { copyToClipboard } from '../utils/clipboard.js';
 import { useT } from '../i18n/useT.js';
 import { Can } from '../components/Can.js';
+import { EditPanel, ReportDirty, type EditPanelTab } from '../components/EditPanel.js';
 import { ProtocolAccessEditor } from '../components/ProtocolAccessEditor.js';
 import { WebmailPolicyEditor } from '../components/WebmailPolicyEditor.js';
 import { DataTable, type Column } from '../components/DataTable.js';
@@ -340,7 +341,6 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
     onSuccess: () => {
       toast.success(t('domain_updated_toast'));
       void qc.invalidateQueries({ queryKey: ['admin-domains'] });
-      onClose();
     },
     onError: (err: Error) => toast.error(err.message || t('domain_save_error')),
   });
@@ -394,21 +394,12 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
     }
   };
 
-  const titleId = useId();
-  return (
-    <Modal
-      onClose={onClose}
-      labelledBy={titleId}
-
-      closeOnBackdrop={false}
-      overlayClassName="fixed inset-0 bg-scrim/40 flex items-center justify-center z-50 p-4"
-      className={`bg-surface rounded-lg shadow-2xl w-full ${dnsCheck ? 'max-w-2xl' : 'max-w-lg'} p-6 max-h-[90vh] overflow-y-auto transition-all`}
-    >
-        <div className="flex items-center justify-between mb-5">
-          <h2 id={titleId} className="text-base font-semibold text-fg">{t('domain_edit_title')}</h2>
-          <button type="button" onClick={onClose} aria-label={t('action_close')} className="p-1 text-fg-subtle hover:text-fg-muted rounded"><X size={16} /></button>
-        </div>
-
+  const tabs: EditPanelTab[] = [
+    {
+      id: 'general', label: t('mbox_tab_general'),
+      content: (
+        <>
+          <ReportDirty dirty={name !== domain.name || selector !== domain.dkimSelector} />
         <div className="space-y-3">
           <div>
             <label className="block text-xs font-medium text-fg-muted mb-1">{t('domain_edit_name_label')}</label>
@@ -534,16 +525,6 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
               </div>
             )}
           </div>
-
-          {/* ── 9.4: protocol access (domain level; write = servers area) ───── */}
-          <div className="pt-3 border-t border-line">
-            <ProtocolAccessEditor path={`/admin/protocol-access/domains/${domain.id}`} area="servers" />
-          </div>
-
-          {/* ── 9.4: webmail policies (domain level; write = servers area) ──── */}
-          <div className="pt-3 border-t border-line">
-            <WebmailPolicyEditor path={`/admin/webmail-policies/domains/${domain.id}`} area="servers" />
-          </div>
         </div>
 
         <div className="flex items-center justify-between mt-5">
@@ -571,8 +552,16 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
             </button>
           </div>
         </div>
-    </Modal>
-  );
+        </>
+      ),
+    },
+    // 9.4: protocol access (domain level; write = servers area)
+    { id: 'protocols', label: t('mbox_tab_protocols'), content: <ProtocolAccessEditor path={`/admin/protocol-access/domains/${domain.id}`} area="servers" /> },
+    // 9.4: webmail policies (domain level; write = servers area)
+    { id: 'webmail', label: t('mbox_tab_webmail'), content: <WebmailPolicyEditor path={`/admin/webmail-policies/domains/${domain.id}`} area="servers" /> },
+  ];
+
+  return <EditPanel kind="domain" title={t('domain_edit_title')} subtitle={domain.name} tabs={tabs} onClose={onClose} />;
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
@@ -586,7 +575,7 @@ export function DomainsPage() {
   const [limit,  setLimit]        = useState(50);
   const [page,   setPage]         = useState(1);
   const [showAdd, setShowAdd]     = useState(false);
-  const [editing, setEditing]     = useState<Domain | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   // Debounced search query string
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -605,6 +594,8 @@ export function DomainsPage() {
   });
 
   const domains = data?.domains ?? [];
+  // The panel reads the live row: after a save the list refetches and the form compares against the saved state.
+  const editing = domains.find((d) => d.id === editingId) ?? null;
   const total   = data?.total   ?? 0;
 
   const toggleMutation = useMutation({
@@ -660,7 +651,7 @@ export function DomainsPage() {
       cell: (d) => (
         <Can area="domains" access="write">
           <button
-            onClick={() => setEditing(d)}
+            onClick={() => setEditingId(d.id)}
             className="p-1.5 text-info-fg hover:text-info-fg border border-info-line rounded hover:bg-info-bg transition-colors"
             title={t('domain_edit_title_btn')}
             aria-label={`${t('domain_edit_title_btn')}: ${d.name}`}
@@ -716,7 +707,7 @@ export function DomainsPage() {
 
       {/* ── Modals ─────────────────────────────────────────────────────────── */}
       {showAdd  && <AddDomainModal  onClose={() => setShowAdd(false)} />}
-      {editing  && <EditDomainModal domain={editing} onClose={() => setEditing(null)} />}
+      {editing  && <EditDomainModal domain={editing} onClose={() => setEditingId(null)} />}
     </div>
   );
 }
