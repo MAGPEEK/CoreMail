@@ -73,6 +73,25 @@ export async function run(state) {
     return 'enable own-domain USER';
   });
 
+  await check('scopes: grantees of another domain are redacted in detail views (w3)', async () => {
+    const grant = await http('POST', `/api/v1/admin/mailboxes/${state.users.a.id}/delegates`, {
+      token: admin, body: { granteeId: s.otherUserId, permission: 'READ_ONLY', autoMap: false },
+    });
+    assert(grant.status === 201, `grant ${grant.status} ${grant.text.slice(0, 200)}`);
+    try {
+      const scoped = await http('GET', `/api/v1/admin/mailboxes/${state.users.a.id}/delegates`, { token: hd });
+      assert(scoped.status === 200, `${scoped.status}`);
+      assert(!scoped.text.includes(OTHER), `other domain visible: ${scoped.text.slice(0, 300)}`);
+      const row = scoped.json.find((d) => d.granteeId === s.otherUserId);
+      assert(row?.grantee?.email === '(andere Domain)', JSON.stringify(row));
+      const org = await http('GET', `/api/v1/admin/mailboxes/${state.users.a.id}/delegates`, { token: admin });
+      assert(org.text.includes(`other@${OTHER}`), 'organisation-wide admins see the address');
+      return 'scoped: "(andere Domain)", organisation-wide: address';
+    } finally {
+      await http('DELETE', `/api/v1/admin/mailboxes/${state.users.a.id}/delegates/${s.otherUserId}`, { token: admin });
+    }
+  });
+
   await check('scopes: server-wide routes and scope changes are refused', async () => {
     const srv = await http('GET', '/api/v1/admin/servers/settings', { token: hd });
     const own = await http('PUT', `/api/v1/admin/organisation/role-assignments/${s.hdId}/scope`, { token: hd, body: { domainIds: [] } });

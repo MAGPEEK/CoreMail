@@ -2,8 +2,8 @@ import {
   prisma, createMessage, copyMessages, moveMessages, modifyFlags, expunge, verifyMailCredentials, isMailboxWriteBlocked, OVER_QUOTA_MESSAGE,
   parseRawMessage, storeRawMessage, truncateBodyColumn, parseMimeTree, headerBytes, bodyBytes,
   attachmentKey, uploadBuffer, loadThreadReferences, deleteFolderMovingMail, announceFolderListChange,
-  canCreateItems, canCreateSubfolder, canDeleteItem, canEditItem, canManageFolder, canReadFolder, hasAnyWriteRight,
-  hasWriteRightSomewhere, reparentedFolders,
+  canCreateItems, canCreateSubfolder, canDeleteItem, canEditItem, canManageFolder, canReadFolder, canSeeFolder, hasAnyWriteRight,
+  hasWriteRightSomewhere, reparentedFolders, folderNameCollision,
   type FolderAccess, type FolderTreeNode, type RawSourceMessage,
 } from '@coremail/storage';
 import { type Chunk, flagList, isValidFlag, literal, joinChunks, toBuffer } from '../fetch/imap-string.js';
@@ -89,6 +89,19 @@ async function reshapesOthers(
     where: { mailboxId: target.mailboxId }, select: { id: true, name: true, parentId: true },
   });
   return reparentedFolders(tree, change(tree), new Set(exempt)).length > 0;
+}
+
+/**
+ * w3 scope leaks: is a wanted name taken only by folders the grantee cannot
+ * see? CREATE / RENAME then answer NOPERM like any other refusal — never
+ * [ALREADYEXISTS], which would reveal the hidden folder's name.
+ */
+async function takenByHiddenFolder(target: Pick<MailboxTarget, 'folders' | 'mailboxId'>, takenIds: string[]): Promise<boolean> {
+  if (target.folders.level !== 'grants' || takenIds.length === 0) return false;
+  const tree: FolderTreeNode[] = await prisma.folder.findMany({
+    where: { mailboxId: target.mailboxId }, select: { id: true, name: true, parentId: true },
+  });
+  return folderNameCollision(tree, target.folders, takenIds) === 'hidden';
 }
 
 /** Every message may be deleted: the "delete all" right, or "delete own" and all are the user's. */
@@ -245,7 +258,7 @@ export async function handleCreate(
     select: { id: true },
   });
   if (existing) {
-    sendNo(session, tag, '[ALREADYEXISTS] Mailbox already exists');
+    sendNo(session, tag, await takenByHiddenFolder(target, [existing.id]) ? NOPERM : '[ALREADYEXISTS] Mailbox already exists');
     return;
   }
   if (await reshapesOthers(target, (tree) => [...tree, { id: NEW_FOLDER, name, parentId: null }])) { sendNo(session, tag, NOPERM); return; }
@@ -337,7 +350,9 @@ export async function handleRename(
   const display = displayNames(folders.map((f) => f.name));
   const shown = (f: { name: string }): string => display.get(f.name) ?? f.name;
   const folder = folders.find((f) => shown(f) === oldName);
-  if (!folder) {
+  // w3: a folder the user can neither see nor read is reported like a missing one (as findTargetFolder does)
+  const sourceAccess = folder ? folderAccessIn(from.target, folder.id) : null;
+  if (!folder || !sourceAccess || (!canSeeFolder(sourceAccess) && !canReadFolder(sourceAccess))) {
     sendNo(session, tag, '[NONEXISTENT] Mailbox does not exist');
     return;
   }
@@ -356,9 +371,10 @@ export async function handleRename(
     sendNo(session, tag, NOPERM);
     return;
   }
-  const taken = new Set(folders.flatMap((f) => [f.name, shown(f)]));
-  if (newName === 'INBOX' || renames.some((r) => taken.has(r.name))) {
-    sendNo(session, tag, '[ALREADYEXISTS] Target folder exists');
+  const wanted = new Set(renames.map((r) => r.name));
+  const takenIds = folders.filter((f) => wanted.has(f.name) || wanted.has(shown(f))).map((f) => f.id);
+  if (newName === 'INBOX' || takenIds.length > 0) {
+    sendNo(session, tag, await takenByHiddenFolder(from.target, takenIds) ? NOPERM : '[ALREADYEXISTS] Target folder exists');
     return;
   }
   const newNames = new Map(renames.map((r) => [r.id, r.name]));

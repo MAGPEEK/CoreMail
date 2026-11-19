@@ -34,8 +34,9 @@ export async function run(state) {
     } finally { im.close(); }
     const folders = (await http('GET', '/api/v1/mail/folders', { token: A })).json ?? [];
     ctx.sub = folders.find((f) => f.name === sub);
+    ctx.parent = folders.find((f) => f.name === parent);
     ctx.inbox = folders.find((f) => f.name === 'INBOX');
-    assert(ctx.sub && ctx.inbox, `folders not found: ${folders.map((f) => f.name).join(', ')}`);
+    assert(ctx.sub && ctx.parent && ctx.inbox, `folders not found: ${folders.map((f) => f.name).join(', ')}`);
     return ctx.sub.id;
   });
 
@@ -124,6 +125,44 @@ export async function run(state) {
       return 'no folders';
     } finally {
       await http('DELETE', `/api/v1/admin/mailboxes/${state.users.a.id}/delegates/${state.users.b.id}`, { token: admin });
+    }
+  });
+
+  await check('folder-permissions: unknown and hidden addresses get the same answer (w3, no address oracle)', async () => {
+    const put = (email) => http('PUT', `/api/v1/mail/folders/${ctx.sub.id}/permissions`, {
+      token: A, body: { entries: [{ grantee: { email }, role: 'reviewer' }] },
+    });
+    const unknown = await put(`nobody-${stamp}@${userA.split('@')[1]}`);
+    assert(unknown.status === 400 && unknown.json?.code === 'UNKNOWN_GRANTEE', `unknown ${unknown.status} ${unknown.text}`);
+    const flowB = `/api/v1/admin/mailboxes/${state.users.b.id}/mail-flow`;
+    const h = await http('PUT', flowB, { token: admin, body: { hiddenFromGal: true } });
+    assert(h.status === 200, `hide B ${h.status}`);
+    try {
+      const hidden = await put(userB);
+      assert(hidden.status === unknown.status && hidden.text === unknown.text, `hidden ${hidden.status} ${hidden.text} vs ${unknown.text}`);
+    } finally {
+      await http('PUT', flowB, { token: admin, body: { hiddenFromGal: false } });
+    }
+    return 'unknown = hidden: 400 UNKNOWN_GRANTEE';
+  });
+
+  await check('folder-permissions: a grantee cannot probe hidden folder names (w3, REST 403 / IMAP NOPERM)', async () => {
+    // B may create subfolders in the parent, but cannot see the existing subfolder "Projekt"
+    const g = await http('PUT', `/api/v1/mail/folders/${ctx.parent.id}/permissions`, {
+      token: A, body: { entries: [{ grantee: { email: userB }, role: 'publishingEditor' }] },
+    });
+    assert(g.status === 200, `grant ${g.status} ${g.text.slice(0, 200)}`);
+    try {
+      const rest = await http('POST', `${ctx.base}/folders`, { token: B, body: { name: sub, parentId: ctx.parent.id } });
+      assert(rest.status === 403 && rest.json?.code === 'NO_PERMISSION', `REST create over a hidden name → ${rest.status} ${rest.text}`);
+      const im = await imapLogin(userB, c.userB);
+      try {
+        const cr = await imapCmd(im, `CREATE ${imapQuote(foreignSub)}`);
+        assert(cr.status === 'NO' && /NOPERM/.test(cr.text) && !/ALREADYEXISTS/.test(cr.text), `IMAP CREATE ${cr.text}`);
+      } finally { im.close(); }
+      return 'REST 403 NO_PERMISSION, IMAP NO [NOPERM]';
+    } finally {
+      await http('PUT', `/api/v1/mail/folders/${ctx.parent.id}/permissions`, { token: A, body: { entries: [] } });
     }
   });
 

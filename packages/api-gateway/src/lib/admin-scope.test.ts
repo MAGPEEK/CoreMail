@@ -127,3 +127,47 @@ test('rbac: only ORGANIZATION_MANAGEMENT assigns scopes, and only to scopable ro
     assert.equal(rbac.scopeAssignmentError('ORGANIZATION_MANAGEMENT', target, []), null, `${target}: clearing is always allowed`);
   }
 });
+
+// ─── w3 scope leaks: addresses of other domains in detail views ─────────────
+
+test('addressRedactor: hosted other domains hidden, external and own addresses kept, runs counted', () => {
+  const r = scope.addressRedactor(scopedA, ['a.example', 'B.example', 'c.example'], 'me@b.example');
+  assert.equal(r.active, true);
+  assert.deepEqual(r.hiddenDomains, ['b.example', 'c.example']);
+  assert.equal(r.hides('x@b.example'), true);
+  assert.equal(r.hides('X <X@B.EXAMPLE>'), true);
+  assert.equal(r.hides('x@a.example'), false);
+  assert.equal(r.hides('x@gmail.test'), false, 'external correspondents stay visible');
+  assert.equal(r.hides('x@sub.b.example'), false, 'only hosted domains');
+  assert.equal(r.hides('me@b.example'), false, "the viewer's own address");
+  assert.equal(r.hides(null), false);
+
+  assert.equal(r.text('x@b.example'), '(andere Domain)');
+  assert.equal(r.text('x@b.example, y@c.example, z@a.example'), '(andere Domain, 2 Adressen), z@a.example');
+  assert.equal(r.text('z@a.example, x@b.example'), 'z@a.example, (andere Domain)');
+  assert.equal(r.text('"Max, B" <max@b.example>; Eva <eva@c.example>'), '(andere Domain, 2 Adressen)', 'display names go with the address');
+  assert.equal(r.text('Delivery to x@b.example failed.'), 'Delivery to (andere Domain) failed.');
+  assert.equal(r.text('a@a.example and q@gmail.test'), 'a@a.example and q@gmail.test');
+  assert.equal(r.optionalText(null), null);
+
+  assert.deepEqual(r.deep({
+    owner: 'u@a.example', grantee: 'x@b.example', recipients: ['u@a.example', 'x@b.example', 'y@c.example'],
+    nested: [{ 'k@b.example': 'FULL', 'l@c.example': 'READ' }], n: 3, ok: true, at: null,
+  }), {
+    owner: 'u@a.example', grantee: '(andere Domain)', recipients: ['u@a.example', '(andere Domain, 2 Adressen)'],
+    nested: [{ '(andere Domain)': 'FULL', '(andere Domain) #2': 'READ' }], n: 3, ok: true, at: null,
+  });
+  assert.deepEqual(r.person({ id: 'u1', email: 'x@b.example', displayName: 'Xaver' }), { id: 'u1', email: '(andere Domain)', displayName: '(andere Domain)' });
+  const inScope = { id: 'u2', email: 'u@a.example', displayName: 'U' };
+  assert.equal(r.person(inScope), inScope);
+});
+
+test('addressRedactor: organisation-wide admins see everything unchanged', () => {
+  const r = scope.addressRedactor(org, ['a.example', 'b.example']);
+  assert.equal(r, scope.NO_REDACTION);
+  const value = { to: ['x@b.example'] };
+  assert.equal(r.deep(value), value);
+  assert.equal(r.text('x@b.example'), 'x@b.example');
+  assert.equal(scope.otherDomainLabel(1), '(andere Domain)');
+  assert.equal(scope.otherDomainLabel(4), '(andere Domain, 4 Adressen)');
+});

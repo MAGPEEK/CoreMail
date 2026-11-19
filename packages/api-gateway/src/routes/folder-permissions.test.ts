@@ -328,6 +328,59 @@ test('w3 review: a grantee cannot pull other folders below its own by name (crea
   assert.equal((await call('POST', `${ERIN}/folders`, tok('dave'), { name: 'Mr', parentId: 'f-erin-proj' })).status, 201);
 });
 
+test('w3 scope leaks: PUT answers unknown, hidden and other-domain addresses alike (no address oracle)', async () => {
+  erinTree();
+  const t = tok('erin');
+  const refusal = async (grantee: unknown, role = 'reviewer') => {
+    const r = await call('PUT', OWN('f-erin-proj'), t, { entries: [{ grantee, role }] });
+    return [r.status, r.json];
+  };
+  const unknown = await refusal({ email: 'nobody@ex.com' });
+  assert.deepEqual(unknown, [400, { error: 'Unbekannter Benutzer', code: 'UNKNOWN_GRANTEE' }]);
+  for (const grantee of [
+    { email: 'ivy@ex.com' }, // hidden from the address list
+    { email: 'carol@ex.com' }, // another domain
+    { userId: 'ivy' }, { userId: 'carol' }, { userId: 'ghost' },
+    { email: 'gina@ex.com' }, // deactivated
+  ]) {
+    assert.deepEqual(await refusal(grantee), unknown, JSON.stringify(grantee));
+    assert.deepEqual(await refusal(grantee, 'none'), unknown, `${JSON.stringify(grantee)} with "none"`);
+  }
+  assert.equal(folderPerms.length, 0, 'nothing written');
+  // a grant that already exists (set by an administrator) stays editable by the owner
+  addFolderPerm('f-erin-proj', 'user:ivy', ROLE_RIGHTS.reviewer);
+  const keep = await call('PUT', OWN('f-erin-proj'), t, { entries: [{ grantee: { userId: 'ivy' }, role: 'editor' }] });
+  assert.equal(keep.status, 200, JSON.stringify(keep.json));
+  assert.deepEqual(folderPerms.map((p) => [p['granteeKey'], p['rights']]), [['user:ivy', ROLE_RIGHTS.editor]]);
+  // a grantee with the folder owner right: the same rule for its own grants
+  addFolderPerm('f-erin-proj', 'user:hank', ROLE_RIGHTS.owner);
+  const byGrantee = await call('PUT', `${ERIN}/folders/f-erin-proj/permissions`, tok('hank'), {
+    entries: [{ grantee: { userId: 'hank' }, role: 'owner' }, { grantee: { userId: 'ivy' }, role: 'editor' }, { grantee: { email: 'carol@ex.com' }, role: 'reviewer' }],
+  });
+  assert.deepEqual([byGrantee.status, byGrantee.json], [400, { error: 'Unbekannter Benutzer', code: 'UNKNOWN_GRANTEE' }]);
+});
+
+test('w3 scope leaks: a grantee cannot probe hidden folder names through "already exists"', async () => {
+  erinTree();
+  addFolder('f-erin-own', 'mb-erin', 'Hank', 'f-erin-proj');
+  addFolderPerm('f-erin-proj', 'user:hank', ROLE_RIGHTS.owner, true); // Projekte + Sub (+ Hank)
+  const t = tok('hank');
+  // "Privat" exists but hank cannot see it → the same refusal as any other (403), never 409
+  const hidden = await call('POST', `${ERIN}/folders`, t, { name: 'Privat', parentId: 'f-erin-proj' });
+  const other = await call('POST', `${ERIN}/folders`, t, { name: 'Oben' }); // top level: refused anyway
+  assert.deepEqual([hidden.status, hidden.json], [other.status, other.json]);
+  assert.deepEqual([hidden.status, hidden.json['code']], [403, 'NO_PERMISSION']);
+  const renameHidden = await call('PATCH', `${ERIN}/folders/f-erin-own`, t, { name: 'Privat' });
+  assert.deepEqual([renameHidden.status, renameHidden.json['code']], [403, 'NO_PERMISSION']);
+  // a folder hank can list is still "already exists"
+  assert.equal((await call('POST', `${ERIN}/folders`, t, { name: 'Sub', parentId: 'f-erin-proj' })).status, 409);
+  assert.equal((await call('PATCH', `${ERIN}/folders/f-erin-own`, t, { name: 'Sub' })).status, 409);
+  assert.equal((await call('POST', `${ERIN}/folders`, t, { name: 'Projekte', parentId: 'f-erin-proj' })).status, 409);
+  assert.ok(!writes.some((w) => w.startsWith('folder.')), 'nothing written');
+  // full access (the owner side) keeps the plain 409
+  assert.equal((await call('POST', `${ERIN}/folders`, tok('dave'), { name: 'Privat' })).status, 409);
+});
+
 test('w3 review: GET /mail/delegated-mailboxes lists folders only for a read delegation of an active owner', async () => {
   const byMailbox = (rows: Row[]) => Object.fromEntries(rows.map((r) => [r['mailboxId'], (r['folders'] as Row[]).length]));
   const sendAs = await call('GET', '/api/v1/mail/delegated-mailboxes', tok('bob'));

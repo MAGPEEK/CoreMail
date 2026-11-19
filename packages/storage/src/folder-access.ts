@@ -215,6 +215,27 @@ export function listableFolders(folders: readonly FolderTreeNode[], m: MailboxFo
   return folders.filter((f) => out.has(f.id)).map((f) => out.get(f.id)!);
 }
 
+/** How a folder name a user wants to create or rename to collides with the mailbox's folders. */
+export type FolderNameCollision = 'free' | 'visible' | 'hidden';
+
+/**
+ * Pure (w3 scope leaks): `takenIds` are the folders that already carry the
+ * wanted name. 'visible' = one of them is in the user's folder list (it may be
+ * answered as "already exists"); 'hidden' = only folders the user can neither
+ * see nor reach as a path — callers answer it exactly like any other refusal
+ * of the change, never as "already exists", so a grantee cannot probe the
+ * names of folders it cannot see. Mailbox-level access: always 'visible'.
+ */
+export function folderNameCollision(
+  folders: readonly FolderTreeNode[],
+  m: MailboxFolderAccess,
+  takenIds: readonly string[],
+): FolderNameCollision {
+  if (takenIds.length === 0) return 'free';
+  const listed = new Set(listableFolders(folders, m).map((l) => l.id));
+  return takenIds.some((id) => listed.has(id)) ? 'visible' : 'hidden';
+}
+
 /**
  * The user's access to one folder, wherever it lives (own mailbox, mailbox
  * grant, folder grant); null when the folder does not exist or the user has

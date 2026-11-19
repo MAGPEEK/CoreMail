@@ -1137,6 +1137,37 @@ describe('w3: folder permissions', () => {
     assert.equal((await client.cmd('DELETE "Other Users/dave@example.test/Projects/Neu"')).status, 'OK');
   });
 
+  test('w3 scope leaks: CREATE / RENAME never reveal a hidden folder name through [ALREADYEXISTS]', async (t) => {
+    const { client, db } = await login(t);
+    daveFolders(db);
+    db.folders.push(
+      { id: 'f-dave-secret', mailboxId: 'mb-dave', name: 'Projects.Secret', displayName: 'Projects.Secret' },
+      { id: 'f-dave-mine', mailboxId: 'mb-dave', name: 'Projects.Mine', displayName: 'Projects.Mine' },
+    );
+    db.permissions.push(
+      grant('f-dave-proj', 'mb-dave', 'user:u1', ROLE.owner, true), // Projects and below …
+      grant('f-dave-secret', 'mb-dave', 'user:u1', 0), // … except Projects.Secret ("None")
+    );
+    invalidateAccessCaches();
+    const p = (name: string) => `"Other Users/dave@example.test/Projects/${name}"`;
+    assert.doesNotMatch((await client.cmd('LIST "" "Other Users/dave@example.test/*"')).raw, /Secret/);
+    // a hidden name is refused like any other change; a free one is created
+    const hidden = await client.cmd(`CREATE ${p('Secret')}`);
+    assert.match(hidden.tagged, /NO \[NOPERM\]/, hidden.tagged);
+    assert.doesNotMatch(hidden.tagged, /ALREADYEXISTS/);
+    assert.match((await client.cmd(`RENAME ${p('Mine')} ${p('Secret')}`)).tagged, /NO \[NOPERM\]/);
+    // a hidden source answers like a missing one
+    const untag = (line: string): string => line.replace(/^\S+ /, '');
+    const fromHidden = untag((await client.cmd(`RENAME ${p('Secret')} ${p('Open')}`)).tagged);
+    assert.equal(fromHidden, untag((await client.cmd(`RENAME ${p('Nothing')} ${p('Open')}`)).tagged));
+    assert.match(fromHidden, /^NO \[NONEXISTENT\]/);
+    // names the grantee can list keep [ALREADYEXISTS]
+    assert.match((await client.cmd(`CREATE ${p('Sub')}`)).tagged, /NO \[ALREADYEXISTS\]/);
+    assert.match((await client.cmd(`RENAME ${p('Mine')} ${p('Sub')}`)).tagged, /NO \[ALREADYEXISTS\]/);
+    assert.equal(db.folders.find((f) => f.id === 'f-dave-secret')!.name, 'Projects.Secret', 'unchanged');
+    assert.equal((await client.cmd(`CREATE ${p('Brandneu')}`)).status, 'OK');
+  });
+
   test('w3 review: a permission-change of another user (a Default change) re-checks every IDLE session at once', async (t) => {
     setIdlePollInterval(60_000);
     const { client, db } = await login(t);

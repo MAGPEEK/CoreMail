@@ -225,6 +225,19 @@ export function hasGrantee(entries: readonly PermissionEntry[], user: { id?: str
   return entries.some((e) => sameGrantee(e, user));
 }
 
+/** One entry of the /contacts?q= search (private contacts, `gal-<id>` = address-list users). */
+export interface ContactSuggest { id: string; displayName: string; email: string }
+
+/**
+ * The grantee picker's suggestions (w3 scope leaks): only users of the address
+ * list (`gal-` entries — the server leaves out users hidden from it and other
+ * domains), never private contacts, never someone already listed. The server
+ * accepts new grantees from the same directory only.
+ */
+export function directorySuggestions(found: readonly ContactSuggest[], entries: readonly PermissionEntry[], max: number): ContactSuggest[] {
+  return found.filter((c) => c.id.startsWith('gal-') && c.email && !hasGrantee(entries, { email: c.email })).slice(0, max);
+}
+
 /**
  * Adds a user with NEW_GRANTEE_ROLE (no-op when already listed). With an id the
  * entry is sent as { userId } (BCP), without one as { email } (webmail directory search).

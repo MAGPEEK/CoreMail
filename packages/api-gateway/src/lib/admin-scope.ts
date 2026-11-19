@@ -141,6 +141,130 @@ export const ORG_ONLY_REFUSAL = Object.freeze({
   code: 'SCOPE_ORG_ONLY',
 });
 
+// ─── Addresses of other domains in detail views ─────────────────────────────
+
+/**
+ * Shown to a scoped admin instead of an address of a hosted domain outside its
+ * scope (grantees, other recipients, audit details); a run of several hidden
+ * addresses becomes one label with their count.
+ */
+export const OTHER_DOMAIN_LABEL = '(andere Domain)';
+
+export function otherDomainLabel(count: number): string {
+  return count <= 1 ? OTHER_DOMAIN_LABEL : `(andere Domain, ${count} Adressen)`;
+}
+
+/**
+ * An address with an optional display name ("Name" <a@b>, Name <a@b>) or a bare
+ * address. Group 1 = the address of the angle form, group 2 = a bare address.
+ */
+const ADDRESS_RE = /(?:"[^"\r\n]*"|[^\s",;:<>()[\]@]+(?:[ \t]+[^\s",;:<>()[\]@]+)*)?[ \t]*<([^<>\s@]+@[^<>\s]+)>|([\p{L}\p{N}.!#$%&'*+/=?^_`{|}~-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*)/gu;
+const HIDDEN_MARK = '\u0001';
+const HIDDEN_RUN_RE = /\u0001(?:[ \t]*[,;][ \t]*\u0001)*/g;
+const LIST_SEPARATORS_RE = /^[\s,;]*$/;
+
+/** Redacts the addresses of other hosted domains for one admin (see addressRedactor). */
+export interface AddressRedactor {
+  /** false = organisation-wide: every method returns its input unchanged */
+  readonly active: boolean;
+  /** hosted domains outside the scope (lower-case) */
+  readonly hiddenDomains: readonly string[];
+  /** Is this address (bare or with display name) one the admin must not see? */
+  hides(address: string | null | undefined): boolean;
+  /** A text with every hidden address replaced (runs of a list → one label with a count). */
+  text(value: string): string;
+  /** text() for an optional column. */
+  optionalText<T extends string | null | undefined>(value: T): T;
+  /** Strings, array elements and object keys / values of a JSON value, recursively. */
+  deep<T>(value: T): T;
+  /** A person row ({ email, displayName? }) of another domain: both fields become the label. */
+  person<T extends { email: string; displayName?: string | null }>(p: T): T;
+}
+
+const identity = <T>(v: T): T => v;
+
+/** The redactor of organisation-wide admins: nothing is hidden. */
+export const NO_REDACTION: AddressRedactor = Object.freeze({
+  active: false, hiddenDomains: Object.freeze([]) as readonly string[],
+  hides: () => false, text: identity, optionalText: identity, deep: identity, person: identity,
+});
+
+/**
+ * Pure (w3 scope leaks): the redactor of a scoped admin. Hidden are addresses
+ * of hosted domains (`hostedDomains`, the Domain table) outside the scope —
+ * the other tenants of the server. Addresses of external domains stay visible
+ * (the correspondents of the scope's mailboxes: quarantine senders, mail-flow
+ * partners), and so does the viewer's own address (`viewerEmail`). An
+ * organisation-wide scope → NO_REDACTION.
+ */
+export function addressRedactor(scope: AdminScope, hostedDomains: readonly string[], viewerEmail?: string): AddressRedactor {
+  if (!isScoped(scope)) return NO_REDACTION;
+  const own = new Set(scope.domains.map((d) => d.name));
+  const hidden = new Set(hostedDomains.map((d) => d.toLowerCase()).filter((d) => !own.has(d)));
+  const viewer = viewerEmail?.trim().toLowerCase() ?? '';
+  const hides = (address: string | null | undefined): boolean => {
+    if (!address) return false;
+    const bare = address.trim().replace(/^.*<([^>]*)>.*$/, '$1').trim().toLowerCase();
+    return bare !== viewer && hidden.has(domainOfAddress(bare));
+  };
+
+  /** The text with hidden addresses replaced, their number and whether nothing else was in it. */
+  const redact = (value: string): { text: string; count: number; pure: boolean } => {
+    let count = 0;
+    const marked = value.replaceAll(HIDDEN_MARK, '').replace(ADDRESS_RE, (match, angle: string | undefined, bare: string | undefined) => {
+      if (!hides(angle ?? bare)) return match;
+      count += 1;
+      return HIDDEN_MARK;
+    });
+    if (count === 0) return { text: value, count, pure: false };
+    const pure = LIST_SEPARATORS_RE.test(marked.replaceAll(HIDDEN_MARK, ''));
+    const text = marked.replace(HIDDEN_RUN_RE, (run) => otherDomainLabel(run.split(HIDDEN_MARK).length - 1));
+    return { text, count, pure };
+  };
+
+  const deep = (value: unknown): unknown => {
+    if (typeof value === 'string') return redact(value).text;
+    if (Array.isArray(value)) {
+      // elements that are only hidden addresses collapse into one label with their count
+      let hiddenCount = 0;
+      let at = -1;
+      const out: unknown[] = [];
+      for (const v of value) {
+        const r = typeof v === 'string' ? redact(v) : null;
+        if (r?.pure) {
+          hiddenCount += r.count;
+          if (at < 0) at = out.length;
+        } else {
+          out.push(r ? r.text : deep(v));
+        }
+      }
+      if (hiddenCount > 0) out.splice(at, 0, otherDomainLabel(hiddenCount));
+      return out;
+    }
+    if (value && typeof value === 'object' && !(value instanceof Date) && !Buffer.isBuffer(value)) {
+      const out: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+        let key = redact(k).text;
+        for (let n = 2; key in out; n += 1) key = `${redact(k).text} #${n}`;
+        out[key] = deep(v);
+      }
+      return out;
+    }
+    return value;
+  };
+
+  return Object.freeze({
+    active: true,
+    hiddenDomains: Object.freeze([...hidden].sort()),
+    hides,
+    text: (value: string) => redact(value).text,
+    optionalText: <T extends string | null | undefined>(value: T): T => (typeof value === 'string' ? redact(value).text : value) as T,
+    deep: <T>(value: T): T => deep(value) as T,
+    person: <T extends { email: string; displayName?: string | null }>(p: T): T =>
+      (hides(p.email) ? { ...p, email: OTHER_DOMAIN_LABEL, ...('displayName' in p ? { displayName: OTHER_DOMAIN_LABEL } : {}) } : p),
+  });
+}
+
 /** Public form of a scope (GET /admin/me/permissions, role assignments). */
 export function scopeView(scope: AdminScope): { kind: 'organisation' } | { kind: 'domains'; domains: ScopeDomain[] } {
   return isScoped(scope) ? { kind: 'domains', domains: scope.domains.map((d) => ({ id: d.id, name: d.name })) } : { kind: 'organisation' };

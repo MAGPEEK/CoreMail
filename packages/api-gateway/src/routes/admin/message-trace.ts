@@ -11,8 +11,8 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { prisma } from '@coremail/storage';
 import { requireArea } from '../../middleware/auth.js';
 import { csvCellQuoted } from '../../lib/export-safety.js';
-import { scopeOf } from '../../middleware/admin-scope.js';
-import { anyAddressInScope, isScoped, type AdminScope } from '../../lib/admin-scope.js';
+import { redactorOf, scopeOf } from '../../middleware/admin-scope.js';
+import { anyAddressInScope, isScoped, type AddressRedactor, type AdminScope } from '../../lib/admin-scope.js';
 
 export const adminMessageTraceRouter: RouterType = Router();
 
@@ -48,6 +48,21 @@ export function traceRowInScope(scope: AdminScope, metadata: unknown): boolean {
   if (!isScoped(scope)) return true;
   const m = (metadata && typeof metadata === 'object' ? metadata : {}) as Record<string, unknown>;
   return anyAddressInScope(scope, [...addressesOf(m['sender']), ...addressesOf(m['recipient'])]);
+}
+
+/**
+ * Pure (w3 scope leaks): a MAIL_FLOW row as a scoped admin sees it — the
+ * addresses of other hosted domains in its metadata and message text read
+ * "(andere Domain)". Scoped searches match the redacted row (no oracle).
+ */
+export function redactTraceRow<T extends { metadata: unknown; message?: string }>(r: AddressRedactor, row: T): T {
+  if (!r.active) return row;
+  return { ...row, metadata: r.deep(row.metadata), ...(typeof row.message === 'string' ? { message: r.text(row.message) } : {}) };
+}
+
+/** The rows a scoped admin may see, redacted (organisation-wide: unchanged). */
+function visibleRows<T extends { metadata: unknown; message?: string }>(scope: AdminScope, r: AddressRedactor, rows: T[]): T[] {
+  return rows.filter((row) => traceRowInScope(scope, row.metadata)).map((row) => redactTraceRow(r, row));
 }
 
 /** Max. rows scanned for a filtered search / export (metadata is JSON, filtered in memory). */
@@ -111,7 +126,7 @@ adminMessageTraceRouter.get('/', async (req: Request, res: Response) => {
   }
 
   const rows = await prisma.systemLog.findMany({ where: w.where, orderBy: { timestamp: 'desc' }, take: TRACE_SCAN_LIMIT, select });
-  const { items, total } = pageFiltered(rows.filter((r) => traceRowInScope(scope, r.metadata)), filter, page, limit);
+  const { items, total } = pageFiltered(visibleRows(scope, await redactorOf(req), rows), filter, page, limit);
   res.json({ items, total, page, limit, truncated: rows.length >= TRACE_SCAN_LIMIT });
 });
 
@@ -128,7 +143,8 @@ adminMessageTraceRouter.get('/export', async (req: Request, res: Response) => {
   });
 
   const scope = scopeOf(req);
-  const filtered = rows.filter(r => traceRowInScope(scope, r.metadata) && matchesTraceFilter(r.metadata, { sender, recipient, subject, status }));
+  const filtered = visibleRows(scope, await redactorOf(req), rows)
+    .filter((r) => matchesTraceFilter(r.metadata, { sender, recipient, subject, status }));
 
   const header = 'Zeitstempel,Absender,Empfänger,Betreff,Status,MessageId\r\n';
   const lines = filtered.map(r => {

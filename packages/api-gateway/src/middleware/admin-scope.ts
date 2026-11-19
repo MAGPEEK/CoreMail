@@ -10,9 +10,9 @@
 import type { Request, Response, NextFunction } from 'express';
 import { prisma } from '@coremail/storage';
 import {
-  EMPTY_SCOPE, ORG_ONLY_REFUSAL, OUT_OF_SCOPE_NOT_FOUND, OUT_OF_SCOPE_REFUSAL,
-  addressInScope, aliasInScope, inScope, isScoped, scopeFromRows,
-  type AdminScope, type DomainScope,
+  EMPTY_SCOPE, NO_REDACTION, ORG_ONLY_REFUSAL, OUT_OF_SCOPE_NOT_FOUND, OUT_OF_SCOPE_REFUSAL,
+  addressInScope, addressRedactor, aliasInScope, inScope, isScoped, scopeFromRows,
+  type AddressRedactor, type AdminScope, type DomainScope,
 } from '../lib/admin-scope.js';
 
 /** Scope of `userId` with `role`: ORGANIZATION_MANAGEMENT never reads rows. Throws on database errors. */
@@ -28,6 +28,19 @@ export async function loadAdminScope(userId: string, role: string): Promise<Admi
 /** The resolved scope of the request's admin; fails closed (sees nothing) when it is missing. */
 export function scopeOf(req: Request): AdminScope {
   return req.apiUser?.adminScope ?? EMPTY_SCOPE;
+}
+
+/**
+ * The address redactor of the request's admin (lib/admin-scope.ts
+ * addressRedactor): organisation-wide → NO_REDACTION without a query; scoped →
+ * hides the addresses of the other hosted domains. Throws on database errors
+ * (fail closed: the route answers 500 instead of an unredacted view).
+ */
+export async function redactorOf(req: Request): Promise<AddressRedactor> {
+  const scope = scopeOf(req);
+  if (!isScoped(scope)) return NO_REDACTION;
+  const domains = await prisma.domain.findMany({ select: { name: true } });
+  return addressRedactor(scope, domains.map((d) => d.name), req.apiUser?.email);
 }
 
 /** Object kinds an admin route addresses by id. */
