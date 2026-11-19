@@ -79,6 +79,10 @@ behaviour (mail to room addresses is refused).
   `cleanup` line of `resource_mailboxes` (one schema-qualified statement deleting only
   owner-less room mailboxes; the FK cascade chain mailbox → folders → messages → attachments is
   checked against schema.prisma); an unusual database schema name is not auto-applied.
+- `infra/docker/schema-sync.test.mjs` (`node --test`, stub prisma / psql / pg_dump, needs `sh`):
+  dump → room mailbox clean-up → push; a failing clean-up, a missing `psql` or no dump location
+  stop the start before anything is deleted; an unrelated data loss next to the room tables is
+  refused, its opt-in run cleans up too.
 - e2e `schema-upgrade`: a 9.5.x database with room rows is upgraded without opt-in, every table
   logged, dump written first (holds the room rows and the room's mailbox), the room's own
   mailbox with folder / message / attachment deleted while a user's mailbox a room row points at
