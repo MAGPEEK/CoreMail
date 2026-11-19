@@ -10,7 +10,7 @@ import { X } from 'lucide-react';
 import { Modal } from './Modal.js';
 import { useT } from '../i18n/useT.js';
 import {
-  DISCARD_CONFIRM_TEXT, initialTab, needsDiscardConfirm, rememberTab, tabForKey, withDirty,
+  initialTab, needsDiscardConfirm, rememberTab, tabForKey, withDirty,
   type DirtyTabs, type TabMemory,
 } from '../lib/editPanel.js';
 
@@ -62,7 +62,7 @@ export function EditPanel({ kind, title, subtitle, tabs, onClose }: {
   }, [kind]);
 
   const requestClose = useCallback(() => {
-    if (!needsDiscardConfirm(dirty) || window.confirm(DISCARD_CONFIRM_TEXT)) onClose();
+    if (!needsDiscardConfirm(dirty) || window.confirm(t('editpanel_discard'))) onClose();
   }, [dirty, onClose]);
 
   const onTabKey = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -104,7 +104,7 @@ export function EditPanel({ kind, title, subtitle, tabs, onClose }: {
               className={`px-3 py-2 text-sm whitespace-nowrap border-b-2 -mb-px ${
                 selected ? 'border-accent text-accent-fg font-medium' : 'border-transparent text-fg-muted hover:text-fg'}`}>
               {tab.label}
-              {dirty.has(tab.id) && <span className="sr-only"> (ungespeicherte Änderungen)</span>}
+              {dirty.has(tab.id) && <span className="sr-only"> ({t('editpanel_unsaved')})</span>}
               {dirty.has(tab.id) && <span aria-hidden="true" className="ml-1 text-warning-fg">●</span>}
             </button>
           );

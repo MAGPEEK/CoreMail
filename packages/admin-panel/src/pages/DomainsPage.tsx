@@ -341,7 +341,6 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
     onSuccess: () => {
       toast.success(t('domain_updated_toast'));
       void qc.invalidateQueries({ queryKey: ['admin-domains'] });
-      onClose();
     },
     onError: (err: Error) => toast.error(err.message || t('domain_save_error')),
   });
@@ -576,7 +575,7 @@ export function DomainsPage() {
   const [limit,  setLimit]        = useState(50);
   const [page,   setPage]         = useState(1);
   const [showAdd, setShowAdd]     = useState(false);
-  const [editing, setEditing]     = useState<Domain | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   // Debounced search query string
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -595,6 +594,8 @@ export function DomainsPage() {
   });
 
   const domains = data?.domains ?? [];
+  // The panel reads the live row: after a save the list refetches and the form compares against the saved state.
+  const editing = domains.find((d) => d.id === editingId) ?? null;
   const total   = data?.total   ?? 0;
 
   const toggleMutation = useMutation({
@@ -650,7 +651,7 @@ export function DomainsPage() {
       cell: (d) => (
         <Can area="domains" access="write">
           <button
-            onClick={() => setEditing(d)}
+            onClick={() => setEditingId(d.id)}
             className="p-1.5 text-info-fg hover:text-info-fg border border-info-line rounded hover:bg-info-bg transition-colors"
             title={t('domain_edit_title_btn')}
             aria-label={`${t('domain_edit_title_btn')}: ${d.name}`}
@@ -706,7 +707,7 @@ export function DomainsPage() {
 
       {/* ── Modals ─────────────────────────────────────────────────────────── */}
       {showAdd  && <AddDomainModal  onClose={() => setShowAdd(false)} />}
-      {editing  && <EditDomainModal domain={editing} onClose={() => setEditing(null)} />}
+      {editing  && <EditDomainModal domain={editing} onClose={() => setEditingId(null)} />}
     </div>
   );
 }

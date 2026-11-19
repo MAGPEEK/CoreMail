@@ -3,9 +3,6 @@
  * navigation, the remembered tab per panel kind and the unsaved-changes guard.
  */
 
-/** Text of the confirmation shown when a panel with unsaved changes is closed. */
-export const DISCARD_CONFIRM_TEXT = 'Ungespeicherte Änderungen verwerfen?';
-
 /** Tab that a key press selects (WAI-ARIA tabs pattern, automatic activation); null = key not handled. */
 export function tabForKey(ids: readonly string[], current: string, key: string): string | null {
   if (ids.length === 0) return null;

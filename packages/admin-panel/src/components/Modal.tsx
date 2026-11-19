@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ReactNode } from 'react';
+import { trapTab } from '../lib/focusTrap.js';
 
 // Stack of open dialogs — only the topmost one reacts to Escape/Tab
 const openStack: symbol[] = [];
@@ -65,11 +66,10 @@ export function Modal({
       if (e.key !== 'Tab' || !panelRef.current) return;
       const items = Array.from(panelRef.current.querySelectorAll<HTMLElement>(FOCUSABLE))
         .filter((el) => el.offsetParent !== null || el === document.activeElement);
-      if (items.length === 0) { e.preventDefault(); return; }
-      const first = items[0]!;
-      const last = items[items.length - 1]!;
-      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
-      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      const action = trapTab(items, document.activeElement as HTMLElement | null, e.shiftKey);
+      if (action.kind === 'default') return;
+      e.preventDefault();
+      if (action.kind === 'focus') action.target.focus();
     };
     document.addEventListener('keydown', onKey);
     return () => {
@@ -83,7 +83,11 @@ export function Modal({
   return (
     <div
       className={`${overlayClassName} ${layout === 'dialog' ? 'overflow-y-auto' : ''}`}
-      onMouseDown={(e) => { if (closeOnBackdrop && e.target === e.currentTarget) onClose(); }}
+      onMouseDown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        // a backdrop click that does not close must not move focus out of the dialog either
+        if (closeOnBackdrop) onClose(); else e.preventDefault();
+      }}
     >
       <div
         ref={panelRef}

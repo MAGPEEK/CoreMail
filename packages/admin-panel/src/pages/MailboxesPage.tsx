@@ -123,7 +123,7 @@ export function MailboxesPage() {
   const [domainFilter, setDomainFilter] = useState('');
   const [activeId, setActiveId]         = useState<string | null>(null);
   const [showCreate, setShowCreate]     = useState(false);
-  const [editUser, setEditUser]         = useState<User | null>(null);
+  const [editUserId, setEditUserId]     = useState<string | null>(null);
   const [showResetPw, setShowResetPw]   = useState<User | null>(null);
   const [newPassword, setNewPassword]   = useState('');
   const [revokeAppPw, setRevokeAppPw]   = useState(false);
@@ -144,6 +144,8 @@ export function MailboxesPage() {
   });
 
   const active = mailboxes.find((u) => u.id === activeId) ?? null;
+  // The panel reads the live row: after a save the list refetches and the form compares against the saved state.
+  const editUser = mailboxes.find((u) => u.id === editUserId) ?? null;
 
   // Detail query for the selected user (folders + storage)
   const { data: detail, isFetching: detailLoading } = useQuery<UserDetail>({
@@ -184,7 +186,6 @@ export function MailboxesPage() {
     onSuccess: () => {
       toast.success(t('mbox_saved_toast'));
       invalidate();
-      setEditUser(null);
     },
     onError: (err: Error) => toast.error(err.message),
   });
@@ -361,7 +362,7 @@ export function MailboxesPage() {
       cell: (u) => (
         <Can area="recipients" access="write">
           <div className="flex items-center gap-1">
-            <button onClick={() => setEditUser(u)} className="btn-ghost p-1.5 rounded" title={t('mbox_btn_edit_title')} aria-label={`${t('mbox_btn_edit_title')}: ${u.email}`}>
+            <button onClick={() => setEditUserId(u.id)} className="btn-ghost p-1.5 rounded" title={t('mbox_btn_edit_title')} aria-label={`${t('mbox_btn_edit_title')}: ${u.email}`}>
               <Pencil size={13} className="text-fg-subtle" />
             </button>
             <button onClick={() => confirmDelete(u)} className="btn-ghost p-1.5 rounded" title={t('mbox_btn_delete_title')} aria-label={`${t('mbox_btn_delete_title')}: ${u.email}`}>
@@ -423,7 +424,7 @@ export function MailboxesPage() {
                 <Can area="recipients" access="write">
                   <button className="btn-secondary flex items-center gap-1.5 text-xs disabled:opacity-40"
                     disabled={selectedRows.length !== 1}
-                    onClick={() => selectedRows[0] && setEditUser(selectedRows[0])}>
+                    onClick={() => selectedRows[0] && setEditUserId(selectedRows[0].id)}>
                     <Pencil size={13} aria-hidden="true" /> {t('tb_edit')}
                   </button>
                 </Can>
@@ -476,7 +477,7 @@ export function MailboxesPage() {
               <div className="flex flex-wrap gap-1.5">
                 {/* Each quick action follows its own right (HELP_DESK: reset / enable-disable / sign out). */}
                 <Can area="recipients" access="write">
-                  <button className="btn-secondary text-xs flex items-center gap-1" onClick={() => setEditUser(active)}>
+                  <button className="btn-secondary text-xs flex items-center gap-1" onClick={() => setEditUserId(active.id)}>
                     <Pencil size={12} aria-hidden="true" /> {t('tb_edit')}
                   </button>
                 </Can>
@@ -676,7 +677,7 @@ export function MailboxesPage() {
         <UserEditPanel user={editUser} domains={domains}
           onSave={(data) => updateMutation.mutate({ id: editUser.id, data })}
           isPending={updateMutation.isPending}
-          onClose={() => setEditUser(null)} />
+          onClose={() => setEditUserId(null)} />
       )}
 
       {/* ── Dialog: Password reset ─────────────────────────────────────────── */}
@@ -747,8 +748,7 @@ function UserEditPanel({ user, domains, onSave, isPending, onClose }:
   const levelsValid = gbInputValid(warningGb) && gbInputValid(sendGb);
   const domainLabel = `@${domains.find((d) => d.id === user.domainId)?.name ?? user.domainId}`;
 
-  const generalDirty = displayName !== user.displayName || role !== user.role;
-  const limitsDirty = quotaBytes !== user.quotaBytes
+  const dirty = displayName !== user.displayName || role !== user.role || quotaBytes !== user.quotaBytes
     || warningGb !== bytesToGbInput(user.quotaWarningBytes) || sendGb !== bytesToGbInput(user.quotaProhibitSendBytes);
 
   const save = (
@@ -775,7 +775,7 @@ function UserEditPanel({ user, domains, onSave, isPending, onClose }:
       id: 'general', label: t('mbox_tab_general'),
       content: (
         <WriteGuard area="recipients">
-          <ReportDirty dirty={generalDirty} />
+          <ReportDirty dirty={dirty} />
           <div className="space-y-4">
             <div>
               <label className="field-label" htmlFor="mbox-edit-email">{t('mbox_edit_email')}</label>
@@ -795,25 +795,6 @@ function UserEditPanel({ user, domains, onSave, isPending, onClose }:
                 {assignableRoles(ROLE_KEYS, actorRole, user.role).map((v) => <option key={v} value={v}>{roleLabel(t, v)}</option>)}
               </select>
             </div>
-            {save}
-            <div className="border-t border-line pt-4">
-              <MailboxAliasesSection
-                mailboxType="user"
-                mailboxId={user.id}
-                defaultDomainId={user.domainId}
-                allDomains={domains.map((d) => ({ id: d.id, name: d.name }))}
-              />
-            </div>
-          </div>
-        </WriteGuard>
-      ),
-    },
-    {
-      id: 'limits', label: t('mbox_tab_limits'),
-      content: (
-        <WriteGuard area="recipients">
-          <ReportDirty dirty={limitsDirty} />
-          <div className="space-y-4">
             <div>
               <label className="field-label flex items-center gap-1" htmlFor="mbox-edit-quota"><HardDrive size={12} aria-hidden="true" /> {t('mbox_create_quota')}</label>
               <select id="mbox-edit-quota" className="input w-full" value={quotaBytes} onChange={(e) => setQuotaBytes(parseInt(e.target.value))}>
@@ -836,6 +817,14 @@ function UserEditPanel({ user, domains, onSave, isPending, onClose }:
               {!levelsValid && <p className="col-span-2 text-xs text-danger-fg" role="alert">{t('mbox_quota_invalid')}</p>}
             </div>
             {save}
+            <div className="border-t border-line pt-4">
+              <MailboxAliasesSection
+                mailboxType="user"
+                mailboxId={user.id}
+                defaultDomainId={user.domainId}
+                allDomains={domains.map((d) => ({ id: d.id, name: d.name }))}
+              />
+            </div>
           </div>
         </WriteGuard>
       ),

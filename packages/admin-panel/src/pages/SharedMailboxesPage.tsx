@@ -339,9 +339,9 @@ function SharedMailboxEditPanel({ item, onClose }: { item: SharedMailbox; onClos
     queryFn: () => api.get<{ domains: Domain[] }>('/admin/domains?limit=200').then(r => r.domains),
   });
 
-  const generalDirty = name !== item.displayName || active !== item.active
-    || copySendAs !== (item.sentCopySendAs ?? false) || copyOnBehalf !== (item.sentCopySendOnBehalf ?? false);
-  const limitsDirty = quotaBytes !== item.quotaBytes
+  const dirty = name !== item.displayName || active !== item.active
+    || copySendAs !== (item.sentCopySendAs ?? false) || copyOnBehalf !== (item.sentCopySendOnBehalf ?? false)
+    || quotaBytes !== item.quotaBytes
     || warningGb !== bytesToGbInput(item.quotaWarningBytes) || sendGb !== bytesToGbInput(item.quotaProhibitSendBytes);
 
   const mutation = useMutation({
@@ -354,7 +354,6 @@ function SharedMailboxEditPanel({ item, onClose }: { item: SharedMailbox; onClos
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['admin-shared-mailboxes'] });
       toast.success(t('shared_saved'));
-      onClose();
     },
     onError: (e: Error) => toast.error(e.message || t('shared_save_error')),
   });
@@ -375,7 +374,7 @@ function SharedMailboxEditPanel({ item, onClose }: { item: SharedMailbox; onClos
       id: 'general', label: t('mbox_tab_general'),
       content: (
         <>
-          <ReportDirty dirty={generalDirty} />
+          <ReportDirty dirty={dirty} />
           <div>
             <label className="field-label" htmlFor="sm-name">{t('shared_displayname')}</label>
             <input id="sm-name" value={name} onChange={e => setName(e.target.value)} className="input" placeholder={t('shared_displayname_ph')} />
@@ -396,23 +395,6 @@ function SharedMailboxEditPanel({ item, onClose }: { item: SharedMailbox; onClos
               {t('shared_sent_copy_on_behalf')}
             </label>
           </fieldset>
-          {save}
-          <div className="border-t border-line pt-4">
-            <MailboxAliasesSection
-              mailboxType="shared"
-              mailboxId={item.id}
-              defaultDomainId={item.domainId}
-              allDomains={allDomains.map((d) => ({ id: d.id, name: d.name }))}
-            />
-          </div>
-        </>
-      ),
-    },
-    {
-      id: 'limits', label: t('mbox_tab_limits'),
-      content: (
-        <>
-          <ReportDirty dirty={limitsDirty} />
           <div>
             <label className="field-label flex items-center gap-1" htmlFor="sm-quota"><HardDrive size={12} aria-hidden="true" /> {t('shared_quota')}</label>
             <select id="sm-quota" className="input w-full" value={quotaBytes} onChange={(e) => setQuotaBytes(parseInt(e.target.value, 10))}>
@@ -435,6 +417,14 @@ function SharedMailboxEditPanel({ item, onClose }: { item: SharedMailbox; onClos
             {!levelsValid && <p className="col-span-2 text-xs text-danger-fg" role="alert">{t('mbox_quota_invalid')}</p>}
           </div>
           {save}
+          <div className="border-t border-line pt-4">
+            <MailboxAliasesSection
+              mailboxType="shared"
+              mailboxId={item.id}
+              defaultDomainId={item.domainId}
+              allDomains={allDomains.map((d) => ({ id: d.id, name: d.name }))}
+            />
+          </div>
         </>
       ),
     },
