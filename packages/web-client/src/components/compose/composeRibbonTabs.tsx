@@ -9,7 +9,7 @@
  * draft cannot do (plain text: no pictures, no formatting).
  */
 
-import { CalendarClock, FileText, Flag, Mail, MailCheck, Paperclip, Save, Settings2 } from 'lucide-react';
+import { CalendarClock, FilePlus2, FileText, Flag, Mail, MailCheck, Paperclip, Save, Settings2 } from 'lucide-react';
 import type { CommandGroup, CommandItem } from '../CommandBar.js';
 
 import type { ContextMenuItem } from '../ContextMenu.js';
@@ -22,12 +22,6 @@ import type { TranslationKey } from '../../i18n/translations.js';
 
 type T = (key: TranslationKey) => string;
 
-export interface ComposeRibbonSlots {
-  /** "Vorlage einfügen …" — supplied by the templates module; hidden without it. */
-  onInsertTemplate?: (() => void) | undefined;
-}
-
-
 const compact = (items: (CommandItem | undefined | null | false)[]): CommandItem[] => items.filter((i): i is CommandItem => !!i);
 const group = (id: string, title: string, items: (CommandItem | undefined | null | false)[]): CommandGroup[] => {
   const list = compact(items);
@@ -35,7 +29,7 @@ const group = (id: string, title: string, items: (CommandItem | undefined | null
 };
 
 /** Command groups of one contextual tab. */
-export function composeRibbonGroups(tab: RibbonTabId, api: ComposeRibbonApi, t: T, slots: ComposeRibbonSlots = {}): CommandGroup[] {
+export function composeRibbonGroups(tab: RibbonTabId, api: ComposeRibbonApi, t: T): CommandGroup[] {
   const { state, actions, editor } = api;
   const plain = state.plainText;
   const header = headerItems(state, actions, t);
@@ -58,6 +52,9 @@ export function composeRibbonGroups(tab: RibbonTabId, api: ComposeRibbonApi, t: 
     onClick: (anchor) => actions.openSchedule(anchor),
   };
   const save: CommandItem = { ...more['save']!, icon: <Save size={16} /> };
+  // mail templates: the same "…" menu commands of the card (the card hides that menu while the ribbon shows)
+  const insertTemplate: CommandItem = { ...more['insert-template']!, icon: <FileText size={16} /> };
+  const saveTemplate: CommandItem = { ...more['save-template']!, icon: <FilePlus2 size={16} /> };
   const unIcon = (c: CommandItem | false | null | undefined) => c && ({ ...c, iconOnly: false });
 
   switch (tab) {
@@ -66,15 +63,12 @@ export function composeRibbonGroups(tab: RibbonTabId, api: ComposeRibbonApi, t: 
         ...group('undo', t('ribbon_compose_group_undo'), [fly.undo, fly.redo]),
         ...group('font', t('ribbon_compose_group_font'), [fly.font, fly.size, unIcon(bar?.bold), unIcon(bar?.italic), unIcon(bar?.underline), fly.strike]),
         ...group('insert', t('ribbon_compose_group_insert'), [attach, link, signature, image, emoji]),
-        ...group('send', t('ribbon_compose_group_send'), [schedule, save]),
+        ...group('send', t('ribbon_compose_group_send'), [schedule, save, saveTemplate]),
       ];
     case 'insert':
       return [
         ...group('insert', t('ribbon_compose_group_insert'), [
-          { ...attach, label: t('compose_insert_file') }, image, link, emoji, signature,
-          slots.onInsertTemplate && {
-            id: 'template', label: t('compose_insert_template'), icon: <FileText size={16} />, onClick: () => slots.onInsertTemplate?.(),
-          },
+          { ...attach, label: t('compose_insert_file') }, image, link, emoji, signature, insertTemplate,
         ]),
         ...group('objects', t('ribbon_compose_group_paragraph'), [fly.rule, fly.table, more['datetime'] && { ...more['datetime'] }]),
       ];

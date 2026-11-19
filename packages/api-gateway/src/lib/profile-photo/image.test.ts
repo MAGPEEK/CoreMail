@@ -12,6 +12,7 @@ import { fakePng, fakeJpeg, fakeWebpLossless } from '../branding/test-fixtures.j
 import {
   processProfilePhoto, cropCenterSquare, upscaleSquare, flattenOnWhite, squareAt, PhotoError,
   processBackgroundImage, fitSize, downscaleRgba, BACKGROUND_MAX_WIDTH, MAX_BACKGROUND_BYTES, MAX_BACKGROUND_PIXELS, MIN_BACKGROUND_SIDE,
+  BACKGROUND_JPEG_MAX_MEMORY_MB,
   PHOTO_SIZE, MAX_PHOTO_BYTES, MAX_PHOTO_PIXELS, MIN_PHOTO_SIDE, PHOTO_ERROR_STATUS,
 } from './image.js';
 import { readJpegStructure, MAX_JPEG_SCANS } from './jpeg-structure.js';
@@ -305,4 +306,30 @@ test('fitSize / downscaleRgba math', () => {
   const img = downscaleRgba(halves(4, 2), 2, 1);
   assert.deepEqual([...img.data], [255, 0, 0, 255, 0, 0, 255, 255]);
   assert.throws(() => downscaleRgba(halves(4, 2), 8, 1), RangeError);
+});
+
+/** Header-only baseline JPEG (DQT, SOF0 with the given h/v sampling per component, no scan): jpeg-js allocates for it. */
+function sofOnlyJpeg(w: number, h: number, sampling: number[]): Buffer {
+  const dqt = Buffer.concat([Buffer.from([0xff, 0xdb, 0x00, 0x43, 0x00]), Buffer.alloc(64, 1)]);
+  const sof = Buffer.alloc(10 + 3 * sampling.length);
+  sof[0] = 0xff; sof[1] = 0xc0; sof.writeUInt16BE(8 + 3 * sampling.length, 2); sof[4] = 8;
+  sof.writeUInt16BE(h, 5); sof.writeUInt16BE(w, 7); sof[9] = sampling.length;
+  sampling.forEach((hv, i) => { sof[10 + 3 * i] = i + 1; sof[11 + 3 * i] = hv; sof[12 + 3 * i] = 0; });
+  return Buffer.concat([Buffer.from([0xff, 0xd8]), dqt, sof, Buffer.from([0xff, 0xd9])]);
+}
+
+test('10.2 background: jpeg-js memory cap ≤ 160 MB — a 12 MP camera JPEG (4:2:0) fits, 12 MP without subsampling / CMYK is refused', () => {
+  assert.ok(BACKGROUND_JPEG_MAX_MEMORY_MB <= 160);
+  assert.equal(MAX_BACKGROUND_PIXELS, 12_000_000, '12 megapixels stay the pixel limit');
+  // CMYK 4:4:4 at 12 MP: the coefficient blocks alone exceed the cap → refused before any scan is decoded
+  assert.equal(codeOf(() => processBackgroundImage(sofOnlyJpeg(3464, 3464, [0x11, 0x11, 0x11, 0x11]))), 'DIMENSIONS');
+  // YCbCr 4:4:4 at 12 MP needs ≈ 250 MB in jpeg-js
+  assert.equal(codeOf(() => processBackgroundImage(sofOnlyJpeg(4000, 3000, [0x11, 0x11, 0x11]))), 'DIMENSIONS');
+  // YCbCr 4:2:0 (what cameras and phones write) at 12 MP ≈ 138 MB: decoded and scaled
+  const out = jpeg.decode(processBackgroundImage(sofOnlyJpeg(4000, 3000, [0x22, 0x11, 0x11])), { useTArray: true });
+  assert.deepEqual([out.width, out.height], [BACKGROUND_MAX_WIDTH, 1920]);
+  // the RGB pixels of a JPEG become RGBA, also without scaling
+  const rgb = { width: 2, height: 1, channels: 3 as const, data: Buffer.from([255, 0, 0, 0, 0, 255]) };
+  assert.deepEqual([...downscaleRgba(rgb, 2, 1).data], [255, 0, 0, 255, 0, 0, 255, 255]);
+  assert.deepEqual([...downscaleRgba(rgb, 1, 1).data], [128, 0, 128, 255]);
 });

@@ -53,6 +53,9 @@ test('"Über CoreMail" shows the newest released version', () => {
 test('"Neue E-Mail" menu: E-Mail, E-Mail aus Vorlage (only with a template source), Ereignis', () => {
   assert.deepEqual(newMenuItems(true), ['mail', 'template', 'event']);
   assert.deepEqual(newMenuItems(false), ['mail', 'event']);
+  // the own-mailbox mail is a fourth, last entry — only while a shared / delegated mailbox is open
+  assert.deepEqual(newMenuItems(true, true), ['mail', 'template', 'event', 'ownMail']);
+  assert.deepEqual(newMenuItems(true, false), ['mail', 'template', 'event']);
 });
 
 const ctx = (over: Partial<RibbonMailContext> = {}): RibbonMailContext => ({

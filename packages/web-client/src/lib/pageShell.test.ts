@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { PAGE_SHELL_CLASS, PAGE_BODY_CLASS } from './pageShell.ts';
@@ -21,7 +21,7 @@ test('every app page uses the shared page shell', () => {
 });
 
 test('mail and calendar share one command bar component (no own ribbon/bulk toolbars)', () => {
-  assert.match(read('components/CalendarToolbar.tsx'), /<CommandBar\b/);
+  assert.match(read('components/Ribbon.tsx'), /<CommandBar\b/, 'the shared ribbon (mail, calendar, contacts) draws the command bar');
   assert.match(read('components/MailCommandBar.tsx'), /<CommandBar\b/);
   assert.match(read('components/MessageReader.tsx'), /<CommandBar\b/);
   assert.doesNotMatch(read('pages/MailPage.tsx'), /BulkToolbar/, 'multi-select actions live in the command bar');
@@ -44,6 +44,23 @@ test('calendar filter popover: a labelled dialog that takes focus, closes on Esc
   assert.match(src, /role="dialog"\s+aria-label="Filter"/);
   assert.match(src, /e\.key === 'Escape'[^\n]*closeFilter\(\)/);
   assert.match(src, /trigger\.focus\(\)/);
-  assert.match(src, /open: filterIsOpen/, 'button exposes aria-haspopup="dialog" + aria-expanded (via the ribbon adapter)');
-  assert.match(read('components/calendar/ribbonAdapter.tsx'), /dialogOpen: popover.open/);
+  assert.match(src, /dialogOpen: popoverOpen/, 'button exposes aria-haspopup="dialog" + aria-expanded');
+  assert.match(src, /toItem\(c, dispatch, filterIsOpen\)/);
+});
+
+test('mail, calendar and contacts share one ribbon, one pane surface and one "Über CoreMail" dialog', () => {
+  for (const file of ['components/MailRibbon.tsx', 'components/CalendarToolbar.tsx', 'components/contacts/ContactsRibbon.tsx']) {
+    assert.match(read(file), /<Ribbon\b/, file);
+  }
+  for (const page of ['pages/CalendarPage.tsx', 'pages/ContactsPage.tsx']) {
+    assert.match(read(page), /<PaneCard\b/, page);
+    assert.doesNotMatch(read(page), /CardSurface/, `${page}: no local card wrapper`);
+  }
+  for (const file of ['components/MailRibbon.tsx', 'pages/CalendarPage.tsx', 'pages/ContactsPage.tsx']) {
+    assert.match(read(file), /import \{ AboutDialog \} from '(\.\.\/components|\.)\/AboutDialog\.js'/, file);
+  }
+  for (const gone of ['components/calendar/ribbonAdapter.tsx', 'components/calendar/CardSurface.tsx', 'components/contacts/CardSurface.tsx',
+    'components/contacts/AboutDialog.tsx', 'components/contacts/ContactsCommandBar.tsx']) {
+    assert.equal(existsSync(join(src, gone)), false, `${gone} is gone`);
+  }
 });

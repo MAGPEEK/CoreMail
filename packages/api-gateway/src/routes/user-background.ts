@@ -23,7 +23,8 @@ import { prisma, saveUserBackground, removeUserBackground, userBackgroundInfo } 
 import { requireAuth } from '../middleware/auth.js';
 import { announceOnWrite } from '../lib/realtime.js';
 import { createUserRateLimiter, envInt } from '../lib/user-rate-limit.js';
-import { processBackgroundImage, PhotoError, PHOTO_ERROR_STATUS, MAX_BACKGROUND_BYTES } from '../lib/profile-photo/image.js';
+import { PhotoError, PHOTO_ERROR_STATUS, MAX_BACKGROUND_BYTES } from '../lib/profile-photo/image.js';
+import { processImageUpload } from '../lib/profile-photo/decode-pool.js';
 import { sendStoredImage, USER_BACKGROUND_IMAGE } from '../lib/profile-photo/serve.js';
 import { imageUploadBody } from '../lib/profile-photo/upload-body.js';
 
@@ -65,7 +66,7 @@ userBackgroundRouter.put('/', backgroundUploadRateLimiter.middleware, background
   const userId = req.apiUser!.userId;
   let jpeg: Buffer;
   try {
-    jpeg = processBackgroundImage(Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0));
+    jpeg = await processImageUpload('background', Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0));
   } catch (err) {
     if (err instanceof PhotoError) { res.status(PHOTO_ERROR_STATUS[err.code]).json({ error: err.message, code: err.code }); return; }
     throw err;

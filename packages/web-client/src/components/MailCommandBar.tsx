@@ -37,7 +37,7 @@ import {
   categoryCoverage, commandTargets, mailCommandStates, nextCategoryIds, readToggle, ribbonMailStates, summarizeSelection,
   type CommandState, type MailCommandId, type RibbonMailCommandId,
 } from '../lib/mailCommands.js';
-import { newMenuItems } from '../lib/ribbon.js';
+import { newMenuItems, type NewItemId } from '../lib/ribbon.js';
 import type { ShortcutAction } from '../lib/shortcuts.js';
 import { CommandBar, type CommandGroup, type CommandItem } from './CommandBar.js';
 import type { ContextMenuItem } from './ContextMenu.js';
@@ -159,18 +159,14 @@ export function useMailCommandGroups({ ribbon, onNewFromTemplate }: MailCommandO
     { label: t('mail_view_conversations'), icon: checkIcon(groupByConversation), onClick: () => setGroupByConversation(!groupByConversation) },
   ];
 
-  const newItems: Record<'mail' | 'template' | 'event', ContextMenuItem> = {
+  const newItems: Record<NewItemId, ContextMenuItem> = {
     mail: { label: t('mail_cmd_new_mail'), icon: <Mail size={14} />, onClick: () => openCompose() },
     template: { label: t('mail_cmd_new_template'), icon: <FileText size={14} />, onClick: () => onNewFromTemplate?.() },
     event: { label: t('mail_cmd_new_event'), icon: <CalendarPlus size={14} />, onClick: () => setEventOpen(true) },
-  };
-  const newMenu = (): ContextMenuItem[] => newMenuItems(!!onNewFromTemplate).flatMap((id): ContextMenuItem[] => [
-    newItems[id],
     // a shared / delegated mailbox is shown: a mail from the own mailbox stays one click away
-    ...(id === 'mail' && mailbox.foreign
-      ? [{ label: t('mail_cmd_new_mail_own'), icon: <Mail size={14} />, onClick: () => openCompose({ mailbox: OWN_MAILBOX }) }]
-      : []),
-  ]);
+    ownMail: { label: t('mail_cmd_new_mail_own'), icon: <Mail size={14} />, onClick: () => openCompose({ mailbox: OWN_MAILBOX }) },
+  };
+  const newMenu = (): ContextMenuItem[] => newMenuItems(!!onNewFromTemplate, mailbox.foreign).map((id) => newItems[id]);
 
   /** Common fields of a command from its state. */
   const fromState = (id: string, s: CommandState, icon: ReactNode, more: Partial<CommandItem> = {}): CommandItem =>

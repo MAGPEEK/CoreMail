@@ -1,6 +1,7 @@
 import { X } from 'lucide-react';
 import type { Calendar, CalendarEvent } from '../../api/types.js';
 import { instantToWallClock, localDay } from '../../lib/zonedTime.js';
+import { PANE_CARD_CLASS } from '../../lib/paneLayout.js';
 
 /**
  * 9.4: day agenda side panel of the calendar — the events of the selected day
@@ -30,7 +31,7 @@ export function DayAgenda({ date, events, calendars, timeZone, onOpen, onClose }
   const heading = date.toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long' });
 
   return (
-    <aside aria-label="Tagesagenda" className="w-64 shrink-0 border-l border-line bg-surface flex flex-col min-h-0">
+    <aside aria-label="Tagesagenda" className={`w-64 shrink-0 flex flex-col min-h-0 max-md:border-l ${PANE_CARD_CLASS}`}>
       <div className="px-3 py-2 border-b border-line flex items-center justify-between">
         <h2 className="text-sm font-semibold text-fg">{heading}</h2>
         <button type="button" onClick={onClose} aria-label="Tagesagenda schließen" className="p-1 rounded text-fg-subtle hover:bg-surface-2">

@@ -19,7 +19,7 @@ and how each setting takes effect.
 | Out of office, rules, categories, inactivity timeout, hidden shared mailboxes | unchanged (own columns / tables) | server / webmail |
 | Profile photo (9.5) | `User.photoKey` + object store `profile-photos/` | webmail avatars of the organisation (see [Profile photo](#profile-photo)) |
 | Background (10.1): none / built-in / own picture | `preferences.appearance.background`; the picture in `User.backgroundKey` + object store `backgrounds/` | webmail canvas behind the panes (see [Background](#background)) |
-| Ribbon (10.1): collapsed, simplified / classic | `preferences.ribbon` | webmail mail view |
+| Ribbon (10.1): collapsed, simplified / classic | `preferences.ribbon` | webmail mail, calendar and contacts views (one shared ribbon) |
 | Favourite folders (10.1) | `preferences.folders.favorites` | webmail folder pane ("Favoriten") |
 | Panel widths, collapsed folder sections, expanded shared mailboxes | browser only | webmail (they depend on the screen) |
 
@@ -227,6 +227,11 @@ upload goes through the profile-photo pipeline (`api-gateway/src/lib/profile-pho
 `processBackgroundImage`): type by magic bytes, size and pixel limits from the header before
 decoding (at most 12 megapixels, at least 320 px on the shorter side, JPEG scan / segment limits),
 decoded, scaled to fit 2560 × 2560 (never enlarged) and re-encoded as JPEG without any metadata.
+A JPEG is decoded as RGB under a decoder memory cap of 160 MB: a 12-megapixel camera picture (4:2:0
+chroma subsampling) fits, a 12-megapixel JPEG without subsampling or in CMYK is refused with 422
+`DIMENSIONS`. Photo and background uploads are decoded in worker threads, at most two at a time per
+api-gateway process (`lib/profile-photo/decode-pool.ts`; further uploads wait), so the event loop
+stays free and the decoders stay below 2 × their memory cap.
 Storage like the profile photo (`storage/src/user-image-store.ts`): content-addressed key
 `backgrounds/<aa>/<sha256>.jpg`, compare-and-set on `User.backgroundKey`, an object nobody
 references any more is deleted (also when the account is deleted). Upload errors: 413 `SIZE`,
@@ -260,14 +265,18 @@ Webmail (`components/templates/`, rules in `lib/mailTemplates.ts`):
 
 - **Neue E-Mail aus Vorlage** (`TemplatePickerDialog`): search, list, preview; "Verwenden" opens a
   new compose tab with subject, recipients and body (the default signature follows the body).
-  The ribbon wires it with `useTemplatePicker()` → `{ open, element }`
-  (`onNewFromTemplate={templates.open}` + `{templates.element}`).
+  The mail view wires it with `useTemplatePicker()` → `{ open, element }`
+  (`<MailRibbon onNewFromTemplate={templates.open} />` + `{templates.element}`): "E-Mail aus Vorlage"
+  in the menu of the ribbon's split button "Neue E-Mail" (E-Mail, E-Mail aus Vorlage, Ereignis; while a
+  shared or delegated mailbox is open a fourth entry "E-Mail aus dem eigenen Postfach").
 - **Vorlagen verwalten** (`TemplateManagerDialog`): list + editor (name, subject, recipient fields,
   body with a small formatting bar), new / save / delete; asks before unsaved changes are lost.
   Reached from the picker and from Settings → Vorlagen.
 - Compose "…" menu: **Vorlage einfügen …** inserts the body at the cursor and fills subject and
   recipient fields only while they are empty; **Als Vorlage speichern …** saves subject, recipients
-  and the body without signature block and quoted original.
+  and the body without signature block and quoted original. While the ribbon shows the draft's
+  contextual tabs (the card then hides its "…" menu) the same two commands are in the ribbon:
+  **Einfügen → Vorlage einfügen …** and **Nachricht → Als Vorlage speichern …**.
 
 ## Deep links
 

@@ -22,7 +22,9 @@ import { useLanguageStore } from '../store/language.js';
 import { useT } from '../i18n/useT.js';
 import { CalendarSidebar } from '../components/CalendarSidebar.js';
 import { CalendarNavBar } from '../components/calendar/CalendarNavBar.js';
-import { CardSurface } from '../components/calendar/CardSurface.js';
+import { PaneCard } from '../components/PaneCard.js';
+import { AboutDialog } from '../components/AboutDialog.js';
+import { FOLDER_PANE_CLASS } from '../lib/paneLayout.js';
 import { parseAction, type CalendarAction } from '../lib/calendarRibbon.js';
 import {
   CalendarToolbar,
@@ -81,6 +83,7 @@ export function CalendarPage() {
   const [occurrenceChoice, setOccurrenceChoice] = useState<{ eventId: string; occurrence: string; summary: string } | null>(null);
   const [agendaOpen, setAgendaOpen] = useState(false);
   const [shareDialogOpen, setShareDialogOpen] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
   // 9.5: a phone starts in the day view (the month grid does not fit 320 px)
   const compactScreen = useLayoutMode() === 'single';
   const [calendarListOpen, setCalendarListOpen] = useState(false);
@@ -282,7 +285,8 @@ export function CalendarPage() {
       case 'agenda': setAgendaOpen((o) => !o); break;
       case 'settings': navigate('/settings#calendar'); break;
       case 'shortcuts': setShortcutHelpOpen(true); break;
-      case 'filter': case 'about': break;
+      case 'about': setAboutOpen(true); break;
+      case 'filter': break;
     }
   };
 
@@ -291,7 +295,9 @@ export function CalendarPage() {
   return (
     <PageShell
       title="Kalender"
-      bodyClassName="gap-0"
+      ribbon
+      bodyCard={false}
+      bodyClassName="md:gap-2"
       commandBar={
         <CalendarToolbar
           view={view}
@@ -304,17 +310,20 @@ export function CalendarPage() {
         />
       }
     >
+      {/* Calendar list on the canvas like the mail folder pane (a translucent card over a picture) */}
       {!compactScreen && (
-        <CalendarSidebar
-          calendars={calendars ?? []}
-          selectedDate={selectedDate}
-          onSelectDate={handleSelectDate}
-        />
+        <div className={`shrink-0 flex ${FOLDER_PANE_CLASS}`}>
+          <CalendarSidebar
+            calendars={calendars ?? []}
+            selectedDate={selectedDate}
+            onSelectDate={handleSelectDate}
+          />
+        </div>
       )}
 
       {/* Main area: navigation row + FullCalendar in a card on the canvas */}
       <div className="flex-1 min-w-0 min-h-0 flex flex-col overflow-auto">
-      <CardSurface label="Kalenderraster" className="flex-1 min-h-[26rem] flex flex-col">
+      <PaneCard label="Kalenderraster" className="flex-1 min-h-[26rem]">
         {compactScreen && (
           <button
             type="button"
@@ -359,7 +368,7 @@ export function CalendarPage() {
           height="100%"
         />
         </div>
-      </CardSurface>
+      </PaneCard>
       </div>
 
       {/* Phones: the calendar list is a sheet (Modal: focus trap, Escape, focus returns to the button) */}
@@ -437,6 +446,8 @@ export function CalendarPage() {
           />
         );
       })()}
+
+      {aboutOpen && <AboutDialog onClose={() => setAboutOpen(false)} />}
     </PageShell>
   );
 }

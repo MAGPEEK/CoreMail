@@ -6,6 +6,8 @@
  * icons), roaming preferences `ribbon.layout` / `ribbon.collapsed`.
  * Below 1100 px the simplified layout is forced; below 768 px there is no ribbon
  * (the mail command bar of the narrow layout takes its place).
+ * 10.2: the tab row, layouts and collapse are the shared components/Ribbon.tsx
+ * (mail, calendar, contacts; the layout / collapse preferences apply to all three).
  * No imports — unit-tested with `node --test`.
  */
 
@@ -70,7 +72,7 @@ export function selectableTab(wanted: RibbonTabId, composeShown: boolean): Ribbo
  * Keyboard of the tab row (WAI-ARIA tabs, automatic activation): ←/→ wrap,
  * Home/End jump. Returns the tab to select, or null for other keys.
  */
-export function tabKeyTarget(key: string, tabs: readonly RibbonTabId[], current: RibbonTabId): RibbonTabId | null {
+export function tabKeyTarget<Id extends string>(key: string, tabs: readonly Id[], current: Id): Id | null {
   const i = Math.max(0, tabs.indexOf(current));
   if (key === 'ArrowRight') return tabs[(i + 1) % tabs.length] ?? null;
   if (key === 'ArrowLeft') return tabs[(i - 1 + tabs.length) % tabs.length] ?? null;
@@ -84,8 +86,13 @@ export function latestReleasedVersion(versions: readonly { version: string }[] |
   return versions?.find((v) => /^\d+\.\d+\.\d+/.test(v.version))?.version ?? null;
 }
 
-/** Items of the "Neue E-Mail" split menu, in order ("E-Mail aus Vorlage" only when a template source exists). */
-export type NewItemId = 'mail' | 'template' | 'event';
-export function newMenuItems(hasTemplates: boolean): NewItemId[] {
-  return hasTemplates ? ['mail', 'template', 'event'] : ['mail', 'event'];
+/**
+ * Items of the "Neue E-Mail" split menu, in order: E-Mail, E-Mail aus Vorlage (only when a
+ * template source exists), Ereignis — and, only while a shared / delegated mailbox is open,
+ * "E-Mail aus dem eigenen Postfach" as the last entry.
+ */
+export type NewItemId = 'mail' | 'template' | 'event' | 'ownMail';
+export function newMenuItems(hasTemplates: boolean, foreignMailbox = false): NewItemId[] {
+  const items: NewItemId[] = hasTemplates ? ['mail', 'template', 'event'] : ['mail', 'event'];
+  return foreignMailbox ? [...items, 'ownMail'] : items;
 }

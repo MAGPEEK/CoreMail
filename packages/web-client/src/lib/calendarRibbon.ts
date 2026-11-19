@@ -2,8 +2,8 @@
  * 10.2: the calendar ribbon as pure data — tabs Start / Ansicht / Hilfe with commands
  * that map to EXISTING calendar actions only. No imports: unit-tested with `node --test`.
  *
- * Rendering is a separate, thin layer (components/calendar/ribbonAdapter.tsx); a ribbon
- * component only needs `resolveRibbon(state)` and an action dispatcher.
+ * Rendering is a separate, thin layer (components/CalendarToolbar.tsx on the shared
+ * components/Ribbon.tsx): `resolveRibbon(state)` and an action dispatcher.
  */
 
 export type CalendarViewId = 'timeGridDay' | 'timeGridWeek' | 'workWeek' | 'dayGridMonth';
@@ -191,8 +191,9 @@ export function resolveRibbon(state: RibbonState, tabs: readonly RibbonTabDef[] 
 }
 
 /**
- * Commands of all tabs in tab order, each command once — for a bar without tabs
- * (the view buttons sit on Start and on Ansicht). Groups keep their first-appearance order.
+ * Commands of the given tabs grouped by their caption, each command once (the view
+ * buttons sit on Start and on Ansicht). Groups keep their first-appearance order.
+ * The ribbon passes the one selected tab.
  */
 export function flattenRibbon(tabs: readonly ResolvedTab[]): Array<{ group: string; commands: ResolvedCommand[] }> {
   const seen = new Set<string>();

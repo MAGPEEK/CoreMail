@@ -1,8 +1,8 @@
 /**
  * Contacts ribbon as pure data: tabs, groups and commands with their
  * enablement rules. Components map `icon` names to lucide icons and `action`
- * keys to handlers (components/contacts/ContactsCommandBar.tsx is the one
- * adapter onto the command bar). No React, no I/O — unit-tested with `node --test`.
+ * keys to handlers (components/contacts/ContactsRibbon.tsx puts them on the
+ * shared ribbon). No React, no I/O — unit-tested with `node --test`.
  */
 
 export type RibbonTabId = 'start' | 'view' | 'help';

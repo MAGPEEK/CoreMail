@@ -1,27 +1,22 @@
 /**
- * 10.1: the ribbon of the mail view — tab row "Start | Ansicht | Hilfe" (ARIA
- * tablist, automatic activation, ←/→ Home/End), and while a draft is shown in
- * the reading pane the contextual tabs "Nachricht | Einfügen | Text formatieren |
- * Optionen" (announced; selected when a draft opens, back to Start when it goes).
- * Right of the tabs: "Menüband: Vereinfacht / Klassisch" (`ribbon.layout`,
- * simplified forced below 1100 px) and the collapse chevron (`ribbon.collapsed`).
- * The panel is the shared command bar (toolbar, roving focus, overflow "…"):
- * one row of buttons (simplified) or the taller groups with labels (classic).
- * Below 768 px the compact command bar of the narrow layout takes its place.
+ * 10.1: the ribbon of the mail view — tab row "Start | Ansicht | Hilfe", and
+ * while a draft is shown in the reading pane the contextual tabs "Nachricht |
+ * Einfügen | Text formatieren | Optionen" (announced; selected when a draft
+ * opens, back to Start when it goes). Tab row, layouts and collapse: the shared
+ * components/Ribbon.tsx (10.2). Below 768 px the compact command bar of the
+ * narrow layout takes its place.
  * Tab logic: lib/ribbon.ts; Start commands: MailCommandBar useMailCommandGroups;
  * compose tabs: compose/composeRibbonTabs.tsx.
  */
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
-import {
-  ArrowUpDown, ChevronDown, ChevronUp, Info, Keyboard, LayoutTemplate, MessagesSquare, PanelsTopLeft, RefreshCw, Rows3, SlidersHorizontal,
-} from 'lucide-react';
-import { api } from '../api/client.js';
-import { CommandBar, type CommandGroup } from './CommandBar.js';
-import { ContextMenu, type ContextMenuItem } from './ContextMenu.js';
-import { Modal } from './Modal.js';
+import { ArrowUpDown, Info, Keyboard, MessagesSquare, PanelsTopLeft, RefreshCw, Rows3, SlidersHorizontal } from 'lucide-react';
+import type { CommandGroup } from './CommandBar.js';
+import type { ContextMenuItem } from './ContextMenu.js';
+import { Ribbon } from './Ribbon.js';
+import { AboutDialog } from './AboutDialog.js';
 import { MailCommandBar, SelectionInfo, useMailCommandGroups, READING_PANE, DENSITY } from './MailCommandBar.js';
 import { composeRibbonGroups } from './compose/composeRibbonTabs.js';
 import { useUiStore, useUiPrefs } from '../store/ui.js';
@@ -30,8 +25,7 @@ import { useComposeRibbon } from '../store/composeRibbon.js';
 import { useLayoutMode } from '../hooks/useLayoutMode.js';
 import { useBranding } from '../hooks/useBranding.js';
 import {
-  COMPOSE_TABS_ANNOUNCEMENT, RIBBON_TAB_LABELS, isComposeTab, latestReleasedVersion, ribbonTabs, selectableTab,
-  tabAfterComposeChange, tabKeyTarget, type RibbonTabId,
+  COMPOSE_TABS_ANNOUNCEMENT, RIBBON_TAB_LABELS, isComposeTab, ribbonTabs, selectableTab, tabAfterComposeChange, type RibbonTabId,
 } from '../lib/ribbon.js';
 import type { SortDir, SortField } from '../lib/preferences.js';
 import { fmt, useT } from '../i18n/useT.js';
@@ -40,8 +34,6 @@ import type { TranslationKey } from '../i18n/translations.js';
 interface Props {
   /** "E-Mail aus Vorlage" (templates module); hidden without it. */
   onNewFromTemplate?: () => void;
-  /** "Vorlage einfügen …" in the Einfügen tab (templates module); hidden without it. */
-  onInsertTemplate?: () => void;
 }
 
 const SORT_FIELDS: { value: SortField; labelKey: TranslationKey }[] = [
@@ -54,29 +46,6 @@ const SORT_DIRS: { value: SortDir; labelKey: TranslationKey }[] = [
   { value: 'desc', labelKey: 'view_sort_desc' },
   { value: 'asc', labelKey: 'view_sort_asc' },
 ];
-
-/** "Über CoreMail": product name and the released version (GET /changelog). */
-function AboutDialog({ onClose }: { onClose: () => void }) {
-  const t = useT();
-  const { productName } = useBranding();
-  const { data, isError } = useQuery({
-    queryKey: ['changelog-version'],
-    queryFn: () => api.get<{ versions: { version: string }[] }>('/changelog'),
-    staleTime: 60 * 60_000,
-  });
-  const version = latestReleasedVersion(data?.versions);
-  return (
-    <Modal onClose={onClose} labelledBy="about-title" className="bg-surface rounded-xl shadow-2xl w-full max-w-sm p-6">
-      <h2 id="about-title" className="text-lg font-semibold text-fg">{fmt(t('help_cmd_about'), { product: productName })}</h2>
-      <p className="mt-2 text-sm text-fg-muted">
-        {version ? fmt(t('help_about_version'), { version }) : isError ? t('help_about_unknown') : '…'}
-      </p>
-      <div className="mt-6 flex justify-end">
-        <button type="button" autoFocus onClick={onClose} className="btn-secondary text-sm">OK</button>
-      </div>
-    </Modal>
-  );
-}
 
 /** Ansicht tab. */
 function useViewGroups(): CommandGroup[] {
@@ -129,54 +98,14 @@ function helpGroups(t: (k: TranslationKey) => string, productName: string, openA
   ] }];
 }
 
-/** "Menüband: Vereinfacht / Klassisch" (a menu with the two layouts). */
-function LayoutSwitch({ classicAllowed }: { classicAllowed: boolean }) {
-  const t = useT();
-  const layout = usePreferences((s) => s.prefs.ribbon.layout);
-  const update = usePreferences((s) => s.update);
-  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
-  const button = useRef<HTMLButtonElement>(null);
-  const shown = classicAllowed ? layout : 'simplified';
-  const label = `${t('ribbon_layout')}: ${t(shown === 'classic' ? 'ribbon_layout_classic' : 'ribbon_layout_simplified')}`;
-  return (
-    <>
-      <button
-        ref={button}
-        type="button"
-        aria-haspopup="menu"
-        aria-expanded={!!menu}
-        title={classicAllowed ? label : `${label} — ${t('ribbon_layout_forced')}`}
-        onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setMenu({ x: r.left, y: r.bottom + 2 }); }}
-        className="inline-flex items-center gap-1 h-8 px-2 rounded text-xs text-fg-muted hover:bg-surface-2 hover:text-fg whitespace-nowrap"
-      >
-        <LayoutTemplate size={14} aria-hidden="true" />
-        <span className="max-xl:sr-only">{label}</span>
-        <ChevronDown size={12} aria-hidden="true" />
-      </button>
-      {menu && (
-        <ContextMenu x={menu.x} y={menu.y} autoFocus onClose={() => { setMenu(null); button.current?.focus(); }} items={[
-          { label: t('ribbon_layout_simplified'), checked: shown === 'simplified', onClick: () => update({ ribbon: { layout: 'simplified' } }) },
-          {
-            label: t('ribbon_layout_classic'), checked: shown === 'classic',
-            ...(classicAllowed ? {} : { disabled: true, title: t('ribbon_layout_forced') }),
-            onClick: () => update({ ribbon: { layout: 'classic' } }),
-          },
-        ]} />
-      )}
-    </>
-  );
-}
-
-export function MailRibbon({ onNewFromTemplate, onInsertTemplate }: Props) {
+export function MailRibbon({ onNewFromTemplate }: Props) {
   const t = useT();
   const mode = useLayoutMode();
-  const baseId = useId();
   const { productName } = useBranding();
   const { selectedIds, clearSelection } = useUiStore();
   const composeKey = useUiStore((s) => s.compose.activeKey);
   const composeApi = useComposeRibbon((s) => s.api);
-  const ribbonPrefs = usePreferences((s) => s.prefs.ribbon);
-  const update = usePreferences((s) => s.update);
+  const collapsed = usePreferences((s) => s.prefs.ribbon.collapsed);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [announcement, setAnnouncement] = useState('');
 
@@ -192,9 +121,6 @@ export function MailRibbon({ onNewFromTemplate, onInsertTemplate }: Props) {
   }, [composeShown, composeKey]);
 
   const narrow = mode === 'single';
-  const classicAllowed = mode === 'three';
-  const variant = classicAllowed && ribbonPrefs.layout === 'classic' ? 'ribbon' : 'inline';
-  const collapsed = ribbonPrefs.collapsed;
   const activeTab = selectableTab(tab, composeShown);
 
   // The compose card keeps only Senden while the ribbon offers its commands
@@ -208,93 +134,23 @@ export function MailRibbon({ onNewFromTemplate, onInsertTemplate }: Props) {
 
   if (narrow) return <MailCommandBar {...(onNewFromTemplate ? { onNewFromTemplate } : {})} />;
 
-  const tabs = ribbonTabs(composeShown);
-  const tabId = (id: RibbonTabId) => `${baseId}-tab-${id}`;
-  const panelId = `${baseId}-panel`;
   const groups: CommandGroup[] = activeTab === 'start' ? start.groups
     : activeTab === 'view' ? viewGroups
       : activeTab === 'help' ? helpGroups(t, productName, () => setAboutOpen(true))
-        : composeApi ? composeRibbonGroups(activeTab, composeApi, t, { onInsertTemplate }) : [];
-
-  const select = (id: RibbonTabId) => {
-    setTab(id);
-    // a collapsed ribbon opens again when a tab is chosen
-    if (collapsed) update({ ribbon: { collapsed: false } });
-  };
-  const onTabKey = (e: React.KeyboardEvent) => {
-    const next = tabKeyTarget(e.key, tabs, activeTab);
-    if (!next) return;
-    e.preventDefault();
-    setTab(next);
-    document.getElementById(tabId(next))?.focus();
-  };
-
-  const tabButton = (id: RibbonTabId): ReactNode => {
-    const selected = id === activeTab;
-    return (
-      <button
-        key={id}
-        id={tabId(id)}
-        type="button"
-        role="tab"
-        aria-selected={selected}
-        aria-controls={panelId}
-        tabIndex={selected ? 0 : -1}
-        onClick={() => select(id)}
-        className={`relative h-8 px-3 text-sm whitespace-nowrap rounded-t transition-colors ${
-          selected ? 'text-accent-fg font-semibold' : 'text-fg-muted hover:text-fg hover:bg-surface-2'
-        }`}
-      >
-        {RIBBON_TAB_LABELS[id]}
-        {selected && <span aria-hidden="true" className="absolute left-3 right-3 bottom-0 h-[3px] rounded-full bg-accent" />}
-      </button>
-    );
-  };
+        : composeApi ? composeRibbonGroups(activeTab, composeApi, t) : [];
 
   return (
-    <div className="flex flex-col min-w-0" data-ribbon>
-      <div className="flex items-end gap-1 px-2 pt-1 min-w-0">
-        <div role="tablist" aria-label={t('ribbon_tabs_label')} onKeyDown={onTabKey} className="flex items-end min-w-0 overflow-x-auto">
-          {tabs.filter((id) => !isComposeTab(id)).map(tabButton)}
-          {composeShown && <span aria-hidden="true" className="self-center mx-1 h-5 w-px bg-line-strong" />}
-          {tabs.filter(isComposeTab).map(tabButton)}
-        </div>
-        <div className="ml-auto flex items-center gap-1 pb-0.5 shrink-0">
-          <LayoutSwitch classicAllowed={classicAllowed} />
-          <button
-            type="button"
-            aria-expanded={!collapsed}
-            aria-controls={panelId}
-            aria-label={t(collapsed ? 'ribbon_expand' : 'ribbon_collapse')}
-            title={t(collapsed ? 'ribbon_expand' : 'ribbon_collapse')}
-            onClick={() => update({ ribbon: { collapsed: !collapsed } })}
-            className="inline-flex items-center justify-center w-8 h-8 rounded text-fg-muted hover:bg-surface-2 hover:text-fg"
-          >
-            {collapsed ? <ChevronDown size={16} aria-hidden="true" /> : <ChevronUp size={16} aria-hidden="true" />}
-          </button>
-        </div>
-      </div>
-      <div
-        id={panelId}
-        role="tabpanel"
-        aria-labelledby={tabId(activeTab)}
-        hidden={collapsed}
-        className={`border-t border-line px-1 ${variant === 'ribbon' ? 'py-0.5' : 'py-1'}`}
-      >
-        {!collapsed && (
-          <CommandBar
-            key={`${activeTab}:${variant}`}
-            label={`${t('ribbon_label')}: ${RIBBON_TAB_LABELS[activeTab]}`}
-            groups={groups}
-            variant={variant}
-            className="flex-1"
-            end={activeTab === 'start' && selectedIds.size > 0 ? <SelectionInfo count={selectedIds.size} onClear={clearSelection} /> : null}
-          />
-        )}
-      </div>
+    <Ribbon
+      label={t('ribbon_label')}
+      tabs={ribbonTabs(composeShown).map((id) => ({ id, label: RIBBON_TAB_LABELS[id], contextual: isComposeTab(id) }))}
+      active={activeTab}
+      onSelect={setTab}
+      groups={groups}
+      end={activeTab === 'start' && selectedIds.size > 0 ? <SelectionInfo count={selectedIds.size} onClear={clearSelection} /> : null}
+    >
       <span className="sr-only" role="status" aria-live="polite">{announcement}</span>
       {start.dialogs}
       {aboutOpen && <AboutDialog onClose={() => setAboutOpen(false)} />}
-    </div>
+    </Ribbon>
   );
 }

@@ -13,6 +13,7 @@ import { MailRibbon } from '../components/MailRibbon.js';
 import { PageShell } from '../components/PageShell.js';
 import { ComposePane } from '../components/compose/ComposePane.js';
 import { DraftTabStrip } from '../components/compose/DraftTabStrip.js';
+import { useTemplatePicker } from '../components/templates/useTemplatePicker.js';
 import { useUiStore, useUiPrefs } from '../store/ui.js';
 import { api } from '../api/client.js';
 import type { Folder } from '../api/types.js';
@@ -102,6 +103,7 @@ export function MailPage() {
   const qc = useQueryClient();
   const { selectedFolderId, selectedMessageId, selectedIds, setSelectedFolder, setSelectedMessage, clearSelection } = useUiStore();
   const mode = useLayoutMode();
+  const templates = useTemplatePicker();
   const [foldersShown, setFoldersShown] = useState(false);
   const mailbox = useActiveMailbox();
   const { readingPane } = useUiPrefs();
@@ -361,7 +363,7 @@ export function MailPage() {
   return (
     <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd} onDragCancel={() => setActiveDrag(null)}>
       {/* 10.1: the ribbon (tab row + commands) is the command card; below 768 px the compact command bar */}
-      <PageShell title="Mail" ribbon={mode !== 'single'} commandBar={<MailRibbon />} bodyCard={false}>
+      <PageShell title="Mail" ribbon={mode !== 'single'} commandBar={<MailRibbon onNewFromTemplate={templates.open} />} bodyCard={false}>
         <div className={MAIL_VIEW_COLUMN_CLASS}>
         {narrowBar}
         <div className={MAIL_VIEW_ROOT_CLASS}>
@@ -409,6 +411,7 @@ export function MailPage() {
         <DraftTabStrip />
         </div>
       </PageShell>
+      {templates.element}
 
       <DragOverlay dropAnimation={{ duration: 180, easing: 'ease-out' }}>
         {activeDrag ? (

@@ -28,12 +28,12 @@ import { useCategoryDefs } from '../components/CategoryPicker.js';
 import { ContactEditor } from '../components/contacts/ContactEditor.js';
 import { ContactAvatar, ContactDetails } from '../components/contacts/ContactDetails.js';
 import { ContactGroupDetails, ContactGroupEditor } from '../components/contacts/ContactGroupPanel.js';
-import { CardSurface } from '../components/contacts/CardSurface.js';
-import { ContactsCommandBar } from '../components/contacts/ContactsCommandBar.js';
+import { PaneCard } from '../components/PaneCard.js';
+import { ContactsRibbon } from '../components/contacts/ContactsRibbon.js';
 import { ContactsSidebar } from '../components/contacts/ContactsSidebar.js';
 import { EntryList, type EntryRow } from '../components/contacts/EntryList.js';
 import { DirectoryDetails } from '../components/contacts/DirectoryDetails.js';
-import { AboutDialog } from '../components/contacts/AboutDialog.js';
+import { AboutDialog } from '../components/AboutDialog.js';
 
 type Selection = { kind: 'contact' | 'group' | 'directory'; id: string } | null;
 type Mode = 'view' | 'edit' | 'new';
@@ -300,17 +300,19 @@ export function ContactsPage() {
   return (
     <PageShell
       title="Kontakte"
-      commandBar={<ContactsCommandBar selection={ribbonSelection} handlers={handlers} sort={sort} categoryMenu={categoryMenu} />}
-      bodyClassName="gap-2 p-2"
+      commandBar={<ContactsRibbon selection={ribbonSelection} handlers={handlers} sort={sort} categoryMenu={categoryMenu} />}
+      ribbon
+      bodyCard={false}
+      bodyClassName="md:gap-2"
     >
-      <CardSurface label="Kontaktordner" className={`${show('nav')} flex-1 md:flex-none md:w-60 shrink-0`}>
+      <PaneCard label="Kontaktordner" className={`${show('nav')} flex-1 md:flex-none md:w-60 shrink-0`}>
         <ContactsSidebar
           address={ownAddress} view={view} onView={changeView}
           contactCount={ownContacts.length} groupCount={groups?.length ?? 0} categories={categories}
         />
-      </CardSurface>
+      </PaneCard>
 
-      <CardSurface label={viewTitle(view)} className={`${show('list')} flex-1 md:flex-none md:w-[26rem] shrink-0`}>
+      <PaneCard label={viewTitle(view)} className={`${show('list')} flex-1 md:flex-none md:w-[26rem] shrink-0`}>
         <div className="p-3 border-b border-line flex items-center gap-2">
           <button type="button" className="btn-ghost p-1.5 md:hidden shrink-0" aria-label="Ordner anzeigen" onClick={() => setPane('nav')}>
             <FolderOpen size={16} aria-hidden="true" />
@@ -322,16 +324,16 @@ export function ContactsPage() {
           </div>
         </div>
         <EntryList label={viewTitle(view)} rows={rows} selectedId={selection?.kind === rowKind ? selection.id : null} onSelect={select} empty={emptyText} />
-      </CardSurface>
+      </PaneCard>
 
-      <CardSurface label="Details" className={`${show('detail')} flex-1`}>
+      <PaneCard label="Details" className={`${show('detail')} flex-1`}>
         <div className="md:hidden border-b border-line p-2">
           <button type="button" className="btn-ghost text-xs flex items-center gap-1" onClick={() => { setMode('view'); setPane('list'); }}>
             <ArrowLeft size={14} aria-hidden="true" /> Zurück zur Liste
           </button>
         </div>
         <div className="flex-1 overflow-y-auto">{renderPanel()}</div>
-      </CardSurface>
+      </PaneCard>
 
       {aboutOpen && <AboutDialog onClose={() => setAboutOpen(false)} />}
     </PageShell>

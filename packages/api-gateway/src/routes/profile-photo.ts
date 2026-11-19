@@ -27,7 +27,8 @@ import { saveProfilePhoto, removeProfilePhoto, profilePhotoInfo } from '@coremai
 import { requireAuth } from '../middleware/auth.js';
 import { announceOnWrite } from '../lib/realtime.js';
 import { createUserRateLimiter, envInt } from '../lib/user-rate-limit.js';
-import { processProfilePhoto, PhotoError, PHOTO_ERROR_STATUS, MAX_PHOTO_BYTES } from '../lib/profile-photo/image.js';
+import { PhotoError, PHOTO_ERROR_STATUS, MAX_PHOTO_BYTES } from '../lib/profile-photo/image.js';
+import { processImageUpload } from '../lib/profile-photo/decode-pool.js';
 import { lookupAddresses, lookupPhotos, visiblePhotoKey, MAX_LOOKUP_ADDRESSES } from '../lib/profile-photo/directory.js';
 import { sendPhoto } from '../lib/profile-photo/serve.js';
 import { imageUploadBody } from '../lib/profile-photo/upload-body.js';
@@ -56,7 +57,7 @@ ownPhotoRouter.put('/', photoUploadRateLimiter.middleware, photoBody, async (req
   const userId = req.apiUser!.userId;
   let jpeg: Buffer;
   try {
-    jpeg = processProfilePhoto(Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0));
+    jpeg = await processImageUpload('photo', Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0));
   } catch (err) {
     if (err instanceof PhotoError) { res.status(PHOTO_ERROR_STATUS[err.code]).json({ error: err.message, code: err.code }); return; }
     throw err;
