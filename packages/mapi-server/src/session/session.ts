@@ -52,6 +52,8 @@ export class MapiSession {
   /** Byte budget of the open server objects (messages, attachments, streams). */
   readonly memoryLimit: number;
   readonly endpoint: Endpoint;
+  /** Client IDs reserved by RopGetLocalReplicaIds in this session (bounded, store/local-ids.ts). */
+  localIdsReserved = 0;
   private draftCounter = DRAFT_COUNTER_BASE;
 
   constructor(
@@ -68,6 +70,13 @@ export class MapiSession {
   }
 
   get user(): MapiUser { return this.auth.user; }
+
+  /** Ends a logon: its objects are released and its notifications dropped. */
+  dropLogon(logonId: number): void {
+    this.objects.releaseLogon(logonId);
+    this.logons.delete(logonId);
+    this.notifications.drop({ logonId });
+  }
 
   /** Message ID counter for a message that has not been saved yet. */
   nextDraftCounter(): bigint {

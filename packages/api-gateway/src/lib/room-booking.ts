@@ -6,7 +6,7 @@
  * room-booking.ts — ActiveSync calendar writes book rooms the same way; the rules
  * (resource-booking-rules.ts) are the ones the mail path applies to invitations.
  */
-import { prisma, bookingIntervals, ROOM_POLICY_SELECT, type BookingRow } from '@coremail/storage';
+import { prisma, bookingAddress, bookingIntervals, ROOM_POLICY_SELECT, type BookingRow } from '@coremail/storage';
 import { overlaps } from '@coremail/core/recurrence';
 import type { BusyInterval } from '@coremail/core/free-busy';
 
@@ -15,6 +15,37 @@ export {
   type BookedRoom, type BookingRow, type MeetingToBook, type RoomBookingStatus, type RoomDecision, type RoomDeclineReason,
   type RoomPolicy,
 } from '@coremail/storage';
+
+export interface MeetingWriter {
+  /** The acting user (id + login address). */
+  userId: string;
+  email: string;
+  /** Owner of the calendar the event is stored in (the acting user, or the one who granted WRITE). */
+  calendarOwnerId: string;
+}
+
+/**
+ * Is the stored event the organizer's own copy of the meeting? True without organizer (an
+ * appointment), when the organizer is the acting user, or when it is the owner of the
+ * calendar the event lives in (the acting user is that owner or a delegate with WRITE) —
+ * own addresses and active aliases count. Only that copy books, rebooks or releases rooms
+ * and sends invitations / cancellations; an attendee's copy of someone else's meeting
+ * changes (or deletes) only itself.
+ */
+export async function isOrganizerCopy(organizer: string | null, writer: MeetingWriter): Promise<boolean> {
+  if (!organizer) return true;
+  const address = bookingAddress(organizer);
+  if (bookingAddress(writer.email) === address) return true;
+  if (writer.calendarOwnerId !== writer.userId) {
+    const owner = await prisma.user.findUnique({ where: { id: writer.calendarOwnerId }, select: { email: true } });
+    if (owner && bookingAddress(owner.email) === address) return true;
+  }
+  const alias = await prisma.emailAlias.findFirst({
+    where: { targetUserId: { in: [...new Set([writer.userId, writer.calendarOwnerId])] }, active: true, address: { equals: address, mode: 'insensitive' } },
+    select: { id: true },
+  });
+  return alias !== null;
+}
 
 export interface RoomAvailability {
   id: string;

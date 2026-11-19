@@ -61,12 +61,14 @@ export class MailboxView {
       });
     }
     const visible = records.filter((r) => !r.name.startsWith(RECOVERABLE_ROOT));
-    const ids = new Set(visible.map((r) => r.id));
+    // A folder the client created keeps the ID it assigned (cached mode), else the row's counter.
+    const counters = new Map(visible.map((r) => [r.id, r.clientId ?? folderCounterForRow(r.id)]));
     for (const r of visible) {
-      const parentKnown = r.parentId !== null && ids.has(r.parentId);
+      const parentCounter = r.parentId !== null ? counters.get(r.parentId) : undefined;
+      const parentKnown = parentCounter !== undefined;
       const node: FolderNode = {
-        counter: folderCounterForRow(r.id),
-        parentCounter: parentKnown ? folderCounterForRow(r.parentId!) : SpecialCounter.IpmSubtree,
+        counter: counters.get(r.id)!,
+        parentCounter: parentCounter ?? SpecialCounter.IpmSubtree,
         displayName: r.displayName || r.name,
         record: r,
         special: null,

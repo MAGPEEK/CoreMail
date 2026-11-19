@@ -209,7 +209,17 @@ X-ResponseCode 2; no credentials → 401; an NTLM header gets the Basic challeng
 with `X-MapiHttpCapability: 1` announces no mapiHttp block). The admin turns the switch on for A:
 Autodiscover now announces the mapiHttp block (MailStore + AddressBook URLs, A's LegacyDN, no
 EXCH/EXPR). B sends A a mail over SMTP submission; A connects (`Connect`, cookies, PROCESSING/DONE),
-logs on, finds the mail in the Inbox contents table, opens it and reads the body through a stream,
+logs on, finds the mail in the Inbox contents table, opens it and reads the body through a stream.
+Cached mode (9.5): an ICS contents synchronization of the Inbox (`RopSynchronizationConfigure`,
+`RopFastTransferSourceGetBuffer` until Done) carries the mail and ends with an ICS state; after a new
+mail and `RopSetMessageReadFlag` on the first one, a synchronization with that state (uploaded with
+`RopSynchronizationUploadStateStream*`) sends only the new mail as a change and the read state as
+`IncrSyncRead`, a third one nothing; a malformed uploaded state is refused with `RpcFormat`; a
+draft created offline in Drafts (an ID from `RopGetLocalReplicaIds`, `ImportMessageChange` +
+`SaveChangesMessage`) keeps that ID — `RopOpenMessage` opens it by it, a second import edits it,
+and with the collector's state merged in the next download sends neither back while the server
+holds exactly one (edited) draft under that ID (`offlineDraftRoundTrip` in the test client, also
+run by `app.test.ts`); a hierarchy synchronization lists INBOX, Sent and Outbox. A
 then creates a message in the Outbox (`SetProperties`, `ModifyRecipients`, `SubmitMessage`) that
 reaches B (IMAP search). The address book: `Bind`, `GetSpecialTable`, `QueryRows` (paged) lists A and
 B, `ResolveNames` finds B by address (an unknown address stays unresolved), `DNToMId` maps A's DN,

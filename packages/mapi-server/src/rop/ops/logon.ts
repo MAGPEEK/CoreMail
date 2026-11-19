@@ -66,9 +66,7 @@ export const ropLogon = defineRop<LogonReq>({
     if (!mailbox) throw new RopError(Ec.LoginPerm, 'no access to the requested mailbox');
 
     // Logging on with an active LogonId replaces that logon (MS-OXCROPS 2.2.3.1.1).
-    ctx.session.objects.releaseLogon(req.logonId);
-    ctx.session.logons.delete(req.logonId);
-    ctx.session.notifications.drop({ logonId: req.logonId });
+    ctx.session.dropLogon(req.logonId);
 
     const view = new MailboxView(await ctx.store.listFolders(mailbox.mailboxId));
     const { maxMessageBytes } = await ctx.store.submissionLimits(ctx.session.user);
@@ -102,11 +100,7 @@ export const ropRelease = defineRop<IndexReq>({
     if (handle === undefined || handle === HANDLE_UNUSED) return null;
     const released = ctx.session.objects.release(handle);
     ctx.session.notifications.drop({ handle });
-    if (released?.kind === 'logon') {
-      ctx.session.objects.releaseLogon(released.logon.logonId);
-      ctx.session.logons.delete(released.logon.logonId);
-      ctx.session.notifications.drop({ logonId: released.logon.logonId });
-    }
+    if (released?.kind === 'logon') ctx.session.dropLogon(released.logon.logonId);
     // A released stream keeps what was written (MS-OXCPRPT: release commits).
     if (released?.kind === 'stream' && released.stream.dirty) commitStream(released.stream);
     return null;

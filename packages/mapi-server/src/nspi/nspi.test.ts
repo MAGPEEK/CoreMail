@@ -17,13 +17,15 @@ import {
   AbTag, AddressBook, AnrMid, ephemeralEntryId, GAL_DISPLAY_NAME, galHierarchyRow, Mid, NspiError, NSPI_SERVER_GUID,
 } from './address-book.js';
 import {
-  currentPosition, HIERARCHY_VERSION, MAX_FILTER_NODES, MAX_RESOLVE_NAMES, MAX_RESULT_CELLS, MAX_ROWS_PER_REQUEST, NSPI_OPERATIONS,
+  bindCodePage, currentPosition, HIERARCHY_VERSION, MAX_FILTER_NODES, MAX_RESOLVE_NAMES, MAX_RESULT_CELLS, MAX_ROWS_PER_REQUEST, NSPI_OPERATIONS,
   pageRows, statAt, type NspiContext,
 } from './operations.js';
 import { legacyDnFor } from '@coremail/storage';
+import { encoderFor, isBindCodePage } from './codepage.js';
 import type { DirectoryRecord } from '../store/types.js';
 
 const hex = (s: string): Buffer => Buffer.from(s.replace(/\s+/g, ''), 'hex');
+const WESTERN = encoderFor(1252)!;
 const bytes = (fn: (w: BufferWriter) => void): Buffer => { const w = new BufferWriter(); fn(w); return w.toBuffer(); };
 const utf16z = (s: string): string => Buffer.from(`${s}\u0000`, 'utf16le').toString('hex');
 
@@ -156,11 +158,11 @@ test('GetMatches filter: PidTagAnr nodes use ANR, other nodes the entry properti
 test('EntryIDs: permanent (GUID_NSPI, display type, DN) by default, ephemeral (server GUID, MID) with fEphID', () => {
   const book = new AddressBook(RECORDS);
   const bob = book.resolve('bob')[0]!;
-  const [perm] = book.cells(bob, [Tag.EntryId], { ephemeral: false, unicode: true });
+  const [perm] = book.cells(bob, [Tag.EntryId], { ephemeral: false, unicode: true, encode8: WESTERN });
   const permanent = (perm as { value: Buffer }).value;
   assert.equal(permanent.subarray(0, 28).toString('hex'), '00000000dca740c8c042101ab4b908002b2fe1820100000000000000');
   assert.equal(permanent.subarray(28).toString('latin1'), `${bob.dn}\u0000`);
-  const [eph] = book.cells(bob, [Tag.EntryId], { ephemeral: true, unicode: true });
+  const [eph] = book.cells(bob, [Tag.EntryId], { ephemeral: true, unicode: true, encode8: WESTERN });
   const ephemeral = (eph as { value: Buffer }).value;
   const mid = Buffer.alloc(4);
   mid.writeUInt32LE(bob.mid);
@@ -192,7 +194,7 @@ test('positioning: absolute (beginning / end / MID + Delta, clamped) and fractio
 
 function ctxOf(book: AddressBook, revealed = new Set<string>()): NspiContext {
   return {
-    book: async () => book, revealed,
+    book: async () => book, revealed, codePage: 1252,
     endpoints: async () => ({ mailStore: 'https://h.example.test/mapi/emsmdb/', addressBook: 'https://h.example.test/mapi/nspi/' }),
   };
 }
@@ -413,4 +415,50 @@ test('result bounds: explicit MID lists / ResolveNames beyond the cell budget �
     for (let i = 0; i < MAX_FILTER_NODES; i++) w.u8(0x08).u32(Tag.DisplayName);
     w.u8(0).u32(100).u8(0).u32(0);
   }), ctx)), NspiError.TooComplex);
+});
+
+// ── 9.5 review: the code page of NspiBind ────────────────────────────────────
+
+test('code pages: Western, Cyrillic and Shift-JIS encoders; unrepresentable characters become ?; Bind never accepts Unicode', () => {
+  assert.deepEqual([...encoderFor(1252)!('Ä€')], [0xc4, 0x80]);
+  assert.deepEqual([...encoderFor(1251)!('Иван')], [0xc8, 0xe2, 0xe0, 0xed]);
+  assert.deepEqual([...encoderFor(932)!('日本')], [0x93, 0xfa, 0x96, 0x7b]);
+  assert.equal(encoderFor(1252)!('Иx').toString('latin1'), '?x');
+  assert.equal(encoderFor(20127)!('Ä a').toString('latin1'), '? a');
+  assert.equal(isBindCodePage(1252), true);
+  assert.equal(isBindCodePage(1200), false, 'CP_WINUNICODE is no session code page');
+  assert.equal(isBindCodePage(4711), false, 'unknown code page');
+});
+
+test('8-bit strings: the request STAT code page, else the session code page — not a fixed Latin-1', async () => {
+  const book = new AddressBook([{ id: 'u-ivan', kind: 'user', email: 'ivan@example.test', displayName: 'Иван', aliases: [], hidden: false }]);
+  const ctx: NspiContext = { ...ctxOf(book), codePage: 1251 };
+  const name8 = ((Tag.DisplayName & 0xffff0000) | PropType.String8) >>> 0;
+  const query = async (codePage: number): Promise<Buffer> => {
+    const r = new BufferReader(await NSPI_OPERATIONS['QueryRows']!(body((w) => {
+      w.u32(0); withStat(w, { ...STAT, codePage }).u32(0).u32(10).u8(1).u32(1).u32(name8).u32(0);
+    }), ctx));
+    r.u32();
+    assert.equal(r.u32(), 0);
+    r.u8(); readStat(r); r.u8(); r.bytes(8);
+    assert.equal(r.u32(), 1);
+    assert.equal(r.u8(), 0, 'standard row');
+    assert.equal(r.u8(), 0xff, 'HasValue');
+    const out: number[] = [];
+    for (let b = r.u8(); b !== 0; b = r.u8()) out.push(b);
+    return Buffer.from(out);
+  };
+  assert.deepEqual([...await query(1251)], [0xc8, 0xe2, 0xe0, 0xed], 'STAT names windows-1251');
+  assert.deepEqual([...await query(1200)], [0xc8, 0xe2, 0xe0, 0xed], 'Unicode STAT, 8-bit column: the bound code page');
+  assert.equal((await query(1252)).toString('latin1'), '????', 'Western cannot represent Cyrillic');
+});
+
+test('Bind: CP_WINUNICODE or an unserved code page → InvalidCodepage; the session code page comes from the STAT', () => {
+  const bind = (codePage: number): Buffer => body((w) => { w.u32(0); withStat(w, { ...STAT, codePage }).u32(0); });
+  const unicode = bindCodePage(bind(1200));
+  assert.equal(unicode.ok, false);
+  if (!unicode.ok) assert.equal(unicode.response.readUInt32LE(4), NspiError.InvalidCodepage);
+  assert.equal(bindCodePage(bind(4711)).ok, false);
+  assert.deepEqual(bindCodePage(bind(1251)), { ok: true, codePage: 1251 });
+  assert.deepEqual(bindCodePage(body((w) => { w.u32(0).u8(0).u32(0); })), { ok: true, codePage: 1252 }, 'no STAT: Western');
 });

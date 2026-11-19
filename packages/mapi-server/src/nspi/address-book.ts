@@ -25,7 +25,8 @@ import { legacyDnFor } from '@coremail/storage';
 import { addressBookEntryId, ADDRESS_BOOK_PROVIDER } from '../ids.js';
 import { lookupProperty, tagForUnicodePreference, type PropertyBag } from '../props/bag.js';
 import { evaluateRestriction, type Restriction } from '../props/restriction.js';
-import { PropType, propIdOf, tag, Tag, ObjectType } from '../props/tags.js';
+import { PropType, propIdOf, propTypeOf, tag, Tag, ObjectType } from '../props/tags.js';
+import type { Encoder } from './codepage.js';
 import { BufferWriter } from '../wire/writer.js';
 import type { AbCell } from './wire.js';
 import type { DirectoryRecord } from '../store/types.js';
@@ -50,7 +51,7 @@ export const DisplayType = { MailUser: 0x0000, Container: 0x0100 } as const;
 /** PidTagContainerFlags: AB_RECIPIENTS | AB_UNMODIFIABLE (MS-OXOABK 2.2.2.1). */
 const GAL_CONTAINER_FLAGS = 0x1 | 0x8;
 const ENTRY_ID_EPHEMERAL = 0x87;
-export const CP_WINUNICODE = 1200;
+export { CP_WINUNICODE } from './codepage.js';
 
 const T = PropType;
 /** Address book properties (MS-OXPROPS / MS-OXOABK). */
@@ -80,6 +81,8 @@ export interface CellOptions {
   ephemeral: boolean;
   /** String values in Unicode (else 8-bit). */
   unicode: boolean;
+  /** Converts a value requested as PtypString8 into the 8-bit code page (codepage.ts). */
+  encode8: Encoder;
 }
 
 function midCandidate(id: string): number {
@@ -177,18 +180,18 @@ export class AddressBook {
 
   /** Cells of an entry for `columns` (string types as requested, PtypUnspecified → stored type). */
   cells(e: AbEntry, columns: readonly number[], opts: CellOptions): AbCell[] {
-    return cellsOf(entryBag(e, opts), columns);
+    return cellsOf(entryBag(e, opts), columns, opts.encode8);
   }
 
   /** Every property of an entry (GetProps without tags), strings per `opts.unicode`. */
   allCells(e: AbEntry, opts: CellOptions): AbCell[] {
-    return cellsOf(entryBag(e, opts), propertyList(e, opts.unicode));
+    return cellsOf(entryBag(e, opts), propertyList(e, opts.unicode), opts.encode8);
   }
 
   private filterBagOf(e: AbEntry): PropertyBag {
     let bag = this.filterBags.get(e.mid);
     if (!bag) {
-      bag = entryBag(e, { ephemeral: false, unicode: true });
+      bag = entryBag(e, { ephemeral: false });
       this.filterBags.set(e.mid, bag);
     }
     return bag;
@@ -206,20 +209,27 @@ function anrMatches(e: AbEntry, value: string): boolean {
   return q !== '' && (e.email === q || e.aliases.includes(q) || anrPrefixMatch(e, q));
 }
 
-function cellsOf(bag: PropertyBag, columns: readonly number[]): AbCell[] {
+const EIGHT_BIT = new Map<number, number>([[PropType.String8, PropType.String], [PropType.MultipleString8, PropType.MultipleString]]);
+
+/** Cells of `columns`; strings requested as PtypString8 are encoded from their Unicode value. */
+function cellsOf(bag: PropertyBag, columns: readonly number[], encode8: Encoder): AbCell[] {
   return columns.map((c): AbCell => {
-    const r = lookupProperty(bag, c);
+    const unicodeType = EIGHT_BIT.get(propTypeOf(c));
+    const r = lookupProperty(bag, unicodeType === undefined ? c : tag(propIdOf(c), unicodeType));
     if (!r.found) return { kind: 'error', tag: c, error: NspiError.NotFound };
-    return 'value' in r ? { kind: 'value', tag: r.tag, value: r.value } : { kind: 'error', tag: c, error: r.error };
+    if (!('value' in r)) return { kind: 'error', tag: c, error: r.error };
+    if (unicodeType === undefined) return { kind: 'value', tag: r.tag, value: r.value };
+    const v = r.value;
+    return { kind: 'value', tag: c, value: Array.isArray(v) ? (v as string[]).map(encode8) : encode8(String(v)) };
   });
 }
 
 /** Tags of an entry's properties (GetPropList / GetProps without tags). */
 export function propertyList(e: AbEntry, unicode: boolean): number[] {
-  return [...entryBag(e, { ephemeral: false, unicode: true }).keys()].map((t) => tagForUnicodePreference(t, unicode));
+  return [...entryBag(e, { ephemeral: false }).keys()].map((t) => tagForUnicodePreference(t, unicode));
 }
 
-function entryBag(e: AbEntry, opts: CellOptions): PropertyBag {
+function entryBag(e: AbEntry, opts: { ephemeral: boolean }): PropertyBag {
   const permanent = addressBookEntryId(e.dn, DisplayType.MailUser);
   const instanceKey = Buffer.alloc(4);
   instanceKey.writeUInt32LE(e.mid);
@@ -266,4 +276,6 @@ export const NspiError = {
   TooComplex: 0x80040117,
   TableTooBig: 0x80040403,
   InvalidBookmark: 0x80040405,
+  /** MS-OXNSPI 2.2.1.2: the code page is not served (NspiBind). */
+  InvalidCodepage: 0x8004011e,
 } as const;

@@ -10,7 +10,11 @@
  *  - Each session is a live connection (LiveConnectionRegistry, protocol
  *    `mapi`): a password/app-password/MFA change, deactivation or the MAPI
  *    switch turned off ends it at once.
- *  - At most MAX_SESSIONS_PER_USER sessions per account (the oldest goes).
+ *  - At most MAX_SESSIONS_PER_USER sessions per account across every MAPI
+ *    server instance: the account's sessions are indexed in Redis
+ *    (`mapi:user-ctx:<userId>`, sorted set scored by last use); a new session
+ *    beyond the cap ends the least recently used one — its context record is
+ *    deleted, so the instance holding it ends it on its next request.
  */
 import { createLogger, type LiveConnectionRegistry } from '@coremail/core';
 import { cookieDigest, MapiSession, newCookieValue, type SessionAuth } from './session.js';
@@ -20,12 +24,20 @@ const log = createLogger('mapi:sessions');
 
 export const MAX_SESSIONS_PER_USER = 16;
 const KEY_PREFIX = 'mapi:ctx:';
+const USER_KEY_PREFIX = 'mapi:user-ctx:';
+/** How often a session's last-use score in the account index is refreshed. */
+export const INDEX_REFRESH_MS = 60_000;
 
 /** Minimal Redis surface (ioredis compatible). */
 export interface SessionRedis {
   set(key: string, value: string, mode: 'PX', ttlMs: number): Promise<unknown>;
   pexpire(key: string, ttlMs: number): Promise<number>;
   del(key: string): Promise<number>;
+  zadd(key: string, score: number, member: string): Promise<unknown>;
+  zrem(key: string, member: string): Promise<unknown>;
+  /** Members by ascending score. */
+  zrange(key: string, start: number, stop: number): Promise<string[]>;
+  zremrangebyscore(key: string, min: number | string, max: number | string): Promise<unknown>;
 }
 
 export interface RegistryDeps {
@@ -37,7 +49,7 @@ export interface RegistryDeps {
   now?: () => number;
 }
 
-interface Entry { session: MapiSession; unregister: () => void }
+interface Entry { session: MapiSession; unregister: () => void; indexedAt: number }
 
 export class SessionRegistry {
   private readonly byDigest = new Map<string, Entry>();
@@ -58,7 +70,6 @@ export class SessionRegistry {
 
   /** New session of an endpoint (Connect: emsmdb, Bind: nspi); returns it with the two cookie values to send. */
   async create(auth: SessionAuth, authStartedAt: number, endpoint: Endpoint = 'emsmdb'): Promise<{ session: MapiSession; context: string; sequence: string }> {
-    this.evictOldest(auth.user.userId);
     const context = newCookieValue();
     const sequence = newCookieValue();
     const digest = cookieDigest(context);
@@ -74,7 +85,8 @@ export class SessionRegistry {
         void this.end(session);
       },
     }, authStartedAt);
-    this.byDigest.set(digest, { session, unregister });
+    this.byDigest.set(digest, { session, unregister, indexedAt: this.now() });
+    await this.claimSlot(auth.user.userId, digest);
     return { session, context, sequence };
   }
 
@@ -91,17 +103,24 @@ export class SessionRegistry {
     const alive = await this.deps.redis.pexpire(KEY_PREFIX + digest, this.deps.idleMs);
     if (alive !== 1) { await this.end(entry.session); return null; }
     entry.session.lastUsed = this.now();
+    if (entry.session.lastUsed - entry.indexedAt >= INDEX_REFRESH_MS) {
+      entry.indexedAt = entry.session.lastUsed;
+      await this.index(entry.session.user.userId, digest, entry.indexedAt);
+    }
     return entry.session;
   }
 
-  /** Ends a session: objects released, record deleted, no longer a live connection. */
+  /** Ends a session: objects released, records deleted, no longer a live connection. */
   async end(session: MapiSession): Promise<void> {
     const entry = this.byDigest.get(session.id);
     session.closed = true;
     session.notificationWait?.abort();
     this.byDigest.delete(session.id);
     entry?.unregister();
-    await this.deps.redis.del(KEY_PREFIX + session.id).catch((err: unknown) => log.warn({ err }, 'MAPI context record not deleted'));
+    await Promise.all([
+      this.deps.redis.del(KEY_PREFIX + session.id),
+      this.deps.redis.zrem(USER_KEY_PREFIX + session.user.userId, session.id),
+    ]).catch((err: unknown) => log.warn({ err }, 'MAPI context record not deleted'));
   }
 
   /** Ends sessions idle for longer than the timeout. */
@@ -112,10 +131,34 @@ export class SessionRegistry {
     return idle.length;
   }
 
-  private evictOldest(userId: string): void {
-    const own = [...this.byDigest.values()].filter((e) => e.session.user.userId === userId);
-    if (own.length < MAX_SESSIONS_PER_USER) return;
-    const oldest = own.sort((a, b) => a.session.lastUsed - b.session.lastUsed)[0]!;
-    void this.end(oldest.session);
+  /** The live sessions of an account in this process. */
+  sessionsOfUser(userId: string): MapiSession[] {
+    return [...this.byDigest.values()].map((e) => e.session).filter((s) => !s.closed && s.user.userId === userId);
+  }
+
+  private async index(userId: string, digest: string, at: number): Promise<void> {
+    const key = USER_KEY_PREFIX + userId;
+    await this.deps.redis.zadd(key, at, digest);
+    await this.deps.redis.pexpire(key, this.deps.idleMs + INDEX_REFRESH_MS);
+  }
+
+  /** Enters the session in the account index and ends the least recently used ones beyond the cap. */
+  private async claimSlot(userId: string, digest: string): Promise<void> {
+    const key = USER_KEY_PREFIX + userId;
+    const now = this.now();
+    // Members whose context expired (their instance stopped, or they idled out).
+    await this.deps.redis.zremrangebyscore(key, '-inf', now - this.deps.idleMs - INDEX_REFRESH_MS);
+    await this.index(userId, digest, now);
+    const others = (await this.deps.redis.zrange(key, 0, -1)).filter((d) => d !== digest);
+    const excess = others.length + 1 - MAX_SESSIONS_PER_USER;
+    for (const old of others.slice(0, Math.max(0, excess))) await this.evict(userId, old);
+  }
+
+  private async evict(userId: string, digest: string): Promise<void> {
+    const local = this.byDigest.get(digest);
+    if (local) { await this.end(local.session); return; }
+    await this.deps.redis.zrem(USER_KEY_PREFIX + userId, digest);
+    await this.deps.redis.del(KEY_PREFIX + digest);
+    log.info({ userId }, 'MAPI session of another instance ended: session limit of the account reached');
   }
 }
