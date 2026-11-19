@@ -8,12 +8,25 @@ import { Info } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
 import { errorMessage } from '../lib/errors.js';
+import { describeDomain } from '../lib/idn.js';
+import { IdnText } from './IdnText.js';
 import {
-  envOverrideNote, spoofFormFrom, spoofPayload, SPOOF_ACTION_LABEL,
+  envOverrideNote, linesToList, spoofFormFrom, spoofPayload, SPOOF_ACTION_LABEL,
   type SpoofAction, type SpoofField, type SpoofForm, type SpoofingView,
 } from '../lib/senderLists.js';
 
 const KEY = ['admin', 'security', 'spoofing'] as const;
+
+/** Unicode readings of the international domains typed into a list (nothing for plain entries). */
+function IdnPreview({ text }: { text: string }) {
+  const idn = linesToList(text).map(describeDomain).filter((d) => d.state !== 'ascii');
+  if (idn.length === 0) return null;
+  return (
+    <ul className="space-y-1" aria-label="Internationale Domains in Unicode-Darstellung">
+      {idn.map((d) => <li key={d.ascii}><IdnText display={d} /></li>)}
+    </ul>
+  );
+}
 
 function EnvNote({ variable }: { variable: string | undefined }) {
   const note = envOverrideNote(variable);
@@ -84,6 +97,7 @@ export function SpoofingSection() {
           disabled={!!env('localSpoofAllow')}
           placeholder={'203.0.113.25\n198.51.100.0/24\nmailer.example'}
           className="w-full border border-line-strong rounded px-2 py-1.5 text-sm font-mono bg-surface text-fg focus:outline-none focus:ring-2 focus:ring-accent-fg disabled:opacity-50" />
+        <IdnPreview text={form.allow} />
       </div>
 
       <div className="card p-4 space-y-2">
@@ -97,6 +111,7 @@ export function SpoofingSection() {
           disabled={!!env('arcTrustedSealers')}
           placeholder="lists.example.org"
           className="w-full border border-line-strong rounded px-2 py-1.5 text-sm font-mono bg-surface text-fg focus:outline-none focus:ring-2 focus:ring-accent-fg disabled:opacity-50" />
+        <IdnPreview text={form.sealers} />
       </div>
     </div>
   );

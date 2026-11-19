@@ -32,7 +32,6 @@ import { PromptDialog } from './PromptDialog.js';
 import { confirmFolderDelete } from './folderDeleteConfirm.js';
 import { isStaleSubfolderRefusal } from '../lib/folderDelete.js';
 import { RecoverDeletedItemsDialog } from './RecoverDeletedItems.js';
-import { QuotaIndicator } from './QuotaIndicator.js';
 import { OpenSharedMailboxModal } from './OpenSharedMailboxModal.js';
 import { SAFETY_REFETCH_MS } from '../lib/realtimeEvents.js';
 import { folderMenuAccess } from '../lib/folderPermissions.js';
@@ -312,9 +311,6 @@ function ForeignMailboxNode({ entry, expanded, onToggle, onHide }: {
           <div role="tree" aria-label={title} className="space-y-0.5">
             {roots.map((f) => renderFolder(f, 1))}
           </div>
-          {entry.kind === 'shared' && (
-            <QuotaIndicator sharedMailboxId={entry.id} className="pl-8 pr-3 py-1" />
-          )}
         </div>
       )}
 
