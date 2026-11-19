@@ -44,5 +44,6 @@ test('calendar filter popover: a labelled dialog that takes focus, closes on Esc
   assert.match(src, /role="dialog"\s+aria-label="Filter"/);
   assert.match(src, /e\.key === 'Escape'[^\n]*closeFilter\(\)/);
   assert.match(src, /trigger\.focus\(\)/);
-  assert.match(src, /dialogOpen: filterIsOpen/, 'button exposes aria-haspopup="dialog" + aria-expanded');
+  assert.match(src, /open: filterIsOpen/, 'button exposes aria-haspopup="dialog" + aria-expanded (via the ribbon adapter)');
+  assert.match(read('components/calendar/ribbonAdapter.tsx'), /dialogOpen: popover.open/);
 });

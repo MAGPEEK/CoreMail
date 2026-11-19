@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import {
-  Plus, Calendar as CalDay, Briefcase, CalendarRange, LayoutGrid,
-  Columns3, Filter, Share2, Printer, X, CalendarCheck, ListTodo,
-} from 'lucide-react';
-import { CommandBar, type CommandGroup } from './CommandBar.js';
+import { X } from 'lucide-react';
+import { CommandBar } from './CommandBar.js';
+import { ribbonToCommandGroups } from './calendar/ribbonAdapter.js';
+import type { CalendarAction, CalendarViewId } from '../lib/calendarRibbon.js';
 
-export type CalendarView = 'timeGridDay' | 'timeGridWeek' | 'workWeek' | 'dayGridMonth' | 'split';
+export type CalendarView = CalendarViewId;
 
 /** v3.18.21: Realistic filters that actually map to CalendarEvent fields. */
 export const FILTER_OPTIONS = [
@@ -28,25 +27,18 @@ export const FILTER_DEFAULT: Record<FilterKey, boolean> = {
 
 interface Props {
   view: CalendarView;
-  onChangeView: (v: CalendarView) => void;
-  onNewEvent: () => void;
-  onPrint?: () => void;
-  onShare?: () => void;
-  // v3.18.21: controlled filter state — held in CalendarPage
-  // and applied to fcEvents
+  // v3.18.21: controlled filter state — held in CalendarPage and applied to fcEvents
   filters: Record<FilterKey, boolean>;
   onFiltersChange: (next: Record<FilterKey, boolean>) => void;
-  /** 9.4: jump to today */
-  onToday: () => void;
-  /** 9.4: day agenda side panel */
+  hasOwnCalendar: boolean;
+  slotMinutes: number;
   agendaOpen: boolean;
-  onToggleAgenda: () => void;
+  /** Every ribbon command except the filter popover (owned here) goes through the page. */
+  onAction: (action: CalendarAction) => void;
 }
 
-/** Calendar ribbon on the shared command bar (components/CommandBar.tsx). */
-export function CalendarToolbar({
-  view, onChangeView, onNewEvent, onPrint, onShare, filters, onFiltersChange, onToday, agendaOpen, onToggleAgenda,
-}: Props) {
+/** Calendar ribbon: the pure ribbon data (lib/calendarRibbon.ts) on the shared command bar. */
+export function CalendarToolbar({ view, filters, onFiltersChange, hasOwnCalendar, slotMinutes, agendaOpen, onAction }: Props) {
   const [filterOpen, setFilterOpen] = useState<{ x: number; y: number; trigger: HTMLElement } | null>(null);
   const filterRef = useRef<HTMLDivElement>(null);
   const filterIsOpen = filterOpen !== null;
@@ -69,49 +61,16 @@ export function CalendarToolbar({
 
   const resetFilters = () => onFiltersChange({ ...FILTER_DEFAULT });
 
-  const viewItem = (id: CalendarView, label: string, icon: React.ReactNode) => ({
-    id, label, icon, pressed: view === id, onClick: () => onChangeView(id),
-  });
-
-  const groups: CommandGroup[] = [
-    { id: 'new', title: 'Neu', items: [{
-      id: 'new-event',
-      label: 'Neues Ereignis',
-      icon: <Plus size={20} className="text-accent-fg" />,
-      placement: 'pinned',
-      menu: () => [
-        { label: 'Neuer Termin',         icon: <Plus size={14} />, onClick: onNewEvent },
-        { label: 'Neue Besprechung',     icon: <Plus size={14} />, onClick: onNewEvent },
-        { label: 'Ganztägiges Ereignis', icon: <Plus size={14} />, onClick: onNewEvent },
-      ],
-    }] },
-    { id: 'goto', title: 'Gehe zu', items: [
-      { id: 'today', label: 'Heute', icon: <CalendarCheck size={20} />, onClick: onToday },
-    ] },
-    { id: 'arrange', title: 'Anordnen', items: [
-      viewItem('timeGridDay', 'Tag', <CalDay size={20} />),
-      viewItem('workWeek', 'Arbeitswoche', <Briefcase size={20} />),
-      viewItem('timeGridWeek', 'Woche', <Columns3 size={20} />),
-      viewItem('dayGridMonth', 'Monat', <LayoutGrid size={20} />),
-      { id: 'split', label: 'Geteilte Ansicht', icon: <CalendarRange size={20} />, disabled: true, tooltip: 'Noch nicht verfügbar' },
-      { id: 'agenda', label: 'Tagesagenda', icon: <ListTodo size={20} />, pressed: agendaOpen, onClick: onToggleAgenda },
-    ] },
-    { id: 'filter', title: 'Filter', items: [{
-      id: 'filter',
-      label: filterCount > 0 ? 'Filter angewendet' : 'Filter',
-      icon: <Filter size={20} className={filterCount > 0 ? 'text-accent-fg' : ''} />,
-      pressed: filterCount > 0,
-      dialogOpen: filterIsOpen,
-      onClick: (trigger) => {
-        const r = trigger.getBoundingClientRect();
-        setFilterOpen({ x: Math.max(8, r.right - 340), y: r.bottom + 4, trigger });
-      },
-    }] },
-    { id: 'share', title: 'Teilen', items: [
-      { id: 'share', label: 'Kalender teilen', icon: <Share2 size={20} />, ...(onShare ? { onClick: onShare } : { disabled: true }) },
-      { id: 'print', label: 'Drucken', icon: <Printer size={20} />, ...(onPrint ? { onClick: onPrint } : { disabled: true }) },
-    ] },
-  ];
+  const groups = ribbonToCommandGroups(
+    { view, activeFilters: filterCount, hasOwnCalendar, slotMinutes, agendaOpen, aboutAvailable: false },
+    (action, anchor) => {
+      if (action === 'filter' && anchor) {
+        const r = anchor.getBoundingClientRect();
+        setFilterOpen({ x: Math.max(8, r.right - 340), y: r.bottom + 4, trigger: anchor });
+      } else onAction(action);
+    },
+    { action: 'filter', open: filterIsOpen },
+  );
 
   return (
     <>
