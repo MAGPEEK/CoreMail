@@ -10,8 +10,8 @@ import forge from 'node-forge';
 import { randomCertSerialHex } from '@coremail/core/cert-serial';
 import {
   BACKOFF_BASE_MS, BACKOFF_MAX_MS, backoffDelayMs, decideRenewal, deriveCertStatus,
-  hostnameUpdateFor, isDefaultHostname, isPemCurrentlyValid, parseCertValidity, planSni,
-  recomputeStatus, resolveSni, selectProxyCerts, buildFullChainPem, uncoveredDomains, needsHttpsReplacement, replacementProxyCert,
+  hostnameUpdateFor, isDefaultHostname, isPemCurrentlyValid, matchSni, parseCertValidity, planSni,
+  recomputeStatus, resolveSni, servedProxyCert, selectProxyCerts, buildFullChainPem, uncoveredDomains, needsHttpsReplacement, replacementProxyCert,
   type ProxyCertRow, type RenewalCandidate,
 } from './cert-lifecycle.js';
 
@@ -228,6 +228,23 @@ describe('HTTPS proxy certificate selection', () => {
     const plan = planSni(selectProxyCerts([row('x', ['x.test'], -100, -1)], NOW));
     assert.equal(plan.defaultId, null);
     assert.equal(resolveSni(plan, 'x.test'), null);
+  });
+
+  test('9.5.1: matchSni has no default; servedProxyCert = the certificate served for a host name', () => {
+    const rows = [
+      row('default', ['other.example.net'], -30, 60, { isActiveHttps: true }),
+      row('le', ['mail.example.com'], -10, 80),
+      row('wild', ['*.example.org'], -20, 60),
+      row('nokey', ['key.example.com'], -1, 80, { keyPem: null }),
+    ];
+    const plan = planSni(selectProxyCerts(rows, NOW));
+    assert.equal(matchSni(plan, 'unknown.test'), null);
+    assert.equal(matchSni(plan, 'MAIL.example.com'), 'le');
+    assert.equal(servedProxyCert(rows, 'mail.example.com', NOW)?.id, 'le', 'SNI exact beats isActiveHttps');
+    assert.equal(servedProxyCert(rows, 'mx.example.org', NOW)?.id, 'wild');
+    assert.equal(servedProxyCert(rows, 'key.example.com', NOW)?.id, 'default', 'no key → not served, default instead');
+    assert.equal(servedProxyCert(rows, 'unknown.test', NOW)?.name, 'default');
+    assert.equal(servedProxyCert([row('x', ['x.test'], -100, -1)], 'x.test', NOW), null);
   });
 });
 

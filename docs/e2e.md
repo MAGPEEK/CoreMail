@@ -140,7 +140,7 @@ must bring every port back to the self-signed default for `mail.<E2E_DOMAIN>` (o
 all ports, visible as the SELF_SIGNED protocol certificate). The uploaded certificate is deleted.
 See [certificates.md](certificates.md).
 `legacy-clients`: the IMAPS listener refuses a TLS 1.0 client by default, accepts TLS 1.0/1.1 a few
-seconds after „Ältere Clients erlauben" is switched on (no container restart) and refuses it again
+seconds after „Zusätzlich veraltete TLS-Versionen 1.0/1.1 zulassen (optional)" is switched on (no container restart) and refuses it again
 after switching off; Autodiscover answers 401 Basic first, then IMAP/SMTP with an explicit
 `<Encryption>` (mixed-case path); the device relay refuses an external recipient while off, refuses
 `0.0.0.0/0` and `::ffff:0:0/96`, then (private networks + `<E2E_DOMAIN>`) accepts the external RCPT for that

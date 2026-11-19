@@ -192,8 +192,8 @@ export interface SelectedProxyCert extends ProxyCertRow {
  * (test, untrusted) certificates always come after the trusted ones (9.2.x:
  * a staging test must not replace a working certificate in browsers).
  */
-export function selectProxyCerts(rows: ProxyCertRow[], now: Date = new Date()): SelectedProxyCert[] {
-  const out: SelectedProxyCert[] = [];
+export function selectProxyCerts<T extends ProxyCertRow>(rows: T[], now: Date = new Date()): Array<T & SelectedProxyCert> {
+  const out: Array<T & SelectedProxyCert> = [];
   for (const r of rows) {
     if (!r.certPem || !r.keyPem) continue;
     const v = parseCertValidity(r.certPem);
@@ -339,8 +339,8 @@ export function planSni(certs: Array<Pick<SelectedProxyCert, 'id' | 'certPem' | 
   return { exact, wildcards, defaultId };
 }
 
-/** Resolves an SNI server name against a plan: exact → wildcard (one label) → default. */
-export function resolveSni(plan: SniPlan, servername: string): string | null {
+/** The certificate a plan names for an SNI server name: exact → wildcard (one label); null without a match. */
+export function matchSni(plan: SniPlan, servername: string): string | null {
   const lower = servername.toLowerCase();
   const exact = plan.exact.get(lower);
   if (exact) return exact;
@@ -350,5 +350,25 @@ export function resolveSni(plan: SniPlan, servername: string): string | null {
       if (prefix.length > 0 && !prefix.includes('.')) return w.certId;
     }
   }
-  return plan.defaultId;
+  return null;
+}
+
+/** Resolves an SNI server name against a plan: exact → wildcard (one label) → default. */
+export function resolveSni(plan: SniPlan, servername: string): string | null {
+  return matchSni(plan, servername) ?? plan.defaultId;
+}
+
+/**
+ * The certificate the integrated HTTPS server serves for `hostname` — the same
+ * selection as tls-proxy.ts (selectProxyCerts → planSni → resolveSni): rows
+ * without a key or with a PEM that is not currently valid are skipped, then
+ * exact → wildcard → default (isActiveHttps, else newest). Null when no
+ * certificate would be served at all.
+ */
+export function servedProxyCert<T extends ProxyCertRow>(
+  rows: T[], hostname: string, now: Date = new Date(),
+): (T & SelectedProxyCert) | null {
+  const certs = selectProxyCerts(rows, now);
+  const id = resolveSni(planSni(certs), hostname);
+  return certs.find((c) => c.id === id) ?? null;
 }

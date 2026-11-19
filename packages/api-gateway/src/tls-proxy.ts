@@ -28,7 +28,8 @@ import type { Application } from 'express';
 import { createLogger, getRedisClient, stripForwardedHeaders, tlsProtocolOptions, type TlsProtocolOptions } from '@coremail/core';
 import { prisma, decryptPrivateKey, selfSignedReplacement } from '@coremail/storage';
 import {
-  selectProxyCerts, planSni, buildFullChainPem, needsHttpsReplacement, replacementProxyCert, type SelectedProxyCert,
+  selectProxyCerts, planSni, matchSni, resolveSni, buildFullChainPem, needsHttpsReplacement, replacementProxyCert,
+  type SelectedProxyCert, type SniPlan,
 } from './lib/cert-lifecycle.js';
 
 const log  = createLogger('tls-proxy');
@@ -37,12 +38,10 @@ const REDIS_CHANNEL = 'coremail:tls:reload';
 
 let activeServer: https.Server | null = null;
 
-/** Map: hostname (lowercase) → SecureContext */
-let sniContexts: Map<string, tls.SecureContext> = new Map();
-/** Wildcard patterns: '*.example.com' → SecureContext */
-let wildcardContexts: Array<{ suffix: string; ctx: tls.SecureContext }> = [];
-/** Fallback for unknown SNI names (or connections without SNI) */
-let defaultContext: tls.SecureContext | null = null;
+/** Hostname → certificate assignment (exact, wildcard, default) — lib/cert-lifecycle.ts planSni. */
+let sniPlan: SniPlan = { exact: new Map(), wildcards: [], defaultId: null };
+/** Certificate id → SecureContext for every certificate in the plan. */
+let contextsById: Map<string, tls.SecureContext> = new Map();
 
 // ── Public entry point ───────────────────────────────────────────────────────
 
@@ -120,7 +119,7 @@ async function replacementCerts(): Promise<LoadedCert[]> {
 }
 
 /**
- * BCP → Dienste → HTTPS: "Ältere Clients erlauben (TLS 1.0/1.1)"
+ * BCP → Dienste → HTTPS: "Zusätzlich veraltete TLS-Versionen 1.0/1.1 zulassen (optional)"
  * (ServerSettings.httpsAllowLegacyTls). Read on every reload; an unreadable
  * setting keeps the secure default (TLS 1.2+).
  */
@@ -136,10 +135,6 @@ async function loadHttpsLegacyTls(): Promise<boolean> {
 
 /** The TLS policy is applied to every SNI context and to the server itself. */
 function buildSniMaps(certs: LoadedCert[], policy: TlsProtocolOptions): LoadedCert[] {
-  sniContexts = new Map();
-  wildcardContexts = [];
-  defaultContext = null;
-
   const contexts = new Map<string, tls.SecureContext>();
   const usable: LoadedCert[] = [];
   for (const cert of certs) {
@@ -160,59 +155,24 @@ function buildSniMaps(certs: LoadedCert[], policy: TlsProtocolOptions): LoadedCe
 
   // Hostnames: CN + SANs from the PEM + the DB `domains[]` field; first
   // (= newest) cert claiming a hostname wins. Default: isActiveHttps, else newest.
-  const plan = planSni(usable);
-  for (const [hostname, certId] of plan.exact) {
-    const ctx = contexts.get(certId);
-    if (ctx) sniContexts.set(hostname, ctx);
-  }
-  for (const w of plan.wildcards) {
-    const ctx = contexts.get(w.certId);
-    if (ctx) wildcardContexts.push({ suffix: w.suffix, ctx });
-  }
-  defaultContext = plan.defaultId ? contexts.get(plan.defaultId) ?? null : null;
+  sniPlan = planSni(usable);
+  contextsById = contexts;
   return usable;
 }
 
 /**
- * SNI callback: selects the matching TLS context based on the server name
- * sent by the client.
- *
- * Match order:
- *   1. Exact match (`hostname` in sniContexts)
- *   2. Wildcard match (`*.parent` matches one sub-label level)
- *   3. defaultContext (otherwise the connection is dropped)
+ * SNI callback: selects the TLS context of the certificate the plan names for
+ * the server name sent by the client — exact → wildcard (one sub-label level)
+ * → default (resolveSni); without one the connection is dropped.
  */
 function sniCallback(
   servername: string,
   cb: (err: Error | null, ctx?: tls.SecureContext) => void,
 ): void {
-  const lower = servername.toLowerCase();
-
-  // 1. Exact
-  const exact = sniContexts.get(lower);
-  if (exact) {
-    cb(null, exact);
-    return;
-  }
-
-  // 2. Wildcard (exactly one sub-label level — RFC 6125)
-  for (const w of wildcardContexts) {
-    if (lower.endsWith(w.suffix)) {
-      const prefix = lower.slice(0, -w.suffix.length);
-      if (prefix.length > 0 && !prefix.includes('.')) {
-        cb(null, w.ctx);
-        return;
-      }
-    }
-  }
-
-  // 3. Default
-  if (defaultContext) {
-    cb(null, defaultContext);
-    return;
-  }
-
-  cb(new Error('No matching certificate'));
+  const certId = resolveSni(sniPlan, servername);
+  const ctx = certId ? contextsById.get(certId) : undefined;
+  if (ctx) cb(null, ctx);
+  else cb(new Error('No matching certificate'));
 }
 
 /** true while the HTTPS server listens with a certificate marked isActiveHttps. */
@@ -220,13 +180,7 @@ let httpsActive = false;
 
 /** Does one of the loaded certificates cover `host` (exact or one-level wildcard)? */
 function coversHost(host: string): boolean {
-  const lower = host.toLowerCase();
-  if (sniContexts.has(lower)) return true;
-  return wildcardContexts.some((w) => {
-    if (!lower.endsWith(w.suffix)) return false;
-    const prefix = lower.slice(0, -w.suffix.length);
-    return prefix.length > 0 && !prefix.includes('.');
-  });
+  return matchSni(sniPlan, host) !== null;
 }
 
 /** State for the HTTP → HTTPS redirect (lib/https-redirect.ts). */
@@ -257,13 +211,13 @@ async function reloadServer(app: Application): Promise<void> {
     return;
   }
 
-  const hostnameCount = sniContexts.size + wildcardContexts.length;
+  const hostnameCount = sniPlan.exact.size + sniPlan.wildcards.length;
   log.info(
     {
       certs: certs.length,
       hostnames: hostnameCount,
-      names: Array.from(sniContexts.keys()),
-      wildcards: wildcardContexts.map((w) => `*${w.suffix}`),
+      names: Array.from(sniPlan.exact.keys()),
+      wildcards: sniPlan.wildcards.map((w) => `*${w.suffix}`),
     },
     'TLS SNI map built',
   );

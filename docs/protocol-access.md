@@ -37,7 +37,7 @@ server but on for some domains or mailboxes is consistent; the page says so in a
 inconsistency.
 
 Per protocol the page shows the server-wide access switch, its ports (port on/off, TLS mode
-implicit TLS / STARTTLS, "Ältere Clients erlauben", address and port — add, edit, delete), and a
+implicit TLS / STARTTLS, "Zusätzlich veraltete TLS-Versionen 1.0/1.1 zulassen (optional)", address and port — add, edit, delete), and a
 summary line such as "aktiv auf 993 · 2 Domains abweichend · 1 Benutzer abweichend". The counts
 open the list of those domains / mailboxes; each links to the domain or mailbox list filtered to it
 (`/domains?q=…`, `/mailboxes?q=…`), where the override is edited. "Abweichend" counts the explicit

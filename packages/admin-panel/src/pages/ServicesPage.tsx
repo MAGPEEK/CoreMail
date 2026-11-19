@@ -12,14 +12,14 @@
 import { useEffect, useId, useState } from 'react';
 import { Link, Navigate, useLocation, useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Pencil, Trash2, Lock, Loader2, AlertTriangle, Globe, Info, Inbox, ChevronDown, ChevronUp } from 'lucide-react';
+import { Plus, Pencil, Trash2, Lock, Loader2, AlertTriangle, CheckCircle2, Globe, Info, Inbox, ChevronDown, ChevronUp } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { Modal } from '../components/Modal.js';
 import { api } from '../api/client.js';
 import { Toggle } from '../components/Toggle.js';
 import { Can } from '../components/Can.js';
 import { errorMessage } from '../lib/errors.js';
-import { LEGACY_TLS_LABEL, LEGACY_TLS_WARNING, listenerPayload, type ListenerForm } from '../lib/legacyClients.js';
+import { LEGACY_TLS_HINT, LEGACY_TLS_LABEL, LEGACY_TLS_WARNING, httpsStatusText, listenerPayload, type ListenerForm } from '../lib/legacyClients.js';
 import type { ProtocolLevelView } from '../lib/protocolAccess.js';
 import {
   hiddenNamesText, httpsName, legacyServicesTarget, listenerSlug, noticeText, orderedRows, overrideEntryLabel, overrideLink, overrideSummary, PROTOCOL_NAMES,
@@ -48,6 +48,11 @@ function LegacyTlsWarning() {
       <span>{LEGACY_TLS_WARNING}</span>
     </p>
   );
+}
+
+/** Under the switch while it is off: an optional extra, not a requirement. */
+function LegacyTlsHint() {
+  return <p className="mt-1 text-[11px] text-fg-subtle">{LEGACY_TLS_HINT}</p>;
 }
 
 function LegacyTlsBadge() {
@@ -122,7 +127,7 @@ function ListenerModal({ initial, smtp, onSave, onClose, saving }: {
               <Toggle active={form.allowLegacyTls} label={LEGACY_TLS_LABEL}
                 onToggle={() => set('allowLegacyTls', !form.allowLegacyTls)} />
             </div>
-            {form.allowLegacyTls && <LegacyTlsWarning />}
+            {form.allowLegacyTls ? <LegacyTlsWarning /> : <LegacyTlsHint />}
           </div>
         </div>
         <div className="flex justify-end gap-2 mt-5">
@@ -392,12 +397,18 @@ function HttpsTlsCard({ https }: { https: HttpsState }) {
         <div>
           <h3 className="text-sm font-semibold text-fg">{httpsName(https.port)}</h3>
           <p className="text-xs text-fg-subtle">
-            Webmail, BCP, ActiveSync, JMAP, CalDAV/CardDAV, MAPI, Autodiscover — {https.active ? 'aktiv' : 'nicht aktiv'}, {certText}.{' '}
+            Webmail, BCP, ActiveSync, JMAP, CalDAV/CardDAV, MAPI, Autodiscover — {certText}.{' '}
             <Link to="/certificates" className="text-accent-fg hover:underline">SSL/TLS öffnen</Link>
           </p>
         </div>
         {on && <span className="ml-auto"><LegacyTlsBadge /></span>}
       </div>
+      <p role="status" className={`mb-2 flex items-start gap-1.5 text-xs font-medium ${https.active ? 'text-success-fg' : 'text-warning-fg'}`}>
+        {https.active
+          ? <CheckCircle2 size={13} className="mt-0.5 shrink-0" aria-hidden="true" />
+          : <AlertTriangle size={13} className="mt-0.5 shrink-0" aria-hidden="true" />}
+        <span>{httpsStatusText(https.active, on)}</span>
+      </p>
       <div className="flex items-center justify-between py-1">
         <span className="text-xs font-medium text-fg-muted">{LEGACY_TLS_LABEL}</span>
         <Can area="servers" access="write">
@@ -405,7 +416,7 @@ function HttpsTlsCard({ https }: { https: HttpsState }) {
             onToggle={() => mut.mutate(!on)} />
         </Can>
       </div>
-      {on && <LegacyTlsWarning />}
+      {on ? <LegacyTlsWarning /> : <LegacyTlsHint />}
     </section>
   );
 }
@@ -417,7 +428,7 @@ function ExplanationBox() {
       <p className="flex items-center gap-1.5 font-semibold"><Info size={13} aria-hidden="true" /> Ports und Zugriff</p>
       <p>
         <strong>Port</strong>: ob der Server auf einer Adresse lauscht — ist kein Port aktiv, kann sich kein Programm verbinden.
-        Änderungen wirken sofort; ändern sich TLS, „Ältere Clients erlauben“ oder die Adresse eines laufenden Ports, wird nur
+        Änderungen wirken sofort; ändern sich TLS, „veraltete TLS-Versionen 1.0/1.1 zulassen“ oder die Adresse eines laufenden Ports, wird nur
         dieser Port kurz neu gestartet (offene Verbindungen werden getrennt).
       </p>
       <p>

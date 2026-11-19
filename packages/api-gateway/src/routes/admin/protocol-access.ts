@@ -28,7 +28,7 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { z } from 'zod';
 import { createLogger } from '@coremail/core';
 import {
-  prisma, readProtocolLevel, readProtocolOverrides, updateProtocolSettings, ACCESS_PROTOCOLS, PROTOCOL_SETTINGS,
+  prisma, decryptPrivateKey, readProtocolLevel, readProtocolOverrides, updateProtocolSettings, ACCESS_PROTOCOLS, PROTOCOL_SETTINGS,
   SERVER_PROTOCOL_SETTINGS, type ProtocolLevelView, type ProtocolScope, type ProtocolSettings,
 } from '@coremail/storage';
 import { requireArea } from '../../middleware/auth.js';
@@ -38,6 +38,7 @@ import { audit, auditContext } from '../../lib/audit.js';
 import {
   buildProtocolOverview, isTrustedHttpsCert, redactOverrideNames, submissionPorts, type HttpsState, type ProtocolOverview,
 } from '../../lib/protocol-overview.js';
+import { servedProxyCert } from '../../lib/cert-lifecycle.js';
 import { httpsRedirectState } from '../../tls-proxy.js';
 
 const log = createLogger('admin:protocol-access');
@@ -124,17 +125,40 @@ adminProtocolAccessRouter.put('/', serversArea, async (req: Request, res: Respon
 
 // ── Combined overview (w2b) ───────────────────────────────────────────────────
 
-/** The integrated HTTPS server: listening state from the proxy, trust from the active HTTPS certificate. */
+/**
+ * A row whose private key cannot be decrypted is not served by the HTTPS proxy
+ * (tls-proxy.ts logs it on every reload); here it only drops out of the selection.
+ */
+function withReadableKey<T extends { keyPem: string | null }>(row: T): T {
+  if (!row.keyPem) return row;
+  try {
+    decryptPrivateKey(row.keyPem);
+    return row;
+  } catch {
+    return { ...row, keyPem: null };
+  }
+}
+
+/**
+ * The integrated HTTPS server: listening state from the proxy; certificate and
+ * trust from the certificate the proxy serves for the public host name (SNI:
+ * exact → wildcard → default, lib/cert-lifecycle.ts servedProxyCert) — not
+ * only the one marked isActiveHttps.
+ */
 async function loadHttpsState(): Promise<HttpsState> {
   const state = httpsRedirectState();
-  const [settings, cert] = await Promise.all([
+  const [settings, rows] = await Promise.all([
     prisma.serverSettings.findUnique({ where: { id: 'singleton' }, select: { publicHostname: true } }),
-    prisma.certificate.findFirst({
-      where: { isActiveHttps: true },
-      select: { id: true, name: true, type: true, acmeStaging: true, certPem: true, status: true },
+    prisma.certificate.findMany({
+      where: { certPem: { not: null }, keyPem: { not: null } },
+      select: {
+        id: true, name: true, type: true, status: true, acmeStaging: true, isActiveHttps: true, createdAt: true,
+        certPem: true, keyPem: true, chainPem: true, domains: true,
+      },
     }),
   ]);
   const hostname = (settings?.publicHostname ?? '').trim().toLowerCase() || 'localhost';
+  const cert = servedProxyCert(rows.map(withReadableKey), hostname);
   return {
     active: state.active,
     port: state.port,

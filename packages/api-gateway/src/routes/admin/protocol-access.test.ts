@@ -10,6 +10,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
+import forge from 'node-forge';
 import { setTestEnv } from '../../test-support/fake-prisma.js';
 
 setTestEnv();
@@ -157,8 +158,7 @@ test('overview (w2b): ports, overrides and warnings in one answer; servers area 
   assert.equal(row('imap')['overrides'].domains.total, 1, 'one.test switched IMAP off (domain test above)');
   assert.equal(row('imap')['overrides'].users.differing, 1, 'bob switched IMAP back on');
   assert.equal(r.body['https'].active, false);
-  assert.equal(r.body['https'].cert.name, 'self');
-  assert.equal(r.body['https'].cert.trusted, false);
+  assert.equal(r.body['https'].cert, null, 'a certificate without PEM and key is not served');
   const codes = (r.body['warnings'] as Array<Record<string, string>>).map((w) => `${w['protocol']}:${w['code']}`);
   assert.ok(codes.includes('pop3:no-active-port'), codes.join(', '));
 
@@ -176,4 +176,61 @@ test('overview (w2b): ports, overrides and warnings in one answer; servers area 
   assert.equal((await call('GET', '/overview', 'rcp')).status, 403, 'recipients admins do not read the server view');
   assert.equal((await call('GET', '/overview', 'help')).status, 403);
   assert.equal((await call('GET', '/overview', 'bob')).status, 403);
+});
+
+// ── 9.5.1: the HTTPS card / mapi-https warning use the certificate served for the public host name ──
+
+const TEST_KEY = forge.pki.rsa.generateKeyPair(1024);
+const TEST_KEY_PEM = forge.pki.privateKeyToPem(TEST_KEY.privateKey);
+
+/** A certificate for `names` issued by `issuer` (= names[0] → self-issued). */
+function pem(names: string[], issuer: string): string {
+  const cert = forge.pki.createCertificate();
+  cert.publicKey = TEST_KEY.publicKey;
+  cert.serialNumber = '01';
+  cert.validity.notBefore = new Date(Date.now() - 60_000);
+  cert.validity.notAfter = new Date(Date.now() + 60 * 86_400_000);
+  cert.setSubject([{ name: 'commonName', value: names[0]! }]);
+  cert.setIssuer([{ name: 'commonName', value: issuer }]);
+  cert.setExtensions([{ name: 'subjectAltName', altNames: names.map((value) => ({ type: 2, value })) }]);
+  cert.sign(TEST_KEY.privateKey, forge.md.sha256.create());
+  return forge.pki.certificateToPem(cert);
+}
+
+async function httpsCertWith(certs: Array<Record<string, unknown>>): Promise<{ name: string; trusted: boolean } | null> {
+  const table = new FakeTable(() => ({ acmeStaging: false, status: 'ACTIVE', isActiveHttps: false, chainPem: null, keyPem: TEST_KEY_PEM }));
+  db['certificate'] = table;
+  for (const c of certs) await table.create({ data: { domains: [], createdAt: new Date(), ...c } });
+  const r = await call('GET', '/overview', 'srv');
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  return r.body['https'].cert;
+}
+
+test('overview HTTPS cert: the certificate served for the public host name, not only isActiveHttps', async () => {
+  db.serverSettings.rows[0]!['publicHostname'] = 'mail.one.test';
+  const le = { name: 'le-mail', type: 'LETSENCRYPT', certPem: pem(['mail.one.test'], 'Test CA') };
+  const self = { name: 'self', type: 'SELF_SIGNED', certPem: pem(['mail.one.test'], 'mail.one.test') };
+
+  const noActive = await httpsCertWith([le]);
+  assert.deepEqual([noActive?.name, noActive?.trusted], ['le-mail', true],
+    'no isActiveHttps certificate: the ACTIVE LE certificate for the host name is served and trusted');
+
+  const sni = await httpsCertWith([{ ...self, name: 'self-default', certPem: pem(['other.one.test'], 'other.one.test'), isActiveHttps: true }, le]);
+  assert.equal(sni?.name, 'le-mail', 'SNI exact match wins over the isActiveHttps default');
+  assert.equal(sni?.trusted, true);
+
+  const onlySelf = await httpsCertWith([{ ...self, isActiveHttps: true }]);
+  assert.equal(onlySelf?.name, 'self');
+  assert.equal(onlySelf?.trusted, false, 'only self-signed → untrusted → mapi-https warning');
+
+  const wildcard = await httpsCertWith([{ name: 'wild', type: 'UPLOADED', certPem: pem(['*.one.test'], 'Test CA') }]);
+  assert.deepEqual([wildcard?.name, wildcard?.trusted], ['wild', true], 'a wildcard certificate covers the host name');
+
+  const uncovered = await httpsCertWith([{ name: 'elsewhere', type: 'LETSENCRYPT', certPem: pem(['other.one.test'], 'Test CA') }]);
+  assert.deepEqual([uncovered?.name, uncovered?.trusted], ['elsewhere', false], 'the default certificate does not cover the host name');
+
+  const staging = await httpsCertWith([{ ...le, name: 'staging', acmeStaging: true }]);
+  assert.deepEqual([staging?.name, staging?.trusted], ['staging', false]);
+
+  assert.equal(await httpsCertWith([{ ...le, keyPem: 'enc:unreadable' }]), null, 'an unreadable key is not served');
 });

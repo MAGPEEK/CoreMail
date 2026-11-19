@@ -1,15 +1,29 @@
 /**
  * BCP: settings for old mail clients (pure helpers).
- *  - Dienste: "Ältere Clients erlauben (TLS 1.0/1.1)" per listener and for HTTPS
+ *  - Dienste: "Zusätzlich veraltete TLS-Versionen 1.0/1.1 zulassen (optional)" per listener and for HTTPS
  *  - SMTP-Konfiguration → Geräte-Relay: lists entered one per line
  */
 
-export const LEGACY_TLS_LABEL = 'Ältere Clients erlauben (TLS 1.0/1.1)';
+/**
+ * 9.5.1: worded as an optional extra on top of TLS 1.2/1.3 — the old label
+ * ("Ältere Clients erlauben") was read as the switch that turns HTTPS on.
+ */
+export const LEGACY_TLS_LABEL = 'Zusätzlich veraltete TLS-Versionen 1.0/1.1 zulassen (optional)';
+
+/** Shown under the switch while it is off. */
+export const LEGACY_TLS_HINT = 'Nur für sehr alte Geräte nötig. Moderne Clients und Outlook brauchen das nicht.';
 
 export const LEGACY_TLS_WARNING =
-  'Unsicher: TLS 1.0 und 1.1 gelten als veraltet. Nur aktivieren, wenn ältere Mailprogramme oder Geräte '
-  + 'kein TLS 1.2 beherrschen — und so bald wie möglich wieder ausschalten. Unsichere Verfahren '
-  + '(RC4, 3DES, NULL, EXPORT) bleiben auch dann gesperrt.';
+  'Optionaler Kompatibilitätsmodus aktiv: TLS 1.0 und 1.1 gelten als unsicher und veraltet. Nur eingeschaltet lassen, '
+  + 'wenn ältere Mailprogramme oder Geräte kein TLS 1.2 beherrschen — und so bald wie möglich wieder ausschalten. '
+  + 'Unsichere Verfahren (RC4, 3DES, NULL, EXPORT) bleiben auch dann gesperrt.';
+
+/** Status line of the HTTPS card: whether HTTPS runs, with which TLS versions, and that nothing else must be switched on. */
+export function httpsStatusText(active: boolean, allowLegacyTls: boolean): string {
+  if (!active) return 'HTTPS ist nicht aktiv — Zertifikat unter SSL/TLS zuweisen.';
+  const versions = allowLegacyTls ? 'TLS 1.2 und 1.3 (zusätzlich 1.0/1.1)' : 'TLS 1.2 und 1.3';
+  return `HTTPS ist aktiv mit ${versions} — für Webmail, ActiveSync, MAPI usw. ist kein weiterer Schalter nötig.`;
+}
 
 export interface ListenerForm {
   address: string;
