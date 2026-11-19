@@ -9,6 +9,10 @@ import type { NamedPropertyMap } from '../props/named.js';
 import type { StoreGuids } from '../ids.js';
 import type { AttachmentRecord, MailboxRef, MessageSummary } from '../store/types.js';
 import type { MailboxView } from './mailbox-view.js';
+import type { SyncConfig } from '../ics/config.js';
+import type { IcsState, StateUpload, SyncKind } from '../ics/state.js';
+import type { DownloadTransfer } from '../ics/download.js';
+import type { FastTransferSource } from '../ics/transfer.js';
 
 export interface LogonState {
   logonId: number;
@@ -63,7 +67,22 @@ export interface MessageState {
   submitted: boolean;
   /** Folder-associated information (view settings …): kept for the session only. */
   associated: boolean;
+  /** Created by RopSynchronizationImportMessageChange: what RopSaveChangesMessage writes. */
+  imported: ImportTarget | null;
 }
+
+/**
+ * The message an ICS upload changes (MS-OXCFXICS 3.2.5.9.4.2): a new one
+ * (`clientId` = the ID it keeps, `replacedId` = a client ID that could not be
+ * kept), a stored one, or none (`dropped`: the message is gone, moved away, or
+ * the server version won a conflict). `pcl` = the uploaded version's
+ * PidTagPredecessorChangeList; `uploadState` = the collector's ICS state that
+ * records the change numbers written (3.2.5.9.4).
+ */
+export type ImportTarget =
+  | { kind: 'new'; folderId: string; clientId: bigint | null; replacedId: bigint | null; pcl: Buffer | null; uploadState: IcsState }
+  | { kind: 'existing'; summary: MessageSummary; pcl: Buffer | null; uploadState: IcsState }
+  | { kind: 'dropped' };
 
 export type StreamTarget =
   | { kind: 'message'; message: MessageState }
@@ -109,8 +128,29 @@ export interface NotificationSubscription {
   messageId: bigint;
 }
 
+/** A synchronization download context (RopSynchronizationConfigure). */
+export interface SyncDownload {
+  config: SyncConfig;
+  /** The initial ICS state (uploaded before the first GetBuffer). */
+  state: IcsState;
+  stateUpload: StateUpload | null;
+  /** Started by the first RopFastTransferSourceGetBuffer. */
+  transfer: DownloadTransfer | null;
+}
+
+/** A synchronization upload context (RopSynchronizationOpenCollector). */
+export interface SyncUpload {
+  kind: SyncKind;
+  folderCounter: bigint;
+  state: IcsState;
+  stateUpload: StateUpload | null;
+}
+
 export type ServerObject =
   | { kind: 'logon'; logon: LogonState }
+  | { kind: 'syncDownload'; logon: LogonState; sync: SyncDownload }
+  | { kind: 'syncUpload'; logon: LogonState; sync: SyncUpload }
+  | { kind: 'fastTransfer'; logon: LogonState; source: FastTransferSource }
   | { kind: 'folder'; logon: LogonState; counter: bigint }
   | { kind: 'table'; logon: LogonState; table: TableState }
   | { kind: 'message'; logon: LogonState; message: MessageState }

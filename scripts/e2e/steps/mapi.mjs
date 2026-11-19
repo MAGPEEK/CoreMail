@@ -4,6 +4,11 @@
 // mail (SMTP submission); A connects over MAPI (Connect → Execute Logon → Inbox
 // → contents table) and sees it, opens it and reads the body through a stream,
 // then composes a message in the Outbox and submits it to B (checked over IMAP).
+// Cached mode (ICS): an initial contents synchronization of the Inbox carries the
+// mail and ends with an ICS state; after a new mail and a read change the
+// incremental synchronization with that state sends exactly those (a message
+// change + IncrSyncRead), a third one nothing; a hierarchy synchronization lists
+// the folder tree.
 // The address book (Bind, GetSpecialTable, QueryRows, ResolveNames) lists and
 // resolves B; a NotificationWait wakes within 3 s of a new mail and the next
 // Execute carries RopNotify NewMail. With the switch off again, a running MAPI
@@ -18,6 +23,7 @@ import { imapLogin } from './imap.mjs';
 import {
   MapiHttpClient, rop, decodeLogon, decodeQueryRows, decodeOpenMessage, responseHead, TAG, HANDLE_UNUSED,
   nspiBody, nspiDecode, parseExecuteResponse, readNotifications, ropOutput,
+  ICS, decodeHierarchyStream, globcntOfId, icsDownload, offlineDraftRoundTrip,
 } from '../../../packages/mapi-server/src/testing/mapi-client.ts';
 
 const SMTP_ADDRESS = 0x39fe001f;
@@ -167,6 +173,76 @@ export async function run(state) {
       const body = resp.bytes(resp.u16()).toString('utf16le');
       assert(body.includes('Body read over MAPI.'), `body ${JSON.stringify(body.slice(0, 80))}`);
       return `stream ${size} bytes`;
+    });
+
+    let icsState;
+    await check('mapi: cached mode — ICS initial sync of the Inbox carries the e2e mail and ends with an ICS state', async () => {
+      const first = await icsDownload(client, 4, ICS.SyncContents);
+      assert(first.ended, 'IncrSyncEnd');
+      const hit = first.messages.find((m) => m.props.get(TAG.Subject) === subject);
+      assert(hit, `the e2e mail among ${first.messages.length} message changes`);
+      assert(hit.header.get(TAG.Mid) === found.mid, 'PidTagMid in the change header = the MID of the contents table');
+      assert(first.state.has(ICS.IdsetGiven) && first.state.has(ICS.CnsetSeen), 'final state');
+      icsState = first.state;
+      return `${first.messages.length} messages in ${first.calls} buffer(s), state ${[...first.state.values()].reduce((n, b) => n + b.length, 0)} bytes`;
+    });
+
+    await check('mapi: cached mode — incremental sync after a new mail and a read change sends just those', async () => {
+      const nextSubject = `E2E mapi ics ${Date.now()}`;
+      await sendBtoA(B, c.userB, A, nextSubject, 'Arrives through ICS.');
+      const fresh = await waitFor(async () => {
+        const t = await inboxRows(client);
+        return t.rows.some((x) => x[1] === nextSubject) ? t : null;
+      }, { timeout: 30_000, interval: 1000, what: 'the new mail' });
+      // mark the first mail read online (RopSetMessageReadFlag) — the delta carries it as IncrSyncRead
+      const marked = await client.execute([
+        rop.openFolder(0, 1, fresh.folderIds[4]), rop.openMessage(1, 3, fresh.folderIds[4], found.mid), rop.setMessageReadFlag(3, 3, true),
+      ], [fresh.handles[0], U, U, U]);
+      const resp = marked.rop.responses;
+      assert(responseHead(resp).returnValue === 0, 'OpenFolder');
+      resp.bytes(2);
+      assert(decodeOpenMessage(resp).returnValue === 0, 'OpenMessage');
+      assert(responseHead(resp).returnValue === 0, 'SetMessageReadFlag');
+      const delta = await icsDownload(client, 4, ICS.SyncContents, icsState);
+      assert(delta.ended, 'IncrSyncEnd');
+      const subjects = delta.messages.map((m) => m.props.get(TAG.Subject));
+      assert(subjects.length === 1 && subjects[0] === nextSubject, `only the new mail as a change: ${JSON.stringify(subjects)}`);
+      assert(delta.read.includes(globcntOfId(found.mid)), `IncrSyncRead names the read mail: ${delta.read.join(',')}`);
+      const again = await icsDownload(client, 4, ICS.SyncContents, delta.state);
+      assert(again.messages.length === 0 && again.read.length === 0 && again.deleted.length === 0, 'nothing left after the delta');
+      return `delta: ${subjects.length} change(s), ${delta.read.length} read change(s)`;
+    });
+
+    await check('mapi: cached mode — a malformed ICS state upload is refused with RpcFormat (no session failure)', async () => {
+      const logon = await client.execute([rop.logon(0)], [U]);
+      const l = decodeLogon(logon.rop.responses);
+      assert(l.returnValue === 0, `RopLogon 0x${l.returnValue.toString(16)}`);
+      const bad = Buffer.concat([Buffer.alloc(16, 1), Buffer.from([0x99])]); // REPLGUID + an unknown GLOBSET command
+      const r = await client.execute([
+        rop.openFolder(0, 1, l.folderIds[4]), rop.syncConfigure(1, 2, ICS.SyncContents, ICS.FlagUnicode | ICS.FlagNormal, 0),
+        rop.uploadStateBegin(2, ICS.CnsetSeen, bad.length), rop.uploadStateContinue(2, bad), rop.uploadStateEnd(2),
+      ], [logon.rop.handles[0], U, U]);
+      const resp = r.rop.responses;
+      assert(responseHead(resp).returnValue === 0, 'OpenFolder');
+      resp.bytes(2);
+      for (const what of ['SynchronizationConfigure', 'UploadStateStreamBegin', 'UploadStateStreamContinue']) {
+        assert(responseHead(resp).returnValue === 0, what);
+      }
+      const end = responseHead(resp).returnValue;
+      assert(end === 0x4b6, `UploadStateStreamEnd → 0x${end.toString(16)} (expected RpcFormat 0x4b6)`);
+      return 'RpcFormat';
+    });
+
+    await check('mapi: cached mode — a draft created offline keeps its client ID (opened by it at once), an edit updates it, neither comes back',
+      () => offlineDraftRoundTrip(client));
+
+    await check('mapi: cached mode — hierarchy sync lists the folder tree below Top of Information Store', async () => {
+      const tree = decodeHierarchyStream((await icsDownload(client, 3, ICS.SyncHierarchy)).stream);
+      const names = tree.map((f) => f.get(TAG.DisplayName));
+      assert(['INBOX', 'Sent', 'Outbox'].every((n) => names.includes(n)), `folders ${JSON.stringify(names)}`);
+      // the synchronizations logged on again: fresh handles for the checks below
+      found = { ...(await inboxRows(client)), mid: found.mid };
+      return `${tree.length} folders`;
     });
 
     const outSubject = `E2E mapi submit ${Date.now()}`;

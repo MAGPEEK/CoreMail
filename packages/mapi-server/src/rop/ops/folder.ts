@@ -15,7 +15,7 @@ import {
 import { HANDLE_UNUSED } from '../handles.js';
 import { makeId } from '../../ids.js';
 import { BufferWriter } from '../../wire/writer.js';
-import { counterOf, folderNode, folderRecordId, refreshView, uidOf } from './common.js';
+import { counterOf, folderNode, folderRecordId, messagesByIds, refreshView } from './common.js';
 import { loadTableRows } from './table.js';
 import type { TableSource, TableState } from '../../objects/state.js';
 import type { BufferReader } from '../../wire/reader.js';
@@ -185,9 +185,9 @@ export const ropDeleteMessages = defineRop<DeleteMessagesReq>({
     assertWritable(logon);
     await refreshView(ctx.store, logon);
     const folderId = folderRecordId(folderNode(logon, counter));
-    const uids = req.messageIds.map(uidOf);
+    const uids = (await messagesByIds(ctx.store, folderId, req.messageIds)).map((m) => m.uid);
     const deleted = await ctx.store.deleteMessages(logon.mailbox, folderId, uids);
-    return okResponse(RopId.DeleteMessages, req.inputIndex).u8(deleted < uids.length ? 1 : 0).toBuffer();
+    return okResponse(RopId.DeleteMessages, req.inputIndex).u8(deleted < req.messageIds.length ? 1 : 0).toBuffer();
   },
 });
 
@@ -221,9 +221,9 @@ export const ropMoveCopyMessages = defineRop<MoveCopyReq>({
     if (dest.logon !== source.logon) await refreshView(ctx.store, dest.logon);
     const from = { mailbox: source.logon.mailbox, folderId: folderRecordId(folderNode(source.logon, source.counter)) };
     const to = { mailbox: dest.logon.mailbox, folderId: folderRecordId(folderNode(dest.logon, dest.counter)) };
-    const uids = req.messageIds.map(uidOf);
+    const uids = (await messagesByIds(ctx.store, from.folderId, req.messageIds)).map((m) => m.uid);
     const done = await ctx.store.moveOrCopy(from, to, uids, req.copy);
-    return okResponse(RopId.MoveCopyMessages, req.sourceIndex).u8(done < uids.length ? 1 : 0).toBuffer();
+    return okResponse(RopId.MoveCopyMessages, req.sourceIndex).u8(done < req.messageIds.length ? 1 : 0).toBuffer();
   },
 });
 

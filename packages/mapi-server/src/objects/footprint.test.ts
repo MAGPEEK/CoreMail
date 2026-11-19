@@ -10,7 +10,7 @@ function message(): MessageState {
   return {
     folderCounter: 1n, counter: 1n, summary: null, props: new Map([[0x0037001f, 'abcd']]), recipients: [],
     attachments: [{ num: 0, props: new Map(), record: null, data: Buffer.alloc(1000), saved: true }],
-    nextAttachNum: 1, readOnly: false, contentLoaded: true, submitted: false, associated: false,
+    nextAttachNum: 1, readOnly: false, contentLoaded: true, submitted: false, associated: false, imported: null,
   };
 }
 

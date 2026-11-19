@@ -6,22 +6,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { LiveConnectionRegistry, PROTOCOL_ACCESS_CHANGE } from '@coremail/core';
-import { SessionRegistry, MAX_SESSIONS_PER_USER, type SessionRedis } from './registry.js';
+import { SessionRegistry, MAX_SESSIONS_PER_USER } from './registry.js';
 import { cookieDigest, MapiSession, type SessionAuth } from './session.js';
 import { queueNotificationSource } from '../emsmdb/notification-wait.js';
-
-class MemoryRedis implements SessionRedis {
-  store = new Map<string, { value: string; expires: number }>();
-  now = 0;
-  async set(key: string, value: string, _mode: 'PX', ttl: number): Promise<unknown> { this.store.set(key, { value, expires: this.now + ttl }); return 'OK'; }
-  async pexpire(key: string, ttl: number): Promise<number> {
-    const e = this.store.get(key);
-    if (!e || e.expires <= this.now) { this.store.delete(key); return 0; }
-    e.expires = this.now + ttl;
-    return 1;
-  }
-  async del(key: string): Promise<number> { return this.store.delete(key) ? 1 : 0; }
-}
+import { MemoryRedis } from '../testing/memory-redis.js';
 
 function auth(userId = 'u1', credential: SessionAuth['credential'] = 'app_password'): SessionAuth {
   return {
@@ -119,6 +107,24 @@ test('at most MAX_SESSIONS_PER_USER sessions per account: the least recently use
   await new Promise((r) => setImmediate(r));
   assert.equal(first.session.closed, true);
   assert.equal(registry.size, MAX_SESSIONS_PER_USER);
+});
+
+test('review 9.4: the session cap counts the sessions of every instance (shared Redis index)', async () => {
+  const clock = { t: 1_000 };
+  const redis = new MemoryRedis();
+  const deps = { redis, idleMs: 600_000, now: () => clock.t };
+  const a = new SessionRegistry({ ...deps, live: new LiveConnectionRegistry('a', { now: () => clock.t }) });
+  const b = new SessionRegistry({ ...deps, live: new LiveConnectionRegistry('b', { now: () => clock.t }) });
+  const onA: Array<{ session: MapiSession; context: string }> = [];
+  for (let i = 0; i < MAX_SESSIONS_PER_USER; i++) { clock.t += 1; onA.push(await a.create(auth(), clock.t)); }
+  clock.t += 1;
+  await b.create(auth(), clock.t); // the 17th session, on the other instance
+  assert.equal(await a.lookup(onA[0]!.context), null, 'the least recently used session (on instance A) ended');
+  assert.equal(onA[0]!.session.closed, true);
+  assert.equal(await a.lookup(onA[1]!.context), onA[1]!.session, 'the others stay');
+  assert.equal((await redis.zrange('mapi:user-ctx:u1', 0, -1)).length, MAX_SESSIONS_PER_USER);
+  await b.create(auth('u2'), clock.t);
+  assert.equal(await a.lookup(onA[2]!.context), onA[2]!.session, 'another account does not count');
 });
 
 test('lookup with a refusing predicate returns null and does not refresh the session', async () => {

@@ -16,6 +16,7 @@ import { CHANNEL_MAILBOX_CHANGES, createLogger, getRedisClient, parseMailboxChan
 import { refreshView } from '../../rop/ops/common.js';
 import { NotificationType } from './data.js';
 import { planNotifications, type FolderFacts, type NewMessageFact } from './planner.js';
+import { messageCounter } from '../../ics/keys.js';
 import type { MailboxView } from '../../objects/mailbox-view.js';
 import type { LogonState, NotificationSubscription, TableSource, TableState } from '../../objects/state.js';
 import type { MapiSession } from '../../session/session.js';
@@ -69,7 +70,7 @@ async function newMessages(store: MailStore, logon: LogonState, view: MailboxVie
   const last = rows.at(-1)?.createdModSeq ?? logon.notifiedModSeq;
   const announced = change.modSeq !== undefined && rows.length < MAX_NEW_MAIL_PER_CHANGE ? BigInt(change.modSeq) : last;
   logon.notifiedModSeq = announced > logon.notifiedModSeq ? announced : logon.notifiedModSeq;
-  return rows.map((r) => ({ folderCounter: view.ofRecord(r.folderId)!.counter, uid: r.uid, read: r.read }));
+  return rows.map((r) => ({ folderCounter: view.ofRecord(r.folderId)!.counter, counter: messageCounter(r), read: r.read }));
 }
 
 async function notifyLogon(session: MapiSession, logon: LogonState, change: MailboxChangeEvent, store: MailStore): Promise<void> {

@@ -24,7 +24,8 @@ import type { NotificationSubscription, TableSource } from '../../objects/state.
 
 export interface FolderFacts { counter: bigint; total: number; unread: number }
 
-export interface NewMessageFact { folderCounter: bigint; uid: number; read: boolean }
+/** A message that appeared; `counter` = its MAPI message counter (ics/keys messageCounter). */
+export interface NewMessageFact { folderCounter: bigint; counter: bigint; read: boolean }
 
 export interface PlanInput {
   logonId: number;
@@ -61,8 +62,8 @@ export function planNotifications(input: PlanInput): QueuedNotification[] {
       for (const m of input.newMessages) {
         if (!covers(sub, m.folderCounter)) continue;
         out.push({
-          key: `${handle}:new:${m.folderCounter}:${m.uid}`, handle, logonId: input.logonId,
-          data: newMailData(makeId(m.folderCounter), makeId(BigInt(m.uid)), m.read ? MSGFLAG_READ : 0, NEW_MAIL_CLASS),
+          key: `${handle}:new:${m.folderCounter}:${m.counter}`, handle, logonId: input.logonId,
+          data: newMailData(makeId(m.folderCounter), makeId(m.counter), m.read ? MSGFLAG_READ : 0, NEW_MAIL_CLASS),
         });
       }
     }

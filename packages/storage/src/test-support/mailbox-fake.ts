@@ -2,7 +2,7 @@
  * In-memory Prisma stand-in for the quota / recoverable-items / OOF tests
  * (installed through the globalThis.__prisma seam). Supports the where-clause
  * shapes those modules use: equality, in/not/lt/lte/gt/gte/startsWith/contains/has,
- * AND/OR/NOT and the relations message.folder, folder.mailbox.
+ * AND/OR/NOT and the relations message.folder, folder.mailbox; also the MAPI object table (mapiObject).
  */
 export type Row = Record<string, unknown>;
 
@@ -16,10 +16,11 @@ export interface FakeDb {
   serverSettings: Row[];
   userSettings: Row[];
   attachments: Row[];
+  mapiObjects: Row[];
 }
 
 export function emptyDb(): FakeDb {
-  return { users: [], sharedMailboxes: [], mailboxes: [], folders: [], messages: [], aliases: [], serverSettings: [], userSettings: [], attachments: [] };
+  return { users: [], sharedMailboxes: [], mailboxes: [], folders: [], messages: [], aliases: [], serverSettings: [], userSettings: [], attachments: [], mapiObjects: [] };
 }
 
 function cmp(a: unknown, b: unknown): number {
@@ -192,6 +193,7 @@ export function createFake(db: FakeDb) {
     serverSettings: model('serverSettings'),
     userSettings: model('userSettings'),
     attachment: model('attachments'),
+    mapiObject: model('mapiObjects', () => ({ clientId: null, messageId: null, folderId: null, pcl: null })),
   };
   fake['$transaction'] = async <T>(fn: (tx: unknown) => Promise<T>): Promise<T> => fn(fake);
   return fake;

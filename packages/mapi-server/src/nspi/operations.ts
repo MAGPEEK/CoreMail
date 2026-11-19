@@ -30,6 +30,7 @@ import {
 } from './bodies.js';
 import type { AbCell, Stat } from './wire.js';
 import type { MapiEndpoints } from '@coremail/storage';
+import { encoderFor, isBindCodePage } from './codepage.js';
 
 /** NspiUnbind success value (MS-OXNSPI 2.2.1.2 UnbindSuccess). */
 const UNBIND_SUCCESS = 0x00000001;
@@ -53,6 +54,8 @@ export const MAX_RESULT_CELLS = 100_000;
 export const MAX_RESOLVE_NAMES = 1000;
 export const MAX_FILTER_NODES = 256;
 const DEFAULT_CODEPAGE = 1252;
+/** Session code page of a Bind without a STAT. */
+export const DEFAULT_BIND_CODEPAGE = DEFAULT_CODEPAGE;
 
 export interface NspiContext {
   /** The address book of the session (loaded on first use, cached by the caller). */
@@ -64,6 +67,8 @@ export interface NspiContext {
    * those it named by DN (DNToMId adds them). Kept across book reloads.
    */
   revealed: Set<string>;
+  /** The session's 8-bit code page (from NspiBind). */
+  codePage: number;
 }
 
 type Operation = (body: Buffer, ctx: NspiContext) => Promise<Buffer>;
@@ -102,6 +107,26 @@ function unicodeFor(stat: Stat | null): boolean {
   return stat?.codePage === CP_WINUNICODE;
 }
 
+/** The 8-bit code page of a request: its STAT's, else the session's (NspiBind). */
+function stringCodePage(ctx: NspiContext, stat: Stat | null): number {
+  return stat && stat.codePage !== CP_WINUNICODE && encoderFor(stat.codePage) ? stat.codePage : ctx.codePage;
+}
+
+function cellOptions(ctx: NspiContext, stat: Stat | null, ephemeral: boolean): CellOptions {
+  return { ephemeral, unicode: unicodeFor(stat), encode8: encoderFor(stringCodePage(ctx, stat)) ?? encoderFor(DEFAULT_CODEPAGE)! };
+}
+
+/**
+ * The session code page a Bind names (MS-OXNSPI 3.1.4.1.1): CP_WINUNICODE or
+ * a code page the server does not serve → InvalidCodepage and no session;
+ * without a STAT the Western code page.
+ */
+export function bindCodePage(body: Buffer): { ok: true; codePage: number } | { ok: false; response: Buffer } {
+  const codePage = parseBind(body).state?.codePage ?? DEFAULT_CODEPAGE;
+  if (isBindCodePage(codePage)) return { ok: true, codePage };
+  return { ok: false, response: buildBindResponse(NspiError.InvalidCodepage, Buffer.alloc(16)) };
+}
+
 function rowSet(book: AddressBook, entries: readonly AbEntry[], columns: readonly number[], opts: CellOptions): AbRowSet {
   return { columns: [...columns], rows: entries.map((e) => book.cells(e, columns, opts)) };
 }
@@ -137,9 +162,9 @@ const unbind: Operation = async (body) => {
   return buildPlainResponse(UNBIND_SUCCESS);
 };
 
-const getSpecialTable: Operation = async (body) => {
+const getSpecialTable: Operation = async (body, ctx) => {
   const req = parseGetSpecialTable(body);
-  const codePage = req.state?.codePage ?? DEFAULT_CODEPAGE;
+  const codePage = req.state?.codePage ?? ctx.codePage;
   if (req.flags & SPECIAL_TABLE_TEMPLATES) return buildGetSpecialTableResponse(NspiError.Success, codePage, null, []);
   const unicode = (req.flags & SPECIAL_TABLE_UNICODE) !== 0 || codePage === CP_WINUNICODE;
   const rows = req.version === HIERARCHY_VERSION ? [] : [galHierarchyRow(unicode)];
@@ -152,7 +177,7 @@ const queryRows: Operation = async (body, ctx) => {
   if (stat.containerId !== GAL_CONTAINER_ID) return buildTableResponse(NspiError.InvalidBookmark, null, null);
   const book = await ctx.book();
   const columns = req.columns ?? DEFAULT_COLUMNS;
-  const opts: CellOptions = { ephemeral: (req.flags & FLAG_EPHEMERAL_ID) !== 0, unicode: unicodeFor(stat) };
+  const opts = cellOptions(ctx, stat, (req.flags & FLAG_EPHEMERAL_ID) !== 0);
   if (req.explicitTable.length > 0) {
     if (!fitsResult(req.explicitTable.length, columns.length)) return buildTableResponse(NspiError.TableTooBig, null, null);
     return buildTableResponse(NspiError.Success, { ...stat, delta: 0 }, explicitRows(book, req.explicitTable, columns, opts, ctx.revealed));
@@ -187,7 +212,7 @@ const seekEntries: Operation = async (body, ctx) => {
   const candidates = req.explicitTable ? book.visible(req.explicitTable) : book.table;
   const found = book.seek(candidates, req.target.value);
   if (found < 0) return buildTableResponse(NspiError.NotFound, null, null);
-  const opts: CellOptions = { ephemeral: false, unicode: unicodeFor(stat) };
+  const opts = cellOptions(ctx, stat, false);
   const rows = req.columns ? rowSet(book, candidates.slice(found, found + pageRows(MAX_ROWS_PER_REQUEST, req.columns.length)), req.columns, opts) : null;
   return buildTableResponse(NspiError.Success, statAt(stat, found, candidates), rows);
 };
@@ -204,7 +229,7 @@ const getMatches: Operation = async (body, ctx) => {
   if (matches.length > req.rowCount || (req.columns && !fitsResult(matches.length, req.columns.length))) {
     return buildTableResponse(NspiError.TableTooBig, null, null, null);
   }
-  const opts: CellOptions = { ephemeral: false, unicode: unicodeFor(stat) };
+  const opts = cellOptions(ctx, stat, false);
   const out: Stat = { ...stat, currentRec: Mid.BeginningOfTable, delta: 0, numPos: 0, totalRecs: matches.length };
   const rows = req.columns ? rowSet(book, matches, req.columns, opts) : null;
   return buildTableResponse(NspiError.Success, out, rows, matches.map((e) => e.mid));
@@ -212,10 +237,10 @@ const getMatches: Operation = async (body, ctx) => {
 
 const resolveNames: Operation = async (body, ctx) => {
   const req = parseResolveNames(body);
-  if (req.state && req.state.containerId !== GAL_CONTAINER_ID) return buildResolveNamesResponse(NspiError.InvalidBookmark, DEFAULT_CODEPAGE, null, null);
+  if (req.state && req.state.containerId !== GAL_CONTAINER_ID) return buildResolveNamesResponse(NspiError.InvalidBookmark, ctx.codePage, null, null);
   const columns = req.tags ?? DEFAULT_COLUMNS;
   if (req.names.length > MAX_RESOLVE_NAMES || !fitsResult(req.names.length, columns.length)) {
-    return buildResolveNamesResponse(NspiError.TableTooBig, DEFAULT_CODEPAGE, null, null);
+    return buildResolveNamesResponse(NspiError.TableTooBig, ctx.codePage, null, null);
   }
   const book = await ctx.book();
   const resolved: AbEntry[] = [];
@@ -226,9 +251,9 @@ const resolveNames: Operation = async (body, ctx) => {
     resolved.push(hits[0]!);
     return hits[0]!.mid;
   });
-  const opts: CellOptions = { ephemeral: false, unicode: true };
+  const opts = cellOptions(ctx, req.state, false);
   const rows = rowSet(book, resolved, columns, opts);
-  return buildResolveNamesResponse(NspiError.Success, req.state?.codePage ?? DEFAULT_CODEPAGE, mids, rows);
+  return buildResolveNamesResponse(NspiError.Success, req.state?.codePage ?? ctx.codePage, mids, rows);
 };
 
 const dnToMId: Operation = async (body, ctx) => {
@@ -249,7 +274,7 @@ const getProps: Operation = async (body, ctx) => {
   const book = await ctx.book();
   const entry = book.reachable(stat.currentRec, ctx.revealed);
   if (!entry) return buildGetPropsResponse(NspiError.NotFound, stat.codePage, null);
-  const opts: CellOptions = { ephemeral: (req.flags & FLAG_EPHEMERAL_ID) !== 0, unicode: unicodeFor(stat) };
+  const opts = cellOptions(ctx, stat, (req.flags & FLAG_EPHEMERAL_ID) !== 0);
   const cells = req.tags ? book.cells(entry, req.tags, opts) : book.allCells(entry, opts);
   const code = cells.some((c) => c.kind !== 'value') ? NspiError.ErrorsReturned : NspiError.Success;
   return buildGetPropsResponse(code, stat.codePage, cells);

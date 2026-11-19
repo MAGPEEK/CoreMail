@@ -12,7 +12,8 @@ import { MAX_QUEUED_NOTIFICATIONS, NotificationQueue } from './queue.js';
 import { planNotifications, type FolderFacts, type PlanInput } from './planner.js';
 import { dispatchMailboxChange } from './bus.js';
 import { makeId } from '../../ids.js';
-import { SessionRegistry, type SessionRedis } from '../../session/registry.js';
+import { SessionRegistry } from '../../session/registry.js';
+import { MemoryRedis } from '../../testing/memory-redis.js';
 import { MemoryStore } from '../../testing/memory-store.js';
 import { executeRopBuffer } from '../../rop/engine.js';
 import { ROP_REGISTRY } from '../../rop/registry.js';
@@ -79,7 +80,7 @@ function plan(over: Partial<PlanInput>): ReturnType<typeof planNotifications> {
   return planNotifications({
     logonId: 0, kinds: ['messages'], changedFolders: new Set([10n]),
     before: facts([10n, 1, 1], [11n, 5, 0]), after: facts([10n, 2, 2], [11n, 5, 0]),
-    newMessages: [{ folderCounter: 10n, uid: 7, read: false }], subscriptions: [], tables: [], ...over,
+    newMessages: [{ folderCounter: 10n, counter: 7n, read: false }], subscriptions: [], tables: [], ...over,
   });
 }
 
@@ -110,12 +111,6 @@ test('planner: TableChanged for contents tables of changed folders and hierarchy
   const folders = plan({ tables, kinds: ['folders'], changedFolders: null, after: facts([10n, 1, 1], [11n, 5, 0]), newMessages: [] });
   assert.deepEqual(folders.map((x) => x.handle), [23]);
 });
-
-class MemoryRedis implements SessionRedis {
-  async set(): Promise<unknown> { return 'OK'; }
-  async pexpire(): Promise<number> { return 1; }
-  async del(): Promise<number> { return 1; }
-}
 
 test('bus: a delivery queues NewMail for the subscribed logon; Sent copies never; the next Execute output carries the queue', async () => {
   const store = new MemoryStore();
