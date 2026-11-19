@@ -258,6 +258,15 @@ test('patchVEvent switches to all-day and back, removes RRULE on null, edits att
   assert.equal(patchVEvent('garbage', { summary: 'x' }), null);
 });
 
+test('patchVEvent with tzid moves a UTC event into a zone (same instants, local time with TZID); unknown zone keeps UTC', () => {
+  const base = buildVCalendar({ uid: 'z1', summary: 'x', start: new Date('2026-11-23T09:00:00Z'), end: new Date('2026-11-23T10:00:00Z') });
+  const zoned = patchVEvent(base, { tzid: 'Europe/Berlin', start: new Date('2026-11-23T09:00:00Z'), end: new Date('2026-11-23T10:00:00Z'), rrule: 'FREQ=WEEKLY' })!;
+  assert.match(zoned, /DTSTART;TZID=Europe\/Berlin:20261123T100000\r\n/);
+  const ev = parseCalendarObject(zoned)!.main;
+  assert.deepEqual([ev.tzid, ev.start.toISOString(), ev.end.toISOString()], ['Europe/Berlin', '2026-11-23T09:00:00.000Z', '2026-11-23T10:00:00.000Z']);
+  assert.match(patchVEvent(base, { tzid: 'Nowhere/Invalid', start: new Date('2026-11-23T09:00:00Z'), end: new Date('2026-11-23T10:00:00Z') })!, /DTSTART:20261123T090000Z/);
+});
+
 test('parseCalendarObject returns overrides (RECURRENCE-ID) separately from the master', () => {
   const doc = [
     'BEGIN:VCALENDAR',

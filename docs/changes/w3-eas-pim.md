@@ -30,9 +30,12 @@ ActiveSync mail behaviour is unchanged (see "Changed" for the two protocol-visib
   the phone's calendar with the returned CalendarId as its ServerId.
 - Webmail module policies apply: with the calendar, tasks or notes module switched off the folders
   disappear from FolderSync and their Sync / Ping ask the device to refresh its folder list.
-- Storage: `createTask` / `updateTask` (task-writer.ts), the task writer shared by the REST API and
-  ActiveSync. Core: `restoreOccurrence` (calendar exceptions) and an optional `tzid` for
-  `buildVCalendar`.
+- Storage: ActiveSync tasks go through `task-store.ts` (`createTaskWithRules` / `updateTaskWithRules`),
+  now the one task writer of REST, the CalDAV task list and ActiveSync. Meetings written by a phone
+  book their rooms through storage `room-booking.ts` (moved from api-gateway `lib/room-booking.ts`):
+  the same resource policy, conflict check and booking lock as the REST event form. Core:
+  `restoreOccurrence` (calendar exceptions), an optional `tzid` for `buildVCalendar` and
+  `patchVEvent` (`VEventPatch`).
 - Tests: TimeZone and Recurrence mapping, WBXML byte fixtures for the three classes, the round trip
   of a recurring meeting with exceptions, PIM sync-state tests on the in-memory Prisma fake; e2e
   step `eas-pim`.
@@ -44,14 +47,41 @@ ActiveSync mail behaviour is unchanged (see "Changed" for the two protocol-visib
   folders and later hierarchy changes without being set up again.
 - ActiveSync MoveItems answers Status 2 (invalid destination) for a move between a mail folder and a
   calendar / tasks / notes folder, or between different PIM classes.
-- REST `POST/PUT /api/v1/tasks` use the shared storage task writer (same behaviour).
+- Task writer (REST, CalDAV, ActiveSync): a task that is completed and stays completed keeps its
+  stored rule — a client sending the completed occurrence again with its old RRULE / Recurrence no
+  longer revives the series (reopened later it would have created a second next task). CalDAV had
+  this rule since 9.5; REST and ActiveSync get it from the shared writer.
+- ActiveSync calendar: a single timed event without zone is sent with the user's Region zone (a
+  series in UTC still in UTC); a timed event added on a phone is stored with the phone's zone.
+
+### Fixed
+
+- ActiveSync PIM Sync: the ClientId → ServerId map of the retry detection is bound to the SyncKey of
+  its request — a later request reusing a ClientId (devices count them per request) no longer gets
+  the earlier item back while its new item is silently dropped.
+- ActiveSync PIM Sync: a priming Sync without airsync:Supported drops the stored list (no stale
+  ghosting after a device reset).
+- ActiveSync FolderSync retried with the previous key after the hierarchy went back answers a new
+  key with the snapshot the device holds — Ping no longer answers Status 7 forever.
+- ActiveSync Ping on a PIM folder with an unreadable webmail policy answers Status 8 (server error)
+  instead of 7.
+- ActiveSync calendar Sync, GetItemEstimate and Ping read only the FilterType window and the events
+  the device holds, not the whole calendar history.
+- A timed event stored in UTC that a phone turns into a series moves to the phone's zone (or the
+  Region zone when the phone echoes UTC) and keeps its local time across DST changes; the phone gets
+  it back with that zone.
+
+### Security
+
+- Room bookings (REST and ActiveSync): a booking of a UID belongs to its organizer — booking,
+  re-checking, refreshing or releasing with another organizer leaves it untouched (a booking
+  attempt answers declined). Client-chosen UIDs (ActiveSync) cannot take over or cancel someone
+  else's room.
 
 ### Known limits
 
-- Device writes do not send meeting invitations (the device sends them itself, as before for
-  MeetingResponse) and do not (re)book rooms of a meeting; rooms stay attendees.
+- Device writes do not send meeting invitations to people (the device sends them itself, as before
+  for MeetingResponse).
 - Recurrence rules without an ActiveSync form (e.g. several month days, hourly) are not sent to the
   device and are kept unchanged on device edits.
-- An event made recurring on the device after it was stored as a single timed event keeps a UTC
-  start (the series follows UTC across DST changes).
 - Contacts are a separate package (the class registry takes one more module).

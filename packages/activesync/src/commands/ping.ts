@@ -18,6 +18,7 @@ export const PING_STATUS = {
   MISSING_PARAMETERS: '3',
   BAD_HEARTBEAT: '5',
   FOLDER_HIERARCHY_SYNC: '7',
+  SERVER_ERROR: '8',
 } as const;
 
 export const MIN_HEARTBEAT = 60;    // seconds
@@ -124,13 +125,18 @@ export async function handlePing(
   });
   const pim = await pimWatches(userId, folderIds.filter((id) => moduleFor(id)), version,
     (id) => storedOptions(syncKeys, id)?.filterType);
+  // an unreadable webmail policy is temporary: Status 8 (a FolderSync now would fail as well)
+  if (pim.status === 'error') {
+    send(res, [el('Status', PING_STATUS.SERVER_ERROR)]);
+    return;
+  }
   // a folder that is not the user's (any more), or a hierarchy the device does not have yet
   // (new calendar, class switched on / off) → the device runs FolderSync first
-  if (folders.length !== mailIds.length || !pim || (device && await hierarchyChanged(userId, syncKeys, version))) {
+  if (folders.length !== mailIds.length || pim.status === 'hierarchy' || (device && await hierarchyChanged(userId, syncKeys, version))) {
     send(res, [el('Status', PING_STATUS.FOLDER_HIERARCHY_SYNC)]);
     return;
   }
-  const watches: PimWatch[] = pim;
+  const watches: PimWatch[] = pim.watches;
 
   if (device) {
     const params = JSON.stringify({ heartbeat, folders: folderIds });

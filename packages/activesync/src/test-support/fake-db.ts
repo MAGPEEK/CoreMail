@@ -3,7 +3,8 @@
  * the `globalThis.__prisma` seam of @coremail/storage. Supports the query shapes
  * the commands use: equality, in/contains/equals (mode ignored → case-insensitive),
  * gt/lt/lte, OR/AND/NOT, relation filters (folder.mailbox, message.folder,
- * calendarEvent.calendar), select/include of those relations, increment updates,
+ * calendarEvent.calendar, resourceBooking.calendar.resource), select/include of those
+ * relations, compound unique keys (findUnique / upsert), increment updates,
  * count/aggregate and `$transaction(fn)`; `updatedAt` of calendar events, tasks and notes
  * is set on every write. Every call is logged in `calls`.
  * Test-only module.
@@ -24,7 +25,20 @@ const RELATIONS: Record<string, Record<string, { table: string; local: string; f
   calendar: { shares: { table: 'calendarShare', local: 'id', foreign: 'calendarId', many: true } },
   user: { mailFlowPolicy: { table: 'mailFlowPolicy', local: 'id', foreign: 'userId' } },
   sharedMailbox: { mailFlowPolicy: { table: 'mailFlowPolicy', local: 'id', foreign: 'sharedMailboxId' } },
+  // rooms booked by calendar writes (storage room-booking.ts)
+  resourceMailbox: { calendar: { table: 'resourceCalendar', local: 'id', foreign: 'resourceId' } },
+  resourceCalendar: { resource: { table: 'resourceMailbox', local: 'resourceId', foreign: 'id' } },
+  resourceBooking: { calendar: { table: 'resourceCalendar', local: 'calendarId', foreign: 'id' } },
 };
+
+/** `{ a_b: { a, b } }` compound unique keys of findUnique / upsert as plain equality. */
+function plainWhere(where: Row): Row {
+  const out = { ...where };
+  for (const [k, v] of Object.entries(out)) {
+    if (v && typeof v === 'object' && !Array.isArray(v) && k.includes('_')) { delete out[k]; Object.assign(out, v); }
+  }
+  return out;
+}
 
 function cmp(a: unknown, b: unknown): number {
   if (a instanceof Date || b instanceof Date) return new Date(a as Date).getTime() - new Date(b as Date).getTime();
@@ -133,10 +147,7 @@ export function createFakeDb(tables: Tables) {
     return {
       findUnique: async (args: Row) => {
         log('findUnique', args);
-        const where = { ...(args['where'] as Row) };
-        for (const [k, v] of Object.entries(where)) {
-          if (v && typeof v === 'object' && !Array.isArray(v) && k.includes('_')) { delete where[k]; Object.assign(where, v); }
-        }
+        const where = plainWhere(args['where'] as Row);
         const r = t(name).find((x) => match(name, x, where));
         return r ? shape(name, r, args) : null;
       },
@@ -185,7 +196,7 @@ export function createFakeDb(tables: Tables) {
       },
       upsert: async (args: Row) => {
         log('upsert', args);
-        const r = t(name).find((x) => match(name, x, args['where'] as Row));
+        const r = t(name).find((x) => match(name, x, plainWhere(args['where'] as Row)));
         if (r) { applyData(r, args['update'] as Row); return r; }
         const row: Row = { id: `${name}-${++seq}`, ...(args['create'] as Row) };
         t(name).push(row);
@@ -210,7 +221,8 @@ export function createFakeDb(tables: Tables) {
   }
 
   const db: Row = { $on: () => undefined, calls, tables };
-  for (const name of ['user', 'emailAlias', 'userSettings', 'activeSyncDevice', 'activeSyncItem', 'mailbox', 'folder', 'message', 'attachment', 'sharedMailbox', 'sharedMailboxPerm', 'mailFlowPolicy', 'contact', 'calendar', 'calendarShare', 'calendarEvent', 'task', 'note', 'systemLog', 'webmailPolicy']) {
+  for (const name of ['user', 'emailAlias', 'userSettings', 'activeSyncDevice', 'activeSyncItem', 'mailbox', 'folder', 'message', 'attachment', 'sharedMailbox', 'sharedMailboxPerm', 'mailFlowPolicy', 'contact', 'calendar', 'calendarShare', 'calendarEvent', 'task', 'note', 'systemLog', 'webmailPolicy',
+    'resourceMailbox', 'resourceCalendar', 'resourceBooking']) {
     db[name] = model(name);
   }
   db['$transaction'] = async (fn: (tx: unknown) => Promise<unknown>) => fn(db);

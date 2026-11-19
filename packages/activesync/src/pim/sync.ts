@@ -8,11 +8,12 @@
  * last response: its pending rows become committed) or the acknowledged one (a retry: the same
  * changes are sent again); anything else, and a collection never primed, is Status 3.
  *
- * Client commands: Add (ClientId → ServerId in airsync:Responses; a retried Add with a
- * ClientId of the previous request gets the ServerId it got then, nothing is created twice),
- * Change and Delete. The device's own writes are recorded as held at their new version, so
- * they are not echoed; an item the server normalised is recorded at version 0 and comes back
- * as a Change.
+ * Client commands: Add (ClientId → ServerId in airsync:Responses; a retried request — the same
+ * SyncKey presented again — gets for an Add with a ClientId of the first attempt the ServerId it
+ * got then, nothing is created twice; ClientIds of earlier requests are never matched, devices
+ * reuse them), Change and Delete. The device's own writes are recorded as held at their new
+ * version, so they are not echoed; an item the server normalised is recorded at version 0 and
+ * comes back as a Change.
  *
  * Server commands: Change, Delete and Add (inside the FilterType window), at most WindowSize
  * per response (MoreAvailable). A Change carries the complete item.
@@ -41,8 +42,19 @@ export interface PimSyncContext {
 
 /** airsync:Supported of the collection (names of the elements the client handles). */
 export const SUPPORTED_KEY = (collectionId: string) => `sup:${collectionId}`;
-/** ClientId → ServerId of the Adds of the last request (retry detection). */
+/** ClientId → ServerId of the Adds of the last request and the SyncKey it presented (retry detection). */
 const CLIENT_IDS_KEY = (collectionId: string) => `cid:${collectionId}`;
+
+interface ClientIdMap { key: string; adds: Record<string, string> }
+
+/** The Adds of the last request when `clientKey` retries it (the same key again), else none. */
+export function retriedAdds(raw: string | undefined, clientKey: string): Record<string, string> {
+  try {
+    const v = JSON.parse(raw || 'null') as Partial<ClientIdMap> | null;
+    if (!v || v.key !== clientKey || !v.adds || typeof v.adds !== 'object' || Array.isArray(v.adds)) return {};
+    return Object.fromEntries(Object.entries(v.adds).filter((e): e is [string, string] => typeof e[1] === 'string'));
+  } catch { return {}; }
+}
 
 /** The body form sent for PIM items: plain text unless the client only takes HTML (no MIME). */
 export function pimBodyPreference(opts: BodyOptions | null): BodyPreference {
@@ -53,16 +65,9 @@ export function pimBodyPreference(opts: BodyOptions | null): BodyPreference {
 
 export function storedSupported(syncKeys: Record<string, string>, collectionId: string): ReadonlySet<string> | null {
   try {
-    const list = JSON.parse(syncKeys[SUPPORTED_KEY(collectionId)] ?? 'null') as unknown;
+    const list = JSON.parse(syncKeys[SUPPORTED_KEY(collectionId)] || 'null') as unknown;
     return Array.isArray(list) ? new Set(list.filter((x): x is string => typeof x === 'string')) : null;
   } catch { return null; }
-}
-
-function readJsonMap(raw: string | undefined): Record<string, string> {
-  try {
-    const v = JSON.parse(raw ?? '{}') as unknown;
-    return v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, string> : {};
-  } catch { return {}; }
 }
 
 const collectionElement = (className: string | undefined, collectionId: string, syncKey: string, status: string, rest: WbxmlElement[] = []) =>
@@ -83,13 +88,15 @@ interface CommandScope {
   deviceRowId: string;
   write: WriteContext;
   syncKeys: Record<string, string>;
+  /** The SyncKey the request presented. */
+  clientKey: string;
 }
 
 /** Client Add / Change / Delete; returns the airsync:Responses entries. */
 async function applyClientCommands(commands: WbxmlElement, s: CommandScope): Promise<WbxmlElement[]> {
   const { module, collection, deviceRowId } = s;
   const responses: WbxmlElement[] = [];
-  const previousAdds = readJsonMap(s.syncKeys[CLIENT_IDS_KEY(collection.id)]);
+  const previousAdds = retriedAdds(s.syncKeys[CLIENT_IDS_KEY(collection.id)], s.clientKey);
   const adds: Record<string, string> = {};
   // the device holds what it sent; a normalised item at version 0 → it gets the stored one back
   const held = (serverId: string, version: bigint, normalized?: boolean) =>
@@ -124,7 +131,9 @@ async function applyClientCommands(commands: WbxmlElement, s: CommandScope): Pro
       await forgetItems(deviceRowId, collection.id, [serverId]);
     }
   }
-  if (Object.keys(adds).length > 0) s.syncKeys[CLIENT_IDS_KEY(collection.id)] = JSON.stringify(adds);
+  // the map belongs to this request's key: a retry presents it again, a new request does not
+  if (Object.keys(adds).length > 0) s.syncKeys[CLIENT_IDS_KEY(collection.id)] = JSON.stringify({ key: s.clientKey, adds } satisfies ClientIdMap);
+  else if (s.syncKeys[CLIENT_IDS_KEY(collection.id)]) s.syncKeys[CLIENT_IDS_KEY(collection.id)] = '';
   return responses;
 }
 
@@ -133,7 +142,8 @@ async function serverCommands(
   s: CommandScope, filterType: number | undefined, render: RenderContext, newKey: string, windowSize: number, now: Date,
 ): Promise<{ commands: WbxmlElement[]; moreAvailable: boolean }> {
   const { module, collection, deviceRowId } = s;
-  const diff = diffItems(await module.states(collection, filterType, now), await knownItems(deviceRowId, collection.id));
+  const held = await knownItems(deviceRowId, collection.id);
+  const diff = diffItems(await module.states(collection, filterType, now, new Set(held.keys())), held);
   const ordered: Array<['Change' | 'Delete' | 'Add', string]> = [
     ...diff.changes.map((id) => ['Change', id] as ['Change', string]),
     ...diff.deletes.map((id) => ['Delete', id] as ['Delete', string]),
@@ -180,8 +190,10 @@ export async function syncPimCollection(request: WbxmlElement, ctx: PimSyncConte
   if (isPrimingSyncKey(clientKey)) {
     ctx.syncKeys[collectionId] = PRIMING_SYNC_KEY;
     ctx.syncKeys[ACK_KEY(collectionId)] = PRIMING_SYNC_KEY;
+    // Supported comes with the priming Sync only: a new priming without it ghosts nothing
     const supported = getChild(request, 'Supported');
-    if (supported) ctx.syncKeys[SUPPORTED_KEY(collectionId)] = JSON.stringify(commandsOf(supported).map((c) => c.name));
+    ctx.syncKeys[SUPPORTED_KEY(collectionId)] = supported ? JSON.stringify(commandsOf(supported).map((c) => c.name)) : '';
+    ctx.syncKeys[CLIENT_IDS_KEY(collectionId)] = '';
     await resetCollection(deviceRowId, collectionId);
     return status(PIM_STATUS.SUCCESS, PRIMING_SYNC_KEY);
   }
@@ -194,7 +206,7 @@ export async function syncPimCollection(request: WbxmlElement, ctx: PimSyncConte
   if (!user) return status(PIM_STATUS.OBJECT_NOT_FOUND);
   const bodyPref = pimBodyPreference(options);
   const scope: CommandScope = {
-    module, collection, deviceRowId, syncKeys: ctx.syncKeys,
+    module, collection, deviceRowId, syncKeys: ctx.syncKeys, clientKey,
     write: {
       version: ctx.version, user, now: ctx.now, supported: storedSupported(ctx.syncKeys, collectionId),
       ...(bodyPref.truncationSize !== undefined ? { truncatedAt: bodyPref.truncationSize } : {}),

@@ -176,6 +176,43 @@ export async function run(state) {
     return `${starts.length} instances, the second deleted`;
   });
 
+  await check('eas-pim: a meeting added on the device books its room like the event form; its Delete frees the room', async () => {
+    const admin = await session(state, 'admin', state.adminEmail, c.admin);
+    const domain = B_MAIL.split('@')[1];
+    const room = await http('POST', '/api/v1/admin/resources', { token: admin, body: {
+      email: `e2e-raum-${Date.now()}@${domain}`, displayName: 'E2E Raum EAS', resourceType: 'ROOM', domainId: state.domainId, bookingWindowDays: 365,
+    } });
+    assert(room.status === 201 && room.json?.email, `create room ${room.status} ${room.text.slice(0, 200)}`);
+    try {
+      const start = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate() + 20, 13, 0, 0));
+      const end = new Date(start.getTime() + 36e5);
+      const free = async () => {
+        const r = await http('GET', `/api/v1/calendar/rooms?start=${start.toISOString()}&end=${end.toISOString()}`, { token: tok });
+        return r.json?.find((x) => x.email === room.json.email)?.available;
+      };
+      assert(await free() === true, 'room not free before');
+      // the phone lists the room as an ordinary attendee (AttendeeType 1)
+      const r = await sync(calendarCollection, keys.calendar, [A(0x16, [A(0x07, [A(0x0c, 'e2e-room-1'), A(0x1d, [
+        C(0x05, UTC_ZONE), C(0x06, '0'), C(0x26, `E2E EAS Raum ${Date.now()}`), C(0x27, compact(start)), C(0x12, compact(end)), C(0x0d, '2'),
+        C(0x07, [C(0x08, [C(0x09, room.json.email), C(0x0a, 'Raum'), C(0x2a, '1')])]),
+      ])])])]);
+      const id = kid(r.responses[0], 'ServerId')?.text;
+      assert(kid(r.responses[0], 'Status')?.text === '1' && id, `Add response ${JSON.stringify(r.responses)}`);
+      const ev = await http('GET', `/api/v1/calendar/events/${id}`, { token: tok });
+      const entry = (ev.json?.attendees ?? []).find((a) => a.email?.toLowerCase() === room.json.email.toLowerCase());
+      assert(entry?.partstat === 'ACCEPTED' && entry?.cutype === 'ROOM', `room entry ${JSON.stringify(entry)}`);
+      assert(await free() === false, 'room still free after the booking');
+      const echoed = await sync(calendarCollection, r.key);
+      const d = await sync(calendarCollection, echoed.key, [A(0x16, [A(0x09, [A(0x0d, id)])])]);
+      assert(d.status === '1', `Delete status ${d.status}`);
+      assert(await free() === true, 'room not freed by the device Delete');
+      keys.calendar = d.key;
+      return 'booked (ACCEPTED, ROOM) and released';
+    } finally {
+      await http('DELETE', `/api/v1/admin/resources/${room.json.id}`, { token: admin });
+    }
+  });
+
   await check('eas-pim: clean up the items of this step', async () => {
     for (const id of created.events) await http('DELETE', `/api/v1/calendar/events/${id}`, { token: tok });
     for (const id of created.notes) await http('DELETE', `/api/v1/notes/${id}`, { token: tok });

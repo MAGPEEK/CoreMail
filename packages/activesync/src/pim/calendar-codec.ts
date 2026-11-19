@@ -3,9 +3,10 @@
  *
  * Server → device: the stored calendar object (master VEVENT + RECURRENCE-ID overrides)
  * becomes calendar:* properties. Times are UTC instants; the item's zone travels in
- * calendar:TimeZone ([MS-ASDTYPE] 2.7.4): the master's TZID, else UTC for timed events (the
+ * calendar:TimeZone ([MS-ASDTYPE] 2.7.4): the master's TZID, else UTC for a timed series (the
  * server expands a UTC series in UTC, so the device must too), and the user's zone
- * (Settings → Region) for all-day events, whose StartTime / EndTime are local midnights.
+ * (Settings → Region) for single timed events and for all-day events, whose StartTime /
+ * EndTime are local midnights.
  * Recurrence ↔ RRULE (pim/recurrence.ts); EXDATEs and cancelled overrides are deleted
  * exceptions, the other overrides changed exceptions.
  *
@@ -49,8 +50,12 @@ export interface CalendarRenderInput {
 }
 
 /** Zone an event is sent in (see the module comment). */
-export function eventZone(main: Pick<ParsedVEvent, 'allDay' | 'tzid'>, userZone: string | null): string {
-  return main.allDay ? userZone ?? 'UTC' : main.tzid ?? 'UTC';
+export function eventZone(main: Pick<ParsedVEvent, 'allDay' | 'tzid' | 'rrule' | 'rdates'>, userZone: string | null): string {
+  if (main.allDay) return userZone ?? 'UTC';
+  if (main.tzid) return main.tzid;
+  // a UTC series is expanded in UTC (the device must too); a single event is the user's —
+  // a phone that turns it into a series then sends that zone back (calendar-ical.ts)
+  return main.rrule || main.rdates.length > 0 ? 'UTC' : userZone ?? 'UTC';
 }
 
 /** The instant a stored time is sent as: an all-day date becomes its local midnight in `zone`. */

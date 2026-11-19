@@ -31,13 +31,16 @@ export async function estimatePimCollection(r: PimEstimateRequest): Promise<PimE
   const resolved = await resolveCollection(r.userId, r.collectionId, r.version);
   if (resolved.status !== 'ok') return { status: 'invalid-collection' };
   if (isPrimingSyncKey(r.clientSyncKey)) return { status: 'not-primed' };
-  const states = await resolved.module.states(resolved.collection, r.filterType, r.now);
-  if (!r.deviceRowId) return { status: 'ok', estimate: states.filter((s) => s.inFilter).length };
+  if (!r.deviceRowId) {
+    const states = await resolved.module.states(resolved.collection, r.filterType, r.now);
+    return { status: 'ok', estimate: states.filter((s) => s.inFilter).length };
+  }
   const issued = r.syncKeys[r.collectionId];
   const ack = r.syncKeys[ACK_KEY(r.collectionId)];
   let held: Map<string, bigint>;
   if (ack !== undefined && r.clientSyncKey === ack) held = await heldItems(r.deviceRowId, r.collectionId);
   else if (ack !== undefined && r.clientSyncKey === issued) held = await heldItems(r.deviceRowId, r.collectionId, issued);
   else return { status: 'invalid-key' };
+  const states = await resolved.module.states(resolved.collection, r.filterType, r.now, new Set(held.keys()));
   return { status: 'ok', estimate: diffSize(diffItems(states, held)) };
 }

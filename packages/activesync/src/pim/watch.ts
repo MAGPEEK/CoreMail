@@ -19,17 +19,25 @@ export interface PimWatch {
   fingerprint: string | null;
 }
 
-/** Watches for the requested PIM collections; null when one is not the user's / switched off (Ping Status 7). */
+export type PimWatches =
+  | { status: 'ok'; watches: PimWatch[] }
+  /** A collection is not the user's (any more) or its class is switched off: Ping Status 7. */
+  | { status: 'hierarchy' }
+  /** The webmail policy could not be read (temporary): Ping Status 8, never 7 — a FolderSync would fail too. */
+  | { status: 'error' };
+
+/** Watches for the requested PIM collections. */
 export async function pimWatches(
   userId: string, ids: string[], version: EasVersion, filterTypeOf: (collectionId: string) => number | undefined,
-): Promise<PimWatch[] | null> {
-  const out: PimWatch[] = [];
+): Promise<PimWatches> {
+  const watches: PimWatch[] = [];
   for (const id of ids) {
     const r = await resolveCollection(userId, id, version);
-    if (r.status !== 'ok') return null;
-    out.push({ collectionId: id, module: r.module, collection: r.collection, filterType: filterTypeOf(id), fingerprint: null });
+    if (r.status === 'error') return { status: 'error' };
+    if (r.status !== 'ok') return { status: 'hierarchy' };
+    watches.push({ collectionId: id, module: r.module, collection: r.collection, filterType: filterTypeOf(id), fingerprint: null });
   }
-  return out;
+  return { status: 'ok', watches };
 }
 
 /** Has the collection changes for the device? `issuedKey`: the SyncKey the device got last. */
@@ -41,5 +49,5 @@ export async function pimChanged(w: PimWatch, deviceRowId: string | null, issued
   // without an item state (no device, never synced): changes after the Ping started
   if (!deviceRowId || issuedKey === undefined) return !first;
   const held = await heldItems(deviceRowId, w.collectionId, issuedKey);
-  return diffSize(diffItems(await w.module.states(w.collection, w.filterType, now), held)) > 0;
+  return diffSize(diffItems(await w.module.states(w.collection, w.filterType, now, new Set(held.keys())), held)) > 0;
 }

@@ -19,7 +19,7 @@ import { decodeTimeZone, encodeTimeZone, timeZoneOf } from './timezone.js';
 import { formatCompactDate } from './dates.js';
 import type { PimUser, RenderContext, WriteContext } from './types.js';
 
-const USER: PimUser = { id: 'u1', email: 'bob@example.com', displayName: 'Bob B', addresses: ['bob@example.com'], timeZone: 'Europe/Berlin' };
+const USER: PimUser = { id: 'u1', email: 'bob@example.com', displayName: 'Bob B', addresses: ['bob@example.com'], timeZone: 'Europe/Berlin', domainId: null };
 const render = (version: '12.1' | '14.1' = '14.1', user = USER): RenderContext => ({ version, bodyPref: DEFAULT_BODY_PREFERENCE, user });
 const write = (supported: ReadonlySet<string> | null = null): WriteContext => ({ version: '14.1', user: USER, now: new Date('2026-03-01T00:00:00Z'), supported });
 

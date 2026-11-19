@@ -140,8 +140,11 @@ export async function handleFolderSync(
     if (!current[id]) changes.push(el('Delete', undefined, [el('ServerId', id)]));
   }
 
-  // New key when something is sent (or on the initial sync); otherwise the key stays.
-  const answeredKey = isInitialSync || changes.length > 0
+  // New key when something is sent (or on the initial sync), and when the device presented
+  // the previous key: the stored snapshot must become the one the device holds — else Ping
+  // would compare against a hierarchy the device never got and answer Status 7 forever.
+  // Otherwise the key stays.
+  const answeredKey = isInitialSync || changes.length > 0 || (state !== null && clientSyncKey !== state.key)
     ? nextKey(state?.key ?? device?.folderSyncKey ?? '0')
     : clientSyncKey;
   if (device) {

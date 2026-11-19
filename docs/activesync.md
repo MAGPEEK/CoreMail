@@ -123,15 +123,16 @@ module of `CLASS_MODULES`.
 
 | Class | Collection ids (FolderSync Type) | Items | Writer |
 |---|---|---|---|
-| Calendar ([MS-ASCAL], page 4) | `cal:<calendarId>` — the user's **own** calendars: the default one Type 8, the others 13; no shared calendars | `CalendarEvent` (ServerId = event id, the MeetingResponse `CalendarId`) | calendar object built / patched with `@coremail/core/calendar` (`src/pim/calendar-ical.ts`), row columns derived from it, `announceCalendarChange` |
-| Tasks ([MS-ASTASK], page 9) | `tasks:default` (Type 7) | `Task` | storage `createTask` / `updateTask` (shared with REST: status rules, the next occurrence of a completed recurring task), `announceUserEvent` `tasks` |
+| Calendar ([MS-ASCAL], page 4) | `cal:<calendarId>` — the user's **own** calendars: the default one Type 8, the others 13; no shared calendars | `CalendarEvent` (ServerId = event id, the MeetingResponse `CalendarId`) | calendar object built / patched with `@coremail/core/calendar` (`src/pim/calendar-ical.ts`), rooms booked through storage `room-booking.ts` (`src/pim/calendar-rooms.ts`), row columns derived from it, `announceCalendarChange` |
+| Tasks ([MS-ASTASK], page 9) | `tasks:default` (Type 7) | `Task` | storage `task-store.ts` `createTaskWithRules` / `updateTaskWithRules` — the one task writer of REST, CalDAV and ActiveSync (status rules, the next task of a completed recurring task exactly once, no revived rule on a completed task), `announceUserEvent` `tasks` |
 | Notes ([MS-ASNOTE], page 23, 14.0+) | `notes:default` (Type 10) | `Note` (subject, plain-text body; no categories in the model) | row writes, `announceUserEvent` `notes` |
 
 **Availability**: a class exists for a user only while its webmail module is on (9.4 policies
 `calendar` / `tasks` / `notes`) and the protocol version knows it (Notes from 14.0). Switched off:
 the folders leave FolderSync, a Sync of such a collection answers Status 12 (hierarchy changed), a
-Ping on it Status 7; an unreadable policy → FolderSync Status 6, Sync Status 16. Protocol access
-(`activesync` switch) applies at authentication as for mail.
+Ping on it Status 7; an unreadable policy → FolderSync Status 6, Sync Status 16, Ping Status 8
+(never 7 — the FolderSync it asks for would fail as well). Protocol access (`activesync` switch)
+applies at authentication as for mail.
 
 **Change detection**: PIM items have no mailbox modSeq. The item version is `updatedAt` (ms); the
 per-device item state (`ActiveSyncItem`, committed / pending rows, `ack:` keys — the same rules as
@@ -141,23 +142,32 @@ items inside the FilterType window (calendar 4–7 = two weeks … six months ba
 tasks 8 = incomplete only), at most WindowSize per response (MoreAvailable). SyncKeys are counters
 per collection (priming → 1, then the presented key + 1); a collection never primed, or a key that
 is neither the issued nor the acknowledged one, is Status 3. A Change carries the complete item.
+A calendar Sync reads only the FilterType window plus the events the device holds (`states(…,
+held)`), not the whole calendar history.
 
 **Client commands**: Add answers `ClientId` + `ServerId` in airsync:Responses; a retried request
-with a ClientId of the previous request gets the ServerId it got then (nothing is created twice).
-Change and Delete are applied through the writers; an unknown ServerId gets Status 8. The device's
+(the same SyncKey presented again) gets for a ClientId of its first attempt the ServerId it got then
+(nothing is created twice). The ClientId map (`cid:<collectionId>`) is bound to that SyncKey —
+ClientIds of earlier requests are never matched, devices reuse them. A priming Sync without
+`Supported` drops the stored list. Change and Delete are applied through the writers; an unknown
+ServerId gets Status 8. The device's
 own writes are recorded as held at their new version (no echo); an item the server normalised (a
-completed recurring task, an Add whose UID the calendar already has — the existing event is updated)
-is recorded at version 0 and comes back as a Change. Change semantics ([MS-ASCMD]
+completed recurring task, an Add whose UID the calendar already has — the existing event is updated,
+a meeting whose rooms answered, an event moved into another zone than the device's TimeZone) is
+recorded at version 0 and comes back as a Change. Change semantics ([MS-ASCMD]
 airsync:Supported): an element missing from a Change is cleared, unless the client listed a
 Supported set in its priming Sync and the element is not in it (ghosted). A body the device got
 truncated and sends back unchanged does not cut the stored one.
 
 **Calendar mapping** (`src/pim/calendar-codec.ts`): times are UTC instants; calendar:TimeZone
-([MS-ASDTYPE] 2.7.4, `src/pim/timezone.ts`) carries the master's TZID, else UTC for timed events
-(the server expands a UTC series in UTC) and the user's Settings → Region zone for all-day events,
-whose StartTime / EndTime are local midnights. A device TimeZone is mapped back to the IANA zone with
-the same rules (names, the user's zone first, then every zone of the runtime); a timed series is
-stored with that TZID so it keeps its wall-clock time across DST changes. Recurrence ↔ RRULE
+([MS-ASDTYPE] 2.7.4, `src/pim/timezone.ts`) carries the master's TZID, else UTC for a timed series
+(the server expands a UTC series in UTC) and the user's Settings → Region zone for single timed
+events and for all-day events, whose StartTime / EndTime are local midnights. A device TimeZone is
+mapped back to the IANA zone with the same rules (names, the user's zone first, then every zone of
+the runtime); a timed event added on a device is stored with that TZID (an unknown one → the Region
+zone), so a series keeps its wall-clock time across DST changes. A timed event stored in UTC that a
+device turns into a series moves to the device's zone — or, when the device sends UTC (the zone it
+got) or an unknown one, the Region zone — and the device gets it back with that zone. Recurrence ↔ RRULE
 (`src/pim/recurrence.ts`: daily, weekly, monthly on day / nth weekday, yearly on day / nth weekday,
 Interval, Occurrences, Until, FirstDayOfWeek); an RRULE without an ActiveSync form is not sent and is
 kept on device changes. Exceptions: EXDATEs and cancelled overrides are deleted exceptions, other
@@ -166,7 +176,18 @@ RECURRENCE-ID overrides changed ones; a device's exception list is applied with
 Attendees (AttendeeStatus / AttendeeType, rooms as type 3), reminder (VALARM minutes), BusyStatus ↔
 show-as, Sensitivity ↔ CLASS, MeetingStatus (own / received / cancelled), ResponseType (14.0+).
 Invitations are sent by the device itself (SendMail with text/calendar) — the server does not send
-iMIP for device writes; rooms of a meeting are kept as attendees but not (re)booked by device writes.
+iMIP for device writes.
+
+**Rooms** (`src/pim/calendar-rooms.ts`, the booking path of the REST event form — storage
+`room-booking.ts` with the resource policy, every occurrence checked, the room's booking lock): an
+attendee whose address is a room / resource mailbox of the user's domain is a room, whatever
+AttendeeType the device gave it. Only the user's own meetings (organizer = an own address, or none)
+book; a copy of another organizer's meeting never touches a room. Rooms are (re)booked when the room
+list or the timing (start, end, all-day, rule, exceptions) changed, a removed room and the rooms of
+a deleted meeting are released; the rooms' answers replace whatever the device sent for them
+(PARTSTAT, CUTYPE ROOM / RESOURCE, NON-PARTICIPANT — a phone cannot mark a declined room accepted)
+and the device gets the meeting back. A booking of the same UID by another organizer is never
+changed or released (answer: declined) — device UIDs are client-chosen.
 
 **Tasks mapping** (`src/pim/tasks-codec.ts`): Importance ↔ priority, UtcStartDate / UtcDueDate (the
 local StartDate / DueDate in the user's zone), Complete + DateCompleted ↔ status COMPLETED (the
@@ -180,7 +201,9 @@ classes or between mail and a PIM class; ItemOperations Fetch returns the item w
 Ping watches PIM collections against the device's issued SyncKey (fingerprint = count + newest
 change, the difference only when it moved) and answers Status 7 when the hierarchy differs from the
 device's last FolderSync snapshot (a new calendar, a class switched on or off) — so devices that
-synced before discover the new folders. MeetingResponse writes the accepted meeting into the default
+synced before discover the new folders. A FolderSync with the previous key (a retry) always answers
+a new key with the snapshot the device then holds, so a hierarchy that went back meanwhile cannot
+leave Ping answering Status 7 forever. MeetingResponse writes the accepted meeting into the default
 calendar; the next calendar Sync delivers it with the returned `CalendarId` as ServerId.
 
 ## Device policy
@@ -216,4 +239,8 @@ versions.
   of a recurring meeting with exceptions across a DST change, Change / ghosting rules;
 * `src/pim/pim-sync.test.ts` — FolderSync, Sync both ways with the item state, policies, Notes
   from 14.0, GetItemEstimate, MoveItems, ItemOperations, Ping, MeetingResponse (in-memory Prisma);
+* `src/pim/pim-review.test.ts` — ClientIds of earlier requests, re-priming without Supported,
+  rooms of phone meetings (booked / declined / released, copies and foreign UIDs untouched), a UTC
+  event turned into a series across DST, the calendar FilterType window, a completed task sent
+  again with its rule, FolderSync retried with the previous key, Ping with an unreadable policy;
 * e2e steps `eas-legacy` and `eas-pim` (`scripts/e2e/steps/`, see [e2e.md](e2e.md)).

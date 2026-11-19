@@ -49,6 +49,8 @@ export interface PimUser {
   addresses: string[];
   /** Settings → Region time zone (IANA), null when not set. */
   timeZone: string | null;
+  /** Domain of the user: rooms of this domain are booked by the user's meetings (none without). */
+  domainId: string | null;
 }
 
 export interface RenderContext {
@@ -95,7 +97,13 @@ export interface PimClassModule<Row = unknown> {
   folders(userId: string): Promise<PimFolder[]>;
   /** The collection when `collectionId` is one of the user's, else null. */
   collection(userId: string, collectionId: string): Promise<PimCollection | null>;
-  states(col: PimCollection, filterType: number | undefined, now: Date): Promise<PimItemState[]>;
+  /**
+   * The items as the change detection sees them. `held`: the ServerIds the device holds — a
+   * module may leave out items outside the FilterType window the device does not hold (they
+   * are neither added nor changed), so a Sync does not read a whole calendar history.
+   * Without `held` only the in-window items count.
+   */
+  states(col: PimCollection, filterType: number | undefined, now: Date, held?: ReadonlySet<string>): Promise<PimItemState[]>;
   load(col: PimCollection, ids: string[]): Promise<Row[]>;
   rowId(row: Row): string;
   rowVersion(row: Row): bigint;
