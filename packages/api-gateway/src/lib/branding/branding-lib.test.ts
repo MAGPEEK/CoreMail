@@ -267,7 +267,7 @@ test('image: slot rules — type, size, dimensions, square favicon, jpeg only fo
 
 const BRAND: PublicBranding = {
   version: 7, productName: 'Acme </title><script>alert(1)</script>', primaryColor: '#112233', headerColor: null,
-  allowUserAccent: true, showPoweredBy: false, loginText: '</script><script>alert(2)</script>\u2028',
+  allowUserAccent: true, showPoweredBy: false, defaultBackground: 'none', loginText: '</script><script>alert(2)</script>\u2028',
   footerLinks: [{ label: 'Impressum', url: 'https://example.org/impressum' }],
   assets: { logoLight: `/branding/assets/${'b'.repeat(64)}.svg`, logoDark: null, favicon: null, loginBackground: null },
 };

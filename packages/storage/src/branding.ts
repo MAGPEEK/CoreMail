@@ -12,6 +12,7 @@
  * here too (pure functions, no database).
  */
 import { prisma } from './prisma/index.js';
+import { normalizeDefaultBackground, type DefaultBackground } from './user-background.js';
 
 export const DEFAULT_PRODUCT_NAME = 'CoreMail';
 export const DEFAULT_PRIMARY_COLOR = '#0078d4';
@@ -40,6 +41,8 @@ export interface PublicBranding {
   headerColor: string | null;
   allowUserAccent: boolean;
   showPoweredBy: boolean;
+  /** 10.1: webmail background of users without an own choice */
+  defaultBackground: DefaultBackground;
   loginText: string;
   footerLinks: BrandingFooterLink[];
   assets: Record<BrandingAssetSlot, string | null>;
@@ -59,6 +62,8 @@ export interface BrandingRow {
   footerLinks: unknown;
   allowUserAccent: boolean;
   showPoweredBy: boolean;
+  /** 10.1 (optional: rows of older callers / fakes) */
+  defaultBackground?: string | null;
 }
 
 // ── Validation (pure) ─────────────────────────────────────────────────────────
@@ -180,6 +185,7 @@ export function toPublicBranding(row: BrandingRow | null, env: Record<string, st
     headerColor: normalizeHexColor(row?.headerColor),
     allowUserAccent: row?.allowUserAccent ?? true,
     showPoweredBy: row?.showPoweredBy ?? true,
+    defaultBackground: normalizeDefaultBackground(row?.defaultBackground) ?? 'none',
     loginText: row?.loginText ?? '',
     footerLinks: storedFooterLinks(row?.footerLinks ?? []),
     assets: {

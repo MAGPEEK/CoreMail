@@ -41,10 +41,10 @@ export function readPngHeader(buf: Buffer): PngHeader | null {
   };
 }
 
-/** Whether decodePng() handles this header. */
-export function isDecodable(h: PngHeader): boolean {
+/** Whether decodePng() handles this header (`maxPixels`: decoded size cap, default 2048²). */
+export function isDecodable(h: PngHeader, maxPixels = MAX_PIXELS): boolean {
   return h.bitDepth === 8 && h.interlace === 0 && CHANNELS[h.colorType] !== undefined
-    && h.width > 0 && h.height > 0 && h.width * h.height <= MAX_PIXELS;
+    && h.width > 0 && h.height > 0 && h.width * h.height <= maxPixels;
 }
 
 function paeth(a: number, b: number, c: number): number {
@@ -86,10 +86,10 @@ function unfilter(raw: Buffer, width: number, height: number, bpp: number): Buff
 }
 
 /** Decodes an 8-bit, non-interlaced PNG to RGBA. */
-export function decodePng(buf: Buffer): RgbaImage {
+export function decodePng(buf: Buffer, maxPixels = MAX_PIXELS): RgbaImage {
   const h = readPngHeader(buf);
   if (!h) throw new PngUnsupportedError('not a PNG');
-  if (!isDecodable(h)) throw new PngUnsupportedError('PNG: only 8-bit, non-interlaced images are supported');
+  if (!isDecodable(h, maxPixels)) throw new PngUnsupportedError('PNG: only 8-bit, non-interlaced images are supported');
   const idat: Buffer[] = [];
   let palette: Buffer | null = null;
   let alpha: Buffer | null = null;

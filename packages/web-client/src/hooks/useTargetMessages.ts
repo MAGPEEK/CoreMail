@@ -18,12 +18,17 @@ export interface TargetMessage {
   flagStartAt: string | null;
   flagDueAt: string | null;
   flagReminderAt: string | null;
+  /** 10.1: what reply / forward of the ribbon need */
+  subject: string;
+  fromAddr: string;
+  toAddrs: string[];
 }
 
 function toTarget(m: MessageSummary): TargetMessage {
   return {
     id: m.id, flags: m.flags, pinnedAt: m.pinnedAt ?? null, categoryIds: (m.categories ?? []).map((c) => c.id),
     flagStatus: followUpStatusOf(m), flagStartAt: m.flagStartAt ?? null, flagDueAt: m.flagDueAt ?? null, flagReminderAt: m.flagReminderAt ?? null,
+    subject: m.subject, fromAddr: m.fromAddr, toAddrs: m.toAddrs ?? [],
   };
 }
 

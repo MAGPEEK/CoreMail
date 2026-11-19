@@ -83,7 +83,9 @@ test('card layout: header row on top, fields, body, the formatting bar at the bo
   assert.match(pane, /\{formatBarShown && \(\s*<ComposeFormatBar/, 'no formatting toolbar in plain text or when switched off');
   assert.match(pane, /formatBarVisible\(plainText, composePrefs\.composeFormatBar\)/, 'the roaming preference decides');
   assert.match(pane, /md:rounded-xl md:border md:border-line md:shadow-md/, 'a raised card inline from 768 px');
-  assert.match(pane, /bg-canvas md:p-3/, 'the pane around the card is tinted, 12 px margin');
+  // 10.1: the card is the reading-pane card of the floating layout (lib/paneLayout.ts)
+  assert.doesNotMatch(pane, /bg-canvas md:p-3/, 'no second margin around the card');
+  assert.match(pane, /animate-compose-in \$\{ON_PICTURE\}/, 'arrives with a short slide; translucent over a background picture');
   assert.match(pane, /window: 'relative flex flex-col flex-1 min-w-0 min-h-0 bg-surface'/, 'the own window has no margin or shadow');
   assert.match(pane, /editor\?\.isEmpty && \(/, 'body placeholder while the body is empty');
   for (const f of ['ComposeCommandRow', 'ComposeFormatBar']) {

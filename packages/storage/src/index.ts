@@ -45,6 +45,7 @@ export * from './realtime/announce.js';
 export * from './mail-flow.js';
 export * from './mailbox-access-audit.js';
 export * from './profile-photo.js';
+export * from './user-background.js';
 export * from './shared-sent-copy.js';
 export * from './legacy-dn.js';
 export * from './mapi-endpoints.js';

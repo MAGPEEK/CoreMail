@@ -28,3 +28,13 @@ export function businessHours(s: Pick<CalendarSettings, 'workDays' | 'workStart'
   if (s.workDays.length === 0 || s.workStart >= s.workEnd) return false;
   return { daysOfWeek: [...s.workDays], startTime: s.workStart, endTime: s.workEnd };
 }
+
+/**
+ * Calendar of a new event: the own default, else the first own calendar; never a
+ * shared or read-only one ('' = none writable). Used by the calendar and by
+ * "Neue E-Mail → Ereignis" in the mail view (10.1).
+ */
+export function defaultWritableCalendarId(calendars: readonly { id: string; isDefault?: boolean; shared?: boolean; permission?: string }[]): string {
+  const writable = calendars.filter((c) => c.permission !== 'READ' && !c.shared);
+  return writable.find((c) => c.isDefault)?.id ?? writable[0]?.id ?? '';
+}

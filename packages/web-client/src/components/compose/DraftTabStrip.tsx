@@ -9,6 +9,7 @@ import { useUiStore } from '../../store/ui.js';
 import { tabTitle } from '../../lib/composeTabs.js';
 import { closeStripDraft } from './composeRuntime.js';
 import { fmt, useT } from '../../i18n/useT.js';
+import { PANE_CARD_BASE } from '../../lib/paneLayout.js';
 
 function closeFromStrip(key: string, savedText: string, failedText: string): void {
   closeStripDraft(key).then(({ saved }) => {
@@ -23,7 +24,7 @@ export function DraftTabStrip() {
   const activate = useUiStore((s) => s.activateCompose);
   if (tabs.length === 0) return null;
   return (
-    <nav aria-label={t('compose_strip_label')} className="shrink-0 border-t border-line bg-surface-2 px-2 py-1 coremail-no-print">
+    <nav aria-label={t('compose_strip_label')} className={`shrink-0 max-md:border-t bg-surface-2 ${PANE_CARD_BASE} px-2 py-1 coremail-no-print`}>
       <ul className="flex gap-1 overflow-x-auto">
         {tabs.map((tab) => {
           const title = tabTitle(tab.subject, t('compose_no_subject'));

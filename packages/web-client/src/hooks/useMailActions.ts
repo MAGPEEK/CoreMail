@@ -125,6 +125,8 @@ export function useMailActions() {
       return false;
     }
     invalidate();
+    // 10.1: the ribbon's "Verschieben in" offers the last targets first
+    if (action === 'move' && targetFolderId) useUiStore.getState().noteMoveTarget(targetFolderId);
     // Undo is only offered after the server confirmed the action
     const inboxId = folderIdByName('INBOX', ref);
     showUndoToast({
@@ -165,5 +167,23 @@ export function useMailActions() {
     return ids.map((id) => ({ id, folderId: known.get(id) ?? fallbackFolderId }));
   }, [qc]);
 
-  return { runWithUndo, deletePermanently, setState, invalidate, locateIds };
+  /**
+   * "Alle als gelesen markieren" of a folder of the shown mailbox (folder pane
+   * menu, ribbon): the unread messages of its first 500 are marked read.
+   * Returns how many changed.
+   */
+  const markFolderRead = useCallback(async (folderId: string): Promise<number> => {
+    const ref = activeRef();
+    if (refuseReadOnly(ref)) return 0;
+    try {
+      const list = await api.get<{ messages: { id: string; flags: string[] }[] }>(`${mailApiBase(ref)}/folders/${folderId}/messages?limit=500`);
+      const unread = list.messages.filter((m) => !m.flags.includes('\\Seen')).map((m) => m.id);
+      if (unread.length) await bulk({ ids: unread, action: 'read' }, ref);
+      return unread.length;
+    } finally {
+      invalidate();
+    }
+  }, [bulk, invalidate, refuseReadOnly]);
+
+  return { runWithUndo, deletePermanently, setState, invalidate, locateIds, markFolderRead };
 }

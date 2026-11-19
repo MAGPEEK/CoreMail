@@ -5,7 +5,7 @@ import { useDraggable } from '@dnd-kit/core';
 import {
   Paperclip, Pin, Archive, Trash2, Mail, MailOpen, Flag, FlagOff,
   Forward, Reply, ReplyAll, AlertOctagon, Clock, FolderInput, ShieldOff, Download, Code, Tag,
-  Search, X, ListFilter, Settings, ShieldAlert, CalendarClock, CheckCircle2,
+  Search, X, ListFilter, Settings, ShieldAlert, CalendarClock, CheckCircle2, ChevronDown,
 } from 'lucide-react';
 import { RuleEditorModal } from './RuleEditorModal.js';
 import type { RulePreset } from '../api/rule-types.js';
@@ -29,7 +29,8 @@ import { useActiveMailbox } from '../hooks/useActiveMailbox.js';
 import { useWebmailFeatures } from '../hooks/useWebmailFeatures.js';
 import { READ_ONLY_HINT } from '../lib/mailboxContext.js';
 
-import { useT } from '../i18n/useT.js';
+import { fmt, useT } from '../i18n/useT.js';
+import { DATE_GROUP_LABELS, dateGroupsApply, groupByDate, type DateGroupId } from '../lib/dateGroups.js';
 import { usePreferences, useRegional } from '../store/preferences.js';
 import { formatDate, formatListDate } from '../lib/regionalFormat.js';
 import { followUpStatusOf } from '../lib/followUp.js';
@@ -46,6 +47,9 @@ function hasOperatorSyntax(q: string): boolean {
 interface Props {
   folderId: string;
 }
+
+/** DOM id of a date group header row (10.1). */
+const groupRowId = (key: string) => `grp-row-${key}`;
 
 /** List date in the user's regional settings (today: time, yesterday: "Gestern"). */
 function ListDate({ iso }: { iso: string }) {
@@ -143,7 +147,7 @@ function MessageRow({
           : checked
             ? 'bg-accent/5'
             : 'hover:bg-surface-2 hover:shadow-sm'
-      } ${isUnread ? 'border-l-2 border-l-accent-fg' : 'border-l-2 border-l-transparent'} ${isDragging ? 'opacity-30' : ''}`}
+      } ${isDragging ? 'opacity-30' : ''}`}
       // the three undefined props drop the button semantics dnd-kit's `attributes` add
       role="row"
       aria-roledescription={undefined}
@@ -151,8 +155,10 @@ function MessageRow({
       aria-disabled={undefined}
       tabIndex={tabStop ? 0 : -1}
     >
+      {/* 10.1: unread = 3 px accent bar on the left (plus accent subject / time) */}
+      {isUnread && <span aria-hidden="true" className="absolute left-0 top-1 bottom-1 w-[3px] rounded-r-full bg-accent" />}
       <div role="gridcell" className="flex items-center gap-2.5">
-        {/* Checkbox / Unread-Dot (24 px target around the 16 px box) */}
+        {/* Checkbox (24 px target around the 16 px box) */}
         <button
           onClick={onToggleCheck}
           tabIndex={tabStop ? 0 : -1}
@@ -205,9 +211,7 @@ function MessageRow({
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between gap-2">
             <span className={`text-sm truncate flex items-center gap-1 ${isUnread ? 'font-semibold text-fg' : 'text-fg-muted'}`}>
-              {isUnread && (
-                <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent animate-pulse-soft shrink-0" />
-              )}
+              {isUnread && <span className="sr-only">{t('mail_cmd_unread')}: </span>}
               {isPinned && <Pin size={11} className="text-accent-fg shrink-0" />}
               <span className="truncate">{msg.fromAddr}</span>
             </span>
@@ -225,11 +229,11 @@ function MessageRow({
               )}
               {hasAttachments && <Paperclip size={12} className="text-fg-subtle" />}
               {isSnoozed && <Clock size={12} className="text-warning-fg" />}
-              <span className="text-xs text-fg-subtle transition-opacity duration-150 group-hover:opacity-0"><ListDate iso={msg.date} /></span>
+              <span className={`text-xs transition-opacity duration-150 group-hover:opacity-0 ${isUnread ? 'text-accent-fg font-medium' : 'text-fg-subtle'}`}><ListDate iso={msg.date} /></span>
             </div>
           </div>
           <p className={`text-sm truncate mt-0.5 transition-colors duration-150 ${
-            isUnread ? 'font-medium text-fg' : 'text-fg-muted'
+            isUnread ? 'font-medium text-accent-fg' : 'text-fg-muted'
           } group-hover:text-accent-fg group-hover:underline group-hover:underline-offset-2`}>
             {msg.subject || '(kein Betreff)'}
           </p>
@@ -437,11 +441,33 @@ export function MessageList({ folderId }: Props) {
     return () => io.disconnect();
   }, [hasNextPage, isFetchingNextPage, fetchNextPage, displayMessages.length]);
 
-  const orderedIds = useMemo(() => displayMessages.map((m) => m.id), [displayMessages]);
+  // 10.1: date groups (Heute, Gestern, Diese Woche, …) — folder lists in date order only;
+  // collapsed groups per folder for this session, their rows leave the grid
+  const regional = useRegional();
+  const weekStart = usePreferences((s) => s.prefs.calendar.weekStart);
+  const groupsOn = !searching && dateGroupsApply(sortBy, groupByConversation);
+  const folderKey = `${mailbox.key}:${folderId}`;
+  const collapsedGroups = useUiStore((s) => s.collapsedDateGroups[folderKey]);
+  const toggleDateGroup = useUiStore((s) => s.toggleDateGroup);
+  const runs = useMemo(
+    () => (groupsOn ? groupByDate(displayMessages, new Date(), regional.timeZone, weekStart) : null),
+    [groupsOn, displayMessages, regional.timeZone, weekStart],
+  );
+  const visibleMessages = useMemo(
+    () => (runs ? runs.flatMap((r) => (collapsedGroups?.includes(r.group) ? [] : r.items)) : displayMessages),
+    [runs, collapsedGroups, displayMessages],
+  );
+  const orderedIds = useMemo(() => visibleMessages.map((m) => m.id), [visibleMessages]);
+  /** DOM ids of the grid rows in visual order (group headers + messages) — the arrow keys walk them. */
+  const navIds = useMemo(() => (runs
+    ? runs.flatMap((r) => [groupRowId(r.key), ...(collapsedGroups?.includes(r.group) ? [] : r.items.map((m) => `msg-row-${m.id}`))])
+    : orderedIds.map((id) => `msg-row-${id}`)), [runs, collapsedGroups, orderedIds]);
 
-  // Roving tabindex of the grid: the row that last had focus, else the open one, else the first
+  // Roving tabindex of the grid: the row (or group header) that last had focus, else the open one, else the first
   const [focusedRowId, setFocusedRowId] = useState<string | null>(null);
-  const tabStopId = orderedIds[tabStopIndex(
+  const [focusedGroup, setFocusedGroup] = useState<string | null>(null);
+  const headerTabStop = focusedGroup !== null && navIds.includes(groupRowId(focusedGroup)) ? focusedGroup : null;
+  const tabStopId = headerTabStop ? undefined : orderedIds[tabStopIndex(
     orderedIds.length,
     focusedRowId ? orderedIds.indexOf(focusedRowId) : -1,
     selectedMessageId ? orderedIds.indexOf(selectedMessageId) : -1,
@@ -449,25 +475,42 @@ export function MessageList({ folderId }: Props) {
   const focusRow = (id: string | undefined) => {
     if (!id) return;
     setFocusedRowId(id);
+    setFocusedGroup(null);
     document.getElementById(`msg-row-${id}`)?.focus();
   };
-  /** Row that holds the keyboard focus (the row itself or a button in it), if any. */
+  /** Message row that holds the keyboard focus (the row itself or a button in it), if any. */
   const rowWithFocus = (): string | undefined => {
     const active = document.activeElement as HTMLElement | null;
     if (!active || !scrollRef.current?.contains(active)) return undefined;
-    return active.closest('[role="row"]')?.id.replace('msg-row-', '');
+    const id = active.closest('[role="row"]')?.id ?? '';
+    return id.startsWith('msg-row-') ? id.replace('msg-row-', '') : undefined;
   };
   const handleGridFocus = (e: React.FocusEvent) => {
-    if ((e.target as HTMLElement).getAttribute('role') === 'row') setFocusedRowId(e.target.id.replace('msg-row-', ''));
+    const el = e.target as HTMLElement;
+    if (el.getAttribute('role') !== 'row') return;
+    if (el.id.startsWith('msg-row-')) { setFocusedRowId(el.id.replace('msg-row-', '')); setFocusedGroup(null); }
+    else if (el.dataset.groupKey) setFocusedGroup(el.dataset.groupKey);
   };
   const handleGridKeyDown = (e: React.KeyboardEvent) => {
     const row = e.target as HTMLElement;
     if (row.getAttribute('role') !== 'row' || e.ctrlKey || e.metaKey || e.altKey) return;
-    const idx = orderedIds.indexOf(row.id.replace('msg-row-', ''));
-    const to = listTarget(e.key, idx, orderedIds.length);
+    const group = row.dataset.group as DateGroupId | undefined;
+    if (group) {
+      const open = !collapsedGroups?.includes(group);
+      // Enter / Space toggle a group header; → opens, ← closes (tree-like)
+      if (e.key === 'Enter' || e.key === ' ' || (e.key === 'ArrowRight' && !open) || (e.key === 'ArrowLeft' && open)) {
+        e.preventDefault();
+        toggleDateGroup(folderKey, group);
+        return;
+      }
+    }
+    const idx = navIds.indexOf(row.id);
+    const to = listTarget(e.key, idx, navIds.length);
     if (to === null || to === idx) return;
     e.preventDefault();
-    focusRow(orderedIds[to]);
+    const target = navIds[to]!;
+    if (target.startsWith('msg-row-')) focusRow(target.replace('msg-row-', ''));
+    else document.getElementById(target)?.focus();
   };
 
   const allChecked = orderedIds.length > 0 && orderedIds.every((id) => selectedIds.has(id));
@@ -801,7 +844,7 @@ export function MessageList({ folderId }: Props) {
   };
 
   return (
-    <div className="w-full h-full border-r border-line bg-surface flex flex-col overflow-hidden">
+    <div className="w-full h-full flex flex-col overflow-hidden">
       {/* Search row */}
       <div className="px-3 py-2 border-b border-line flex items-center gap-2 relative">
         <div className="relative flex-1">
@@ -886,27 +929,57 @@ export function MessageList({ folderId }: Props) {
             role="grid"
             aria-label="Nachrichtenliste"
             aria-multiselectable="true"
-            aria-rowcount={hasNextPage ? -1 : displayMessages.length}
+            aria-rowcount={hasNextPage ? -1 : navIds.length}
             onKeyDown={handleGridKeyDown}
             onFocus={handleGridFocus}
           >
-          {displayMessages.map((msg, i) => (
-            <MessageRow
-              key={msg.id}
-              rowIndex={i + 1}
-              msg={msg}
-              tabStop={msg.id === tabStopId}
-              selected={msg.id === selectedMessageId && selectedIds.size === 0}
-              checked={selectedIds.has(msg.id)}
-              onClick={handleRowClick(msg)}
-              onToggleCheck={(e) => { e.stopPropagation(); toggleSelection(msg.id); }}
-              onContextMenu={handleContextMenu(msg)}
-              onQuickAction={(a) => quickAction(msg, a)}
-              density={density}
-              folders={folders}
-              readOnly={readOnly}
-            />
-          ))}
+          {(() => {
+            let rowIndex = 0;
+            const row = (msg: MessageSummary) => (
+              <MessageRow
+                key={msg.id}
+                rowIndex={++rowIndex}
+                msg={msg}
+                tabStop={msg.id === tabStopId}
+                selected={msg.id === selectedMessageId && selectedIds.size === 0}
+                checked={selectedIds.has(msg.id)}
+                onClick={handleRowClick(msg)}
+                onToggleCheck={(e) => { e.stopPropagation(); toggleSelection(msg.id); }}
+                onContextMenu={handleContextMenu(msg)}
+                onQuickAction={(a) => quickAction(msg, a)}
+                density={density}
+                folders={folders}
+                readOnly={readOnly}
+              />
+            );
+            if (!runs) return displayMessages.map(row);
+            return runs.map((run) => {
+              const open = !collapsedGroups?.includes(run.group);
+              const label = DATE_GROUP_LABELS[run.group];
+              return (
+                <div key={run.key} role="rowgroup" aria-label={fmt(t('date_groups_label'), { group: label })}>
+                  <div
+                    id={groupRowId(run.key)}
+                    role="row"
+                    aria-rowindex={++rowIndex}
+                    aria-expanded={open}
+                    data-group={run.group}
+                    data-group-key={run.key}
+                    tabIndex={headerTabStop === run.key ? 0 : -1}
+                    onClick={() => toggleDateGroup(folderKey, run.group)}
+                    className="sticky top-0 z-10 flex items-center gap-1.5 px-3 h-8 bg-surface border-b border-line text-xs font-semibold text-fg-muted cursor-pointer select-none hover:text-fg outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-fg"
+                  >
+                    <span role="rowheader" className="flex items-center gap-1.5" title={fmt(t('date_group_toggle'), { group: label })}>
+                      <ChevronDown size={14} aria-hidden="true" className={`transition-transform duration-150 ${open ? '' : '-rotate-90'}`} />
+                      {label}
+                      <span className="font-normal text-fg-subtle">({run.items.length})</span>
+                    </span>
+                  </div>
+                  {open && run.items.map(row)}
+                </div>
+              );
+            });
+          })()}
           </div>
         )}
         {hasNextPage && !isLoading && (

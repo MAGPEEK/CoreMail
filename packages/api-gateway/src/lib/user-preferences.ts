@@ -22,6 +22,16 @@ const ID = /^[A-Za-z0-9_-]{1,64}$/;
 const IDENTITY_KEY = /^(own|shared:[A-Za-z0-9_-]{1,64})$/;
 export const MAX_HIDDEN_CALENDARS = 200;
 export const MAX_SIGNATURE_IDENTITIES = 50;
+export const MAX_FAVORITE_FOLDERS = 50;
+/**
+ * 10.1: built-in webmail backgrounds (KEEP IN STEP with storage
+ * BUILTIN_BACKGROUND_IDS and web-client lib/backgrounds.ts — the test checks both).
+ */
+export const BUILTIN_BACKGROUNDS = ['lake', 'dawn', 'forest', 'coast', 'dunes', 'waves', 'aurora', 'neutral'] as const;
+/** none | custom (the uploaded image) | builtin:<id>; null = the organisation default (branding). */
+const BACKGROUND = new RegExp(`^(none|custom|builtin:(${BUILTIN_BACKGROUNDS.join('|')}))$`);
+/** Favourite folder: a folder id or the name of a default folder (INBOX, Sent, …). */
+const FOLDER_REF = ID;
 
 /** IANA time zone known to this runtime, or '' (= the browser's zone). */
 export function isTimeZone(tz: string): boolean {
@@ -92,6 +102,18 @@ const FIELDS = {
     defaults: z.record(z.string().regex(IDENTITY_KEY), signatureDefault)
       .refine((r) => Object.keys(r).length <= MAX_SIGNATURE_IDENTITIES, 'too many identities'),
   },
+  // 10.1: webmail layout
+  appearance: {
+    background: z.string().regex(BACKGROUND).nullable(),
+  },
+  ribbon: {
+    collapsed: z.boolean(),
+    layout: z.enum(['simplified', 'classic']),
+  },
+  folders: {
+    favorites: z.array(z.string().regex(FOLDER_REF)).max(MAX_FAVORITE_FOLDERS)
+      .refine((f) => new Set(f).size === f.length, 'duplicate folder'),
+  },
 } as const;
 
 type Fields = typeof FIELDS;
@@ -122,6 +144,9 @@ export const DEFAULT_PREFERENCES: UserPreferences = Object.freeze({
     showWeekNumbers: true, hiddenCalendarIds: [],
   },
   signatures: { defaults: {} },
+  appearance: { background: null },
+  ribbon: { collapsed: false, layout: 'simplified' },
+  folders: { favorites: ['INBOX', 'Sent', 'Drafts', 'Trash'] },
 }) as UserPreferences;
 
 const SECTIONS = Object.keys(FIELDS) as SectionName[];

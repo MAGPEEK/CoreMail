@@ -21,8 +21,7 @@
  * `settings` / `profile`; other users pick a new photo up through the version in
  * the lookup and the ETag.
  */
-import express, { Router, type Router as RouterType, type Request, type Response, type NextFunction } from 'express';
-import multer from 'multer';
+import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { createLogger } from '@coremail/core';
 import { saveProfilePhoto, removeProfilePhoto, profilePhotoInfo } from '@coremail/storage';
 import { requireAuth } from '../middleware/auth.js';
@@ -31,6 +30,7 @@ import { createUserRateLimiter, envInt } from '../lib/user-rate-limit.js';
 import { processProfilePhoto, PhotoError, PHOTO_ERROR_STATUS, MAX_PHOTO_BYTES } from '../lib/profile-photo/image.js';
 import { lookupAddresses, lookupPhotos, visiblePhotoKey, MAX_LOOKUP_ADDRESSES } from '../lib/profile-photo/directory.js';
 import { sendPhoto } from '../lib/profile-photo/serve.js';
+import { imageUploadBody } from '../lib/profile-photo/upload-body.js';
 
 const log = createLogger('profile-photo');
 
@@ -41,35 +41,10 @@ export const photoUploadRateLimiter = createUserRateLimiter({
   windowSec: Math.max(1, envInt('PROFILE_PHOTO_UPLOAD_WINDOW_SEC', 600)),
 });
 
-function tooLarge(res: Response): void {
-  res.setHeader('Connection', 'close');
-  res.status(413).json({ error: `Foto darf höchstens ${MAX_PHOTO_BYTES / 1024 / 1024} MB groß sein`, code: 'SIZE' });
-}
-
-const rawBody = express.raw({ type: () => true, limit: MAX_PHOTO_BYTES });
-const multipartBody = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_PHOTO_BYTES, files: 1, fields: 5, parts: 6 },
-}).single('photo');
-
 /** Reads the upload (raw body or multipart field `photo`) into `req.body` as a Buffer. */
-function photoBody(req: Request, res: Response, next: NextFunction): void {
-  const declared = Number(req.get('content-length') ?? 'NaN');
-  // multipart framing adds a little; the file itself is checked by multer
-  if (Number.isFinite(declared) && declared > MAX_PHOTO_BYTES + 64 * 1024) { tooLarge(res); return; }
-  const multipart = /^multipart\/form-data/i.test(req.get('content-type') ?? '');
-  const parse = multipart ? multipartBody : rawBody;
-  parse(req, res, (err?: unknown) => {
-    if (err) {
-      const e = err as { type?: string; code?: string };
-      if (e.type === 'entity.too.large' || e.code === 'LIMIT_FILE_SIZE') { tooLarge(res); return; }
-      res.status(400).json({ error: 'Upload fehlgeschlagen', code: 'TYPE' });
-      return;
-    }
-    if (multipart) req.body = (req as Request & { file?: { buffer: Buffer } }).file?.buffer ?? Buffer.alloc(0);
-    next();
-  });
-}
+const photoBody = imageUploadBody({
+  maxBytes: MAX_PHOTO_BYTES, field: 'photo', tooLargeMessage: `Foto darf höchstens ${MAX_PHOTO_BYTES / 1024 / 1024} MB groß sein`,
+});
 
 // ── Own photo ─────────────────────────────────────────────────────────────────
 

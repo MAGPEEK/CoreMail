@@ -15,6 +15,8 @@ import { MailboxAccessLog } from '../components/MailboxAccessLog.js';
 import { QuotaIndicator } from '../components/QuotaIndicator.js';
 import { quotaColor, type QuotaLevel } from '../lib/quota.js';
 import { SignatureSettings } from '../components/settings/SignatureSettings.js';
+import { PANE_CARD_CLASS } from '../lib/paneLayout.js';
+import { BackgroundSettings } from '../components/settings/BackgroundSettings.js';
 import { ProfilePhotoSettings } from '../components/settings/ProfilePhotoSettings.js';
 import { ReadingSettings } from '../components/settings/ReadingSettings.js';
 import { ComposeSettings } from '../components/settings/ComposeSettings.js';
@@ -374,8 +376,8 @@ function ThemeSection() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-lg font-semibold text-fg">Design</h2>
-        <p className="text-sm text-fg-subtle mt-0.5">Erscheinungsbild und Akzentfarbe des Webclients</p>
+        <h2 className="text-lg font-semibold text-fg">Darstellung</h2>
+        <p className="text-sm text-fg-subtle mt-0.5">Farbschema, Akzentfarbe und Hintergrund des Webclients</p>
       </div>
 
       {/* Color scheme */}
@@ -465,6 +467,9 @@ function ThemeSection() {
             : 'Die Akzentfarbe wird von Ihrer Organisation vorgegeben und kann nicht geändert werden.'}
         </p>
       </fieldset>
+
+      {/* 10.1: background picture behind the panes */}
+      <BackgroundSettings />
     </div>
   );
 }
@@ -2470,9 +2475,11 @@ export function SettingsPage() {
   const SectionComp = SECTION_MAP[shown];
 
   return (
-    <div className="flex flex-col md:flex-row flex-1 min-w-0 overflow-hidden bg-surface">
+    // 10.1: one card floating on the canvas (lib/paneLayout.ts) — the background shows around it
+    <div className="flex flex-1 min-w-0 min-h-0 md:p-2">
+    <div className={`flex flex-col md:flex-row flex-1 min-w-0 ${PANE_CARD_CLASS}`}>
       {/* Left navigation — OWA style */}
-      <aside className="w-full md:w-56 shrink-0 max-md:max-h-[35%] md:border-r max-md:border-b border-line pt-4 bg-surface overflow-y-auto">
+      <aside className="w-full md:w-56 shrink-0 max-md:max-h-[35%] md:border-r max-md:border-b border-line pt-4 overflow-y-auto">
         {NAV.map(({ group, items }) => (
           <div key={group} className="mb-2">
             <p className="px-4 py-1 text-xs font-semibold text-fg-subtle uppercase tracking-wide">{t(group)}</p>
@@ -2487,11 +2494,12 @@ export function SettingsPage() {
       </aside>
 
       {/* Right content area — external clients needs more width for URLs */}
-      <div className="flex-1 min-w-0 overflow-y-auto p-4 md:p-8 bg-surface">
+      <div className="flex-1 min-w-0 overflow-y-auto p-4 md:p-8">
         <div className={shown === 'externalClients' ? 'max-w-5xl' : shown === 'recover' ? 'max-w-3xl' : 'max-w-xl'}>
           <SectionComp />
         </div>
       </div>
+    </div>
     </div>
   );
 }

@@ -8,13 +8,15 @@
  * inventory and the model are in docs/compose.md. Esc saves and closes,
  * Ctrl/⌘+Enter sends.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { EditorContent } from '@tiptap/react';
 import { Paperclip } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { ComposeCommandRow, type ComposeCommandActions, type ComposeCommandState, type ComposeStatusLine } from './ComposeCommandRow.js';
 import { ComposeFormatBar } from './ComposeFormatBar.js';
+import { useComposeRibbon } from '../../store/composeRibbon.js';
+import { ON_PICTURE } from '../../lib/paneLayout.js';
 import { MessageOptionsDialog, type MessageOptions } from './MessageOptionsDialog.js';
 import { AccessibilityDialog } from './AccessibilityDialog.js';
 import { ComposeFields } from './ComposeFields.js';
@@ -83,15 +85,15 @@ interface Props {
 }
 
 const ROOT_CLASS: Record<ComposeVariant, string> = {
-  // >= 768 px: the card floats on the tinted pane (12 px margin); < 768 px: full screen, above the top bar
+  // >= 768 px: the card is the reading-pane card of the floating layout (10.1); < 768 px: full screen, above the top bar
   // (z-50, later in the DOM); dialogs and menus stay above it
-  inline: 'relative flex flex-col flex-1 min-w-0 min-h-0 bg-canvas md:p-3 max-md:bg-surface max-md:fixed max-md:inset-0 max-md:z-50',
+  inline: 'relative flex flex-col flex-1 min-w-0 min-h-0 max-md:bg-surface max-md:fixed max-md:inset-0 max-md:z-50',
   window: 'relative flex flex-col h-full min-h-0 bg-surface',
 };
 
 /** The card itself: raised with a border and a soft shadow inline from 768 px, flat otherwise. */
 const CARD_CLASS: Record<ComposeVariant, string> = {
-  inline: 'relative flex flex-col flex-1 min-w-0 min-h-0 overflow-hidden bg-surface md:rounded-xl md:border md:border-line md:shadow-md',
+  inline: `relative flex flex-col flex-1 min-w-0 min-h-0 overflow-hidden bg-surface md:rounded-xl md:border md:border-line md:shadow-md animate-compose-in ${ON_PICTURE}`,
   window: 'relative flex flex-col flex-1 min-w-0 min-h-0 bg-surface',
 };
 
@@ -339,7 +341,8 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
   // ── Actions ──────────────────────────────────────────────────────────────────
   const busy = forwardLoading || draftLoading || scheduling;
   const blockers = sendBlockers({ to, cc, bcc });
-  const canSend = !busy && !blockers.missingTo;
+  // 10.1: Senden stays usable without a recipient and says what is missing (readyToSend)
+  const canSend = !busy;
   const invalidateMail = () => {
     void qc.invalidateQueries({ queryKey: ['messages'] });
     void qc.invalidateQueries({ queryKey: ['folders'] });
@@ -374,6 +377,11 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
   /** Checks before a send; false = do not send. */
   const readyToSend = (): boolean => {
     if (!canSend || busyAction.current || runtime.finished) return false;
+    if (blockers.missingTo) {
+      toast.error(t('compose_send_need_to_focus'));
+      refs.to.current?.focus();
+      return false;
+    }
     if (blockers.invalid.length) {
       toast.error(fmt(t('compose_invalid_recipients'), { list: blockers.invalid.slice(0, 3).join(', ') }));
       return false;
@@ -696,6 +704,23 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
     emojiOpen: popover?.kind === 'emoji', formatBarShown, inWindow: variant === 'window',
   };
 
+  // 10.1: the ribbon's compose tabs run the same commands (store/composeRibbon.ts);
+  // published after every render, so toggles (Fett, Lesebestätigung …) stay current there
+  const ribbonCompact = useComposeRibbon((s) => variant === 'inline' && s.shownFor === tab.key);
+  useLayoutEffect(() => {
+    if (variant !== 'inline') return;
+    useComposeRibbon.getState().publish({
+      tabKey: tab.key, editor, defaultSize: composeTextDefaults(composePrefs).fontSize, state: commandState,
+      actions: {
+        ...commandActions,
+        openLink,
+        toggleRequestReceipt: () => { setRequestReceipt((v) => !v); touch(); },
+      },
+      requestReceipt, receiptVisible: receiptOption.visible,
+    });
+  });
+  useEffect(() => () => useComposeRibbon.getState().withdraw(tab.key), [tab.key]);
+
   return (
     <section
       aria-label={fmt(t('compose_region'), { subject: subject.trim() || t('compose_new_message') })}
@@ -713,7 +738,7 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
       className={ROOT_CLASS[variant]}
     >
       <div className={CARD_CLASS[variant]}>
-        <ComposeCommandRow state={commandState} actions={commandActions} status={statusLine} />
+        <ComposeCommandRow state={commandState} actions={commandActions} status={statusLine} compact={ribbonCompact} />
         <div className="flex-1 min-h-0 overflow-y-auto">
           <ComposeFields
             visibility={visibility}

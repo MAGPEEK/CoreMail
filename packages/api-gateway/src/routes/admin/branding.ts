@@ -3,7 +3,8 @@
  *
  *   GET    /                     branding object (same shape as GET /api/v1/branding)
  *   PUT    /                     partial update: productName, primaryColor, headerColor,
- *                                allowUserAccent, showPoweredBy, loginText, footerLinks
+ *                                allowUserAccent, showPoweredBy, loginText, footerLinks,
+ *                                defaultBackground (10.1: none | builtin:<id>)
  *                                → object + `warnings` (colours below 3:1 are saved but flagged)
  *   POST   /assets/:slot         raw image body (Content-Type image/png | image/webp |
  *                                image/svg+xml, loginBackground also image/jpeg) → object
@@ -33,9 +34,9 @@ import { createHash } from 'node:crypto';
 import express, { Router, type Router as RouterType, type Request, type Response, type NextFunction } from 'express';
 import {
   prisma, getObjectStore, loadBrandingRow, toPublicBranding, brandingDefaults,
-  normalizeProductName, normalizeHexColor, normalizeLoginText, normalizeFooterLinks,
+  normalizeProductName, normalizeHexColor, normalizeLoginText, normalizeFooterLinks, normalizeDefaultBackground,
   BRANDING_ASSET_SLOTS, BRANDING_KEY_PREFIX,
-  type BrandingAssetSlot, type BrandingRow, type BrandingFooterLink, type PublicBranding, type BrandingDefaults,
+  type BrandingAssetSlot, type BrandingRow, type BrandingFooterLink, type PublicBranding, type BrandingDefaults, type DefaultBackground,
 } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import { requireArea } from '../../middleware/auth.js';
@@ -54,7 +55,7 @@ type FullRow = BrandingRow & Record<`${BrandingAssetSlot}Type`, string | null>;
 const KEY_FIELD = (slot: BrandingAssetSlot) => `${slot}Key` as const;
 const TYPE_FIELD = (slot: BrandingAssetSlot) => `${slot}Type` as const;
 
-const PUT_FIELDS = ['productName', 'primaryColor', 'headerColor', 'allowUserAccent', 'showPoweredBy', 'loginText', 'footerLinks'] as const;
+const PUT_FIELDS = ['productName', 'primaryColor', 'headerColor', 'allowUserAccent', 'showPoweredBy', 'loginText', 'footerLinks', 'defaultBackground'] as const;
 
 function isSlot(v: string): v is BrandingAssetSlot {
   return (BRANDING_ASSET_SLOTS as readonly string[]).includes(v);
@@ -149,6 +150,7 @@ adminBrandingRouter.get('/', async (_req: Request, res: Response) => {
 type PutData = {
   productName?: string | null; primaryColor?: string | null; headerColor?: string | null;
   allowUserAccent?: boolean; showPoweredBy?: boolean; loginText?: string; footerLinks?: BrandingFooterLink[];
+  defaultBackground?: DefaultBackground;
 };
 
 /** Validates a PUT body → data, or `{ error, field }`. Exported for tests. */
@@ -188,6 +190,11 @@ export function parseBrandingPut(body: unknown): { data: PutData } | { error: st
     if (!Array.isArray(v)) return { error: v.error, field: 'footerLinks' };
     data.footerLinks = v;
   }
+  if ('defaultBackground' in b) {
+    const v = normalizeDefaultBackground(b['defaultBackground'] ?? 'none');
+    if (!v) return { error: 'defaultBackground must be none or builtin:<id> of a built-in background', field: 'defaultBackground' };
+    data.defaultBackground = v;
+  }
   return { data };
 }
 
@@ -204,6 +211,7 @@ adminBrandingRouter.put('/', async (req: Request, res: Response) => {
     ...(d.showPoweredBy !== undefined ? { showPoweredBy: d.showPoweredBy } : {}),
     ...(d.loginText !== undefined ? { loginText: d.loginText } : {}),
     ...(d.footerLinks !== undefined ? { footerLinks: d.footerLinks } : {}),
+    ...(d.defaultBackground !== undefined ? { defaultBackground: d.defaultBackground } : {}),
   });
   const changes: Record<string, { from: unknown; to: unknown }> = {};
   for (const [k, v] of Object.entries(d)) {
@@ -297,7 +305,7 @@ adminBrandingRouter.post('/reset', async (req: Request, res: Response) => {
     const row = await writeBranding({
       productName: null, primaryColor: null, headerColor: null,
       loginText: '', footerLinks: [],
-      allowUserAccent: true, showPoweredBy: true,
+      allowUserAccent: true, showPoweredBy: true, defaultBackground: 'none',
       ...assetsNull,
     });
     await deleteUnreferenced(referencedKeys(before), row);

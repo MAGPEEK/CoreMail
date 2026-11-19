@@ -119,15 +119,16 @@ test('asset URLs only for content-addressed branding keys', () => {
 test('toPublicBranding: contract shape, defaults for null fields, invalid stored values ignored', () => {
   assert.deepEqual(b.toPublicBranding(null, {}), {
     version: 0, productName: 'CoreMail', primaryColor: '#0078d4', headerColor: null,
-    allowUserAccent: true, showPoweredBy: true, loginText: '', footerLinks: [],
+    allowUserAccent: true, showPoweredBy: true, defaultBackground: 'none', loginText: '', footerLinks: [],
     assets: { logoLight: null, logoDark: null, favicon: null, loginBackground: null },
   });
   const p = b.toPublicBranding({
     version: 3, productName: 'Acme', primaryColor: '#112233', headerColor: '#445566',
     logoLightKey: `branding/${SHA}.svg`, logoDarkKey: null, faviconKey: `branding/${SHA}.png`, loginBackgroundKey: null,
     loginText: 'Welcome', footerLinks: [{ label: 'Impressum', url: 'https://example.org/impressum' }],
-    allowUserAccent: false, showPoweredBy: false,
+    allowUserAccent: false, showPoweredBy: false, defaultBackground: 'builtin:forest',
   }, { BRANDING_NAME: 'Env' });
+  assert.equal(p.defaultBackground, 'builtin:forest');
   assert.equal(p.version, 3);
   assert.equal(p.productName, 'Acme');
   assert.equal(p.headerColor, '#445566');
@@ -139,6 +140,8 @@ test('toPublicBranding: contract shape, defaults for null fields, invalid stored
   assert.equal(q.primaryColor, '#00ff00');
   assert.equal(q.headerColor, null);
   assert.deepEqual(q.footerLinks, []);
+  assert.equal(q.defaultBackground, 'none', 'missing column (older row) → none');
+  assert.equal(b.toPublicBranding({ ...{ version: 1, productName: null, primaryColor: null, headerColor: null, logoLightKey: null, logoDarkKey: null, faviconKey: null, loginBackgroundKey: null, loginText: '', footerLinks: [], allowUserAccent: true, showPoweredBy: true }, defaultBackground: 'builtin:evil' }).defaultBackground, 'none');
 });
 
 test('getBranding never throws; brandDisplayName prefers a branded product name', async () => {

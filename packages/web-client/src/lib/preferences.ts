@@ -22,6 +22,7 @@ export type MarkReadMode = 'immediately' | 'delay' | 'manual';
 export type ReceiptPolicy = 'never' | 'ask' | 'always';
 export type ComposeFormat = 'html' | 'plain';
 export type WeekStart = 0 | 1 | 6;
+export type RibbonLayout = 'simplified' | 'classic';
 
 export interface SignatureDefaults { newId: string | null; replyId: string | null }
 
@@ -47,12 +48,18 @@ export interface UserPreferences {
     showWeekNumbers: boolean; hiddenCalendarIds: string[];
   };
   signatures: { defaults: Record<string, SignatureDefaults> };
+  /** 10.1: webmail background — none | custom | builtin:<id>; null = the organisation default (lib/backgroundPrefs.ts) */
+  appearance: { background: string | null };
+  /** 10.1: the ribbon above the mail view */
+  ribbon: { collapsed: boolean; layout: RibbonLayout };
+  /** 10.1: favourite folders of the own mailbox — folder ids or default-folder names (lib/folderLists.ts) */
+  folders: { favorites: string[] };
 }
 
 export type SectionName = Exclude<keyof UserPreferences, 'version' | 'migratedAt'>;
 export type PreferencesPatch = { [S in SectionName]?: Partial<UserPreferences[S]> };
 
-export const SECTIONS: readonly SectionName[] = ['view', 'theme', 'regional', 'reading', 'compose', 'calendar', 'signatures'];
+export const SECTIONS: readonly SectionName[] = ['view', 'theme', 'regional', 'reading', 'compose', 'calendar', 'signatures', 'appearance', 'ribbon', 'folders'];
 
 export const DEFAULT_PREFERENCES: UserPreferences = {
   version: 1,
@@ -75,6 +82,9 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
     showWeekNumbers: true, hiddenCalendarIds: [],
   },
   signatures: { defaults: {} },
+  appearance: { background: null },
+  ribbon: { collapsed: false, layout: 'simplified' },
+  folders: { favorites: ['INBOX', 'Sent', 'Drafts', 'Trash'] },
 };
 
 function isRecord(v: unknown): v is Record<string, unknown> {

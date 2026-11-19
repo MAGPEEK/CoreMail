@@ -244,3 +244,11 @@ test('asset pre-check mirrors the API limits', () => {
   assert.equal(checkAssetFile('favicon', { type: 'image/gif', size: 10 }), 'TYPE');
   assert.equal(checkAssetFile('favicon', { type: 'image/png', size: 0 }), 'SIZE');
 });
+
+test('10.1 defaultBackground: none or builtin:<id>; anything else → none', () => {
+  assert.equal(parseBranding({}).defaultBackground, 'none');
+  assert.equal(parseBranding({ defaultBackground: 'builtin:lake' }).defaultBackground, 'builtin:lake');
+  for (const bad of ['custom', 'url(https://x)', 'builtin:', 'builtin:Lake', 7]) {
+    assert.equal(parseBranding({ defaultBackground: bad }).defaultBackground, 'none', String(bad));
+  }
+});

@@ -3,6 +3,8 @@
 // through the batched address lookup; ETag revalidation answers 304; a JPEG scan bomb is refused (415);
 // A removes it → 404;
 // an admin removes a re-uploaded photo (DELETE /admin/mailboxes/:id/photo) → 404 again.
+// 10.1: the webmail background — upload (≤ 2560 px JPEG, metadata stripped), own-only GET + ETag,
+// preference "custom", DELETE.
 import { check, assert, creds, http, session, makePng, pngChunk } from '../lib.mjs';
 
 /** JPEG segment markers before the scan (FFxx second bytes). */
@@ -135,5 +137,45 @@ export async function run(state) {
     const d = await http('DELETE', `/api/v1/admin/mailboxes/${aId}/photo`, { token: admin });
     assert(d.status === 200 && d.json?.removed === true, `${d.status} ${d.text.slice(0, 200)}`);
     assert((await getPhoto(B, aId)).status === 404, 'photo still served');
+  });
+
+  // ── 10.1: webmail background (same image pipeline, own user only) ───────────
+  const getBackground = async (token, headers = {}) => {
+    const res = await http('GET', '/api/v1/user/background', { token, raw: true, headers });
+    return { status: res.status, headers: res.headers, buf: Buffer.from(await res.arrayBuffer()) };
+  };
+
+  await check('background: upload a wide PNG → JPEG of at most 2560 px, no metadata, private + ETag', async () => {
+    const wide = makePng(3000, 1000, [40, 90, 160], [exif]);
+    const r = await http('PUT', '/api/v1/user/background', { token: A, body: wide, headers: { 'Content-Type': 'image/png' } });
+    assert(r.status === 200 && /^[0-9a-f]{16}$/.test(r.json?.background?.version ?? ''), `${r.status} ${r.text.slice(0, 200)}`);
+    const g = await getBackground(A);
+    assert(g.status === 200 && g.headers.get('content-type') === 'image/jpeg', `${g.status} ${g.headers.get('content-type')}`);
+    const size = jpegSize(g.buf);
+    assert(size?.width === 2560 && size?.height === 853, `size ${JSON.stringify(size)}`);
+    assert(!jpegMarkers(g.buf).includes(0xe1) && !g.buf.includes(Buffer.from('GPSLatitude')), 'metadata stripped');
+    assert(/private/.test(g.headers.get('cache-control') ?? ''), `cache-control ${g.headers.get('cache-control')}`);
+    const etag = g.headers.get('etag') ?? '';
+    const again = await getBackground(A, { 'If-None-Match': etag, 'Cache-Control': 'max-age=0' });
+    assert(again.status === 304, `revalidation ${again.status}`);
+    const info = await http('GET', '/api/v1/user/background/info', { token: A });
+    assert(info.json?.background?.version === r.json.background.version, JSON.stringify(info.json));
+  });
+
+  await check('background: only the owner — B gets none, anonymous 401; preference "custom" roams', async () => {
+    assert((await getBackground(B)).status === 404, 'B must not see A\'s background');
+    assert((await getBackground(undefined)).status === 401, 'anonymous');
+    const p = await http('PATCH', '/api/v1/user/preferences', { token: A, body: { preferences: { appearance: { background: 'custom' } } } });
+    assert(p.status === 200 && p.json?.preferences?.appearance?.background === 'custom', `${p.status} ${p.text.slice(0, 200)}`);
+    const bad = await http('PATCH', '/api/v1/user/preferences', { token: A, body: { preferences: { appearance: { background: 'builtin:photo' } } } });
+    assert(bad.status === 400, `invalid built-in accepted: ${bad.status}`);
+  });
+
+  await check('background: DELETE → 404, info null', async () => {
+    const d = await http('DELETE', '/api/v1/user/background', { token: A });
+    assert(d.status === 200 && d.json?.removed === true, `${d.status} ${d.text.slice(0, 200)}`);
+    assert((await getBackground(A)).status === 404, 'still served');
+    const info = await http('GET', '/api/v1/user/background/info', { token: A });
+    assert(info.json?.background === null, JSON.stringify(info.json));
   });
 }

@@ -72,7 +72,7 @@ test('header row: quiet icon buttons, the Senden menu and the "…" menu (nothin
   assert.deepEqual([...SEND_MENU], ['send', 'schedule', 'importance', 'options']);
   assert.deepEqual(moreMenuCommands(false), ['save', 'showFrom', 'checkNames', 'datetime', 'format', 'formatBar', 'a11y']);
   assert.deepEqual(moreMenuCommands(true), ['save', 'showFrom', 'checkNames', 'datetime', 'format', 'a11y', 'emoji']);
-  assert.equal(translations.de.compose_schedule, 'Später senden …');
+  assert.equal(translations.de.compose_schedule, 'Senden planen …');
   assert.deepEqual(fieldRowHeights('normal'), { row: 36, subject: 40 });
   assert.deepEqual(fieldRowHeights('comfortable'), { row: 36, subject: 40 });
   assert.deepEqual(fieldRowHeights('compact'), { row: 32, subject: 36 });

@@ -21,6 +21,7 @@ import {
   type BrandingDraft, type BrandingWarning, type DefaultField, type DraftField,
 } from '../lib/brandingForm.js';
 import { PREVIEW_THEME_VARS, previewStyle } from '../lib/brandingPreview.js';
+import { BUILTIN_BACKGROUND_IDS, BUILTIN_BACKGROUND_LABELS, builtinBackgroundUrl, parseDefaultBackground } from '../lib/backgroundPrefs.js';
 
 // 9.3 — BCP → Organisation → Branding. API contract: docs/plans/branding-9.3.md.
 
@@ -191,6 +192,7 @@ export function BrandingPage() {
               <SwitchRow label="Benutzer dürfen eigene Akzentfarbe wählen" checked={draft.allowUserAccent}
                 onChange={(v) => update('allowUserAccent', v)}
                 hint="Aus: alle sehen die Primärfarbe, die Auswahl in den Webmail-Einstellungen ist gesperrt." />
+              <DefaultBackgroundPicker value={draft.defaultBackground} onChange={(v) => update('defaultBackground', v)} />
             </section>
 
             <section className="card space-y-5" aria-labelledby="branding-login">
@@ -333,6 +335,39 @@ function ColorField({ id, label, value, onChange, hint, error, onUseDefault }: {
       </div>
       <FieldMessages id={id} hint={hint} error={error} />
     </div>
+  );
+}
+
+/**
+ * 10.1: "Standard-Hintergrund" — the webmail background of users without an own
+ * choice: Keiner or one of the built-in pictures (the webmail serves them at
+ * /backgrounds/…; the same set as Einstellungen → Darstellung).
+ */
+function DefaultBackgroundPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const current = parseDefaultBackground(value);
+  const options: { value: string; label: string; src: string | null }[] = [
+    { value: 'none', label: 'Keiner', src: null },
+    ...BUILTIN_BACKGROUND_IDS.map((id) => ({ value: `builtin:${id}`, label: BUILTIN_BACKGROUND_LABELS[id], src: builtinBackgroundUrl(id, false) })),
+  ];
+  return (
+    <fieldset className="min-w-0 border-0 p-0 m-0 space-y-2">
+      <legend className="field-label">Standard-Hintergrund der Webmail</legend>
+      <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
+        {options.map((o) => (
+          <label key={o.value} className="group flex flex-col gap-1 cursor-pointer">
+            <input type="radio" name="branding-default-background" value={o.value} checked={current === o.value}
+              onChange={() => onChange(o.value)} className="peer sr-only" />
+            <span className={`block aspect-[16/10] rounded-md overflow-hidden border-2 peer-focus-visible:ring-2 peer-focus-visible:ring-accent-fg ${
+              current === o.value ? 'border-accent' : 'border-line group-hover:border-line-strong'
+            }`}>
+              {o.src ? <img src={o.src} alt="" className="w-full h-full object-cover" loading="lazy" /> : <span className="block w-full h-full bg-surface-2" />}
+            </span>
+            <span className={`text-xs leading-tight ${current === o.value ? 'text-accent-fg font-semibold' : 'text-fg-muted'}`}>{o.label}</span>
+          </label>
+        ))}
+      </div>
+      <p className="text-xs text-fg-subtle">Gilt für alle, die in den Einstellungen keinen eigenen Hintergrund gewählt haben.</p>
+    </fieldset>
   );
 }
 

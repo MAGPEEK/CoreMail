@@ -13,6 +13,9 @@ import {
 import { subjectFor, type ComposeMode } from '../lib/composeQuote.js';
 import type { Importance } from '../lib/importance.js';
 import type { Sensitivity } from '../lib/sensitivity.js';
+import type { BackgroundChoice } from '../lib/backgroundPrefs.js';
+import { pushRecentFolder } from '../lib/folderLists.js';
+import { toggleCollapsedGroup, type DateGroupId } from '../lib/dateGroups.js';
 
 export type { ComposeMode };
 /** A local file, or an attachment already stored with the server draft. */
@@ -92,6 +95,15 @@ interface UiState {
   /** Keyboard shortcut help dialog (?) */
   shortcutHelpOpen: boolean;
   setShortcutHelpOpen: (v: boolean) => void;
+  /** 10.1: background tile hovered / focused in Settings → Darstellung (live preview), null = none */
+  backgroundPreview: BackgroundChoice | null;
+  setBackgroundPreview: (v: BackgroundChoice | null) => void;
+  /** 10.1: last move targets of this session (ribbon "Verschieben in"), newest first */
+  recentMoveTargets: string[];
+  noteMoveTarget: (folderId: string) => void;
+  /** 10.1: collapsed date groups of the message list per folder (session only) */
+  collapsedDateGroups: Record<string, DateGroupId[]>;
+  toggleDateGroup: (folderKey: string, group: DateGroupId) => void;
 
   // Multi-selection in the message list
   selectedIds: Set<string>;
@@ -126,6 +138,12 @@ export const useUiStore = create<UiState>((set, get) => ({
   sidebarCollapsed: false,
   shortcutHelpOpen: false,
   setShortcutHelpOpen: (v) => set({ shortcutHelpOpen: v }),
+  backgroundPreview: null,
+  setBackgroundPreview: (v) => set({ backgroundPreview: v }),
+  recentMoveTargets: [],
+  noteMoveTarget: (folderId) => set((s) => ({ recentMoveTargets: pushRecentFolder(s.recentMoveTargets, folderId) })),
+  collapsedDateGroups: {},
+  toggleDateGroup: (folderKey, group) => set((s) => ({ collapsedDateGroups: toggleCollapsedGroup(s.collapsedDateGroups, folderKey, group) })),
   selectedIds: new Set<string>(),
   lastSelectedId: null,
   filter: 'all',

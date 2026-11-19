@@ -99,7 +99,7 @@ test('validation: name, colours, login text, footer links', () => {
 test('PUT body is trimmed and normalised', () => {
   const body = draftToBody({
     productName: ' Acme ', primaryColor: '#ABC', headerColor: '#FFFFFF', allowUserAccent: false,
-    showPoweredBy: false, loginText: ' Hallo ', footerLinks: [{ label: ' Impressum ', url: ' https://e.org/i ' }],
+    showPoweredBy: false, defaultBackground: 'none', loginText: ' Hallo ', footerLinks: [{ label: ' Impressum ', url: ' https://e.org/i ' }],
     useDefault: { productName: false, primaryColor: false },
   }, saved);
   assert.deepEqual(body, {
@@ -133,4 +133,12 @@ test('400 body → field error', () => {
   assert.deepEqual(parseFieldError({ error: 'zu lang', field: 'loginText' }, 'x'), { field: 'loginText', message: 'zu lang' });
   assert.deepEqual(parseFieldError({ error: 'kaputt', field: 'evil' }, 'x'), { field: null, message: 'kaputt' });
   assert.deepEqual(parseFieldError(null, 'HTTP 500'), { field: null, message: 'HTTP 500' });
+});
+
+test('10.1 Standard-Hintergrund: only a change is sent', () => {
+  const d = draftFrom(saved);
+  assert.equal(d.defaultBackground, 'none');
+  assert.deepEqual(draftToBody(d, saved), {});
+  assert.deepEqual(draftToBody(editDraft(d, 'defaultBackground', 'builtin:forest'), saved), { defaultBackground: 'builtin:forest' });
+  assert.equal(isDraftDirty(editDraft(d, 'defaultBackground', 'builtin:forest'), saved), true);
 });
