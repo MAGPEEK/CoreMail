@@ -2,7 +2,8 @@
 //  - B gets a folder "E2E-Backup" with two messages (one with an attachment, flags \Flagged \Seen)
 //  - mailbox backup of B (ZIP, encrypted in the backup bucket) → restore of the STORED archive into
 //    A (mode subfolder) → A sees "Wiederhergestellt <date>.E2E-Backup" over IMAP, raw byte-exact,
-//    flags kept; a second restore adds nothing; the downloaded ZIP uploaded again adds nothing
+//    flags kept, 9.5: the INTERNALDATE set by APPEND kept; a second restore adds nothing; the
+//    downloaded ZIP uploaded again adds nothing
 //  - RBAC (HELP_DESK 403, SERVER_MANAGEMENT 403 on restore, COMPLIANCE_MANAGEMENT 403 on the
 //    system dump download), validation (mode folder without folderId → 400)
 //  - "Empfohlene Sicherung einrichten" creates the nightly system + full schedule once; the system
@@ -15,6 +16,8 @@ import {
 import { imapLogin } from './imap.mjs';
 
 const sha = (b) => createHash('sha256').update(b).digest('hex');
+/** IMAP date-time the first source message is appended with (9.5: preserved by the restore). */
+const INTERNAL_DATE = '03-Nov-2025 07:08:09 +0000';
 const B_URL = '/api/v1/admin/backups';
 
 /** Admin-role user for the RBAC checks (created once via the admin API, like users.mjs); returns a session token. */
@@ -51,13 +54,17 @@ async function folderMessages(user, pass, folder) {
     assert(c.loginResult.status === 'OK', `IMAP login ${user}: ${c.loginResult.text}`);
     const ex = await imapCmd(c, `EXAMINE ${imapQuote(folder)}`);
     assert(ex.status === 'OK', `EXAMINE ${folder}: ${ex.text}`);
-    const f = await imapCmd(c, 'FETCH 1:* (UID FLAGS BODY.PEEK[])');
+    const f = await imapCmd(c, 'FETCH 1:* (UID FLAGS INTERNALDATE BODY.PEEK[])');
     if (f.status !== 'OK') return [];
     const out = [];
     f.lines.forEach((l) => {
       const m = l.match(/^\* \d+ FETCH .*?<literal:(\d+)>/);
       if (!m) return;
-      out.push({ flags: (l.match(/FLAGS \(([^)]*)\)/)?.[1] ?? '').split(' ').filter(Boolean), raw: f.literals[+m[1]] });
+      out.push({
+        flags: (l.match(/FLAGS \(([^)]*)\)/)?.[1] ?? '').split(' ').filter(Boolean),
+        internalDate: l.match(/INTERNALDATE "([^"]+)"/)?.[1] ?? null,
+        raw: f.literals[+m[1]],
+      });
     });
     return out;
   } finally { c.close(); }
@@ -96,7 +103,8 @@ export async function run(state) {
       const m1 = Buffer.from(buildMime({ from: A.email, to: B.email, subject: subjects[0], text: 'with attachment',
         attachment: { filename: 'e2e.bin', contentType: 'application/octet-stream', data: randomBytes(3000) } }), 'latin1');
       const m2 = Buffer.from(buildMime({ from: A.email, to: B.email, subject: subjects[1], text: 'plain' }), 'latin1');
-      const r1 = await imapCmd(s, `APPEND ${imapQuote(SRC)} (\\Flagged \\Seen)`, { literal: m1 });
+      // 9.5: an explicit internal date (not the Date header, not "now") — the restore must keep it
+      const r1 = await imapCmd(s, `APPEND ${imapQuote(SRC)} (\\Flagged \\Seen) "${INTERNAL_DATE}"`, { literal: m1 });
       const r2 = await imapCmd(s, `APPEND ${imapQuote(SRC)} ()`, { literal: m2 });
       assert(r1.status === 'OK' && r2.status === 'OK', `APPEND: ${r1.text} / ${r2.text}`);
       sourceRaw.set(subjects[0], m1);
@@ -131,10 +139,12 @@ export async function run(state) {
       const hit = msgs.find((m) => m.raw.toString('latin1').includes(subject));
       assert(hit, `"${subject}" not in ${restoreFolder}`);
       assert(sha(hit.raw) === sha(raw), `"${subject}" differs (${hit.raw.length} vs ${raw.length} bytes)`);
-      if (subject === subjects[0]) assert(hit.flags.includes('\\Flagged') && hit.flags.includes('\\Seen'), `flags ${hit.flags}`);
-      else assert(!hit.flags.includes('\\Seen'), `unread message restored as read: ${hit.flags}`);
+      if (subject === subjects[0]) {
+        assert(hit.flags.includes('\\Flagged') && hit.flags.includes('\\Seen'), `flags ${hit.flags}`);
+        assert(hit.internalDate === INTERNAL_DATE, `INTERNALDATE ${hit.internalDate} — expected the original ${INTERNAL_DATE}`);
+      } else assert(!hit.flags.includes('\\Seen'), `unread message restored as read: ${hit.flags}`);
     }
-    return `${job.progressMeta.imported} restored into ${restoreFolder}`;
+    return `${job.progressMeta.imported} restored into ${restoreFolder}, INTERNALDATE kept`;
   });
 
   await check('backup: a second restore of the same archive adds nothing (idempotent)', async () => {

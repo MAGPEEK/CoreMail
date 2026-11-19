@@ -4,3 +4,4 @@ export * from './contact-vcard.js';
 export * from './contact-group-vcard.js';
 export * from './contact-groups.js';
 export * from './contact-store.js';
+export * from './contact-backfill.js';

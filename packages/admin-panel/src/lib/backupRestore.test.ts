@@ -56,6 +56,15 @@ test('jobs list: restore summary, scope labels, restore / download rules', () =>
   assert.equal(restoreSummary({ imported: 12, duplicates: 3, failed: 1, otherEntries: 0, targetFolder: 'Wiederhergestellt 2026-11-16' }),
     '12 wiederhergestellt · 3 bereits vorhanden · 1 fehlgeschlagen → „Wiederhergestellt 2026-11-16“');
   assert.equal(restoreSummary({ imported: 0, duplicates: 4, targetFolder: null }), '0 wiederhergestellt · 4 bereits vorhanden');
+  // 9.5: restored address book; otherEntries are only calendar / other files now
+  assert.equal(restoreSummary({
+    imported: 2, duplicates: 0, failed: 0, otherEntries: 1, targetFolder: 'Wiederhergestellt 2026-11-16',
+    contactsImported: 5, contactGroupsImported: 2, contactsDuplicates: 3, contactGroupsDuplicates: 1, addressBookFailed: 0,
+  }), '2 wiederhergestellt → „Wiederhergestellt 2026-11-16“ · Kontakte wiederhergestellt: 5, Kontaktlisten: 2, '
+    + 'übersprungen (bereits vorhanden): 4 · 1 Kalender-/sonstige Dateien nicht übernommen');
+  assert.equal(restoreSummary({ imported: 0, duplicates: 0, contactsImported: 0, contactGroupsImported: 0, contactsDuplicates: 2, addressBookFailed: 1 }),
+    '0 wiederhergestellt · Kontakte wiederhergestellt: 0, Kontaktlisten: 0, übersprungen (bereits vorhanden): 2 · 1 Kontakte/Kontaktlisten fehlgeschlagen');
+  assert.ok(!String(restoreSummary({ imported: 1, duplicates: 0, contactsImported: 0 })).includes('Kontakte'), 'no address book line for an archive without one');
   assert.equal(restoreSummary({ phase: 'done', current: 3 }), null);
   assert.equal(restoreSummary(null), null);
   assert.equal(jobScopeLabel('restore'), 'Wiederherstellung');

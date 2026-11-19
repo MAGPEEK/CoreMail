@@ -30,9 +30,26 @@ vCard with the columns derived from it; nothing writes contact columns by hand.
 Type labels: e-mail / address / web page / chat `work | home | other`; phone
 `work | home | mobile | fax | pager | other`. At most 20 entries per list.
 
-Contacts stored before 9.5 keep empty structured columns until their next
-write; the REST API reads the structured fields from `vcardData`, so they show
-completely anyway. Search falls back to the flat columns for them.
+Contacts stored before 9.5 have empty structured columns at first. A one-time
+background backfill fills them (`packages/storage/src/contacts/contact-backfill.ts`,
+started by the api-gateway 30 s after start-up):
+
+- a row needs it while `searchText` is empty; the 9.5 columns (`uid`, name parts,
+  `nickname`, `fileAs`, dates, `categories`, the typed lists, `searchText`) are
+  derived through the same mapping (`contactCardFromRow` → `contactColumns`) — from
+  the vCard, or from the flat columns for a row without a vCard. The vCard and the
+  flat columns are not touched;
+- `updatedAt` and `changeKey` are kept, so the CardDAV ETag / sync-token / ctag and
+  ActiveSync / MAPI see no change; a row written meanwhile (other `updatedAt`) is
+  left to its writer;
+- batches of 200 in id order, one instance at a time (Redis lock
+  `storage:contacts-backfill:lock`), resumable (`storage:contacts-backfill:cursor`
+  = last id done), one-time (`storage:contacts-backfill:done` once a pass reached
+  the end; the job then stops for good). Deleting the two keys re-runs it, which is
+  harmless (idempotent).
+
+Until a row is filled, the REST API reads the structured fields from
+`vcardData`, so they show completely anyway, and search falls back to the flat columns.
 
 `contact_groups`: `name`, `uid`, `vcardData` (the group's own vCard) and
 `members` (JSON `[{kind: "card", uid}]` = own contact or nested group,
@@ -51,7 +68,8 @@ contact or group leaves every group it was a member of (`detachCardFromGroups`).
 | `contacts/contact-vcard.ts` | `contactCardFromVcard()`, `applyContactCard()` (writes only changed properties), `buildContactVcard()`, `contactColumnsFromVcard()`; properties outside the card: `vcardText()` / `setVcardText()` (e.g. `OFFICE_LOCATION_PROPERTY`), `vcardPhoto()` / `setVcardPhoto()` (inline PHOTO in the spelling of the vCard version) |
 | `contacts/contact-store.ts` | the contact row writer: `createContactRow()`, `updateContactRow()` (vCard + derived columns), `deleteContactRow()` (also leaves every group), `ensureContactUid()` — realtime announcements stay with the caller |
 | `contacts/contact-group-vcard.ts` | group vCards (both spellings), `applyContactGroup()`, `expandGroupMembers()` (pure) |
-| `contacts/contact-groups.ts` | group columns, `detachCardFromGroups()`, `resolveCards()`, `expandContactGroup()` |
+| `contacts/contact-groups.ts` | group columns, `detachCardFromGroups()`, `resolveCards()`, `expandContactGroup()`, `findContactUidOwner()` (UID unique across contacts and groups — CardDAV, backup restore) |
+| `contacts/contact-backfill.ts` | one-time backfill of the 9.5 columns for older rows (see above) |
 
 A protocol implementation maps its item to a `ContactPatch`, applies it with
 `applyContactPatch(contactCardFromRow(row), patch)`, writes
@@ -109,6 +127,15 @@ vCard becomes a group, everything else a contact. A resource keeps its kind
 (a contact PUT onto a group resource → 409), the UID is unique across contacts
 and groups (409 `no-uid-conflict`). Deleting a contact or a group rewrites the
 groups it was a member of (new ETag), so clients pick the change up.
+
+## Backup and restore
+
+Mailbox backups (ZIP) contain the address book as CardDAV serves it: every
+contact and every group as its stored vCard in `contacts/<id>.vcf`, plus the
+names of address members in the archive manifest. A restore puts contacts back
+first, then groups (members resolve by UID), and skips every object whose UID
+the address book already uses — see [backup.md](backup.md#3-restore-bcp--backup--restore--wiederherstellen).
+The system backup (database dump) contains both tables anyway.
 
 ## ActiveSync
 
@@ -180,7 +207,8 @@ Logic: `web-client/src/lib/contactForm.ts`, `lib/contactGroups.ts`,
 
 ## Tests
 
-- storage: `src/contacts/contact-vcard.test.ts`, `src/contacts/contact-groups.test.ts`
+- storage: `src/contacts/contact-vcard.test.ts`, `src/contacts/contact-groups.test.ts`, `src/contacts/contact-backfill.test.ts`
+- backup-service: `src/restore/restore-roundtrip.test.ts` (contacts + groups export → restore)
 - api-gateway: `src/routes/contacts.test.ts`, `src/routes/contacts-structured.test.ts`, `src/routes/notes.test.ts`
 - caldav-server: `src/carddav/carddav.test.ts`
 - activesync: `src/pim/contacts-codec.test.ts`, `src/pim/contacts-sync.test.ts`

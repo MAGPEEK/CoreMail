@@ -171,12 +171,26 @@ export function restoreSummary(meta: unknown): string | null {
   const m = meta as Record<string, unknown>;
   const n = (k: string): number => (typeof m[k] === 'number' ? m[k] as number : 0);
   if (typeof m['imported'] !== 'number' && typeof m['duplicates'] !== 'number') return null;
-  const parts = [`${n('imported')} wiederhergestellt`];
-  if (n('duplicates')) parts.push(`${n('duplicates')} bereits vorhanden`);
-  if (n('failed')) parts.push(`${n('failed')} fehlgeschlagen`);
-  if (n('otherEntries')) parts.push(`${n('otherEntries')} Kontakt-/Kalenderdateien nicht übernommen`);
+  const mail = [`${n('imported')} wiederhergestellt`];
+  if (n('duplicates')) mail.push(`${n('duplicates')} bereits vorhanden`);
+  if (n('failed')) mail.push(`${n('failed')} fehlgeschlagen`);
   const folder = typeof m['targetFolder'] === 'string' && m['targetFolder'] ? ` → „${m['targetFolder']}“` : '';
-  return parts.join(' · ') + folder;
+  // The target folder belongs to the messages; the address book has no folder.
+  const parts = [mail.join(' · ') + folder];
+  const addressBook = addressBookSummary(n);
+  if (addressBook) parts.push(addressBook);
+  if (n('addressBookFailed')) parts.push(`${n('addressBookFailed')} Kontakte/Kontaktlisten fehlgeschlagen`);
+  if (n('otherEntries')) parts.push(`${n('otherEntries')} Kalender-/sonstige Dateien nicht übernommen`);
+  return parts.join(' · ');
+}
+
+/** 9.5: restored contacts / contact lists of a restore job, or null when the archive held none. */
+function addressBookSummary(n: (k: string) => number): string | null {
+  const contacts = n('contactsImported');
+  const groups = n('contactGroupsImported');
+  const skipped = n('contactsDuplicates') + n('contactGroupsDuplicates');
+  if (!contacts && !groups && !skipped) return null;
+  return `Kontakte wiederhergestellt: ${contacts}, Kontaktlisten: ${groups}, übersprungen (bereits vorhanden): ${skipped}`;
 }
 
 /** Scope column of the jobs list. */

@@ -8,7 +8,8 @@
  *   3. For each mail in the mailbox: compute the effective tag by hierarchy
  *        Personal (on item) → Personal (on folder) → RPT (for folder) → DPT (policy)
  *   4. If `createdAt (delivery) + tag.retentionDays <= now` → execute the tag action
- *      (never the sender-controlled Date header, see ./expiry.ts):
+ *      (never the sender-controlled Date header, see ./expiry.ts; a restored item
+ *      gets a grace period after its restore, `Message.restoredAt`):
  *        • MOVE_TO_ARCHIVE             — move to "Archive"
  *        • DELETE_AND_ALLOW_RECOVERY   — move to Recoverable Items/Deletions (soft delete, 14 days)
  *        • PERMANENTLY_DELETE          — move to Recoverable Items/Purges
@@ -223,7 +224,7 @@ async function applyForMailbox(
     // Fetch all non-soft-deleted items in this folder
     const messages = await prisma.message.findMany({
       where: { folderId: folder.id, deletedAt: null, softDeletedAt: null },
-      select: { id: true, createdAt: true, retentionTagId: true, rawSize: true },
+      select: { id: true, createdAt: true, restoredAt: true, retentionTagId: true, rawSize: true },
     });
     result.itemsScanned += messages.length;
 
@@ -236,8 +237,8 @@ async function applyForMailbox(
       if (!effective || !effective.enabled) continue;
 
       // Age is measured from delivery (createdAt), not from the sender-controlled
-      // Date header — see retentionDecision().
-      const { expired, expiresAt } = retentionDecision(m.createdAt, effective);
+      // Date header; a restored item gets a grace period — see retentionDecision().
+      const { expired, expiresAt } = retentionDecision(m.createdAt, effective, new Date(), m.restoredAt);
       if (!expired || !expiresAt) continue; // not expired yet
 
       if (effective.action === 'PERMANENTLY_DELETE') {

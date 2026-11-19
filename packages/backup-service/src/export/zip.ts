@@ -2,16 +2,17 @@ import archiver from 'archiver';
 import { createWriteStream } from 'node:fs';
 import { exportEmlStream } from './mbox.js';
 import { ManifestBuilder, MANIFEST_NAME } from './manifest.js';
-import { prisma } from '@coremail/storage';
+import { prisma, membersFromJson } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 
 const log = createLogger('backup:zip');
 
 /**
  * Creates a ZIP archive containing all messages as .eml files (original raw
- * octets), plus contacts as .vcf and calendars as .ics. 9.3: the archive also
- * holds `coremail-manifest.json` (exact folder names + flags of every message),
- * which the restore uses to put messages back into their folders with their flags.
+ * octets), plus contacts and (9.5) contact groups as .vcf and calendars as .ics.
+ * 9.3: the archive also holds `coremail-manifest.json` (exact folder names +
+ * flags + 9.5 internal dates of every message, 9.5 member names of the groups),
+ * which the restore uses to put everything back as it was.
  * `fileCount` counts every file except the manifest; `messageCount` only the mails.
  */
 export async function exportZip(
@@ -40,18 +41,28 @@ export async function exportZip(
       for await (const entry of exportEmlStream(userId, folderIds)) {
         const name = `mail/${entry.filename}`;
         archive.append(entry.content, { name });
-        manifest.add(name, entry.folder, entry.flags, entry.date, entry.content.length);
+        manifest.add(name, entry.folder, entry.flags, entry.date, entry.content.length, entry.internalDate);
         fileCount++;
         messageCount++;
       }
 
-      // Add contacts as vCard
-      const contacts = await prisma.contact.findMany({ where: { userId } });
+      // Address book as CardDAV serves it: contacts and (9.5) contact groups, each
+      // its stored vCard in contacts/<id>.vcf (a group vCard is KIND:group or the
+      // X-ADDRESSBOOKSERVER-KIND form); the manifest keeps the member names.
+      const contacts = await prisma.contact.findMany({ where: { userId }, select: { id: true, vcardData: true } });
       for (const c of contacts) {
         if (c.vcardData) {
           archive.append(c.vcardData, { name: `contacts/${c.id}.vcf` });
           fileCount++;
         }
+      }
+      const groups = await prisma.contactGroup.findMany({ where: { userId }, select: { id: true, vcardData: true, members: true } });
+      for (const g of groups) {
+        if (!g.vcardData) continue;
+        const name = `contacts/${g.id}.vcf`;
+        archive.append(g.vcardData, { name });
+        manifest.addContactGroup(name, membersFromJson(g.members));
+        fileCount++;
       }
 
       // Add calendar events as iCal

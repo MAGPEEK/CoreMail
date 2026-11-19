@@ -568,6 +568,10 @@ model Message {
   // the item in a foreign folder (IMAP APPEND / COPY into it) — "own" items for
   // the EditOwned / DeleteOwned rights. Null = not created by a grantee.
   createdBy        String?
+  // 9.5: when the backup restore wrote this row (createdAt keeps the original
+  // received date). Retention policies give a restored item a grace period from
+  // this time (backup-service retention/expiry.ts). Null = not restored.
+  restoredAt       DateTime?
   attachments  Attachment[]
   categories   MessageCategory[]
   mapiObject   MapiObject?
