@@ -1,6 +1,7 @@
 /**
  * BCP → Schutzfilter → Absenderlisten / Spoofing and the DNSBL action choice (pure, 9.4).
  */
+import { describeDomain, describePattern, describeText, matchesDisplay, type DisplayDomain } from './idn.ts';
 
 export type ListType = 'BLOCK' | 'ALLOW';
 export type ListScope = 'GLOBAL' | 'DOMAIN' | 'USER';
@@ -46,11 +47,24 @@ export function patternPlaceholder(type: PatternType): string {
   return 'absender@example.com';
 }
 
-/** Pure: entries of one list, optionally filtered by a search text (pattern, target, comment). */
+/** Pure: display forms of an entry's pattern (regular expressions are never converted). */
+export function patternDisplay(e: Pick<SenderListEntry, 'patternType' | 'pattern'>): DisplayDomain {
+  return e.patternType === 'REGEX' ? describeText(e.pattern) : describePattern(e.pattern);
+}
+
+/** Pure: display forms of an entry's target (domain name or mailbox address; '' for global). */
+export function targetDisplay(e: Pick<SenderListEntry, 'scope' | 'target'>): DisplayDomain {
+  return e.scope === 'DOMAIN' ? describeDomain(e.target) : describePattern(e.target);
+}
+
+/**
+ * Pure: entries of one list, optionally filtered by a search text (pattern, target, comment).
+ * Domains match in both spellings: stored A-label (`xn--mller-kva.de`) and U-label (`müller.de`).
+ */
 export function filterEntries(entries: readonly SenderListEntry[], listType: ListType, query = ''): SenderListEntry[] {
   const q = query.trim().toLowerCase();
   return entries.filter((e) => e.listType === listType
-    && (!q || e.pattern.toLowerCase().includes(q) || e.target.toLowerCase().includes(q) || e.comment.toLowerCase().includes(q)));
+    && (!q || matchesDisplay(patternDisplay(e), q) || matchesDisplay(targetDisplay(e), q) || e.comment.toLowerCase().includes(q)));
 }
 
 /** Pure: readable list of the CSV import errors returned by the API. */

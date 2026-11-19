@@ -9,9 +9,10 @@ import { api, downloadFile } from '../api/client.js';
 import { ApiError, errorMessage } from '../lib/errors.js';
 import { Toggle } from './Toggle.js';
 import { usePermissions } from '../hooks/usePermissions.js';
+import { IdnText } from './IdnText.js';
 import {
   creatableScopes, effectiveScope,
-  filterEntries, importErrorText, patternPlaceholder, LIST_TYPE_LABEL, SCOPE_LABEL, PATTERN_TYPE_LABEL,
+  filterEntries, patternDisplay, targetDisplay, importErrorText, patternPlaceholder, LIST_TYPE_LABEL, SCOPE_LABEL, PATTERN_TYPE_LABEL,
   type ListScope, type ListType, type PatternType, type SenderListEntry,
 } from '../lib/senderLists.js';
 
@@ -183,11 +184,12 @@ export function SenderListsSection() {
                       onToggle={() => patch.mutate({ id: e.id, body: { active: !e.active } })} />
                   </td>
                   <td className="px-3 py-2">
-                    <code className="font-mono text-xs text-fg break-all">{e.pattern}</code>
+                    <IdnText display={patternDisplay(e)} />
                     <span className="block text-[10px] text-fg-subtle">{PATTERN_TYPE_LABEL[e.patternType]}</span>
                   </td>
                   <td className="px-3 py-2 text-xs text-fg-muted">
-                    {SCOPE_LABEL[e.scope]}{e.target ? `: ${e.target}` : ''}
+                    {SCOPE_LABEL[e.scope]}
+                    {e.target && <>: <IdnText display={targetDisplay(e)} className="text-xs text-fg-muted break-all" /></>}
                   </td>
                   <td className="px-3 py-2 text-xs text-fg-subtle">{e.comment}</td>
                   <td className="px-3 py-2 text-right">
@@ -206,7 +208,9 @@ export function SenderListsSection() {
 
       <p className="text-xs text-fg-subtle">
         CSV-Spalten: listType, scope, target, patternType, pattern, comment, active. Ein Import wird vollständig
-        abgelehnt, wenn eine Zeile fehlerhaft ist; vorhandene Einträge werden übersprungen.
+        abgelehnt, wenn eine Zeile fehlerhaft ist; vorhandene Einträge werden übersprungen. Domains dürfen als
+        Unicode (müller.example) oder in Punycode (xn--mller-kva.example) eingegeben werden; gespeichert und im
+        CSV-Export ausgegeben wird immer die Punycode-Form.
       </p>
     </div>
   );
