@@ -6,7 +6,7 @@
  */
 import { useEffect, useId, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Mail, Pencil, Plus, Trash2, Users, X } from 'lucide-react';
+import { Plus, Trash2, Users, X } from 'lucide-react';
 import { api } from '../../api/client.js';
 import {
   addMember, addressMember, memberKey, memberLabel, removeMember, groupIdOfSuggestion,
@@ -37,11 +37,10 @@ function MemberList({ members, onRemove }: { members: readonly GroupMember[]; on
   );
 }
 
-export function ContactGroupDetails({ group, sending, onSend, onEdit, onDelete }: {
-  group: ContactGroupDetail; sending: boolean; onSend: () => void; onEdit: () => void; onDelete: () => void;
-}) {
+/** The commands (edit, delete, e-mail to the list) live in the ribbon (lib/contactsRibbon.ts). */
+export function ContactGroupDetails({ group }: { group: ContactGroupDetail }) {
   return (
-    <div className="p-6 max-w-2xl">
+    <div className="p-4 sm:p-6 max-w-2xl">
       <div className="flex items-start gap-4 mb-6">
         <div className="w-16 h-16 rounded-full bg-accent flex items-center justify-center text-white shrink-0" aria-hidden="true">
           <Users size={26} />
@@ -49,17 +48,6 @@ export function ContactGroupDetails({ group, sending, onSend, onEdit, onDelete }
         <div className="flex-1 min-w-0">
           <h2 className="text-xl font-semibold text-fg leading-tight">{group.name}</h2>
           <p className="text-sm text-fg-subtle mt-0.5">Kontaktliste · {group.members.length} {group.members.length === 1 ? 'Mitglied' : 'Mitglieder'}</p>
-        </div>
-        <div className="flex gap-1 shrink-0">
-          <button type="button" onClick={onSend} disabled={sending || group.members.length === 0} className="btn-primary text-xs flex items-center gap-1 disabled:opacity-50">
-            <Mail size={13} aria-hidden="true" /> E-Mail an Liste
-          </button>
-          <button type="button" onClick={onEdit} className="btn-secondary text-xs flex items-center gap-1">
-            <Pencil size={13} aria-hidden="true" /> Bearbeiten
-          </button>
-          <button type="button" onClick={onDelete} className="btn-ghost text-xs text-danger-fg flex items-center gap-1">
-            <Trash2 size={13} aria-hidden="true" /> Löschen
-          </button>
         </div>
       </div>
       <MemberList members={group.members} />

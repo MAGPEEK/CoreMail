@@ -11,7 +11,8 @@ import type { Category } from '../api/types.js';
 import { useWebmailFeatures } from '../hooks/useWebmailFeatures.js';
 import { categoryColor, categoryOptions, isSelected, toggleCategory } from '../lib/itemCategories.js';
 
-function useCategoryDefs(): Category[] {
+/** The user's category list (empty while the category module is off). */
+export function useCategoryDefs(): Category[] {
   const enabled = useWebmailFeatures().features.categories;
   const { data = [] } = useQuery({
     queryKey: ['categories'],
