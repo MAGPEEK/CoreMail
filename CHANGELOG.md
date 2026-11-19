@@ -13,6 +13,49 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [10.0.0] — 2026-11-19 — Room and equipment resources removed
+
+Major release (SemVer: REST endpoints, an admin API, schema models / tables and SMTP behaviour are removed). Room and equipment resources are removed completely, like distribution groups in v5.6.1, public folders in v3.18.31 and eDiscovery in v3.18.5. Every change was reviewed independently; every finding was fixed with a regression test.
+
+> **BREAKING — read before upgrading from 9.5.x**
+>
+> - **Room data is deleted at start, after a mandatory backup.** On the first start, schema-sync writes `/data/backups/pre-migrate-<UTC timestamp>.sql.gz` (the `coremail-data` volume) and only then drops the retired tables `resource_mailboxes`, `resource_calendars` and `resource_bookings` (allow-list `RETIRED_TABLES`; the log lists every table with its row count). The rooms' own mailboxes (owner-less mailbox rows that `resource_mailboxes` points at) are deleted with their folders, messages and attachments in the same step, after the dump and before the drop, in one transaction. No `COREMAIL_ALLOW_SCHEMA_DATA_LOSS` is needed; **any other data loss is still refused** (fail-closed). If the dump cannot be written, the start stops and nothing is changed — make your own backup and start once with `COREMAIL_SCHEMA_BACKUP=skip`.
+> - **Helm:** for the 9.5 → 10.0 rollout with room rows, set `app.schemaSync.backupClaim` (or `app.schemaSync.skipBackup=true` after your own backup); otherwise the init container stops without changes. Chart 3.0.0.
+> - **Mail to former room and equipment addresses is refused:** port 25 answers `550 5.1.1` at RCPT, local senders get an NDR.
+> - **Existing meetings that list a local room** keep it as an attendee; later updates or cancellations sent to it bounce to the organizer — remove the room from those meetings.
+> - **Room attendees are invited like people:** an attendee with `CUTYPE=ROOM` / `RESOURCE` is stored and invited like any other attendee; there is no automatic accept / decline any more.
+> - **Removed APIs:** `/api/v1/admin/resources` (incl. bookings and free/busy), EMS `GET /api/v1/admin/ems/resource-mailboxes` and `GET /api/v1/calendar/rooms` answer 404. The `rooms` field of `POST` / `PUT /api/v1/calendar/events` and the `rooms` / `uid` fields of `POST /api/v1/calendar/schedule-suggestions` are ignored when sent; `GET /api/v1/admin/organisation/gal` no longer has a `resources` key.
+> - **Object store:** raw messages and attachment files of the deleted room mailboxes stay in the object store without any row pointing at them — no API serves them, they only take space and are in no backup.
+> - **Alternatives:** a **shared mailbox** whose calendar is shared with the people who book the room, or a **shared calendar** per room, checked with the scheduling assistant / free-busy.
+
+### Removed
+- **Room and equipment mailboxes** completely:
+  - Schema: models `ResourceMailbox`, `ResourceCalendar`, `ResourceBooking`, enum `ResourceType` and the relations `Domain.resourceMailboxes` / `Mailbox.resourceMailbox` (tables `resource_mailboxes`, `resource_calendars`, `resource_bookings`).
+  - Storage: `room-booking.ts`, `resource-booking-rules.ts`, `resource-lock.ts`; the room-reply-only options (`subject`, `text`, `headers`) of `buildITipReplyMime`.
+  - SMTP: resource booking of mailed invitations (`handlers/resource-booking.ts`), the rooms' iMIP replies (`handlers/resource-reply.ts`), the recipient lookup of resource addresses and the outbound job flag `resourceReply` with its sender-authentication path. A queued 9.5 job that still carries the flag is delivered without sender authentication.
+  - REST: admin API `/api/v1/admin/resources` (incl. bookings and free/busy), EMS `GET /api/v1/admin/ems/resource-mailboxes`, `GET /api/v1/calendar/rooms`, the `rooms` field of `POST` / `PUT /api/v1/calendar/events` and the `rooms` / `uid` fields of `POST /api/v1/calendar/schedule-suggestions` (ignored when sent), the `resources` key of `GET /api/v1/admin/organisation/gal`.
+  - ActiveSync: room booking of meetings written by a phone (`pim/calendar-rooms.ts`).
+  - Webmail: room picker of the event form and the room rows of the scheduling assistant.
+  - BCP: remaining room texts (SMTP local delivery hint, role description of RECIPIENT_MANAGEMENT).
+
+### Changed
+- Calendar meetings: attendees are no longer split into people and rooms — every attendee (including one with `CUTYPE=ROOM` / `RESOURCE` from another client) is stored and invited like any other. Only the organizer's copy sends invitation updates / cancellations (unchanged; `isOrganizerCopy` moved to api-gateway `lib/organizer-copy.ts`).
+- schema-sync: new verdict **retire** — the tables listed in `RETIRED_TABLES` (`infra/docker/schema-sync-classify.mjs`: the three room tables) are dropped without `COREMAIL_ALLOW_SCHEMA_DATA_LOSS`, but only when every other warning is a safe new unique constraint, each table is logged with its row count, and only after the **mandatory** pre-migration dump succeeded. Data of a retired table kept in other tables (`RETIREMENT_CLEANUP`: the rooms' own owner-less mailbox rows with their folders, messages and attachments) is deleted after the dump and before the drop, in one transaction — also on the `COREMAIL_ALLOW_SCHEMA_DATA_LOSS` path. A mailbox row left behind by a room deleted in 9.x is not touched. Without a dump location the start stops with the Helm values to set (`app.schemaSync.backupClaim` / `skipBackup`).
+- Helm chart 3.0.0 (appVersion 10.0.0): values unchanged; the 9.5 → 10.0 rollout with room rows needs `app.schemaSync.backupClaim` or `skipBackup` (infra/k8s/README.md, "Upgrading to chart 3.0").
+
+### Fixed
+- Webmail event form: the location placeholder reads "Ort hinzufügen" (was "Hinzufügen eines Raums oder Standorts").
+
+### Upgrade notes
+1. Back up as usual; the start writes its own pre-migration dump to `/data/backups` when room rows exist (see the BREAKING block). If the dump fails (no space, PostgreSQL newer than the image's `pg_dump`, directory not writable), dump the database yourself and start once with `COREMAIL_SCHEMA_BACKUP=skip`.
+2. `cd /opt/coremail && git pull && docker compose pull && docker compose up -d`; check the log for the retired tables and their row counts.
+3. Remove former room addresses from existing meetings and recreate bookable rooms as shared mailboxes or shared calendars.
+4. Remove clients of `/api/v1/admin/resources`, `/api/v1/calendar/rooms` and EMS `resource-mailboxes` (404).
+
+Tests: schema-sync classifier (`retire` verdict, cleanup statement against the FK cascade chain) and shell harness (`infra/docker/schema-sync.test.mjs`), e2e `schema-upgrade` from a 9.5.x database with room rows, `rest` / `smtp` 404 and `550 5.1.1` checks, unit tests in smtp-server, api-gateway and activesync, repo hygiene "the room/equipment resource feature stays removed".
+
+---
+
 ## [9.5.1] — 2026-11-19 — MAPI HTTPS warning fix
 
 ### Fixed

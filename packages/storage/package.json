@@ -1,6 +1,6 @@
 {
   "name": "@coremail/storage",
-  "version": "9.5.1",
+  "version": "10.0.0",
   "private": true,
   "type": "module",
   "exports": {

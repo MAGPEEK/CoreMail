@@ -1,6 +1,6 @@
 # CoreMail Helm chart
 
-Deploys CoreMail (default: 9.5.1) on Kubernetes the same way as the reference
+Deploys CoreMail (default: 10.0.0) on Kubernetes the same way as the reference
 Docker Compose setup (`infra/docker/docker-compose.yml`): **one app pod**
 running `magpeek/coremail-app` (all services under supervisord), plus
 PostgreSQL, Redis (with authentication), MinIO (`pgsty/minio`, pinned by digest),
@@ -9,8 +9,8 @@ with a PVC) or an external endpoint.
 
 | | |
 |---|---|
-| Chart version | `2.3.1` (independent SemVer of the chart; 2.x = 9.x values, see "Upgrading to chart 2.0") |
-| App version | `9.5.1` → image `magpeek/coremail-app:9.5.1` |
+| Chart version | `3.0.0` (independent SemVer of the chart; 3.x = CoreMail 10.x, see "Upgrading to chart 3.0"; 2.x = 9.x values) |
+| App version | `10.0.0` → image `magpeek/coremail-app:10.0.0` |
 | Kubernetes | ≥ 1.25 |
 | Chart dependencies | none (installs without access to third-party chart repositories) |
 
@@ -314,6 +314,23 @@ is used — then set `SETUP_TOKEN` there). `filesystem` object storage is limite
 to one replica.
 
 ## Upgrading
+
+### Upgrading to chart 3.0 (CoreMail 10.0)
+
+Chart 3.0.0 ships with app 10.0.0 (`appVersion`). No value was added or removed,
+but the rollout can need one: CoreMail 10.0 removes room and equipment resources,
+and schema-sync drops their tables (`resource_mailboxes`, `resource_calendars`,
+`resource_bookings`, together with the rooms' own mailboxes) only after a
+**mandatory** pre-migration dump.
+
+- **Room rows exist:** set `app.schemaSync.backupClaim` to an existing PVC (a
+  `pre-migrate-<timestamp>.sql.gz` dump is written there first), or dump the
+  database yourself and set `app.schemaSync.skipBackup=true` for this rollout.
+  Without either, the init container stops before changing anything and its log
+  names these two values. `app.schemaSync.allowDataLoss` is not needed; any other
+  data loss is still refused.
+- Read the 10.0.0 upgrade notes in `CHANGELOG.md` (mail to former room addresses
+  is refused with `550 5.1.1`, removed APIs).
 
 ### Upgrading to chart 2.0 (CoreMail 9.0)
 
