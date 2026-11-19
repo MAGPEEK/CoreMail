@@ -470,7 +470,8 @@ adminMailboxesRouter.put('/:id/mail-flow', putMailFlowHandler('user'));
 // ── w3: folder permissions (lib/folder-permissions-admin.ts) ────────────────
 adminMailboxesRouter.get('/:id/folder-permissions', listFolderPermissionsHandler('user'));
 adminMailboxesRouter.get('/:id/folders/:folderId/permissions', getFolderPermissionsHandler('user'));
-adminMailboxesRouter.put('/:id/folders/:folderId/permissions', requireRecipientsWrite, putFolderPermissionsHandler('user'));
+// 9.5: recipients write (not requireRecipientsWrite — that one is organisation-wide only); the scope is checked by param('id')
+adminMailboxesRouter.put('/:id/folders/:folderId/permissions', requireArea('recipients'), putFolderPermissionsHandler('user'));
 
 // ── Mailbox delegation (user mailbox access rights) ─────────────────────────
 

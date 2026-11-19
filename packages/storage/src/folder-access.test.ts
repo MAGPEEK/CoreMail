@@ -9,7 +9,8 @@ import assert from 'node:assert/strict';
 import {
   FolderPermissionError, accessToFolder, describeFolderPermissions, folderAccessForUser, listFolderGrantMailboxes,
   listVisibleForeignMailboxes, listableFolders, loadMailboxFolderAccess, mergeForeignMailboxes,
-  planFolderPermissionChanges, readableFolderIds, setFolderPermissions, type FolderPermissionWriteDb,
+  planFolderPermissionChanges, readableFolderIds, setFolderPermissions, addsRights, affectsSubfolders, subfolderAuthorizer,
+  type FolderPermissionWriteDb,
 } from './folder-access.js';
 import { ALL_FOLDER_RIGHTS, DEFAULT_GRANTEE_KEY, READ_ONLY_FLOOR, ROLE_RIGHTS, normalizeRights } from './folder-permissions.js';
 import type { AccessibleMailbox } from './mailbox-access.js';
@@ -233,6 +234,47 @@ test('setFolderPermissions: writes, audits every change, refuses the owner, unkn
   await refused([{ granteeKey: 'user:bob', rights: 0x800, applyToSubfolders: false }] as never[], 'INVALID_RIGHTS');
   await refused([{ granteeKey: 'anonymous', rights: 0, applyToSubfolders: false }] as never[], 'INVALID_RIGHTS');
   assert.equal(db.audit.length, 3, 'refused changes write nothing');
+});
+
+test('w3 review: an authorizer refuses before anything is written; addsRights / affectsSubfolders', async () => {
+  const { db, prisma } = fakeDb();
+  const folder = { id: 'a-proj', mailboxId: 'mb-a', name: 'Projects' };
+  const actor = { userId: 'bob', source: 'webmail' as const };
+  await assert.rejects(
+    setFolderPermissions(prisma, {
+      folder, mailboxOwnerId: 'alice', replace: false, actor, authorize: () => 'FORBIDDEN_GRANTEE',
+      inputs: [{ granteeKey: 'user:erin', rights: ROLE_RIGHTS.reviewer, applyToSubfolders: false }],
+    }),
+    (e: unknown) => e instanceof FolderPermissionError && e.code === 'FORBIDDEN_GRANTEE',
+  );
+  assert.deepEqual([db.perms.length, db.audit.length], [0, 0]);
+
+  const c = (before: { rights: number; applyToSubfolders: boolean } | null, after: { rights: number; applyToSubfolders: boolean } | null) =>
+    ({ granteeKey: 'user:x', before, after });
+  assert.equal(addsRights(c(null, { rights: 1, applyToSubfolders: false })), true);
+  assert.equal(addsRights(c({ rights: 0x401, applyToSubfolders: false }, { rights: 0x1, applyToSubfolders: true })), false);
+  assert.equal(addsRights(c({ rights: 0x401, applyToSubfolders: false }, null)), false);
+  assert.equal(affectsSubfolders(c(null, { rights: 1, applyToSubfolders: false })), false);
+  assert.equal(affectsSubfolders(c({ rights: 0, applyToSubfolders: true }, null)), true, 'removing an inherited None reaches the subfolders');
+  assert.equal(affectsSubfolders(c(null, { rights: 1, applyToSubfolders: true })), true);
+});
+
+test('w3 review: subfolderAuthorizer — the folder owner right on one folder does not reach the folders below', async () => {
+  const { db, grant, prisma } = fakeDb();
+  const folders = db.folders.filter((f) => f.mailboxId === 'mb-a');
+  grant('a-proj', 'user:bob', ROLE_RIGHTS.owner); // Projects only, not Sub
+  const entry = { mailboxId: 'mb-a', readOnly: true, folderScoped: true };
+  const own = await loadMailboxFolderAccess(prisma, 'bob', entry);
+  const guard = subfolderAuthorizer(folders, 'a-proj', own);
+  const toSub = { granteeKey: 'user:bob', before: { rights: ROLE_RIGHTS.owner, applyToSubfolders: false }, after: { rights: ROLE_RIGHTS.owner, applyToSubfolders: true } };
+  assert.equal(guard([toSub]), 'SUBFOLDERS_NOT_ADMINISTERED');
+  assert.equal(guard([{ granteeKey: 'user:erin', before: null, after: { rights: ROLE_RIGHTS.reviewer, applyToSubfolders: false } }]), null);
+  // with the owner right on the whole subtree (inherited) it may
+  db.perms.length = 0;
+  grant('a-proj', 'user:bob', ROLE_RIGHTS.owner, true);
+  assert.equal(subfolderAuthorizer(folders, 'a-proj', await loadMailboxFolderAccess(prisma, 'bob', entry))([toSub]), null);
+  // the mailbox owner always may
+  assert.equal(subfolderAuthorizer(folders, 'a-proj', await loadMailboxFolderAccess(prisma, 'alice', 'owner', 'mb-a'))([toSub]), null);
 });
 
 test('describeFolderPermissions: own entries (Default first) and inherited ones with their source', async () => {

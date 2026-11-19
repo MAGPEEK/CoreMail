@@ -53,8 +53,8 @@ import {
   prisma, moveMessages, setFlags, touchMessages, expunge, loadRawMessage, folderSubtree,
   reservedFolderPrefix, reservedFolderNameError, loadMailboxFolderAccess, accessToFolder, listableFolders,
   canSeeFolder, canReadFolder, canCreateItems, canEditItem, canDeleteItem, canCreateSubfolder, canManageFolder,
-  canAdministerFolder, hasWriteRightSomewhere, folderRightsView,
-  type AccessibleMailbox, type FolderAccess, type FolderAccessDb, type MailboxFolderAccess,
+  canAdministerFolder, hasWriteRightSomewhere, folderRightsView, reparentedFolders, subfolderAuthorizer,
+  type AccessibleMailbox, type FolderAccess, type FolderAccessDb, type FolderTreeNode, type MailboxFolderAccess,
 } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import { protocolSubject, requireAuth } from '../middleware/auth.js';
@@ -195,6 +195,26 @@ function mayPlaceUnder(f: Foreign, parentId: string | null): boolean {
   return parentId ? canCreateSubfolder(accessOf(f, parentId)) : f.rights.level !== 'grants';
 }
 
+/** Placeholder id of a folder about to be created (reshapesOthers). */
+const NEW_FOLDER = 'new:folder';
+
+/** Every folder of the mailbox as a tree node (permission inheritance, w3 review checks). */
+function mailboxTree(f: Foreign): Promise<FolderTreeNode[]> {
+  return prisma.folder.findMany({ where: { mailboxId: f.entry.mailboxId }, select: { id: true, name: true, parentId: true } });
+}
+
+/**
+ * w3 review: would a grantee's folder change move OTHER folders of the mailbox
+ * (a folder's parent may come from another folder's name, storage
+ * folder-permissions.ts)? Moved folders could fall into the reach of the
+ * grantee's "apply to subfolders" grants — refused. Mailbox-level access: no limit.
+ */
+async function reshapesOthers(f: Foreign, change: (tree: FolderTreeNode[]) => FolderTreeNode[], exempt: string[] = []): Promise<boolean> {
+  if (f.rights.level !== 'grants') return false;
+  const tree = await mailboxTree(f);
+  return reparentedFolders(tree, change(tree), new Set(exempt)).length > 0;
+}
+
 /** Route-level auth (the router is mounted next to other routers on the same prefix). */
 const auth = (req: Request, res: Response, next: NextFunction): void => requireAuth(req, res, next);
 
@@ -242,6 +262,7 @@ export function createForeignMailboxRouter(kind: Kind): RouterType {
     if (!mayPlaceUnder(f, parentId)) { refuse(f, res); return; }
     const exists = await prisma.folder.findFirst({ where: { mailboxId: f.entry.mailboxId, name } });
     if (exists) { res.status(409).json({ error: 'Ordner existiert bereits' }); return; }
+    if (await reshapesOthers(f, (tree) => [...tree, { id: NEW_FOLDER, name, parentId }])) { refuse(f, res); return; }
     const folder = await prisma.folder.create({
       data: {
         mailboxId: f.entry.mailboxId,
@@ -292,6 +313,13 @@ export function createForeignMailboxRouter(kind: Kind): RouterType {
     const before = { name: folder.name, parentId: folder.parentId };
     const renamedOrMoved = (name !== undefined && name !== before.name)
       || (parsed.data.parentId !== undefined && parsed.data.parentId !== before.parentId);
+    const moved = (x: FolderTreeNode): FolderTreeNode => ({
+      ...x, name: name ?? x.name, parentId: parsed.data.parentId !== undefined ? parsed.data.parentId : x.parentId ?? null,
+    });
+    if (renamedOrMoved && await reshapesOthers(f, (tree) => tree.map((x) => (x.id === folderId ? moved(x) : x)), [folderId])) {
+      refuse(f, res);
+      return;
+    }
     const updated = await prisma.folder.update({
       where: { id: folderId },
       data: {
@@ -327,6 +355,8 @@ export function createForeignMailboxRouter(kind: Kind): RouterType {
     // w3: the folder owner right on the folder — and on every folder a recursive delete removes
     const doomed = opts.recursive ? await folderSubtree(prisma, folder) : [folder];
     if (!doomed.every((d) => canManageFolder(accessOf(f, d.id)))) { refuse(f, res); return; }
+    const gone = new Set(doomed.map((d) => d.id));
+    if (await reshapesOthers(f, (tree) => tree.filter((x) => !gone.has(x.id)))) { refuse(f, res); return; }
     const refusal = await folderDeleteRefusal(folder, opts, SYSTEM_FOLDER_NAMES, 'refuse');
     if (refusal) { res.status(409).json(refusal); return; }
     // A1: messages of the whole subtree go to Trash through the message store first —
@@ -388,7 +418,10 @@ export function createForeignMailboxRouter(kind: Kind): RouterType {
   });
   r.put('/folders/:folderId/permissions', auth, async (req: Request, res: Response) => {
     const hit = await permissionFolder(req, res);
-    if (hit) await replaceFolderPermissions(req, res, hit.folder, hit.f.entry.ownerUserId, 'webmail');
+    if (!hit) return;
+    // w3 review: entries that reach subfolders only with the owner right on all of them
+    const authorize = subfolderAuthorizer(await mailboxTree(hit.f), hit.folder.id, hit.f.rights);
+    await replaceFolderPermissions(req, res, hit.folder, hit.f.entry.ownerUserId, 'webmail', authorize);
   });
 
   // ── Message list + search ─────────────────────────────────────────────────

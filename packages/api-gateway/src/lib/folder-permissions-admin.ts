@@ -11,11 +11,21 @@
  * storage (`mailbox.folder.permission.set|remove`, source `admin`). Like every
  * other change of an account, the mailboxes of admin accounts are
  * ORGANIZATION_MANAGEMENT-only.
+ *
+ * Like the mailbox-level grants (9.5 review), an administrator other than
+ * ORGANIZATION_MANAGEMENT never gives rights to itself — nor to Default, which
+ * includes it (403 FORBIDDEN_GRANTEE) — and a scoped administrator gives rights
+ * only to users of its domains (others answer like an unknown user). Lowering
+ * or removing entries is always allowed.
  */
 import type { Request, Response } from 'express';
-import { prisma, listMailboxFolderPermissions, type FolderAccessDb } from '@coremail/storage';
+import {
+  prisma, listMailboxFolderPermissions, addsRights, granteeUserId,
+  type FolderAccessDb, type FolderPermissionAuthorizer,
+} from '@coremail/storage';
 import { replaceFolderPermissions, sendFolderPermissions, withFixedEntries } from './folder-permissions-api.js';
 import { canManageAccount } from './rbac.js';
+import { targetInScope } from '../middleware/admin-scope.js';
 
 export type FolderPermissionTargetKind = 'user' | 'shared';
 
@@ -40,6 +50,19 @@ export function listFolderPermissionsHandler(kind: FolderPermissionTargetKind) {
     if (!target) { res.status(404).json(NOT_FOUND); return; }
     const folders = await listMailboxFolderPermissions(prisma as unknown as FolderAccessDb, target.mailboxId);
     res.json(folders.map((f) => ({ ...f, entries: withFixedEntries(f.entries) })));
+  };
+}
+
+/** The admin rules for the planned changes of one request (see the module comment). */
+export function adminAuthorizer(req: Request): FolderPermissionAuthorizer {
+  const actor = req.apiUser!;
+  return async (changes) => {
+    for (const change of changes.filter(addsRights)) {
+      const userId = granteeUserId(change.granteeKey);
+      if (actor.role !== 'ORGANIZATION_MANAGEMENT' && (userId === null || userId === actor.userId)) return 'FORBIDDEN_GRANTEE';
+      if (userId !== null && !(await targetInScope(req, 'user', userId))) return 'UNKNOWN_GRANTEE';
+    }
+    return null;
   };
 }
 
@@ -70,6 +93,6 @@ export function putFolderPermissionsHandler(kind: FolderPermissionTargetKind) {
       res.status(403).json({ error: 'Nur die Organisationsverwaltung darf Admin-Postfächer ändern', code: 'FORBIDDEN' });
       return;
     }
-    await replaceFolderPermissions(req, res, hit.folder, hit.target.ownerUserId, 'admin');
+    await replaceFolderPermissions(req, res, hit.folder, hit.target.ownerUserId, 'admin', adminAuthorizer(req));
   };
 }

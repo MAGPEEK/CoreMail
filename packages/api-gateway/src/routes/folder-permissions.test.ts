@@ -218,7 +218,14 @@ test('admin: overview and per-folder update; admin mailboxes need ORGANIZATION_M
   const { listFolderPermissionsHandler, getFolderPermissionsHandler, putFolderPermissionsHandler } = await import('../lib/folder-permissions-admin.js');
   const app = express();
   app.use(express.json());
-  app.use((req, _res, next) => { (req as unknown as { apiUser: unknown }).apiUser = { userId: 'admin1', email: 'admin@ex.com', role: String(req.headers['x-role']) } as never; next(); });
+  app.use((req, _res, next) => {
+    // x-actor: the admin's user id; x-scope: a domain id → a scoped admin, else organisation-wide
+    const scope = req.headers['x-scope'] ? { kind: 'domains', domains: [{ id: String(req.headers['x-scope']), name: 'ex.com' }] } : { kind: 'organisation' };
+    (req as unknown as { apiUser: unknown }).apiUser = {
+      userId: String(req.headers['x-actor'] ?? 'admin1'), email: 'admin@ex.com', role: String(req.headers['x-role']), adminScope: scope,
+    } as never;
+    next();
+  });
   app.get('/m/:id/folder-permissions', listFolderPermissionsHandler('user'));
   app.get('/m/:id/folders/:folderId/permissions', getFolderPermissionsHandler('user'));
   app.put('/m/:id/folders/:folderId/permissions', putFolderPermissionsHandler('user'));
@@ -226,8 +233,8 @@ test('admin: overview and per-folder update; admin mailboxes need ORGANIZATION_M
   const server = app.listen(0, '127.0.0.1');
   await new Promise((r) => server.once('listening', r));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  const req = async (method: string, path: string, role: string, body?: unknown) => {
-    const r = await fetch(`${base}${path}`, { method, headers: { 'content-type': 'application/json', 'x-role': role }, ...(body ? { body: JSON.stringify(body) } : {}) });
+  const req = async (method: string, path: string, role: string, body?: unknown, extra: Record<string, string> = {}) => {
+    const r = await fetch(`${base}${path}`, { method, headers: { 'content-type': 'application/json', 'x-role': role, ...extra }, ...(body ? { body: JSON.stringify(body) } : {}) });
     return { status: r.status, json: await r.json() as Row & Row[] };
   };
   try {
@@ -239,9 +246,27 @@ test('admin: overview and per-folder update; admin mailboxes need ORGANIZATION_M
     assert.equal((await req('GET', '/s/sm1/folder-permissions', 'RECIPIENT_MANAGEMENT')).status, 200);
     assert.equal((await req('GET', '/m/erin/folders/f-sm1-inbox/permissions', 'RECIPIENT_MANAGEMENT')).status, 404, 'folder of another mailbox');
 
-    const put = await req('PUT', '/m/erin/folders/f-erin-proj/permissions', 'RECIPIENT_MANAGEMENT', { entries: [{ grantee: 'default', role: 'reviewer' }] });
+    // w3 review: an admin below ORGANIZATION_MANAGEMENT never grants to itself — nor to Default (includes it)
+    const toDefault = await req('PUT', '/m/erin/folders/f-erin-proj/permissions', 'RECIPIENT_MANAGEMENT', { entries: [{ grantee: 'default', role: 'reviewer' }] });
+    assert.deepEqual([toDefault.status, toDefault.json['code']], [403, 'FORBIDDEN_GRANTEE']);
+    const toSelf = await req('PUT', '/m/erin/folders/f-erin-proj/permissions', 'RECIPIENT_MANAGEMENT',
+      { entries: [{ grantee: { userId: 'hank' }, role: 'reviewer' }, { grantee: { userId: 'frank' }, role: 'owner' }] }, { 'x-actor': 'frank' });
+    assert.deepEqual([toSelf.status, toSelf.json['code']], [403, 'FORBIDDEN_GRANTEE']);
+    // a scoped admin: grantees of other domains answer like unknown users (no oracle); unchanged entries pass
+    const outOfScope = await req('PUT', '/m/erin/folders/f-erin-proj/permissions', 'RECIPIENT_MANAGEMENT',
+      { entries: [{ grantee: { userId: 'hank' }, role: 'reviewer' }, { grantee: { email: 'carol@ex.com' }, role: 'reviewer' }] }, { 'x-scope': 'd1' });
+    assert.deepEqual([outOfScope.status, outOfScope.json['code']], [400, 'UNKNOWN_GRANTEE']);
+    const inScope = await req('PUT', '/m/erin/folders/f-erin-proj/permissions', 'RECIPIENT_MANAGEMENT',
+      { entries: [{ grantee: { userId: 'hank' }, role: 'reviewer' }, { grantee: { userId: 'bob' }, role: 'reviewer' }] }, { 'x-scope': 'd1' });
+    assert.equal(inScope.status, 200, JSON.stringify(inScope.json));
+    assert.deepEqual(folderPerms.map((p) => p['granteeKey']).sort(), ['user:bob', 'user:hank']);
+
+    const put = await req('PUT', '/m/erin/folders/f-erin-proj/permissions', 'ORGANIZATION_MANAGEMENT', { entries: [{ grantee: 'default', role: 'reviewer' }] });
     assert.equal(put.status, 200);
-    assert.deepEqual(folderPerms.map((p) => p['granteeKey']), ['default'], 'replaced: hank removed, Default set');
+    assert.deepEqual(folderPerms.map((p) => p['granteeKey']), ['default'], 'replaced: hank and bob removed, Default set');
+    // lowering / removing is always allowed (also Default, also for a scoped admin)
+    assert.equal((await req('PUT', '/m/erin/folders/f-erin-proj/permissions', 'RECIPIENT_MANAGEMENT', { entries: [] }, { 'x-scope': 'd1' })).status, 200);
+    assert.equal(folderPerms.length, 0);
     await flush();
     assert.ok(auditRows.some((a) => a['action'] === 'mailbox.folder.permission.remove' && (a['changes'] as Row)['source'] === 'admin'));
 
@@ -251,6 +276,66 @@ test('admin: overview and per-folder update; admin mailboxes need ORGANIZATION_M
   } finally {
     server.close();
   }
+});
+
+test('w3 review: the folder owner right on one folder never extends to the folders below it', async () => {
+  erinTree();
+  addFolderPerm('f-erin-proj', 'user:hank', ROLE_RIGHTS.owner); // Projekte only, not Sub
+  const t = tok('hank');
+  const path = `${ERIN}/folders/f-erin-proj/permissions`;
+  for (const entries of [
+    [{ grantee: { userId: 'hank' }, role: 'owner', applyToSubfolders: true }], // itself onto Sub
+    [{ grantee: { userId: 'hank' }, role: 'owner' }, { grantee: 'default', role: 'reviewer', applyToSubfolders: true }],
+    [{ grantee: { userId: 'hank' }, role: 'owner' }, { grantee: { userId: 'bob' }, role: 'reviewer', applyToSubfolders: true }],
+  ]) {
+    const r = await call('PUT', path, t, { entries });
+    assert.deepEqual([r.status, r.json['code']], [403, 'SUBFOLDERS_NOT_ADMINISTERED'], JSON.stringify(entries));
+  }
+  assert.deepEqual(folderPerms.map((p) => p['granteeKey']), ['user:hank'], 'nothing written');
+  assert.equal((await call('GET', `${ERIN}/folders/f-erin-sub/messages`, t)).status, 404);
+  // an entry for Projekte alone is fine
+  assert.equal((await call('PUT', path, t, { entries: [{ grantee: { userId: 'hank' }, role: 'owner' }, { grantee: { userId: 'bob' }, role: 'reviewer' }] })).status, 200);
+  // erin's "None for bob below Projekte" may not be lifted by hank either
+  folderPerms.splice(0, folderPerms.length);
+  addFolderPerm('f-erin-proj', 'user:hank', ROLE_RIGHTS.owner);
+  addFolderPerm('f-erin-proj', 'user:bob', ROLE_RIGHTS.none, true);
+  const lift = await call('PUT', path, t, { entries: [{ grantee: { userId: 'hank' }, role: 'owner' }] });
+  assert.deepEqual([lift.status, lift.json['code']], [403, 'SUBFOLDERS_NOT_ADMINISTERED']);
+  // with the owner right on the whole subtree it may
+  folderPerms.splice(0, folderPerms.length);
+  addFolderPerm('f-erin-proj', 'user:hank', ROLE_RIGHTS.owner, true);
+  assert.equal((await call('PUT', path, t, { entries: [{ grantee: { userId: 'hank' }, role: 'owner', applyToSubfolders: true }, { grantee: 'default', role: 'reviewer', applyToSubfolders: true }] })).status, 200);
+});
+
+test('w3 review: a grantee cannot pull other folders below its own by name (create / rename / delete)', async () => {
+  erinTree();
+  addFolder('f-erin-mr', 'mb-erin', 'Mr. Smith'); // top level, no grants; "." in the name
+  addFolder('f-erin-own', 'mb-erin', 'Hank', 'f-erin-proj');
+  addFolder('f-erin-old', 'mb-erin', 'Old', 'f-erin-proj');
+  addFolder('f-erin-oldsub', 'mb-erin', 'Old.sub'); // IMAP child of "Old"
+  addFolderPerm('f-erin-proj', 'user:hank', ROLE_RIGHTS.owner, true);
+  const t = tok('hank');
+  const create = await call('POST', `${ERIN}/folders`, t, { name: 'Mr', parentId: 'f-erin-proj' });
+  assert.deepEqual([create.status, create.json['code']], [403, 'NO_PERMISSION'], '"Mr. Smith" would move below Projekte');
+  assert.equal((await call('POST', `${ERIN}/folders`, t, { name: 'Neu', parentId: 'f-erin-proj' })).status, 201);
+  const rename = await call('PATCH', `${ERIN}/folders/f-erin-own`, t, { name: 'Mr' });
+  assert.deepEqual([rename.status, rename.json['code']], [403, 'NO_PERMISSION']);
+  assert.equal((await call('PATCH', `${ERIN}/folders/f-erin-own`, t, { name: 'Hank 2' })).status, 200);
+  const del = await call('DELETE', `${ERIN}/folders/f-erin-old`, t);
+  assert.deepEqual([del.status, del.json['code']], [403, 'NO_PERMISSION'], '"Old.sub" would lose its parent');
+  assert.equal((await call('GET', `${ERIN}/folders/f-erin-mr/messages`, t)).status, 404);
+  // the mailbox owner (and full access) is not limited
+  assert.equal((await call('POST', `${ERIN}/folders`, tok('dave'), { name: 'Mr', parentId: 'f-erin-proj' })).status, 201);
+});
+
+test('w3 review: GET /mail/delegated-mailboxes lists folders only for a read delegation of an active owner', async () => {
+  const byMailbox = (rows: Row[]) => Object.fromEntries(rows.map((r) => [r['mailboxId'], (r['folders'] as Row[]).length]));
+  const sendAs = await call('GET', '/api/v1/mail/delegated-mailboxes', tok('bob'));
+  assert.equal(sendAs.status, 200);
+  assert.deepEqual(byMailbox(sendAs.json as Row[]), { 'mb-erin': 0 }, 'SEND_AS only: no folders');
+  assert.equal(((sendAs.json as Row[])[0]!['mailboxOwner'] as Row)['active'], undefined, 'shape unchanged');
+  assert.deepEqual(byMailbox((await call('GET', '/api/v1/mail/delegated-mailboxes', tok('frank'))).json as Row[]), { 'mb-erin': 2 });
+  assert.deepEqual(byMailbox((await call('GET', '/api/v1/mail/delegated-mailboxes', tok('dave'))).json as Row[]), { 'mb-erin': 2, 'mb-gina': 0 }, 'deactivated owner');
 });
 
 test('pure: body parsing, fixed entries, SSE folder filter, webmail module gate', () => {

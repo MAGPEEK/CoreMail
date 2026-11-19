@@ -50,3 +50,18 @@ except IMAP SETACL/DELETEACL/LISTRIGHTS, see Changed).
 - Mailbox-level paths that do not know folder permissions (JMAP, MAPI, pre-9.3
   REST routes, recover deleted items) can never grant more than before: folder
   grants only add on top of mailbox-level grants.
+- Review: a grantee can no longer pull other folders of the mailbox below its
+  own by name (create / rename / delete of a folder whose name is the "." prefix
+  of another folder), over REST and IMAP.
+- Review: the folder owner right on one folder no longer reaches the folders
+  below it — entries that apply to subfolders need the owner right on all of
+  them (REST `SUBFOLDERS_NOT_ADMINISTERED`, IMAP SETACL / DELETEACL `NO [CANNOT]`).
+- Review: admin folder permissions follow the 9.5 rules of mailbox grants —
+  no rights to oneself or to Default below ORGANIZATION_MANAGEMENT
+  (`FORBIDDEN_GRANTEE`), grantees of a scoped admin only from its domains;
+  the update route is available to scoped recipient admins.
+- Review: `GET /api/v1/mail/delegated-mailboxes` no longer lists the folders
+  (names, counts) of SEND_AS / SEND_ON_BEHALF-only delegations or of a
+  deactivated owner (pre-existing leak).
+- Review: a Default change re-checks every idling IMAP session at once; the
+  webmail re-reads folder panes and message lists on a grant change.

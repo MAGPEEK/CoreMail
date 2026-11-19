@@ -17,14 +17,16 @@
  *   SETACL / DELETEACL → need "a": set / remove the folder permission of a user
  *                (login address) or of "anyone" (= Default, every user of the
  *                organisation). "anonymous", negative rights ("-identifier") and
- *                the mailbox owner are refused with NO [CANNOT]. Changes are
+ *                the mailbox owner are refused with NO [CANNOT]; so is a grantee's
+ *                change of an entry that reaches subfolders it does not administer
+ *                (w3 review: storage subfolderAuthorizer). Changes are
  *                audited and end the grantee's live access at once
  *                (`permission-change`).
  *
  * A foreign name the user may not open is answered exactly like a missing mailbox.
  */
 import {
-  prisma, describeFolderPermissions, setFolderPermissions, publishFolderPermissionChange, canAdministerFolder,
+  prisma, describeFolderPermissions, setFolderPermissions, publishFolderPermissionChange, canAdministerFolder, subfolderAuthorizer,
   FolderPermissionError, DEFAULT_GRANTEE_KEY, granteeUserId, userGranteeKey,
   type FolderPermissionInput, type FolderPermissionWriteDb,
 } from '@coremail/storage';
@@ -153,6 +155,10 @@ export async function handleSetAcl(session: ImapSession, tag: string, args: stri
       inputs: [input],
       replace: false,
       actor: { userId: session.userId ?? '', ...(session.userEmail ? { email: session.userEmail } : {}), source: 'imap' },
+      authorize: subfolderAuthorizer(
+        await prisma.folder.findMany({ where: { mailboxId: folder.mailboxId }, select: { id: true, name: true, parentId: true } }),
+        folder.id, folder.target.folders,
+      ),
     });
     await publishFolderPermissionChange(changes, session.userId ?? '');
     log.info({ id: session.id, folderId: folder.id, grantee: granteeUserId(grantee.key) ?? grantee.key, changes: changes.length }, `IMAP ${command}`);

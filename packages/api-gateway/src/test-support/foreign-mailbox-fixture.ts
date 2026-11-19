@@ -27,7 +27,8 @@ const shared: Record<string, Row> = {
   sm2: { id: 'sm2', email: 'sales@ex.com', displayName: 'Sales', active: true, mailboxId: 'mb-sm2' },
   sm3: { id: 'sm3', email: 'old@ex.com', displayName: 'Old', active: false, mailboxId: 'mb-sm3' },
 };
-// dave: FULL_ACCESS on erin's mailbox and on gina's (gina deactivated); frank: READ_ONLY on erin's.
+// dave: FULL_ACCESS on erin's mailbox and on gina's (gina deactivated); frank: READ_ONLY on erin's;
+// bob: SEND_AS on erin's (no read access).
 const owners: Record<string, Row> = {
   'mb-erin': { id: 'erin', email: 'erin@ex.com', displayName: 'Erin', active: true },
   'mb-gina': { id: 'gina', email: 'gina@ex.com', displayName: 'Gina', active: false },
@@ -36,6 +37,7 @@ const delegates = [
   { granteeId: 'dave',  mailboxId: 'mb-erin', permission: 'FULL_ACCESS' },
   { granteeId: 'frank', mailboxId: 'mb-erin', permission: 'READ_ONLY' },
   { granteeId: 'dave',  mailboxId: 'mb-gina', permission: 'FULL_ACCESS' },
+  { granteeId: 'bob',   mailboxId: 'mb-erin', permission: 'SEND_AS' },
 ];
 
 export let folders: Row[] = [];
@@ -54,6 +56,7 @@ const mailboxOwner: Record<string, string> = { 'mb-alice': 'alice', 'mb-erin': '
 export const folderPerms: Row[] = [];
 const users: Row[] = ['alice', 'bob', 'carol', 'dave', 'erin', 'frank', 'gina', 'hank'].map((id) => ({
   id, email: `${id}@ex.com`, displayName: id[0]!.toUpperCase() + id.slice(1), active: id !== 'gina',
+  domainId: id === 'carol' ? 'd2' : 'd1', // admin scope tests: carol lives in another domain
 }));
 const mailboxRows = (): Row[] => [
   ...Object.entries(mailboxOwner).map(([id, userId]) => ({ id, userId, sharedBoxId: null })),
@@ -177,7 +180,11 @@ installFakePrisma({
       const w = (a as { where: Row }).where;
       return delegates
         .filter((d) => d.granteeId === w['granteeId'] && matchPerm(w['permission'], d.permission))
-        .map((d) => ({ permission: d.permission, mailbox: { id: d.mailboxId, user: owners[d.mailboxId] ?? null } }));
+        .map((d) => ({
+          id: `del-${d.granteeId}-${d.mailboxId}`, grantedAt: new Date(0), permission: d.permission,
+          // folders: GET /mail/delegated-mailboxes (include mailbox.folders)
+          mailbox: { id: d.mailboxId, user: owners[d.mailboxId] ?? null, folders: folders.filter((f) => f['mailboxId'] === d.mailboxId) },
+        }));
     },
   },
   auditLog: {

@@ -3,8 +3,8 @@ import {
   parseRawMessage, storeRawMessage, truncateBodyColumn, parseMimeTree, headerBytes, bodyBytes,
   attachmentKey, uploadBuffer, loadThreadReferences, deleteFolderMovingMail, announceFolderListChange,
   canCreateItems, canCreateSubfolder, canDeleteItem, canEditItem, canManageFolder, canReadFolder, hasAnyWriteRight,
-  hasWriteRightSomewhere,
-  type FolderAccess, type RawSourceMessage,
+  hasWriteRightSomewhere, reparentedFolders,
+  type FolderAccess, type FolderTreeNode, type RawSourceMessage,
 } from '@coremail/storage';
 import { type Chunk, flagList, isValidFlag, literal, joinChunks, toBuffer } from '../fetch/imap-string.js';
 import { parseFetchItems, sectionLabel, FetchParseError, type FetchItem } from '../fetch/fetch-items.js';
@@ -68,6 +68,27 @@ async function mayCreateFolderNamed(target: MailboxTarget, name: string): Promis
   if (dot <= 0) return mayCreateTopLevel(target);
   const parent = await prisma.folder.findFirst({ where: { mailboxId: target.mailboxId, name: name.slice(0, dot) }, select: { id: true } });
   return parent ? canCreateSubfolder(folderAccessIn(target, parent.id)) : mayCreateTopLevel(target);
+}
+
+/** Placeholder id of a folder about to be created (reshapesOthers). */
+const NEW_FOLDER = 'new:folder';
+
+/**
+ * w3 review: would a grantee's CREATE / RENAME / DELETE move OTHER folders of the
+ * mailbox (a folder's parent may come from another folder's name, storage
+ * folder-permissions.ts)? They could fall into the reach of the grantee's
+ * "apply to subfolders" grants — refused. Own mailbox / FULL_ACCESS: no limit.
+ */
+async function reshapesOthers(
+  target: Pick<MailboxTarget, 'folders' | 'mailboxId'>,
+  change: (tree: FolderTreeNode[]) => FolderTreeNode[],
+  exempt: string[] = [],
+): Promise<boolean> {
+  if (target.folders.level !== 'grants') return false;
+  const tree: FolderTreeNode[] = await prisma.folder.findMany({
+    where: { mailboxId: target.mailboxId }, select: { id: true, name: true, parentId: true },
+  });
+  return reparentedFolders(tree, change(tree), new Set(exempt)).length > 0;
 }
 
 /** Every message may be deleted: the "delete all" right, or "delete own" and all are the user's. */
@@ -227,6 +248,7 @@ export async function handleCreate(
     sendNo(session, tag, '[ALREADYEXISTS] Mailbox already exists');
     return;
   }
+  if (await reshapesOthers(target, (tree) => [...tree, { id: NEW_FOLDER, name, parentId: null }])) { sendNo(session, tag, NOPERM); return; }
   await prisma.folder.create({
     data: { mailboxId: target.mailboxId, name, displayName: name },
   });
@@ -257,6 +279,11 @@ export async function handleDeleteFolder(
     return;
   }
   if (!canManageFolder(folder.access)) { sendNo(session, tag, NOPERM); return; }
+  // w3 review: the folders linked to it move up, its inferior names lose their parent — not for a grantee
+  const reparented = (tree: FolderTreeNode[]): FolderTreeNode[] => tree
+    .filter((f) => f.id !== folder.id)
+    .map((f) => (f.parentId === folder.id ? { ...f, parentId: folder.parentId ?? null } : f));
+  if (await reshapesOthers(folder.target, reparented)) { sendNo(session, tag, NOPERM); return; }
   // Same path as the webmail: the messages go to the mailbox Trash through the
   // message store (new UID + modSeq, recoverable; expunged first when the folder is
   // below Trash) — the Message→Folder cascade would remove them for good. Only this
@@ -332,6 +359,11 @@ export async function handleRename(
   const taken = new Set(folders.flatMap((f) => [f.name, shown(f)]));
   if (newName === 'INBOX' || renames.some((r) => taken.has(r.name))) {
     sendNo(session, tag, '[ALREADYEXISTS] Target folder exists');
+    return;
+  }
+  const newNames = new Map(renames.map((r) => [r.id, r.name]));
+  if (await reshapesOthers(from.target, (tree) => tree.map((f) => ({ ...f, name: newNames.get(f.id) ?? f.name })), [...newNames.keys()])) {
+    sendNo(session, tag, NOPERM);
     return;
   }
   await prisma.$transaction(async (tx) => {

@@ -14,7 +14,8 @@
  *
  * Changing permissions: setFolderPermissions() (REST, IMAP SETACL/DELETEACL,
  * admin) validates, writes, audits every change and returns the changes for
- * publishFolderPermissionChange() (folder-permission-events.ts).
+ * publishFolderPermissionChange() (permission-events.ts). Callers add their own
+ * rules through `authorize` (admin scope, a grantee's subtree — w3 review).
  *
  * The database client is passed in (structural types): the IMAP test harness
  * runs this module unchanged against an in-memory fake.
@@ -22,7 +23,8 @@
 import { listAccessibleMailboxes, type AccessibleMailbox, type MailboxAccessDb } from './mailbox-access.js';
 import {
   ALL_FOLDER_RIGHTS, DEFAULT_GRANTEE_KEY, NO_FOLDER_ACCESS, READ_ONLY_FLOOR, FolderRight,
-  applicableGrant, canReadFolder, canSeeFolder, computeFolderRights, hasAnyWriteRight, folderParents, folderPath, granteeUserId,
+  applicableGrant, canAdministerFolder, canReadFolder, canSeeFolder, computeFolderRights, descendantFolderIds, hasAnyWriteRight,
+  folderParents, folderPath, granteeUserId,
   indexGrants, normalizeRights, roleOfRights, userGranteeKey,
   type FolderAccess, type FolderAccessLevel, type FolderGrantRow, type FolderTreeNode, type FolderRole,
 } from './folder-permissions.js';
@@ -351,7 +353,17 @@ export interface PermissionActor {
   userAgent?: string;
 }
 
-export type FolderPermissionErrorCode = 'UNKNOWN_GRANTEE' | 'OWNER_GRANTEE' | 'INVALID_RIGHTS' | 'TOO_MANY_ENTRIES';
+export type FolderPermissionErrorCode =
+  | 'UNKNOWN_GRANTEE' | 'OWNER_GRANTEE' | 'INVALID_RIGHTS' | 'TOO_MANY_ENTRIES'
+  /** An administrator other than ORGANIZATION_MANAGEMENT gives rights to itself or to Default. */
+  | 'FORBIDDEN_GRANTEE'
+  /** A grantee changes an entry that reaches subfolders it does not administer. */
+  | 'SUBFOLDERS_NOT_ADMINISTERED';
+
+/** Decides whether the planned changes may be applied (null = yes); runs before any write. */
+export type FolderPermissionAuthorizer = (
+  changes: readonly FolderPermissionChange[],
+) => FolderPermissionErrorCode | null | Promise<FolderPermissionErrorCode | null>;
 
 export class FolderPermissionError extends Error {
   constructor(readonly code: FolderPermissionErrorCode, message: string) {
@@ -398,6 +410,39 @@ export function planFolderPermissionChanges(
   return changes;
 }
 
+/** Pure: does the change give the grantee a right its entry did not hold before? */
+export function addsRights(change: FolderPermissionChange): boolean {
+  return change.after !== null && (change.after.rights & ~(change.before?.rights ?? 0)) !== 0;
+}
+
+/**
+ * Pure: does the change reach the folder's subfolders — the entry applies to
+ * them before or after? (Lowering or removing such an entry can raise a
+ * grantee's rights below as well: an inherited user "None" that kept Default
+ * out disappears.)
+ */
+export function affectsSubfolders(change: FolderPermissionChange): boolean {
+  return change.before?.applyToSubfolders === true || change.after?.applyToSubfolders === true;
+}
+
+/**
+ * The authorizer of a grantee who administers `rootId` through folder
+ * permissions (w3 review): an entry that reaches subfolders may only change
+ * when the user also administers every folder below — the folder owner right
+ * on one folder never extends to the folders below it. Owners pass always.
+ */
+export function subfolderAuthorizer(
+  folders: readonly FolderTreeNode[],
+  rootId: string,
+  m: MailboxFolderAccess,
+): FolderPermissionAuthorizer {
+  return (changes) => {
+    if (!changes.some(affectsSubfolders)) return null;
+    const below = descendantFolderIds(folders, rootId);
+    return below.every((id) => canAdministerFolder(accessToFolder(m, id))) ? null : 'SUBFOLDERS_NOT_ADMINISTERED';
+  };
+}
+
 function validInput(input: FolderPermissionInput): boolean {
   if (input.granteeKey !== DEFAULT_GRANTEE_KEY && granteeUserId(input.granteeKey) === null) return false;
   if ('remove' in input) return true;
@@ -419,6 +464,8 @@ export async function setFolderPermissions(
     inputs: readonly FolderPermissionInput[];
     replace: boolean;
     actor: PermissionActor;
+    /** Further rules of the caller (admin scope, a grantee's subtree), checked on the planned changes. */
+    authorize?: FolderPermissionAuthorizer;
   },
 ): Promise<FolderPermissionChange[]> {
   const { folder, inputs, actor } = args;
@@ -435,6 +482,8 @@ export async function setFolderPermissions(
   const apply = async (tx: FolderPermissionWriteDb): Promise<FolderPermissionChange[]> => {
     const current = await tx.folderPermission.findMany({ where: { folderId: folder.id }, select: GRANT_SELECT } as never) as GrantRow[];
     const changes = planFolderPermissionChanges(current, inputs, args.replace);
+    const refusal = changes.length > 0 && args.authorize ? await args.authorize(changes) : null;
+    if (refusal) throw new FolderPermissionError(refusal, 'Permission change not allowed');
     for (const change of changes) {
       if (change.after === null) {
         await tx.folderPermission.deleteMany({ where: { folderId: folder.id, granteeKey: change.granteeKey } } as never);

@@ -8,8 +8,8 @@ import assert from 'node:assert/strict';
 import {
   ALL_FOLDER_RIGHTS, DEFAULT_GRANTEE_KEY, FolderRight, READ_ONLY_FLOOR, ROLE_RIGHTS,
   applicableGrant, canAdministerFolder, canCreateItems, canCreateSubfolder, canDeleteItem, canEditItem,
-  canManageFolder, canReadFolder, canSeeFolder, computeFolderRights, folderParents, folderPath, granteeUserId,
-  hasAnyWriteRight, indexGrants, normalizeRights, roleOfRights, userGranteeKey, type FolderGrantRow,
+  canManageFolder, canReadFolder, canSeeFolder, computeFolderRights, descendantFolderIds, folderParents, folderPath, granteeUserId,
+  hasAnyWriteRight, indexGrants, normalizeRights, reparentedFolders, roleOfRights, userGranteeKey, type FolderGrantRow,
 } from './folder-permissions.js';
 
 const R = FolderRight;
@@ -66,6 +66,29 @@ test('folderParents: parentId first, else the "." name prefix; root folders (als
   assert.equal(p.get('loose'), null, 'a parentless webmail folder is not a subfolder of INBOX');
   assert.equal(p.get('inbox'), null);
   assert.deepEqual(folderPath('proj-a-x', p), ['proj-a-x', 'proj-a', 'proj']);
+});
+
+test('w3 review: descendantFolderIds follows parentId and the "." name prefix', () => {
+  assert.deepEqual(descendantFolderIds(folders, 'proj').sort(), ['proj-a', 'proj-a-x']);
+  assert.deepEqual(descendantFolderIds(folders, 'imap-parent'), ['imap-child']);
+  assert.deepEqual(descendantFolderIds(folders, 'loose'), []);
+});
+
+test('w3 review: reparentedFolders — a new or renamed folder must not adopt unrelated folders by name', () => {
+  const tree = [
+    { id: 'x', name: 'Shared', parentId: null },
+    { id: 'mr', name: 'Mr. Smith', parentId: null }, // a top-level webmail folder whose name contains "."
+    { id: 'y', name: 'Old', parentId: null },
+    { id: 'y-sub', name: 'Old.sub', parentId: null }, // IMAP child of "Old"
+  ];
+  // a grantee creates "Mr" below its shared folder: "Mr. Smith" would move below it
+  assert.deepEqual(reparentedFolders(tree, [...tree, { id: 'new', name: 'Mr', parentId: 'x' }]), ['mr']);
+  assert.deepEqual(reparentedFolders(tree, [...tree, { id: 'new', name: 'Other', parentId: 'x' }]), []);
+  // renaming "Shared" to "Mr" adopts it as well; the renamed folder itself is exempt
+  const renamed = tree.map((f) => (f.id === 'x' ? { ...f, name: 'Mr' } : f));
+  assert.deepEqual(reparentedFolders(tree, renamed, new Set(['x'])), ['mr']);
+  // deleting "Old" leaves its IMAP child without a parent
+  assert.deepEqual(reparentedFolders(tree, tree.filter((f) => f.id !== 'y')), ['y-sub']);
 });
 
 test('folderPath is cycle-safe', () => {

@@ -150,6 +150,7 @@ matrix already limits the route to ORGANIZATION_MANAGEMENT (never scoped) ·
 | `PUT /mailboxes/quota-defaults`, `POST /mailboxes/recalculate-all-quotas`, `POST /mailboxes/bulk-provision` | org |
 | `POST /mailboxes` | OUT_OF_SCOPE unless `domainId` is in the scope (the address must match the domain — existing rule); role ≠ USER → `FORBIDDEN_ROLE` |
 | `GET/PUT/DELETE /mailboxes/:id`, `POST /:id/recoverable/purge`, `/:id/recalculate-quota`, `/:id/revoke-sessions`, `/:id/provision`, `GET/PUT /:id/mail-flow`, `GET/POST /:id/delegates`, `DELETE /:id/delegates/:granteeId` | 404 (`router.param('id')`); delegate grantee outside → 404 `Grantee not found`; admin accounts → `FORBIDDEN_ROLE` |
+| `GET /mailboxes/:id/folder-permissions`, `GET/PUT /:id/folders/:folderId/permissions` and the same under `/shared-mailboxes/:id` (w3) | 404 (`router.param('id')`); a grantee outside the scope gets no rights (400 `UNKNOWN_GRANTEE`, like an unknown user); no rights to oneself or to Default below ORGANIZATION_MANAGEMENT (403 `FORBIDDEN_GRANTEE`); admin accounts → `FORBIDDEN` |
 | `GET /shared-mailboxes` | filter |
 | `POST /shared-mailboxes` | OUT_OF_SCOPE (domainId) |
 | `GET/PUT/DELETE /shared-mailboxes/:id`, `/:id/provision`, `/:id/mail-flow`, `/:id/permissions…` | 404; permission grantee outside → 404 `User not found` |

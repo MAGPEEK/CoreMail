@@ -111,6 +111,22 @@ export async function run(state) {
     return '403';
   });
 
+  await check('folder-permissions: a SEND_AS delegation reveals no folders of A (GET /mail/delegated-mailboxes)', async () => {
+    const g = await http('POST', `/api/v1/admin/mailboxes/${state.users.a.id}/delegates`, {
+      token: admin, body: { granteeId: state.users.b.id, permission: 'SEND_AS' },
+    });
+    assert(g.status === 201, `grant SEND_AS ${g.status} ${g.text.slice(0, 200)}`);
+    try {
+      const list = (await http('GET', '/api/v1/mail/delegated-mailboxes', { token: B })).json ?? [];
+      const entry = list.find((d) => d.mailboxOwner?.id === state.users.a.id);
+      assert(entry?.permission === 'SEND_AS', `delegation ${JSON.stringify(entry)}`);
+      assert(Array.isArray(entry.folders) && entry.folders.length === 0, `folders listed: ${entry.folders?.length}`);
+      return 'no folders';
+    } finally {
+      await http('DELETE', `/api/v1/admin/mailboxes/${state.users.a.id}/delegates/${state.users.b.id}`, { token: admin });
+    }
+  });
+
   await check('folder-permissions: admin overview lists the folders of A\'s mailbox', async () => {
     const r = await http('GET', `/api/v1/admin/mailboxes/${state.users.a.id}/folder-permissions`, { token: admin });
     assert(r.status === 200 && Array.isArray(r.json) && r.json.some((f) => f.id === ctx.sub.id), `GET ${r.status}`);

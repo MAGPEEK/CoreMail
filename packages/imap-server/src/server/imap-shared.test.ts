@@ -1100,4 +1100,58 @@ describe('w3: folder permissions', () => {
     assert.match((await client.cmd('CREATE "Other Users/dave@example.test/TopLevel"')).tagged, /NO \[NOPERM\]/, 'top level needs mailbox access');
     assert.equal((await client.cmd('CREATE "Other Users/dave@example.test/Projekte/Neu"')).status, 'OK');
   });
+
+  test('w3 review: SETACL / DELETEACL of an entry that reaches subfolders needs the owner right on all of them', async (t) => {
+    const { client, db } = await login(t);
+    daveFolders(db);
+    db.permissions.push(
+      grant('f-dave-proj', 'mb-dave', 'user:u1', ROLE.owner), // Projects only, not Projects.Sub
+      grant('f-dave-proj', 'mb-dave', 'user:u3', ROLE.reviewer, true),
+    );
+    invalidateAccessCaches();
+    assert.match((await client.cmd(`SETACL ${DAVE_PROJ} carol@example.test +swte`)).tagged, /NO \[CANNOT\]/, 'more rights below Projects');
+    assert.match((await client.cmd(`DELETEACL ${DAVE_PROJ} carol@example.test`)).tagged, /NO \[CANNOT\]/);
+    assert.equal(db.permissions.find((p) => p.granteeKey === 'user:u3')?.rights, ROLE.reviewer, 'unchanged');
+    assert.equal((await client.cmd(`SETACL ${DAVE_PROJ} alice@example.test lr`)).status, 'OK', 'an entry for Projects alone');
+    assert.match((await client.cmd(`SELECT ${DAVE_SUB}`)).tagged, /NO \[NONEXISTENT\]/);
+  });
+
+  test('w3 review: a grantee cannot pull other folders below its own by name (CREATE / RENAME / DELETE)', async (t) => {
+    const { client, db } = await login(t);
+    daveFolders(db);
+    db.folders.push(
+      { id: 'f-dave-deep', mailboxId: 'mb-dave', name: 'Projects.Deep.Secret', displayName: 'Projects.Deep.Secret' }, // no "Projects.Deep"
+      { id: 'f-dave-mine', mailboxId: 'mb-dave', name: 'Projects.Mine', displayName: 'Projects.Mine' },
+    );
+    db.deliver('f-dave-deep', 'TOPSECRET deep');
+    db.permissions.push(grant('f-dave-proj', 'mb-dave', 'user:u1', ROLE.owner, true));
+    invalidateAccessCaches();
+    const deep = '"Other Users/dave@example.test/Projects/Deep"';
+    assert.match((await client.cmd(`CREATE ${deep}`)).tagged, /NO \[NOPERM\]/, '"Projects.Deep.Secret" would move below Projects');
+    assert.match((await client.cmd(`RENAME "Other Users/dave@example.test/Projects/Mine" ${deep}`)).tagged, /NO \[NOPERM\]/);
+    assert.match((await client.cmd('SELECT "Other Users/dave@example.test/Projects/Deep/Secret"')).tagged, /NO \[NONEXISTENT\]/);
+    assert.doesNotMatch((await client.cmd('LIST "" "Other Users/dave@example.test/*"')).raw, /TOPSECRET|Deep/);
+    // deleting Projects would leave Projects.Sub / Projects.Mine without their parent
+    assert.match((await client.cmd(`DELETE ${DAVE_PROJ}`)).tagged, /NO \[NOPERM\]/);
+    assert.equal((await client.cmd('CREATE "Other Users/dave@example.test/Projects/Neu"')).status, 'OK');
+    assert.equal((await client.cmd('DELETE "Other Users/dave@example.test/Projects/Neu"')).status, 'OK');
+  });
+
+  test('w3 review: a permission-change of another user (a Default change) re-checks every IDLE session at once', async (t) => {
+    setIdlePollInterval(60_000);
+    const { client, db } = await login(t);
+    daveFolders(db);
+    db.permissions.push(grant('f-dave-proj', 'mb-dave', 'default', ROLE.reviewer));
+    invalidateAccessCaches();
+    assert.equal((await client.cmd(`EXAMINE ${DAVE_PROJ}`)).status, 'OK');
+    client.write('I3 IDLE\r\n');
+    assert.match(await client.line(), /^\+ /);
+    await new Promise((r) => setTimeout(r, 50));
+    db.permissions.length = 0;
+    // dave removed Default — the event names dave (publishFolderPermissionChange's fallback user)
+    applyAuthInvalidation({ userId: 'u4', reason: 'permission-change' });
+    assert.equal(await client.line(), '* OK [CLOSED] Access to the selected mailbox was revoked');
+    client.write('DONE\r\n');
+    assert.match(await client.line(), /^I3 OK/);
+  });
 });

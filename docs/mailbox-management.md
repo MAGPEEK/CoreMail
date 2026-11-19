@@ -244,6 +244,26 @@ is its "." prefix (IMAP, `Projects.2026` → `Projects`). A webmail folder witho
 parent is not a subfolder of INBOX for the permissions (the webmail only shows
 it there).
 
+### Limits for grantees and administrators
+
+* A grantee (folder permissions, no mailbox-level FULL_ACCESS) may not create,
+  rename, move or delete a folder when that would move OTHER folders of the
+  mailbox — e.g. creating `Mr` below a shared folder would otherwise adopt the
+  owner's top-level folder `Mr. Smith` through the name rule above (storage
+  `reparentedFolders`; REST 403 `NO_PERMISSION`, IMAP `NO [NOPERM]`).
+* The folder owner right on one folder does not reach the folders below it: a
+  grantee may change an entry that applies to subfolders (before or after the
+  change) only when it holds the folder owner right on every subfolder (storage
+  `subfolderAuthorizer`; REST 403 `SUBFOLDERS_NOT_ADMINISTERED`, IMAP
+  `NO [CANNOT]`).
+* Administrators other than ORGANIZATION_MANAGEMENT never give rights to
+  themselves or to Default (which includes them) — 403 `FORBIDDEN_GRANTEE`; a
+  scoped administrator gives rights only to users of its domains (others answer
+  like an unknown user). Lowering and removing entries is always allowed.
+* `GET /api/v1/mail/delegated-mailboxes` lists the folders of a delegation only
+  for FULL_ACCESS / READ_ONLY of an active owner (SEND_AS / SEND_ON_BEHALF:
+  `folders: []`).
+
 ### Where it is enforced
 
 | Path | Behaviour |

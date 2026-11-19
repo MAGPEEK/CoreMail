@@ -129,6 +129,30 @@ export function folderParents(folders: readonly FolderTreeNode[]): Map<string, s
   return out;
 }
 
+/** Pure: every folder below `rootId` (not the folder itself), by the same parents as folderParents(). */
+export function descendantFolderIds(folders: readonly FolderTreeNode[], rootId: string): string[] {
+  const parents = folderParents(folders);
+  return folders.filter((f) => f.id !== rootId && folderPath(f.id, parents).includes(rootId)).map((f) => f.id);
+}
+
+/**
+ * Pure: the folders (other than `exempt`) whose parent differs between two
+ * versions of a mailbox's folder list. A folder's parent can come from another
+ * folder's NAME (the "." prefix), so creating, renaming or deleting one folder
+ * may move unrelated folders below another one — and with it into the reach of
+ * its "apply to subfolders" grants. Grantees must never reshape the tree like
+ * that (w3 review); only the folders they change themselves may move.
+ */
+export function reparentedFolders(
+  before: readonly FolderTreeNode[],
+  after: readonly FolderTreeNode[],
+  exempt: ReadonlySet<string> = new Set(),
+): string[] {
+  const was = folderParents(before);
+  const now = folderParents(after);
+  return [...now.keys()].filter((id) => !exempt.has(id) && was.has(id) && was.get(id) !== now.get(id));
+}
+
 /** Pure: the folder and its ancestors, nearest first (cycle-safe). */
 export function folderPath(folderId: string, parents: ReadonlyMap<string, string | null>): string[] {
   const path: string[] = [];

@@ -19,7 +19,7 @@ import {
 } from '../lib/attachment-download.js';
 import { getRedisClient, createBullMqConnection, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
 import { protocolSubject, requireAuth } from '../middleware/auth.js';
-import { announceFolderListChange, CRLF_STREAM_TRANSPORT, canonicalAddress, addressVariants, effectiveWebmailPolicy } from '@coremail/storage';
+import { announceFolderListChange, CRLF_STREAM_TRANSPORT, canonicalAddress, addressVariants, effectiveWebmailPolicy, MAILBOX_READ_PERMISSIONS } from '@coremail/storage';
 import { imageDecisionFor } from '../lib/webmail-features.js';
 import { checkFolderParent, type FolderLookup } from '../lib/folder-tree.js';
 import { withBodyLimit, checkRecipients, envelopeRecipients, deliveryReceiptDsn, maxRecipients, MAX_SEND_FILES } from '../lib/send-limits.js';
@@ -1485,7 +1485,9 @@ mailRouter.get('/search', async (req: Request, res: Response) => {
 });
 
 // GET /api/v1/mail/delegated-mailboxes
-// Returns all mailboxes the current user has access to
+// Every delegation of the current user. The folders (names + counts) are part of
+// the mailbox content: listed only for a read delegation (FULL_ACCESS / READ_ONLY)
+// of an active owner — SEND_AS / SEND_ON_BEHALF alone reveal no folders (w3 review).
 mailRouter.get('/delegated-mailboxes', async (req: Request, res: Response) => {
   const userId = req.apiUser!.userId;
   const delegates = await prisma.mailboxDelegate.findMany({
@@ -1493,19 +1495,23 @@ mailRouter.get('/delegated-mailboxes', async (req: Request, res: Response) => {
     include: {
       mailbox: {
         include: {
-          user: { select: { id: true, email: true, displayName: true } },
+          user: { select: { id: true, email: true, displayName: true, active: true } },
           folders: { select: { id: true, name: true, displayName: true, totalCount: true, unreadCount: true } },
         },
       },
     },
     orderBy: { grantedAt: 'asc' },
   });
-  res.json(delegates.map((d) => ({
-    id: d.id,
-    permission: d.permission,
-    grantedAt: d.grantedAt,
-    mailboxOwner: d.mailbox.user,
-    mailboxId: d.mailbox.id,
-    folders: d.mailbox.folders,
-  })));
+  res.json(delegates.map((d) => {
+    const { active, ...owner } = d.mailbox.user ?? { active: false };
+    const readable = active === true && (MAILBOX_READ_PERMISSIONS as readonly string[]).includes(String(d.permission));
+    return {
+      id: d.id,
+      permission: d.permission,
+      grantedAt: d.grantedAt,
+      mailboxOwner: d.mailbox.user ? owner : null,
+      mailboxId: d.mailbox.id,
+      folders: readable ? d.mailbox.folders : [],
+    };
+  }));
 });

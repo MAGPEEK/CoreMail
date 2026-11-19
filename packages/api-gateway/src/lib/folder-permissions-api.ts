@@ -21,7 +21,7 @@ import { z } from 'zod';
 import {
   prisma, describeFolderPermissions, setFolderPermissions, publishFolderPermissionChange,
   FolderPermissionError, FOLDER_ROLES, ROLE_RIGHTS, ALL_FOLDER_RIGHTS, DEFAULT_GRANTEE_KEY, userGranteeKey,
-  type FolderPermissionInput, type FolderPermissionView, type FolderPermissionWriteDb, type PermissionActor,
+  type FolderPermissionAuthorizer, type FolderPermissionInput, type FolderPermissionView, type FolderPermissionWriteDb, type PermissionActor,
 } from '@coremail/storage';
 import { auditContext } from './audit.js';
 
@@ -118,7 +118,12 @@ const ERROR_TEXT: Record<string, string> = {
   OWNER_GRANTEE: 'Der Postfachinhaber hat immer alle Rechte',
   INVALID_RIGHTS: 'Ungültige Berechtigungen',
   TOO_MANY_ENTRIES: 'Zu viele Einträge',
+  FORBIDDEN_GRANTEE: 'Nur die Organisationsverwaltung darf sich selbst oder „Standard“ Rechte geben',
+  SUBFOLDERS_NOT_ADMINISTERED: 'Keine Berechtigung für die Unterordner dieses Ordners',
 };
+
+/** Refusals of the caller's rights (403); every other code is an invalid request (400). */
+const FORBIDDEN_CODES: ReadonlySet<string> = new Set(['FORBIDDEN_GRANTEE', 'SUBFOLDERS_NOT_ADMINISTERED']);
 
 /** PUT: replaces the folder's permissions and answers with the new view. */
 export async function replaceFolderPermissions(
@@ -127,6 +132,7 @@ export async function replaceFolderPermissions(
   folder: PermissionFolder,
   mailboxOwnerId: string | null,
   source: PermissionActor['source'],
+  authorize?: FolderPermissionAuthorizer,
 ): Promise<void> {
   const parsed = parsePermissionBody(req.body);
   if (!parsed.ok) { res.status(400).json({ error: parsed.error }); return; }
@@ -140,10 +146,11 @@ export async function replaceFolderPermissions(
   try {
     const changes = await setFolderPermissions(prisma as unknown as FolderPermissionWriteDb, {
       folder: { id: folder.id, mailboxId: folder.mailboxId, name: folder.name }, mailboxOwnerId, inputs, replace: true, actor,
+      ...(authorize ? { authorize } : {}),
     });
     await publishFolderPermissionChange(changes, actor.userId);
   } catch (err) {
-    if (err instanceof FolderPermissionError) { res.status(400).json({ error: ERROR_TEXT[err.code] ?? err.message, code: err.code }); return; }
+    if (err instanceof FolderPermissionError) { res.status(FORBIDDEN_CODES.has(err.code) ? 403 : 400).json({ error: ERROR_TEXT[err.code] ?? err.message, code: err.code }); return; }
     throw err;
   }
   await sendFolderPermissions(res, folder);
