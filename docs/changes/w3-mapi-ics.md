@@ -13,12 +13,27 @@
   (new messages, drafts, read state of received messages), `…ImportHierarchyChange` (new folder,
   rename / move), `…ImportDeletes`, `…ImportReadStateChanges`, `…ImportMessageMove`,
   `RopGetLocalReplicaIds`, `RopSetLocalReplicaMidsetDeleted` — every write through the message
-  store; objects created offline get server IDs and the next download swaps the client's copy.
-  `RopLongTermIdFromId` / `RopIdFromLongTermId`.
+  store. `RopLongTermIdFromId` / `RopIdFromLongTermId`.
+- MAPI cached mode: folders and messages Outlook creates keep the IDs it assigned from its
+  `RopGetLocalReplicaIds` ranges (MS-OXCFXICS 3.3.5.2.1) — reachable by that ID at once (open,
+  tables, downloads, a collector on a new folder), later changes update them, a draft saved again
+  keeps its ID; IDs outside the handed-out ranges or already used are replaced by server IDs (the
+  next download swaps the client's copy). Stored persistently in the new table `mapi_objects`
+  (model MapiObject, additive schema change).
+- MAPI cached mode: the collector's ICS state records the change number of every imported change
+  (CnsetSeen; read states CnsetRead), so the client's next download sends none of its own changes
+  back.
+- MAPI cached mode: conflict detection on `RopSynchronizationImportMessageChange` with
+  PidTagPredecessorChangeList — a change the server already has → `IgnoreFailure`; conflicting
+  versions → `SyncConflict` with *FailOnConflict*, else the server version is kept and downloaded
+  next. Downloads carry the uploaded PCL merged with the current change key.
 - MailStore: `importMessage`, `renameFolder`, local replica ID ranges and replaced client IDs
-  (Redis `mapi:local-ids:<mailboxId>`, `mapi:replaced-ids:<mailboxId>`), `foreignAccess`.
+  (Redis `mapi:local-ids:<mailboxId>`, `mapi:replaced-ids:<mailboxId>`), `foreignAccess`, client
+  IDs (`findMessagesByCounters`, `messageByRowId`, `clientIdOwner`, `assignedClientIds`,
+  `bindMapiObject`, `localIdsHandedOutBelow`); `setRead` returns the new modSeq.
 - e2e step `mapi`: ICS initial and incremental synchronization of the Inbox (new mail + read
-  change), a malformed state upload (`RpcFormat`), hierarchy synchronization.
+  change), a malformed state upload (`RpcFormat`), a draft created offline (client ID kept, opened
+  by it, edited, no echo, one copy), hierarchy synchronization.
 
 ### Changed
 
@@ -59,4 +74,7 @@
 SemVer: MINOR (compatible protocol additions). Behaviour change to note: an address book `Bind`
 with `STAT.CodePage` = 1200 (CP_WINUNICODE) is now refused with `InvalidCodepage` (MS-OXNSPI
 3.1.4.1.1: the client must not bind with CP_WINUNICODE, the server returns an error; a code page
-the server does not serve → InvalidCodepage); Outlook binds with its ANSI code page.
+the server does not serve → InvalidCodepage); Outlook binds with its ANSI code page. Schema:
+additive table `mapi_objects` (+ relation fields on Message / Folder, no column changes).
+Online mode: `RopDeleteMessages` / `RopMoveCopyMessages` with an unknown message ID now report a
+partial completion instead of failing with `ecNotFound`.

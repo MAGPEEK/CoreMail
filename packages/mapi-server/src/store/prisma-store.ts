@@ -27,6 +27,8 @@ import {
 } from '@coremail/storage';
 import { enqueueRawOutbound, type RawOutboundJob } from './outbound.js';
 import { createRedisLocalIdStore, type LocalIdRedis, type LocalIdStore } from './local-ids.js';
+import { isServerMessageId, LOCAL_ID_BASE } from '../ics/keys.js';
+import { contains, normalize } from '../ics/globset.js';
 import {
   MailboxFullError,
   type ComposedMessage, type FolderRecord, type FolderTarget, type MailboxRef, type MailStore, type MapiUser,
@@ -42,25 +44,31 @@ const FOLDER_SELECT = {
 const SUMMARY_SELECT = {
   id: true, folderId: true, uid: true, flags: true, subject: true, fromAddr: true, fromName: true,
   toAddrs: true, ccAddrs: true, messageId: true, inReplyTo: true, date: true, createdAt: true,
-  rawSize: true, modSeq: true,
+  rawSize: true, modSeq: true, createdModSeq: true,
 } as const;
 
 const SEEN = '\\Seen';
 const DRAFT = '\\Draft';
 const TOP_LEVEL_DEFAULTS = new Set(DEFAULT_FOLDERS.map((f) => f.name.toLowerCase()));
+/** Upper bound of the client IDs one download looks up (assignedClientIds). */
+const MAX_ASSIGNED_LOOKUP = 200_000;
 
 interface SummaryRow {
   id: string; folderId: string; uid: number; flags: string[]; subject: string; fromAddr: string; fromName: string;
   toAddrs: string[]; ccAddrs: string[]; messageId: string | null; inReplyTo: string | null; date: Date;
-  createdAt: Date; rawSize: number; modSeq: bigint;
+  createdAt: Date; rawSize: number; modSeq: bigint; createdModSeq: bigint | null;
 }
 
-function toSummary(row: SummaryRow, withAttachments: ReadonlySet<string>): MessageSummary {
+/** Cached-mode data of a row (MapiObject). */
+interface MapiInfo { clientId: bigint | null; pcl: Buffer | null }
+
+function toSummary(row: SummaryRow, withAttachments: ReadonlySet<string>, mapi?: MapiInfo): MessageSummary {
   return {
     id: row.id, folderId: row.folderId, uid: row.uid, flags: row.flags, subject: row.subject,
     fromAddr: row.fromAddr, fromName: row.fromName, toAddrs: row.toAddrs, ccAddrs: row.ccAddrs,
     messageIdHeader: row.messageId, inReplyTo: row.inReplyTo, date: row.date, createdAt: row.createdAt,
     rawSize: row.rawSize, hasAttachments: withAttachments.has(row.id), modSeq: row.modSeq,
+    createdModSeq: row.createdModSeq ?? 0n, clientId: mapi?.clientId ?? null, pcl: mapi?.pcl ?? null,
   };
 }
 
@@ -68,6 +76,42 @@ async function attachmentOwners(ids: string[]): Promise<Set<string>> {
   if (ids.length === 0) return new Set();
   const rows = await prisma.attachment.findMany({ where: { messageId: { in: ids } }, select: { messageId: true } });
   return new Set(rows.map((r) => r.messageId));
+}
+
+/**
+ * MapiObject data of message rows — only while a row lies in the mailbox its
+ * client ID belongs to (a row moved to another mailbox shows its UID there).
+ */
+async function mapiInfoOf(rows: ReadonlyArray<{ id: string; folderId: string }>): Promise<Map<string, MapiInfo>> {
+  const out = new Map<string, MapiInfo>();
+  if (rows.length === 0) return out;
+  const objects = await prisma.mapiObject.findMany({
+    where: { messageId: { in: rows.map((r) => r.id) } }, select: { messageId: true, mailboxId: true, clientId: true, pcl: true },
+  });
+  if (objects.length === 0) return out;
+  const folders = await prisma.folder.findMany({ where: { id: { in: [...new Set(rows.map((r) => r.folderId))] } }, select: { id: true, mailboxId: true } });
+  const mailboxOfFolder = new Map(folders.map((f) => [f.id, f.mailboxId]));
+  const folderOfRow = new Map(rows.map((r) => [r.id, r.folderId]));
+  for (const o of objects) {
+    if (!o.messageId || mailboxOfFolder.get(folderOfRow.get(o.messageId) ?? '') !== o.mailboxId) continue;
+    out.set(o.messageId, { clientId: o.clientId, pcl: o.pcl ? Buffer.from(o.pcl) : null });
+  }
+  return out;
+}
+
+async function summariesOf(rows: SummaryRow[]): Promise<MessageSummary[]> {
+  const [withAttachments, mapi] = await Promise.all([attachmentOwners(rows.map((r) => r.id)), mapiInfoOf(rows)]);
+  return rows.map((r) => toSummary(r, withAttachments, mapi.get(r.id)));
+}
+
+type FolderRow = Omit<FolderRecord, 'clientId'>;
+
+async function withClientIds(rows: FolderRow[]): Promise<FolderRecord[]> {
+  const objects = rows.length === 0 ? [] : await prisma.mapiObject.findMany({
+    where: { folderId: { in: rows.map((r) => r.id) } }, select: { folderId: true, clientId: true },
+  });
+  const byFolder = new Map(objects.map((o) => [o.folderId, o.clientId]));
+  return rows.map((r) => ({ ...r, clientId: byFolder.get(r.id) ?? null }));
 }
 
 function domainOf(address: string): string {
@@ -201,7 +245,7 @@ export function createPrismaStore(deps: PrismaStoreDeps = defaultStoreDeps): Mai
     },
 
     async listFolders(mailboxId) {
-      return prisma.folder.findMany({ where: { mailboxId }, select: FOLDER_SELECT, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] });
+      return withClientIds(await prisma.folder.findMany({ where: { mailboxId }, select: FOLDER_SELECT, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] }));
     },
 
     async createFolder(mailbox, parent, displayName) {
@@ -210,13 +254,13 @@ export function createPrismaStore(deps: PrismaStoreDeps = defaultStoreDeps): Mai
       if (!parent && TOP_LEVEL_DEFAULTS.has(name.toLowerCase())) return 'exists';
       const dup = await prisma.folder.findFirst({ where: { mailboxId: mailbox.mailboxId, name }, select: { id: true } });
       if (dup) return 'exists';
-      const created: FolderRecord = await prisma.folder.create({
+      const created: FolderRow = await prisma.folder.create({
         data: { mailboxId: mailbox.mailboxId, name, displayName, ...(parent ? { parentId: parent.id } : {}) },
         select: FOLDER_SELECT,
       });
       announceFolderListChange(mailbox.mailboxId);
       audit(mailbox, 'mailbox.foreign.folder.create', { count: 1 });
-      return created;
+      return { ...created, clientId: null };
     },
 
     async deleteFolder(mailbox, folderId, recursive) {
@@ -230,13 +274,12 @@ export function createPrismaStore(deps: PrismaStoreDeps = defaultStoreDeps): Mai
       const rows = await prisma.message.findMany({
         where: { folderId, deletedAt: null, softDeletedAt: null }, select: SUMMARY_SELECT, orderBy: { uid: 'asc' },
       });
-      const withAtt = await attachmentOwners(rows.map((r) => r.id));
-      return rows.map((r) => toSummary(r, withAtt));
+      return summariesOf(rows);
     },
 
     async findMessage(folderId, uid) {
       const row = await prisma.message.findFirst({ where: { folderId, uid, deletedAt: null, softDeletedAt: null }, select: SUMMARY_SELECT });
-      return row ? toSummary(row, await attachmentOwners([row.id])) : null;
+      return row ? (await summariesOf([row]))[0]! : null;
     },
 
     async loadContent(message): Promise<MessageContent> {
@@ -258,7 +301,7 @@ export function createPrismaStore(deps: PrismaStoreDeps = defaultStoreDeps): Mai
     },
 
     async setRead(mailbox, message, read) {
-      const changed = await prisma.$transaction(async (tx) => {
+      return prisma.$transaction(async (tx) => {
         const rows = await modifyFlags(tx, [message.id], (flags) => {
           const has = flags.includes(SEEN);
           if (has === read) return null;
@@ -270,7 +313,7 @@ export function createPrismaStore(deps: PrismaStoreDeps = defaultStoreDeps): Mai
             data: { unreadCount: read ? { decrement: 1 } : { increment: 1 } },
           });
         }
-        return rows.length > 0;
+        return rows[0]?.modSeq ?? null;
       });
     },
 
@@ -380,11 +423,15 @@ export function createPrismaStore(deps: PrismaStoreDeps = defaultStoreDeps): Mai
       if (folderIds.length === 0) return [];
       const rows = await prisma.message.findMany({
         where: { folderId: { in: [...folderIds] }, createdModSeq: { gt: sinceModSeq }, deletedAt: null, softDeletedAt: null },
-        select: { folderId: true, uid: true, flags: true, createdModSeq: true },
+        select: { id: true, folderId: true, uid: true, flags: true, createdModSeq: true },
         orderBy: { createdModSeq: 'asc' },
         take: limit,
       });
-      return rows.map((r) => ({ folderId: r.folderId, uid: r.uid, read: r.flags.includes(SEEN), createdModSeq: r.createdModSeq ?? 0n }));
+      const mapi = await mapiInfoOf(rows);
+      return rows.map((r) => ({
+        folderId: r.folderId, uid: r.uid, read: r.flags.includes(SEEN), createdModSeq: r.createdModSeq ?? 0n,
+        clientId: mapi.get(r.id)?.clientId ?? null,
+      }));
     },
 
     async importMessage(mailbox, folderId, message, opts) {
@@ -418,9 +465,89 @@ export function createPrismaStore(deps: PrismaStoreDeps = defaultStoreDeps): Mai
       return 'ok';
     },
 
-    reserveLocalIds: (mailboxId, count) => deps.localIds.reserve(mailboxId, count),
+    async reserveLocalIds(mailboxId, count) {
+      // Above every client ID the mailbox's objects keep, also when the Redis counter was lost.
+      const top = await prisma.mapiObject.findFirst({
+        where: { mailboxId, clientId: { gte: LOCAL_ID_BASE } }, select: { clientId: true }, orderBy: { clientId: 'desc' },
+      });
+      return deps.localIds.reserve(mailboxId, count, (top?.clientId ?? 0n) + 1n);
+    },
     replacedLocalIds: (mailboxId) => deps.localIds.replaced(mailboxId),
     addReplacedLocalIds: (mailboxId, ids) => deps.localIds.addReplaced(mailboxId, ids),
+    localIdsHandedOutBelow: (mailboxId) => deps.localIds.handedOutBelow(mailboxId),
+
+    async findMessagesByCounters(folderId, counters) {
+      const out = new Map<bigint, MessageSummary>();
+      const uids = counters.filter(isServerMessageId).map(Number);
+      if (uids.length > 0) {
+        const rows = await prisma.message.findMany({ where: { folderId, uid: { in: uids }, deletedAt: null, softDeletedAt: null }, select: SUMMARY_SELECT });
+        for (const s of await summariesOf(rows)) out.set(BigInt(s.uid), s);
+      }
+      const rest = counters.filter((c) => !out.has(c));
+      if (rest.length === 0) return out;
+      const folder = await prisma.folder.findUnique({ where: { id: folderId }, select: { mailboxId: true } });
+      if (!folder) return out;
+      const objects = await prisma.mapiObject.findMany({
+        where: { mailboxId: folder.mailboxId, clientId: { in: [...rest] }, messageId: { not: null } }, select: { messageId: true },
+      });
+      if (objects.length === 0) return out;
+      const rows = await prisma.message.findMany({
+        where: { id: { in: objects.map((o) => o.messageId!) }, folderId, deletedAt: null, softDeletedAt: null }, select: SUMMARY_SELECT,
+      });
+      for (const s of await summariesOf(rows)) if (s.clientId !== null) out.set(s.clientId, s);
+      return out;
+    },
+
+    async messageByRowId(id) {
+      const row = await prisma.message.findFirst({ where: { id, deletedAt: null, softDeletedAt: null }, select: SUMMARY_SELECT });
+      return row ? (await summariesOf([row]))[0]! : null;
+    },
+
+    async clientIdOwner(mailboxId, clientId) {
+      const o = await prisma.mapiObject.findFirst({ where: { mailboxId, clientId }, select: { messageId: true, folderId: true } });
+      if (!o) return null;
+      if (o.folderId) return { kind: 'folder', folderId: o.folderId };
+      if (o.messageId) {
+        const live = await prisma.message.findFirst({ where: { id: o.messageId, deletedAt: null, softDeletedAt: null }, select: { id: true } });
+        if (live) return { kind: 'message', messageId: o.messageId };
+      }
+      return { kind: 'retired' };
+    },
+
+    async assignedClientIds(mailboxId, ranges) {
+      if (ranges.length === 0) return [];
+      const low = ranges.reduce((m, r) => (r.low < m ? r.low : m), ranges[0]!.low);
+      const high = ranges.reduce((m, r) => (r.high > m ? r.high : m), ranges[0]!.high);
+      const rows = await prisma.mapiObject.findMany({
+        where: { mailboxId, clientId: { gte: low, lte: high } }, select: { clientId: true }, take: MAX_ASSIGNED_LOOKUP,
+      });
+      const sorted = normalize(ranges);
+      return rows.map((r) => r.clientId!).filter((id) => contains(sorted, id));
+    },
+
+    async bindMapiObject(mailboxId, target, data) {
+      const own = 'messageId' in target ? { messageId: target.messageId } : { folderId: target.folderId };
+      const bind = 'messageId' in target ? { messageId: target.messageId, folderId: null } : { folderId: target.folderId, messageId: null };
+      const pcl = data.pcl ? { pcl: data.pcl } : {};
+      await prisma.$transaction(async (tx) => {
+        let mine = await tx.mapiObject.findFirst({ where: own, select: { id: true, clientId: true } });
+        if (data.clientId !== undefined && mine && mine.clientId !== null && mine.clientId !== data.clientId) {
+          // The row's previous client ID retires (its clients are told it is gone).
+          await tx.mapiObject.update({ where: { id: mine.id }, data: { messageId: null, folderId: null } });
+          mine = null;
+        }
+        const holder = data.clientId === undefined ? null
+          : await tx.mapiObject.findFirst({ where: { mailboxId, clientId: data.clientId }, select: { id: true } });
+        if (holder && holder.id !== mine?.id) {
+          if (mine) await tx.mapiObject.deleteMany({ where: { id: mine.id } });
+          await tx.mapiObject.update({ where: { id: holder.id }, data: { ...bind, ...pcl } });
+        } else if (mine) {
+          await tx.mapiObject.update({ where: { id: mine.id }, data: { ...(data.clientId !== undefined ? { clientId: data.clientId } : {}), ...pcl } });
+        } else {
+          await tx.mapiObject.create({ data: { mailboxId, ...bind, ...(data.clientId !== undefined ? { clientId: data.clientId } : {}), ...pcl } });
+        }
+      });
+    },
 
     async foreignAccess(user, mailbox) {
       const accessible = await listAccessibleMailboxes(prisma, user.userId);

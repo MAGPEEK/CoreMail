@@ -80,7 +80,7 @@ function plan(over: Partial<PlanInput>): ReturnType<typeof planNotifications> {
   return planNotifications({
     logonId: 0, kinds: ['messages'], changedFolders: new Set([10n]),
     before: facts([10n, 1, 1], [11n, 5, 0]), after: facts([10n, 2, 2], [11n, 5, 0]),
-    newMessages: [{ folderCounter: 10n, uid: 7, read: false }], subscriptions: [], tables: [], ...over,
+    newMessages: [{ folderCounter: 10n, counter: 7n, read: false }], subscriptions: [], tables: [], ...over,
   });
 }
 

@@ -15,7 +15,8 @@ import { messageSummaryBag } from '../objects/props.js';
 import { has, propertyFilter, SyncExtraFlag, SyncFlag, type SyncConfig } from './config.js';
 import { deletions, folderChange, messageChange, readStateChanges } from './elements.js';
 import { FxWriter, Marker, type FxPiece } from './fx-stream.js';
-import { rangesOf } from './globset.js';
+import { contains, intersect, rangesOf } from './globset.js';
+import { LOCAL_ID_RANGE, messageCounter } from './keys.js';
 import {
   contentsStateAfter, hierarchyStateAfter, isRead, planContents, planHierarchy,
   type ContentsInput, type HierarchyInput,
@@ -39,6 +40,18 @@ function tail(parts: FxPiece[][], state: IcsState, kind: SyncConfig['kind']): Fx
   return [...parts.flat(), ...w.pieces];
 }
 
+/**
+ * Client-assigned IDs of the client's IdsetGiven the server knows: IDs objects
+ * kept (live or retired, MapiObject) and IDs it replaced by server IDs.
+ */
+async function knownClientIds(store: MailStore, logon: LogonState, state: IcsState): Promise<Set<bigint>> {
+  const mailboxId = logon.mailbox.mailboxId;
+  const clientRanges = intersect(state.idsetGiven.ranges(logon.guids.replica), [LOCAL_ID_RANGE]);
+  if (clientRanges.length === 0) return new Set();
+  const [assigned, replaced] = await Promise.all([store.assignedClientIds(mailboxId, clientRanges), store.replacedLocalIds(mailboxId)]);
+  return new Set([...assigned, ...[...replaced].filter((id) => contains(clientRanges, id))]);
+}
+
 async function contentsDownload(store: MailStore, logon: LogonState, config: SyncConfig, state: IcsState): Promise<DownloadTransfer> {
   const mailboxId = logon.mailbox.mailboxId;
   const highestModSeq = await store.highestModSeq(mailboxId);
@@ -53,7 +66,7 @@ async function contentsDownload(store: MailStore, logon: LogonState, config: Syn
   };
   const input: ContentsInput = {
     guids: logon.guids, messages, inScope, state, highestModSeq,
-    replaced: await store.replacedLocalIds(mailboxId),
+    knownClientIds: await knownClientIds(store, logon, state),
     options: {
       normal: has(config.flags, SyncFlag.Normal),
       readState: has(config.flags, SyncFlag.ReadState),
@@ -67,8 +80,8 @@ async function contentsDownload(store: MailStore, logon: LogonState, config: Syn
   const changeCtx = { store, logon, folderCounter: config.folderCounter, config, filter: propertyFilter(config) };
   async function* elements(): AsyncGenerator<FxPiece[]> {
     for (const m of plan.changes) yield await messageChange(changeCtx, m);
-    const reads = plan.readChanges.filter(isRead).map((m) => BigInt(m.uid));
-    const unreads = plan.readChanges.filter((m) => !isRead(m)).map((m) => BigInt(m.uid));
+    const reads = plan.readChanges.filter(isRead).map(messageCounter);
+    const unreads = plan.readChanges.filter((m) => !isRead(m)).map(messageCounter);
     yield tail([
       deletions(logon, plan.deleted, plan.noLongerInScope),
       readStateChanges(logon, rangesOf(reads), rangesOf(unreads)),
@@ -86,7 +99,7 @@ async function hierarchyDownload(store: MailStore, logon: LogonState, config: Sy
   const input: HierarchyInput = {
     guids: logon.guids, view, root: config.folderCounter, state,
     noDeletions: has(config.flags, SyncFlag.NoDeletions),
-    replaced: await store.replacedLocalIds(logon.mailbox.mailboxId),
+    knownClientIds: await knownClientIds(store, logon, state),
   };
   const plan = planHierarchy(input);
   function* elements(): Generator<FxPiece[]> {

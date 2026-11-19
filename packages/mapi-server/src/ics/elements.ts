@@ -22,6 +22,7 @@ import { has, SyncExtraFlag, SyncFlag, type PropertyFilter, type SyncConfig } fr
 import { Marker, FxWriter, type FxPiece } from './fx-stream.js';
 import { replidIdset, MetaTag } from './state.js';
 import type { Range } from './globset.js';
+import { messageCounter } from './keys.js';
 import type { FolderNode } from '../objects/mailbox-view.js';
 import type { LogonState, RecipientState } from '../objects/state.js';
 import type { MailStore, MessageSummary } from '../store/types.js';
@@ -82,7 +83,7 @@ export async function messageChange(ctx: MessageChangeContext, m: MessageSummary
   w.prop(Tag.ChangeKey, bag.get(Tag.ChangeKey)!);
   w.prop(Tag.PredecessorChangeList, bag.get(Tag.PredecessorChangeList)!);
   w.prop(Tag.Associated, false);
-  if (has(config.extraFlags, SyncExtraFlag.Eid)) w.prop(Tag.Mid, makeId(BigInt(m.uid)));
+  if (has(config.extraFlags, SyncExtraFlag.Eid)) w.prop(Tag.Mid, makeId(messageCounter(m)));
   if (has(config.extraFlags, SyncExtraFlag.MessageSize)) w.prop(Tag.MessageSize, m.rawSize);
   if (has(config.extraFlags, SyncExtraFlag.CN)) w.prop(Tag.ChangeNumber, bag.get(Tag.ChangeNumber)!);
 

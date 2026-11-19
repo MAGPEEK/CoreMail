@@ -449,6 +449,7 @@ model Folder {
   // Personal tag on folder (user assignment)
   retentionTag   RetentionTag? @relation("FolderRetentionTag", fields: [retentionTagId], references: [id])
   retentionTagId String?
+  mapiObject     MapiObject?
 
   @@unique([mailboxId, name])
   @@index([mailboxId])
@@ -532,6 +533,7 @@ model Message {
   flagCompletedAt  DateTime?
   attachments  Attachment[]
   categories   MessageCategory[]
+  mapiObject   MapiObject?
   createdAt    DateTime    @default(now())
 
   @@unique([folderId, uid])
@@ -1112,6 +1114,27 @@ model ActiveSyncItem {
   @@id([deviceRowId, collectionId, serverId, pendingKey])
   @@index([deviceRowId, collectionId, pendingKey])
   @@map("active_sync_items")
+}
+
+// MAPI over HTTP cached mode (9.5, docs/mapi.md): an object classic Outlook created keeps the ID
+// the client assigned from its RopGetLocalReplicaIds ranges (clientId, MS-OXCFXICS 3.3.5.2.1) —
+// also when a draft is saved again (new row, same ID); pcl = PidTagPredecessorChangeList of the
+// version a client uploaded (conflict detection, 3.1.5.6). The row outlives its object
+// (SetNull): a retired client ID is still reported deleted to the client.
+model MapiObject {
+  id        String   @id @default(cuid())
+  mailboxId String
+  clientId  BigInt?
+  message   Message? @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  messageId String?  @unique
+  folder    Folder?  @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  folderId  String?  @unique
+  pcl       Bytes?
+  updatedAt DateTime @updatedAt
+
+  @@unique([mailboxId, clientId])
+  @@index([mailboxId])
+  @@map("mapi_objects")
 }
 
 // ─────────────────────────────────────────────

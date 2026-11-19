@@ -73,13 +73,16 @@ export interface MessageState {
 
 /**
  * The message an ICS upload changes (MS-OXCFXICS 3.2.5.9.4.2): a new one
- * (`localId` = the client-assigned ID it replaces), a stored one, or one that
- * no longer exists on the server (the change is dropped: deletions win).
+ * (`clientId` = the ID it keeps, `replacedId` = a client ID that could not be
+ * kept), a stored one, or none (`dropped`: the message is gone, moved away, or
+ * the server version won a conflict). `pcl` = the uploaded version's
+ * PidTagPredecessorChangeList; `uploadState` = the collector's ICS state that
+ * records the change numbers written (3.2.5.9.4).
  */
 export type ImportTarget =
-  | { kind: 'new'; folderId: string; localId: bigint | null }
-  | { kind: 'existing'; summary: MessageSummary }
-  | { kind: 'gone' };
+  | { kind: 'new'; folderId: string; clientId: bigint | null; replacedId: bigint | null; pcl: Buffer | null; uploadState: IcsState }
+  | { kind: 'existing'; summary: MessageSummary; pcl: Buffer | null; uploadState: IcsState }
+  | { kind: 'dropped' };
 
 export type StreamTarget =
   | { kind: 'message'; message: MessageState }

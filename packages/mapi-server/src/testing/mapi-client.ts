@@ -166,6 +166,36 @@ export function ropOutput(buf: Buffer): { responses: Reader; handles: number[] }
   return { responses: new Reader(buf.subarray(2, size)), handles };
 }
 
+/** Namespace GUID of the test client's own changes (foreign XIDs: 8-byte LocalId, MS-OXCFXICS 3.3.5.2.3). */
+export const CLIENT_NAMESPACE = Buffer.alloc(16, 0xc1);
+let clientChanges = 0n;
+
+/** SizedXids of a PCL sorted by namespace GUID (MS-OXCFXICS 2.2.2.3); the highest XID per namespace. */
+export function mergeSizedXids(...pcls: Buffer[]): Buffer {
+  const best = new Map<string, Buffer>();
+  for (const pcl of pcls) {
+    for (let p = 0; p < pcl.length;) {
+      const n = pcl[p]!;
+      const xid = pcl.subarray(p + 1, p + 1 + n);
+      p += 1 + n;
+      const guid = xid.subarray(0, 16).toString('hex');
+      const cur = best.get(guid);
+      if (!cur || BigInt(`0x${xid.subarray(16).toString('hex')}`) > BigInt(`0x${cur.subarray(16).toString('hex')}`)) best.set(guid, xid);
+    }
+  }
+  return Buffer.concat([...best.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([, x]) => Buffer.concat([Buffer.from([x.length]), x])));
+}
+
+/** A new change of the test client: its change key and PCL (merged with the predecessors it saw). */
+export function clientChange(predecessors: Buffer | null = null): { changeKey: Buffer; pcl: Buffer } {
+  clientChanges += 1n;
+  const local = Buffer.alloc(8);
+  local.writeBigUInt64BE(clientChanges);
+  const changeKey = Buffer.concat([CLIENT_NAMESPACE, local]);
+  const own = Buffer.concat([Buffer.from([changeKey.length]), changeKey]);
+  return { changeKey, pcl: predecessors ? mergeSizedXids(predecessors, own) : own };
+}
+
 export const rop = {
   logon: (out: number, essdn = ''): Buffer => {
     const dn = essdn ? Buffer.from(`${essdn}\u0000`, 'ascii') : Buffer.alloc(0);
@@ -231,10 +261,12 @@ export const rop = {
   },
   getTransferState: (input: number, out: number): Buffer => new Writer().u8(0x82).u8(0).u8(input).u8(out).toBuffer(),
   openCollector: (input: number, out: number, contents: boolean): Buffer => new Writer().u8(0x7e).u8(0).u8(input).u8(out).u8(contents ? 1 : 0).toBuffer(),
-  /** RopSynchronizationImportMessageChange with the four fixed properties. */
-  importMessageChange: (input: number, out: number, sourceKey: Buffer, flags = 0): Buffer => {
-    const changeKey = Buffer.concat([sourceKey.subarray(0, 16), Buffer.from([0, 0, 0, 0, 0, 1])]);
-    const pcl = Buffer.concat([Buffer.from([changeKey.length]), changeKey]);
+  /**
+   * RopSynchronizationImportMessageChange with the four fixed properties; by
+   * default a new change of the test client (clientChange) without predecessors.
+   */
+  importMessageChange: (input: number, out: number, sourceKey: Buffer, flags = 0, change = clientChange()): Buffer => {
+    const { changeKey, pcl } = change;
     const w = new Writer().u8(0x72).u8(0).u8(input).u8(out).u8(flags).u16(4);
     w.u32(0x65e00102).u16(sourceKey.length).bytes(sourceKey);
     w.u32(0x30080040).u64(0x01d9000000000000n);
@@ -356,34 +388,93 @@ export function readFxStream(buf: Buffer): FxToken[] {
   return out;
 }
 
-/** GLOBSET → GLOBCNT values (MS-OXCFXICS 2.2.2.6; every command). */
-export function readGlobset(r: Reader): bigint[] {
+/** GLOBSET → GLOBCNT ranges in command order (MS-OXCFXICS 2.2.2.6; every command). */
+export function readGlobsetRanges(r: Reader): Array<[bigint, bigint]> {
   const stack: number[] = [];
   const pushes: number[] = [];
-  const out: bigint[] = [];
+  const out: Array<[bigint, bigint]> = [];
   const value = (low: number[]): bigint => BigInt(Buffer.from([...stack, ...low]).readUIntBE(0, 6));
   for (;;) {
     const cmd = r.u8();
     if (cmd === 0x00) return out;
     if (cmd >= 0x01 && cmd <= 0x06) {
       stack.push(...r.bytes(cmd));
-      if (stack.length === 6) { out.push(value([])); stack.length -= cmd; } else pushes.push(cmd);
+      if (stack.length === 6) { const v = value([]); out.push([v, v]); stack.length -= cmd; } else pushes.push(cmd);
     } else if (cmd === 0x50) {
       stack.length -= pushes.pop()!;
     } else if (cmd === 0x42) {
       const start = r.u8();
       const mask = r.u8();
-      out.push(value([start]));
-      for (let bit = 0; bit < 8; bit++) if (mask & (1 << bit)) out.push(value([start + 1 + bit]));
+      const single = (low: number): void => { const v = value([low]); out.push([v, v]); };
+      single(start);
+      for (let bit = 0; bit < 8; bit++) if (mask & (1 << bit)) single(start + 1 + bit);
     } else if (cmd === 0x52) {
       const n = 6 - stack.length;
-      const low = value([...r.bytes(n)]);
-      const high = value([...r.bytes(n)]);
-      for (let v = low; v <= high; v++) out.push(v);
+      out.push([value([...r.bytes(n)]), value([...r.bytes(n)])]);
     } else {
       throw new Error(`GLOBSET command 0x${cmd.toString(16)}`);
     }
   }
+}
+
+/** GLOBSET → GLOBCNT values (small sets: every value). */
+export function readGlobset(r: Reader): bigint[] {
+  const out: bigint[] = [];
+  for (const [low, high] of readGlobsetRanges(r)) for (let v = low; v <= high; v++) out.push(v);
+  return out;
+}
+
+/** A REPLGUID-based IDSET (ICS state property) as merged ranges per replica GUID (hex). */
+export type IdsetRanges = Map<string, Array<[bigint, bigint]>>;
+
+function mergeRanges(ranges: Array<[bigint, bigint]>): Array<[bigint, bigint]> {
+  const out: Array<[bigint, bigint]> = [];
+  for (const [low, high] of [...ranges].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))) {
+    const last = out[out.length - 1];
+    if (last && low <= last[1] + 1n) { if (high > last[1]) last[1] = high; } else out.push([low, high]);
+  }
+  return out;
+}
+
+export function readIdsetRanges(buf: Buffer): IdsetRanges {
+  const out: IdsetRanges = new Map();
+  const r = new Reader(buf);
+  while (r.remaining > 0) {
+    const guid = r.bytes(16).toString('hex');
+    out.set(guid, mergeRanges([...(out.get(guid) ?? []), ...readGlobsetRanges(r)]));
+  }
+  return out;
+}
+
+/** REPLGUID-based IDSET with Range commands only (GUIDs ascending, MS-OXCFXICS 2.2.2.4.2). */
+export function encodeIdsetRanges(sets: IdsetRanges): Buffer {
+  const w = new Writer();
+  const bytes6 = (v: bigint): Buffer => { const b = Buffer.alloc(6); b.writeUIntBE(Number(v), 0, 6); return b; };
+  for (const guid of [...sets.keys()].sort()) {
+    const ranges = mergeRanges(sets.get(guid)!);
+    if (ranges.length === 0) continue;
+    w.bytes(Buffer.from(guid, 'hex'));
+    for (const [low, high] of ranges) w.u8(0x52).bytes(bytes6(low)).bytes(bytes6(high));
+    w.u8(0x00);
+  }
+  return w.toBuffer();
+}
+
+/**
+ * What a client does after an upload (MS-OXCFXICS 3.3.4.3.3, 2.2.1.1.1): its
+ * own new objects join MetaTagIdsetGiven of its download state and the upload
+ * context's state (from RopSynchronizationGetTransferState) is merged in.
+ */
+export function mergeUploadState(download: Map<number, Buffer>, upload: Map<number, Buffer>, own: { replica: Buffer; ids: bigint[] }): Map<number, Buffer> {
+  const out = new Map(download);
+  const union = (a: Buffer | undefined, b: IdsetRanges): Buffer => {
+    const sets = a ? readIdsetRanges(a) : new Map<string, Array<[bigint, bigint]>>();
+    for (const [guid, ranges] of b) sets.set(guid, [...(sets.get(guid) ?? []), ...ranges]);
+    return encodeIdsetRanges(sets);
+  };
+  out.set(ICS.IdsetGiven, union(out.get(ICS.IdsetGiven), new Map([[own.replica.toString('hex'), own.ids.map((v): [bigint, bigint] => [v, v])]])));
+  for (const [tag, value] of upload) out.set(tag, union(out.get(tag), readIdsetRanges(value)));
+  return out;
 }
 
 /** IDSET values: REPLGUID form (state properties) or REPLID form (deletions, read states). */
@@ -754,4 +845,125 @@ export class MapiHttpClient {
   }
 
   disconnect(): Promise<ClientResult> { return this.request('emsmdb', 'Disconnect', disconnectBody()); }
+}
+
+// ── Cached-mode scenarios (HTTP tests and the e2e step) ──────────────────────
+
+function expect(ok: boolean, what: string): void {
+  if (!ok) throw new Error(what);
+}
+
+/** A message ID of replica 1 (MS-OXCDATA 2.2.1.2: 2-byte replica ID, 6-byte counter big-endian). */
+export function idOfGlobcnt(globcnt: bigint): bigint {
+  const b = Buffer.alloc(8);
+  b.writeUInt16LE(1, 0);
+  b.writeUIntBE(Number(globcnt), 2, 6);
+  return b.readBigUInt64LE(0);
+}
+
+/**
+ * Cached mode download (MS-OXCFXICS): Logon → OpenFolder (a logon folder index
+ * or a folder ID) → RopSynchronizationConfigure → state upload →
+ * RopFastTransferSourceGetBuffer until Done.
+ */
+export async function icsDownload(client: MapiHttpClient, folder: number | bigint, type: number, state: Map<number, Buffer> = new Map()): Promise<IcsResult & { stream: Buffer; calls: number }> {
+  const logon = await client.execute([rop.logon(0)], [HANDLE_UNUSED]);
+  const l = decodeLogon(logon.rop!.responses);
+  expect(l.returnValue === 0, `RopLogon 0x${l.returnValue.toString(16)}`);
+  const flags = type === ICS.SyncContents ? ICS.FlagUnicode | ICS.FlagNormal | ICS.FlagReadState : ICS.FlagUnicode;
+  const rops = [rop.openFolder(0, 1, typeof folder === 'bigint' ? folder : l.folderIds[folder]!), rop.syncConfigure(1, 2, type, flags, ICS.ExtraEid)];
+  for (const [tag, value] of state) rops.push(rop.uploadStateBegin(2, tag, value.length), rop.uploadStateContinue(2, value), rop.uploadStateEnd(2));
+  const configured = await client.execute(rops, [logon.rop!.handles[0]!, HANDLE_UNUSED, HANDLE_UNUSED]);
+  const resp = configured.rop!.responses;
+  expect(responseHead(resp).returnValue === 0, 'OpenFolder');
+  resp.bytes(2);
+  for (let i = 1; i < rops.length; i++) {
+    const head = responseHead(resp);
+    expect(head.returnValue === 0, `ROP 0x${head.ropId.toString(16)} → 0x${head.returnValue.toString(16)}`);
+  }
+  let handles = configured.rop!.handles;
+  const parts: Buffer[] = [];
+  for (let calls = 0; calls < 5000; calls++) {
+    const g = await client.execute([rop.getBuffer(2, 0x4000)], handles);
+    handles = g.rop!.handles;
+    const chunk = decodeGetBuffer(g.rop!.responses);
+    expect(chunk.returnValue === 0, `GetBuffer 0x${chunk.returnValue.toString(16)}`);
+    parts.push(chunk.data);
+    if (chunk.status === 0x0003) return { ...decodeIcsStream(Buffer.concat(parts)), stream: Buffer.concat(parts), calls: calls + 1 };
+  }
+  throw new Error('GetBuffer never reported Done');
+}
+
+/**
+ * Outlook's cached mode with a draft created offline: a client ID from
+ * RopGetLocalReplicaIds, the upload (ImportMessageChange + SaveChangesMessage
+ * returns that ID), OpenMessage by it at once, an edit of the same object, the
+ * upload context's state merged into the client's state — then the download
+ * sends neither back and the server holds exactly one draft under that ID.
+ * Throws on the first failed check; returns a summary.
+ */
+export async function offlineDraftRoundTrip(client: MapiHttpClient): Promise<string> {
+  const U = HANDLE_UNUSED;
+  const tree = decodeHierarchyStream((await icsDownload(client, 3, ICS.SyncHierarchy)).stream);
+  const draftsFid = tree.find((f) => f.get(TAG.DisplayName) === 'Drafts')?.get(TAG.FolderId);
+  if (typeof draftsFid !== 'bigint') throw new Error('Drafts in the hierarchy (PidTagFolderId)');
+  const before = (await icsDownload(client, draftsFid, ICS.SyncContents)).state;
+  const logon = await client.execute([rop.logon(0)], [U]);
+  expect(decodeLogon(logon.rop!.responses).returnValue === 0, 'RopLogon');
+  const ids = await client.execute([rop.getLocalReplicaIds(0, 16)], [logon.rop!.handles[0]!]);
+  const idr = ids.rop!.responses;
+  expect(responseHead(idr).returnValue === 0, 'GetLocalReplicaIds');
+  const replica = idr.bytes(16);
+  const localId = BigInt(idr.bytes(6).readUIntBE(0, 6));
+  const key = Buffer.alloc(22);
+  replica.copy(key, 0);
+  key.writeUIntBE(Number(localId), 16, 6);
+  const subject = `Offline draft ${Date.now()}`;
+  const opened = await client.execute([rop.openFolder(0, 1, draftsFid), rop.openCollector(1, 2, true)], [ids.rop!.handles[0]!, U, U]);
+  expect(responseHead(opened.rop!.responses).returnValue === 0, 'OpenFolder');
+  opened.rop!.responses.bytes(2);
+  expect(responseHead(opened.rop!.responses).returnValue === 0, 'OpenCollector');
+  let handles = opened.rop!.handles;
+  let pcl: Buffer | null = null;
+  for (const [n, text] of [[1, subject], [2, `${subject} (edited)`]] as const) {
+    const change = clientChange(pcl);
+    const r = await client.execute([
+      rop.importMessageChange(2, 3, key, 0, change),
+      rop.setProperties(3, [{ tag: TAG.Subject, value: text }, { tag: ICS.MessageFlags, value: 0x09 }]),
+      rop.saveChangesMessage(3, 3), rop.release(3),
+    ], [...handles.slice(0, 3), U]);
+    const resp = r.rop!.responses;
+    expect(responseHead(resp).returnValue === 0, `ImportMessageChange #${n}`);
+    resp.bytes(8);
+    expect(responseHead(resp).returnValue === 0, `SetProperties #${n}`);
+    resp.bytes(2);
+    expect(responseHead(resp).returnValue === 0, `SaveChangesMessage #${n}`);
+    resp.bytes(1);
+    expect(globcntOfId(resp.u64()) === localId, `SaveChangesMessage #${n} returns the client-assigned ID`);
+    handles = r.rop!.handles;
+    pcl = change.pcl;
+  }
+  const byId = await client.execute([rop.openFolder(0, 4, draftsFid), rop.openMessage(4, 5, draftsFid, idOfGlobcnt(localId))], [...handles.slice(0, 3), U, U, U]);
+  expect(responseHead(byId.rop!.responses).returnValue === 0, 'OpenFolder');
+  byId.rop!.responses.bytes(2);
+  expect(decodeOpenMessage(byId.rop!.responses).returnValue === 0, 'OpenMessage by the client-assigned ID');
+  const ts = await client.execute([rop.getTransferState(2, 6)], [...handles.slice(0, 3), U, U, U, U]);
+  expect(responseHead(ts.rop!.responses).returnValue === 0, 'GetTransferState');
+  let tsHandles = ts.rop!.handles;
+  const parts: Buffer[] = [];
+  for (let i = 0; i < 100; i++) {
+    const g = await client.execute([rop.getBuffer(6, 0x4000)], tsHandles);
+    tsHandles = g.rop!.handles;
+    const chunk = decodeGetBuffer(g.rop!.responses);
+    parts.push(chunk.data);
+    if (chunk.status === 0x0003) break;
+  }
+  const state = mergeUploadState(before, decodeIcsStream(Buffer.concat(parts)).state, { replica, ids: [localId] });
+  const echo = await icsDownload(client, draftsFid, ICS.SyncContents, state);
+  expect(!echo.messages.some((m) => String(m.props.get(TAG.Subject)).startsWith(subject)), 'the client\'s own draft does not come back');
+  expect(!echo.deleted.includes(localId), 'its ID is not reported deleted');
+  const all = (await icsDownload(client, draftsFid, ICS.SyncContents)).messages.filter((m) => String(m.props.get(TAG.Subject)).startsWith(subject));
+  expect(all.length === 1 && all[0]!.props.get(TAG.Subject) === `${subject} (edited)`, `one draft on the server, edited (${all.length})`);
+  expect(globcntOfId(all[0]!.header.get(TAG.Mid) as bigint) === localId, 'under the client-assigned ID');
+  return `draft ${localId} kept its ID`;
 }

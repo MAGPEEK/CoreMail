@@ -23,7 +23,7 @@ import { imapLogin } from './imap.mjs';
 import {
   MapiHttpClient, rop, decodeLogon, decodeQueryRows, decodeOpenMessage, responseHead, TAG, HANDLE_UNUSED,
   nspiBody, nspiDecode, parseExecuteResponse, readNotifications, ropOutput,
-  ICS, decodeGetBuffer, decodeIcsStream, decodeHierarchyStream, globcntOfId,
+  ICS, decodeHierarchyStream, globcntOfId, icsDownload, offlineDraftRoundTrip,
 } from '../../../packages/mapi-server/src/testing/mapi-client.ts';
 
 const SMTP_ADDRESS = 0x39fe001f;
@@ -77,39 +77,6 @@ async function inboxRows(client) {
     resp.bytes(skip);
   }
   return { folderIds: l.folderIds, handles: r.rop.handles, rows: decodeQueryRows(resp, cols).rows };
-}
-
-/**
- * Cached mode (MS-OXCFXICS): Logon → OpenFolder → RopSynchronizationConfigure →
- * upload the ICS state → RopFastTransferSourceGetBuffer until Done. Returns the
- * decoded stream (its `state` is the next round's initial state).
- */
-async function icsDownload(client, folderIndex, type, state = new Map()) {
-  const logon = await client.execute([rop.logon(0)], [U]);
-  const l = decodeLogon(logon.rop.responses);
-  assert(l.returnValue === 0, `RopLogon 0x${l.returnValue.toString(16)}`);
-  const flags = type === ICS.SyncContents ? ICS.FlagUnicode | ICS.FlagNormal | ICS.FlagReadState : ICS.FlagUnicode;
-  const rops = [rop.openFolder(0, 1, l.folderIds[folderIndex]), rop.syncConfigure(1, 2, type, flags, ICS.ExtraEid)];
-  for (const [tag, value] of state) rops.push(rop.uploadStateBegin(2, tag, value.length), rop.uploadStateContinue(2, value), rop.uploadStateEnd(2));
-  const configured = await client.execute(rops, [logon.rop.handles[0], U, U]);
-  const resp = configured.rop.responses;
-  assert(responseHead(resp).returnValue === 0, 'OpenFolder');
-  resp.bytes(2);
-  for (let i = 1; i < rops.length; i++) {
-    const head = responseHead(resp);
-    assert(head.returnValue === 0, `ROP 0x${head.ropId.toString(16)} → 0x${head.returnValue.toString(16)}`);
-  }
-  let handles = configured.rop.handles;
-  const parts = [];
-  for (let calls = 0; calls < 5000; calls++) {
-    const g = await client.execute([rop.getBuffer(2, 0x4000)], handles);
-    handles = g.rop.handles;
-    const chunk = decodeGetBuffer(g.rop.responses);
-    assert(chunk.returnValue === 0, `GetBuffer 0x${chunk.returnValue.toString(16)}`);
-    parts.push(chunk.data);
-    if (chunk.status === 0x0003) return { ...decodeIcsStream(Buffer.concat(parts)), stream: Buffer.concat(parts), calls: calls + 1 };
-  }
-  throw new Error('GetBuffer never reported Done');
 }
 
 export async function run(state) {
@@ -265,6 +232,9 @@ export async function run(state) {
       assert(end === 0x4b6, `UploadStateStreamEnd → 0x${end.toString(16)} (expected RpcFormat 0x4b6)`);
       return 'RpcFormat';
     });
+
+    await check('mapi: cached mode — a draft created offline keeps its client ID (opened by it at once), an edit updates it, neither comes back',
+      () => offlineDraftRoundTrip(client));
 
     await check('mapi: cached mode — hierarchy sync lists the folder tree below Top of Information Store', async () => {
       const tree = decodeHierarchyStream((await icsDownload(client, 3, ICS.SyncHierarchy)).stream);

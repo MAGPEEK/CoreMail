@@ -4,19 +4,21 @@
  * queueing it.
  */
 import type {
-  AttachmentRecord, ComposedMessage, DirectoryRecord, DirectoryStore, FolderRecord, ImportOptions, MailboxRef, MailStore,
-  MapiUser, MessageContent, MessageSummary, NewMessage, SubmissionLimits, SubmitResult,
+  AttachmentRecord, ClientIdOwner, ComposedMessage, DirectoryRecord, DirectoryStore, FolderRecord, IdRange, ImportOptions,
+  MailboxRef, MailStore, MapiObjectTarget, MapiUser, MessageContent, MessageSummary, NewMessage, SubmissionLimits, SubmitResult,
 } from '../store/types.js';
 import { LOCAL_ID_BASE } from '../ics/keys.js';
+import { contains, normalize } from '../ics/globset.js';
 
 export interface MemoryMessage {
   summary: MessageSummary;
   content: MessageContent;
   attachmentData: Map<string, Buffer>;
   deleted: boolean;
-  /** Mailbox modSeq at which the message appeared in its folder. */
-  createdModSeq: bigint;
 }
+
+/** A MapiObject row (the prisma-store table). */
+export interface MemoryMapiObject { mailboxId: string; clientId: bigint | null; messageId: string | null; folderId: string | null; pcl: Buffer | null }
 
 export interface SentRecord { user: MapiUser; mailbox: MailboxRef; message: ComposedMessage; saveCopy: boolean }
 
@@ -32,6 +34,7 @@ export class MemoryStore implements MailStore {
   /** Messages stored by importMessage (with their options). */
   readonly imported: Array<{ message: ComposedMessage; opts: ImportOptions }> = [];
   readonly replaced = new Map<string, Set<bigint>>();
+  readonly mapiObjects: MemoryMapiObject[] = [];
   private seq = 0;
   private uid = 100;
   private modSeq = 0n;
@@ -43,7 +46,10 @@ export class MemoryStore implements MailStore {
   }
 
   addFolder(mailboxId: string, name: string, parentId: string | null, displayName = name): FolderRecord & { mailboxId: string } {
-    const f = { id: `f${++this.seq}`, mailboxId, name, displayName, parentId, totalCount: 0, unreadCount: 0, createdAt: new Date('2026-01-01T00:00:00Z') };
+    const f = {
+      id: `f${++this.seq}`, mailboxId, name, displayName, parentId, totalCount: 0, unreadCount: 0,
+      createdAt: new Date('2026-01-01T00:00:00Z'), clientId: null,
+    };
     this.folders.push(f);
     return f;
   }
@@ -61,7 +67,7 @@ export class MemoryStore implements MailStore {
       id: `m${++this.seq}`, folderId, uid: ++this.uid, flags: [], subject: 'Hello', fromAddr: 'sender@example.test',
       fromName: 'Sender', toAddrs: ['user@example.test'], ccAddrs: [], messageIdHeader: `<m${this.seq}@example.test>`,
       inReplyTo: null, date: new Date('2026-02-01T10:00:00Z'), createdAt: new Date('2026-02-01T10:00:05Z'),
-      rawSize: 1234, hasAttachments: atts.length > 0, modSeq, ...fields,
+      rawSize: 1234, hasAttachments: atts.length > 0, modSeq, createdModSeq: modSeq, clientId: null, pcl: null, ...fields,
     };
     const msg: MemoryMessage = {
       summary,
@@ -71,7 +77,6 @@ export class MemoryStore implements MailStore {
       },
       attachmentData: new Map(atts.map((a) => [a.id, a.data])),
       deleted: false,
-      createdModSeq: modSeq,
     };
     this.messages.push(msg);
     this.recount(folderId);
@@ -103,7 +108,15 @@ export class MemoryStore implements MailStore {
   }
 
   async listFolders(mailboxId: string): Promise<FolderRecord[]> {
-    return this.folders.filter((f) => f.mailboxId === mailboxId).map(({ mailboxId: _m, ...f }) => ({ ...f }));
+    return this.folders.filter((f) => f.mailboxId === mailboxId)
+      .map(({ mailboxId: _m, ...f }) => ({ ...f, clientId: this.mapiObjects.find((o) => o.folderId === f.id)?.clientId ?? null }));
+  }
+
+  /** A summary with its MapiObject data (only while the row lies in the ID's mailbox). */
+  private withMapi(s: MessageSummary): MessageSummary {
+    const o = this.mapiObjects.find((x) => x.messageId === s.id);
+    const valid = o !== undefined && o.mailboxId === this.folders.find((f) => f.id === s.folderId)?.mailboxId;
+    return { ...s, clientId: valid ? o.clientId : null, pcl: valid ? o.pcl : null };
   }
 
   async createFolder(mailbox: MailboxRef, parent: FolderRecord | null, displayName: string): Promise<FolderRecord | 'exists' | 'invalid-name'> {
@@ -117,16 +130,17 @@ export class MemoryStore implements MailStore {
     const i = this.folders.findIndex((f) => f.id === folderId && f.mailboxId === mailbox.mailboxId);
     if (i < 0) return 'not-found';
     this.folders.splice(i, 1);
+    for (const o of this.mapiObjects) if (o.folderId === folderId) o.folderId = null; // onDelete SetNull
     return 'ok';
   }
 
   async listMessages(folderId: string): Promise<MessageSummary[]> {
-    return this.live(folderId).map((m) => ({ ...m.summary }));
+    return this.live(folderId).map((m) => this.withMapi(m.summary));
   }
 
   async findMessage(folderId: string, uid: number): Promise<MessageSummary | null> {
     const m = this.live(folderId).find((x) => x.summary.uid === uid);
-    return m ? { ...m.summary } : null;
+    return m ? this.withMapi(m.summary) : null;
   }
 
   async loadContent(message: MessageSummary): Promise<MessageContent> {
@@ -140,13 +154,21 @@ export class MemoryStore implements MailStore {
     throw new Error('no attachment');
   }
 
-  async setRead(_mailbox: MailboxRef, message: MessageSummary, read: boolean): Promise<void> {
+  async setRead(_mailbox: MailboxRef, message: MessageSummary, read: boolean): Promise<bigint | null> {
     const m = this.messages.find((x) => x.summary.id === message.id)!;
     const flags = m.summary.flags.filter((f) => f !== '\\Seen');
-    if (m.summary.flags.includes('\\Seen') === read) return;
+    if (m.summary.flags.includes('\\Seen') === read) return null;
     m.summary.flags = read ? [...flags, '\\Seen'] : flags;
     m.summary.modSeq = ++this.modSeq;
     this.recount(m.summary.folderId);
+    return m.summary.modSeq;
+  }
+
+  /** Changes a message's flags with a new modSeq (another client, tests). */
+  touch(message: MemoryMessage, flags: string[]): void {
+    message.summary.flags = flags;
+    message.summary.modSeq = ++this.modSeq;
+    this.recount(message.summary.folderId);
   }
 
   async deleteMessages(_mailbox: MailboxRef, folderId: string, uids: number[]): Promise<number> {
@@ -160,8 +182,11 @@ export class MemoryStore implements MailStore {
     const hit = this.live(source.folderId).filter((m) => uids.includes(m.summary.uid));
     for (const m of hit) {
       const modSeq = ++this.modSeq;
-      if (copy) this.messages.push({ ...m, summary: { ...m.summary, id: `m${++this.seq}`, uid: ++this.uid, folderId: target.folderId, modSeq }, createdModSeq: modSeq });
-      else { m.summary.folderId = target.folderId; m.summary.uid = ++this.uid; m.summary.modSeq = modSeq; m.createdModSeq = modSeq; }
+      if (copy) {
+        this.messages.push({ ...m, summary: { ...m.summary, id: `m${++this.seq}`, uid: ++this.uid, folderId: target.folderId, modSeq, createdModSeq: modSeq } });
+      } else {
+        Object.assign(m.summary, { folderId: target.folderId, uid: ++this.uid, modSeq, createdModSeq: modSeq });
+      }
     }
     this.recount(source.folderId);
     this.recount(target.folderId);
@@ -199,10 +224,13 @@ export class MemoryStore implements MailStore {
 
   async messagesCreatedSince(folderIds: readonly string[], sinceModSeq: bigint, limit: number): Promise<NewMessage[]> {
     return this.messages
-      .filter((m) => !m.deleted && folderIds.includes(m.summary.folderId) && m.createdModSeq > sinceModSeq)
-      .sort((a, b) => Number(a.createdModSeq - b.createdModSeq))
+      .filter((m) => !m.deleted && folderIds.includes(m.summary.folderId) && m.summary.createdModSeq > sinceModSeq)
+      .sort((a, b) => Number(a.summary.createdModSeq - b.summary.createdModSeq))
       .slice(0, limit)
-      .map((m) => ({ folderId: m.summary.folderId, uid: m.summary.uid, read: m.summary.flags.includes('\\Seen'), createdModSeq: m.createdModSeq }));
+      .map((m) => ({
+        folderId: m.summary.folderId, uid: m.summary.uid, read: m.summary.flags.includes('\\Seen'),
+        createdModSeq: m.summary.createdModSeq, clientId: this.withMapi(m.summary).clientId,
+      }));
   }
 
   async importMessage(_mailbox: MailboxRef, folderId: string, message: ComposedMessage, opts: ImportOptions): Promise<MessageSummary> {
@@ -231,6 +259,63 @@ export class MemoryStore implements MailStore {
     const first = this.nextLocalId;
     this.nextLocalId += BigInt(count);
     return first;
+  }
+
+  async localIdsHandedOutBelow(): Promise<bigint | null> {
+    return this.nextLocalId;
+  }
+
+  async findMessagesByCounters(folderId: string, counters: readonly bigint[]): Promise<Map<bigint, MessageSummary>> {
+    const out = new Map<bigint, MessageSummary>();
+    const live = this.live(folderId).map((m) => this.withMapi(m.summary));
+    for (const c of counters) {
+      const hit = live.find((s) => BigInt(s.uid) === c) ?? live.find((s) => s.clientId === c);
+      if (hit) out.set(c, hit);
+    }
+    return out;
+  }
+
+  async messageByRowId(id: string): Promise<MessageSummary | null> {
+    const m = this.messages.find((x) => x.summary.id === id && !x.deleted);
+    return m ? this.withMapi(m.summary) : null;
+  }
+
+  async clientIdOwner(mailboxId: string, clientId: bigint): Promise<ClientIdOwner | null> {
+    const o = this.mapiObjects.find((x) => x.mailboxId === mailboxId && x.clientId === clientId);
+    if (!o) return null;
+    if (o.folderId) return { kind: 'folder', folderId: o.folderId };
+    if (o.messageId && this.messages.some((m) => m.summary.id === o.messageId && !m.deleted)) return { kind: 'message', messageId: o.messageId };
+    return { kind: 'retired' };
+  }
+
+  async assignedClientIds(mailboxId: string, ranges: readonly IdRange[]): Promise<bigint[]> {
+    const sorted = normalize(ranges);
+    return this.mapiObjects.filter((o) => o.mailboxId === mailboxId && o.clientId !== null && contains(sorted, o.clientId)).map((o) => o.clientId!);
+  }
+
+  async bindMapiObject(mailboxId: string, target: MapiObjectTarget, data: { clientId?: bigint; pcl?: Buffer }): Promise<void> {
+    const isMine = (o: MemoryMapiObject): boolean => ('messageId' in target ? o.messageId === target.messageId : o.folderId === target.folderId);
+    const bind = (o: MemoryMapiObject): void => {
+      o.messageId = 'messageId' in target ? target.messageId : null;
+      o.folderId = 'folderId' in target ? target.folderId : null;
+      if (data.pcl) o.pcl = data.pcl;
+    };
+    let mine = this.mapiObjects.find(isMine);
+    if (data.clientId !== undefined && mine && mine.clientId !== null && mine.clientId !== data.clientId) {
+      mine.messageId = null; mine.folderId = null; mine = undefined; // the old ID retires
+    }
+    const holder = data.clientId === undefined ? undefined : this.mapiObjects.find((o) => o.mailboxId === mailboxId && o.clientId === data.clientId);
+    if (holder && holder !== mine) {
+      if (mine) this.mapiObjects.splice(this.mapiObjects.indexOf(mine), 1);
+      bind(holder);
+    } else if (mine) {
+      if (data.clientId !== undefined) mine.clientId = data.clientId;
+      if (data.pcl) mine.pcl = data.pcl;
+    } else {
+      const o: MemoryMapiObject = { mailboxId, clientId: data.clientId ?? null, messageId: null, folderId: null, pcl: null };
+      bind(o);
+      this.mapiObjects.push(o);
+    }
   }
 
   async replacedLocalIds(mailboxId: string): Promise<Set<bigint>> {

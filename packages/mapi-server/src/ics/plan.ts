@@ -6,18 +6,21 @@
  * Contents: a message whose CN (modSeq) the client has not seen is sent —
  * as a read-state change when the client has it (ID in IdsetGiven), the
  * download includes read states and nothing else the client shows can have
- * changed: CoreMail never rewrites a stored message (a draft that is saved
- * again, a move or a copy is a new UID, so a new ID), so a known ID only
- * changes its flags; besides the read flag the client shows only \Answered,
- * $Forwarded and \Draft, which mean a full change. Everything else is a full
- * message change.
+ * changed: CoreMail never rewrites a stored message (a draft saved again is a
+ * new row that keeps the message's ID only through MapiObject, with a new
+ * modSeq; a move or a copy is a new UID), so a known ID only changes its
+ * flags; besides the read flag the client shows only \Answered, $Forwarded
+ * and \Draft, which mean a full change. Everything else is a full message
+ * change. A CN the client recorded as its own read-state upload (CnsetRead
+ * of the upload context, merged into its state) is not sent back.
+ * Message IDs are messageCounter(): a client-assigned ID, else the UID.
  *
  * Deletions: IDs of IdsetGiven that are no longer in the folder (deleted,
  * expunged, moved away) — server IDs (UIDs; folder IDs for the hierarchy) and
- * client-assigned IDs the server replaced by its own (an uploaded new
- * message). Other client-assigned IDs (folder associated information the
- * server does not keep) are left alone. Known messages that no longer match
- * the restriction are reported as no longer in scope.
+ * client-assigned IDs the server knows (kept by an object, live or retired, or
+ * replaced by a server ID). Other client-assigned IDs (folder associated
+ * information the server does not keep) are left alone. Known messages that
+ * no longer match the restriction are reported as no longer in scope.
  *
  * Final state: given IDs + sent − deleted; CnsetSeen / CnsetRead + the CNs
  * sent. After a complete unrestricted contents download every CN up to the
@@ -27,9 +30,9 @@
  * one compact range.
  */
 import { intersect, rangesOf, subtract, union, type Range } from './globset.js';
-import { folderChangeNumber, LOCAL_ID_BASE } from './keys.js';
+import { folderChangeNumber, messageCounter } from './keys.js';
 import { emptyState, type IcsState } from './state.js';
-import { DRAFT_COUNTER_BASE, SpecialCounter, type StoreGuids } from '../ids.js';
+import { SpecialCounter, type StoreGuids } from '../ids.js';
 import type { FolderNode, MailboxView } from '../objects/mailbox-view.js';
 import type { MessageSummary } from '../store/types.js';
 
@@ -62,8 +65,8 @@ export interface ContentsInput {
   options: ContentsOptions;
   /** Mailbox modSeq read before the folder was listed. */
   highestModSeq: bigint;
-  /** Client-assigned IDs the server replaced by its own. */
-  replaced: ReadonlySet<bigint>;
+  /** Client-assigned IDs of IdsetGiven the server knows (kept by an object, live or retired; replaced). */
+  knownClientIds: ReadonlySet<bigint>;
 }
 
 export interface ContentsPlan {
@@ -75,9 +78,9 @@ export interface ContentsPlan {
   noLongerInScope: Range[];
 }
 
-function deletable(given: readonly Range[], replaced: ReadonlySet<bigint>, server: readonly Range[]): Range[] {
-  const local = [...replaced].filter((v) => v >= LOCAL_ID_BASE && v < DRAFT_COUNTER_BASE);
-  return intersect(given, union(server, rangesOf(local)));
+/** IDs of IdsetGiven the server may report deleted: its own IDs and the client IDs it knows. */
+function deletable(given: readonly Range[], knownClientIds: ReadonlySet<bigint>, server: readonly Range[]): Range[] {
+  return intersect(given, union(server, rangesOf(knownClientIds)));
 }
 
 export function planContents(input: ContentsInput): ContentsPlan {
@@ -90,7 +93,8 @@ export function planContents(input: ContentsInput): ContentsPlan {
   if (options.normal) {
     for (const m of inScope) {
       if (state.cnsetSeen.has(replica, m.modSeq)) continue;
-      const known = state.idsetGiven.has(replica, BigInt(m.uid));
+      const known = state.idsetGiven.has(replica, messageCounter(m));
+      if (known && state.cnsetRead.has(replica, m.modSeq)) continue; // the client's own read-state upload
       const onlyRead = known && options.readState && !m.flags.some((f) => FULL_CHANGE_FLAGS.includes(f));
       (onlyRead ? readChanges : changes).push(m);
     }
@@ -103,10 +107,10 @@ export function planContents(input: ContentsInput): ContentsPlan {
   let deleted: Range[] = [];
   let noLongerInScope: Range[] = [];
   if (!options.noDeletions) {
-    const present = rangesOf(input.messages.map((m) => BigInt(m.uid)));
-    deleted = subtract(deletable(given, input.replaced, [UID_RANGE]), present);
+    const present = rangesOf(input.messages.map(messageCounter));
+    deleted = subtract(deletable(given, input.knownClientIds, [UID_RANGE]), present);
     if (!options.ignoreNoLongerInScope) {
-      const outOfScope = rangesOf(input.messages.filter((m) => !input.inScope(m)).map((m) => BigInt(m.uid)));
+      const outOfScope = rangesOf(input.messages.filter((m) => !input.inScope(m)).map(messageCounter));
       noLongerInScope = intersect(given, outOfScope);
     }
   }
@@ -126,7 +130,7 @@ export function contentsStateAfter(input: ContentsInput, plan: ContentsPlan, sen
   const allSeen: Range[] = complete && input.options.normal && !input.options.restricted
     ? [{ low: 1n, high: input.highestModSeq }]
     : [];
-  out.idsetGiven = input.state.idsetGiven.clone().add(replica, changes.map((m) => BigInt(m.uid)));
+  out.idsetGiven = input.state.idsetGiven.clone().add(replica, changes.map(messageCounter));
   if (complete) out.idsetGiven.removeRanges(replica, plan.deleted).removeRanges(replica, plan.noLongerInScope);
   out.cnsetSeen = input.state.cnsetSeen.clone().addRanges(replica, union(sentCns, allSeen));
   out.cnsetRead = input.state.cnsetRead.clone().addRanges(replica, union(sentCns, allSeen));
@@ -147,7 +151,8 @@ export interface HierarchyInput {
   root: bigint;
   state: IcsState;
   noDeletions: boolean;
-  replaced: ReadonlySet<bigint>;
+  /** Client-assigned folder IDs of IdsetGiven the server knows (kept by a folder, live or retired; replaced). */
+  knownClientIds: ReadonlySet<bigint>;
 }
 
 export interface HierarchyPlan {
@@ -166,7 +171,7 @@ export function planHierarchy(input: HierarchyInput): HierarchyPlan {
   if (!input.noDeletions) {
     // Folders the client has that left the synchronization scope (deleted, or moved out of the root's subtree).
     const present = rangesOf(inScope.map((n) => n.counter).concat(input.root));
-    deleted = subtract(deletable(input.state.idsetGiven.ranges(replica), input.replaced, FOLDER_RANGES), present);
+    deleted = subtract(deletable(input.state.idsetGiven.ranges(replica), input.knownClientIds, FOLDER_RANGES), present);
   }
   return { inScope, changes, deleted };
 }

@@ -19,10 +19,11 @@ import { valueBytes } from '../../objects/footprint.js';
 import { lookupProperty, setProperty, stringProp, type PropertyBag } from '../../props/bag.js';
 import { MessageFlag, RecipientKind, Tag } from '../../props/tags.js';
 import { makeId } from '../../ids.js';
+import { messageCounter } from '../../ics/keys.js';
 import {
   messageSummaryBag, newAttachment, newMessageBag, recipientsFromRow, splitSubject,
 } from '../../objects/props.js';
-import { counterOf, folderNode, refreshView, uidOf } from './common.js';
+import { counterOf, folderNode, keepMessageId, messagesByIds, refreshView } from './common.js';
 import { ensureContent } from './content.js';
 import { composeMessage } from './compose.js';
 import { saveImported } from './sync-import.js';
@@ -97,10 +98,10 @@ export const ropOpenMessage = defineRop<OpenReq>({
     const folderCounter = counterOf(req.folderId);
     const node = folderNode(logon, folderCounter);
     // Special folders (Outbox …) hold no stored messages.
-    const summary = node.record ? await ctx.store.findMessage(node.record.id, uidOf(req.messageId)) : null;
+    const summary = node.record ? (await messagesByIds(ctx.store, node.record.id, [req.messageId]))[0] : undefined;
     if (!summary) throw new RopError(Ec.NotFound, 'message not found');
     const message: MessageState = {
-      folderCounter, counter: BigInt(summary.uid), summary,
+      folderCounter, counter: messageCounter(summary), summary,
       props: messageSummaryBag(logon, folderCounter, summary),
       recipients: recipientsFromRow(summary, null), attachments: [], nextAttachNum: 0,
       readOnly: req.mode === OPEN_READ_ONLY || logon.mailbox.readOnly,
@@ -175,11 +176,13 @@ async function persistDraft(store: MailStore, logon: LogonState, message: Messag
   const node = folderNode(logon, message.folderCounter);
   if (message.associated || !node.record || !isDraft(message)) return;
   const composed = await composeMessage(store, message);
-  const saved = await store.saveDraft(logon.mailbox, node.record.id, composed, message.summary).catch((err: unknown) => {
+  const previous = message.summary;
+  const saved = await store.saveDraft(logon.mailbox, node.record.id, composed, previous).catch((err: unknown) => {
     throw err instanceof MailboxFullError ? new RopError(Ec.QuotaExceeded, err.message) : err;
   });
-  message.summary = saved;
-  message.counter = BigInt(saved.uid);
+  // A draft the client created in cached mode keeps the ID it assigned.
+  message.summary = previous?.clientId != null ? await keepMessageId(store, logon.mailbox.mailboxId, previous, saved, previous.pcl) : saved;
+  message.counter = messageCounter(message.summary);
   setProperty(message.props, Tag.Mid, makeId(message.counter));
 }
 

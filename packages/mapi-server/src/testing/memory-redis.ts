@@ -21,6 +21,10 @@ export class MemoryRedis implements SessionRedis, LocalIdRedis {
     return e;
   }
 
+  async get(key: string): Promise<string | null> {
+    return this.live(key)?.value ?? null;
+  }
+
   async set(key: string, value: string, mode: 'PX' | 'NX', ttlMs?: number): Promise<unknown> {
     if (mode === 'NX' && this.live(key)) return null;
     this.store.set(key, { value, expires: mode === 'PX' ? this.now + (ttlMs ?? 0) : Number.POSITIVE_INFINITY });

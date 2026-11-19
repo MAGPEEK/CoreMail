@@ -83,6 +83,10 @@ export const Ec = {
   NoRecipients: 0x80040607,
   HasFolders: 0x80040609,
   HasMessages: 0x8004060a,
+  /** MS-OXCDATA 2.4.2 IgnoreFailure (SYNC_E_IGNORE): the server already has this change or a successor. */
+  SyncIgnore: 0x80040801,
+  /** MS-OXCDATA 2.4.2 SyncConflict (SYNC_E_CONFLICT): conflicting versions, FailOnConflict set. */
+  SyncConflict: 0x80040802,
 } as const;
 
 /** A ROP failed with a MAPI return value (sent in the ROP's failure response). */

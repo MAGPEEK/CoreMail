@@ -56,6 +56,8 @@ export interface FolderRecord {
   totalCount: number;
   unreadCount: number;
   createdAt: Date;
+  /** The ID the client assigned (cached mode, MapiObject): replaces the folder counter. */
+  clientId: bigint | null;
 }
 
 export interface MessageSummary {
@@ -75,6 +77,12 @@ export interface MessageSummary {
   rawSize: number;
   hasAttachments: boolean;
   modSeq: bigint;
+  /** modSeq of the row's creation (its content never changes afterwards). */
+  createdModSeq: bigint;
+  /** The ID the client assigned (cached mode, MapiObject): replaces the UID as message counter. */
+  clientId: bigint | null;
+  /** PidTagPredecessorChangeList of the version a client uploaded (conflict detection). */
+  pcl: Buffer | null;
 }
 
 export interface AttachmentRecord {
@@ -138,7 +146,8 @@ export interface MailStore {
   findMessage(folderId: string, uid: number): Promise<MessageSummary | null>;
   loadContent(message: MessageSummary): Promise<MessageContent>;
   loadAttachment(attachmentId: string): Promise<Buffer>;
-  setRead(mailbox: MailboxRef, message: MessageSummary, read: boolean): Promise<void>;
+  /** Sets or clears \Seen; returns the row's new modSeq (null: nothing changed). */
+  setRead(mailbox: MailboxRef, message: MessageSummary, read: boolean): Promise<bigint | null>;
   /** Soft-deletes messages (tombstones, recoverable) — returns how many. */
   deleteMessages(mailbox: MailboxRef, folderId: string, uids: number[]): Promise<number>;
   moveOrCopy(source: FolderTarget, target: FolderTarget, uids: number[], copy: boolean): Promise<number>;
@@ -166,12 +175,38 @@ export interface MailStore {
   /** Client-assigned IDs whose objects the server stored under its own ID. */
   replacedLocalIds(mailboxId: string): Promise<Set<bigint>>;
   addReplacedLocalIds(mailboxId: string, ids: readonly bigint[]): Promise<void>;
+  /** The first GLOBCNT RopGetLocalReplicaIds has not handed out yet (null: the counter is unknown). */
+  localIdsHandedOutBelow(mailboxId: string): Promise<bigint | null>;
+  /**
+   * Live messages of a folder by MAPI counter: a UID, or an ID a client
+   * assigned (MapiObject; also a retired UID that a draft saved again keeps).
+   */
+  findMessagesByCounters(folderId: string, counters: readonly bigint[]): Promise<Map<bigint, MessageSummary>>;
+  /** A live message by its row id. */
+  messageByRowId(id: string): Promise<MessageSummary | null>;
+  /** What a client-assigned ID of the mailbox names (null: never assigned). */
+  clientIdOwner(mailboxId: string, clientId: bigint): Promise<ClientIdOwner | null>;
+  /** IDs within `ranges` that the mailbox's clients ever had assigned (live or retired objects). */
+  assignedClientIds(mailboxId: string, ranges: readonly IdRange[]): Promise<bigint[]>;
+  /**
+   * Binds a client-assigned ID and / or the PCL of an uploaded version to a
+   * message or folder row. A client ID bound to another row moves to this one
+   * (a draft saved again keeps its ID); callers check clientIdOwner first.
+   */
+  bindMapiObject(mailboxId: string, target: MapiObjectTarget, data: { clientId?: bigint; pcl?: Buffer }): Promise<void>;
   /**
    * The session user's current access to a shared / delegated mailbox it is
    * logged on to (null = revoked); no mailbox access audit entry.
    */
   foreignAccess(user: MapiUser, mailbox: MailboxRef): Promise<MailboxRef | null>;
 }
+
+export interface IdRange { low: bigint; high: bigint }
+
+export type MapiObjectTarget = { messageId: string } | { folderId: string };
+
+/** The object a client-assigned ID names; `retired`: that object no longer exists. */
+export type ClientIdOwner = { kind: 'message'; messageId: string } | { kind: 'folder'; folderId: string } | { kind: 'retired' };
 
 export interface ImportOptions {
   read: boolean;
@@ -180,4 +215,4 @@ export interface ImportOptions {
 }
 
 /** A message that appeared in a folder (NewMail notifications). */
-export interface NewMessage { folderId: string; uid: number; read: boolean; createdModSeq: bigint }
+export interface NewMessage { folderId: string; uid: number; read: boolean; createdModSeq: bigint; clientId: bigint | null }

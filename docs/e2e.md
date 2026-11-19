@@ -188,7 +188,11 @@ Cached mode (9.5): an ICS contents synchronization of the Inbox (`RopSynchroniza
 mail and `RopSetMessageReadFlag` on the first one, a synchronization with that state (uploaded with
 `RopSynchronizationUploadStateStream*`) sends only the new mail as a change and the read state as
 `IncrSyncRead`, a third one nothing; a malformed uploaded state is refused with `RpcFormat`; a
-hierarchy synchronization lists INBOX, Sent and Outbox. A
+draft created offline in Drafts (an ID from `RopGetLocalReplicaIds`, `ImportMessageChange` +
+`SaveChangesMessage`) keeps that ID — `RopOpenMessage` opens it by it, a second import edits it,
+and with the collector's state merged in the next download sends neither back while the server
+holds exactly one (edited) draft under that ID (`offlineDraftRoundTrip` in the test client, also
+run by `app.test.ts`); a hierarchy synchronization lists INBOX, Sent and Outbox. A
 then creates a message in the Outbox (`SetProperties`, `ModifyRecipients`, `SubmitMessage`) that
 reaches B (IMAP search). The address book: `Bind`, `GetSpecialTable`, `QueryRows` (paged) lists A and
 B, `ResolveNames` finds B by address (an unknown address stays unresolved), `DNToMId` maps A's DN,

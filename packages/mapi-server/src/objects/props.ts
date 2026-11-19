@@ -9,7 +9,7 @@ import { Tag, ObjectType, MessageFlag, RecipientKind } from '../props/tags.js';
 import {
   makeId, folderEntryId, messageEntryId, addressBookEntryId, objectKey, SpecialCounter,
 } from '../ids.js';
-import { changeKey, changeNumberId, folderChangeNumber, predecessorChangeList, sourceKey } from '../ics/keys.js';
+import { changeKey, changeNumberId, downloadPcl, folderChangeNumber, messageCounter, predecessorChangeList, sourceKey } from '../ics/keys.js';
 import type { FolderNode } from './mailbox-view.js';
 import type { LogonState, AttachmentState, RecipientState } from './state.js';
 import type { AttachmentRecord, MessageContent, MessageSummary } from '../store/types.js';
@@ -131,7 +131,7 @@ function iconIndex(flags: readonly string[]): number {
 /** Properties of a stored message that come from its row (contents tables, RopOpenMessage). */
 export function messageSummaryBag(logon: LogonState, folderCounter: bigint, m: MessageSummary): PropertyBag {
   const { guids } = logon;
-  const counter = BigInt(m.uid);
+  const counter = messageCounter(m);
   const bag: PropertyBag = new Map();
   const { prefix, normalized } = splitSubject(m.subject);
   const senderName = m.fromName || m.fromAddr;
@@ -150,7 +150,7 @@ export function messageSummaryBag(logon: LogonState, folderCounter: bigint, m: M
   bag.set(Tag.SourceKey, sourceKey(guids, counter));
   bag.set(Tag.ParentSourceKey, sourceKey(guids, folderCounter));
   bag.set(Tag.ChangeKey, change);
-  bag.set(Tag.PredecessorChangeList, predecessorChangeList(change));
+  bag.set(Tag.PredecessorChangeList, downloadPcl(guids, m));
   bag.set(Tag.ChangeNumber, changeNumberId(m.modSeq));
   bag.set(Tag.ObjectType, ObjectType.Message);
   bag.set(Tag.MessageClass, 'IPM.Note');

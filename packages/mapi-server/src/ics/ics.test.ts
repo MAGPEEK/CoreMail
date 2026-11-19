@@ -17,7 +17,7 @@ import { MapiSession } from '../session/session.js';
 import { MemoryStore } from '../testing/memory-store.js';
 import {
   rop, ropInput, ropOutput, decodeLogon, responseHead, decodeGetBuffer, decodeIcsStream, decodeHierarchyStream,
-  readGlobset, readIdset, ICS, TAG, Reader, Writer,
+  readGlobset, readIdset, ICS, TAG, Reader, Writer, clientChange, globcntOfId, mergeSizedXids, CLIENT_NAMESPACE,
 } from '../testing/mapi-client.js';
 import { BufferReader, WireFormatError } from '../wire/reader.js';
 import {
@@ -108,6 +108,28 @@ async function download(h: Harness, folderId: bigint, type: number, opts: Downlo
 }
 
 const uidsOf = (values: bigint[]): number[] => values.map(Number).sort((a, b) => a - b);
+
+/** The checkpoint state of an upload context (RopSynchronizationGetTransferState + GetBuffer). */
+async function collectorState(h: Harness, collectorIndex: number): Promise<Map<number, Buffer>> {
+  ok(await h.run(rop.getTransferState(collectorIndex, 9)), RopId.SynchronizationGetTransferState);
+  const parts: Buffer[] = [];
+  for (;;) {
+    const g = decodeGetBuffer(await h.run(rop.getBuffer(9, 0xbabe)));
+    parts.push(g.data);
+    if (g.status === 3) break;
+  }
+  return decodeIcsStream(Buffer.concat(parts)).state;
+}
+
+/** A download state with an upload context's state merged in (what the client does after uploading). */
+function mergeStates(download: Map<number, Buffer>, upload: Map<number, Buffer>): Map<number, Buffer> {
+  const out = new Map(download);
+  for (const [tag, value] of upload) {
+    const mine = out.get(tag);
+    out.set(tag, mine ? IdSet.decodeGuidForm(mine).union(IdSet.decodeGuidForm(value)).encodeGuidForm() : value);
+  }
+  return out;
+}
 
 // ── Codecs ───────────────────────────────────────────────────────────────────
 
@@ -312,7 +334,7 @@ test('hierarchy sync: the folder tree (parents first, empty parent key at the ro
 
 // ── Upload ───────────────────────────────────────────────────────────────────
 
-test('upload: a new message (client ID), read state, deletion and move through the collector; the next download swaps the client copy', async () => {
+test('upload: a new message keeps its client ID (openable at once); read state, deletion and move through the collector; nothing comes back', async () => {
   const h = new Harness();
   const inbox = h.folder('INBOX');
   const mark = h.store.addMessage(inbox, { subject: 'Mark me' });
@@ -340,13 +362,21 @@ test('upload: a new message (client ID), read state, deletion and move through t
   ok(r, RopId.SynchronizationImportMessageChange);
   assert.equal(r.u64(), 0n, 'MessageId 0');
   ok(r, RopId.SetProperties); r.u16();
-  ok(r, RopId.SaveChangesMessage); r.u8(); r.u64();
+  ok(r, RopId.SaveChangesMessage); r.u8();
+  assert.equal(r.u64(), makeId(localId), 'SaveChangesMessage returns the client-assigned ID');
   ok(r, RopId.SynchronizationImportReadStateChanges);
   ok(r, RopId.SynchronizationImportDeletes);
   assert.equal(h.store.imported[0]!.message.subject, 'Written offline');
   assert.equal(h.store.imported[0]!.opts.read, true);
   assert.equal((await h.store.findMessage(inbox, mark.summary.uid))!.flags.includes('\\Seen'), true);
   assert.equal(await h.store.findMessage(inbox, drop.summary.uid), null);
+  assert.deepEqual(h.store.mapiObjects.filter((o) => o.clientId === localId).length, 1, 'the client ID is kept (persistent MapiObject)');
+
+  // openable by the client's ID at once
+  r = await h.run(rop.openMessage(1, 6, h.inbox, makeId(localId)));
+  ok(r, RopId.OpenMessage);
+  const uploadState = await collectorState(h, 4);
+  const server = await h.store.listMessages(inbox);
 
   const inboxKey = decodeHierarchyStream((await download(h, h.ipmSubtree, ICS.SyncHierarchy, { flags: ICS.FlagUnicode })).stream)
     .find((f) => f.get(TAG.DisplayName) === 'INBOX')!.get(ICS.SourceKey) as Buffer;
@@ -357,22 +387,25 @@ test('upload: a new message (client ID), read state, deletion and move through t
   ok(r, RopId.OpenFolder); r.u8(); r.u8();
   ok(r, RopId.SynchronizationOpenCollector);
   ok(r, RopId.SynchronizationImportMessageMove);
-  assert.equal((await h.store.listMessages(h.folder('Archive'))).length, 1, 'moved through the message store');
+  const archived = await h.store.listMessages(h.folder('Archive'));
+  assert.equal(archived.length, 1, 'moved through the message store');
+  assert.equal(archived[0]!.clientId, localId + 1n, 'the moved message takes the destination ID the client assigned');
 
-  // The client's state now also names its own copy (localId): the next download replaces it.
-  const given = IdSet.decodeGuidForm(initial.state.get(ICS.IdsetGiven)!).add(REPLICA, [localId]);
-  const state = new Map(initial.state).set(ICS.IdsetGiven, given.encodeGuidForm());
+  // The client's state: its own message (localId) added by checkpointing, the upload state merged in.
+  const state = mergeStates(new Map(initial.state).set(ICS.IdsetGiven,
+    IdSet.decodeGuidForm(initial.state.get(ICS.IdsetGiven)!).add(REPLICA, [localId]).encodeGuidForm()), uploadState);
   const next = decodeIcsStream((await download(h, h.inbox, ICS.SyncContents, { state })).stream);
-  assert.ok(next.deleted.includes(localId), 'the client-created copy is reported deleted');
-  assert.ok(next.deleted.includes(BigInt(drop.summary.uid)) && next.deleted.includes(BigInt(moveUid)));
-  assert.deepEqual(next.messages.map((m) => m.props.get(TAG.Subject)), ['Written offline'], 'the server copy arrives');
-  assert.deepEqual(uidsOf(next.read), [mark.summary.uid]);
+  assert.deepEqual(next.messages, [], 'no echo: neither the uploaded message nor the read change come back');
+  assert.deepEqual(next.read, []);
+  assert.deepEqual(uidsOf(next.deleted), [drop.summary.uid, moveUid].sort((a, b) => a - b), 'only the deleted and the moved message');
+  assert.equal(server.filter((m) => m.subject === 'Written offline').length, 1, 'one copy on the server');
 });
 
-test('upload: hierarchy import creates a folder (client ID replaced); default folders cannot be renamed or deleted; read-only mailboxes refuse imports', async () => {
+test('upload: hierarchy import keeps the client ID of a new folder (openable at once, its messages upload by that ID); default folders cannot be renamed or deleted; read-only mailboxes refuse imports', async () => {
   const h = new Harness();
   await h.logon();
-  let r = await h.run(rop.getLocalReplicaIds(0, 1));
+  const before = decodeIcsStream((await download(h, h.ipmSubtree, ICS.SyncHierarchy, { flags: ICS.FlagUnicode })).stream).state;
+  let r = await h.run(rop.getLocalReplicaIds(0, 4));
   ok(r, RopId.GetLocalReplicaIds); r.bytes(16);
   const localId = BigInt(r.bytes(6).readUIntBE(0, 6));
   r = await h.run(rop.openFolder(0, 1, h.ipmSubtree), rop.openCollector(1, 4, false),
@@ -380,10 +413,31 @@ test('upload: hierarchy import creates a folder (client ID replaced); default fo
   ok(r, RopId.OpenFolder); r.u8(); r.u8();
   ok(r, RopId.SynchronizationOpenCollector);
   ok(r, RopId.SynchronizationImportHierarchyChange);
-  assert.ok(h.store.folders.some((f) => f.displayName === 'Offline Folder'));
-  assert.equal((await h.store.replacedLocalIds('mb1')).has(localId), true);
+  const created = h.store.folders.find((f) => f.displayName === 'Offline Folder')!;
+  assert.ok(created);
+  assert.equal((await h.store.replacedLocalIds('mb1')).has(localId), false, 'kept, not replaced');
+  const hierarchyUpload = await collectorState(h, 4);
 
+  // The folder answers to the client's ID: a message created offline in it uploads through a collector on that ID.
+  r = await h.run(rop.openFolder(0, 6, makeId(localId)), rop.openCollector(6, 7, true),
+    rop.importMessageChange(7, 8, sourceKey(localId + 1n)), rop.setProperties(8, [{ tag: TAG.Subject, value: 'Filed offline' }]),
+    rop.saveChangesMessage(8, 8));
+  ok(r, RopId.OpenFolder); r.u8(); r.u8();
+  ok(r, RopId.SynchronizationOpenCollector);
+  ok(r, RopId.SynchronizationImportMessageChange); r.u64();
+  ok(r, RopId.SetProperties); r.u16();
+  ok(r, RopId.SaveChangesMessage);
+  assert.deepEqual((await h.store.listMessages(created.id)).map((m) => [m.subject, m.clientId]), [['Filed offline', localId + 1n]]);
+
+  // The folder keeps the client's ID in every download.
   const tree = decodeHierarchyStream((await download(h, h.ipmSubtree, ICS.SyncHierarchy, { flags: ICS.FlagUnicode })).stream);
+  assert.deepEqual(tree.find((f) => f.get(TAG.DisplayName) === 'Offline Folder')!.get(ICS.SourceKey), sourceKey(localId));
+  // The client's state from before the upload, its own folder added, the upload state merged in: no echo, no deletion.
+  const state = mergeStates(new Map(before).set(ICS.IdsetGiven,
+    IdSet.decodeGuidForm(before.get(ICS.IdsetGiven)!).add(REPLICA, [localId]).encodeGuidForm()), hierarchyUpload);
+  const again = (await download(h, h.ipmSubtree, ICS.SyncHierarchy, { flags: ICS.FlagUnicode, state })).stream;
+  assert.deepEqual([decodeHierarchyStream(again).length, decodeIcsStream(again).deleted.length], [0, 0]);
+
   const inboxKey = tree.find((f) => f.get(TAG.DisplayName) === 'INBOX')!.get(ICS.SourceKey) as Buffer;
   r = await h.run(rop.openFolder(0, 1, h.ipmSubtree), rop.openCollector(1, 4, false),
     rop.importHierarchyChange(4, Buffer.alloc(0), inboxKey, 'Renamed Inbox'), rop.importDeletes(4, 0x01, [inboxKey]));
@@ -399,6 +453,194 @@ test('upload: hierarchy import creates a folder (client ID replaced); default fo
   ok(r, RopId.OpenFolder); r.u8(); r.u8();
   ok(r, RopId.SynchronizationOpenCollector);
   assert.equal(responseHead(r).returnValue, 0x80070005, 'read-only mailbox');
+});
+
+// ── Cached-mode client model: offline create + edit, server changes, no duplicates, no echo ──
+
+const PCL_TAG = 0x65e30102;
+const UNSENT = 0x08;
+const UNSENT_READ = UNSENT | 0x01;
+
+/** The MAPI folder ID of a folder row (its counter in the logon's view). */
+function folderIdOf(h: Harness, recordId: string): bigint {
+  return makeId(h.session.logons.get(0)!.view.ofRecord(recordId)!.counter);
+}
+
+interface ClientItem { subject: string; read: boolean; pcl: Buffer | null }
+
+/** Classic Outlook's view of the Drafts folder: its items, pending changes and ICS state. */
+class CachedClient {
+  readonly items = new Map<bigint, ClientItem>();
+  readonly pendingEdits = new Set<bigint>();
+  readonly pendingReads = new Map<bigint, boolean>();
+  readonly created = new Set<bigint>();
+  state = new Map<number, Buffer>();
+  pool: bigint[] = [];
+  private n = 0;
+
+  constructor(readonly h: Harness, readonly folderId: bigint) {}
+
+  async reserve(): Promise<void> {
+    const r = await this.h.run(rop.getLocalReplicaIds(0, 32));
+    ok(r, RopId.GetLocalReplicaIds); r.bytes(16);
+    const first = BigInt(r.bytes(6).readUIntBE(0, 6));
+    this.pool = Array.from({ length: 32 }, (_, i) => first + BigInt(i));
+  }
+
+  createOffline(): void {
+    const id = this.pool.shift()!;
+    this.items.set(id, { subject: `client ${++this.n}`, read: true, pcl: null });
+    this.created.add(id);
+    this.pendingEdits.add(id);
+  }
+
+  edit(id: bigint): void {
+    this.items.get(id)!.subject = `edited ${++this.n}`;
+    this.pendingEdits.add(id);
+  }
+
+  async upload(): Promise<{ uploaded: Set<bigint> }> {
+    const uploaded = new Set<bigint>();
+    let r = await this.h.run(rop.openFolder(0, 1, this.folderId), rop.openCollector(1, 4, true));
+    ok(r, RopId.OpenFolder); r.u8(); r.u8();
+    ok(r, RopId.SynchronizationOpenCollector);
+    for (const id of this.pendingEdits) {
+      const item = this.items.get(id)!;
+      const change = clientChange(item.pcl);
+      r = await this.h.run(rop.importMessageChange(4, 5, sourceKey(id), 0, change),
+        rop.setProperties(5, [{ tag: TAG.Subject, value: item.subject }, { tag: ICS.MessageFlags, value: item.read ? UNSENT_READ : UNSENT }]),
+        rop.saveChangesMessage(5, 5), rop.release(5)); // a failed import leaves no object behind
+      if (responseHead(r).returnValue === 0) { item.pcl = change.pcl; uploaded.add(id); }
+    }
+    if (this.pendingReads.size > 0) {
+      r = await this.h.run(rop.importReadStateChanges(4, [...this.pendingReads].map(([id, read]) => ({ sourceKey: sourceKey(id), read }))));
+      ok(r, RopId.SynchronizationImportReadStateChanges);
+    }
+    const upload = await collectorState(this.h, 4);
+    // Checkpointing: the client's own new objects join IdsetGiven; the upload state is merged in.
+    const given = this.state.get(ICS.IdsetGiven);
+    const own = [...this.created].filter((id) => uploaded.has(id));
+    const merged = (given ? IdSet.decodeGuidForm(given) : new IdSet()).add(REPLICA, own);
+    this.state = mergeStates(new Map(this.state).set(ICS.IdsetGiven, merged.encodeGuidForm()), upload);
+    this.created.clear();
+    this.pendingEdits.clear();
+    this.pendingReads.clear();
+    return { uploaded };
+  }
+
+  async download(): Promise<ReturnType<typeof decodeIcsStream>> {
+    const result = decodeIcsStream((await download(this.h, this.folderId, ICS.SyncContents, {
+      state: this.state, flags: SYNC_FLAGS, extra: ICS.ExtraEid | ICS.ExtraCN,
+    })).stream);
+    for (const m of result.messages) {
+      const id = globcntOfId(m.header.get(TAG.Mid) as bigint);
+      this.items.set(id, {
+        subject: m.props.get(TAG.Subject) as string, read: ((m.props.get(ICS.MessageFlags) as number) & 1) !== 0,
+        pcl: m.header.get(PCL_TAG) as Buffer,
+      });
+    }
+    for (const id of result.deleted) this.items.delete(id);
+    for (const id of result.read) this.items.get(id)!.read = true;
+    for (const id of result.unread) this.items.get(id)!.read = false;
+    this.state = result.state;
+    return result;
+  }
+}
+
+test('model: offline-created and edited drafts keep their client IDs — no duplicates, no echo of the client\'s own changes, server changes arrive (seeded)', async () => {
+  for (const seed of [11, 12, 13]) {
+    const rnd = prng(seed);
+    const h = new Harness();
+    const drafts = h.folder('Drafts');
+    const mailbox = h.store.mailboxes.get('mb1')!;
+    await h.logon();
+    const draftsId = folderIdOf(h, drafts);
+    const client = new CachedClient(h, draftsId);
+    await client.reserve();
+    await client.download();
+    let serverDirty = new Set<bigint>();
+    const live = async (): Promise<MessageSummary[]> => h.store.listMessages(drafts);
+    for (let step = 0; step < 60; step++) {
+      const op = Math.floor(rnd() * 7);
+      const mine = [...client.items.keys()];
+      if (op <= 1 && client.pool.length > 0) client.createOffline();
+      else if (op === 2 && mine.length > 0) client.edit(pick(rnd, mine));
+      else if (op === 3 && mine.length > 0) { const id = pick(rnd, mine); client.pendingReads.set(id, !client.items.get(id)!.read); client.items.get(id)!.read = !client.items.get(id)!.read; }
+      else if (op === 4) serverDirty.add(BigInt(h.store.addMessage(drafts, { flags: ['\\Draft', '\\Seen'], subject: `server ${step}` }).summary.uid));
+      else if (op === 5) {
+        const rows = await live();
+        if (rows.length > 0) { const m = pick(rnd, rows); const id = messageCounterOf(m); await h.store.setRead(mailbox, m, !m.flags.includes('\\Seen')); serverDirty.add(id); }
+      } else {
+        await client.upload();
+        const before = new Set(client.items.keys());
+        const result = await client.download();
+        // No echo: every message change is a server change or a message the client did not have.
+        for (const m of result.messages) {
+          const id = globcntOfId(m.header.get(TAG.Mid) as bigint);
+          assert.ok(serverDirty.has(id) || !before.has(id), `seed ${seed} step ${step}: echo of ${id}`);
+        }
+        for (const id of [...result.read, ...result.unread]) assert.ok(serverDirty.has(id), `seed ${seed} step ${step}: read echo of ${id}`);
+        serverDirty = new Set();
+        const rows = await live();
+        assert.deepEqual([...client.items.keys()].sort(), rows.map(messageCounterOf).sort(), `seed ${seed} step ${step}: same messages`);
+        for (const m of rows) {
+          const item = client.items.get(messageCounterOf(m))!;
+          assert.equal(item.subject, m.subject, `seed ${seed} step ${step}: subject of ${messageCounterOf(m)}`);
+          assert.equal(item.read, m.flags.includes('\\Seen'), `seed ${seed} step ${step}: read state of ${messageCounterOf(m)}`);
+        }
+        assert.equal(new Set(rows.map((m) => m.subject)).size, rows.length, `seed ${seed} step ${step}: no duplicates`);
+      }
+    }
+    // The IDs survive a restart: a new session on the same store opens a client-created draft by its ID.
+    const ownId = [...client.items.keys()].find((id) => id >= LOCAL_ID_BASE);
+    assert.ok(ownId !== undefined, `seed ${seed}: the run created drafts offline`);
+    const fresh = new Harness();
+    Object.assign(fresh, { store: h.store });
+    await fresh.logon();
+    const r = await fresh.run(rop.openFolder(0, 1, draftsId), rop.openMessage(1, 2, draftsId, makeId(ownId)));
+    ok(r, RopId.OpenFolder); r.u8(); r.u8();
+    ok(r, RopId.OpenMessage);
+  }
+});
+
+const messageCounterOf = (m: MessageSummary): bigint => m.clientId ?? BigInt(m.uid);
+
+test('conflicts: a change based on an older version than another client\'s → server version kept (SyncConflict with FailOnConflict); the same change again → IgnoreFailure; a change based on the current version applies', async () => {
+  const h = new Harness();
+  const drafts = h.folder('Drafts');
+  const draft = h.store.addMessage(drafts, { flags: ['\\Draft', '\\Seen'], subject: 'Plan' });
+  await h.logon();
+  const draftsId = folderIdOf(h, drafts);
+  const first = decodeIcsStream((await download(h, draftsId, ICS.SyncContents, { extra: ICS.ExtraEid })).stream);
+  const downloadedPcl = first.messages[0]!.header.get(PCL_TAG) as Buffer;
+  const key = sourceKey(BigInt(draft.summary.uid));
+  let r = await h.run(rop.openFolder(0, 1, draftsId), rop.openCollector(1, 4, true));
+  ok(r, RopId.OpenFolder); r.u8(); r.u8();
+  ok(r, RopId.SynchronizationOpenCollector);
+  const edit = async (change: { changeKey: Buffer; pcl: Buffer }, subject: string, flags = 0): Promise<number> => {
+    r = await h.run(rop.importMessageChange(4, 5, key, flags, change),
+      rop.setProperties(5, [{ tag: TAG.Subject, value: subject }, { tag: ICS.MessageFlags, value: UNSENT_READ }]), rop.saveChangesMessage(5, 5), rop.release(5));
+    return responseHead(r).returnValue;
+  };
+  // Client B (another namespace) edits the downloaded version first.
+  const otherGuid = Buffer.alloc(16, 0xb2);
+  const bXid = Buffer.concat([otherGuid, Buffer.from([0, 0, 0, 0, 0, 0, 0, 1])]);
+  const bChange = { changeKey: bXid, pcl: mergeSizedXids(downloadedPcl, Buffer.concat([Buffer.from([24]), bXid])) };
+  assert.equal(await edit(bChange, 'Plan (B)'), 0);
+  assert.equal(await edit(bChange, 'Plan (B)'), 0x80040801, 'the same change again → IgnoreFailure');
+  // Client A edits the same downloaded version: neither includes the other.
+  assert.equal(await edit(clientChange(downloadedPcl), 'Plan (A)', 0x40), 0x80040802, 'FailOnConflict → SyncConflict');
+  assert.equal(await edit(clientChange(downloadedPcl), 'Plan (A)'), 0, 'accepted without FailOnConflict …');
+  const rows = await h.store.listMessages(drafts);
+  assert.deepEqual(rows.map((m) => m.subject), ['Plan (B)'], '… and the server version (B) is kept, under the same ID');
+  assert.equal(messageCounterOf(rows[0]!), BigInt(draft.summary.uid), 'a draft saved again keeps its message ID');
+  // A downloads B's version; its PCL carries B's change, so A's next edit applies.
+  const second = decodeIcsStream((await download(h, draftsId, ICS.SyncContents, { state: first.state, extra: ICS.ExtraEid })).stream);
+  assert.deepEqual(second.messages.map((m) => m.props.get(TAG.Subject)), ['Plan (B)']);
+  const serverPcl = second.messages[0]!.header.get(PCL_TAG) as Buffer;
+  assert.ok(serverPcl.includes(bXid) && serverPcl.includes(CLIENT_NAMESPACE) === false, 'the downloaded PCL includes B\'s change');
+  assert.equal(await edit(clientChange(serverPcl), 'Plan (A2)'), 0);
+  assert.deepEqual((await h.store.listMessages(drafts)).map((m) => m.subject), ['Plan (A2)']);
 });
 
 test('LongTermIdFromId / IdFromLongTermId map IDs of this replica both ways', async () => {
@@ -641,7 +883,7 @@ class FolderModel {
   }
 
   summaries(): MessageSummary[] {
-    return [...this.messages.values()].map((m) => ({ uid: m.uid, modSeq: m.modSeq, flags: [...m.flags], createdAt: m.createdAt }) as unknown as MessageSummary);
+    return [...this.messages.values()].map((m) => ({ uid: m.uid, modSeq: m.modSeq, createdModSeq: m.modSeq, flags: [...m.flags], createdAt: m.createdAt, clientId: null, pcl: null }) as unknown as MessageSummary);
   }
 }
 
@@ -660,7 +902,7 @@ function syncModel(server: FolderModel, client: Map<number, Set<string>>, state:
   if (rnd() < 0.2) server.randomChange(rnd); // committed between reading the modSeq and listing the folder
   const inScope = v.restricted ? (m: MessageSummary): boolean => !m.flags.includes('\\Seen') : (): boolean => true;
   const input: ContentsInput = {
-    guids: storeGuids('mb1'), messages: server.summaries(), inScope, state: roundTrip(state), highestModSeq, replaced: new Set(),
+    guids: storeGuids('mb1'), messages: server.summaries(), inScope, state: roundTrip(state), highestModSeq, knownClientIds: new Set(),
     options: {
       normal: true, readState: v.readState, noDeletions: false, ignoreNoLongerInScope: false,
       orderByDeliveryTime: rnd() < 0.5, restricted: v.restricted,
@@ -707,7 +949,7 @@ test('review: model-based contents synchronization — after every complete down
       assertClientMatches(server, client, v, `${JSON.stringify(v)} seed ${seed} final`);
       const quiet = planContents({
         guids: storeGuids('mb1'), messages: server.summaries(), inScope: v.restricted ? (m) => !m.flags.includes('\\Seen') : () => true,
-        state, highestModSeq: server.modSeq, replaced: new Set(),
+        state, highestModSeq: server.modSeq, knownClientIds: new Set(),
         options: { normal: true, readState: v.readState, noDeletions: false, ignoreNoLongerInScope: false, orderByDeliveryTime: false, restricted: v.restricted },
       });
       assert.deepEqual([quiet.changes.length, quiet.readChanges.length, quiet.deleted.length], [0, 0, 0], 'nothing is sent twice');
@@ -723,7 +965,7 @@ test('review: a state of another mailbox (another replica GUID) names nothing he
   foreign.cnsetSeen = IdSet.of(replicaGuid('mb2'), [1n, 2n, 3n, 4n, 5n]);
   const plan = planContents({
     guids: storeGuids('mb1'), messages: server.summaries(), inScope: () => true, state: foreign, highestModSeq: server.modSeq,
-    replaced: new Set(),
+    knownClientIds: new Set(),
     options: { normal: true, readState: true, noDeletions: false, ignoreNoLongerInScope: false, orderByDeliveryTime: false, restricted: false },
   });
   assert.deepEqual(plan.changes.map((m) => m.uid), [1, 2, 3, 4, 5]);

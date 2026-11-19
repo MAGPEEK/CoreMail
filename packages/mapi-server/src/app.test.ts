@@ -16,7 +16,7 @@ import { ROP_REGISTRY } from './rop/registry.js';
 import { MemoryDirectory, MemoryStore } from './testing/memory-store.js';
 import {
   MapiHttpClient, rop, decodeLogon, decodeQueryRows, responseHead, TAG, HANDLE_UNUSED, connectBody, AB, nspiBody, nspiDecode,
-  parseExecuteResponse, readNotifications, ropOutput, ICS, decodeGetBuffer, decodeIcsStream, type ClientResult,
+  parseExecuteResponse, readNotifications, ropOutput, ICS, decodeGetBuffer, decodeIcsStream, offlineDraftRoundTrip, type ClientResult,
 } from './testing/mapi-client.js';
 import { authenticate, type AuthOutcome } from './http/auth.js';
 import { queueNotificationSource, type NotificationSource } from './emsmdb/notification-wait.js';
@@ -466,6 +466,14 @@ test('cached mode over HTTP: ICS initial sync in partial buffers, then an increm
   const delta = await sync(first.state);
   assert.deepEqual(delta.messages.map((m) => m.props.get(TAG.Subject)), ['Synced later']);
   assert.equal(delta.ended, true);
+});
+
+test('cached mode over HTTP: a draft created offline keeps its client ID, an edit updates it, neither comes back (the e2e scenario)', async () => {
+  const c = alice();
+  assertOk(await c.connect(''));
+  assert.match(await offlineDraftRoundTrip(c), /kept its ID/);
+  const drafts = await store.listMessages(store.folderByName('mba', 'Drafts').id);
+  assert.equal(drafts.filter((m) => m.subject.startsWith('Offline draft') && m.subject.endsWith('(edited)')).length, 1, 'one draft, edited');
 });
 
 test('review 9.4: a Bind with CP_WINUNICODE or an unserved code page → InvalidCodepage and no session; a Western Bind works', async () => {

@@ -46,6 +46,7 @@ let limits = { maxMessageBytes: 1024 * 1024, maxRecipients: 10 };
 
 const { MemoryRedis } = await import('../testing/memory-redis.js');
 const { createRedisLocalIdStore, localIdSeed } = await import('./local-ids.js');
+const { LOCAL_ID_BASE } = await import('../ics/keys.js');
 const redis = new MemoryRedis();
 const NOW_MS = Date.parse('2026-11-17T09:00:00Z');
 
@@ -327,4 +328,40 @@ test('local replica IDs: consecutive ranges above every UID, seeded from the clo
   await store.addReplacedLocalIds('mb1', [first, first + 1n]);
   assert.deepEqual([...await store.replacedLocalIds('mb1')], [first, first + 1n]);
   assert.deepEqual([...await store.replacedLocalIds('mb2')], []);
+});
+
+test('client IDs (MapiObject): a kept ID names its row in listings and lookups, moves to a draft saved again, retires with its object; reservations start above kept IDs', async () => {
+  addMessage('m1', 'drafts', 1, ['\\Draft', '\\Seen']);
+  addMessage('m2', 'drafts', 2);
+  const L = LOCAL_ID_BASE + 7n;
+  await store.bindMapiObject('mb1', { messageId: 'm1' }, { clientId: L, pcl: Buffer.from([0x18]) });
+  const list = await store.listMessages('drafts');
+  assert.deepEqual(list.map((m) => [m.id, m.clientId, m.pcl?.toString('hex') ?? null]), [['m1', L, '18'], ['m2', null, null]]);
+  const found = await store.findMessagesByCounters('drafts', [L, 2n, 99n]);
+  assert.deepEqual([...found].map(([c, m]) => [c, m.id]), [[2n, 'm2'], [L, 'm1']], 'by UID and by client ID; unknown left out');
+  assert.equal((await store.findMessagesByCounters('inbox', [L])).size, 0, 'only in its folder');
+  assert.deepEqual(await store.clientIdOwner('mb1', L), { kind: 'message', messageId: 'm1' });
+  assert.equal(await store.clientIdOwner('mb2', L), null, 'IDs are per mailbox');
+
+  const saved = await store.saveDraft(OWN, 'drafts', composed(), list[0]!);
+  await store.bindMapiObject('mb1', { messageId: saved.id }, { clientId: L });
+  assert.equal((await store.findMessagesByCounters('drafts', [L])).get(L)?.id, saved.id, 'the draft saved again keeps the ID');
+  assert.equal((await store.messageByRowId(saved.id))?.clientId, L);
+
+  db.mapiObjects.find((o) => o['clientId'] === L)!['messageId'] = null; // the row was purged (onDelete SetNull)
+  assert.deepEqual(await store.clientIdOwner('mb1', L), { kind: 'retired' });
+  assert.deepEqual(await store.assignedClientIds('mb1', [{ low: LOCAL_ID_BASE, high: LOCAL_ID_BASE + 100n }]), [L], 'a retired ID stays assigned');
+
+  await store.bindMapiObject('mb1', { messageId: 'm2' }, { clientId: L + 1n });
+  await store.bindMapiObject('mb1', { messageId: 'm2' }, { clientId: L + 2n });
+  assert.deepEqual(await store.clientIdOwner('mb1', L + 1n), { kind: 'retired' }, 'a row\'s previous client ID retires');
+  assert.equal((await store.listMessages('drafts')).find((m) => m.id === 'm2')?.clientId, L + 2n);
+
+  await store.bindMapiObject('mb1', { folderId: 'archive' }, { clientId: L + 3n });
+  assert.equal((await store.listFolders('mb1')).find((f) => f.id === 'archive')?.clientId, L + 3n);
+
+  db.mapiObjects.push({ id: 'kept', mailboxId: 'mb3', clientId: localIdSeed(NOW_MS) + 1_000_000n, messageId: null, folderId: null, pcl: null });
+  assert.equal(await store.reserveLocalIds('mb3', 4), localIdSeed(NOW_MS) + 1_000_001n, 'a new counter starts above every kept ID');
+  assert.equal(await store.localIdsHandedOutBelow('mb3'), localIdSeed(NOW_MS) + 1_000_005n);
+  assert.equal(await store.localIdsHandedOutBelow('mb9'), null);
 });
