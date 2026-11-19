@@ -94,7 +94,11 @@ Rules:
   flag information (MBOX, ZIPs from before 9.3) restore as `\Seen`.
 - One restore per target mailbox at a time (409 otherwise).
 - **Contacts and contact groups (9.5)** of a ZIP backup go into the address book of the target
-  mailbox's owner (in every mode; a shared mailbox has none). Like a CardDAV PUT the vCard decides
+  mailbox's owner (a restore always targets a user's mailbox). The address book has no folders, so
+  the restore mode does not apply to it: also a restore into the restore folder
+  („Wiederhergestellt <Datum>") or into a chosen folder puts the cards into the one address book —
+  safe, because nothing that is already there (same UID) is added or changed. Restored cards get
+  new resource ids (never the ids or names from the archive). Like a CardDAV PUT the vCard decides
   (group vCard → group); each entry must hold exactly one vCard (≤ 1 MiB), stored verbatim with its
   columns derived by the storage contact mapping. Contacts are restored first, then the groups:
   members reference cards by UID and the restored contacts keep their UIDs, so the members resolve
@@ -102,15 +106,23 @@ Rules:
   from the manifest. **Idempotent:** an object whose UID the address book already uses (contact or
   group) is skipped, one without UID when the identical vCard is already stored; an existing
   contact is never overwritten. Job result: `contactsImported`, `contactsDuplicates`,
-  `contactGroupsImported`, `contactGroupsDuplicates`, `addressBookFailed`.
+  `contactGroupsImported`, `contactGroupsDuplicates`, `addressBookFailed`; the BCP job list shows
+  „Kontakte wiederhergestellt: n, Kontaktlisten: m, übersprungen (bereits vorhanden): k".
 - Calendar files of ZIP backups are **not** restored (counted as `otherEntries`) — import them in
   a client.
 - **Received time (9.5):** a restored message keeps its original internal date (IMAP
-  INTERNALDATE, the webmail's received time; retention policies count from it). Order: the date in
+  INTERNALDATE, the webmail's received time). Order: the date in
   the archive (ZIP manifest `internalDate`; MBOX separator line) → the date of the topmost
   `Received` header → the `Date` header → the restore time. A date before 1970 or more than one
   day in the future is skipped. (Before 9.5 every restored message got the restore time.) A second
   restore still adds nothing — duplicates are found by content, not by date.
+- **Retention after a restore (9.5):** retention policies count a message's age from its received
+  time, which for a restored message may lie beyond the retention period. So that the Managed Folder
+  Assistant does not delete or archive restored mail on its next run, the restore marks each
+  message (`Message.restoredAt`) and a restored message expires at
+  max(received time + retention period, restore time + 30 days) (`RESTORE_RETENTION_GRACE_DAYS`,
+  backup-service `retention/expiry.ts`). The policy still applies — 30 days after the restore at
+  the earliest; move or tag messages that must be kept longer within that time.
 - Limits: `BACKUP_RESTORE_MAX_BYTES` (decrypted archive, default 20 GiB — the container's temp
   directory needs that much space), `BACKUP_RESTORE_MAX_MESSAGE_BYTES` (default 150 MiB per message).
 - MBOX cannot represent a message without a final line break; such messages come back with CRLF
@@ -163,7 +175,7 @@ If only mailboxes are lost, a restore from the mailbox backups (section 3) is en
 - `packages/backup-service`: `restore/restore-roundtrip.test.ts` (export → encrypt → restore into an
   empty mailbox, byte-exact, folders, flags, attachments, internal dates, contacts + groups,
   second run deduplicated), `restore/internal-date.test.ts` (internal date order, mbox separator
-  date, manifest additions), `restore/readers.test.ts` (ZIP/ZIP64/CRC, mboxrd), `restore/source.test.ts`,
+  date, manifest additions), `retention/expiry.test.ts` (restore grace period), `restore/readers.test.ts` (ZIP/ZIP64/CRC, mboxrd), `restore/source.test.ts`,
   `scheduler/automation.test.ts`.
 - e2e step `backup` (docs/e2e.md): mailbox backup of B → restore of the stored archive into A →
   IMAP sees the messages byte-exact with flags and the original INTERNALDATE, re-run and upload add nothing, recommended schedules,

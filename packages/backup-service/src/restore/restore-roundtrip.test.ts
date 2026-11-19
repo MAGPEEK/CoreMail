@@ -81,6 +81,7 @@ const { exportMbox } = await import('../export/mbox.js');
 const { importMbox } = await import('./index.js');
 const { restorePrepared, detectFormat, executeRestoreJob, writeCapped, restoreConfig, zipBackupDate, decryptErrorMessage, RestoreTooLargeError } = await import('./job.js');
 const { prepareUploadedFile } = await import('./import-file.js');
+const { MAX_VCARD_BYTES } = await import('./address-book.js');
 const { encryptFile, loadKeyring, BackupDecryptError } = await import('../crypto/backup-crypto.js');
 
 const ROOT = 'Wiederhergestellt 2026-11-16';
@@ -212,6 +213,8 @@ test('ZIP: export → encrypt → restore into an empty mailbox (original folder
     assert.equal(m['rawSize'], want.length);
     // 9.5: the internal date comes from the manifest, not the restore time
     assert.equal((m['createdAt'] as Date).toISOString(), expectedInternal.get(m['subject'] as string)!.toISOString(), `internal date of "${m['subject']}"`);
+    // Review 9.5: the restore marker (retention grace period) is the restore time
+    assert.ok(m['restoredAt'] instanceof Date && Date.now() - (m['restoredAt'] as Date).getTime() < 60_000, `restoredAt of "${m['subject']}"`);
   }
   const bySubject = (s: string) => restored.find((m) => m['subject'] === s)!;
   assert.equal(folderName(bySubject('Quarterly figures')['folderId']), 'INBOX');
@@ -384,6 +387,35 @@ test('address book: groups after contacts whatever the entry order; an existing 
     { kind: 'card', uid: 'card-a' }, { kind: 'card', uid: 'card-b' }, { kind: 'address', address: 'info@lieferant.test', name: '' },
   ]);
   for (const uid of ['card-a', 'card-b']) assert.ok(kimContacts.some((c) => c['uid'] === uid), `member ${uid} resolves`);
+});
+
+// Review 9.5: hostile address book entries — nothing is written outside the target's
+// address book, entry names are never used as ids or paths, oversized / garbage cards fail.
+test('address book: oversized, garbage and path-like entries; ids are fresh, never taken from the archive', async () => {
+  const zipPath = join(dir, 'hostile-contacts.zip');
+  const huge = `BEGIN:VCARD\r\nVERSION:3.0\r\nUID:huge-1\r\nFN:Huge\r\nNOTE:${'x'.repeat(MAX_VCARD_BYTES)}\r\nEND:VCARD\r\n`;
+  const traversal = 'BEGIN:VCARD\r\nVERSION:3.0\r\nUID:trav-1\r\nFN:Trav\r\nEND:VCARD\r\n';
+  await new Promise<void>((resolve, reject) => {
+    const out = createWriteStream(zipPath);
+    const a = archiver('zip', { zlib: { level: 6 } });
+    out.on('close', () => resolve());
+    a.on('error', reject);
+    a.pipe(out);
+    a.append(huge, { name: 'contacts/huge.vcf' });
+    a.append('not a vcard at all', { name: 'contacts/garbage.vcf' });
+    a.append(traversal, { name: 'contacts/../../kim-own.vcf' });
+    void a.finalize();
+  });
+  const dst = addMailbox('lena', [{ name: 'INBOX' }]);
+  const before = contactRows.filter((c) => c['userId'] !== 'lena').map((c) => ({ ...c }));
+  const counts = await restorePrepared({ path: zipPath, format: 'zip', mailboxId: dst.id, mode: 'subfolder', folderId: null, rootName: ROOT }, cfg);
+  assert.equal(counts.addressBookFailed, 2, 'oversized + garbage');
+  assert.equal(counts.contactsImported, 1);
+  const lena = contactRows.filter((c) => c['userId'] === 'lena');
+  assert.equal(lena.length, 1);
+  assert.equal(lena[0]!['uid'], 'trav-1');
+  assert.ok(!String(lena[0]!['id']).includes('kim-own') && !String(lena[0]!['id']).includes('/'), 'fresh id');
+  assert.deepEqual(contactRows.filter((c) => c['userId'] !== 'lena'), before, 'other address books untouched');
 });
 
 test('mode folder: the folder must belong to the target mailbox', async () => {

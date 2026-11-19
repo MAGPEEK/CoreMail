@@ -12,7 +12,8 @@
  *  - flags come from the archive manifest (sanitized), else \Seen.
  *
  *  - 9.5: the internal (received) date is the original one (restoredInternalDate:
- *    archive date, else Received / Date header), not the restore time.
+ *    archive date, else Received / Date header), not the restore time; the row
+ *    carries `restoredAt` so retention policies do not act on it right away.
  *
  * Contacts and contact groups of a ZIP backup are restored by address-book.ts
  * (job.ts restorePrepared); calendar files are counted but not restored.
@@ -285,6 +286,7 @@ export async function restoreItems(
 
       const { storagePath } = await storeRawMessage(raw);
       const flags = sanitizeFlags(item.flags);
+      const restoredAt = new Date();
       const created = await prisma.$transaction((tx) => createMessage(tx, plan.mailboxId, folderId, {
         flags,
         subject: parsed.subject,
@@ -301,7 +303,9 @@ export async function restoreItems(
         bodyHtml: truncateBodyColumn(parsed.bodyHtml),
         rawSize: raw.length,
         storagePath,
-        createdAt: restoredInternalDate(item.internalDate, raw),
+        createdAt: restoredInternalDate(item.internalDate, raw, restoredAt),
+        // Retention gives the restored item a grace period from now (retention/expiry.ts)
+        restoredAt,
       }));
       for (const [index, att] of parsed.attachments.entries()) {
         const attKey = attachmentKey(created.id, `${index}-${att.sha256.slice(0, 16)}`);

@@ -16,7 +16,7 @@
  */
 import { countVcards, parseVcard } from '@coremail/core/vcard';
 import {
-  prisma, announceUserEvent, contactColumnsFromVcard, contactGroupColumnsFromVcard, contactGroupData, contactRowData,
+  prisma, announceUserEvent, contactGroupColumnsFromVcard, contactGroupData, createContactRow,
   findContactUidOwner, isGroupVcard, vcardUidKey, type ContactGroupMember,
 } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
@@ -124,10 +124,7 @@ export async function restoreAddressBook(
 
 async function restoreContact(userId: string, vcard: string, counts: AddressBookCounts): Promise<string | null> {
   if (await alreadyStored(userId, vcard, 'contact')) { counts.contactsDuplicates++; return null; }
-  const row = await prisma.contact.create({
-    data: { userId, vcardData: vcard, ...contactRowData(contactColumnsFromVcard(vcard)) },
-    select: { id: true },
-  });
+  const row = await createContactRow(userId, vcard);
   counts.contactsImported++;
   return row.id;
 }

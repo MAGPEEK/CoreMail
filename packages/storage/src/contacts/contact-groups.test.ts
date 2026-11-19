@@ -13,11 +13,21 @@ process.env['PEPPER'] ??= 'test-pepper-0123456789abcdef0123456789abcd';
 type Row = Record<string, unknown>;
 const db = { contact: [] as Row[], contactGroup: [] as Row[] };
 function matches(row: Row, where: Row): boolean {
-  return Object.entries(where).every(([k, c]) => (c && typeof c === 'object' && 'in' in (c as Row)
-    ? ((c as Row)['in'] as unknown[]).includes(row[k]) : row[k] === c));
+  return Object.entries(where).every(([k, c]) => {
+    if (k === 'OR') return (c as Row[]).some((w) => matches(row, w));
+    if (c && typeof c === 'object' && 'in' in (c as Row)) return ((c as Row)['in'] as unknown[]).includes(row[k]);
+    if (c && typeof c === 'object' && 'contains' in (c as Row)) return String(row[k]).includes(String((c as Row)['contains']));
+    return row[k] === c;
+  });
 }
+/** Rows the fake findMany handed out (to see what a lookup loads). */
+const loaded: Row[] = [];
 const fakeTable = (rows: Row[]) => ({
-  findMany: async (a: { where: Row }) => rows.filter((r) => matches(r, a.where)),
+  findMany: async (a: { where: Row }) => {
+    const hit = rows.filter((r) => matches(r, a.where));
+    loaded.push(...hit);
+    return hit;
+  },
   update: async (a: { where: Row; data: Row }) => Object.assign(rows.find((r) => matches(r, a.where))!, a.data),
 });
 (globalThis as unknown as { __prisma: unknown }).__prisma = {
@@ -26,7 +36,7 @@ const fakeTable = (rows: Row[]) => ({
 
 const {
   applyContactGroup, contactGroupFromVcard, expandGroupMembers, isGroupVcard, memberFromUri, membersFromJson,
-  detachCardFromGroups, ensureContactUid, expandContactGroup, contactGroupColumns, contactGroupColumnsFromVcard, resolveCards,
+  detachCardFromGroups, ensureContactUid, expandContactGroup, contactGroupColumns, contactGroupColumnsFromVcard, resolveCards, findContactUidOwner,
   buildContactVcard, finalizeContactCard, emptyContactCard, vcardUidKey,
 } = await import('./index.js');
 
@@ -141,6 +151,27 @@ test('storage: resolve (incl. pre-9.5 rows), expand nested, detach a deleted car
   const flatUid = await ensureContactUid({ id: 'c4', uid: '', vcardData: '', displayName: 'Flach', email: 'flach@x.example', phone: '+49 30 1', company: 'F' });
   const c4 = db.contact.find((r) => r['id'] === 'c4')!;
   assert.deepEqual([c4['uid'], c4['email'], c4['phone'], c4['company']], [flatUid, 'flach@x.example', '+49 30 1', 'F']);
+});
+
+// Review 9.5 (backup restore / CardDAV PUT): the UID lookup matches by vCard text only
+// rows without a uid column — a short UID never loads every card that contains it.
+test('findContactUidOwner: own contacts and groups only, pre-9.5 rows by vCard, no text match on filled rows', async () => {
+  const card = (uid: string, note = ''): string => `BEGIN:VCARD\r\nVERSION:3.0\r\nUID:${uid}\r\nFN:x\r\n${note ? `NOTE:${note}\r\n` : ''}END:VCARD\r\n`;
+  db.contact.push(
+    { id: 'o1', userId: 'u7', uid: 'k1', vcardData: card('k1', 'see k2') },
+    { id: 'o2', userId: 'u7', uid: '', vcardData: card('urn:uuid:k2') },
+    { id: 'o3', userId: 'u8', uid: 'k3', vcardData: card('k3') },
+  );
+  db.contactGroup.push({ id: 'og', userId: 'u7', uid: 'k4', name: 'G', vcardData: '', members: [] });
+
+  loaded.length = 0;
+  assert.equal(await findContactUidOwner('u7', 'k2'), 'o2', 'pre-9.5 row found by its vCard UID');
+  assert.deepEqual(loaded.map((r) => r['id']), ['o2'], 'a filled row that merely mentions the UID is not loaded');
+  assert.equal(await findContactUidOwner('u7', 'urn:uuid:k1'), 'o1');
+  assert.equal(await findContactUidOwner('u7', 'k1', 'o1'), null, 'the object itself does not count');
+  assert.equal(await findContactUidOwner('u7', 'k4'), 'og', 'groups share the UID namespace');
+  assert.equal(await findContactUidOwner('u7', 'k3'), null, 'another user\'s UID is free');
+  assert.equal(await findContactUidOwner('u7', '  '), null);
 });
 
 // Review 9.5: a client's mailto: member must never inject vCard lines when the group is written back

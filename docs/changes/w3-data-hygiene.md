@@ -20,7 +20,14 @@
 - MBOX backups write the internal date (arrival in the mailbox) into the `From ` separator line
   instead of the Date header.
 - Restore job result: `otherEntries` now counts only calendar files and other non-mail entries
-  (vCard entries are restored and counted separately).
+  (vCard entries are restored and counted separately). The BCP job list shows the restored contacts
+  and contact lists („Kontakte wiederhergestellt: n, Kontaktlisten: m, übersprungen (bereits
+  vorhanden): k").
+- Retention: a restored message (new column `Message.restoredAt`, set by the restore) expires at
+  max(received time + retention period, restore time + 30 days), so the Managed Folder Assistant
+  does not delete or archive restored mail with an old received time right after the restore.
+- The CardDAV / restore UID lookup matches by vCard text only contacts whose `uid` column is still
+  empty (pre-9.5 rows), instead of loading every card that contains the UID string.
 
 ### Fixed
 
