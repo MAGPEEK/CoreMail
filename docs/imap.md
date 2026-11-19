@@ -270,7 +270,7 @@ Letters ⇄ member rights: `l` folder visible, `r` read, `s`/`w` edit all items,
 | `MYRIGHTS mbox` | the caller's rights (table above) |
 | `GETACL mbox` | needs `a` (own folder, or the folder owner right): the mailbox owner with all rights, `anyone` (= Default) and every user grantee by address, own and inherited entries; otherwise `NO [NOPERM]` (grantees are not disclosed) |
 | `LISTRIGHTS mbox id` | the caller's own identifier → its rights; with `a`: the mailbox owner all rights, anyone else `"" l r sw ip k xa te c d`; otherwise `NO [NOPERM]` |
-| `SETACL mbox id rights` | needs `a`: sets the folder permission of a user (login address) or `anyone` (Default); `+`/`-` add / remove, otherwise replace. `anonymous`, negative rights (`-id`), the mailbox owner and unknown users → `NO [CANNOT]`; unknown letters → `BAD` |
+| `SETACL mbox id rights` | needs `a`: sets the folder permission of a user (login address) or `anyone` (Default); `+`/`-` add / remove, otherwise replace. `anonymous`, negative rights (`-id`), the mailbox owner and unknown users → `NO [CANNOT]`; unknown letters → `BAD`. A user identifier resolves only inside the caller's address list (active users of its domain not hidden from it) or among the users the folder's ACL already shows — unknown, hidden, deactivated and other-domain identifiers all get `NO [CANNOT] Unknown identifier` (no address oracle; the REST rule, storage `folder-grantees.ts`) |
 | `DELETEACL mbox id` | needs `a`: removes the entry |
 
 SELECT / EXAMINE / STATUS need `r`; a visible folder without `r` is listed

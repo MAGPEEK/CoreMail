@@ -13,6 +13,7 @@ import { prisma, downloadBuffer, quarantineEnvelope } from '@coremail/storage';
 import { getOutboundJobOptions } from '@coremail/storage/queue-options';
 import { createLogger, createBullMqConnection } from '@coremail/core';
 import { Queue } from 'bullmq';
+import { domainVariants } from '@coremail/storage/idn';
 import { requireArea } from '../../middleware/auth.js';
 import { audit, auditContext } from '../../lib/audit.js';
 import { releaseQuarantine, ReleaseError, type ReleaseDeps, type ReleaseJob } from '../../lib/quarantine-release.js';
@@ -82,11 +83,16 @@ export function redactQuarantineItem<T extends { fromAddr: string; details: unkn
 
 /**
  * Pure (w3): the free-text search of the list. For a scoped admin a sender of
- * another hosted domain never matches (it is shown redacted — no oracle).
+ * another hosted domain never matches (it is shown redacted — no oracle) — in
+ * either spelling of the domain (punycode and Unicode, review) and with a
+ * trailing root dot; case is ignored by the database.
  */
 export function quarantineSearchWhere(search: string, r: AddressRedactor): Record<string, unknown> {
   const fromAddr = { fromAddr: { contains: search, mode: 'insensitive' } };
-  const hiddenSender = r.hiddenDomains.map((d) => ({ fromAddr: { endsWith: `@${d}`, mode: 'insensitive' } }));
+  const hiddenSender = r.hiddenDomains
+    .flatMap((d) => domainVariants(d))
+    .flatMap((d) => [`@${d}`, `@${d}.`])
+    .map((suffix) => ({ fromAddr: { endsWith: suffix, mode: 'insensitive' } }));
   return {
     OR: [
       hiddenSender.length > 0 ? { AND: [fromAddr, { NOT: { OR: hiddenSender } }] } : fromAddr,

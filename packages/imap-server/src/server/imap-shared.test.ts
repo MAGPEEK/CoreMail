@@ -47,7 +47,11 @@ interface Msg {
 interface Folder { id: string; mailboxId: string; name: string; displayName: string }
 interface Mailbox { id: string; uidNext: number; uidValidity: number; highestModSeq: bigint; userId: string | null; sharedBoxId: string | null }
 interface SharedBox { id: string; email: string; displayName: string; active: boolean }
-interface User { id: string; email: string; displayName: string | null; active: boolean; passwordHash: string; mailbox: { id: string }; quotaBytes: bigint }
+interface User {
+  id: string; email: string; displayName: string | null; active: boolean; passwordHash: string; mailbox: { id: string }; quotaBytes: bigint;
+  /** w3 scope leaks: the address list of a domain decides whom SETACL resolves */
+  domainId: string; mailFlowPolicy: { hiddenFromGal: boolean } | null;
+}
 
 interface Db {
   mailboxes: Mailbox[];
@@ -76,12 +80,14 @@ function matches(row: Row, where: Row | undefined): boolean {
   if (!where) return true;
   return Object.entries(where).every(([key, cond]) => {
     if (key === 'OR') return (cond as Row[]).some((c) => matches(row, c));
+    if (key === 'AND') return (cond as Row[]).every((c) => matches(row, c));
     if (key === 'NOT') return !matches(row, cond as Row);
     const value = row[key];
     if (cond === null) return value === null || value === undefined;
     if (typeof cond === 'object' && !(cond instanceof Date)) {
-      const c = cond as { has?: unknown; in?: unknown[]; gte?: number; lte?: number; lt?: unknown };
+      const c = cond as { has?: unknown; in?: unknown[]; gte?: number; lte?: number; lt?: unknown; is?: Row };
       if ('has' in c) return (value as unknown[]).includes(c.has);
+      if ('is' in c) return value !== null && value !== undefined && matches(value as Row, c.is);
       if ('in' in c) return (c.in ?? []).includes(value);
       if ('gte' in c || 'lte' in c) {
         return (c.gte === undefined || (value as number) >= c.gte) && (c.lte === undefined || (value as number) <= c.lte);
@@ -118,7 +124,7 @@ function install(): Db {
     ({ id, uidValidity, uidNext, highestModSeq: 10n, userId: owner.userId ?? null, sharedBoxId: owner.sharedBoxId ?? null });
   const f = (id: string, mailboxId: string, name: string): Folder => ({ id, mailboxId, name, displayName: name });
   const user = (id: string, email: string, mailboxId: string): User =>
-    ({ id, email, displayName: null, active: true, passwordHash: 'hash:secret', mailbox: { id: mailboxId }, quotaBytes: 1024n * 1024n });
+    ({ id, email, displayName: null, active: true, passwordHash: 'hash:secret', mailbox: { id: mailboxId }, quotaBytes: 1024n * 1024n, domainId: 'd1', mailFlowPolicy: null });
 
   const db: Db = {
     mailboxes: [
@@ -191,6 +197,7 @@ function install(): Db {
     domain: { findFirst: async () => ({ name: 'example.test' }) },
     user: {
       findFirst: async ({ where }: { where: Row }) => { await tick(); return db.users.find((u) => matches(u as unknown as Row, where)) ?? null; },
+      findUnique: async ({ where }: { where: { id: string } }) => db.users.find((u) => u.id === where.id) ?? null,
       findMany: async ({ where }: { where: Row }) => db.users.filter((u) => matches(u as unknown as Row, where)).map(principal),
     },
     sharedMailbox: { findMany: async ({ where }: { where: Row }) => db.shared.filter((s) => matches(s as unknown as Row, where)).map(principal) },
@@ -1099,6 +1106,36 @@ describe('w3: folder permissions', () => {
     assert.equal((await client.cmd(`RENAME ${DAVE_PROJ} "Other Users/dave@example.test/Projekte"`)).status, 'OK', 'owner role renames');
     assert.match((await client.cmd('CREATE "Other Users/dave@example.test/TopLevel"')).tagged, /NO \[NOPERM\]/, 'top level needs mailbox access');
     assert.equal((await client.cmd('CREATE "Other Users/dave@example.test/Projekte/Neu"')).status, 'OK');
+  });
+
+  test('w3 scope leaks: SETACL / DELETEACL answer unknown, hidden, deactivated and other-domain identifiers alike', async (t) => {
+    const { db, loginAs } = await login(t);
+    daveFolders(db);
+    const extra = (id: string, email: string, over: Partial<User>): User => ({
+      id, email, displayName: null, active: true, passwordHash: 'hash:secret', mailbox: { id: `mb-${id}` },
+      quotaBytes: 1n, domainId: 'd1', mailFlowPolicy: null, ...over,
+    });
+    db.users.push(
+      extra('u-hidden', 'hidden@example.test', { mailFlowPolicy: { hiddenFromGal: true } }),
+      extra('u-off', 'off@example.test', { active: false }),
+      extra('u-other', 'eve@other.test', { domainId: 'd2' }),
+    );
+    const dave = await loginAs('dave@example.test');
+    const answers = new Set<string>();
+    for (const who of ['nobody@example.test', 'hidden@example.test', 'off@example.test', 'eve@other.test', 'EVE@OTHER.TEST']) {
+      for (const cmd of [`SETACL Projects ${who} lr`, `DELETEACL Projects ${who}`]) {
+        answers.add((await dave.cmd(cmd)).tagged.replace(/^\S+ /, ''));
+      }
+    }
+    assert.deepEqual([...answers], ['NO [CANNOT] Unknown identifier']);
+    assert.equal(db.permissions.length, 0, 'nothing granted');
+    assert.equal((await dave.cmd('SETACL Projects carol@example.test lr')).status, 'OK', 'a user of the address list');
+
+    // a grantee the ACL already shows stays editable even when it left the address list
+    db.permissions.push(grant('f-dave-proj', 'mb-dave', 'user:u-other', ROLE.reviewer));
+    assert.equal((await dave.cmd('SETACL Projects eve@other.test +w')).status, 'OK', 'shown entry');
+    assert.equal((await dave.cmd('DELETEACL Projects eve@other.test')).status, 'OK');
+    assert.equal(db.permissions.some((p) => p.granteeKey === 'user:u-other'), false);
   });
 
   test('w3 review: SETACL / DELETEACL of an entry that reaches subfolders needs the owner right on all of them', async (t) => {

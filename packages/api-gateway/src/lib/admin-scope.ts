@@ -16,6 +16,7 @@
  *    are public DNS facts, so the refusal reveals nothing.
  * The decision for every admin route is listed in docs/rbac.md.
  */
+import { canonicalDomain } from '@coremail/storage/idn';
 
 export interface ScopeDomain { readonly id: string; readonly name: string }
 
@@ -157,8 +158,11 @@ export function otherDomainLabel(count: number): string {
 /**
  * An address with an optional display name ("Name" <a@b>, Name <a@b>) or a bare
  * address. Group 1 = the address of the angle form, group 2 = a bare address.
+ * Letters include combining marks (decomposed Unicode, "u\u0308"), and the
+ * domain's label separators include the full stops IDNA maps to "." (U+3002,
+ * U+FF0E, U+FF61): every spelling of a hosted domain is caught as a whole.
  */
-const ADDRESS_RE = /(?:"[^"\r\n]*"|[^\s",;:<>()[\]@]+(?:[ \t]+[^\s",;:<>()[\]@]+)*)?[ \t]*<([^<>\s@]+@[^<>\s]+)>|([\p{L}\p{N}.!#$%&'*+/=?^_`{|}~-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*)/gu;
+const ADDRESS_RE = /(?:"[^"\r\n]*"|[^\s",;:<>()[\]@]+(?:[ \t]+[^\s",;:<>()[\]@]+)*)?[ \t]*<([^<>\s@]+@[^<>\s]+)>|([\p{L}\p{M}\p{N}.!#$%&'*+/=?^_`{|}~-]+@[\p{L}\p{M}\p{N}-]+(?:[.\u3002\uFF0E\uFF61][\p{L}\p{M}\p{N}-]+)*)/gu;
 const HIDDEN_MARK = '\u0001';
 const HIDDEN_RUN_RE = /\u0001(?:[ \t]*[,;][ \t]*\u0001)*/g;
 const LIST_SEPARATORS_RE = /^[\s,;]*$/;
@@ -194,18 +198,25 @@ export const NO_REDACTION: AddressRedactor = Object.freeze({
  * of hosted domains (`hostedDomains`, the Domain table) outside the scope —
  * the other tenants of the server. Addresses of external domains stay visible
  * (the correspondents of the scope's mailboxes: quarantine senders, mail-flow
- * partners), and so does the viewer's own address (`viewerEmail`). An
- * organisation-wide scope → NO_REDACTION.
+ * partners), and so does the viewer's own address (`viewerEmail`). Domains are
+ * compared in their canonical form (lower-case A-label, storage idn.ts), so a
+ * Unicode, punycode, upper-case or decomposed spelling of a hidden domain is
+ * hidden as well. An organisation-wide scope → NO_REDACTION.
  */
 export function addressRedactor(scope: AdminScope, hostedDomains: readonly string[], viewerEmail?: string): AddressRedactor {
   if (!isScoped(scope)) return NO_REDACTION;
-  const own = new Set(scope.domains.map((d) => d.name));
-  const hidden = new Set(hostedDomains.map((d) => d.toLowerCase()).filter((d) => !own.has(d)));
-  const viewer = viewerEmail?.trim().toLowerCase() ?? '';
+  const canonicalOf = (address: string): string => {
+    const bare = address.trim().replace(/^.*<([^>]*)>.*$/, '$1').trim().toLowerCase();
+    const at = bare.lastIndexOf('@');
+    return at < 0 ? bare : `${bare.slice(0, at)}@${canonicalDomain(bare.slice(at + 1).replace(/[\u3002\uFF0E\uFF61]/g, '.'))}`;
+  };
+  const own = new Set(scope.domains.map((d) => canonicalDomain(d.name)));
+  const hidden = new Set(hostedDomains.map((d) => canonicalDomain(d)).filter((d) => d && !own.has(d)));
+  const viewer = viewerEmail ? canonicalOf(viewerEmail) : '';
   const hides = (address: string | null | undefined): boolean => {
     if (!address) return false;
-    const bare = address.trim().replace(/^.*<([^>]*)>.*$/, '$1').trim().toLowerCase();
-    return bare !== viewer && hidden.has(domainOfAddress(bare));
+    const canonical = canonicalOf(address);
+    return canonical !== viewer && hidden.has(domainOfAddress(canonical));
   };
 
   /** The text with hidden addresses replaced, their number and whether nothing else was in it. */

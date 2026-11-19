@@ -140,10 +140,22 @@ export async function run(state) {
     try {
       const hidden = await put(userB);
       assert(hidden.status === unknown.status && hidden.text === unknown.text, `hidden ${hidden.status} ${hidden.text} vs ${unknown.text}`);
+      // review: IMAP SETACL / DELETEACL apply the same rule (storage folder-grantees.ts)
+      const im = await imapLogin(userA, passA);
+      try {
+        for (const cmd of ['SETACL', 'DELETEACL']) {
+          const rights = cmd === 'SETACL' ? ' lr' : '';
+          const answers = [];
+          for (const who of [`nobody-${stamp}@${userA.split('@')[1]}`, userB]) {
+            answers.push(await imapCmd(im, `${cmd} ${imapQuote(sub)} ${imapQuote(who)}${rights}`));
+          }
+          assert(answers.every((r) => r.status === 'NO' && /\[CANNOT\] Unknown identifier/.test(r.text)), `IMAP ${cmd}: ${answers.map((r) => r.text).join(' | ')}`);
+        }
+      } finally { im.close(); }
     } finally {
       await http('PUT', flowB, { token: admin, body: { hiddenFromGal: false } });
     }
-    return 'unknown = hidden: 400 UNKNOWN_GRANTEE';
+    return 'unknown = hidden: 400 UNKNOWN_GRANTEE, IMAP NO [CANNOT] Unknown identifier';
   });
 
   await check('folder-permissions: a grantee cannot probe hidden folder names (w3, REST 403 / IMAP NOPERM)', async () => {

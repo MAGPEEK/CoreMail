@@ -156,7 +156,7 @@ matrix already limits the route to ORGANIZATION_MANAGEMENT (never scoped) ·
 | `GET/PUT/DELETE /shared-mailboxes/:id`, `/:id/provision`, `/:id/mail-flow`, `/:id/permissions…` | 404; permission grantee outside → 404 `User not found`; listed grantees of other domains redacted |
 | `GET /resources` | filter |
 | `POST /resources` | OUT_OF_SCOPE (domainId and the address's domain) |
-| `GET/PUT/DELETE /resources/:id`, `GET /:id/bookings`, `DELETE /:id/bookings/:bookingId` | 404; a booking must belong to the resource of the path (was not checked before 9.5) |
+| `GET/PUT/DELETE /resources/:id`, `GET /:id/bookings`, `DELETE /:id/bookings/:bookingId` | 404; a booking must belong to the resource of the path (was not checked before 9.5); organizers / attendees of other domains in bookings redacted |
 | `GET /resources/freebusy/query?email=` | 404 for a resource outside the scope |
 | `GET /aliases` | filter (alias domain and target domain) |
 | `GET/POST /mailboxes/:id/aliases`, `GET/POST /shared-mailboxes/:id/aliases` | 404 for the owner; alias address in another domain → OUT_OF_SCOPE; list filtered |
@@ -257,6 +257,11 @@ unredacted view).
   and so does the viewer's own address.
 - Text filters of a scoped admin run on the redacted data, so a search for a
   hidden address finds nothing (no search oracle).
+- Domains are compared in their canonical form (lower-case A-label, storage
+  `idn.ts` `canonicalDomain`): a Unicode, punycode, upper-case or decomposed
+  spelling of a hidden domain, and the IDNA full stops (U+3002, U+FF0E, U+FF61),
+  are hidden as well; the quarantine search excludes both spellings of a hidden
+  sender domain (and a trailing root dot).
 
 | View | Redacted |
 |---|---|
@@ -265,6 +270,7 @@ unredacted view).
 | `GET …/folder-permissions`, `GET/PUT …/folders/:folderId/permissions` (mailboxes, shared mailboxes) | folder-permission grantees (own and inherited entries) |
 | `GET /quarantine`, `GET /quarantine/:id` | other recipients (`details`), the sender, preview headers; `search` never matches a hidden sender |
 | `GET /message-trace`, `GET /message-trace/export` | metadata (sender, recipients, …) and message text; the sender / recipient / subject filters match the redacted row |
+| `GET /resources/:id`, `GET /resources/:id/bookings` | booking organizer, attendees and every iCalendar line naming such an address (its `CN` display name removed as well) |
 | `GET /audit-log`, `/export.csv`, `/export.json`, `/export.pdf` | actor e-mail, target name, error text and every string, list element and key of `changes`; `actorEmail` / `searchText` filters run on the redacted entries over the newest 5000 entries of the scope (`truncated: true` in the list when the scan was capped) |
 
 **Audit log scope filter**: an entry belongs to the scope when its `targetId` is
@@ -283,7 +289,15 @@ remain organisation-wide only.
   password reset a recipient admin already holds, it is part of the role.
 - The mail-flow settings of an in-scope mailbox (`GET …/mail-flow`: accept /
   reject lists, forwarding target) are shown as stored, not redacted — they are
-  configuration the scoped admin may set itself.
+  configuration the scoped admin may set itself, they say where the scope's mail
+  goes, and the BCP saves the whole form (`PUT`), so a redacted value would come
+  back as an invalid entry (review decision).
+- Display names are redacted where they stand next to a hidden address (person
+  rows, `Name <a@b>`, iCalendar `CN`); a display name stored in a separate
+  field of an audit entry's `changes` is not linked to its address and stays.
+- The quarantine search compares the stored sender in the database: a hidden
+  sender domain written in decomposed Unicode (NFD) is not excluded there (the
+  listed row still shows it redacted).
 - Redaction works on address syntax: an identifier that looks like an address of
   a hosted domain (a Message-ID such as `<id@b.example>`) reads
   `(andere Domain)` as well.

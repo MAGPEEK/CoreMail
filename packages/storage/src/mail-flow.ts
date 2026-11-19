@@ -46,12 +46,8 @@ export const MAX_SENDER_LIST_ENTRIES = 500;
 export const MAX_FLOW_SIZE_MB = 2048;
 export const MAX_FLOW_RECIPIENTS = 10_000;
 
-/**
- * Prisma filter for directory listings (GAL, autocomplete, ActiveSync GAL,
- * JMAP principals): leaves out users / Shared Mailboxes hidden from the
- * address list. Mailboxes without a policy row are listed.
- */
-export const GAL_VISIBLE_WHERE = Object.freeze({ NOT: { mailFlowPolicy: { is: { hiddenFromGal: true } } } });
+// Prisma filter for directory listings: pure module, shared with folder-grantees.ts.
+export { GAL_VISIBLE_WHERE } from './gal-visible.js';
 
 // ─── Pure rules ──────────────────────────────────────────────────────────────
 

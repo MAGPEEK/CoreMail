@@ -3,18 +3,38 @@
  * GET/POST/PUT/DELETE /api/v1/admin/resources
  * GET                 /api/v1/admin/resources/:id/bookings
  * DELETE              /api/v1/admin/resources/:id/bookings/:bookingId
+ *
+ * w3 scope leaks (review): a scoped admin sees the organizer / attendees of a
+ * booking from another hosted domain as "(andere Domain)" (redactBooking).
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { requireArea } from '../../middleware/auth.js';
-import { allowAddress, allowDomain, scopeOf, scopeParam, targetInScope } from '../../middleware/admin-scope.js';
-import { domainIdWhere } from '../../lib/admin-scope.js';
+import { allowAddress, allowDomain, redactorOf, scopeOf, scopeParam, targetInScope } from '../../middleware/admin-scope.js';
+import { domainIdWhere, type AddressRedactor } from '../../lib/admin-scope.js';
 
 export const adminResourcesRouter: RouterType = Router();
 adminResourcesRouter.use(requireArea('recipients'));
 // 9.5: a resource outside the admin's management scope is "not found" on every /:id route.
 adminResourcesRouter.param('id', scopeParam('resource'));
+
+/** iCalendar CN parameter (display name of an organizer / attendee). */
+const ICAL_CN_RE = /;CN=(?:"[^"]*"|[^;:]*)/gi;
+
+/**
+ * Pure (w3 scope leaks, review): a booking as a scoped admin sees it — the
+ * organizer, the attendees and every iCalendar line naming an address of
+ * another hosted domain are redacted; such a line also loses its CN (display
+ * name). The iCalendar text is unfolded for that. Organisation-wide: unchanged.
+ */
+export function redactBooking<T extends { organizer: string; attendees: unknown; icalData: string }>(r: AddressRedactor, b: T): T {
+  if (!r.active) return b;
+  const icalData = b.icalData.replace(/\r?\n[ \t]/g, '').split(/\r?\n/)
+    .map((line) => (r.text(line) === line ? line : r.text(line.replace(ICAL_CN_RE, ''))))
+    .join('\r\n');
+  return { ...b, organizer: r.text(b.organizer), attendees: r.deep(b.attendees), icalData };
+}
 
 // ──────────────────────────────────────────────────────────
 // Resource Mailboxes CRUD
@@ -38,7 +58,10 @@ adminResourcesRouter.get('/:id', async (req: Request, res: Response) => {
     include: { calendar: { include: { bookings: { orderBy: { dtStart: 'desc' }, take: 50 } } } },
   });
   if (!resource) { res.status(404).json({ error: 'Resource not found' }); return; }
-  res.json(resource);
+  const redactor = await redactorOf(req);
+  res.json(resource.calendar && redactor.active
+    ? { ...resource, calendar: { ...resource.calendar, bookings: resource.calendar.bookings.map((b) => redactBooking(redactor, b)) } }
+    : resource);
 });
 
 const CreateResourceSchema = z.object({
@@ -191,7 +214,8 @@ adminResourcesRouter.get('/:id/bookings', async (req: Request, res: Response) =>
     },
     orderBy: { dtStart: 'asc' },
   });
-  res.json(bookings);
+  const redactor = await redactorOf(req);
+  res.json(bookings.map((b) => redactBooking(redactor, b)));
 });
 
 // DELETE /api/v1/admin/resources/:id/bookings/:bookingId

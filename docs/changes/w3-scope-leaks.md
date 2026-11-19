@@ -41,6 +41,22 @@ outside the caller's address list — see Security.
   NO_PERMISSION`, IMAP CREATE / RENAME `NO [NOPERM]`; storage
   `folderNameCollision`); IMAP RENAME of a folder the grantee can neither see nor
   read answers `[NONEXISTENT]` like a missing folder.
+- **IMAP SETACL / DELETEACL — no address oracle** (review): a user identifier
+  was resolved against every account of the server, so `NO [CANNOT] Unknown
+  identifier` told a folder administrator whether an address existed, also in
+  another domain or hidden from the address list. SETACL / DELETEACL now apply
+  the REST rule (storage `folder-grantees.ts`, shared by both): the caller's
+  address list plus the users the folder's ACL already shows; unknown, hidden,
+  deactivated and other-domain identifiers all get the same answer.
+- **Redaction of other domains — every spelling** (review): an address of a
+  hidden domain written in Unicode while the domain is stored as punycode (or
+  the other way round), in decomposed Unicode or with an IDNA full stop was
+  shown unredacted; domains are now compared in their canonical form. The
+  quarantine search excludes both spellings of a hidden sender domain.
+- **Room / equipment bookings of domain-scoped admins** (review): `GET
+  /admin/resources/:id` and `/:id/bookings` showed organizers and attendees of
+  other hosted domains (also inside the iCalendar data); they are redacted like
+  the other detail views.
 
 ### Changed
 - `GET /api/v1/admin/audit-log` of a scoped admin with an actor / free-text

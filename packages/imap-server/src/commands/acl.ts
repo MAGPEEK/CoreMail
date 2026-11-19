@@ -21,14 +21,20 @@
  *                change of an entry that reaches subfolders it does not administer
  *                (w3 review: storage subfolderAuthorizer). Changes are
  *                audited and end the grantee's live access at once
- *                (`permission-change`).
+ *                (`permission-change`). A user identifier resolves only
+ *                inside the caller's address list (active users of its domain
+ *                not hidden from it) or among the users the folder's ACL
+ *                already shows (w3 scope leaks, storage folder-grantees.ts —
+ *                the REST rule): unknown, hidden, deactivated and other-domain
+ *                identifiers all get NO [CANNOT] Unknown identifier.
  *
  * A foreign name the user may not open is answered exactly like a missing mailbox.
  */
 import {
   prisma, describeFolderPermissions, setFolderPermissions, publishFolderPermissionChange, canAdministerFolder, subfolderAuthorizer,
+  resolvableGrantees, shownGranteeIds, webmailGranteeDirectory,
   FolderPermissionError, DEFAULT_GRANTEE_KEY, granteeUserId, userGranteeKey,
-  type FolderPermissionInput, type FolderPermissionWriteDb,
+  type FolderPermissionInput, type FolderPermissionsView, type FolderPermissionWriteDb, type GranteeDb,
 } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import { type ImapSession, sendOk, sendNo, sendBad, sendUntagged } from '../session/state.js';
@@ -113,16 +119,27 @@ export async function handleListRights(session: ImapSession, tag: string, args: 
   sendOk(session, tag, 'LISTRIGHTS completed');
 }
 
-/** The grantee key of an identifier, or a refusal text. */
-async function granteeOf(session: ImapSession, folder: AclFolder, identifier: string): Promise<{ key: string } | { refusal: string }> {
-  const id = identifier.toLowerCase();
+/** The grantee key of an identifier, or a refusal text (`view`: the folder's current ACL). */
+async function granteeOf(
+  session: ImapSession, folder: AclFolder, identifier: string, view: FolderPermissionsView,
+): Promise<{ key: string } | { refusal: string }> {
+  const id = identifier.trim().toLowerCase();
   if (id.startsWith('-')) return { refusal: '[CANNOT] Negative rights are not supported' };
   if (id === 'anonymous') return { refusal: '[CANNOT] Anonymous users get no rights on mail folders' };
   if (id === ANYONE) return { key: DEFAULT_GRANTEE_KEY };
   const owner = mailboxOwner(session, folder);
   if (owner && owner.identifier.toLowerCase() === id) return { refusal: '[CANNOT] The mailbox owner always has every right' };
-  const user = await prisma.user.findFirst({ where: { email: id }, select: { id: true } });
-  return user ? { key: userGranteeKey(user.id) } : { refusal: '[CANNOT] Unknown identifier' };
+  // w3 scope leaks: one answer for unknown, hidden, deactivated and other-domain identifiers
+  const callerId = session.userId ?? '';
+  const users = prisma as unknown as GranteeDb;
+  const known = await resolvableGrantees(
+    users,
+    { emails: [id], ids: [] },
+    await webmailGranteeDirectory(users, callerId),
+    [...shownGranteeIds(view), ...(callerId ? [callerId] : []), ...(owner?.id ? [owner.id] : [])],
+  );
+  const userId = known.byEmail.get(id);
+  return userId ? { key: userGranteeKey(userId) } : { refusal: '[CANNOT] Unknown identifier' };
 }
 
 export async function handleSetAcl(session: ImapSession, tag: string, args: string[], command: 'SETACL' | 'DELETEACL'): Promise<void> {
@@ -135,14 +152,14 @@ export async function handleSetAcl(session: ImapSession, tag: string, args: stri
   const folder = await findFolder(session, args[0]!, true);
   if (!folder) { sendNo(session, tag, '[NONEXISTENT] Mailbox does not exist'); return; }
   if (!canAdministerFolder(folder.access)) { sendNo(session, tag, NOPERM); return; }
-  const grantee = await granteeOf(session, folder, args[1]);
+  const view = await describeFolderPermissions(db(), { id: folder.id, mailboxId: folder.mailboxId });
+  const grantee = await granteeOf(session, folder, args[1], view);
   if ('refusal' in grantee) { sendNo(session, tag, grantee.refusal); return; }
 
   let input: FolderPermissionInput;
   if (command === 'DELETEACL') {
     input = { granteeKey: grantee.key, remove: true };
   } else {
-    const view = await describeFolderPermissions(db(), { id: folder.id, mailboxId: folder.mailboxId });
     const current = view.entries.find((e) => e.granteeKey === grantee.key);
     const rights = applyImapRights(current?.rights ?? 0, args[2] ?? '');
     if (rights === null) { sendBad(session, tag, 'SETACL: unknown right'); return; }

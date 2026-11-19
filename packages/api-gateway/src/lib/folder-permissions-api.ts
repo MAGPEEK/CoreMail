@@ -24,9 +24,9 @@
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import {
-  prisma, GAL_VISIBLE_WHERE, describeFolderPermissions, setFolderPermissions, publishFolderPermissionChange,
+  prisma, describeFolderPermissions, resolvableGrantees, shownGranteeIds, webmailGranteeDirectory as webmailDirectoryOf, setFolderPermissions, publishFolderPermissionChange,
   FolderPermissionError, FOLDER_ROLES, ROLE_RIGHTS, ALL_FOLDER_RIGHTS, DEFAULT_GRANTEE_KEY, userGranteeKey,
-  type FolderPermissionAuthorizer, type FolderPermissionInput, type FolderPermissionView, type FolderPermissionWriteDb, type PermissionActor,
+  type FolderPermissionAuthorizer, type FolderPermissionInput, type GranteeDb, type GranteeDirectory, type ResolvableGrantees, type FolderPermissionView, type FolderPermissionWriteDb, type PermissionActor,
 } from '@coremail/storage';
 import { auditContext } from './audit.js';
 import { NO_REDACTION, type AddressRedactor } from './admin-scope.js';
@@ -78,9 +78,6 @@ export function parsePermissionBody(body: unknown): { ok: true; entries: Permiss
   return { ok: true, entries: out };
 }
 
-/** The users a request may name, by lower-case address and by id. */
-export interface ResolvableGrantees { byEmail: ReadonlyMap<string, string>; ids: ReadonlySet<string> }
-
 /**
  * Pure: the storage inputs of a PUT body; null when it names a user that is not
  * resolvable for the caller — unknown, or not grantable (w3: every such case
@@ -95,43 +92,27 @@ export function granteeInputs(entries: readonly PermissionRequestEntry[], known:
       continue;
     }
     if ('userId' in e.grantee) id = known.ids.has(e.grantee.userId) ? e.grantee.userId : undefined;
-    else id = known.byEmail.get(e.grantee.email.toLowerCase());
+    else id = known.byEmail.get(e.grantee.email.trim().toLowerCase());
     if (!id) return null;
     out.push({ granteeKey: userGranteeKey(id), rights: e.rights, applyToSubfolders: e.applyToSubfolders });
   }
   return out;
 }
 
-/**
- * w3 scope leaks: a Prisma `where` on User — whom a caller may name as a NEW
- * grantee. The users the folder's permission view already shows (own and
- * inherited entries), the mailbox owner and the caller stay resolvable; any
- * other address answers exactly like an unknown one, so the PUT reveals neither
- * whether an address exists nor whether it is hidden from the address list.
- */
-export type GranteeDirectory = Record<string, unknown>;
+const granteeDb = (): GranteeDb => prisma as unknown as GranteeDb;
 
-/** Webmail callers: the active users of their own domain shown in the address list (the picker's source). */
-export async function webmailGranteeDirectory(userId: string): Promise<GranteeDirectory> {
-  const caller = await prisma.user.findUnique({ where: { id: userId }, select: { domainId: true } });
-  return caller?.domainId ? { domainId: caller.domainId, active: true, ...GAL_VISIBLE_WHERE } : { id: { in: [] } };
+/** Webmail callers: the active users of their own domain shown in the address list (storage folder-grantees.ts). */
+export function webmailGranteeDirectory(userId: string): Promise<GranteeDirectory> {
+  return webmailDirectoryOf(granteeDb(), userId);
 }
 
-/** I/O: the users of the body the caller may name (directory, shown entries, owner, caller). */
-async function resolvableGrantees(entries: readonly PermissionRequestEntry[], directory: GranteeDirectory, alwaysIds: readonly string[]): Promise<ResolvableGrantees> {
+/** I/O: the users of the body the caller may name (storage folder-grantees.ts, the rule IMAP SETACL shares). */
+function resolvableIn(entries: readonly PermissionRequestEntry[], directory: GranteeDirectory, alwaysIds: readonly string[]): Promise<ResolvableGrantees> {
   const named = entries.flatMap((e) => (typeof e.grantee === 'object' ? [e.grantee] : []));
-  const emails = named.flatMap((g) => ('email' in g ? [g.email.toLowerCase()] : []));
-  const ids = named.flatMap((g) => ('userId' in g ? [g.userId] : []));
-  const users = named.length === 0 ? [] : await prisma.user.findMany({
-    where: {
-      AND: [
-        { OR: [{ email: { in: emails } }, { id: { in: ids } }] },
-        { OR: [directory, { id: { in: [...alwaysIds] } }] },
-      ],
-    },
-    select: { id: true, email: true },
-  });
-  return { byEmail: new Map(users.map((u) => [u.email.toLowerCase(), u.id])), ids: new Set(users.map((u) => u.id)) };
+  return resolvableGrantees(granteeDb(), {
+    emails: named.flatMap((g) => ('email' in g ? [g.email] : [])),
+    ids: named.flatMap((g) => ('userId' in g ? [g.userId] : [])),
+  }, directory, alwaysIds);
 }
 
 export interface PermissionFolder { id: string; mailboxId: string; name: string; displayName: string }
@@ -196,9 +177,8 @@ export async function replaceFolderPermissions(
   const parsed = parsePermissionBody(req.body);
   if (!parsed.ok) { res.status(400).json({ error: parsed.error }); return; }
   const shown = await describe(folder);
-  const alwaysIds = [...shown.entries, ...shown.inherited].flatMap((e) => (e.user ? [e.user.id] : []));
-  alwaysIds.push(req.apiUser!.userId, ...(mailboxOwnerId ? [mailboxOwnerId] : []));
-  const inputs = granteeInputs(parsed.entries, await resolvableGrantees(parsed.entries, rules.directory, alwaysIds));
+  const alwaysIds = [...shownGranteeIds(shown), req.apiUser!.userId, ...(mailboxOwnerId ? [mailboxOwnerId] : [])];
+  const inputs = granteeInputs(parsed.entries, await resolvableIn(parsed.entries, rules.directory, alwaysIds));
   if (!inputs) { res.status(400).json({ error: ERROR_TEXT['UNKNOWN_GRANTEE'], code: 'UNKNOWN_GRANTEE' }); return; }
   const { authorize } = rules;
   const ctx = auditContext(req);

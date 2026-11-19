@@ -162,6 +162,25 @@ test('addressRedactor: hosted other domains hidden, external and own addresses k
   assert.equal(r.person(inScope), inScope);
 });
 
+test('addressRedactor review: every spelling of a hidden domain is hidden (IDN, punycode, case, NFD, IDNA dots)', () => {
+  const r = scope.addressRedactor(scopedA, ['a.example', 'xn--bcher-kva.example', 'Müller.Example'], 'me@a.example');
+  assert.deepEqual(r.hiddenDomains, ['xn--bcher-kva.example', 'xn--mller-kva.example'], 'canonical A-labels');
+  for (const spelling of [
+    'x@bücher.example', 'x@BÜCHER.EXAMPLE', 'x@xn--bcher-kva.example', 'x@XN--BCHER-KVA.EXAMPLE',
+    'x@bu\u0308cher.example', 'x@müller.example', 'x@xn--mller-kva.example', 'Ü <x@bücher.example>',
+    'x@bücher\u3002example', 'x@bücher\uFF0Eexample',
+  ]) {
+    assert.equal(r.hides(spelling), true, spelling);
+    assert.equal(r.text(`${spelling}, ok@a.example`), '(andere Domain), ok@a.example', spelling);
+  }
+  assert.equal(r.hides('x@a.example'), false);
+  assert.equal(r.text('x@bücher.example.other.test'), 'x@bücher.example.other.test', 'another domain that only starts alike');
+  assert.equal(r.hides('ME@A.EXAMPLE'), false, 'the viewer in any case');
+  const own = scope.addressRedactor(scope.scopeFromRows('HELP_DESK', [{ id: 'dU', name: 'xn--bcher-kva.example' }]), ['bücher.example', 'b.example']);
+  assert.equal(own.hides('x@bücher.example'), false, 'the scope domain in its other spelling stays visible');
+  assert.equal(own.hides('x@b.example'), true);
+});
+
 test('addressRedactor: organisation-wide admins see everything unchanged', () => {
   const r = scope.addressRedactor(org, ['a.example', 'b.example']);
   assert.equal(r, scope.NO_REDACTION);
