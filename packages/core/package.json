@@ -17,6 +17,7 @@
     "./free-busy": "./dist/calendar/free-busy.js",
     "./http": "./dist/http/index.js",
     "./ssrf": "./dist/net/ssrf.js",
+    "./domain-alignment": "./dist/net/domain-alignment.js",
     "./tls-errors": "./dist/tls/tls-errors.js",
     "./tls-policy": "./dist/tls/legacy-tls.js",
     "./cert-serial": "./dist/tls/cert-serial.js",
@@ -35,6 +36,7 @@
     "pino": "^9.4.0",
     "pino-pretty": "^11.3.0",
     "rrule": "^2.8.1",
+    "tldts": "7.0.30",
     "zod": "^4.6.7"
   },
   "devDependencies": {

@@ -13,7 +13,7 @@ process.env['PEPPER'] ??= 'test-pepper-test-pepper-test-pepper-1234';
 process.env['LOG_LEVEL'] = 'error';
 (globalThis as unknown as { __prisma: unknown }).__prisma = { $on: () => undefined };
 
-const { authenticateMail, dmarcDisposition, domainsAligned, isDomainAuthenticated } = await import('./index.js');
+const { authenticateMail, dmarcDisposition, isDomainAuthenticated } = await import('./index.js');
 const { runContentChecks, decideAuthentication } = await import('../pipeline/index.js');
 const { parseContentContext, contentErrorResult } = await import('../content-request.js');
 
@@ -62,13 +62,19 @@ test('DMARC disposition follows the published policy; none/temperror never rejec
   assert.equal(dmarcDisposition({ dmarc: 'none', dmarcPolicy: null }), 'none');
 });
 
-test('relaxed alignment helper', () => {
-  assert.equal(domainsAligned('corp.test', 'corp.test'), true);
-  assert.equal(domainsAligned('corp.test', 'mail.corp.test'), true);
-  assert.equal(domainsAligned('mail.corp.test', 'corp.test'), true);
-  assert.equal(domainsAligned('corp.test', 'corp.test.evil.example'), false);
-  assert.equal(domainsAligned('corp.test', 'evilcorp.test'), false);
+test('relaxed alignment helper (DMARC organizational domain, Public Suffix List)', () => {
+  assert.equal(isDomainAuthenticated('corp.test', ['corp.test']), true);
+  assert.equal(isDomainAuthenticated('corp.test', ['mail.corp.test']), true);
+  assert.equal(isDomainAuthenticated('mail.corp.test', ['corp.test']), true);
+  assert.equal(isDomainAuthenticated('bounces.corp.test', ['mail.corp.test']), true);
+  assert.equal(isDomainAuthenticated('corp.test', ['corp.test.evil.example']), false);
+  assert.equal(isDomainAuthenticated('corp.test', ['evilcorp.test']), false);
   assert.equal(isDomainAuthenticated('corp.test', []), false);
+  // a public suffix never makes two registrable domains related
+  assert.equal(isDomainAuthenticated('victim.co.uk', ['evil.co.uk']), false);
+  assert.equal(isDomainAuthenticated('victim.co.uk', ['co.uk']), false);
+  assert.equal(isDomainAuthenticated('co.uk', ['evil.co.uk']), false);
+  assert.equal(isDomainAuthenticated('alice.github.io', ['bob.github.io']), false);
 });
 
 const baseAuth = (over: Partial<Auth> = {}): Auth => ({
@@ -97,6 +103,17 @@ test('anti-spoofing (LOCAL_SPOOF_ACTION=reject): a local domain in MAIL FROM or 
   assert.equal(await decideAuthentication(baseAuth({ headerFromDomain: 'corp.test' }), { ...ctx, authUser: 'ceo@corp.test' }, isLocal, strict), null);
   // foreign domains without DMARC record → continue
   assert.equal(await decideAuthentication(baseAuth({ headerFromDomain: 'ext.example' }), ctx, isLocal, strict), null);
+});
+
+test('anti-spoofing: a local domain under a public suffix is not authenticated by a sibling registrable domain', async () => {
+  const isLocalUk = async (d: string) => d === 'victim.co.uk';
+  const ukCtx = { ...ctx, rcptTo: 'u@victim.co.uk' };
+  for (const verified of ['evil.co.uk', 'co.uk']) {
+    const r = await decideAuthentication(baseAuth({ headerFromDomain: 'victim.co.uk', dkim: 'pass', dkimDomains: [verified], verifiedDomains: [verified] }), ukCtx, isLocalUk, strict);
+    assert.ok(r && 'action' in r && r.action === 'reject', verified);
+  }
+  // a DKIM signature of the same organization (subdomain) still counts
+  assert.equal(await decideAuthentication(baseAuth({ headerFromDomain: 'victim.co.uk', dkim: 'pass', dkimDomains: ['mail.victim.co.uk'], verifiedDomains: ['mail.victim.co.uk'] }), ukCtx, isLocalUk, strict), null);
 });
 
 test('DMARC p=reject fails with reject, p=quarantine delivers to Junk with the AR header', async () => {

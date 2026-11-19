@@ -1,5 +1,6 @@
 import { authenticate, type AuthenticateResult } from 'mailauth';
 import { createLogger } from '@coremail/core';
+import { isAlignedWithAny } from '@coremail/core/domain-alignment';
 
 const log = createLogger('security-filter:spf-dkim');
 
@@ -273,20 +274,12 @@ export function countMailboxes(value: string): number {
 }
 
 /**
- * Pure: relaxed alignment between a claimed domain and an authenticated one
- * (equal, or one is a subdomain of the other — RFC 7489 §3.1 without the
- * public-suffix lookup, i.e. stricter than DMARC for sibling subdomains).
+ * Pure: is `domain` authenticated by one of the verified domains? DMARC relaxed
+ * alignment (RFC 7489 §3.1) with the Public Suffix List — the shared helper of
+ * `@coremail/core/domain-alignment`.
  */
-export function domainsAligned(claimed: string, verified: string): boolean {
-  const a = claimed.toLowerCase().replace(/\.$/, '');
-  const b = verified.toLowerCase().replace(/\.$/, '');
-  if (!a || !b) return false;
-  return a === b || a.endsWith(`.${b}`) || b.endsWith(`.${a}`);
-}
-
-/** Pure: is `domain` authenticated by one of the verified domains? */
 export function isDomainAuthenticated(domain: string, verifiedDomains: readonly string[]): boolean {
-  return verifiedDomains.some((v) => domainsAligned(domain, v));
+  return isAlignedWithAny(domain, verifiedDomains);
 }
 
 export { domainOf as addressDomain };
