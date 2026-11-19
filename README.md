@@ -9,7 +9,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-22+-green.svg)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.5-blue.svg)](https://www.typescriptlang.org)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED.svg)](https://www.docker.com)
-[![Version](https://img.shields.io/badge/Version-10.0.0-brightgreen.svg)](https://github.com/MAGPEEK/CoreMail/releases)
+[![Version](https://img.shields.io/badge/Version-10.1.0-brightgreen.svg)](https://github.com/MAGPEEK/CoreMail/releases)
 [![IMAP4rev2](https://img.shields.io/badge/IMAP4-rev2-blue.svg)](https://datatracker.ietf.org/doc/html/rfc9051)
 [![CalDAV](https://img.shields.io/badge/CalDAV%2FCardDAV-supported-blue.svg)](https://datatracker.ietf.org/doc/html/rfc4791)
 
@@ -22,7 +22,7 @@
 
 **🎯 Standard mail protocols.** CoreMail speaks **IMAP4rev2** (RFC 9051) + **JMAP** (RFC 8620/8621, since v5.7.1) + **SMTP submission** + **POP3** + **CalDAV/CardDAV** + **ActiveSync** — standard clients (Apple Mail, Thunderbird, Outlook, K-9 Mail, eM Client, iOS Mail) connect via IMAP/SMTP. **App passwords** for MFA-compatible sign-in. No VPN, no connector, no third-party software.
 
-> **Current version: v10.0.0** — **room and equipment resources are removed**; use a shared mailbox or a shared calendar instead. Room data is deleted at start after a mandatory backup — **breaking, read the [upgrade notes](docs/releases/v10.0.0.md) before upgrading**. **v9.5.1:** fix for a false MAPI HTTPS warning ([release notes](docs/releases/v9.5.1.md)). **v9.5.0:** ActiveSync phones sync calendar, tasks, notes and contacts both ways, a CalDAV task list for Apple Reminders / Thunderbird / DAVx⁵, contacts with several addresses and phone numbers plus contact groups, Outlook-style folder permissions (also as IMAP ACL), admin roles limited to domains, Outlook cached mode over MAPI, profile photos, an accessible and responsive webmail and DMARC alignment by the Public Suffix List ([release notes](docs/releases/v9.5.0.md)). **v9.4.0:** classic Outlook connects as an Exchange account again via **MAPI over HTTP** (opt-in, online mode), protocol access switches per server, domain and mailbox, ActiveSync 12.1/14.0/14.1, realtime push with an installable webmail (PWA, Web Push), an Outlook-style webmail (inline compose with draft tabs, calendar with series exceptions and scheduling assistant, tasks and follow-up flags), mailbox management (auto-mapping, sent copies, mail flow), roaming personal settings, webmail policies, sender lists and spoofing settings, and TLS 1.0/1.1 for old clients as an opt-in ([release notes](docs/releases/v9.4.0.md)). **v9.3.0:** branding (name, colours, logo, login page), Let's Encrypt that works behind NAT with mail certificates applied instantly, shared and delegated mailboxes in the webmail folder pane, backup restore from stored archives plus a recommended backup schedule ([release notes](docs/releases/v9.3.0.md)). **v9.2.0:** accessible dark mode (WCAG 2.2 AA) in webmail and admin panel, every BCP function reviewed and fixed, ClamAV settings with EICAR self-test ([release notes](docs/releases/v9.2.0.md)). **v9.1.0:** shared and delegated mailboxes in IMAP clients (`Shared/`, `Other Users/`), full RFC 5256 REFERENCES threading, recover deleted items in shared mailboxes, Helm chart tested on a real cluster ([release notes](docs/releases/v9.1.0.md)). **v9.0.0:** OWASP security hardening (shared lockout, HttpOnly refresh cookies, DMARC enforcement, ReDoS/DoS limits, encrypted backups, fail-closed schema sync); Exchange-parity mail logic (DSN, CHUNKING, SMTPUTF8, QRESYNC, SORT/THREAD, quota levels, recover deleted items, server drafts with undo send); Thunderbird/Apple auto setup; Docker Compose variants minimal/standard/full; Helm chart 2.0.0; verified end to end in both storage modes ([docs/e2e.md](docs/e2e.md)). **Breaking — read the [upgrade notes](docs/releases/v9.0.0.md) before upgrading** · admin CLI `coremail` ([docs](docs/cli.md)) · JMAP server ([docs](docs/jmap.md)) · IMAP4rev2 · [Changelog](CHANGELOG.md) · [Releases](https://github.com/MAGPEEK/CoreMail/releases) · [Docker Hub](https://hub.docker.com/r/magpeek/coremail-app)
+> **Current version: v10.1.0** — a calmer compose area (raised card, Send as the only accent split button top left, formatting bar at the bottom); since v10.0.0 **room and equipment resources are removed**; use a shared mailbox or a shared calendar instead. Room data is deleted at start after a mandatory backup — **breaking, read the [upgrade notes](docs/releases/v10.0.0.md) before upgrading**. **v9.5.1:** fix for a false MAPI HTTPS warning ([release notes](docs/releases/v9.5.1.md)). **v9.5.0:** ActiveSync phones sync calendar, tasks, notes and contacts both ways, a CalDAV task list for Apple Reminders / Thunderbird / DAVx⁵, contacts with several addresses and phone numbers plus contact groups, Outlook-style folder permissions (also as IMAP ACL), admin roles limited to domains, Outlook cached mode over MAPI, profile photos, an accessible and responsive webmail and DMARC alignment by the Public Suffix List ([release notes](docs/releases/v9.5.0.md)). **v9.4.0:** classic Outlook connects as an Exchange account again via **MAPI over HTTP** (opt-in, online mode), protocol access switches per server, domain and mailbox, ActiveSync 12.1/14.0/14.1, realtime push with an installable webmail (PWA, Web Push), an Outlook-style webmail (inline compose with draft tabs, calendar with series exceptions and scheduling assistant, tasks and follow-up flags), mailbox management (auto-mapping, sent copies, mail flow), roaming personal settings, webmail policies, sender lists and spoofing settings, and TLS 1.0/1.1 for old clients as an opt-in ([release notes](docs/releases/v9.4.0.md)). **v9.3.0:** branding (name, colours, logo, login page), Let's Encrypt that works behind NAT with mail certificates applied instantly, shared and delegated mailboxes in the webmail folder pane, backup restore from stored archives plus a recommended backup schedule ([release notes](docs/releases/v9.3.0.md)). **v9.2.0:** accessible dark mode (WCAG 2.2 AA) in webmail and admin panel, every BCP function reviewed and fixed, ClamAV settings with EICAR self-test ([release notes](docs/releases/v9.2.0.md)). **v9.1.0:** shared and delegated mailboxes in IMAP clients (`Shared/`, `Other Users/`), full RFC 5256 REFERENCES threading, recover deleted items in shared mailboxes, Helm chart tested on a real cluster ([release notes](docs/releases/v9.1.0.md)). **v9.0.0:** OWASP security hardening (shared lockout, HttpOnly refresh cookies, DMARC enforcement, ReDoS/DoS limits, encrypted backups, fail-closed schema sync); Exchange-parity mail logic (DSN, CHUNKING, SMTPUTF8, QRESYNC, SORT/THREAD, quota levels, recover deleted items, server drafts with undo send); Thunderbird/Apple auto setup; Docker Compose variants minimal/standard/full; Helm chart 2.0.0; verified end to end in both storage modes ([docs/e2e.md](docs/e2e.md)). **Breaking — read the [upgrade notes](docs/releases/v9.0.0.md) before upgrading** · admin CLI `coremail` ([docs](docs/cli.md)) · JMAP server ([docs](docs/jmap.md)) · IMAP4rev2 · [Changelog](CHANGELOG.md) · [Releases](https://github.com/MAGPEEK/CoreMail/releases) · [Docker Hub](https://hub.docker.com/r/magpeek/coremail-app)
 >
 > **Note on Outlook** (since v9.4.0): classic Outlook can create an **Exchange account** via **MAPI over HTTP** — opt-in (protocol switch `mapi`, **off by default**), online and **cached mode** (cached mode since v9.5.0), Basic authentication over HTTPS (no NTLM; an app password when MFA is enabled), setup guide in [docs/mapi.md](docs/mapi.md). EWS stays removed. Without it, set Outlook up via **"Other email accounts" → IMAP**, with calendar + contacts via CalDAV/CardDAV (Outlook CalDav Synchronizer plugin; or Apple Calendar, Thunderbird Lightning).
 >
@@ -351,7 +351,7 @@ CoreMail consists of **six containers** (one custom image, five standard images)
 
 | Container | Image | Purpose |
 |-----------|-------|---------|
-| `coremail` | `magpeek/coremail-app:10.0.0` | All mail services + webmail + admin panel + CLI |
+| `coremail` | `magpeek/coremail-app:10.1.0` | All mail services + webmail + admin panel + CLI |
 | `rspamd` | `rspamd/rspamd:4.0.0` | Anti-spam engine (Bayes, DKIM/SPF/DMARC, fuzzy) |
 | `clamav` | `clamav/clamav:stable` | Open-source antivirus (GPL), freshclam updates |
 | `postgres` | `postgres:16-alpine` | Database for mail, users, calendars |
@@ -368,7 +368,7 @@ Since v5.8.0, `infra/docker/docker-compose.yml` is reduced to the essentials and
 # Excerpt — full file in the repository
 services:
   coremail:
-    image: magpeek/coremail-app:${COREMAIL_VERSION:-10.0.0}
+    image: magpeek/coremail-app:${COREMAIL_VERSION:-10.1.0}
     environment:
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET missing in .env  →  openssl rand -hex 32}
       PEPPER:     ${PEPPER:?PEPPER missing in .env  →  openssl rand -hex 32}
@@ -474,7 +474,7 @@ COREMAIL_DB_USER=coremail_app   # least-privilege DB role (fresh databases only;
 COREMAIL_DB_PASSWORD=…          #   unset = superuser "coremail")
 
 # ── Optional (defaults in parentheses) ─────────────────────
-#COREMAIL_VERSION=10.0.0        # image tag
+#COREMAIL_VERSION=10.1.0        # image tag
 #RSPAMD_NET_PREFIX=10.253.253   # /29 of the app <-> rspamd network (change only on a collision)
 #LOG_LEVEL=info                 # error | warn | info | debug
 #TZ=Europe/Berlin
@@ -641,7 +641,7 @@ docker compose -f infra/docker/docker-compose.yml pull
 docker compose -f infra/docker/docker-compose.yml up -d
 
 # Specific version
-docker pull magpeek/coremail-app:10.0.0
+docker pull magpeek/coremail-app:10.1.0
 ```
 
 **Multi-arch:** The image is built for `linux/amd64` and `linux/arm64` (Synology NAS, Raspberry Pi, Apple Silicon).
@@ -654,6 +654,7 @@ docker pull magpeek/coremail-app:10.0.0
 
 | Version | Highlights |
 |---------|-----------|
+| **v10.1.0** | **New compose area.** Raised card, "Senden" as the only accent split button top left (send later, importance, options), quiet icons, address rows with avatar chips, text limited to 72 characters per line, formatting bar at the bottom (can be hidden, remembered). |
 | **v10.0.0** | **Room and equipment resources removed** (Breaking). Room and equipment mailboxes, their bookings and their own mailboxes are deleted at start after a mandatory pg_dump to `/data/backups` (retired tables only; any other data loss is still refused); mail to former room addresses gets `550 5.1.1`; room attendees are invited like people; `/admin/resources`, EMS `resource-mailboxes` and `/calendar/rooms` answer 404. Use a shared mailbox or a shared calendar instead. Helm chart 3.0.0 (`app.schemaSync.backupClaim` or `skipBackup` for the rollout when rooms exist). |
 | **v9.5.1** | **Bug fix.** "Protocols & services" no longer shows a false MAPI HTTPS warning when port 443 serves a valid certificate by SNI; clearer label for the optional TLS 1.0/1.1 switch. |
 | **v9.5.0** | **ActiveSync calendar / tasks / notes / contacts, folder permissions, domain-scoped admins, Outlook cached mode.** ActiveSync Calendar, Tasks, Notes and Contacts classes both ways (EAS 12.1–14.1); CalDAV task list (VTODO); contacts with several values and contact groups (CardDAV), note categories; per-folder permissions (webmail, BCP, REST, IMAP ACL); admin roles limited to domains with redaction of other domains; MAPI cached mode (ICS download / upload, client IDs kept, conflict detection); profile photos; rooms answer mailed invitations, recurring room invitations checked per occurrence; accessible and responsive webmail; BCP edit side panel, IDN display; backups with contact groups, restore keeps the received date; DMARC alignment by the Public Suffix List. Helm chart 2.3.0. |
@@ -754,7 +755,7 @@ MIT License — see [LICENSE](LICENSE)
 ---
 
 <div align="center">
-  <b>CoreMail v10.0.0</b> · The open-source mail server for small and medium-sized environments<br>
+  <b>CoreMail v10.1.0</b> · The open-source mail server for small and medium-sized environments<br>
   <sub>IMAP4rev2 + JMAP + SMTP + POP3 + CalDAV + CardDAV + ActiveSync</sub><br>
   <sub>Built with ❤️ · <a href="https://github.com/MAGPEEK/CoreMail">github.com/MAGPEEK/CoreMail</a></sub>
 </div>
