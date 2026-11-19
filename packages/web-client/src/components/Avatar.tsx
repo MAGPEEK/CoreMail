@@ -40,11 +40,12 @@ export interface AvatarProps {
   name?: string | null | undefined;
   /** blob: URL of the profile photo; shown instead of the initials */
   photoUrl?: string | null | undefined;
-  size?: 'xs' | 'sm' | 'md' | 'lg' | 'xl';
+  size?: 'chip' | 'xs' | 'sm' | 'md' | 'lg' | 'xl';
   className?: string;
 }
 
 const SIZE_MAP = {
+  chip: 'w-5 h-5 text-[9px]',
   xs: 'w-6 h-6 text-[10px]',
   sm: 'w-7 h-7 text-xs',
   md: 'w-9 h-9 text-sm',

@@ -165,11 +165,20 @@ one of their commands is in one of the bars below):
      Noto / Liberation / DejaVu, a generic family last — `lib/composeFonts.ts`). **Schriftgrad**:
      8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 36 pt. New text starts with the font and size of
      Settings → Verfassen (same lists), else Calibri 11 pt.
-6. **Action bar** at the bottom (`actionBarCommands`): **Senden** (primary, split: Senden / Senden
-   planen …), Verwerfen, Anhang (file), Inline-Bild (HTML only), Emoji, **Signatur einfügen** (picker
-   with the named signatures and "Keine Signatur"; only when the user has named signatures; also in
-   plain-text format) and a chevron with **Datum/Uhrzeit ›** (date, long date, time, date + time in
-   the regional format; also in plain-text format) and the entries of the "…" menu.
+6. **Header row** at the top of the card (`headerCommands`, `SEND_MENU`, `moreMenuCommands` in
+   `lib/composeToolbar.ts`): the split button **Senden** (the only accent-filled control; chevron or
+   Alt+↓ opens Senden, **Später senden …**, **Wichtigkeit ›**, **Nachrichtenoptionen …**), quiet icon
+   buttons Anhängen, Bild (HTML only), **Signatur einfügen** (only with named signatures; also in plain
+   text), "Aa" (toggles the formatting bar, HTML only) and "…" (Entwurf speichern, Absender anzeigen,
+   Namen prüfen, **Datum/Uhrzeit ›**, format switch, Formatleiste ausblenden / einblenden, Barrierefreiheit,
+   Emoji in plain text, Schließen). Right: draft status (live region), "In neuem Fenster öffnen" (inline
+   only) and **Verwerfen**. There is no bottom action bar any more.
+   The inline compose is a raised card (rounded, border, soft shadow, 12 px margin on the tinted
+   `canvas` of the reading pane) from 768 px; the own window and < 768 px have no margin or shadow. The
+   address block has 36 px rows (subject 40 px; 4 px less in compact density), recipient chips with a
+   20 px avatar, and the editor sets 15 px / 1.6 with lines of at most 72ch. The **formatting bar**
+   (inset strip at the bottom of the card) is remembered as the roaming preference
+   `compose.composeFormatBar` (default on).
 7. **Drag & drop**: files dropped anywhere on the compose area are attached (overlay while dragging).
 
 All bars are the shared command bar (`components/CommandBar.tsx`): one tab stop each, ←/→ and
@@ -214,9 +223,8 @@ Generated MIME (drafts, Sent copies, outgoing mail) uses CRLF line ends.
 | File | Content |
 |------|---------|
 | `components/compose/ComposePane.tsx` | The compose area (inline and window) |
-| `components/compose/ComposeCommandRow.tsx` | Top row: Senden / Anhängen / Verwerfen / "…" (shared "…" entries), popout, ✕ |
-| `components/compose/ComposeFormatBar.tsx` | Formatting toolbar below the body and its flyout |
-| `components/compose/ComposeActionBar.tsx` | Action bar at the bottom (Senden ▾, Verwerfen, Anhang, Inline-Bild, Emoji, Signatur, chevron) |
+| `components/compose/ComposeCommandRow.tsx` | Header row of the card: Senden (split), icon buttons, "…", status, popout, Verwerfen |
+| `components/compose/ComposeFormatBar.tsx` | Formatting bar at the bottom of the card and its flyout |
 | `components/compose/MessageOptionsDialog.tsx`, `AccessibilityDialog.tsx` | Nachrichtenoptionen, accessibility issues |
 | `components/compose/ComposeFields.tsx`, `RecipientField.tsx` | Von / An / Cc / Bcc / Betreff, pills + suggestions |
 | `components/compose/AttachmentChips.tsx`, `SchedulePopover.tsx`, `EmojiPopover.tsx`, `AnchoredPopover.tsx` | Pieces of the compose area |

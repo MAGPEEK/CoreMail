@@ -1,10 +1,10 @@
 /**
- * 9.4: model of the compose bars — the formatting toolbar below the body and
- * its chevron flyout, the action bar at the bottom, the "…" menu of the
- * command row, and font size steps of "Schrift größer / kleiner". Which
- * commands exist depends on the format (HTML / plain text), the editor state
- * (cursor in a table, in a link) and where the compose is (inline / own
- * window). Pure — unit-tested with `node --test`.
+ * Model of the compose bars: the header row at the top of the compose card
+ * (quiet icon buttons, the "…" overflow menu, the Senden chevron menu), the
+ * formatting toolbar at its bottom with its chevron flyout, and font size steps
+ * of "Schrift größer / kleiner". Which commands exist depends on the format
+ * (HTML / plain text), the editor state (cursor in a table, in a link) and where
+ * the compose is (inline / own window). Pure — unit-tested with `node --test`.
  */
 import { COMPOSE_FONT_SIZES_PT, sizeValue } from './composeFonts.ts';
 import { TABLE_COMMANDS, type TableCommandId } from './composeFormat.ts';
@@ -12,16 +12,22 @@ import { TABLE_COMMANDS, type TableCommandId } from './composeFormat.ts';
 // ── Formatting toolbar ──────────────────────────────────────────────────────
 
 export type FormatBarId =
-  | 'grow' | 'shrink' | 'bold' | 'italic' | 'underline' | 'highlight' | 'color' | 'bullets' | 'numbering' | 'indent';
+  | 'grow' | 'shrink' | 'bold' | 'italic' | 'underline' | 'highlight' | 'color' | 'bullets' | 'numbering' | 'indent'
+  | 'link' | 'emoji';
 
 /** Buttons of the formatting toolbar, in order (the flyout chevron follows). */
 export const FORMAT_BAR: readonly FormatBarId[] = [
-  'grow', 'shrink', 'bold', 'italic', 'underline', 'highlight', 'color', 'bullets', 'numbering', 'indent',
+  'grow', 'shrink', 'bold', 'italic', 'underline', 'highlight', 'color', 'bullets', 'numbering', 'indent', 'link', 'emoji',
 ];
 
 /** Plain-text format has nothing to format: the toolbar (and its flyout) is hidden. */
-export function formatBarVisible(plain: boolean): boolean {
+export function formatBarAvailable(plain: boolean): boolean {
   return !plain;
+}
+
+/** The toolbar shows when the format has anything to format and the roaming preference `composeFormatBar` is on. */
+export function formatBarVisible(plain: boolean, preference: boolean): boolean {
+  return formatBarAvailable(plain) && preference;
 }
 
 export type Alignment = 'left' | 'center' | 'right' | 'justify';
@@ -105,27 +111,49 @@ export function stepFontSize(current: string | null | undefined, fallback: strin
   return next === undefined ? null : sizeValue(next);
 }
 
-// ── Action bar (bottom) ─────────────────────────────────────────────────────
+// ── Header row (top of the card) ────────────────────────────────────────────
 
-export type ActionBarId = 'send' | 'discard' | 'attach' | 'inlineImage' | 'emoji' | 'signature' | 'more';
+export type HeaderId = 'attach' | 'inlineImage' | 'signature' | 'formatBar';
 
-/** Bottom bar: pictures need HTML; the signature picker only with named signatures. */
-export function actionBarCommands(plain: boolean, hasSignatures: boolean): ActionBarId[] {
-  return (['send', 'discard', 'attach', 'inlineImage', 'emoji', 'signature', 'more'] as const)
-    .filter((id) => !(plain && id === 'inlineImage') && !(!hasSignatures && id === 'signature'));
+/**
+ * Quiet icon buttons after "Senden": pictures need HTML, the signature picker
+ * only with named signatures, the "Aa" toggle only where there is a toolbar.
+ */
+export function headerCommands(plain: boolean, hasSignatures: boolean): HeaderId[] {
+  return (['attach', 'inlineImage', 'signature', 'formatBar'] as const)
+    .filter((id) => !(plain && (id === 'inlineImage' || id === 'formatBar')) && !(!hasSignatures && id === 'signature'));
 }
+
+export type SendMenuId = 'send' | 'schedule' | 'importance' | 'options';
+
+/** Entries of the chevron of "Senden": send, send later, importance, message options (sensitivity, receipts). */
+export const SEND_MENU: readonly SendMenuId[] = ['send', 'schedule', 'importance', 'options'];
 
 // ── "…" menu ────────────────────────────────────────────────────────────────
 
-export type MoreMenuId = 'save' | 'showFrom' | 'checkNames' | 'importance' | 'format' | 'options' | 'a11y' | 'popout';
+export type MoreMenuId = 'save' | 'showFrom' | 'checkNames' | 'datetime' | 'format' | 'formatBar' | 'a11y' | 'emoji' | 'close';
 
-/** Entries of the "…" menu (the own window has no "In neuem Fenster öffnen"). */
-export function moreMenuCommands(inWindow: boolean): MoreMenuId[] {
-  const all: MoreMenuId[] = ['save', 'showFrom', 'checkNames', 'importance', 'format', 'options', 'a11y', 'popout'];
-  return inWindow ? all.filter((id) => id !== 'popout') : all;
+/**
+ * Entries of the header's "…" menu: everything the header does not show.
+ * "Formatleiste" only in HTML, "Emoji" only in plain text (HTML has it in the toolbar).
+ */
+export function moreMenuCommands(plain: boolean): MoreMenuId[] {
+  const all: MoreMenuId[] = ['save', 'showFrom', 'checkNames', 'datetime', 'format', 'formatBar', 'a11y', 'emoji', 'close'];
+  return all.filter((id) => !(plain && id === 'formatBar') && !(!plain && id === 'emoji'));
 }
 
 /** Label of the format switch: the format the mail changes to. */
 export function formatSwitchLabel(plain: boolean): 'compose_to_html' | 'compose_to_plain' {
   return plain ? 'compose_to_html' : 'compose_to_plain';
+}
+
+/** Label of the toolbar toggle: what a click does. */
+export function formatBarToggleLabel(shown: boolean): 'compose_format_bar_hide' | 'compose_format_bar_show' {
+  return shown ? 'compose_format_bar_hide' : 'compose_format_bar_show';
+}
+
+/** Row heights in px of the address block; compact density takes 4 px off. */
+export function fieldRowHeights(density: 'compact' | 'normal' | 'comfortable'): { row: number; subject: number } {
+  const cut = density === 'compact' ? 4 : 0;
+  return { row: 36 - cut, subject: 40 - cut };
 }

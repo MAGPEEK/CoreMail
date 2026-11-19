@@ -26,9 +26,9 @@ import {
   FontSizeExt, InlineImageExt, QuoteMarkerExt, SignatureBlockExt, SubscriptExt, SuperscriptExt, TextDirectionExt,
 } from '../components/editorExtensions.js';
 
-/** Editor area classes: headings, quotes (the quoted original without italics), lists, code, links. */
+/** Editor area classes (24 px sides, 15 px / 1.6, lines at most 72ch, see attributes below): headings, quotes (the quoted original without italics), lists, code, links. */
 export const COMPOSE_EDITOR_CLASS = [
-  'px-4 py-3',
+  'px-6 pt-4 pb-3',
   '[&_.ProseMirror_h1]:text-2xl [&_.ProseMirror_h1]:font-bold [&_.ProseMirror_h1]:mb-2 [&_.ProseMirror_h1]:mt-3',
   '[&_.ProseMirror_h2]:text-xl [&_.ProseMirror_h2]:font-semibold [&_.ProseMirror_h2]:mb-2 [&_.ProseMirror_h2]:mt-2',
   '[&_.ProseMirror_h3]:text-base [&_.ProseMirror_h3]:font-semibold [&_.ProseMirror_h3]:mb-1 [&_.ProseMirror_h3]:mt-2',
@@ -77,7 +77,7 @@ export function useComposeEditor(o: { label: string; placeholder: string; onPast
     content: '',
     editorProps: {
       attributes: {
-        class: 'outline-none min-h-[160px] text-sm leading-relaxed',
+        class: 'outline-none min-h-[160px] max-w-[72ch] text-[15px] leading-[1.6]',
         role: 'textbox',
         'aria-multiline': 'true',
         'aria-label': o.label,

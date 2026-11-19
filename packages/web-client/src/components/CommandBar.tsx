@@ -57,6 +57,8 @@ interface Props {
   /** Content after the toolbar, outside the roving focus (e.g. the selection counter). */
   end?: ReactNode;
   className?: string;
+  /** Hairlines between the groups (default); false = quiet bar without dividers. */
+  dividers?: boolean;
 }
 
 interface OpenMenu { key: string; x: number; y: number; items: ContextMenuItem[]; trigger: HTMLElement }
@@ -160,6 +162,10 @@ function CommandButton({ item, variant, measure = false, tabStop, openKey, descI
         if (dropdownOnly) openMenu(e.currentTarget);
         else item.onClick?.(e.currentTarget);
       }}
+      onKeyDown={measure || !item.menu ? undefined : (e) => {
+        // Alt+↓ opens the dropdown of a split button / dropdown (the main action stays on Enter / Space)
+        if (e.altKey && e.key === 'ArrowDown') { e.preventDefault(); openMenu(e.currentTarget); }
+      }}
       className={`${shape.main} ${iconOnly ? ICON_ONLY : ''} ${common} ${split ? 'rounded-r-none' : ''}`}
     >
       <Label item={item} variant={variant} arrow={dropdownOnly && !iconOnly} iconOnly={iconOnly} />
@@ -209,8 +215,10 @@ function MoreButton({ variant, measure = false, tabStop, open, onOpen }: {
   );
 }
 
-function GroupBox({ group, variant, first, children }: { group: CommandGroup; variant: CommandBarVariant; first: boolean; children: ReactNode }) {
-  const border = first ? '' : 'border-l border-line';
+function GroupBox({ group, variant, first, dividers, children }: {
+  group: CommandGroup; variant: CommandBarVariant; first: boolean; dividers: boolean; children: ReactNode;
+}) {
+  const border = first || !dividers ? '' : 'border-l border-line';
   if (variant === 'ribbon') {
     return (
       <div role="group" aria-label={group.title ?? group.id} className={`${SHAPE.ribbon.group} ${border}`} data-measure-group={group.id}>
@@ -251,7 +259,7 @@ function layoutSignature(groups: CommandGroup[], variant: CommandBarVariant): st
 }
 
 // ── Command bar ───────────────────────────────────────────────────────────────
-export function CommandBar({ label, groups, variant = 'inline', end, className = '' }: Props) {
+export function CommandBar({ label, groups, variant = 'inline', end, className = '', dividers = true }: Props) {
   const baseId = useId();
   const toolbarRef = useRef<HTMLDivElement>(null);
   const measureRef = useRef<HTMLDivElement>(null);
@@ -359,7 +367,7 @@ export function CommandBar({ label, groups, variant = 'inline', end, className =
           const isFirst = firstGroup;
           firstGroup = false;
           return (
-            <GroupBox key={g.id} group={g} variant={variant} first={isFirst}>
+            <GroupBox key={g.id} group={g} variant={variant} first={isFirst} dividers={dividers}>
               {items.map((item) => (
                 <CommandButton
                   key={item.id}
@@ -375,7 +383,7 @@ export function CommandBar({ label, groups, variant = 'inline', end, className =
           );
         })}
         {overflowGroups.length > 0 && (
-          <div className={`flex items-center ${firstGroup ? '' : 'border-l border-line'} px-1`}>
+          <div className={`flex items-center ${firstGroup || !dividers ? '' : 'border-l border-line'} px-1`}>
             <MoreButton variant={variant} {...(tabStop ? { tabStop } : {})} open={menu?.key === MORE_KEY} onOpen={openOverflow} />
           </div>
         )}
@@ -392,7 +400,7 @@ export function CommandBar({ label, groups, variant = 'inline', end, className =
           const items = g.items.filter((i) => i.placement !== 'overflow');
           if (items.length === 0) return null;
           return (
-            <GroupBox key={g.id} group={g} variant={variant} first={gi === 0}>
+            <GroupBox key={g.id} group={g} variant={variant} first={gi === 0} dividers={dividers}>
               {items.map((item) => (
                 <span key={item.id} data-measure-item={item.id} className="inline-flex shrink-0">
                   <CommandButton item={item} variant={variant} measure />
@@ -401,7 +409,7 @@ export function CommandBar({ label, groups, variant = 'inline', end, className =
             </GroupBox>
           );
         })}
-        <span data-measure-more className="inline-flex px-1 border-l border-line">
+        <span data-measure-more className={`inline-flex px-1 ${dividers ? 'border-l border-line' : ''}`}>
           <MoreButton variant={variant} measure />
         </span>
       </div>

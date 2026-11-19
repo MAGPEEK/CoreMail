@@ -56,6 +56,18 @@ test('PreferencesPatchSchema: strict — unknown sections/fields and bad values 
   assert.equal(PreferencesPatchSchema.safeParse({ signatures: { defaults: { 'shared:abc': { newId: 's1', replyId: null } } } }).success, true);
 });
 
+test('compose.composeFormatBar: default on, a boolean only, roams through a patch', () => {
+  assert.equal(DEFAULT_PREFERENCES.compose.composeFormatBar, true);
+  assert.equal(readPreferences({ compose: { format: 'plain' } }).compose.composeFormatBar, true, 'stored before the field existed');
+  assert.equal(readPreferences({ compose: { composeFormatBar: false } }).compose.composeFormatBar, false);
+  assert.equal(readPreferences({ compose: { composeFormatBar: 'off' } }).compose.composeFormatBar, true);
+  assert.equal(PreferencesPatchSchema.safeParse({ compose: { composeFormatBar: false } }).success, true);
+  assert.equal(PreferencesPatchSchema.safeParse({ compose: { composeFormatBar: 'off' } }).success, false);
+  const p = applyPreferencesPatch(readPreferences({}), { compose: { composeFormatBar: false } }, new Date('2026-02-03T04:05:06Z'));
+  assert.equal(p.compose.composeFormatBar, false);
+  assert.equal(p.compose.format, 'html');
+});
+
 test('applyPreferencesPatch: fields replace, other sections stay, migratedAt set once', () => {
   const now = new Date('2026-02-03T04:05:06Z');
   const a = applyPreferencesPatch(readPreferences({}), { view: { density: 'compact' }, regional: { language: 'en' } }, now);

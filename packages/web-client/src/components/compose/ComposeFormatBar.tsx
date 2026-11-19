@@ -1,7 +1,7 @@
 /**
- * 9.4: formatting toolbar below the body (replaces the ribbon tabs): Schrift
- * größer / kleiner, Fett, Kursiv, Unterstrichen, Hervorhebung, Schriftfarbe,
- * Aufzählung, Nummerierung, Einzug and a chevron flyout with everything else
+ * Formatting toolbar at the bottom of the compose card (an inset rounded strip on
+ * the subtle surface): Schrift größer / kleiner, Fett, Kursiv, Unterstrichen,
+ * Hervorhebung, Schriftfarbe, Aufzählung, Nummerierung, Einzug, Link, Emoji and a chevron flyout with everything else
  * (lib/composeToolbar.ts formatFlyout). Shared command bar: one tab stop,
  * ←/→, overflow menu. Not shown in plain-text format.
  */
@@ -11,7 +11,7 @@ import {
   AArrowDown, AArrowUp, AlignCenter, AlignJustify, AlignLeft, AlignRight, ArrowLeftRight, Baseline, Bold, ChevronDown, Code,
   Heading, Highlighter, Image as ImageIcon, IndentDecrease, IndentIncrease, Italic, Link2, List, ListOrdered, Minus,
   Redo2, RemoveFormatting, Strikethrough, Subscript, Superscript, Table as TableIcon, TextQuote, Type, Underline, Undo2,
-  Unlink, ALargeSmall,
+  Unlink, ALargeSmall, Smile,
 } from 'lucide-react';
 import { CommandBar, type CommandItem } from '../CommandBar.js';
 import type { ContextMenuItem } from '../ContextMenu.js';
@@ -30,12 +30,15 @@ import type { TranslationKey } from '../../i18n/translations.js';
 export interface FormatBarActions {
   openLink: () => void;
   insertImage: () => void;
+  openEmoji: (anchor: HTMLElement) => void;
 }
 
 interface Props {
   editor: Editor | null;
   /** Size new text starts with (Settings → Verfassen), the base of Schrift größer / kleiner. */
   defaultSize: string;
+  /** The emoji popover is open (aria-expanded of its button). */
+  emojiOpen: boolean;
   actions: FormatBarActions;
 }
 
@@ -235,6 +238,8 @@ function barItems(e: Editor | null, t: T, p: Props): Record<FormatBarId, Command
     bullets: base('bullets', 'compose_bullets', <List size={ICON} />, { onClick: run((ed) => ed.chain().focus().toggleBulletList().run()), pressed: on('bulletList') }),
     numbering: base('numbering', 'compose_numbering', <ListOrdered size={ICON} />, { onClick: run((ed) => ed.chain().focus().toggleOrderedList().run()), pressed: on('orderedList') }),
     indent: base('indent', 'compose_indent', <IndentIncrease size={ICON} />, { onClick: run((ed) => ed.chain().focus().sinkListItem('listItem').run()) }),
+    link: base('link', 'compose_link', <Link2 size={ICON} />, { onClick: p.actions.openLink, pressed: on('link') }),
+    emoji: base('emoji', 'compose_emoji_title', <Smile size={ICON} />, { onClick: p.actions.openEmoji, dialogOpen: p.emojiOpen }),
   };
 }
 
@@ -247,7 +252,7 @@ export function ComposeFormatBar(p: Props) {
     menu: () => flyoutMenu(p.editor, t, p),
   };
   return (
-    <div className="shrink-0 px-2 py-1 border-t border-line bg-surface">
+    <div className="shrink-0 m-3 mt-0 px-2 py-1 rounded-lg bg-surface-2 text-[13px] [&_[data-roving-stop]:hover]:bg-surface-3">
       <CommandBar
         label={t('compose_format_label')}
         groups={[{ id: 'format', items: [...FORMAT_BAR.map((id) => items[id]), flyout] }]}

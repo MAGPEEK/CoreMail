@@ -1,8 +1,9 @@
 /**
  * 9.4: the compose area — inline in the reading pane (new mail, reply, reply
  * all, forward, a reopened draft) or in its own window (/compose/<draftId>).
- * Command row, fields, status line + attachments, body, formatting toolbar,
- * action bar; files dropped anywhere on it are attached. Server draft
+ * Redesign: a raised card (inline) with the header row (Senden, icons, status,
+ * Verwerfen), the address block, attachments, the body and the formatting bar at
+ * the bottom; files dropped anywhere on it are attached. Server draft
  * semantics are those of 8.1/9.3 (autosave, undo hold, schedule, discard); the
  * inventory and the model are in docs/compose.md. Esc saves and closes,
  * Ctrl/⌘+Enter sends.
@@ -10,11 +11,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { EditorContent } from '@tiptap/react';
-import { Loader2, Paperclip } from 'lucide-react';
+import { Paperclip } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { ComposeCommandRow, type ComposeCommandActions, type ComposeCommandState } from './ComposeCommandRow.js';
+import { ComposeCommandRow, type ComposeCommandActions, type ComposeCommandState, type ComposeStatusLine } from './ComposeCommandRow.js';
 import { ComposeFormatBar } from './ComposeFormatBar.js';
-import { ComposeActionBar } from './ComposeActionBar.js';
 import { MessageOptionsDialog, type MessageOptions } from './MessageOptionsDialog.js';
 import { AccessibilityDialog } from './AccessibilityDialog.js';
 import { ComposeFields } from './ComposeFields.js';
@@ -83,9 +83,16 @@ interface Props {
 }
 
 const ROOT_CLASS: Record<ComposeVariant, string> = {
-  // < 768 px: full screen, above the top bar (z-50, later in the DOM); dialogs and menus stay above it
-  inline: 'relative flex flex-col flex-1 min-w-0 min-h-0 bg-surface max-md:fixed max-md:inset-0 max-md:z-50',
+  // >= 768 px: the card floats on the tinted pane (12 px margin); < 768 px: full screen, above the top bar
+  // (z-50, later in the DOM); dialogs and menus stay above it
+  inline: 'relative flex flex-col flex-1 min-w-0 min-h-0 bg-canvas md:p-3 max-md:bg-surface max-md:fixed max-md:inset-0 max-md:z-50',
   window: 'relative flex flex-col h-full min-h-0 bg-surface',
+};
+
+/** The card itself: raised with a border and a soft shadow inline from 768 px, flat otherwise. */
+const CARD_CLASS: Record<ComposeVariant, string> = {
+  inline: 'relative flex flex-col flex-1 min-w-0 min-h-0 overflow-hidden bg-surface md:rounded-xl md:border md:border-line md:shadow-md',
+  window: 'relative flex flex-col flex-1 min-w-0 min-h-0 bg-surface',
 };
 
 /** The compose area of one draft tab (nothing while the tab does not exist). */
@@ -129,6 +136,8 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
 
   const sender = useComposeSender(mailbox, restore ?? {});
   const composePrefs = usePreferences((s) => s.prefs.compose);
+  const density = usePreferences((s) => s.prefs.view.density);
+  const updatePreferences = usePreferences((s) => s.update);
   const receiptOption = receiptRequestOption(usePreferences((s) => s.prefs.reading.requestReceipts));
   const regional = useRegional();
   const { sendDelaySec } = useUiPrefs();
@@ -647,6 +656,7 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
     checkNames: () => { void checkNames(); },
     setImportance: (level) => { setImportance(level); touch(); },
     togglePlain,
+    toggleFormatBar: () => updatePreferences({ compose: { composeFormatBar: !composePrefs.composeFormatBar } }),
     openOptions: () => setDialog({ kind: 'options' }),
     checkAccessibility: openAccessibilityCheck,
     popOut: () => { void popOut(); },
@@ -676,12 +686,14 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
       : status.kind === 'failed' ? t('draft_save_failed')
         : status.kind === 'locked' ? t('draft_locked')
           : status.kind === 'savedAt' ? fmt(t('draft_saved_at'), { time: formatTime(status.at, regional) }) : '';
+  const statusLine: ComposeStatusLine = { text: statusText, failed: status.kind === 'failed', busy: status.kind === 'loading' || busy };
+  const formatBarShown = formatBarVisible(plainText, composePrefs.composeFormatBar);
   const sendBlockedReason = busy ? t('compose_send_busy') : blockers.missingTo ? t('compose_send_need_to') : undefined;
   const quoteShown = hasQuotedOriginal(editor);
   const commandState: ComposeCommandState = {
     canSend, sendBlockedReason, plainText, importance, signatures: signature.signatures,
     fromShown: visibility.from, fromAutomatic: visibility.fromAutomatic, checkingNames,
-    emojiOpen: popover?.kind === 'emoji', inWindow: variant === 'window',
+    emojiOpen: popover?.kind === 'emoji', formatBarShown, inWindow: variant === 'window',
   };
 
   return (
@@ -700,67 +712,66 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
       }}
       className={ROOT_CLASS[variant]}
     >
-      <ComposeCommandRow state={commandState} actions={commandActions} />
-      <div className="flex-1 min-h-0 overflow-y-auto">
-        <ComposeFields
-          visibility={visibility}
-          senders={sender.choices}
-          sender={sender.selected}
-          onSender={(key) => { sender.setFromKey(key); touch(); }}
-          to={to} cc={cc} bcc={bcc}
-          onTo={edited(setTo, true)} onCc={edited(setCc, true)} onBcc={edited(setBcc, true)}
-          onShowCc={() => { setShowCc(true); requestAnimationFrame(() => refs.cc.current?.focus()); }}
-          onShowBcc={() => { setShowBcc(true); requestAnimationFrame(() => refs.bcc.current?.focus()); }}
-          subject={subject}
-          onSubject={edited(setSubject)}
-          onAnnounce={announce}
-          unresolved={unresolved}
-          refs={refs}
-        />
-        <div className="px-3 py-2 space-y-2 border-b border-line">
-          <p role="status" aria-live="polite" className={`text-xs min-h-[1rem] flex items-center gap-1.5 ${status.kind === 'failed' ? 'text-danger-fg' : 'text-fg-subtle'}`}>
-            {(status.kind === 'loading' || busy) && <Loader2 size={12} className="animate-spin" aria-hidden="true" />}
-            {statusText}
-          </p>
-          <AttachmentChips attachments={attachments} onRemove={(i) => { setAttachments((prev) => prev.filter((_, idx) => idx !== i)); touch(); }} />
-        </div>
-        <div className="relative">
-          {editor?.isEmpty && (
-            <p aria-hidden="true" className="absolute left-4 top-3 text-sm text-fg-subtle pointer-events-none select-none">
-              {t('compose_body_placeholder')}
-            </p>
+      <div className={CARD_CLASS[variant]}>
+        <ComposeCommandRow state={commandState} actions={commandActions} status={statusLine} />
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          <ComposeFields
+            visibility={visibility}
+            density={density}
+            senders={sender.choices}
+            sender={sender.selected}
+            onSender={(key) => { sender.setFromKey(key); touch(); }}
+            to={to} cc={cc} bcc={bcc}
+            onTo={edited(setTo, true)} onCc={edited(setCc, true)} onBcc={edited(setBcc, true)}
+            onShowCc={() => { setShowCc(true); requestAnimationFrame(() => refs.cc.current?.focus()); }}
+            onShowBcc={() => { setShowBcc(true); requestAnimationFrame(() => refs.bcc.current?.focus()); }}
+            subject={subject}
+            onSubject={edited(setSubject)}
+            onAnnounce={announce}
+            unresolved={unresolved}
+            refs={refs}
+          />
+          {attachments.length > 0 && (
+            <div className="px-4 pt-3">
+              <AttachmentChips attachments={attachments} onRemove={(i) => { setAttachments((prev) => prev.filter((_, idx) => idx !== i)); touch(); }} />
+            </div>
           )}
-          <EditorContent editor={editor} className={`${COMPOSE_EDITOR_CLASS} ${quoteFolded ? QUOTE_FOLDED_CLASS : ''}`} />
+          <div className="relative">
+            {editor?.isEmpty && (
+              <p aria-hidden="true" className="absolute left-6 top-4 text-[15px] leading-[1.6] text-fg-subtle pointer-events-none select-none">
+                {t('compose_body_placeholder')}
+              </p>
+            )}
+            <EditorContent editor={editor} className={`${COMPOSE_EDITOR_CLASS} ${quoteFolded ? QUOTE_FOLDED_CLASS : ''}`} />
+          </div>
+          {quoteShown && (
+            <div className="px-6 pb-4">
+              <button
+                type="button"
+                aria-expanded={!quoteFolded}
+                onClick={() => setQuoteFolded((v) => !v)}
+                className="px-3 h-6 rounded-full border border-line-strong text-fg-muted hover:bg-surface-2 text-[13px] leading-none"
+              >
+                <span aria-hidden="true">… </span>{t(quoteFolded ? 'compose_quote_show' : 'compose_quote_hide')}
+              </button>
+            </div>
+          )}
         </div>
-        {quoteShown && (
-          <div className="px-4 pb-4">
-            <button
-              type="button"
-              aria-expanded={!quoteFolded}
-              onClick={() => setQuoteFolded((v) => !v)}
-              title={t(quoteFolded ? 'compose_quote_show' : 'compose_quote_hide')}
-              aria-label={t(quoteFolded ? 'compose_quote_show' : 'compose_quote_hide')}
-              className="px-2 py-0.5 rounded border border-line-strong text-fg-muted hover:bg-surface-2 text-sm leading-none"
-            >
-              …
-            </button>
+        {formatBarShown && (
+          <ComposeFormatBar
+            editor={editor}
+            defaultSize={composeTextDefaults(composePrefs).fontSize}
+            emojiOpen={popover?.kind === 'emoji'}
+            actions={{ openLink, insertImage: commandActions.insertImage, openEmoji: commandActions.openEmoji }}
+          />
+        )}
+
+        {dragging && (
+          <div className="absolute inset-0 z-20 flex items-center justify-center bg-surface/90 border-2 border-dashed border-accent-fg pointer-events-none">
+            <p className="flex items-center gap-2 text-sm font-medium text-accent-fg"><Paperclip size={16} aria-hidden="true" /> {t('compose_drop')}</p>
           </div>
         )}
       </div>
-      {formatBarVisible(plainText) && (
-        <ComposeFormatBar
-          editor={editor}
-          defaultSize={composeTextDefaults(composePrefs).fontSize}
-          actions={{ openLink, insertImage: commandActions.insertImage }}
-        />
-      )}
-      <ComposeActionBar state={commandState} actions={commandActions} />
-
-      {dragging && (
-        <div className="absolute inset-0 z-20 flex items-center justify-center bg-surface/90 border-2 border-dashed border-accent-fg pointer-events-none">
-          <p className="flex items-center gap-2 text-sm font-medium text-accent-fg"><Paperclip size={16} aria-hidden="true" /> {t('compose_drop')}</p>
-        </div>
-      )}
       <input ref={fileInput} type="file" multiple hidden onChange={(e) => { addFiles(Array.from(e.target.files ?? [])); e.target.value = ''; }} />
       <input ref={imageInput} type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden
         onChange={(e) => { const f = e.target.files?.[0]; if (f) insertImage(f); e.target.value = ''; }} />

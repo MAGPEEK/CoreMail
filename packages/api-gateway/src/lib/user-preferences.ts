@@ -75,6 +75,7 @@ const FIELDS = {
     fontFamily: z.enum(['', 'Arial', 'Calibri', 'Georgia', 'Times New Roman', 'Courier New', 'Verdana', 'Trebuchet MS']),
     fontSize: z.enum(['', '10px', '12px', '14px', '16px', '18px']),
     attachmentReminder: z.boolean(),
+    composeFormatBar: z.boolean(),
   },
   calendar: {
     workDays: z.array(z.number().int().min(0).max(6)).max(7).refine((d) => new Set(d).size === d.length, 'duplicate day'),
@@ -114,7 +115,7 @@ export const DEFAULT_PREFERENCES: UserPreferences = Object.freeze({
     markRead: 'immediately', markReadDelaySec: 5,
     requestReceipts: 'never', answerReceipts: 'ask', emptyTrashOnLogout: false,
   },
-  compose: { format: 'html', fontFamily: '', fontSize: '', attachmentReminder: true },
+  compose: { format: 'html', fontFamily: '', fontSize: '', attachmentReminder: true, composeFormatBar: true },
   calendar: {
     workDays: [1, 2, 3, 4, 5], workStart: '08:00', workEnd: '17:00', weekStart: 1,
     defaultReminderMinutes: 15, slotMinutes: 30, defaultEventMinutes: 30,
