@@ -232,6 +232,15 @@ test('resources: list, 404, bookings must belong to the resource', async () => {
   assert.deepEqual([c.status, c.json['code']], [403, OUT_OF_SCOPE], 'address of another domain');
 });
 
+test('9.5 resources: "send replies" (answers to mailed invitations) can be switched; only a boolean is accepted', async () => {
+  const off = await call('rmA', 'PUT', '/resources/resA', { sendReplies: false });
+  assert.deepEqual([off.status, off.json['sendReplies']], [200, false]);
+  const bad = await call('rmA', 'PUT', '/resources/resA', { sendReplies: 'no' });
+  assert.equal(bad.status, 400);
+  const on = await call('rmA', 'PUT', '/resources/resA', { sendReplies: true });
+  assert.deepEqual([on.status, on.json['sendReplies']], [200, true]);
+});
+
 test('aliases: alias domain and target must be in scope', async () => {
   assert.deepEqual(ids((await call('hdA', 'GET', '/aliases')).json), ['alA', 'alAdm']);
   assert.deepEqual((await call('rmA', 'PATCH', '/aliases/alB', { active: false })).json, NOT_FOUND);

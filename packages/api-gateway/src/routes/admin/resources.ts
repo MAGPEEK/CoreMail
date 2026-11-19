@@ -55,6 +55,8 @@ const CreateResourceSchema = z.object({
   maxDurationMinutes: z.number().int().positive().optional(),
   bookingWindowDays: z.number().int().default(180),
   requireApproval: z.boolean().default(false),
+  /** 9.5: automatic reply to the organizer of an invitation that arrives by mail. */
+  sendReplies: z.boolean().default(true),
   delegateIds: z.array(z.string()).default([]),
 });
 
@@ -68,7 +70,7 @@ adminResourcesRouter.post('/', async (req: Request, res: Response) => {
 
   const { email, displayName, resourceType, domainId, capacity, location, phone,
     autoAccept, autoDeclineConflict, allowRecurring, maxDurationMinutes,
-    bookingWindowDays, requireApproval, delegateIds } = parsed.data;
+    bookingWindowDays, requireApproval, sendReplies, delegateIds } = parsed.data;
   // 9.5: a scoped admin creates resources only in its own domains (domain and address)
   if (!allowDomain(req, res, domainId) || !allowAddress(req, res, email)) return;
 
@@ -96,7 +98,7 @@ adminResourcesRouter.post('/', async (req: Request, res: Response) => {
       data: {
         email, displayName, resourceType, domainId,
         location, phone, autoAccept, autoDeclineConflict, allowRecurring,
-        bookingWindowDays, requireApproval, delegateIds,
+        bookingWindowDays, requireApproval, sendReplies, delegateIds,
         mailboxId: mailbox.id,
         ...(capacity !== undefined ? { capacity } : {}),
         ...(maxDurationMinutes !== undefined ? { maxDurationMinutes } : {}),
@@ -120,6 +122,7 @@ const UpdateResourceSchema = z.object({
   maxDurationMinutes: z.number().int().positive().optional(),
   bookingWindowDays: z.number().int().optional(),
   requireApproval: z.boolean().optional(),
+  sendReplies: z.boolean().optional(),
   delegateIds: z.array(z.string()).optional(),
   active: z.boolean().optional(),
 });
@@ -138,7 +141,7 @@ adminResourcesRouter.put('/:id', async (req: Request, res: Response) => {
 
   const { displayName, capacity, location, phone, autoAccept, autoDeclineConflict,
     allowRecurring, maxDurationMinutes, bookingWindowDays, requireApproval,
-    delegateIds, active } = parsed.data;
+    sendReplies, delegateIds, active } = parsed.data;
   const resource = await prisma.resourceMailbox.update({
     where: { id },
     data: {
@@ -152,6 +155,7 @@ adminResourcesRouter.put('/:id', async (req: Request, res: Response) => {
       ...(maxDurationMinutes !== undefined ? { maxDurationMinutes } : {}),
       ...(bookingWindowDays !== undefined ? { bookingWindowDays } : {}),
       ...(requireApproval !== undefined ? { requireApproval } : {}),
+      ...(sendReplies !== undefined ? { sendReplies } : {}),
       ...(delegateIds !== undefined ? { delegateIds } : {}),
       ...(active !== undefined ? { active } : {}),
     },

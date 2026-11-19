@@ -84,6 +84,11 @@ export function parseHeaderBlock(raw: Buffer | string): HeaderMap {
 
 const AUTOMATED_LOCALPART = /^(mailer-daemon|listserv|majordomo|no-?reply|do-?not-?reply|bounces?|owner-.+|.+-request|.+-owner|.+-bounces?)$/i;
 
+/** Pure: a typical automated sender (MAILER-DAEMON, *-request, owner-*, noreply …) — never answered automatically. */
+export function isAutomatedSender(address: string): boolean {
+  return AUTOMATED_LOCALPART.test(address.slice(0, address.lastIndexOf('@')));
+}
+
 export function bareAddress(v: string): string {
   const m = /<([^>]*)>/.exec(v);
   return (m ? m[1]! : v).trim().toLowerCase();
@@ -120,6 +125,23 @@ export type AutoReplyDecision =
   | { send: true; body: string; audience: 'internal' | 'external' }
   | { send: false; reason: string };
 
+const LIST_HEADERS = ['list-id', 'list-unsubscribe', 'list-post', 'list-help', 'list-subscribe', 'list-owner', 'list-archive'];
+
+/**
+ * Pure: why a message must not get an automatic answer — automatically submitted
+ * (`Auto-Submitted` ≠ `no`), bulk / list precedence, mailing-list headers, or an
+ * `X-Auto-Response-Suppress` value matching `suppress` — null when none applies.
+ */
+export function automaticMailReason(headers: HeaderMap, suppress: RegExp): string | null {
+  const h = (n: string) => headers.get(n) ?? [];
+  const autoSubmitted = h('auto-submitted').map((v) => v.split(';')[0]!.trim().toLowerCase());
+  if (autoSubmitted.some((v) => v !== 'no')) return 'auto-submitted';
+  if (h('precedence').some((v) => /^(bulk|list|junk)$/i.test(v.trim()))) return 'precedence';
+  if (LIST_HEADERS.some((name) => h(name).length > 0)) return 'mailing list';
+  if (h('x-auto-response-suppress').some((v) => suppress.test(v))) return 'suppressed';
+  return null;
+}
+
 /** Pure RFC 3834 decision (without the per-sender rate limit). */
 export function decideAutoReply(i: AutoReplyInput): AutoReplyDecision {
   const s = i.settings;
@@ -131,17 +153,11 @@ export function decideAutoReply(i: AutoReplyInput): AutoReplyDecision {
   const sender = bareAddress(i.envelopeFrom);
   if (!sender || !sender.includes('@')) return { send: false, reason: 'null sender' };
   if (i.ownAddresses.includes(sender)) return { send: false, reason: 'own address' };
-  if (AUTOMATED_LOCALPART.test(sender.slice(0, sender.lastIndexOf('@')))) return { send: false, reason: 'automated sender' };
+  if (isAutomatedSender(sender)) return { send: false, reason: 'automated sender' };
   if (i.deliveredToJunk) return { send: false, reason: 'junk' };
 
-  const h = (n: string) => i.headers.get(n) ?? [];
-  const autoSubmitted = h('auto-submitted').map((v) => v.split(';')[0]!.trim().toLowerCase());
-  if (autoSubmitted.some((v) => v !== 'no')) return { send: false, reason: 'auto-submitted' };
-  if (h('precedence').some((v) => /^(bulk|list|junk)$/i.test(v.trim()))) return { send: false, reason: 'precedence' };
-  for (const name of ['list-id', 'list-unsubscribe', 'list-post', 'list-help', 'list-subscribe', 'list-owner', 'list-archive']) {
-    if (h(name).length > 0) return { send: false, reason: 'mailing list' };
-  }
-  if (h('x-auto-response-suppress').some((v) => /\b(all|oof)\b/i.test(v))) return { send: false, reason: 'suppressed' };
+  const automatic = automaticMailReason(i.headers, /\b(all|oof)\b/i);
+  if (automatic) return { send: false, reason: automatic };
   // §2: no personal response unless one of the recipient's addresses is
   // explicitly listed in a recipient field (Bcc'd copies, list exploders
   // without List-* headers).
