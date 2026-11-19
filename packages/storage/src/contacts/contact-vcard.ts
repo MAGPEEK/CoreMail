@@ -157,6 +157,31 @@ export function contactCardFromVcard(vcard: string): ContactCard {
   return doc ? cardFromDoc(doc) : finalizeContactCard(emptyContactCard());
 }
 
+/** The flat columns a `contacts` row may carry next to its vCard. */
+export type ContactRowFlat = { vcardData: string } & Partial<Record<keyof FlatContactColumns, string | null>>;
+
+/**
+ * The card of a `contacts` row: read from its vCard. A row whose vcardData
+ * holds no vCard at all (written outside today's writers) falls back to its
+ * flat columns, so the next write of the row keeps what it showed.
+ */
+export function contactCardFromRow(row: ContactRowFlat): ContactCard {
+  if (parseVcard(row.vcardData)) return contactCardFromVcard(row.vcardData);
+  const v = (k: keyof FlatContactColumns): string => (row[k] ?? '').trim();
+  const typedOf = <T extends string>(pairs: Array<[T, string]>) => pairs.filter(([, value]) => value).map(([type, value]) => ({ type, value }));
+  return finalizeContactCard({
+    ...emptyContactCard(),
+    displayName: v('displayName'),
+    name: namePartsFromDisplayName(v('displayName')),
+    company: v('company'),
+    department: v('department'),
+    jobTitle: v('jobTitle'),
+    notes: v('notes'),
+    emails: typedOf<ContactEmailType>([['other', v('email')], ['other', v('email2')]]),
+    phones: typedOf<ContactPhoneType>([['other', v('phone')], ['mobile', v('mobile')]]),
+  });
+}
+
 /** The vCard UID as group members reference it ("" when absent). */
 export function vcardUidKey(vcard: string): string {
   const uid = parseVcard(vcard)?.properties.find((p) => p.name === 'UID');

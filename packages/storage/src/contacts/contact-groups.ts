@@ -5,7 +5,9 @@
  */
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../prisma/index.js';
-import { applyContactCard, contactCardFromVcard, contactColumnsFromVcard, uidKey, vcardUidKey } from './contact-vcard.js';
+import {
+  applyContactCard, contactCardFromRow, contactColumnsFromVcard, uidKey, vcardUidKey, type ContactRowFlat,
+} from './contact-vcard.js';
 import {
   applyContactGroup, contactGroupFromVcard, expandGroupMembers, membersFromJson, uniqueMembers, GROUP_NESTING_LIMIT,
   type ContactGroupMember, type GroupExpansion, type ResolvedCard,
@@ -77,10 +79,16 @@ export async function resolveCards(userId: string, uids: readonly string[]): Pro
   for (const c of contacts) out.set(c.uid, { kind: 'contact', id: c.id, uid: c.uid, displayName: c.displayName, email: c.email });
   for (const g of groups) out.set(g.uid, { kind: 'group', id: g.id, uid: g.uid, name: g.name, members: membersFromJson(g.members) });
   if (wanted.every((u) => out.has(u))) return out;
-  const legacy = await prisma.contact.findMany({ where: { userId, uid: '' }, select: { id: true, vcardData: true, displayName: true, email: true } });
+  const legacy = await prisma.contact.findMany({
+    where: { userId, uid: '' }, select: { id: true, vcardData: true, displayName: true, email: true, updatedAt: true },
+  });
   for (const c of legacy) {
     const uid = vcardUidKey(c.vcardData);
-    if (uid && wanted.includes(uid) && !out.has(uid)) out.set(uid, { kind: 'contact', id: c.id, uid, displayName: c.displayName, email: c.email });
+    if (!uid) continue;
+    // Review 9.5: fill the column once, so the next lookup finds the row by index
+    // instead of reading every pre-9.5 vCard again (updatedAt kept: no new ETag).
+    await prisma.contact.update({ where: { id: c.id }, data: { uid, updatedAt: c.updatedAt } });
+    if (wanted.includes(uid) && !out.has(uid)) out.set(uid, { kind: 'contact', id: c.id, uid, displayName: c.displayName, email: c.email });
   }
   return out;
 }
@@ -103,10 +111,10 @@ export async function expandContactGroup(userId: string, members: readonly Conta
  * (created before 7.1) gets one written into its vCard; a pre-9.5 row gets
  * its `uid` column filled.
  */
-export async function ensureContactUid(contact: { id: string; uid: string; vcardData: string }): Promise<string> {
+export async function ensureContactUid(contact: { id: string; uid: string } & ContactRowFlat): Promise<string> {
   if (contact.uid) return contact.uid;
   const existing = vcardUidKey(contact.vcardData);
-  const vcardData = existing ? contact.vcardData : applyContactCard(contact.vcardData, contactCardFromVcard(contact.vcardData));
+  const vcardData = existing ? contact.vcardData : applyContactCard(contact.vcardData, contactCardFromRow(contact));
   const columns = contactColumnsFromVcard(vcardData);
   await prisma.contact.update({ where: { id: contact.id }, data: { vcardData, ...contactRowData(columns) } });
   return columns.uid;

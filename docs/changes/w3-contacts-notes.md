@@ -13,5 +13,6 @@
 - A webmail edit of a contact rewrites only the vCard properties whose field changed; a changed e-mail / phone keeps the line's group and parameters (Apple labels, PREF).
 - Deleting a contact (REST or CardDAV) removes it from every contact group.
 - CardDAV: a PUT that would turn a contact into a group (or back) is refused with 409; vCard UIDs are unique across contacts and groups.
-- `PUT/POST /api/v1/notes` validate `color` (`YELLOW BLUE GREEN PINK PURPLE`); other values are refused with 400.
+- `PUT/POST /api/v1/notes` validate `color` (`YELLOW BLUE GREEN PINK PURPLE`, any case, stored upper-case); a colour a note already has is accepted unchanged; other new values are refused with 400 (before 9.5 any string was stored — API clients that send other colours get 400).
+- `PUT /api/v1/contacts/:id` validates only what changes: unchanged fields and values the contact already holds (stored by a CardDAV client) pass as they are; the webmail form checks the same way.
 - `@coremail/core/vcard` keeps only the parser (`parseVcard`, `serializeVcard`, `vcardProperty`, `splitStructured`, `countVcards`, `vcardUid`); `vcardFields`, `patchVcard`, `buildVcard` moved to `@coremail/storage` contacts (internal API).

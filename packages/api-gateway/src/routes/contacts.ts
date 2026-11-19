@@ -1,13 +1,14 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import {
   prisma, GAL_VISIBLE_WHERE, isWebmailFeatureEnabled,
-  applyContactCard, applyContactPatch, contactCardFromVcard, contactColumnsFromVcard, contactRowData, detachCardFromGroups,
-  emptyContactCard, flatContactColumns, isGroupVcard, membersFromJson, sameContactCard, vcardUidKey,
+  applyContactCard, applyContactPatch, contactCardFromRow, contactCardFromVcard, contactColumnsFromVcard, contactRowData, detachCardFromGroups,
+  emptyContactCard, flatContactColumns, isGroupVcard, membersFromJson, sameContactCard, vcardUidKey, type ContactRowFlat,
 } from '@coremail/storage';
-import { parseVcard } from '@coremail/core/vcard';
 import { protocolSubject, requireAuth } from '../middleware/auth.js';
 import { announceOnWrite } from '../lib/realtime.js';
-import { ContactCreateSchema, ContactUpdateSchema, contactPatchFromInput, firstIssue } from '../lib/contact-input.js';
+import {
+  ContactCreateSchema, contactPatchFromInput, contactUpdateSchema, firstIssue, withoutUnchangedFields,
+} from '../lib/contact-input.js';
 import { contactGroupsRouter } from './contact-groups.js';
 
 export const contactsRouter: RouterType = Router();
@@ -183,7 +184,7 @@ contactsRouter.get('/gal', async (req: Request, res: Response) => {
 // 9.5: contact groups ("Kontaktlisten") — registered BEFORE `/:id`
 contactsRouter.use('/groups', contactGroupsRouter);
 
-type ContactRow = { vcardData: string; searchText?: string } & Record<string, unknown>;
+type ContactRow = ContactRowFlat & { searchText?: string } & Record<string, unknown>;
 
 /**
  * A contact as the API returns it: the row plus the structured fields read
@@ -192,8 +193,7 @@ type ContactRow = { vcardData: string; searchText?: string } & Record<string, un
  */
 function contactView(row: ContactRow): Record<string, unknown> {
   const { searchText: _searchText, ...rest } = row;
-  if (!parseVcard(row.vcardData)) return rest;
-  const card = contactCardFromVcard(row.vcardData);
+  const card = contactCardFromRow(row);
   return { ...rest, ...card, ...flatContactColumns(card) };
 }
 
@@ -232,14 +232,17 @@ contactsRouter.post('/', async (req: Request, res: Response) => {
 // v7.1.0: the stored vCard is PATCHED, not rebuilt — PHOTO/UID/X-… and every other
 // property a CardDAV client stored survive a webmail edit (RFC 6352 §6.3.2).
 // 9.5: only the properties whose field changed are rewritten (storage contact-vcard.ts).
+// Review 9.5: fields the body repeats unchanged are dropped before validation and
+// values the contact already holds pass as they are — data a CardDAV client stored
+// (a URL without scheme, a long note, many entries) never blocks a webmail edit.
 contactsRouter.put('/:id', async (req: Request, res: Response) => {
-  const parsed = ContactUpdateSchema.safeParse(req.body);
-  if (!parsed.success) { res.status(400).json({ error: 'Invalid request', ...firstIssue(parsed.error) }); return; }
-
   const contact = await findOwnContact(req.apiUser!.userId, String(req.params['id']));
   if (!contact) { res.status(404).json({ error: 'Contact not found' }); return; }
 
-  const current = contactCardFromVcard(contact.vcardData);
+  const current = contactCardFromRow(contact);
+  const parsed = contactUpdateSchema(current).safeParse(withoutUnchangedFields(req.body, current));
+  if (!parsed.success) { res.status(400).json({ error: 'Invalid request', ...firstIssue(parsed.error) }); return; }
+
   const card = applyContactPatch(current, contactPatchFromInput(parsed.data));
   if (!card.displayName) { res.status(400).json({ error: 'Invalid request', field: 'displayName', message: 'Name fehlt' }); return; }
   if (sameContactCard(card, current) && vcardUidKey(contact.vcardData)) {

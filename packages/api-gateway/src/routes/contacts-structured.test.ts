@@ -219,3 +219,72 @@ test('groups are per user: another user can neither read, expand, change nor ref
   assert.equal((await call('POST', '/', { displayName: 'G', vcardData: 'BEGIN:VCARD\r\nVERSION:4.0\r\nKIND:group\r\nFN:G\r\nEND:VCARD\r\n' })).status, 400,
     'a group vCard is no contact');
 });
+
+// ─── Review 9.5: existing data ───────────────────────────────────────────────
+
+/** A contact a CardDAV client stored: values the strict REST checks would refuse for new input. */
+function storeCardDavContact(id: string): void {
+  const tels = Array.from({ length: 22 }, (_, i) => `TEL;TYPE=WORK:+49 30 ${1000 + i}`);
+  const vcardData = [
+    'BEGIN:VCARD', 'VERSION:3.0', 'UID:CDAV-1', 'FN:Karl Alt', 'N:Alt;Karl;;;', 'ORG:Altfirma',
+    'EMAIL;TYPE=INTERNET:karl@intranet', ...tels, 'URL:www.altfirma.example', `NOTE:${'x'.repeat(12_000)}`,
+    `CATEGORIES:${'K'.repeat(80)}`, 'X-CUSTOM:bleibt', 'END:VCARD', '',
+  ].join('\r\n');
+  contact.rows.push({ id, userId: 'alice', vcardData, uid: '', searchText: '', displayName: 'Karl Alt', email: 'karl@intranet', updatedAt: tick() });
+}
+
+test('a CardDAV contact with values the checks refuse stays editable: the webmail form round trip changes one field only', async () => {
+  storeCardDavContact('cdav-1');
+  const view = (await call('GET', '/cdav-1')).json;
+  assert.equal(view.phones.length, 22);
+  // The webmail sends the whole form back (contactPayload) with one changed field
+  const form = {
+    displayName: view.displayName, name: view.name, nickname: view.nickname, fileAs: view.fileAs, company: view.company,
+    department: view.department, jobTitle: 'Neu', emails: view.emails, phones: view.phones, addresses: view.addresses,
+    urls: view.urls, ims: view.ims, birthday: view.birthday, anniversary: view.anniversary, categories: view.categories, notes: view.notes,
+  };
+  const r = await call('PUT', '/cdav-1', form);
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.equal(r.json.jobTitle, 'Neu');
+  const vcard = String(contact.rows.find((c) => c['id'] === 'cdav-1')!['vcardData']).replace(/\r\n[ \t]/g, '');
+  for (const kept of ['URL:www.altfirma.example', 'EMAIL;TYPE=INTERNET:karl@intranet', 'X-CUSTOM:bleibt', 'TEL;TYPE=WORK:+49 30 1021']) {
+    assert.ok(vcard.includes(kept), `${kept} kept`);
+  }
+
+  // Replacing one of the 22 phones: the stored count passes, growing past it does not
+  const swapped = await call('PUT', '/cdav-1', { phones: [...view.phones.slice(1), { type: 'home', value: '+49 40 1' }] });
+  assert.equal(swapped.status, 200, JSON.stringify(swapped.json));
+  assert.equal(swapped.json.phones.length, 22);
+  const more = await call('PUT', '/cdav-1', { phones: [...swapped.json.phones, { type: 'home', value: '+49 40 2' }] });
+  assert.deepEqual([more.status, more.json.field], [400, 'phones']);
+  const badNew = await call('PUT', '/cdav-1', { urls: [...view.urls, { type: 'work', value: 'javascript:alert(1)' }] });
+  assert.deepEqual([badNew.status, badNew.json.field], [400, 'urls.1.value'], 'a new value is still checked');
+  const changedOld = await call('PUT', '/cdav-1', { urls: [{ type: 'work', value: 'www.anders.example' }] });
+  assert.equal(changedOld.status, 400, 'a changed value is new input');
+});
+
+test('a row without a readable vCard keeps its flat columns on read and on the next write', async () => {
+  contact.rows.push({
+    id: 'flat-1', userId: 'alice', vcardData: '', uid: '', searchText: '', displayName: 'Flach Mann', email: 'flach@x.example',
+    email2: '', phone: '+49 30 1', mobile: '+49 170 2', company: 'Flachbau', department: '', jobTitle: '', notes: 'alt', updatedAt: tick(),
+  });
+  const view = (await call('GET', '/flat-1')).json;
+  assert.deepEqual(view.emails, [{ type: 'other', value: 'flach@x.example' }]);
+  assert.deepEqual(view.phones, [{ type: 'other', value: '+49 30 1' }, { type: 'mobile', value: '+49 170 2' }]);
+  const r = await call('PUT', '/flat-1', { jobTitle: 'Chef' });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  const row = contact.rows.find((c) => c['id'] === 'flat-1')!;
+  assert.deepEqual([row['email'], row['phone'], row['mobile'], row['company'], row['notes'], row['jobTitle']],
+    ['flach@x.example', '+49 30 1', '+49 170 2', 'Flachbau', 'alt', 'Chef']);
+  assert.equal(contactCardFromVcard(String(row['vcardData'])).emails.length, 1, 'the new vCard carries the e-mail');
+});
+
+test('a uid member pointing at another user\'s contact never expands to it', async () => {
+  const secret = (await call('POST', '/', { displayName: 'Geheim B', emails: [{ type: 'work', value: 'geheim@x.example' }] })).json;
+  const uid = String(contact.rows.find((c) => c['id'] === secret.id)!['uid']);
+  const g = await call('POST', '/groups', { name: 'Fremd', members: [{ uid }] }, 'mallory');
+  assert.equal(g.status, 201);
+  assert.deepEqual(g.json.members, [{ kind: 'missing', uid }]);
+  const exp = await call('GET', `/groups/${g.json.id}/expand`, undefined, 'mallory');
+  assert.deepEqual(exp.json.recipients, []);
+});

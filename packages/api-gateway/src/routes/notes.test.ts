@@ -79,3 +79,18 @@ test('update changes only what is sent; category filter; invalid colour / catego
   assert.equal((await call('POST', '/', { subject: 'x', categories: ['ok', ''] })).status, 400);
   assert.equal((await call('POST', '/', { subject: 'x', categories: ['a\nb'] })).status, 400);
 });
+
+// Review 9.5: colours stored before the validation (any string was accepted) stay saveable
+test('a note with a pre-9.5 colour can be saved with that colour; known colours are case-insensitive', async () => {
+  notes.push({ id: 'old-1', userId: 'alice', subject: 'Alt', body: '', color: 'white', categories: [], updatedAt: new Date() });
+  const same = await call('PUT', '/old-1', { subject: 'Alt 2', body: '', color: 'white', categories: [] });
+  assert.equal(same.status, 200);
+  assert.deepEqual([same.json.subject, same.json.color], ['Alt 2', 'white']);
+  assert.equal((await call('PUT', '/old-1', { color: 'black' })).status, 400);
+  const lower = await call('PUT', '/old-1', { color: 'blue' });
+  assert.equal(lower.json.color, 'BLUE');
+  const created = await call('POST', '/', { subject: 'klein', color: 'pink' });
+  assert.deepEqual([created.status, created.json.color], [201, 'PINK']);
+  const refused = await call('POST', '/', { subject: 'x', color: 'ORANGE' });
+  assert.deepEqual([refused.status, refused.json.field], [400, 'color']);
+});

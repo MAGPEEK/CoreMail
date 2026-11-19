@@ -33,16 +33,40 @@ export function isGroupVcard(vcard: string): boolean {
   return !!doc && isGroupDoc(doc);
 }
 
-/** `urn:uuid:<uid>` / `mailto:<address>` → member; anything else is a card UID as written. */
+// eslint-disable-next-line no-control-regex
+const CONTROL = /[\x00-\x1f\x7f]/;
+
+/**
+ * A member address that may be stored and written back: one line, no blanks,
+ * one "@". Percent-decoding a client's `mailto:` URI must never yield CR/LF
+ * (written back by a later group edit it would inject vCard properties) or
+ * other control characters.
+ */
+export function isMemberAddress(address: string): boolean {
+  return address.length <= 254 && !CONTROL.test(address) && !/\s/.test(address) && /^[^@]+@[^@]+$/.test(address);
+}
+
+/** A card UID that is safe to write back as `urn:uuid:<uid>`. */
+const isMemberUid = (uid: string): boolean => uid.length <= 500 && !CONTROL.test(uid);
+
+function decodeMailto(value: string): string | null {
+  try {
+    return decodeURIComponent(value.slice(7).split('?')[0] ?? '').trim();
+  } catch {
+    return null; // malformed percent-encoding
+  }
+}
+
+/** `urn:uuid:<uid>` / `mailto:<address>` → member; anything else is a card UID as written. Unsafe values → null. */
 export function memberFromUri(raw: string): ContactGroupMember | null {
   const v = raw.trim();
   if (!v) return null;
   if (/^mailto:/i.test(v)) {
-    const address = decodeURIComponent(v.slice(7).split('?')[0] ?? '').trim();
-    return address ? { kind: 'address', address, name: '' } : null;
+    const address = decodeMailto(v);
+    return address && isMemberAddress(address) ? { kind: 'address', address, name: '' } : null;
   }
   const uid = uidKey(v);
-  return uid ? { kind: 'card', uid } : null;
+  return uid && isMemberUid(uid) ? { kind: 'card', uid } : null;
 }
 
 export function memberUri(m: ContactGroupMember): string {
@@ -186,9 +210,10 @@ export function membersFromJson(raw: unknown): ContactGroupMember[] {
   for (const e of raw) {
     if (!e || typeof e !== 'object') continue;
     const r = e as Record<string, unknown>;
-    if (r['kind'] === 'card' && typeof r['uid'] === 'string' && r['uid']) out.push({ kind: 'card', uid: r['uid'] });
-    else if (r['kind'] === 'address' && typeof r['address'] === 'string' && r['address']) {
-      out.push({ kind: 'address', address: r['address'], name: typeof r['name'] === 'string' ? r['name'] : '' });
+    if (r['kind'] === 'card' && typeof r['uid'] === 'string' && r['uid'] && isMemberUid(r['uid'])) out.push({ kind: 'card', uid: r['uid'] });
+    else if (r['kind'] === 'address' && typeof r['address'] === 'string' && isMemberAddress(r['address'])) {
+      const name = typeof r['name'] === 'string' && !CONTROL.test(r['name']) ? r['name'] : '';
+      out.push({ kind: 'address', address: r['address'], name });
     }
   }
   return uniqueMembers(out);

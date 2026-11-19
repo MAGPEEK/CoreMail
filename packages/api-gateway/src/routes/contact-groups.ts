@@ -23,13 +23,19 @@ type MemberView =
 
 class MemberError extends Error {}
 
+/** What ensureContactUid() needs (the flat columns cover a row without a readable vCard). */
+const CONTACT_UID_SELECT = {
+  id: true, uid: true, vcardData: true, displayName: true, email: true, email2: true, phone: true, mobile: true,
+  company: true, department: true, jobTitle: true, notes: true,
+} as const;
+
 /** Storage members of the request body (own contacts / groups only). */
 async function membersFromInput(userId: string, input: GroupMemberInput[], selfId: string | null): Promise<ContactGroupMember[]> {
   const contactIds = input.flatMap((m) => ('contactId' in m ? [m.contactId] : []));
   const groupIds = input.flatMap((m) => ('groupId' in m ? [m.groupId] : []));
   if (selfId && groupIds.includes(selfId)) throw new MemberError('Eine Liste kann sich nicht selbst enthalten');
   const [contacts, groups] = await Promise.all([
-    contactIds.length ? prisma.contact.findMany({ where: { userId, id: { in: contactIds } }, select: { id: true, uid: true, vcardData: true } }) : [],
+    contactIds.length ? prisma.contact.findMany({ where: { userId, id: { in: contactIds } }, select: CONTACT_UID_SELECT }) : [],
     groupIds.length ? prisma.contactGroup.findMany({ where: { userId, id: { in: groupIds } }, select: { id: true, uid: true } }) : [],
   ]);
   const contactUid = new Map<string, string>();

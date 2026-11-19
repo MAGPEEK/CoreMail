@@ -110,3 +110,14 @@ test('categories: toggle case-insensitively, colour from the list, foreign names
   assert.equal(categoryColor('Golf', defs), null);
   assert.deepEqual(categoryOptions(defs, ['Golf', 'vip']).map((o) => o.name), ['VIP', 'Kunden', 'Golf']);
 });
+
+// Review 9.5: values another client stored are not re-checked (the server accepts them as they are)
+test('validateContactForm with the loaded form as baseline skips values the contact already had', () => {
+  const loaded = formFromContact({ ...DETAIL, urls: [{ type: 'work', value: 'www.firma.example' }], emails: [{ type: 'work', value: 'karl@intranet' }] });
+  assert.ok(validateContactForm(loaded)[`urls.${loaded.urls[0]!.key}`], 'without baseline it is checked');
+  const edited = { ...loaded, jobTitle: 'Neu' };
+  assert.deepEqual(validateContactForm(edited, loaded), {});
+  const added = addRow(edited, 'urls');
+  const withNew = updateRow(added, 'urls', added.urls[1]!.key, { value: 'ftp://x.example' });
+  assert.deepEqual(Object.keys(validateContactForm(withNew, loaded)), [`urls.${added.urls[1]!.key}`], 'a new value is checked');
+});

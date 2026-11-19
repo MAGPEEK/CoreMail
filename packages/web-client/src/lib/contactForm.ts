@@ -211,23 +211,37 @@ export function isWebUrl(v: string): boolean {
   }
 }
 
-/** Problems keyed by field path ("emails.<key>", "birthday", …), German texts. Empty = valid. */
-export function validateContactForm(form: ContactForm): Record<string, string> {
+/** Values of a typed list that are new compared with `baseline` (the form as loaded). */
+function isNewValue(baseline: ContactForm | undefined, field: 'emails' | 'phones' | 'urls' | 'ims', value: string): boolean {
+  return !baseline || !baseline[field].some((r) => r.value.trim() === value);
+}
+
+/**
+ * Problems keyed by field path ("emails.<key>", "birthday", …), German texts. Empty = valid.
+ * With `baseline` (the form as loaded) values the contact already had are not
+ * format-checked: a value another client stored (a web address without
+ * "https://") never blocks saving a change to another field — the server
+ * accepts it the same way.
+ */
+export function validateContactForm(form: ContactForm, baseline?: ContactForm): Record<string, string> {
   const errors: Record<string, string> = {};
   if (!effectiveDisplayName(form)) errors['displayName'] = 'Bitte einen Namen, eine Firma oder eine E-Mail-Adresse angeben.';
   for (const e of form.emails) {
-    if (e.value.trim() && !EMAIL_RE.test(e.value.trim())) errors[`emails.${e.key}`] = 'Keine gültige E-Mail-Adresse.';
+    const v = e.value.trim();
+    if (v && isNewValue(baseline, 'emails', v) && !EMAIL_RE.test(v)) errors[`emails.${e.key}`] = 'Keine gültige E-Mail-Adresse.';
   }
   for (const p of form.phones) {
     const v = p.value.trim();
-    if (v && (!PHONE_RE.test(v) || !/\d/.test(v))) errors[`phones.${p.key}`] = 'Keine gültige Telefonnummer.';
+    if (v && isNewValue(baseline, 'phones', v) && (!PHONE_RE.test(v) || !/\d/.test(v))) errors[`phones.${p.key}`] = 'Keine gültige Telefonnummer.';
   }
   for (const u of form.urls) {
-    if (u.value.trim() && !isWebUrl(u.value.trim())) errors[`urls.${u.key}`] = 'Webadresse mit http:// oder https:// angeben.';
+    const v = u.value.trim();
+    if (v && isNewValue(baseline, 'urls', v) && !isWebUrl(v)) errors[`urls.${u.key}`] = 'Webadresse mit http:// oder https:// angeben.';
   }
   for (const i of form.ims) {
-    const m = IM_RE.exec(i.value.trim());
-    if (i.value.trim() && (!m || UNSAFE_SCHEMES.has(m[1]!.toLowerCase()))) errors[`ims.${i.key}`] = 'Mit Dienst angeben, z. B. xmpp:name@server.';
+    const v = i.value.trim();
+    const m = IM_RE.exec(v);
+    if (v && isNewValue(baseline, 'ims', v) && (!m || UNSAFE_SCHEMES.has(m[1]!.toLowerCase()))) errors[`ims.${i.key}`] = 'Mit Dienst angeben, z. B. xmpp:name@server.';
   }
   for (const f of ['birthday', 'anniversary'] as const) {
     if (parseGermanDate(form[f]) === null) errors[f] = 'Datum als TT.MM.JJJJ oder TT.MM. angeben.';

@@ -173,7 +173,7 @@ export function ContactEditor({ title, initial, saving, onSave, onCancel }: Prop
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
-    const found = validateContactForm(form);
+    const found = validateContactForm(form, initial);
     setErrors(found);
     if (Object.keys(found).length === 0) onSave(contactPayload(form));
   };

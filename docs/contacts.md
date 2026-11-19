@@ -123,10 +123,20 @@ Validation (400 `{error, field, message}`): e-mail addresses, phone numbers
 `YYYY-MM-DD` or `--MM-DD`, known type labels, no control characters, list and
 length limits; `emails` cannot be combined with `email`/`email2`, `phones` not
 with `phone`/`mobile`. Unknown body fields are ignored (pre-9.5 clients send
-whole objects).
+whole objects). Existing data never blocks an edit: on `PUT` a field the body
+repeats unchanged is dropped before validation, a list entry the contact
+already holds passes as it is (a URL without scheme or an address another
+client stored), and a stored list longer than the limit may keep its length.
+Only new values are checked; the webmail form does the same against the form
+as loaded. A row whose `vcardData` holds no vCard is read from its flat columns.
+Group members read from a client vCard must be safe to write back: a `mailto:`
+whose decoded address holds control characters, blanks or no `@`, or a
+malformed percent-encoding, is dropped.
 
 `/api/v1/notes`: `categories` on POST/PUT (trimmed, de-duplicated, ≤ 50 names
-of ≤ 60 characters), `color` validated, `GET /?category=<name>` filters.
+of ≤ 60 characters), `color` validated (the known colours in any case, stored
+canonical; a colour a note already has from before 9.5 is kept when sent back
+unchanged), `GET /?category=<name>` filters.
 
 Every write announces the realtime event `contacts` / `notes`
 (`announceOnWrite`); CardDAV writes announce `contacts` too.

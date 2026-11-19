@@ -96,9 +96,26 @@ export async function run(state) {
     return 'MEMBER lines follow REST and deletions';
   });
 
-  await check('notes: categories are stored and filterable', async () => {
+  await check('contacts: a percent-encoded CR/LF in a mailto member never reaches the stored members or a rewritten vCard', async () => {
     const t = await tok();
-    const n = await http('POST', '/api/v1/notes', { token: t, body: { subject: 'E2E Notiz', color: 'BLUE', categories: ['E2E-Kategorie'] } });
+    const evilId = `e2e-group-${randomUUID()}`;
+    const evil = vcf('VERSION:4.0', 'KIND:group', 'FN:E2E Evil', `UID:urn:uuid:${randomUUID()}`,
+      'MEMBER:mailto:x%0D%0AEMAIL:injected@partner-e2e.test%0D%0AX@partner-e2e.test', 'MEMBER:mailto:ok@partner-e2e.test');
+    const put = await http('PUT', `${AB}/${evilId}.vcf`, { headers: H({ 'Content-Type': 'text/vcard; charset=utf-8' }), body: evil });
+    assert(put.status === 201 || put.status === 204, `${put.status} ${put.text.slice(0, 200)}`);
+    const r = await http('GET', `/api/v1/contacts/groups/${evilId}`, { token: t });
+    assert(r.json?.members?.length === 1 && r.json.members[0].email === 'ok@partner-e2e.test', JSON.stringify(r.json?.members));
+    await http('PUT', `/api/v1/contacts/groups/${evilId}`, { token: t, body: { name: 'E2E Evil 2' } });
+    const g = await http('GET', `${AB}/${evilId}.vcf`, { headers: H() });
+    assert(!/^EMAIL/m.test(g.text), `injected property:\n${g.text}`);
+    await http('DELETE', `/api/v1/contacts/groups/${evilId}`, { token: t });
+    return 'unsafe member dropped';
+  });
+
+  await check('notes: categories are stored and filterable; colours are case-insensitive', async () => {
+    const t = await tok();
+    const n = await http('POST', '/api/v1/notes', { token: t, body: { subject: 'E2E Notiz', color: 'blue', categories: ['E2E-Kategorie'] } });
+    assert(n.json?.color === 'BLUE', `colour ${n.json?.color}`);
     assert(n.status === 201 && n.json?.categories?.[0] === 'E2E-Kategorie', `${n.status} ${n.text.slice(0, 200)}`);
     const list = await http('GET', '/api/v1/notes?category=E2E-Kategorie', { token: t });
     assert(list.json?.some((x) => x.id === n.json.id), 'category filter');

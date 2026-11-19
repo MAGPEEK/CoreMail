@@ -117,6 +117,8 @@ test('storage: resolve (incl. pre-9.5 rows), expand nested, detach a deleted car
 
   const found = await resolveCards('u1', ['AAA-1', 'legacy-1', 'BBB-2']);
   assert.deepEqual([...found.keys()].sort(), ['AAA-1', 'legacy-1'], 'another user\'s card never resolves');
+  assert.equal(db.contact.find((r) => r['id'] === 'c2')!['uid'], 'legacy-1', 'pre-9.5 row: uid column filled by the lookup');
+  assert.equal(db.contact.find((r) => r['id'] === 'c3')!['uid'], '', 'a vCard without UID stays as it is');
 
   const exp = await expandContactGroup('u1', outer.members);
   assert.deepEqual(exp.recipients.map((r) => r.address), ['anna@x.example', 'lea@x.example']);
@@ -133,4 +135,41 @@ test('storage: resolve (incl. pre-9.5 rows), expand nested, detach a deleted car
   const added = await ensureContactUid({ id: 'c3', uid: '', vcardData: noUidCard });
   assert.ok(added);
   assert.equal(vcardUidKey(String(db.contact.find((r) => r['id'] === 'c3')!['vcardData'])), added, 'UID written into the vCard');
+
+  // Review 9.5: a row without a readable vCard keeps its flat columns when it gets a UID
+  db.contact.push({ id: 'c4', userId: 'u1', uid: '', displayName: 'Flach', email: 'flach@x.example', phone: '+49 30 1', company: 'F', vcardData: '' });
+  const flatUid = await ensureContactUid({ id: 'c4', uid: '', vcardData: '', displayName: 'Flach', email: 'flach@x.example', phone: '+49 30 1', company: 'F' });
+  const c4 = db.contact.find((r) => r['id'] === 'c4')!;
+  assert.deepEqual([c4['uid'], c4['email'], c4['phone'], c4['company']], [flatUid, 'flach@x.example', '+49 30 1', 'F']);
+});
+
+// Review 9.5: a client's mailto: member must never inject vCard lines when the group is written back
+test('memberFromUri refuses CR/LF, control characters, blanks and malformed percent-encoding', () => {
+  assert.equal(memberFromUri('mailto:a%0D%0AEND:VCARD%0D%0ABEGIN:VCARD@example.com'), null);
+  assert.equal(memberFromUri('mailto:a%00b@example.com'), null);
+  assert.equal(memberFromUri('mailto:a b@example.com'), null);
+  assert.equal(memberFromUri('mailto:no-at-sign'), null);
+  assert.equal(memberFromUri('mailto:%E0%A4%A'), null); // would throw URIError
+  assert.deepEqual(memberFromUri('mailto:Team%40x@example.com'), null); // two "@"
+  assert.deepEqual(memberFromUri('mailto:alex@example.com'), { kind: 'address', address: 'alex@example.com', name: '' });
+});
+
+test('a group vCard with an injected mailto member is rewritten without the injection', () => {
+  const evil = [
+    'BEGIN:VCARD', 'VERSION:4.0', 'KIND:group', 'FN:Evil', 'UID:urn:uuid:EVIL-1',
+    'MEMBER:mailto:x%0D%0AEMAIL:attacker@example.com%0D%0AX@example.com', 'MEMBER:mailto:ok@example.com', 'END:VCARD', '',
+  ].join('\r\n');
+  const data = contactGroupFromVcard(evil)!;
+  assert.deepEqual(data.members, [{ kind: 'address', address: 'ok@example.com', name: '' }]);
+  const written = applyContactGroup(evil, { name: 'Evil 2', members: data.members });
+  assert.ok(!lines(written).some((l) => l.startsWith('EMAIL')), written);
+  assert.equal(lines(written).filter((l) => l === 'END:VCARD').length, 1);
+});
+
+test('membersFromJson drops stored members with control characters', () => {
+  assert.deepEqual(membersFromJson([
+    { kind: 'address', address: 'a\r\nEMAIL:x@example.com', name: '' },
+    { kind: 'card', uid: 'u\n1' },
+    { kind: 'address', address: 'b@example.com', name: 'B\r\nX' },
+  ]), [{ kind: 'address', address: 'b@example.com', name: '' }]);
 });
