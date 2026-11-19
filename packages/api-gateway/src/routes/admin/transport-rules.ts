@@ -15,11 +15,12 @@ import { patchSchema } from '../../lib/zod-compat.js';
 import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import { requireArea } from '../../middleware/auth.js';
+import { requireUnscoped } from '../../middleware/admin-scope.js';
 import { invalidRegexConditionMessage } from '../../lib/rule-validation.js';
 
 const log = createLogger('admin:transport-rules');
 export const adminTransportRulesRouter: RouterType = Router();
-adminTransportRulesRouter.use(requireArea('hygiene'));
+adminTransportRulesRouter.use(requireArea('hygiene'), requireUnscoped); // 9.5: rules apply to all mail flow
 
 const ConditionSchema = z.object({
   field: z.enum(['from', 'to', 'cc', 'subject', 'body', 'hasAttachment', 'size', 'spamScore']),

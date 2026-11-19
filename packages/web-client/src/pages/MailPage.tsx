@@ -4,7 +4,7 @@ import {
   DndContext, DragOverlay, PointerSensor, useSensor, useSensors,
   type DragEndEvent, type DragStartEvent,
 } from '@dnd-kit/core';
-import { Mail as MailIcon, Folder as FolderIcon } from 'lucide-react';
+import { Mail as MailIcon, Folder as FolderIcon, ChevronLeft, PanelLeft } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { FolderTree } from '../components/FolderTree.js';
 import { MessageList } from '../components/MessageList.js';
@@ -26,6 +26,8 @@ import {
 } from '../lib/mailboxContext.js';
 import { MAIL_VIEW_COLUMN_CLASS, MAIL_VIEW_ROOT_CLASS } from '../lib/mailLayout.js';
 import { defaultFolderOf } from '../lib/folderTree.js';
+import { backTarget, visibleMailPanes } from '../lib/layoutMode.js';
+import { useLayoutMode } from '../hooks/useLayoutMode.js';
 
 // ── Persistent panel widths ───────────────────────────────────────────────────
 const PANEL_STORAGE_KEY = 'coremail:panel-widths';
@@ -96,7 +98,9 @@ interface ActiveDrag {
 
 export function MailPage() {
   const qc = useQueryClient();
-  const { selectedFolderId, selectedMessageId, selectedIds, setSelectedFolder, clearSelection } = useUiStore();
+  const { selectedFolderId, selectedMessageId, selectedIds, setSelectedFolder, setSelectedMessage, clearSelection } = useUiStore();
+  const mode = useLayoutMode();
+  const [foldersShown, setFoldersShown] = useState(false);
   const mailbox = useActiveMailbox();
   const { readingPane } = useUiPrefs();
   const composeKey = useUiStore((s) => s.compose.activeKey);
@@ -237,11 +241,127 @@ export function MailPage() {
     </div>
   ));
 
+  // ── 9.5: single / two pane layout below 1100 px ──────────────────────────────
+  const hasMessage = !!selectedMessageId && selectedIds.size === 0;
+  const panes = visibleMailPanes({
+    mode, hasFolder: !!selectedFolderId, hasMessage, composeOpen: !!composeKey, foldersShown, readingPane,
+  });
+  const pane = panes[0] ?? 'list';
+  const narrowReaderRef = useRef<HTMLDivElement>(null);
+  const lastOpenedRef = useRef<string | null>(null);
+  if (selectedMessageId) lastOpenedRef.current = selectedMessageId;
+
+  // A chosen folder leads on to its message list
+  useEffect(() => { setFoldersShown(false); }, [selectedFolderId]);
+  // Leaving the narrow layouts resets the drawer / folder step
+  useEffect(() => { if (mode === 'three') setFoldersShown(false); }, [mode]);
+
+  // Focus follows the single-pane step: into the opened message, back onto its row in the list
+  const previousPane = useRef(pane);
+  useEffect(() => {
+    const from = previousPane.current;
+    previousPane.current = pane;
+    if (mode !== 'single' || from === pane) return;
+    if (pane === 'reader') {
+      // the message loads after this step: the reader region takes focus, its subject follows in reading order
+      narrowReaderRef.current?.focus();
+    } else if (pane === 'list' && from === 'reader' && lastOpenedRef.current) {
+      document.getElementById(`msg-row-${lastOpenedRef.current}`)?.focus();
+    }
+  }, [pane, mode]);
+
+  // Two panes: the folder drawer takes focus when it opens and gives it back to its button
+  const drawerWasOpen = useRef(false);
+  useEffect(() => {
+    if (mode !== 'two') return;
+    if (foldersShown) {
+      document.querySelector<HTMLElement>('#mail-folder-drawer [role="treeitem"][tabindex="0"]')?.focus();
+    } else if (drawerWasOpen.current) {
+      document.getElementById('mail-folder-toggle')?.focus();
+    }
+    drawerWasOpen.current = foldersShown;
+  }, [foldersShown, mode]);
+
+  const goBack = () => {
+    if (pane === 'reader') { setSelectedMessage(null); clearSelection(); }
+    else if (pane === 'list') setFoldersShown(true);
+  };
+  const backLabel = pane === 'reader' ? 'Zurück zur Nachrichtenliste' : 'Zurück zu den Ordnern';
+  const showFolderDrawerButton = mode === 'two';
+  const showBackButton = mode === 'single' && backTarget(pane) !== null;
+
+  const narrowBar = (showBackButton || showFolderDrawerButton) ? (
+    <div className="shrink-0 flex items-center gap-2 px-2 py-1 border-b border-line bg-surface coremail-no-print">
+      {showBackButton ? (
+        <button type="button" onClick={goBack} aria-label={backLabel}
+          className="inline-flex items-center gap-1 min-h-[2rem] pr-3 pl-1 rounded text-sm font-medium text-accent-fg hover:bg-surface-2">
+          <ChevronLeft size={18} aria-hidden="true" />
+          {pane === 'reader' ? 'Nachrichten' : 'Ordner'}
+        </button>
+      ) : (
+        <button type="button" id="mail-folder-toggle" onClick={() => setFoldersShown((v) => !v)} aria-expanded={foldersShown}
+          aria-controls="mail-folder-drawer"
+          className="inline-flex items-center gap-1.5 min-h-[2rem] px-2 rounded text-sm font-medium text-accent-fg hover:bg-surface-2">
+          <PanelLeft size={16} aria-hidden="true" />
+          Ordner
+        </button>
+      )}
+    </div>
+  ) : null;
+
+  // Choosing a folder (also the one already open) leads on to its message list
+  const pickProps = {
+    onClickCapture: (e: React.MouseEvent) => {
+      const target = e.target as Element;
+      // the expand arrow of a folder only opens its subfolders
+      if (target.closest('[role="treeitem"]') && !target.closest('[data-folder-toggle]')) setFoldersShown(false);
+    },
+    onKeyDownCapture: (e: React.KeyboardEvent) => {
+      const onItem = (e.target as Element).getAttribute('role') === 'treeitem';
+      if (onItem && (e.key === 'Enter' || e.key === ' ')) setFoldersShown(false);
+    },
+  };
+
+  const narrowBody = (
+    <>
+      {pane === 'folders' && <div {...pickProps} className="flex-1 min-w-0 h-full"><FolderTree /></div>}
+      {pane === 'list' && selectedFolderId && mode === 'single' && (
+        <div className="flex-1 min-w-0 h-full overflow-hidden relative"><MessageList folderId={selectedFolderId} /></div>
+      )}
+      {pane === 'reader' && mode === 'single' && <div ref={narrowReaderRef} role="region" aria-label="Nachricht" tabIndex={-1} className="flex flex-1 min-w-0 min-h-0 outline-none">{readerPanel}</div>}
+      {pane === 'compose' && mode === 'single' && composePanel}
+      {mode === 'two' && selectedFolderId && (
+        <>
+          <div style={{ width: Math.min(listW, 320) }} className="h-full shrink-0 overflow-hidden relative">
+            <MessageList folderId={selectedFolderId} />
+          </div>
+          {panes.includes('reader') && <div className="h-full w-px bg-line shrink-0" />}
+          {panes.includes('reader') && readerPanel}
+          {panes.includes('compose') && composePanel}
+        </>
+      )}
+      {mode === 'two' && !selectedFolderId && (panes.includes('compose')
+        ? composePanel
+        : <div className="flex-1 flex items-center justify-center text-fg-subtle text-sm">Ordner auswählen</div>)}
+      {mode === 'two' && foldersShown && (
+        <>
+          <div className="absolute inset-0 z-20 bg-scrim/40" onClick={() => setFoldersShown(false)} aria-hidden="true" />
+          <div id="mail-folder-drawer" {...pickProps} className="absolute inset-y-0 left-0 z-30 w-72 max-w-[85%] shadow-xl"
+            onKeyDown={(e) => { if (e.key === 'Escape') setFoldersShown(false); }}>
+            <FolderTree />
+          </div>
+        </>
+      )}
+    </>
+  );
+
   return (
     <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd} onDragCancel={() => setActiveDrag(null)}>
       <PageShell title="Mail" commandBar={<MailCommandBar />}>
         <div className={MAIL_VIEW_COLUMN_CLASS}>
+        {narrowBar}
         <div className={MAIL_VIEW_ROOT_CLASS}>
+          {mode !== 'three' ? narrowBody : <>
 
           {/* ── Folder tree ─────────────────────────────────────────────────── */}
           <div style={{ width: folderW, flexShrink: 0 }} className="h-full">
@@ -280,6 +400,7 @@ export function MailPage() {
               Ordner auswählen
             </div>
           )}
+          </>}
         </div>
         <DraftTabStrip />
         </div>

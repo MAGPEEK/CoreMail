@@ -39,6 +39,9 @@ import {
   resourceIdFromHref,
   sendDavError,
   sendMultistatus,
+  sendReadOnlyProppatch,
+  sendUidConflict,
+  isUniqueViolation,
   syncTokenFor,
   xmlChild,
   xmlChildren,
@@ -46,6 +49,7 @@ import {
   type XmlNode,
 } from '../dav-utils.js';
 import { compileCalendarFilter, UnsupportedFilterError } from '../dav-filter.js';
+import { appendTaskCollection, isTaskCollectionSegment } from './tasks.js';
 
 const log = createLogger('caldav');
 
@@ -247,7 +251,9 @@ caldavRouter.all('/calendars/:userId', asyncHandler(async (req: Request, res: Re
   appendCurrentUserPrincipal(homeProp, req);
   homeStat.ele('d:status').txt('HTTP/1.1 200 OK');
 
-  if (req.get('Depth') !== '0') {
+  // 9.5: calendars and the task list, each only while its webmail module is on
+  const modules = req.davModules ?? { calendar: true, tasks: true };
+  if (req.get('Depth') !== '0' && modules.calendar) {
     const [owned, shares] = await Promise.all([
       prisma.calendar.findMany({ where: { userId } }),
       prisma.calendarShare.findMany({
@@ -262,7 +268,14 @@ caldavRouter.all('/calendars/:userId', asyncHandler(async (req: Request, res: Re
     const entries: Array<{ cal: CalendarRow; permission: Permission }> = [
       ...owned.map((cal) => ({ cal, permission: 'OWNER' as const })),
       ...shares.map((s) => ({ cal: s.calendar, permission: (s.permission === 'WRITE' ? 'WRITE' : 'READ') as Permission })),
-    ];
+    ].filter(({ cal }) => {
+      // A calendar created over CalDAV before 9.5 under the reserved name sits behind the
+      // task list (its path is answered by caldav/tasks.ts): never list a second
+      // collection with the same href — it stays usable in the webmail
+      if (!isTaskCollectionSegment(cal.id)) return true;
+      log.warn({ userId, calendarId: cal.id }, 'Calendar id collides with the task list path — not listed over CalDAV');
+      return false;
+    });
     for (const { cal, permission } of entries) {
       const response = doc.ele('d:response');
       response.ele('d:href').txt(`${caldavBase(userId)}/${cal.id}/`);
@@ -271,6 +284,7 @@ caldavRouter.all('/calendars/:userId', asyncHandler(async (req: Request, res: Re
       propstat.ele('d:status').txt('HTTP/1.1 200 OK');
     }
   }
+  if (req.get('Depth') !== '0' && modules.tasks) await appendTaskCollection(doc, req, userId);
 
   sendMultistatus(res, doc);
 }));
@@ -353,17 +367,6 @@ function appendEventResponse(doc: XmlNode, req: Request, href: string, etag: str
   evPropstat.ele('d:status').txt('HTTP/1.1 200 OK');
 }
 
-/** PROPPATCH on a resource without writable properties: 403 for each property (RFC 4918 §9.2). */
-function sendReadOnlyProppatch(req: Request, res: Response, href: string): void {
-  const ops = parseProppatch(req.body);
-  if (!ops) { res.status(400).send('Bad Request — DAV:propertyupdate expected'); return; }
-  const doc = newMultistatus();
-  const r = doc.ele('d:response');
-  r.ele('d:href').txt(href);
-  appendPropResults(r, ops.map((o) => ({ prop: o.prop, status: 403 })));
-  sendMultistatus(res, doc);
-}
-
 // ─── Settable collection properties (PROPPATCH + MKCALENDAR) ─────────────────
 
 interface CalendarPatch { name?: string; color?: string; sortOrder?: number }
@@ -420,6 +423,9 @@ async function handleCalendarProppatch(req: Request, res: Response, userId: stri
 
 // MKCALENDAR — create a new calendar (only OWNER under their own URL); RFC 4791 §5.3.1
 async function handleMkcalendar(req: Request, res: Response, userId: string, calendarId: string): Promise<void> {
+  // 9.5: the task list's name is reserved — also when the client percent-encodes it
+  // (Express routes on the raw path, so `%74asks` arrives here, decoded)
+  if (isTaskCollectionSegment(calendarId)) { res.status(405).send('Calendar already exists'); return; }
   const existing = await prisma.calendar.findUnique({ where: { id: calendarId }, select: { id: true, userId: true } });
   // RFC 4791 §5.3.1: MKCALENDAR on an existing resource of the caller → 405. Calendar IDs
   // are global keys: an ID taken by ANOTHER user gets a neutral 409 that does not say the
@@ -651,14 +657,6 @@ export function validateCalendarObject(text: string): Validation {
   const parsed = parseCalendarObject(text);
   if (!parsed) return { ok: false, status: 400, element: 'c:valid-calendar-data', message: 'no valid VEVENT with DTSTART' };
   return { ok: true, uid: parsed.main.uid, parsed };
-}
-
-function isUniqueViolation(err: unknown): boolean {
-  return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 'P2002';
-}
-
-function sendUidConflict(res: Response, href: string): void {
-  sendDavError(res, 409, 'c:no-uid-conflict', (el) => { el.ele('d:href').txt(href); });
 }
 
 // PUT /calendars/:userId/:calendarId/:eventId.ics — create or update event

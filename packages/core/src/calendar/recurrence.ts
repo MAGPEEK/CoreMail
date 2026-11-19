@@ -62,6 +62,32 @@ export function overlaps(start: Date, end: Date, ws: Date, we: Date): boolean {
   return s < we.getTime() && e > ws.getTime();
 }
 
+type RuleOptions = ReturnType<typeof RRule.parseString>;
+
+/** Rule parts of a "simple" rule: its occurrences are DTSTART + i × step, nothing else. */
+const SIMPLE_RULE_PARTS = new Set(['freq', 'interval', 'count', 'until', 'wkst']);
+
+/**
+ * 9.5: where the rule iteration starts. rrule iterates from DTSTART, so a series that
+ * started long ago costs one step per occurrence before the window on every expansion.
+ * A simple DAILY / WEEKLY rule (only INTERVAL, COUNT, UNTIL — no BYxxx) has its
+ * occurrences at DTSTART + i × step: DTSTART moves to the last occurrence at or before
+ * the (wall-clock) window start, COUNT shrinks by the occurrences skipped. Null when
+ * COUNT is used up before the window; otherwise the original DTSTART for any other rule.
+ */
+function skipToWindow(options: RuleOptions, wallStart: Date, ws: Date): { dtstart: Date; count?: number } | null {
+  const parts = Object.entries(options).filter(([, v]) => v !== undefined && v !== null).map(([k]) => k);
+  const days = options.freq === RRule.DAILY ? 1 : options.freq === RRule.WEEKLY ? 7 : 0;
+  const step = days * DAY_MS * Math.max(1, options.interval ?? 1);
+  const skipped = step > 0 && parts.every((p) => SIMPLE_RULE_PARTS.has(p))
+    ? Math.floor((ws.getTime() - wallStart.getTime()) / step)
+    : 0;
+  if (skipped <= 0) return { dtstart: wallStart };
+  const dtstart = new Date(wallStart.getTime() + skipped * step);
+  if (typeof options.count !== 'number') return { dtstart };
+  return options.count > skipped ? { dtstart, count: options.count - skipped } : null;
+}
+
 function instanceKey(d: Date, allDay: boolean): string {
   return allDay ? toIsoDate(d) : String(d.getTime());
 }
@@ -92,7 +118,12 @@ export function expandOccurrences(
   const toWall = (d: Date): Date => (tz ? new Date(utcToWallClockMs(d.getTime(), tz)) : d);
   const fromWall = (d: Date): Date => (tz ? new Date(wallClockToUtcMs(d.getTime(), tz)) : d);
 
-  let rule: InstanceType<typeof RRule>;
+  // Wall-clock window padded by the event duration and the maximum UTC offset
+  const pad = DAY_MS;
+  const ws = new Date(toWall(windowStart).getTime() - duration - pad);
+  const we = new Date(toWall(windowEnd).getTime() + pad);
+
+  let rule: InstanceType<typeof RRule> | null;
   try {
     const options = RRule.parseString(ev.rrule.replace(/^RRULE:/i, ''));
     if (options.freq === undefined || options.freq === null) throw new Error('RRULE without FREQ');
@@ -100,17 +131,13 @@ export function expandOccurrences(
       // UNTIL is a UTC instant; move it into the same wall-clock space as DTSTART
       options.until = toWall(options.until);
     }
-    rule = new RRule({ ...options, dtstart: toWall(ev.start) });
+    const start = skipToWindow(options, toWall(ev.start), ws);
+    rule = start === null ? null : new RRule({ ...options, ...start });
   } catch {
     // Unparseable rule → behave like a single event instead of failing the whole list
     if (overlaps(ev.start, ev.end, windowStart, windowEnd)) out.push({ start: ev.start, end: ev.end, recurrenceId: ev.start });
     return out;
   }
-
-  // Wall-clock window padded by the event duration and the maximum UTC offset
-  const pad = DAY_MS;
-  const ws = new Date(toWall(windowStart).getTime() - duration - pad);
-  const we = new Date(toWall(windowEnd).getTime() + pad);
 
   const excluded = new Set<string>([
     ...(ev.exdates ?? []).map((x) => instanceKey(x.date, ev.allDay)),
@@ -118,7 +145,7 @@ export function expandOccurrences(
   ]);
 
   const starts = new Map<string, Date>();
-  rule.between(ws, we, true, (_d, i) => i < max * 4).forEach((wall) => {
+  (rule?.between(ws, we, true, (_d, i) => i < max * 4) ?? []).forEach((wall) => {
     const real = fromWall(wall);
     starts.set(instanceKey(real, ev.allDay), real);
   });

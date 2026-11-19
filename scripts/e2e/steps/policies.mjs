@@ -60,7 +60,10 @@ export async function run(state) {
     await check('policies: CalDAV refuses B\'s calendars with the calendar module off', async () => {
       const r = await http('PROPFIND', `/dav/calendars/${state.users.b.id}/`, { token: tokB, headers: { Depth: '0' }, raw: true });
       assert(r.status === 403, `PROPFIND ${r.status}`);
-      return '403';
+      // 9.5: the task list follows the tasks module
+      const t = await http('PROPFIND', `/dav/calendars/${state.users.b.id}/tasks/`, { token: tokB, headers: { Depth: '0' }, raw: true });
+      assert(t.status === 403, `task list PROPFIND ${t.status}`);
+      return 'calendar home 403, task list 403';
     });
 
     const attId = await attachmentOfB(state, tokB);

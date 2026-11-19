@@ -17,9 +17,14 @@ process.env['LOG_LEVEL'] = 'error';
 
 interface Booking { id: string; calendarId: string; uid: string; organizer: string; status: string; summary?: string }
 const bookings: Booking[] = [];
-const resources: Record<string, { id: string; autoAccept: boolean; requireApproval: boolean; autoDeclineConflict: boolean; calendar: { id: string } }> = {
-  'room1@corp.test': { id: 'r1', autoAccept: true, requireApproval: false, autoDeclineConflict: false, calendar: { id: 'cal1' } },
-  'room2@corp.test': { id: 'r2', autoAccept: true, requireApproval: false, autoDeclineConflict: false, calendar: { id: 'cal2' } },
+// the resource settings of the BCP (9.5: the mail path applies the same rules as the event form)
+const POLICY = {
+  active: true, autoAccept: true, requireApproval: false, autoDeclineConflict: false,
+  allowRecurring: true, maxDurationMinutes: null, bookingWindowDays: 3650,
+};
+const resources: Record<string, typeof POLICY & { id: string; calendar: { id: string } }> = {
+  'room1@corp.test': { id: 'r1', ...POLICY, calendar: { id: 'cal1' } },
+  'room2@corp.test': { id: 'r2', ...POLICY, calendar: { id: 'cal2' } },
 };
 const none = async () => null;
 (globalThis as unknown as { __prisma: unknown }).__prisma = {
@@ -38,7 +43,8 @@ const none = async () => null;
     // v8.1: unique per (calendarId, uid)
     findUnique: async ({ where }: { where: { calendarId_uid: { calendarId: string; uid: string } } }) =>
       bookings.find((b) => b.calendarId === where.calendarId_uid.calendarId && b.uid === where.calendarId_uid.uid) ?? null,
-    findFirst: async () => null,
+    // 9.5: the shared conflict check reads the resource's bookings
+    findMany: async ({ where }: { where: { calendarId: string } }) => bookings.filter((b) => b.calendarId === where.calendarId),
     create: async ({ data }: { data: Omit<Booking, 'id'> }) => { const b = { id: `b${bookings.length + 1}`, ...data }; bookings.push(b); return b; },
     update: async ({ where, data }: { where: { id: string }; data: Partial<Booking> }) => { const b = bookings.find((x) => x.id === where.id)!; Object.assign(b, data); return b; },
     delete: async ({ where }: { where: { id: string } }) => { const i = bookings.findIndex((x) => x.id === where.id); return bookings.splice(i, 1)[0]; },

@@ -11,6 +11,8 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { prisma } from '@coremail/storage';
 import { requireArea } from '../../middleware/auth.js';
 import { csvCellQuoted } from '../../lib/export-safety.js';
+import { scopeOf } from '../../middleware/admin-scope.js';
+import { anyAddressInScope, isScoped, type AdminScope } from '../../lib/admin-scope.js';
 
 export const adminMessageTraceRouter: RouterType = Router();
 
@@ -32,6 +34,21 @@ export function matchesTraceFilter(metadata: unknown, f: TraceFilter): boolean {
   return true;
 }
 adminMessageTraceRouter.use(requireArea('compliance'));
+
+/** Addresses of a MAIL_FLOW field (one address or a comma-separated list). */
+function addressesOf(value: unknown): string[] {
+  return typeof value === 'string' ? value.split(',').map((a) => a.trim()).filter(Boolean) : [];
+}
+
+/**
+ * Pure (9.5): is a MAIL_FLOW entry inside a management scope? The sender or a
+ * recipient must be an address of the admin's domains (organisation-wide: all).
+ */
+export function traceRowInScope(scope: AdminScope, metadata: unknown): boolean {
+  if (!isScoped(scope)) return true;
+  const m = (metadata && typeof metadata === 'object' ? metadata : {}) as Record<string, unknown>;
+  return anyAddressInScope(scope, [...addressesOf(m['sender']), ...addressesOf(m['recipient'])]);
+}
 
 /** Max. rows scanned for a filtered search / export (metadata is JSON, filtered in memory). */
 export const TRACE_SCAN_LIMIT = 5000;
@@ -82,7 +99,9 @@ adminMessageTraceRouter.get('/', async (req: Request, res: Response) => {
   if ('error' in w) { res.status(400).json({ error: w.error }); return; }
   const select = { id: true, timestamp: true, level: true, message: true, metadata: true, userId: true } as const;
 
-  if (!filter.sender && !filter.recipient && !filter.subject && !filter.status) {
+  const scope = scopeOf(req);
+  // 9.5: a scoped admin always goes through the filtered scan (the scope is a metadata filter)
+  if (!isScoped(scope) && !filter.sender && !filter.recipient && !filter.subject && !filter.status) {
     const [items, total] = await Promise.all([
       prisma.systemLog.findMany({ where: w.where, orderBy: { timestamp: 'desc' }, skip: (page - 1) * limit, take: limit, select }),
       prisma.systemLog.count({ where: w.where }),
@@ -92,7 +111,7 @@ adminMessageTraceRouter.get('/', async (req: Request, res: Response) => {
   }
 
   const rows = await prisma.systemLog.findMany({ where: w.where, orderBy: { timestamp: 'desc' }, take: TRACE_SCAN_LIMIT, select });
-  const { items, total } = pageFiltered(rows, filter, page, limit);
+  const { items, total } = pageFiltered(rows.filter((r) => traceRowInScope(scope, r.metadata)), filter, page, limit);
   res.json({ items, total, page, limit, truncated: rows.length >= TRACE_SCAN_LIMIT });
 });
 
@@ -108,7 +127,8 @@ adminMessageTraceRouter.get('/export', async (req: Request, res: Response) => {
     select: { timestamp: true, message: true, metadata: true },
   });
 
-  const filtered = rows.filter(r => matchesTraceFilter(r.metadata, { sender, recipient, subject, status }));
+  const scope = scopeOf(req);
+  const filtered = rows.filter(r => traceRowInScope(scope, r.metadata) && matchesTraceFilter(r.metadata, { sender, recipient, subject, status }));
 
   const header = 'Zeitstempel,Absender,Empfänger,Betreff,Status,MessageId\r\n';
   const lines = filtered.map(r => {

@@ -17,6 +17,7 @@ import { prisma } from '@coremail/storage';
 import { hashPassword } from '@coremail/core';
 import { publishUserAuthChange, revokeAllSessions } from '@coremail/storage/auth';
 import { requireArea, requireRole } from '../../middleware/auth.js';
+import { requireUnscoped } from '../../middleware/admin-scope.js';
 import { canManageAccount, type AdminArea } from '../../lib/rbac.js';
 import { generateDkimPrivateKey } from '../../lib/dkim.js';
 import { invalidRegexConditionMessage } from '../../lib/rule-validation.js';
@@ -35,6 +36,9 @@ adminEmsRouter.use((req, res, next) => {
   const hit = EMS_AREAS.find(([re]) => re.test(req.path));
   (hit ? emsAreaGuards.get(hit[1])! : emsOrgOnly)(req, res, next);
 });
+// 9.5: the cmdlet bridge addresses objects by identity across the organisation —
+// organisation-wide admins only (scoped admins use the regular admin routes).
+adminEmsRouter.use(requireUnscoped);
 
 // ──────────────────────────────────────────────────────────────────
 // Get-Mailbox / New-Mailbox / Set-Mailbox / Remove-Mailbox

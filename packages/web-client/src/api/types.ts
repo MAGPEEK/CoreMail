@@ -219,7 +219,7 @@ export interface EventAttendee {
   rsvp?: boolean;
   /** 9.4: ROOM / RESOURCE for booked rooms (answer in partstat, decline reason in `reason`) */
   cutype?: string;
-  reason?: 'inactive' | 'recurring' | 'duration' | 'window' | 'conflict';
+  reason?: 'inactive' | 'recurring' | 'too-frequent' | 'duration' | 'window' | 'conflict';
 }
 
 /** 9.4: GET /calendar/rooms */

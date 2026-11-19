@@ -31,6 +31,8 @@ export type AuthInvalidationReason =
   | 'password-change' | 'password-reset' | 'admin-password-reset'
   | 'mfa-change' | 'app-password-created' | 'app-password-revoked'
   | 'deactivated' | 'deleted' | 'role-change' | 'sessions-revoked'
+  /** 9.5: the admin's management scope (AdminScope domains) changed — like a role change. */
+  | 'scope-change'
   /** 9.1: a shared-mailbox permission or delegation of the user changed (no credential change). */
   | 'permission-change'
   /** 9.4: the user's effective protocol access changed (see PROTOCOL_ACCESS_CHANGE). */

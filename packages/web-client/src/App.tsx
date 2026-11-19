@@ -118,11 +118,19 @@ function Layout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="h-full flex flex-col">
+      {/* SC 2.4.1: bypass block — first focusable element, visible on focus */}
+      <a
+        href="#main-content"
+        onClick={(e) => { e.preventDefault(); document.getElementById('main-content')?.focus(); }}
+        className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-[100] focus:px-3 focus:py-2 focus:rounded focus:bg-surface focus:text-fg focus:shadow-lg"
+      >
+        Zum Inhalt springen
+      </a>
       <TopBar onSearch={handleSearch} />
       {/* App rail left (md+), bottom bar below md (column-reverse puts it last) */}
       <div className="flex-1 flex flex-col-reverse md:flex-row min-h-0">
         <AppRail />
-        <main key={pageKey(location.pathname)} className="flex-1 flex min-h-0 min-w-0 overflow-hidden animate-page-in">
+        <main id="main-content" tabIndex={-1} key={pageKey(location.pathname)} className="flex-1 flex min-h-0 min-w-0 overflow-hidden animate-page-in outline-none">
           <ErrorBoundary resetKey={pageKey(location.pathname)}>
             {/* 9.4: pages of a module the webmail policy switched off lead to the mail view */}
             {pageDisabled ? <Navigate to="/mail" replace /> : children}

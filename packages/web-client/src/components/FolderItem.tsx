@@ -155,24 +155,32 @@ export function FolderItem({
           noSelect ? 'text-fg-subtle italic'
             : selected ? 'bg-accent/10 text-accent-fg font-medium' : 'text-fg-muted hover:bg-surface-2 hover:translate-x-0.5'
         } ${isDragging ? 'opacity-40' : ''}`}
-        role="button"
-        tabIndex={0}
-        aria-current={selected && !noSelect ? 'true' : undefined}
-        {...(noSelect ? { 'aria-disabled': true, title: NO_SELECT_HINT } : {})}
+        // the undefined props drop the button semantics dnd-kit's `attributes` add;
+        // aria-disabled stays only for a non-selectable path parent
+        role="treeitem"
+        aria-level={indent + 1}
+        aria-selected={selected && !noSelect}
+        aria-roledescription={undefined}
+        aria-pressed={undefined}
+        aria-disabled={noSelect ? true : undefined}
+        // roving tabindex: hooks/useRovingFocus.ts makes one item of the tree tabbable
+        tabIndex={-1}
+        {...(noSelect ? { title: NO_SELECT_HINT } : {})}
         {...(hasChildren ? { 'aria-expanded': expanded } : {})}
       >
         {hasChildren ? (
-          <button aria-label={expanded ? 'Ordner zuklappen' : 'Ordner aufklappen'}
-            aria-expanded={expanded}
-            tabIndex={-1}
+          // Pointer affordance only: the arrow keys open/close (a treeitem has no nested controls)
+          <span
+            aria-hidden="true"
+            data-folder-toggle=""
             onClick={(e) => { e.stopPropagation(); onToggleExpand(); }}
             onPointerDown={(e) => e.stopPropagation()}
-            className="w-4 h-4 flex items-center justify-center text-fg-subtle hover:text-fg-muted shrink-0"
+            className="w-6 h-6 -my-1 -ml-1 flex items-center justify-center text-fg-subtle hover:text-fg-muted shrink-0"
           >
             {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-          </button>
+          </span>
         ) : (
-          <span className="w-4 h-4 shrink-0" />
+          <span className="w-4 h-4 shrink-0" aria-hidden="true" />
         )}
         <Icon size={15} className="shrink-0 transition-transform duration-150 group-hover:scale-110" style={folder.color ? { color: folder.color } : undefined} />
         {folder.color && (

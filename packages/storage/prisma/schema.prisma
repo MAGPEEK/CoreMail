@@ -87,6 +87,8 @@ model Domain {
   protocolPolicy     ProtocolPolicy?
   // 9.4: webmail feature switches + attachment/content policy of the domain
   webmailPolicy      WebmailPolicy?
+  // 9.5: admin role assignments limited to this domain (AdminScope)
+  adminScopes        AdminScope[]
   createdAt          DateTime             @default(now())
 
   @@map("domains")
@@ -148,12 +150,39 @@ model User {
   trustedImageSenders TrustedImageSender[]
   // 9.4: per-mailbox mail flow (GAL visibility, forwarding, sender lists, limits)
   mailFlowPolicy      MailFlowPolicy?
+  // 9.5: management scope of an admin role (none = organisation-wide)
+  adminScopes         AdminScope[]
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt
 
   @@index([domainId])
   @@index([externalId])
   @@map("users")
+}
+
+// ─────────────────────────────────────────────
+// Admin management scopes (9.5)
+// ─────────────────────────────────────────────
+
+// Limits the admin role of a user to domains: one row per (admin, domain). An
+// admin without rows manages the whole organisation (backward compatible);
+// ORGANIZATION_MANAGEMENT is always organisation-wide (rows are ignored).
+// Written only through the api-gateway (organisation role-assignment routes,
+// audited, the admin's sessions are revoked). Deleting a domain that still
+// scopes an admin is refused (Restrict): a vanished last row would widen the
+// admin to the whole organisation.
+model AdminScope {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  domainId  String
+  domain    Domain   @relation(fields: [domainId], references: [id], onDelete: Restrict)
+  grantedBy String?
+  createdAt DateTime @default(now())
+
+  @@unique([userId, domainId])
+  @@index([domainId])
+  @@map("admin_scopes")
 }
 
 // ─────────────────────────────────────────────
@@ -887,9 +916,15 @@ model Task {
   companies         String    @default("")
   bodyHtml          String    @default("")      // rich-text note (sanitised on display); body = plain text
   changeKey      String    @default("")
+  // 9.5: CalDAV task list — iCal UID of the VTODO (null = the task id) and the VTODO a
+  // CalDAV client stored last (unknown properties such as CATEGORIES round-trip; the
+  // columns above win on every read — caldav-server src/caldav/vtodo.ts)
+  uid            String?
+  icalData       String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  @@unique([userId, uid])
   @@index([userId])
   @@map("tasks")
 }
@@ -1239,6 +1274,10 @@ model ResourceBooking {
   dtEnd      DateTime
   status     String           @default("ACCEPTED") // ACCEPTED | DECLINED | TENTATIVE | PENDING
   icalData   String
+  // 9.5: occurrences of the meeting that overlap other bookings of the resource
+  // ([{ start, end }] ISO, capped) — the reason of a decline, or the dates listed with an
+  // acceptance when the resource does not decline conflicts (resource-booking-rules.ts)
+  conflicts  Json             @default("[]")
   createdAt  DateTime         @default(now())
 
   @@unique([calendarId, uid])

@@ -10,11 +10,12 @@ import { z } from 'zod';
 import { isoDateTime } from '../../lib/zod-compat.js';
 import { prisma } from '@coremail/storage';
 import { requireArea } from '../../middleware/auth.js';
+import { requireUnscoped } from '../../middleware/admin-scope.js';
 import { createLogger } from '@coremail/core';
 
 const log = createLogger('admin:security-attacks');
 export const adminSecurityAttacksRouter: RouterType = Router();
-adminSecurityAttacksRouter.use(requireArea('hygiene'));
+adminSecurityAttacksRouter.use(requireArea('hygiene'), requireUnscoped); // 9.5: server-wide (connection IPs)
 
 // ── GET /api/v1/admin/security/attacks ───────────────────────────────────────
 adminSecurityAttacksRouter.get('/', async (req: Request, res: Response) => {

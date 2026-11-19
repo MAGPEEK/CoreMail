@@ -80,7 +80,7 @@ node scripts/e2e/run.mjs imap pop3       # single steps (state is kept in state.
 node --test scripts/e2e/repo-hygiene.test.mjs   # static regression checks (no stack needed)
 ```
 
-Steps: `setup users smtp imap pop3 jmap dav eas eas-body eas-commands eas-legacy rest webmail admin tls legacy-clients backup branding mfa live protocols policies mapi lockout restart storage schema-upgrade`.
+Steps: `setup users smtp imap pop3 jmap dav dav-tasks eas eas-body eas-commands eas-legacy rest webmail admin tls legacy-clients backup branding mfa live protocols policies scopes mapi lockout restart storage schema-upgrade`.
 `eas-legacy`: OPTIONS announces `12.1,14.0,14.1` and an unannounced version (2.5) is served as 14.1
 (Status 142 in WBXML for the unprovisioned device); a 12.1
 device gets HTTP 449 without a policy key, provisions, syncs (no Email2 / 14.x tags in any
@@ -92,6 +92,11 @@ device pings without `X-MS-PolicyKey` (served — Status 5 for the too short hea
 FolderSync without key and an unknown device still get 142); with BCP → Settings → Mail set to 1 MB
 (applied at once through the settings reload) a 2 MB SendMail gets Status 122 (14.0) / HTTP 413
 (12.1) and a 3 MB body HTTP 413 at the request-body cap, then the limit is restored to 25 MB. See [activesync.md](activesync.md).
+`dav-tasks` (9.5): the calendar home lists the task list (`/dav/calendars/<id>/tasks/`, VTODO); a
+VTODO `PUT` is a task in `GET /api/v1/tasks/:id` (status rules applied), a webmail change shows in
+`GET` (WAITING as `NEEDS-ACTION`, `CATEGORIES` kept), a task created with `POST /api/v1/tasks` is in
+`REPORT calendar-query` (VTODO time-range), completing a recurring task over CalDAV creates the
+next one, `DELETE` honours `If-Match`. See [caldav.md](caldav.md).
 `schema-upgrade` builds a database from the 8.0.0 schema (`E2E_SCHEMA_BASE`, default `d5ad681`) and checks that schema-sync upgrades it, refuses duplicates and fails closed on a dropped column with data (`E2E_PG_CONTAINER` selects the PostgreSQL container).
 `webmail` (9.3): shared / delegated mailboxes in the mail view at API level — A lists the team
 mailbox in `GET /api/v1/user/accessible-mailboxes` (FULL_ACCESS + SEND_AS), hides and shows it
@@ -177,6 +182,14 @@ the image proxy 403 `EXTERNAL_IMAGES_BLOCKED`; the module "App-Passwörter" off 
 app password fails on IMAP (`NO`) and JMAP (401) while the primary password works, back to inherit
 → the app password works again. Everything is reset to inherit at the end. See
 [webmail-policies.md](webmail-policies.md).
+`scopes` (9.5): a second domain `scope-b.<E2E_DOMAIN>` with one mailbox and a HELP_DESK admin
+limited to the e2e domain (`PUT /api/v1/admin/organisation/role-assignments/:id/scope`).
+`GET /api/v1/admin/me/permissions` reports the scope and no server-wide areas; the mailbox list
+holds only the e2e domain; the other-domain mailbox answers 404 with the same body as an unknown
+id (GET and PUT); enabling an own-domain USER works; `/admin/servers/settings` and changing its
+own scope → 403; the scope change is in the audit log (`user.role.scope`); deleting the domain
+while it still scopes the admin → 409 `DOMAIN_SCOPES_ADMINS`. Everything is removed at the end.
+See [rbac.md](rbac.md).
 `mapi` (9.4): MAPI over HTTP is off by default (Connect → 403 without a password prompt; GET →
 X-ResponseCode 2; no credentials → 401; an NTLM header gets the Basic challenge only; Autodiscover
 with `X-MapiHttpCapability: 1` announces no mapiHttp block). The admin turns the switch on for A:

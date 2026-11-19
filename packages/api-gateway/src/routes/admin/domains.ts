@@ -16,6 +16,8 @@ import { z } from 'zod';
 import { promises as dnsPromises } from 'node:dns';
 import { prisma } from '@coremail/storage';
 import { requireArea } from '../../middleware/auth.js';
+import { scopeOf, scopeParam } from '../../middleware/admin-scope.js';
+import { domainRowWhere } from '../../lib/admin-scope.js';
 import { createLogger } from '@coremail/core';
 import { syncFromPrimaryDomain } from '../../lib/server-urls.js';
 import { dkimDnsRecord, generateDkimPrivateKey, needsDkimKey } from '../../lib/dkim.js';
@@ -23,6 +25,9 @@ import { dkimDnsRecord, generateDkimPrivateKey, needsDkimKey } from '../../lib/d
 const log = createLogger('admin:domains');
 export const adminDomainsRouter: RouterType = Router();
 adminDomainsRouter.use(requireArea('domains'));
+// 9.5: a domain outside the admin's management scope is "not found" on every /:id route
+// (writes are ORGANIZATION_MANAGEMENT-only, which is never scoped).
+adminDomainsRouter.param('id', scopeParam('domain'));
 
 const SELECT = {
   id: true, name: true, active: true, primary: true,
@@ -37,7 +42,10 @@ adminDomainsRouter.get('/', async (req: Request, res: Response) => {
   const limit  = Math.min(200, Math.max(1, parseInt(String(req.query['limit'] ?? '50'), 10)));
   const skip   = (page - 1) * limit;
 
-  const where = search ? { name: { contains: search, mode: 'insensitive' as const } } : {};
+  const where = {
+    ...domainRowWhere(scopeOf(req)), // 9.5: management scope
+    ...(search ? { name: { contains: search, mode: 'insensitive' as const } } : {}),
+  };
 
   const [domains, total] = await Promise.all([
     prisma.domain.findMany({ where, select: SELECT, orderBy: [{ primary: 'desc' }, { name: 'asc' }], skip, take: limit }),
@@ -218,13 +226,20 @@ adminDomainsRouter.delete('/:id', async (req: Request, res: Response) => {
   if (domain.primary) { res.status(409).json({ error: 'Primary domain cannot be deleted' }); return; }
   // v6: every FK with onDelete Restrict is checked up front (shared/resource
   // mailboxes used to crash the service with an unhandled Prisma P2003).
-  const [userCount, sharedCount, resourceCount, ldapCount, oidcCount] = await Promise.all([
+  const [userCount, sharedCount, resourceCount, ldapCount, oidcCount, scopeCount] = await Promise.all([
     prisma.user.count({ where: { domainId: id } }),
     prisma.sharedMailbox.count({ where: { domainId: id } }),
     prisma.resourceMailbox.count({ where: { domainId: id } }),
     prisma.ldapConfig.count({ where: { domainId: id } }),
     prisma.oidcProvider.count({ where: { domainId: id } }),
+    prisma.adminScope.count({ where: { domainId: id } }),
   ]);
+  // 9.5: an admin limited to this domain would otherwise lose its last scope row
+  // and silently become organisation-wide (the FK is Restrict for that reason).
+  if (scopeCount > 0) {
+    res.status(409).json({ error: 'Admins are limited to this domain — change their management scope first', code: 'DOMAIN_SCOPES_ADMINS' });
+    return;
+  }
   if (userCount > 0) { res.status(409).json({ error: 'Domain has active mailboxes' }); return; }
   if (sharedCount > 0) { res.status(409).json({ error: 'Domain has shared mailboxes' }); return; }
   if (resourceCount > 0) { res.status(409).json({ error: 'Domain has resource mailboxes' }); return; }

@@ -260,7 +260,9 @@ GET /api/v1/mail/image-proxy?url=<encoded http(s) URL>     Authorization: Bearer
 
 `GET /api/v1/admin/me/permissions` (any admin role, current-role check and
 forced admin MFA apply) returns
-`{ role, areas: { <area>: 'read'|'write' }, actions: { <area>: AdminAction[] }, mfaVerified }`.
+`{ role, areas: { <area>: 'read'|'write' }, actions: { <area>: AdminAction[] }, scope, mfaVerified }`
+(9.5: `scope` = the admin's management scope — organisation-wide or a list of
+domains; see [rbac.md](rbac.md)).
 The BCP hides areas and actions from it (`usePermissions()`, `<Can>`);
 `permissions.test.ts` proves that the guards of every admin router and the
 action routes agree with both maps for every role.
