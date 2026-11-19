@@ -45,7 +45,7 @@ export interface AvatarProps {
 }
 
 const SIZE_MAP = {
-  chip: 'w-5 h-5 text-[9px]',
+  chip: 'w-[20px] h-[20px] text-[9px]',
   xs: 'w-6 h-6 text-[10px]',
   sm: 'w-7 h-7 text-xs',
   md: 'w-9 h-9 text-sm',

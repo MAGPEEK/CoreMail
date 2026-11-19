@@ -41,7 +41,7 @@ function RecipientPill({ entry, unresolved, onRemove }: { entry: string; unresol
   const photoUrl = usePhotoForAddress(r.address);
   const tone = problem ? 'bg-danger-bg border-danger-line text-danger-fg' : 'bg-surface-3 border-transparent text-fg';
   return (
-    <li className={`group inline-flex items-center max-w-full h-6 rounded-full border text-[13px] ${tone}`}>
+    <li className={`group inline-flex items-center max-w-full h-[24px] rounded-full border text-[13px] ${tone}`}>
       <button
         type="button"
         aria-expanded={expanded}
@@ -60,7 +60,7 @@ function RecipientPill({ entry, unresolved, onRemove }: { entry: string; unresol
         onClick={onRemove}
         aria-label={fmt(t('compose_remove_recipient'), { name: label })}
         title={fmt(t('compose_remove_recipient'), { name: label })}
-        className="pr-1.5 pl-0.5 h-full rounded-r-full opacity-0 group-hover:opacity-100 focus-visible:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100 hover:text-danger-fg"
+        className="w-[24px] h-full shrink-0 inline-flex items-center justify-center rounded-r-full opacity-0 group-hover:opacity-100 focus-visible:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100 hover:text-danger-fg"
       >
         <X size={12} aria-hidden="true" />
       </button>

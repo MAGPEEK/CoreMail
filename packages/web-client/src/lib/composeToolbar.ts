@@ -131,14 +131,14 @@ export const SEND_MENU: readonly SendMenuId[] = ['send', 'schedule', 'importance
 
 // ── "…" menu ────────────────────────────────────────────────────────────────
 
-export type MoreMenuId = 'save' | 'showFrom' | 'checkNames' | 'datetime' | 'format' | 'formatBar' | 'a11y' | 'emoji' | 'close';
+export type MoreMenuId = 'save' | 'showFrom' | 'checkNames' | 'datetime' | 'format' | 'formatBar' | 'a11y' | 'emoji';
 
 /**
  * Entries of the header's "…" menu: everything the header does not show.
  * "Formatleiste" only in HTML, "Emoji" only in plain text (HTML has it in the toolbar).
  */
 export function moreMenuCommands(plain: boolean): MoreMenuId[] {
-  const all: MoreMenuId[] = ['save', 'showFrom', 'checkNames', 'datetime', 'format', 'formatBar', 'a11y', 'emoji', 'close'];
+  const all: MoreMenuId[] = ['save', 'showFrom', 'checkNames', 'datetime', 'format', 'formatBar', 'a11y', 'emoji'];
   return all.filter((id) => !(plain && id === 'formatBar') && !(!plain && id === 'emoji'));
 }
 
@@ -150,6 +150,20 @@ export function formatSwitchLabel(plain: boolean): 'compose_to_html' | 'compose_
 /** Label of the toolbar toggle: what a click does. */
 export function formatBarToggleLabel(shown: boolean): 'compose_format_bar_hide' | 'compose_format_bar_show' {
   return shown ? 'compose_format_bar_hide' : 'compose_format_bar_show';
+}
+
+/**
+ * Layout of the draft status in the header row. The status text appearing or
+ * changing must never push command buttons into the overflow menu (a layout
+ * jump), so: from 1180 px (the inline pane then has room for everything) the
+ * status owns a fixed width; below that the text is for screen readers only
+ * (the live region stays), except a failure, which is always visible. The own
+ * window has the whole width and always reserves it. Literal class names so
+ * Tailwind finds them.
+ */
+export function statusLayoutClass(inWindow: boolean, failed: boolean): string {
+  if (inWindow) return 'min-w-[10rem] justify-end';
+  return failed ? 'justify-end' : 'max-[1179px]:sr-only min-[1180px]:min-w-[10rem] min-[1180px]:justify-end';
 }
 
 /** Row heights in px of the address block; compact density takes 4 px off. */

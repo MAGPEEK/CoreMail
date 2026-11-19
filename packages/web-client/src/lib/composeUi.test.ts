@@ -123,6 +123,11 @@ test('ARIA: recipient combobox + pills, live status, labelled region, drafts str
   assert.match(pane, /e\.key === 'Enter' && \(e\.metaKey \|\| e\.ctrlKey\)/);
   assert.match(pane, /max-md:fixed max-md:inset-0/, 'full screen below 768 px');
   assert.match(read('components/compose/ComposeCommandRow.tsx'), /<CommandBar\b/);
+  assert.match(
+    read('components/compose/ComposeCommandRow.tsx'),
+    /onClick=\{actions\.close\}\s+aria-label=\{t\('compose_close'\)\}\s+title=\{t\('compose_close_icon_tip'\)\}/,
+    'a visible close button next to Verwerfen (keeps the draft)',
+  );
   assert.match(read('components/compose/DraftTabStrip.tsx'), /<nav aria-label=\{t\('compose_strip_label'\)\}/);
   assert.match(read('components/compose/AnchoredPopover.tsx'), /role="dialog"/);
   assert.match(read('components/ContextMenu.tsx'), /'menuitemcheckbox'/, 'checkable "…" entries');

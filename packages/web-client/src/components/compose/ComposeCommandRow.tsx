@@ -4,8 +4,8 @@
  * Wichtigkeit, Nachrichtenoptionen) and quiet icon buttons (Anhängen, Bild,
  * Signatur, "Aa" for the formatting bar) and the "…" menu with everything else
  * (lib/composeToolbar.ts: headerCommands, SEND_MENU, moreMenuCommands); right
- * the draft status (aria-live), "In neuem Fenster öffnen" (inline only) and
- * "Verwerfen". Shared command bar: one tab stop, ←/→, overflow menu.
+ * the draft status (aria-live), "In neuem Fenster öffnen" (inline only),
+ * "Verwerfen" and the quiet ✕ "Schließen" (the draft is kept). Shared command bar: one tab stop, ←/→, overflow menu.
  */
 import {
   Accessibility, ALargeSmall, CalendarClock, CalendarDays, Flag, Image as ImageIcon, Loader2, Paperclip, PenLine, Save, Send, Settings2,
@@ -15,7 +15,7 @@ import { CommandBar, type CommandGroup, type CommandItem } from '../CommandBar.j
 import type { ContextMenuItem } from '../ContextMenu.js';
 import { IMPORTANCE_LEVELS, type Importance } from '../../lib/importance.js';
 import {
-  SEND_MENU, formatBarToggleLabel, formatSwitchLabel, headerCommands, moreMenuCommands, type HeaderId, type MoreMenuId, type SendMenuId,
+  SEND_MENU, formatBarToggleLabel, formatSwitchLabel, headerCommands, moreMenuCommands, statusLayoutClass, type HeaderId, type MoreMenuId, type SendMenuId,
 } from '../../lib/composeToolbar.js';
 import type { NamedSignature } from '../../lib/signaturePick.js';
 import { useT } from '../../i18n/useT.js';
@@ -91,9 +91,6 @@ export function moreCommands(state: ComposeCommandState, actions: ComposeCommand
     },
     a11y: { id: 'a11y', label: t('compose_a11y_check'), icon: <Accessibility size={15} />, onClick: actions.checkAccessibility },
     emoji: { id: 'emoji', label: t('compose_emoji_title'), icon: <Smile size={15} />, onClick: actions.openEmoji, dialogOpen: state.emojiOpen },
-    close: {
-      id: 'close', label: t('compose_close'), icon: <X size={15} />, tooltip: t('compose_close_tip'), onClick: actions.close,
-    },
   };
   return moreMenuCommands(state.plainText).map((id) => all[id]);
 }
@@ -147,12 +144,12 @@ function headerItems(state: ComposeCommandState, actions: ComposeCommandActions,
 
 const QUIET_ICON = 'p-0 inline-flex items-center justify-center w-8 h-8 shrink-0 rounded-md text-fg-muted';
 
-function StatusText({ status }: { status: ComposeStatusLine }) {
+function StatusText({ status, inWindow }: { status: ComposeStatusLine; inWindow: boolean }) {
   return (
     <p
       role="status"
       aria-live="polite"
-      className={`text-xs min-w-0 truncate flex items-center gap-1.5 ${status.failed ? 'text-danger-fg' : 'text-fg-muted'}`}
+      className={`text-xs min-w-0 truncate flex items-center gap-1.5 ${statusLayoutClass(inWindow, status.failed)} ${status.failed ? 'text-danger-fg' : 'text-fg-muted'}`}
     >
       {status.busy && <Loader2 size={12} className="animate-spin shrink-0" aria-hidden="true" />}
       <span className="truncate">{status.text}</span>
@@ -178,7 +175,7 @@ export function ComposeCommandRow({ state, actions, status }: { state: ComposeCo
     <div className="flex items-center gap-2 px-4 py-3 border-b border-line bg-surface shrink-0">
       <CommandBar label={t('compose_commands_label')} groups={groups} dividers={false} className="flex-1" />
       <div className="flex items-center gap-1 min-w-0 shrink">
-        <StatusText status={status} />
+        <StatusText status={status} inWindow={state.inWindow} />
         {!state.inWindow && (
           <button type="button" onClick={actions.popOut} aria-label={t('compose_popout')} title={t('compose_popout')} className={`${QUIET_ICON} hover:bg-surface-2 hover:text-fg`}>
             <SquareArrowOutUpRight size={16} aria-hidden="true" />
@@ -192,6 +189,15 @@ export function ComposeCommandRow({ state, actions, status }: { state: ComposeCo
           className={`${QUIET_ICON} hover:bg-danger-bg hover:text-danger-fg`}
         >
           <Trash2 size={16} aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          onClick={actions.close}
+          aria-label={t('compose_close')}
+          title={t('compose_close_icon_tip')}
+          className={`${QUIET_ICON} hover:bg-surface-2 hover:text-fg`}
+        >
+          <X size={16} aria-hidden="true" />
         </button>
       </div>
     </div>
