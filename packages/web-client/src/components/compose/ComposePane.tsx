@@ -22,6 +22,7 @@ import { AccessibilityDialog } from './AccessibilityDialog.js';
 import { ComposeFields } from './ComposeFields.js';
 import { AttachmentChips } from './AttachmentChips.js';
 import { SchedulePopover } from './SchedulePopover.js';
+import { useComposeTemplateActions } from './ComposeTemplateActions.js';
 import { EmojiPopover } from './EmojiPopover.js';
 import { PromptDialog } from '../PromptDialog.js';
 import { isModalOpen } from '../Modal.js';
@@ -148,7 +149,7 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
   const [start] = useState(() => initialRecipients(mode, ctx, sender.ownAddresses));
   const [to, setTo] = useState<RecipientValue>(() => fromList(restore ? restore.to : start.to));
   const [cc, setCc] = useState<RecipientValue>(() => fromList(restore ? restore.cc : start.cc));
-  const [bcc, setBcc] = useState<RecipientValue>(() => fromList(restore?.bcc ?? []));
+  const [bcc, setBcc] = useState<RecipientValue>(() => fromList(restore?.bcc ?? ctx.template?.bcc ?? []));
   const [showCc, setShowCc] = useState(restore?.showCc ?? false);
   const [showBcc, setShowBcc] = useState(restore?.showBcc ?? false);
   const [subject, setSubject] = useState(restore?.subject ?? subjectFor(mode, ctx.subject));
@@ -294,6 +295,7 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
     replyOrForward: mode !== 'new',
     signatureKey: sender.signatureKey,
     quoteHtml,
+    leadHtml: () => ctx.template?.bodyHtml ?? '',
     fontDefaults: composeTextDefaults(composePrefs),
     initial: restore?.signature,
     onBuilt: (quote) => {
@@ -649,6 +651,21 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
     touch();
   };
 
+  // 10.1 mail templates ("…" menu)
+  const templates = useComposeTemplateActions({
+    editor,
+    plainText,
+    fields: () => ({ subject, to: recipientList(to), cc: recipientList(cc), bcc: recipientList(bcc) }),
+    apply: (plan) => {
+      if (plan.subject !== undefined) setSubject(plan.subject);
+      if (plan.to) setTo(fromList(plan.to));
+      if (plan.cc) setCc(fromList(plan.cc));
+      if (plan.bcc) setBcc(fromList(plan.bcc));
+      if (plan.to || plan.cc || plan.bcc) recipientsTouched.current = true;
+      touch();
+    },
+  });
+
   const commandActions: ComposeCommandActions = {
     send,
     openSchedule: (anchor) => setPopover({ kind: 'schedule', anchor }),
@@ -660,6 +677,8 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
     dateTimes: () => dateTimeInsertOptions(new Date(), regional).map((o) => o.text),
     insertText: (text) => { editor?.chain().focus().insertContent(text).run(); },
     saveDraft: saveDraftNow,
+    insertTemplate: templates.insertTemplate,
+    saveAsTemplate: templates.saveAsTemplate,
     toggleFrom: () => { setShowFrom((v) => !v); },
     checkNames: () => { void checkNames(); },
     setImportance: (level) => { setImportance(level); touch(); },
@@ -833,6 +852,7 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
           onCancel={() => setDialog(null)}
         />
       )}
+      {templates.element}
       {dialog?.kind === 'a11y' && (
         <AccessibilityDialog issues={dialog.issues} onShow={showIssue} onApplyAlt={applyImageAlt} onClose={() => setDialog(null)} />
       )}

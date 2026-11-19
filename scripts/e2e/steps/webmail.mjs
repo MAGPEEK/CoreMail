@@ -4,7 +4,7 @@
 // message operations on a shared mailbox with FULL_ACCESS, READ_ONLY → every write
 // 403 READ_ONLY (shared + delegated), SEND_AS-free users see nothing; 9.4 live
 // stream (contacts / calendar / mailbox events), manifest + service worker. Grants made
-// here are removed again at the end.
+// here are removed again at the end. 10.1: personal mail templates (CRUD, ownership, live event).
 import { BASE, check, assert, creds, http, session, openSse } from '../lib.mjs';
 
 export async function run(state) {
@@ -275,5 +275,43 @@ export async function run(state) {
     const after = await http('GET', '/api/v1/user/signatures', { token: A });
     assert(!after.json.defaults[sharedRef], 'defaults still point at the deleted signature');
     return 'created, defaults own + shared, legacy mirror, 404 for others, deleted + defaults cleared';
+  });
+
+  // 10.1: personal mail templates ("Vorlagen")
+  await check('webmail: mail templates — create, list, use fields, update, 404 for others, validation, live event, delete', async () => {
+    const T = '/api/v1/mail/templates';
+    const live2 = await openSse(A);
+    let id;
+    try {
+      const mk = await http('POST', T, { token: A, body: {
+        name: `E2E-Vorlage-${Date.now()}`, subject: 'E2E Angebot', bodyHtml: '<p>Guten Tag,</p><p>anbei das Angebot.</p>',
+        bodyText: 'Guten Tag,\nanbei das Angebot.', to: ['Kunde <kunde@example.test>'], cc: [], bcc: [state.users.b.email],
+      } });
+      assert(mk.status === 201 && mk.json?.id, `create ${mk.status} ${mk.text.slice(0, 200)}`);
+      id = mk.json.id;
+      await live2.next('settings', { match: (d) => d?.section === 'templates' && d?.action === 'create' });
+      const list = await http('GET', T, { token: A });
+      const row = (list.json?.templates ?? []).find((x) => x.id === id);
+      assert(list.status === 200 && row && row.preview.startsWith('Guten Tag') && list.json.max === 200, `list ${list.status} ${list.text.slice(0, 200)}`);
+      const one = await http('GET', `${T}/${id}`, { token: A });
+      assert(one.status === 200 && one.json.subject === 'E2E Angebot' && one.json.to[0] === 'Kunde <kunde@example.test>'
+        && one.json.bcc[0] === state.users.b.email && one.json.bodyHtml.includes('anbei'), `use fields ${one.text.slice(0, 200)}`);
+      const up = await http('PUT', `${T}/${id}`, { token: A, body: { subject: 'E2E Angebot 2' } });
+      assert(up.status === 200 && up.json.subject === 'E2E Angebot 2', `update ${up.status}`);
+      for (const [m, p] of [['GET', `${T}/${id}`], ['PUT', `${T}/${id}`], ['DELETE', `${T}/${id}`]]) {
+        const r = await http(m, p, { token: B, ...(m === 'PUT' ? { body: { name: 'x' } } : {}) });
+        assert(r.status === 404, `B ${m} → ${r.status}`);
+      }
+      const bad = await http('POST', T, { token: A, body: { name: '', to: ['kein-empfaenger'] } });
+      assert(bad.status === 400 && bad.json?.code === 'TEMPLATE_INVALID', `invalid → ${bad.status}`);
+    } finally {
+      live2.close();
+      if (id) {
+        const del = await http('DELETE', `${T}/${id}`, { token: A });
+        assert(del.status === 200, `delete ${del.status}`);
+      }
+    }
+    assert((await http('GET', `${T}/${id}`, { token: A })).status === 404, 'deleted template still readable');
+    return 'created (live settings/templates), listed with preview, fields, updated, 404 for others, 400 invalid, deleted';
   });
 }

@@ -234,6 +234,41 @@ references any more is deleted (also when the account is deleted). Upload errors
 (`USER_BACKGROUND_UPLOAD_LIMIT` / `USER_BACKGROUND_UPLOAD_WINDOW_SEC`, 0 disables). A change
 announces the user event `settings` / `preferences`, so other tabs pick it up.
 
+## Mail templates (10.1)
+
+Personal templates ("Vorlagen") for mails written often: a name, subject, body and optional
+An / Cc / Bcc lists. No attachments. Model `MailTemplate` (table `mail_templates`, cascade with the
+user), at most 200 per user, body (HTML and text each) at most 256 KB.
+
+    GET    /api/v1/mail/templates       → { templates: [{ id, name, subject, preview, updatedAt }], max }
+    GET    /api/v1/mail/templates/:id   → { id, name, subject, bodyHtml, bodyText, to, cc, bcc, createdAt, updatedAt }
+    POST   /api/v1/mail/templates       { name, subject?, bodyHtml?, bodyText?, to?, cc?, bcc? } → 201
+    PUT    /api/v1/mail/templates/:id   the given fields replace the stored ones
+    DELETE /api/v1/mail/templates/:id
+
+Own templates only — another user's id answers 404 like an unknown one. Validation errors answer
+400 `TEMPLATE_INVALID` with `details: [{ field, message }]` (name 1–100 characters, no line breaks in
+the subject, every recipient a valid address, at most 100 per list, unknown fields refused); the
+201st template 409 `TEMPLATE_LIMIT`. The Webmail protocol switch applies like for drafts; there is no
+own webmail module. Every write announces `settings` / `templates` to the user's other tabs.
+
+The body is untrusted HTML: the webmail sanitises it with the mail sanitiser (`lib/mailHtml.ts`)
+before saving, again when it is loaded into an editor or inserted into a draft, and shows previews
+through `sanitizeMailHtml` (external images blocked). The server only bounds the sizes.
+
+Webmail (`components/templates/`, rules in `lib/mailTemplates.ts`):
+
+- **Neue E-Mail aus Vorlage** (`TemplatePickerDialog`): search, list, preview; "Verwenden" opens a
+  new compose tab with subject, recipients and body (the default signature follows the body).
+  The ribbon wires it with `useTemplatePicker()` → `{ open, element }`
+  (`onNewFromTemplate={templates.open}` + `{templates.element}`).
+- **Vorlagen verwalten** (`TemplateManagerDialog`): list + editor (name, subject, recipient fields,
+  body with a small formatting bar), new / save / delete; asks before unsaved changes are lost.
+  Reached from the picker and from Settings → Vorlagen.
+- Compose "…" menu: **Vorlage einfügen …** inserts the body at the cursor and fills subject and
+  recipient fields only while they are empty; **Als Vorlage speichern …** saves subject, recipients
+  and the body without signature block and quoted original.
+
 ## Deep links
 
 The address bar reflects what the webmail shows, so back/forward work and links can be shared with

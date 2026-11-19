@@ -7,7 +7,7 @@ import {
   ShieldCheck, ShieldOff, Copy, RefreshCw, AlertTriangle, Globe, CalendarDays,
   Tag, Star, Plus, Pencil, X as XIcon, Smartphone, AlertCircle,
   Layout, PanelRight, PanelBottom, EyeOff, Rows3, Clock, ListFilter,
-  Cable, Mail as MailIcon, BookUser, Info, ExternalLink, RotateCcw, Bell,
+  Cable, Mail as MailIcon, BookUser, Info, ExternalLink, RotateCcw, Bell, FileText,
 } from 'lucide-react';
 import { RulesSection } from '../components/RulesSection.js';
 import { RecoverDeletedItemsPanel } from '../components/RecoverDeletedItems.js';
@@ -17,6 +17,7 @@ import { quotaColor, type QuotaLevel } from '../lib/quota.js';
 import { SignatureSettings } from '../components/settings/SignatureSettings.js';
 import { PANE_CARD_CLASS } from '../lib/paneLayout.js';
 import { BackgroundSettings } from '../components/settings/BackgroundSettings.js';
+import { TemplateSettings } from '../components/settings/TemplateSettings.js';
 import { ProfilePhotoSettings } from '../components/settings/ProfilePhotoSettings.js';
 import { ReadingSettings } from '../components/settings/ReadingSettings.js';
 import { ComposeSettings } from '../components/settings/ComposeSettings.js';
@@ -51,7 +52,7 @@ import { useWebmailFeatures } from '../hooks/useWebmailFeatures.js';
 import { isSettingsSectionVisible } from '../lib/webmailFeatures.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
-type Section = 'profile' | 'oof' | 'signature' | 'storage' | 'recover' | 'security' | 'password' | 'theme' | 'language' | 'calendar' | 'categories' | 'appPasswords' | 'inactivity' | 'view' | 'retention' | 'rules' | 'externalClients' | 'reading' | 'compose' | 'regional' | 'notifications';
+type Section = 'profile' | 'oof' | 'signature' | 'templates' | 'storage' | 'recover' | 'security' | 'password' | 'theme' | 'language' | 'calendar' | 'categories' | 'appPasswords' | 'inactivity' | 'view' | 'retention' | 'rules' | 'externalClients' | 'reading' | 'compose' | 'regional' | 'notifications';
 
 interface RetentionTagDto {
   id: string;
@@ -2410,6 +2411,7 @@ const NAV: { group: TranslationKey; items: { id: Section; label: TranslationKey;
       { id: 'oof',             label: 'section_oof',              icon: BellOff    },
       { id: 'rules',           label: 'section_rules',            icon: ListFilter },
       { id: 'signature',       label: 'section_signature',        icon: PenLine    },
+      { id: 'templates',       label: 'section_templates',        icon: FileText   },
       { id: 'categories',      label: 'categories',               icon: Tag        },
       { id: 'retention',       label: 'retention_section_title',  icon: Clock      },
       { id: 'storage',         label: 'section_storage',          icon: HardDrive  },
@@ -2439,6 +2441,7 @@ const SECTION_MAP: Record<Section, React.ComponentType> = {
   password:     PasswordSection,
   oof:          OofSection,
   signature:    SignatureSettings,
+  templates:    TemplateSettings,
   storage:      StorageSection,
   recover:      RecoverSection,
   theme:        ThemeSection,

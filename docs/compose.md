@@ -229,6 +229,7 @@ Generated MIME (drafts, Sent copies, outgoing mail) uses CRLF line ends.
 | `components/compose/ComposeFields.tsx`, `RecipientField.tsx` | Von / An / Cc / Bcc / Betreff, pills + suggestions |
 | `components/compose/AttachmentChips.tsx`, `SchedulePopover.tsx`, `EmojiPopover.tsx`, `AnchoredPopover.tsx` | Pieces of the compose area |
 | `components/compose/DraftTabStrip.tsx` | Tab strip of open drafts |
+| `components/compose/ComposeTemplateActions.tsx` | 10.1 "Vorlage einfügen …" / "Als Vorlage speichern …" (mail templates, docs/user-settings.md) |
 | `components/compose/composeRuntime.ts` | Per-draft autosave that outlives tab switches; logout flush |
 | `components/compose/popoutChannel.ts` | Windows this tab opened, messages to / acknowledgements from the opening window, draft presence (BroadcastChannel) |
 | `hooks/useCompose*.ts` | Editor, sender, original message, signature/body, draft lifecycle; `useComposeRouting` switches to Mail |

@@ -8,7 +8,7 @@
  * "Verwerfen" and the quiet ✕ "Schließen" (the draft is kept). Shared command bar: one tab stop, ←/→, overflow menu.
  */
 import {
-  Accessibility, ALargeSmall, CalendarClock, CalendarDays, Flag, Image as ImageIcon, Loader2, Paperclip, PenLine, Save, Send, Settings2,
+  Accessibility, ALargeSmall, CalendarClock, CalendarDays, FilePlus2, FileText, Flag, Image as ImageIcon, Loader2, Paperclip, PenLine, Save, Send, Settings2,
   Smile, SquareArrowOutUpRight, Trash2, Type, UserCheck, UserRound, X,
 } from 'lucide-react';
 import { CommandBar, type CommandGroup, type CommandItem } from '../CommandBar.js';
@@ -52,6 +52,9 @@ export interface ComposeCommandActions {
   dateTimes: () => string[];
   insertText: (text: string) => void;
   saveDraft: () => void;
+  /** 10.1 mail templates: "Vorlage einfügen …" / "Als Vorlage speichern …" */
+  insertTemplate: () => void;
+  saveAsTemplate: () => void;
   toggleFrom: () => void;
   checkNames: () => void;
   setImportance: (level: Importance) => void;
@@ -85,6 +88,8 @@ export function moreCommands(state: ComposeCommandState, actions: ComposeCommand
       id: 'datetime', label: t('compose_datetime'), icon: <CalendarDays size={15} />,
       menu: () => actions.dateTimes().map((text): ContextMenuItem => ({ label: text, onClick: () => actions.insertText(text) })),
     },
+    insertTemplate: { id: 'insert-template', label: t('compose_template_insert'), icon: <FileText size={15} />, onClick: actions.insertTemplate },
+    saveTemplate: { id: 'save-template', label: t('compose_template_save'), icon: <FilePlus2 size={15} />, onClick: actions.saveAsTemplate },
     format: { id: 'format', label: t(formatSwitchLabel(state.plainText)), icon: <Type size={15} />, onClick: actions.togglePlain },
     formatBar: {
       id: 'format-bar', label: t(formatBarToggleLabel(state.formatBarShown)), icon: <ALargeSmall size={15} />, onClick: actions.toggleFormatBar,
