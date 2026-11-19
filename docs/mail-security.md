@@ -34,8 +34,8 @@ affected):
    most MTAs, CoreMail refuses this for unauthenticated inbound mail.
 2. **Local-domain anti-spoofing** — when `MAIL FROM` or the header `From` uses
    one of our own (active) domains, the message must be authenticated for that
-   domain: DMARC pass, or SPF/DKIM pass for an aligned domain (equal, or parent /
-   subdomain). What happens otherwise is set by `LOCAL_SPOOF_ACTION` (below).
+   domain: DMARC pass, or SPF/DKIM pass for an aligned domain (see *Domain
+   alignment* below). What happens otherwise is set by `LOCAL_SPOOF_ACTION` (below).
 3. **DMARC policy** — on `dmarc=fail` the published policy applies:
    `p=reject` → `550 5.7.1`, `p=quarantine` → delivered to Junk, `p=none` →
    only recorded. `dmarc=none` (no record) and `temperror` never reject.
@@ -89,6 +89,30 @@ header limit for messages with many recipients.
 
 rspamd receives the session as well (`IP`, `Helo`, `From`, `Rcpt` per
 recipient, `User` for authenticated sessions, `MTA-Name`).
+
+### Domain alignment (9.5)
+
+Every check below that asks whether a domain is "aligned" with an
+authenticated domain uses DMARC relaxed alignment (RFC 7489 §3.1/§3.2) through
+one helper, `@coremail/core/domain-alignment`: two domains are aligned when
+they are equal or have the same Organizational Domain — the registrable domain
+one label below the longest matching Public Suffix List entry.
+
+* The full Public Suffix List is used, including its private section
+  (`github.io`, `blogspot.com`, …) — the same list and options mailauth uses for
+  its DMARC verdict. So `alice.github.io` is not aligned with `bob.github.io`,
+  and `evil.co.uk` is not aligned with `victim.co.uk` or with `co.uk`.
+* Subdomains of one organization are aligned with each other
+  (`bounces.example.co.uk` ~ `mail.example.co.uk` ~ `example.co.uk`).
+* Unknown TLDs follow the list's default rule: the last label is the suffix
+  (`mail.corp.test` → `corp.test`).
+* Names are compared lower case, without a trailing dot, with
+  internationalized labels as punycode (`bücher.example` = `xn--bcher-kva.example`).
+* A public suffix itself, an IP literal or a malformed name is aligned only
+  with exactly the same value.
+
+The list ships with the `tldts` package (pinned, the version mailauth already
+uses); it is updated together with the dependency.
 
 ### Where the verdict is used
 

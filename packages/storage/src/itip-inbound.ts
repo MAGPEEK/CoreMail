@@ -46,6 +46,7 @@ import {
   type ParsedVEvent,
 } from '@coremail/core/calendar';
 import { expandOccurrences } from '@coremail/core/recurrence';
+import { isAlignedWithAny } from '@coremail/core/domain-alignment';
 import { prisma } from './prisma/index.js';
 import { announceCalendarChange } from './realtime/announce.js';
 
@@ -83,19 +84,12 @@ export interface ITipContext {
   senderAuth: SenderAuth | null;
 }
 
-/** Pure: relaxed domain alignment (equal, or one is a subdomain of the other). */
-export function domainAligned(a: string, b: string): boolean {
-  const x = a.toLowerCase().replace(/\.$/, '');
-  const y = b.toLowerCase().replace(/\.$/, '');
-  if (!x || !y) return false;
-  return x === y || x.endsWith(`.${y}`) || y.endsWith(`.${x}`);
-}
-
 /**
  * Pure: is the attendee's identity authenticated? Either the authenticated
  * local envelope sender IS the attendee, or the message passed DMARC, SPF or
  * DKIM for a domain aligned with the attendee's domain (RFC 5546 §6.1.1:
- * a REPLY must be authenticated as coming from the attendee).
+ * a REPLY must be authenticated as coming from the attendee). Alignment is
+ * DMARC relaxed alignment with the Public Suffix List (`isAlignedWithAny`).
  */
 export function isAttendeeAuthenticated(attendeeEmail: string, auth: SenderAuth | null | undefined): boolean {
   if (!auth) return false;
@@ -103,7 +97,7 @@ export function isAttendeeAuthenticated(attendeeEmail: string, auth: SenderAuth 
   if (auth.authenticatedSender && bare(auth.authenticatedSender) === attendee) return true;
   const domain = attendee.slice(attendee.lastIndexOf('@') + 1);
   if (!attendee.includes('@') || !domain) return false;
-  return (auth.verifiedDomains ?? []).some((d) => domainAligned(domain, d));
+  return isAlignedWithAny(domain, auth.verifiedDomains ?? []);
 }
 
 const VCAL_RE = /BEGIN:VCALENDAR[\s\S]*?END:VCALENDAR/i;

@@ -113,6 +113,17 @@ test('attendee authentication: aligned DMARC/SPF/DKIM domain or the authenticate
   assert.equal(isAttendeeAuthenticated('bob@partner.example', {}), false);
 });
 
+test('attendee authentication uses the Public Suffix List: a sibling registrable domain never vouches', async () => {
+  const { isAttendeeAuthenticated } = await import('./itip-inbound.js');
+  assert.equal(isAttendeeAuthenticated('bob@partner.co.uk', { verifiedDomains: ['evil.co.uk'] }), false);
+  assert.equal(isAttendeeAuthenticated('bob@co.uk', { verifiedDomains: ['evil.co.uk'] }), false);
+  assert.equal(isAttendeeAuthenticated('bob@partner.co.uk', { verifiedDomains: ['co.uk'] }), false);
+  assert.equal(isAttendeeAuthenticated('bob@partner.com.au', { verifiedDomains: ['evil.com.au'] }), false);
+  assert.equal(isAttendeeAuthenticated('bob@alice.github.io', { verifiedDomains: ['mallory.github.io'] }), false);
+  assert.equal(isAttendeeAuthenticated('bob@partner.co.uk', { verifiedDomains: ['bounces.partner.co.uk'] }), true);
+  assert.equal(isAttendeeAuthenticated('bob@bücher.example', { verifiedDomains: ['mail.xn--bcher-kva.example'] }), true);
+});
+
 const VCAL = [
   'BEGIN:VCALENDAR', 'METHOD:REPLY', 'BEGIN:VEVENT', 'UID:evt-1@example.org', 'SEQUENCE:2',
   'ATTENDEE;PARTSTAT=ACCEPTED;CN=Bob:mailto:bob@partner.example', 'END:VEVENT', 'END:VCALENDAR',

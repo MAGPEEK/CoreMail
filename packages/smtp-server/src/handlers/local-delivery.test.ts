@@ -80,6 +80,9 @@ test('organizer identity: iCal ORGANIZER, else header From; folded lines and quo
   assert.deepEqual(organizerIdentity('', raw, null), { organizer: 'alice@corp.test', authenticated: false });
   assert.deepEqual(organizerIdentity('ORGANIZER:mailto:org@ext.test', raw, { verifiedDomains: ['mail.ext.test'] }), { organizer: 'org@ext.test', authenticated: true });
   assert.deepEqual(organizerIdentity('ORGANIZER:mailto:org@ext.test', raw, { verifiedDomains: ['lists.example'] }), { organizer: 'org@ext.test', authenticated: false });
+  // a sibling registrable domain under a public suffix never authenticates the organizer
+  assert.deepEqual(organizerIdentity('ORGANIZER:mailto:org@partner.co.uk', raw, { verifiedDomains: ['evil.co.uk'] }), { organizer: 'org@partner.co.uk', authenticated: false });
+  assert.deepEqual(organizerIdentity('ORGANIZER:mailto:org@partner.co.uk', raw, { verifiedDomains: ['mail.partner.co.uk'] }), { organizer: 'org@partner.co.uk', authenticated: true });
 });
 
 test('an SRS/VERP envelope sender can update/cancel when the authenticated ORGANIZER matches', async () => {
