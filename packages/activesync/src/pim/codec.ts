@@ -3,6 +3,7 @@
  * name (the decoder resolves names per code page), so `Subject` of calendar (4), tasks (9)
  * and notes (23) reads the same way.
  */
+import { CONTACT_LIMITS, normalizeCategories } from '@coremail/storage/contact-card';
 import { getChild, type WbxmlElement } from '../wbxml.js';
 import { htmlToText } from '../commands/body.js';
 
@@ -59,6 +60,14 @@ export function changedBody(stored: string, incoming: string, truncatedAt: numbe
   const truncatedCopy = truncatedAt !== undefined && Buffer.byteLength(stored, 'utf8') > truncatedAt
     && incoming.length < stored.length && stored.startsWith(incoming);
   return truncatedCopy ? stored : incoming;
+}
+
+/** The device's category names (`Categories` → `Category`) as the REST API would store them: trimmed, unique, capped. */
+export function deviceCategories(list: WbxmlElement): string[] {
+  const names = (list.children ?? [])
+    .filter((c): c is WbxmlElement => typeof c !== 'string' && c.name === 'Category')
+    .map((c) => (c.text ?? '').trim().slice(0, CONTACT_LIMITS.category));
+  return normalizeCategories(names).slice(0, CONTACT_LIMITS.categories);
 }
 
 /** Integer text inside [min, max]; undefined otherwise. */

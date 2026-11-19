@@ -24,6 +24,28 @@ const CODE_PAGES: Record<number, Record<number, string>> = {
     0x26: 'Partial', 0x27: 'ConversationMode', 0x28: 'MaxItems',
     0x29: 'HeartbeatInterval',
   },
+  // Code page 1: Contacts ([MS-ASWBXML] 2.1.2.1.2; the 2.5-only Body / BodySize / BodyTruncated /
+  // CompressedRTF tokens 0x09–0x0B, 0x3B and the 16.0 Alias / WeightedRank are left out)
+  1: {
+    0x05: 'Anniversary', 0x06: 'AssistantName', 0x07: 'AssistantPhoneNumber', 0x08: 'Birthday',
+    0x0c: 'Business2PhoneNumber', 0x0d: 'BusinessAddressCity', 0x0e: 'BusinessAddressCountry',
+    0x0f: 'BusinessAddressPostalCode', 0x10: 'BusinessAddressState', 0x11: 'BusinessAddressStreet',
+    0x12: 'BusinessFaxNumber', 0x13: 'BusinessPhoneNumber', 0x14: 'CarPhoneNumber', 0x15: 'Categories',
+    0x16: 'Category', 0x17: 'Children', 0x18: 'Child', 0x19: 'CompanyName', 0x1a: 'Department',
+    0x1b: 'Email1Address', 0x1c: 'Email2Address', 0x1d: 'Email3Address', 0x1e: 'FileAs', 0x1f: 'FirstName',
+    0x20: 'Home2PhoneNumber', 0x21: 'HomeAddressCity', 0x22: 'HomeAddressCountry', 0x23: 'HomeAddressPostalCode',
+    0x24: 'HomeAddressState', 0x25: 'HomeAddressStreet', 0x26: 'HomeFaxNumber', 0x27: 'HomePhoneNumber',
+    0x28: 'JobTitle', 0x29: 'LastName', 0x2a: 'MiddleName', 0x2b: 'MobilePhoneNumber', 0x2c: 'OfficeLocation',
+    0x2d: 'OtherAddressCity', 0x2e: 'OtherAddressCountry', 0x2f: 'OtherAddressPostalCode', 0x30: 'OtherAddressState',
+    0x31: 'OtherAddressStreet', 0x32: 'PagerNumber', 0x33: 'RadioPhoneNumber', 0x34: 'Spouse', 0x35: 'Suffix',
+    0x36: 'Title', 0x37: 'WebPage', 0x38: 'YomiCompanyName', 0x39: 'YomiFirstName', 0x3a: 'YomiLastName',
+    0x3c: 'Picture',
+  },
+  // Code page 12: Contacts2 ([MS-ASWBXML] 2.1.2.1.13)
+  12: {
+    0x05: 'CustomerId', 0x06: 'GovernmentId', 0x07: 'IMAddress', 0x08: 'IMAddress2', 0x09: 'IMAddress3',
+    0x0a: 'ManagerName', 0x0b: 'CompanyMainPhone', 0x0c: 'AccountName', 0x0d: 'NickName', 0x0e: 'MMS',
+  },
   // Code page 2: Email
   2: {
     0x05: 'Attachment', 0x06: 'Attachments', 0x07: 'AttName',
@@ -218,8 +240,8 @@ const CODE_PAGES: Record<number, Record<number, string>> = {
  * (`pel(CP.AirSyncBase, 'Body')`) or a qualified name (`el('AirSyncBase:Body')`).
  */
 export const CP = {
-  AirSync: 0, Email: 2, Calendar: 4, Move: 5, GetItemEstimate: 6, FolderHierarchy: 7, MeetingResponse: 8, Tasks: 9,
-  ResolveRecipients: 10, Ping: 13, Provision: 14, Search: 15, GAL: 16, AirSyncBase: 17,
+  AirSync: 0, Contacts: 1, Email: 2, Calendar: 4, Move: 5, GetItemEstimate: 6, FolderHierarchy: 7, MeetingResponse: 8, Tasks: 9,
+  ResolveRecipients: 10, Contacts2: 12, Ping: 13, Provision: 14, Search: 15, GAL: 16, AirSyncBase: 17,
   Settings: 18, ItemOperations: 20, ComposeMail: 21, Email2: 22, Notes: 23,
 } as const;
 

@@ -6,10 +6,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   applyContactPatch, contactListsFromRow, emptyContactCard, finalizeContactCard, flatContactColumns, fileAsOf,
-  isContactDate, normalizeContactDate, type ContactCard,
+  isContactDate, normalizeContactDate, photoMediaType, type ContactCard,
 } from './contact-card.js';
 import {
-  applyContactCard, buildContactVcard, contactCardFromVcard, contactColumnsFromVcard, uidKey, vcardSaysCard,
+  applyContactCard, buildContactVcard, contactCardFromVcard, contactColumnsFromVcard, setVcardPhoto, setVcardText, uidKey, vcardPhoto,
+  vcardSaysCard, vcardText, OFFICE_LOCATION_PROPERTY,
 } from './contact-vcard.js';
 
 const lines = (vcard: string): string[] => vcard.replace(/\r\n[ \t]/g, '').split('\r\n').filter(Boolean);
@@ -211,4 +212,35 @@ test('a patch of the legacy fields keeps every untouched line; text is escaped (
 test('uidKey strips urn:uuid: only', () => {
   assert.equal(uidKey(' urn:uuid:ABC '), 'ABC');
   assert.equal(uidKey('plain-uid'), 'plain-uid');
+});
+
+test('vCard text property outside the card: read, set (group + parameters kept, duplicates dropped), removed', () => {
+  const v3 = ['BEGIN:VCARD', 'VERSION:3.0', 'FN:A', 'item2.X-OFFICE-LOCATION;X-P=1:Raum 1', 'X-OFFICE-LOCATION:alt', 'NOTE:n', 'END:VCARD', ''].join('\r\n');
+  assert.equal(vcardText(v3, OFFICE_LOCATION_PROPERTY), 'Raum 1');
+  const set = lines(setVcardText(v3, OFFICE_LOCATION_PROPERTY, 'Raum 2; Süd'));
+  assert.deepEqual(set.filter((l) => l.includes('X-OFFICE-LOCATION')), ['item2.X-OFFICE-LOCATION;X-P=1:Raum 2\\; Süd']);
+  assert.equal(vcardText(set.join('\r\n'), OFFICE_LOCATION_PROPERTY), 'Raum 2; Süd');
+  const removed = lines(setVcardText(v3, OFFICE_LOCATION_PROPERTY, ''));
+  assert.ok(!removed.some((l) => l.includes('X-OFFICE-LOCATION')));
+  assert.ok(removed.includes('NOTE:n'), 'everything else untouched');
+  assert.ok(lines(setVcardText('BEGIN:VCARD\r\nVERSION:3.0\r\nFN:B\r\nEND:VCARD\r\n', OFFICE_LOCATION_PROPERTY, 'R')).includes('X-OFFICE-LOCATION:R'));
+});
+
+test('vCard photo: inline v3 / 2.1 / v4 data URI read, URL and non-image ignored, written in the version spelling', () => {
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]);
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 9, 9]);
+  const card = (...l: string[]) => ['BEGIN:VCARD', ...l, 'FN:A', 'END:VCARD', ''].join('\r\n');
+  assert.deepEqual(vcardPhoto(card('VERSION:3.0', `PHOTO;ENCODING=b;TYPE=JPEG:${jpeg.toString('base64')}`)), { mediaType: 'image/jpeg', data: jpeg });
+  assert.equal(vcardPhoto(card('VERSION:2.1', `PHOTO;ENCODING=BASE64;TYPE=PNG:${png.toString('base64')}`))?.mediaType, 'image/png');
+  assert.deepEqual(vcardPhoto(card('VERSION:4.0', `PHOTO:data:image/jpeg;base64,${jpeg.toString('base64')}`))?.data, jpeg);
+  assert.equal(vcardPhoto(card('VERSION:3.0', 'PHOTO;VALUE=uri:https://example.org/a.jpg')), null);
+  assert.equal(vcardPhoto(card('VERSION:3.0', `PHOTO;ENCODING=b:${Buffer.from('text').toString('base64')}`)), null);
+  assert.equal(photoMediaType(Buffer.from('GIF89a')), 'image/gif');
+  const v3 = lines(setVcardPhoto(card('VERSION:3.0', 'PHOTO;VALUE=uri:https://example.org/a.jpg', 'X-KEEP:1'), { mediaType: 'image/jpeg', data: jpeg }));
+  assert.deepEqual(v3.filter((l) => l.startsWith('PHOTO')), [`PHOTO;ENCODING=b;TYPE=JPEG:${jpeg.toString('base64')}`]);
+  assert.ok(v3.includes('X-KEEP:1'));
+  const v4 = lines(setVcardPhoto(card('VERSION:4.0'), { mediaType: 'image/png', data: png }));
+  assert.ok(v4.includes(`PHOTO:data:image/png;base64,${png.toString('base64')}`));
+  const none = lines(setVcardPhoto(card('VERSION:3.0', `PHOTO;ENCODING=b;TYPE=JPEG:${jpeg.toString('base64')}`), null));
+  assert.ok(!none.some((l) => l.startsWith('PHOTO')));
 });

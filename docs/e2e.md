@@ -88,9 +88,13 @@ REST, a REST change of it reaches the device as a Change and a device Delete rem
 added by the device is a note over REST; a weekly meeting with a deleted occurrence added by the
 device expands without that occurrence over REST; a meeting added by the device with a room (created
 over the admin API, listed as an ordinary attendee) books it like the event form (ACCEPTED, CUTYPE
-ROOM, the room busy in `/calendar/rooms`) and the device Delete frees it. Every response carries
-only 14.1 tags. See
-[activesync.md](activesync.md#calendar-tasks-and-notes-w3).
+ROOM, the room busy in `/calendar/rooms`) and the device Delete frees it. Contacts (w3): the
+FolderSync lists `contacts:default` (9); a contact created over REST arrives in the contacts Sync
+(names, Email1Address, MobilePhoneNumber, CompanyName); a contact added by the device (names,
+e-mail, business phone, business address, NickName, body) is a contact over REST and its vCard is
+served over CardDAV. Every response carries only 14.1 tags. See
+[activesync.md](activesync.md#calendar-tasks-and-notes-w3) and
+[activesync.md](activesync.md#contacts-w3).
 `eas-legacy`: OPTIONS announces `12.1,14.0,14.1` and an unannounced version (2.5) is served as 14.1
 (Status 142 in WBXML for the unprovisioned device); a 12.1
 device gets HTTP 449 without a policy key, provisions, syncs (no Email2 / 14.x tags in any

@@ -3,3 +3,4 @@ export * from './contact-card.js';
 export * from './contact-vcard.js';
 export * from './contact-group-vcard.js';
 export * from './contact-groups.js';
+export * from './contact-store.js';

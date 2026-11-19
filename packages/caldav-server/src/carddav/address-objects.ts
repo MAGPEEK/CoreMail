@@ -5,7 +5,7 @@
  * derives its columns through the storage contact / group mapping.
  */
 import {
-  prisma, announceUserEvent, contactColumnsFromVcard, contactGroupColumnsFromVcard, contactGroupData, contactRowData,
+  prisma, announceUserEvent, contactGroupColumnsFromVcard, contactGroupData, createContactRow, deleteContactRow, updateContactRow,
   detachCardFromGroups, isGroupVcard, membersFromJson, uidKey, vcardUidKey,
 } from '@coremail/storage';
 import { collectionTag } from '../dav-utils.js';
@@ -89,10 +89,7 @@ export async function putAddressObject(userId: string, id: string, vcardData: st
       ? await prisma.contactGroup.update({ where: { id }, data, select: { id: true, updatedAt: true } })
       : await prisma.contactGroup.create({ data: { id, userId, ...data }, select: { id: true, updatedAt: true } });
   } else {
-    const data = { vcardData, ...contactRowData(contactColumnsFromVcard(vcardData)) };
-    saved = existing
-      ? await prisma.contact.update({ where: { id }, data, select: { id: true, updatedAt: true } })
-      : await prisma.contact.create({ data: { id, userId, ...data }, select: { id: true, updatedAt: true } });
+    saved = existing ? await updateContactRow(id, vcardData) : await createContactRow(userId, vcardData, id);
   }
   announceUserEvent(userId, { type: 'contacts', action: existing ? 'update' : 'create', ids: [id] });
   return { status: existing ? 'updated' : 'created', ...saved };
@@ -100,9 +97,13 @@ export async function putAddressObject(userId: string, id: string, vcardData: st
 
 /** Delete an address object; a deleted card also leaves every group it was a member of. */
 export async function deleteAddressObject(userId: string, obj: AddressObject): Promise<void> {
-  if (obj.kind === 'group') await prisma.contactGroup.delete({ where: { id: obj.id } });
-  else await prisma.contact.delete({ where: { id: obj.id } });
-  const changedGroups = await detachCardFromGroups(userId, vcardUidKey(obj.vcardData));
+  let changedGroups: string[];
+  if (obj.kind === 'group') {
+    await prisma.contactGroup.delete({ where: { id: obj.id } });
+    changedGroups = await detachCardFromGroups(userId, vcardUidKey(obj.vcardData));
+  } else {
+    changedGroups = await deleteContactRow(userId, obj);
+  }
   announceUserEvent(userId, { type: 'contacts', action: 'delete', ids: [obj.id] });
   if (changedGroups.length) announceUserEvent(userId, { type: 'contacts', action: 'update', ids: changedGroups });
 }

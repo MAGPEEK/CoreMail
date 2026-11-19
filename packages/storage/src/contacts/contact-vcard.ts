@@ -19,7 +19,7 @@ import {
 } from '@coremail/core/vcard';
 import {
   emptyContactCard, finalizeContactCard, flatContactColumns, contactSearchText, namePartsFromDisplayName, normalizeContactDate,
-  sameContactCard, sameJson as same,
+  photoMediaType, sameContactCard, sameJson as same,
   type ContactAddress, type ContactAddressType, type ContactCard, type ContactEmail, type ContactEmailType, type ContactIm,
   type ContactName, type ContactPhone, type ContactPhoneType, type ContactUrl, type FlatContactColumns,
 } from './contact-card.js';
@@ -359,6 +359,66 @@ export function applyContactCard(vcard: string, card: ContactCard): string {
 /** A fresh vCard 3.0 for `card` (FN, N, UID + every non-empty field). */
 export function buildContactVcard(card: ContactCard): string {
   return applyContactCard(EMPTY_V3, card);
+}
+
+// ─── Properties outside the card (ActiveSync fields) ─────────────────────────
+
+/** Office location of a contact (ActiveSync OfficeLocation; no standard vCard property). */
+export const OFFICE_LOCATION_PROPERTY = 'X-OFFICE-LOCATION';
+
+const docOf = (vcard: string): VcardDocument => parseVcard(vcard) ?? parseVcard(EMPTY_V3)!;
+
+/** Unescaped text of the first `name` property ("" when absent). */
+export function vcardText(vcard: string, name: string): string {
+  return text(parseVcard(vcard)?.properties.find((p) => p.name === name));
+}
+
+/**
+ * `vcard` with its `name` property set to `value`: the first one keeps its group and
+ * parameters, further ones are dropped; "" removes them all. Everything else is untouched.
+ */
+export function setVcardText(vcard: string, name: string, value: string): string {
+  const list = new PropertyList([...docOf(vcard).properties]);
+  const escaped = escapeText(value.trim());
+  list.setValue(name, escaped, () => `${name}:${escaped}`, true);
+  return serializeVcard({ properties: list.props });
+}
+
+/** An inline contact photo. */
+export type VcardPhoto = { mediaType: string; data: Buffer };
+
+/** Base64 text → bytes; null unless it is strict base64 of an image CoreMail recognises. */
+function decodePhoto(b64: string): VcardPhoto | null {
+  const clean = b64.replace(/\s+/g, '');
+  if (!clean || !/^[A-Za-z0-9+/]+={0,2}$/.test(clean)) return null;
+  const data = Buffer.from(clean, 'base64');
+  const mediaType = photoMediaType(data);
+  return mediaType ? { mediaType, data } : null;
+}
+
+/**
+ * The inline PHOTO of a vCard: vCard 3 `PHOTO;ENCODING=b` (also 2.1 `ENCODING=BASE64`) or a
+ * vCard 4 `data:` URI. Null for none, a photo by reference (URL) or unrecognised data.
+ */
+export function vcardPhoto(vcard: string): VcardPhoto | null {
+  const p = parseVcard(vcard)?.properties.find((x) => x.name === 'PHOTO');
+  if (!p) return null;
+  const dataUri = /^data:[^,]*;base64,(.*)$/is.exec(p.value.trim());
+  if (dataUri) return decodePhoto(dataUri[1]!);
+  const encoding = (p.params['ENCODING'] ?? '').toUpperCase();
+  return encoding === 'B' || encoding === 'BASE64' ? decodePhoto(p.value) : null;
+}
+
+/** `vcard` with its PHOTO replaced by `photo` (in the spelling of the vCard version); null removes it. */
+export function setVcardPhoto(vcard: string, photo: VcardPhoto | null): string {
+  const doc = docOf(vcard);
+  const list = new PropertyList([...doc.properties]);
+  const b64 = photo?.data.toString('base64') ?? '';
+  const subtype = photo?.mediaType.split('/')[1]?.toUpperCase() ?? 'JPEG';
+  const line = isVcard4(doc) ? `PHOTO:data:${photo?.mediaType};base64,${b64}` : `PHOTO;ENCODING=b;TYPE=${subtype}:${b64}`;
+  list.remove((p) => p.name === 'PHOTO');
+  if (photo) list.props.push(prop(line));
+  return serializeVcard({ properties: list.props });
 }
 
 /** True when `card` says the same as the stored vCard (nothing to write). */
