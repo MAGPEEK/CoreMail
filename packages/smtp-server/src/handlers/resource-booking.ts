@@ -26,6 +26,10 @@
  * or removes those occurrences of the stored series instead of the whole booking; a
  * declined occurrence update declines those occurrences only (cancelled exceptions,
  * the series keeps its answer).
+ *
+ * 9.5: a decided REQUEST is answered with an iMIP REPLY to the organizer
+ * (handlers/resource-reply.ts, unless the resource's `sendReplies` is off or a loop
+ * rule forbids it); REPLY / COUNTER / DECLINECOUNTER / REFRESH sent to a resource are ignored.
  */
 import { createLogger } from '@coremail/core';
 import {
@@ -37,6 +41,7 @@ import {
   prisma, checkLockedResourceBooking, conflictList, extractCalendarParts, isAttendeeAuthenticated, lockResourceCalendar,
   type ResourceBookingTx, type ResourceCheck, type SenderAuth,
 } from '@coremail/storage';
+import { answerOrganizer, type BookingAnswer } from './resource-reply.js';
 
 const log = createLogger('smtp:resource-booking');
 
@@ -216,8 +221,8 @@ function findResource(email: string) {
   });
 }
 
-/** What an invitation did to the resource's booking (for the log). */
-type Outcome =
+/** What an invitation did to the resource's booking (for the log and the answer). */
+export type Outcome =
   | { kind: 'refused' }
   | { kind: 'unusable' }
   | { kind: 'cancelled'; occurrences: number }
@@ -361,6 +366,10 @@ export async function processResourceMailboxes(
       log.info({ resource: email, from: mailFrom }, 'Mail to a resource mailbox without a usable invitation — ignored');
       continue;
     }
+    if (ANSWER_METHODS.has(invite.method)) {
+      log.info({ resource: email, uid: invite.uid, from: mailFrom, method: invite.method }, 'Calendar answer to a resource mailbox — ignored');
+      continue;
+    }
     const { organizer, authenticated } = organizerIdentity(icalData, rawMessage, senderAuth);
     if (!organizer) {
       log.warn({ resource: email, uid: invite.uid, from: mailFrom }, 'Resource invitation without ORGANIZER/From — ignored');
@@ -368,7 +377,29 @@ export async function processResourceMailboxes(
     }
     const outcome = await handleInvitation(resource, calendarId, invite, icalData, organizer, authenticated, now);
     logOutcome(outcome, { resource: resource.email, uid: invite.uid, organizer, envelope: mailFrom, authenticated, method: invite.method });
+    const answer = bookingAnswer(outcome);
+    if (answer) {
+      await answerOrganizer(
+        resource,
+        { method: invite.method, icalData, raw: rawMessage, envelopeFrom: mailFrom, organizer, authenticated },
+        invite.uid, answer, now,
+      );
+    }
   }
   return handled;
+}
+
+/**
+ * iTIP methods that answer or query a meeting (a REPLY, COUNTER …) — never a booking
+ * request. A resource ignores them: no booking change, no answer (an organizer's REPLY
+ * echoed back, e.g. inside a bounce, never re-books the resource or starts a reply loop).
+ */
+const ANSWER_METHODS = new Set(['REPLY', 'COUNTER', 'DECLINECOUNTER', 'REFRESH']);
+
+/** Pure: what the resource answers the organizer — only for a decided request. */
+export function bookingAnswer(outcome: Outcome): BookingAnswer | null {
+  if (outcome.kind === 'decided') return { decision: outcome.check.decision, conflicts: outcome.check.conflicts, occurrencesOnly: false };
+  if (outcome.kind === 'occurrences-declined') return { decision: outcome.check.decision, conflicts: outcome.check.conflicts, occurrencesOnly: true };
+  return null;
 }
 

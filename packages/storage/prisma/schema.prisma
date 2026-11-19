@@ -1302,6 +1302,9 @@ model ResourceMailbox {
   maxDurationMinutes  Int?
   bookingWindowDays   Int              @default(180)
   requireApproval     Boolean          @default(false)
+  // 9.5: invitations that arrive by mail get an automatic reply to the organizer
+  // (smtp-server handlers/resource-reply.ts); off = the answer is only stored
+  sendReplies         Boolean          @default(true)
   delegateIds         String[]
   active              Boolean          @default(true)
   mailboxId           String?          @unique
