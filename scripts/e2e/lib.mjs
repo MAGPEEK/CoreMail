@@ -65,8 +65,9 @@ export async function check(flow, fn) {
     return false;
   }
 }
-export function flushResults(name) {
-  const file = join(STATE_DIR, `results-${name}.json`);
+/** Writes the results to $E2E_STATE_DIR/<fileName> (results-name.mjs); returns the number of failures. */
+export function flushResults(fileName) {
+  const file = join(STATE_DIR, fileName);
   writeFileSync(file, JSON.stringify(results, null, 2));
   const failed = results.filter((r) => r.status === 'FAIL').length;
   console.log(`\n${results.length} checks, ${failed} failed → ${file}`);

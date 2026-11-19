@@ -111,7 +111,7 @@ VTODO `PUT` is a task in `GET /api/v1/tasks/:id` (status rules applied), a webma
 `GET` (WAITING as `NEEDS-ACTION`, `CATEGORIES` kept), a task created with `POST /api/v1/tasks` is in
 `REPORT calendar-query` (VTODO time-range), completing a recurring task over CalDAV creates the
 next one, `DELETE` honours `If-Match`. See [caldav.md](caldav.md).
-`schema-upgrade` builds a database from the 8.0.0 schema (`E2E_SCHEMA_BASE`, default `d5ad681`) and checks that schema-sync upgrades it, refuses duplicates and fails closed on a dropped column with data (`E2E_PG_CONTAINER` selects the PostgreSQL container).
+`schema-upgrade` builds a database from the 8.0.0 schema (`E2E_SCHEMA_BASE`, default `d5ad681`) and checks that schema-sync upgrades it, refuses duplicates and fails closed on a dropped column with data; 9.5: it also upgrades a 9.4.0 database (`E2E_SCHEMA_BASE_9_4`, default `46ec9d80`) whose user has two tasks — the new `UNIQUE (userId, uid)` over the new optional `tasks.uid` is applied without a duplicate check, the tasks are kept (`E2E_PG_CONTAINER` selects the PostgreSQL container).
 `webmail` (9.3): shared / delegated mailboxes in the mail view at API level — A lists the team
 mailbox in `GET /api/v1/user/accessible-mailboxes` (FULL_ACCESS + SEND_AS), hides and shows it
 (persisted; B without access gets 404, an invalid ref 400), lists folders / messages / search and
@@ -219,8 +219,9 @@ draft created offline in Drafts (an ID from `RopGetLocalReplicaIds`, `ImportMess
 `SaveChangesMessage`) keeps that ID — `RopOpenMessage` opens it by it, a second import edits it,
 and with the collector's state merged in the next download sends neither back while the server
 holds exactly one (edited) draft under that ID (`offlineDraftRoundTrip` in the test client, also
-run by `app.test.ts`); a hierarchy synchronization lists INBOX, Sent and Outbox. A
-then creates a message in the Outbox (`SetProperties`, `ModifyRecipients`, `SubmitMessage`) that
+run by `app.test.ts`); a hierarchy synchronization lists the default folders under their Outlook
+names (Inbox, Drafts, Sent Items, Deleted Items, Junk Email, Archive) and the Outbox directly below
+Top of Information Store. A (with a fresh logon) then creates a message in the Outbox (`SetProperties`, `ModifyRecipients`, `SubmitMessage`) that
 reaches B (IMAP search). The address book: `Bind`, `GetSpecialTable`, `QueryRows` (paged) lists A and
 B, `ResolveNames` finds B by address (an unknown address stays unresolved), `DNToMId` maps A's DN,
 `Unbind`. A `NotificationWait` after `RopRegisterNotification` wakes within 3 s of a new mail and the
@@ -229,7 +230,9 @@ Connect get 403 and Autodiscover drops the mapiHttp block. A's switch is reset t
 compose override sets `MAPI_ALLOW_PLAIN_HTTP=true` (the runner uses plain HTTP) and
 `MAPI_HTTPS_TRUSTED=true` (no CA certificate in the stack). See [mapi.md](mapi.md).
 `setup` reads the one-time setup token from `docker logs coremail-e2e`. Each run prints
-`[PASS]/[FAIL]` lines and writes `$E2E_STATE_DIR/results-<steps>.json`; the exit code is
+`[PASS]/[FAIL]` lines and writes `$E2E_STATE_DIR/results-all.json` (all steps),
+`results-<step>+<step>.json` (a short selection of steps) or `results-<n>-steps-<hash>.json` (a
+long selection — the joined names would exceed the Windows path limit); the exit code is
 non-zero when a check failed.
 
 Notes:

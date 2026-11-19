@@ -77,7 +77,7 @@ test('OpenFolder + GetHierarchyTable on the IPM subtree lists the CoreMail folde
   assert.equal(r.u8(), 0, 'TableStatus complete');
   const q = decodeQueryRows(r, [TAG.DisplayName, TAG.FolderId]);
   assert.equal(q.origin, 2, 'cursor at the end');
-  assert.deepEqual(q.rows.map((x) => x[0]).sort(), ['Archive', 'Drafts', 'INBOX', 'Junk', 'Outbox', 'Sent', 'Trash']);
+  assert.deepEqual(q.rows.map((x) => x[0]).sort(), ['Archive', 'Deleted Items', 'Drafts', 'Inbox', 'Junk Email', 'Outbox', 'Sent Items']);
   assert.ok(q.rows.some((x) => x[1] === h.inbox));
 });
 

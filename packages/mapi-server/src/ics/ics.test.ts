@@ -315,9 +315,9 @@ test('hierarchy sync: the folder tree (parents first, empty parent key at the ro
   const initialStream = (await download(h, h.ipmSubtree, ICS.SyncHierarchy, { flags: ICS.FlagUnicode })).stream;
   const folders = decodeHierarchyStream(initialStream);
   const names = folders.map((f) => f.get(TAG.DisplayName));
-  assert.ok(names.includes('INBOX') && names.includes('Projects') && names.includes('Outbox') && names.includes('Old'));
-  assert.ok(names.indexOf('INBOX') < names.indexOf('Projects'), 'parents before children');
-  const inboxRow = folders.find((f) => f.get(TAG.DisplayName) === 'INBOX')!;
+  assert.ok(names.includes('Inbox') && names.includes('Projects') && names.includes('Outbox') && names.includes('Old'));
+  assert.ok(names.indexOf('Inbox') < names.indexOf('Projects'), 'parents before children');
+  const inboxRow = folders.find((f) => f.get(TAG.DisplayName) === 'Inbox')!;
   assert.equal((inboxRow.get(ICS.ParentSourceKey) as Buffer).length, 0, 'child of the synchronization root');
   assert.deepEqual(folders.find((f) => f.get(TAG.DisplayName) === 'Projects')!.get(ICS.ParentSourceKey), inboxRow.get(ICS.SourceKey));
   const state = decodeIcsStream(initialStream).state;
@@ -379,7 +379,7 @@ test('upload: a new message keeps its client ID (openable at once); read state, 
   const server = await h.store.listMessages(inbox);
 
   const inboxKey = decodeHierarchyStream((await download(h, h.ipmSubtree, ICS.SyncHierarchy, { flags: ICS.FlagUnicode })).stream)
-    .find((f) => f.get(TAG.DisplayName) === 'INBOX')!.get(ICS.SourceKey) as Buffer;
+    .find((f) => f.get(TAG.DisplayName) === 'Inbox')!.get(ICS.SourceKey) as Buffer;
   const archiveId = decodeHierarchyStream((await download(h, h.ipmSubtree, ICS.SyncHierarchy, { flags: ICS.FlagUnicode, extra: ICS.ExtraEid })).stream)
     .find((f) => f.get(TAG.DisplayName) === 'Archive')!.get(0x67480014) as bigint;
   r = await h.run(rop.openFolder(0, 6, archiveId), rop.openCollector(6, 7, true),
@@ -438,7 +438,7 @@ test('upload: hierarchy import keeps the client ID of a new folder (openable at 
   const again = (await download(h, h.ipmSubtree, ICS.SyncHierarchy, { flags: ICS.FlagUnicode, state })).stream;
   assert.deepEqual([decodeHierarchyStream(again).length, decodeIcsStream(again).deleted.length], [0, 0]);
 
-  const inboxKey = tree.find((f) => f.get(TAG.DisplayName) === 'INBOX')!.get(ICS.SourceKey) as Buffer;
+  const inboxKey = tree.find((f) => f.get(TAG.DisplayName) === 'Inbox')!.get(ICS.SourceKey) as Buffer;
   r = await h.run(rop.openFolder(0, 1, h.ipmSubtree), rop.openCollector(1, 4, false),
     rop.importHierarchyChange(4, Buffer.alloc(0), inboxKey, 'Renamed Inbox'), rop.importDeletes(4, 0x01, [inboxKey]));
   ok(r, RopId.OpenFolder); r.u8(); r.u8();

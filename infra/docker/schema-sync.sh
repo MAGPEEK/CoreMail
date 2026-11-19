@@ -9,8 +9,11 @@
 #   2. Prisma refuses some changes as "might be data loss". Its warnings are
 #      classified (schema-sync-classify.mjs):
 #      a) ONLY new unique constraints (e.g. 8.0.0 → 9.0 ResourceBooking
-#         @@unique([calendarId, uid])): nothing is deleted. For every new
-#         constraint a duplicate check runs first; without duplicates the change
+#         @@unique([calendarId, uid]), 9.4 → 9.5 Task @@unique([userId, uid])
+#         over the new optional column uid): nothing is deleted. For every new
+#         constraint a duplicate check runs first (skipped for a table or an
+#         optional column without default the update creates — no rows / all
+#         NULL, which never conflict); without duplicates the change
 #         is applied automatically (best-effort pg_dump first, skipped with a
 #         warning when pg_dump/space/version do not allow it). With duplicates
 #         the start stops and names the table — clean them up first.
@@ -35,6 +38,8 @@
 #   COREMAIL_SCHEMA_BACKUP_DIR         dump directory (default /data/backups — volume coremail-data)
 #   COREMAIL_SCHEMA_BACKUP             skip = no dump (you made your own backup); default: required
 #   COREMAIL_SCHEMA_CLASSIFIER         path of schema-sync-classify.mjs (default: image location)
+#   COREMAIL_PRISMA_SCHEMA_FILE        target schema read by the classifier (default prisma/schema.prisma
+#                                      in the storage package)
 # ─────────────────────────────────────────────────────────────────────────────
 set -u
 
@@ -219,8 +224,16 @@ check_duplicates() {
     return 1
   fi
   dup_rc=0
-  while IFS="${TAB}" read -r kind table columns query; do
+  while IFS="${TAB}" read -r kind table columns guard query; do
     [ "${kind}" = "unique" ] || continue
+    # The constraint may cover a table/column this update creates (classifier header).
+    state="$(sql "${guard}")" || { log "duplicate check failed for ${table}(${columns}): cannot inspect the table"; dup_rc=1; continue; }
+    case "${state}" in
+      new-table) log "unique (${columns}) on ${table}: new table — nothing to check"; continue ;;
+      new-column) log "unique (${columns}) on ${table}: covers a new optional column (NULL in every row) — no duplicates possible"; continue ;;
+      check) ;;
+      *) log "duplicate check for ${table}(${columns}): unexpected table state '${state}'"; dup_rc=1; continue ;;
+    esac
     n="$(sql "${query}")" || { log "duplicate check failed for ${table}(${columns})"; dup_rc=1; continue; }
     case "${n}" in
       0) log "unique (${columns}) on ${table}: no duplicates" ;;

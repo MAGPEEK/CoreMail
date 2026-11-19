@@ -8,7 +8,7 @@
 // mail and ends with an ICS state; after a new mail and a read change the
 // incremental synchronization with that state sends exactly those (a message
 // change + IncrSyncRead), a third one nothing; a hierarchy synchronization lists
-// the folder tree.
+// the default folders under their Outlook names below Top of Information Store.
 // The address book (Bind, GetSpecialTable, QueryRows, ResolveNames) lists and
 // resolves B; a NotificationWait wakes within 3 s of a new mail and the next
 // Execute carries RopNotify NewMail. With the switch off again, a running MAPI
@@ -27,6 +27,8 @@ import {
 } from '../../../packages/mapi-server/src/testing/mapi-client.ts';
 
 const SMTP_ADDRESS = 0x39fe001f;
+/** Below Top of Information Store: the default folders under their Outlook names + the Outbox. */
+const OUTLOOK_DEFAULT_FOLDERS = ['Inbox', 'Drafts', 'Sent Items', 'Deleted Items', 'Junk Email', 'Archive', 'Outbox'];
 
 /** Autodiscover v1 (Outlook schema) as classic Outlook asks for it (X-MapiHttpCapability). */
 async function autodiscover(email, password) {
@@ -238,26 +240,33 @@ export async function run(state) {
 
     await check('mapi: cached mode — hierarchy sync lists the folder tree below Top of Information Store', async () => {
       const tree = decodeHierarchyStream((await icsDownload(client, 3, ICS.SyncHierarchy)).stream);
-      const names = tree.map((f) => f.get(TAG.DisplayName));
-      assert(['INBOX', 'Sent', 'Outbox'].every((n) => names.includes(n)), `folders ${JSON.stringify(names)}`);
-      // the synchronizations logged on again: fresh handles for the checks below
-      found = { ...(await inboxRows(client)), mid: found.mid };
+      // the default folders carry their Outlook names whatever the folder rows hold (mailbox-view.ts);
+      // other steps may add folders, also below the root (e.g. a backup restored into A)
+      const top = tree.filter((f) => f.get(ICS.ParentSourceKey)?.length === 0).map((f) => f.get(TAG.DisplayName));
+      const missing = OUTLOOK_DEFAULT_FOLDERS.filter((n) => !top.includes(n));
+      assert(missing.length === 0, `missing ${JSON.stringify(missing)} among the top folders ${JSON.stringify(top)}`);
       return `${tree.length} folders`;
     });
 
     const outSubject = `E2E mapi submit ${Date.now()}`;
     await check('mapi: CreateMessage (Outbox) + SetProperties + ModifyRecipients + SubmitMessage', async () => {
-      const outbox = found.folderIds[5];
+      // own logon: the synchronizations above logged on again, earlier handles are gone
+      const logon = await client.execute([rop.logon(0)], [U]);
+      const l = decodeLogon(logon.rop.responses);
+      assert(l.returnValue === 0, `RopLogon 0x${l.returnValue.toString(16)}`);
+      const outbox = l.folderIds[5];
       const r = await client.execute([
         rop.openFolder(0, 1, outbox), rop.createMessage(1, 2, outbox),
         rop.setProperties(2, [{ tag: TAG.Subject, value: outSubject }, { tag: TAG.Body, value: 'Sent over MAPI.' }]),
         rop.modifyRecipients(2, [{ rowId: 0, type: 1, email: B, name: 'Bob E2E' }]),
         rop.submitMessage(2),
-      ], [found.handles[0], U, U]);
+      ], [logon.rop.handles[0], U, U]);
       const resp = r.rop.responses;
-      const codes = [];
-      for (const skip of [2, 1, 2, 0, 0]) { codes.push(responseHead(resp).returnValue); resp.bytes(skip); }
-      assert(codes.every((x) => x === 0), `return values ${codes.map((x) => x.toString(16)).join(',')}`);
+      for (const [what, skip] of [['OpenFolder', 2], ['CreateMessage', 1], ['SetProperties', 2], ['ModifyRecipients', 0], ['SubmitMessage', 0]]) {
+        const code = responseHead(resp).returnValue;
+        assert(code === 0, `${what} 0x${code.toString(16)}`); // a failed ROP has no payload to skip
+        resp.bytes(skip);
+      }
       return 'submitted';
     });
 

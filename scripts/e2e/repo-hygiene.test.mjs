@@ -9,6 +9,21 @@ import { dirname, join } from 'node:path';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (p) => readFileSync(join(root, p), 'utf8');
 
+test('e2e results file names stay short (Windows MAX_PATH)', async () => {
+  const { resultsFileName } = await import('./results-name.mjs');
+  const all = [...read('scripts/e2e/run.mjs').match(/const ALL = \[([^\]]+)\]/)[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  assert.ok(all.length > 20);
+  assert.equal(resultsFileName(all, all), 'results-all.json');
+  assert.equal(resultsFileName(['mapi'], all), 'results-mapi.json');
+  assert.equal(resultsFileName(['setup', 'users', 'mapi'], all), 'results-setup+users+mapi.json');
+  const long = all.slice(0, -1);
+  const name = resultsFileName(long, all);
+  assert.match(name, /^results-\d+-steps-[0-9a-f]{10}\.json$/);
+  assert.ok(name.length < 40);
+  assert.equal(resultsFileName(long, all), name, 'deterministic');
+  assert.notEqual(resultsFileName(all.slice(1), all), name);
+});
+
 test('Dockerfile.app strips CR from the entrypoint (Windows checkouts)', () => {
   const df = read('infra/docker/Dockerfile.app');
   assert.match(df, /sed -i 's\/\\r\$\/\/' \/entrypoint\.sh/);
