@@ -9,7 +9,8 @@
  *    uploaded and the server stored under its own ID (a new message gets a UID,
  *    a new folder a folder ID). The next download reports them deleted, so the
  *    client swaps its copy for the server's (sorted set, scored by time,
- *    entries older than REPLACED_TTL_MS dropped).
+ *    entries older than REPLACED_TTL_MS dropped, at most MAX_REPLACED_IDS —
+ *    the oldest go first, so a client cannot grow it without limit).
  */
 import { LOCAL_ID_BASE } from '../ics/keys.js';
 import { DRAFT_COUNTER_BASE } from '../ids.js';
@@ -26,13 +27,22 @@ export interface LocalIdRedis {
   incrby(key: string, n: number): Promise<number | string>;
   zadd(key: string, score: number, member: string): Promise<unknown>;
   zremrangebyscore(key: string, min: number | string, max: number | string): Promise<unknown>;
+  /** Removes members by rank (ascending score; negative ranks count from the end). */
+  zremrangebyrank(key: string, start: number, stop: number): Promise<unknown>;
   zrange(key: string, start: number, stop: number): Promise<string[]>;
   pexpire(key: string, ttlMs: number): Promise<number>;
 }
 
-/** IDs one RopGetLocalReplicaIds may reserve (a request cannot burn the range). */
+/**
+ * IDs one RopGetLocalReplicaIds may reserve (a request cannot burn the range;
+ * MS-OXCFXICS 3.2.5.9.4.7: at least the recommended batch of 0x10000).
+ */
 export const MAX_LOCAL_IDS_PER_REQUEST = 0x10000;
+/** IDs one session may reserve in all (256 maximal batches). */
+export const MAX_LOCAL_IDS_PER_SESSION = 256 * MAX_LOCAL_IDS_PER_REQUEST;
 export const REPLACED_TTL_MS = 90 * 24 * 3600 * 1000;
+/** Replaced client IDs kept per mailbox (the newest; a download needs only those since the last one). */
+export const MAX_REPLACED_IDS = 100_000;
 /** Clock seed: 2^32 + 16 IDs per millisecond since 1970 stays below the session draft range for two centuries. */
 const SEED_PER_MS = 16n;
 
@@ -59,6 +69,7 @@ export function createRedisLocalIdStore(redis: () => LocalIdRedis, now: () => nu
       if (ids.length === 0) return;
       const key = `mapi:replaced-ids:${mailboxId}`;
       for (const id of ids) await redis().zadd(key, now(), id.toString());
+      await redis().zremrangebyrank(key, 0, -(MAX_REPLACED_IDS + 1));
       await redis().pexpire(key, REPLACED_TTL_MS);
     },
   };

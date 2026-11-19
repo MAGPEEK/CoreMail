@@ -59,6 +59,12 @@ export class MemoryRedis implements SessionRedis, LocalIdRedis {
     return sorted.slice(start, stop < 0 ? sorted.length + stop + 1 : stop + 1);
   }
 
+  async zremrangebyrank(key: string, start: number, stop: number): Promise<unknown> {
+    const doomed = await this.zrange(key, start, stop);
+    for (const m of doomed) this.zsets.get(key)?.delete(m);
+    return doomed.length;
+  }
+
   async zremrangebyscore(key: string, min: number | string, max: number | string): Promise<unknown> {
     const lo = min === '-inf' ? Number.NEGATIVE_INFINITY : Number(min);
     const hi = max === '+inf' ? Number.POSITIVE_INFINITY : Number(max);

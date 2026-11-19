@@ -4,8 +4,10 @@
  * a session live in memory until they are saved, submitted or released, so the
  * session has a byte budget (MapiSession.memoryLimit) checked before anything
  * grows. Shared state (a message reached through several handles) counts once.
+ * Synchronization contexts count their decoded ICS state (ics/state.ts).
  * Pure module.
  */
+import { stateBytes } from '../ics/state.js';
 import type { MessageState, ServerObject } from './state.js';
 
 /** Approximate bytes of one property value. */
@@ -46,7 +48,8 @@ export function sessionFootprint(objects: Iterable<ServerObject>): number {
       buffer(o.stream.data);
       if (o.stream.target.kind !== 'readonly') message(o.stream.target.message);
     } else if (o.kind === 'syncDownload' || o.kind === 'syncUpload') {
-      total += o.sync.stateUpload?.size ?? 0; // an ICS state being uploaded
+      // an ICS state being uploaded, and the decoded state of the context
+      total += (o.sync.stateUpload?.size ?? 0) + stateBytes(o.sync.state);
     }
   }
   return total;

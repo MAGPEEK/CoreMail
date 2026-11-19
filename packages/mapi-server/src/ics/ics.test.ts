@@ -3,7 +3,9 @@
  * codecs, buffer splitting of FastTransfer streams, and the ROP flows against
  * the in-memory store — initial and incremental contents download (new,
  * changed, deleted, read messages), hierarchy download, the ICS state round
- * trip (upload, final state, checkpoint) and the upload ROPs.
+ * trip (upload, final state, checkpoint) and the upload ROPs. Review 9.5:
+ * property-based GLOBSET / buffer-splitting / contents-synchronization checks
+ * (seeded, reproducible) and the bounds of hostile ICS states.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -18,11 +20,21 @@ import {
   readGlobset, readIdset, ICS, TAG, Reader, Writer,
 } from '../testing/mapi-client.js';
 import { BufferReader, WireFormatError } from '../wire/reader.js';
-import { decodeGlobset, encodeGlobset, rangesOf, type Range } from './globset.js';
+import {
+  decodeGlobset, encodeGlobset, normalize, rangesOf, GLOBCNT_MAX, IdsetTooLargeError, RANGE_BYTES, type Range,
+} from './globset.js';
 import { IdSet } from './idset.js';
 import { FastTransferSource } from './transfer.js';
-import { makeId, replicaGuid } from '../ids.js';
+import { makeId, replicaGuid, storeGuids } from '../ids.js';
 import { LOCAL_ID_BASE } from './keys.js';
+import { contentsStateAfter, isRead, planContents, type ContentsInput } from './plan.js';
+import { emptyState, type IcsState } from './state.js';
+import type { FxPiece } from './fx-stream.js';
+import { sessionFootprint } from '../objects/footprint.js';
+import { MemoryRedis } from '../testing/memory-redis.js';
+import { createRedisLocalIdStore, MAX_REPLACED_IDS } from '../store/local-ids.js';
+import { encoderFor } from '../nspi/codepage.js';
+import type { MessageSummary } from '../store/types.js';
 
 const U = HANDLE_UNUSED;
 const USER = { userId: 'u1', email: 'user@example.test', displayName: 'User One', domainId: 'd1' };
@@ -400,4 +412,388 @@ test('LongTermIdFromId / IdFromLongTermId map IDs of this replica both ways', as
   const back = await h.run(new Writer().u8(RopId.IdFromLongTermId).u8(0).u8(0).bytes(longTerm).toBuffer());
   ok(back, RopId.IdFromLongTermId);
   assert.equal(back.u64(), id);
+});
+
+// ── Review 9.5: property-based checks and regressions ────────────────────────
+
+/** Deterministic PRNG (mulberry32): reproducible fuzz runs. */
+function prng(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const pick = <T>(rnd: () => number, list: readonly T[]): T => list[Math.floor(rnd() * list.length)]!;
+
+const EDGE_VALUES = [
+  0n, 1n, 2n, 0xffn, 0x100n, 0x101n, 0xffffn, 0x1_0000n, 0xffff_ffffn, 0x1_0000_0000n, 0xff_ffff_ffffn,
+  0x100_0000_0000n, GLOBCNT_MAX - 1n, GLOBCNT_MAX,
+];
+
+function randomGlobcnt(rnd: () => number): bigint {
+  if (rnd() < 0.3) return pick(rnd, EDGE_VALUES);
+  let v = 0n;
+  for (let i = 1 + Math.floor(rnd() * 6); i > 0; i--) v = (v << 8n) | BigInt(Math.floor(rnd() * 256));
+  return v;
+}
+
+const clamp = (v: bigint): bigint => (v > GLOBCNT_MAX ? GLOBCNT_MAX : v);
+
+function randomRanges(rnd: () => number): Range[] {
+  const base = randomGlobcnt(rnd);
+  return Array.from({ length: Math.floor(rnd() * 12) }, () => {
+    const low = clamp(rnd() < 0.5 ? base + BigInt(Math.floor(rnd() * 600)) : randomGlobcnt(rnd));
+    return { low, high: clamp(low + (rnd() < 0.5 ? 0n : BigInt(Math.floor(rnd() * 3000)))) };
+  });
+}
+
+/** Strict check of an encoded GLOBSET: Pop only after Push, an empty stack at End, nothing after End. */
+function assertWellFormedGlobset(buf: Buffer): void {
+  const pushes: number[] = [];
+  let depth = 0;
+  let i = 0;
+  for (;;) {
+    const cmd = buf[i++]!;
+    if (cmd === 0x00) break;
+    if (cmd >= 0x01 && cmd <= 0x06) {
+      assert.ok(depth + cmd <= 6, 'push past six bytes');
+      i += cmd;
+      if (depth + cmd < 6) { depth += cmd; pushes.push(cmd); }
+    } else if (cmd === 0x50) {
+      const n = pushes.pop();
+      assert.ok(n !== undefined, 'Pop on an empty stack (MS-OXCFXICS 3.1.5.4.3.1.2)');
+      depth -= n;
+    } else if (cmd === 0x52) {
+      i += 2 * (6 - depth);
+    } else {
+      assert.fail(`unexpected command 0x${cmd.toString(16)}`);
+    }
+  }
+  assert.equal(depth, 0, 'empty stack at End (MS-OXCFXICS 3.1.5.4.3.1.5)');
+  assert.equal(i, buf.length, 'nothing after End');
+}
+
+test('review: GLOBSET round trip of random sets with edge values (0, byte boundaries, 2^48-1); strict encoding', () => {
+  const rnd = prng(0x5eed);
+  for (let run = 0; run < 3000; run++) {
+    const set = randomRanges(rnd);
+    const encoded = encodeGlobset(set);
+    assertWellFormedGlobset(encoded);
+    const r = new BufferReader(encoded);
+    assert.deepEqual(decodeGlobset(r), normalize(set));
+    assert.equal(r.atEnd, true);
+  }
+  // the test client's independent decoder reads the same values
+  for (let run = 0; run < 300; run++) {
+    const set = randomRanges(rnd).map((x) => ({ low: x.low, high: x.low + ((x.high - x.low) % 40n) }));
+    const expected = normalize(set).flatMap((x) => {
+      const values: bigint[] = [];
+      for (let v = x.low; v <= x.high; v++) values.push(v);
+      return values;
+    });
+    assert.deepEqual(readGlobset(new Reader(encodeGlobset(set))), expected);
+  }
+});
+
+test('review: decoding random bytes as an ICS state ends with a format or size error — nothing else, no hang', () => {
+  const rnd = prng(0xbad5);
+  const commands = [0x00, 0x01, 0x04, 0x05, 0x06, 0x42, 0x50, 0x52];
+  for (let run = 0; run < 5000; run++) {
+    const buf = Buffer.from(Array.from({ length: Math.floor(rnd() * 80) }, () => (rnd() < 0.4 ? pick(rnd, commands) : Math.floor(rnd() * 256))));
+    try {
+      IdSet.decodeStateValue(buf, (replid) => (replid === 1 ? REPLICA : null), 1000);
+    } catch (err) {
+      assert.ok(err instanceof WireFormatError || err instanceof IdsetTooLargeError, String(err));
+    }
+  }
+});
+
+test('review: a hostile ICS state is bounded — every GLOBSET of a value shares one range budget; a repeated replica merges in linear time', () => {
+  // 3000 GLOBSETs of the same replica with 100 isolated values each: 300 000 ranges
+  const parts: Buffer[] = [];
+  for (let i = 0; i < 3000; i++) {
+    parts.push(REPLICA, encodeGlobset(Array.from({ length: 100 }, (_, j) => {
+      const v = 2n * BigInt(i + 3000 * j);
+      return { low: v, high: v };
+    })));
+  }
+  const value = Buffer.concat(parts);
+  const started = Date.now();
+  assert.equal(IdSet.decodeGuidForm(value, 300_000).rangeCount, 300_000);
+  assert.ok(Date.now() - started < 10_000, 'merged once per replica, not once per GLOBSET');
+  assert.throws(() => IdSet.decodeGuidForm(value, 299_999), IdsetTooLargeError);
+  // distinct replicas draw from the same budget
+  const many = Buffer.concat(Array.from({ length: 5 }, (_, i) => [
+    Buffer.alloc(16, i + 1), encodeGlobset(Array.from({ length: 1000 }, (_, j) => ({ low: BigInt(2 * j), high: BigInt(2 * j) }))),
+  ]).flat());
+  assert.equal(IdSet.decodeGuidForm(many, 5000).rangeCount, 5000);
+  assert.throws(() => IdSet.decodeGuidForm(many, 4999), IdsetTooLargeError);
+});
+
+test('review: an uploaded ICS state counts against the session memory; over the budget → ecMAPIOOM, malformed → RpcFormat', async () => {
+  const h = new Harness();
+  h.session = new MapiSession('s1', { user: USER, credential: 'password', authKey: 'k' }, 'seq', Date.now(), 2 * 1024 * 1024);
+  await h.logon();
+  let r = await h.run(rop.openFolder(0, 1, h.inbox), rop.syncConfigure(1, 2, ICS.SyncContents, SYNC_FLAGS, EXTRA));
+  ok(r, RopId.OpenFolder); r.u8(); r.u8();
+  ok(r, RopId.SynchronizationConfigure);
+  const upload = async (tag: number, value: Buffer): Promise<number> => {
+    ok(await h.run(rop.uploadStateBegin(2, tag, value.length)), RopId.SynchronizationUploadStateStreamBegin);
+    for (let at = 0; at < value.length; at += 16_000) {
+      ok(await h.run(rop.uploadStateContinue(2, value.subarray(at, at + 16_000))), RopId.SynchronizationUploadStateStreamContinue);
+    }
+    return responseHead(await h.run(rop.uploadStateEnd(2))).returnValue;
+  };
+  const isolated = (n: number): Buffer => IdSet.of(REPLICA, Array.from({ length: n }, (_, i) => BigInt(2 * i + 1))).encodeGuidForm();
+  assert.equal(await upload(ICS.IdsetGiven, isolated(5000)), 0);
+  assert.ok(sessionFootprint(h.session.objects.all()) >= 5000 * RANGE_BYTES, 'the decoded state counts');
+  assert.equal(await upload(ICS.CnsetSeen, isolated(40_000)), 0x8007000e, '40 000 ranges do not fit into the 2 MB budget');
+  assert.equal(await upload(ICS.CnsetSeen, Buffer.concat([REPLICA, Buffer.from([0x99])])), 0x000004b6, 'malformed GLOBSET → RpcFormat');
+  assert.equal(await upload(ICS.CnsetSeen, isolated(100)), 0, 'the context stays usable');
+});
+
+test('review: FastTransfer buffers of random sizes reassemble the stream; no buffer boundary falls inside an atom', async () => {
+  const rnd = prng(0xfa57);
+  for (let run = 0; run < 300; run++) {
+    const elements: FxPiece[][] = Array.from({ length: 1 + Math.floor(rnd() * 6) }, () =>
+      Array.from({ length: Math.floor(rnd() * 8) }, (): FxPiece => (rnd() < 0.5
+        ? { bytes: Buffer.alloc(pick(rnd, [4, 8, 16]), Math.floor(rnd() * 256)), splittable: false }
+        : { bytes: Buffer.alloc(1 + Math.floor(rnd() * 200), Math.floor(rnd() * 256)), splittable: true })));
+    const atoms: Array<[number, number]> = [];
+    let offset = 0;
+    for (const p of elements.flat()) {
+      if (!p.splittable) atoms.push([offset, offset + p.bytes.length]);
+      offset += p.bytes.length;
+    }
+    const source = new FastTransferSource(elements[Symbol.iterator](), elements.length);
+    const chunks: Buffer[] = [];
+    let at = 0;
+    for (let i = 0; i < 10_000; i++) {
+      const max = 16 + Math.floor(rnd() * 48);
+      const c = await source.next(max);
+      assert.ok(c.data.length <= max);
+      at += c.data.length;
+      assert.ok(!atoms.some(([s, e]) => at > s && at < e), `buffer boundary ${at} inside an atom`);
+      chunks.push(c.data);
+      if (c.done) break;
+      assert.ok(c.data.length > 0, 'every Partial buffer makes progress');
+    }
+    assert.deepEqual(Buffer.concat(chunks), Buffer.concat(elements.flat().map((p) => p.bytes)));
+    assert.equal(source.finished, true);
+    assert.equal(source.completed, elements.length);
+  }
+});
+
+test('review: an atom larger than the buffer fails the GetBuffer instead of returning empty Partial buffers forever', async () => {
+  const source = new FastTransferSource([[{ bytes: Buffer.alloc(20), splittable: false }]][Symbol.iterator](), 1);
+  await assert.rejects(source.next(16), /exceeds/);
+});
+
+// ── Model-based contents synchronization ─────────────────────────────────────
+
+interface ModelMessage { uid: number; modSeq: bigint; flags: string[]; createdAt: Date }
+
+/** Flags the client shows (message flags, icon, draft state); \Flagged is not mapped. */
+const VISIBLE_FLAGS = ['\\Seen', '\\Answered', '$Forwarded', '\\Draft'];
+const visibleFlags = (flags: Iterable<string>): string => {
+  const set = new Set(flags);
+  return VISIBLE_FLAGS.filter((f) => set.has(f)).join(' ');
+};
+
+/** One folder of a mailbox: mailbox-wide UIDs and modSeqs, as in the message store. */
+class FolderModel {
+  uidNext = 1;
+  modSeq = 0n;
+  readonly messages = new Map<number, ModelMessage>();
+
+  add(flags: string[]): void {
+    const uid = this.uidNext++;
+    this.messages.set(uid, { uid, modSeq: ++this.modSeq, flags, createdAt: new Date(1_700_000_000_000 + uid * 1000) });
+  }
+
+  private toggle(m: ModelMessage, flag: string): void {
+    m.flags = m.flags.includes(flag) ? m.flags.filter((f) => f !== flag) : [...m.flags, flag];
+    m.modSeq = ++this.modSeq;
+  }
+
+  /** Sets a flag (also when present: a new modSeq). Clearing \Answered / $Forwarded is a documented limit (docs/mapi.md). */
+  private set(m: ModelMessage, flag: string): void {
+    if (!m.flags.includes(flag)) m.flags = [...m.flags, flag];
+    m.modSeq = ++this.modSeq;
+  }
+
+  randomChange(rnd: () => number): void {
+    const list = [...this.messages.values()];
+    const op = Math.floor(rnd() * 8);
+    if (list.length === 0 || op === 0) { this.add(rnd() < 0.3 ? ['\\Seen'] : []); return; }
+    const m = pick(rnd, list);
+    if (op === 1 || op === 2) this.toggle(m, '\\Seen');
+    else if (op === 3) this.set(m, rnd() < 0.5 ? '\\Answered' : '$Forwarded');
+    else if (op === 4) this.toggle(m, '\\Flagged');
+    else if (op === 5) this.messages.delete(m.uid);
+    else if (op === 6) { this.messages.delete(m.uid); this.add(m.flags); } // moved away and back: a new UID
+    else this.modSeq++; // a change in another folder of the mailbox
+  }
+
+  summaries(): MessageSummary[] {
+    return [...this.messages.values()].map((m) => ({ uid: m.uid, modSeq: m.modSeq, flags: [...m.flags], createdAt: m.createdAt }) as unknown as MessageSummary);
+  }
+}
+
+interface SyncVariant { readState: boolean; restricted: boolean }
+
+const roundTrip = (s: IcsState): IcsState => ({
+  idsetGiven: IdSet.decodeGuidForm(s.idsetGiven.encodeGuidForm()),
+  cnsetSeen: IdSet.decodeGuidForm(s.cnsetSeen.encodeGuidForm()),
+  cnsetSeenFai: IdSet.decodeGuidForm(s.cnsetSeenFai.encodeGuidForm()),
+  cnsetRead: IdSet.decodeGuidForm(s.cnsetRead.encodeGuidForm()),
+});
+
+/** One download applied to the client model; an interrupted one keeps the checkpoint state. */
+function syncModel(server: FolderModel, client: Map<number, Set<string>>, state: IcsState, rnd: () => number, v: SyncVariant, complete: boolean): { state: IcsState; complete: boolean } {
+  const highestModSeq = server.modSeq;
+  if (rnd() < 0.2) server.randomChange(rnd); // committed between reading the modSeq and listing the folder
+  const inScope = v.restricted ? (m: MessageSummary): boolean => !m.flags.includes('\\Seen') : (): boolean => true;
+  const input: ContentsInput = {
+    guids: storeGuids('mb1'), messages: server.summaries(), inScope, state: roundTrip(state), highestModSeq, replaced: new Set(),
+    options: {
+      normal: true, readState: v.readState, noDeletions: false, ignoreNoLongerInScope: false,
+      orderByDeliveryTime: rnd() < 0.5, restricted: v.restricted,
+    },
+  };
+  const plan = planContents(input);
+  const interrupted = !complete && plan.changes.length > 0 && rnd() < 0.25;
+  const sent = interrupted ? Math.floor(rnd() * plan.changes.length) : plan.changes.length;
+  for (const m of plan.changes.slice(0, sent)) client.set(m.uid, new Set(m.flags));
+  if (interrupted) return { state: contentsStateAfter(input, plan, sent, false), complete: false };
+  for (const m of plan.readChanges) {
+    const flags = client.get(m.uid);
+    assert.ok(flags, `read-state change of message ${m.uid} the client does not have`);
+    if (isRead(m)) flags.add('\\Seen'); else flags.delete('\\Seen');
+  }
+  for (const r of [...plan.deleted, ...plan.noLongerInScope]) for (let id = r.low; id <= r.high; id++) client.delete(Number(id));
+  return { state: contentsStateAfter(input, plan, sent, true), complete: true };
+}
+
+function assertClientMatches(server: FolderModel, client: Map<number, Set<string>>, v: SyncVariant, step: string): void {
+  const expected = [...server.messages.values()].filter((m) => !v.restricted || !m.flags.includes('\\Seen'));
+  assert.deepEqual([...client.keys()].sort((a, b) => a - b), expected.map((m) => m.uid).sort((a, b) => a - b), `${step}: messages`);
+  for (const m of expected) assert.equal(visibleFlags(client.get(m.uid)!), visibleFlags(m.flags), `${step}: flags of ${m.uid}`);
+}
+
+test('review: model-based contents synchronization — after every complete download the client equals the folder (new, changed, read, deleted, moved; interrupted downloads resume from their checkpoint)', () => {
+  const variants: SyncVariant[] = [
+    { readState: true, restricted: false }, { readState: false, restricted: false }, { readState: true, restricted: true },
+  ];
+  for (const v of variants) {
+    for (const seed of [1, 2, 3, 4]) {
+      const rnd = prng(seed * 7919 + (v.readState ? 1 : 0) + (v.restricted ? 2 : 0));
+      const server = new FolderModel();
+      const client = new Map<number, Set<string>>();
+      let state = emptyState();
+      for (let step = 0; step < 400; step++) {
+        for (let k = Math.floor(rnd() * 3); k > 0; k--) server.randomChange(rnd);
+        if (rnd() < 0.5) continue;
+        const result = syncModel(server, client, state, rnd, v, step === 399);
+        state = result.state;
+        if (result.complete) assertClientMatches(server, client, v, `${JSON.stringify(v)} seed ${seed} step ${step}`);
+      }
+      state = syncModel(server, client, state, rnd, v, true).state;
+      assertClientMatches(server, client, v, `${JSON.stringify(v)} seed ${seed} final`);
+      const quiet = planContents({
+        guids: storeGuids('mb1'), messages: server.summaries(), inScope: v.restricted ? (m) => !m.flags.includes('\\Seen') : () => true,
+        state, highestModSeq: server.modSeq, replaced: new Set(),
+        options: { normal: true, readState: v.readState, noDeletions: false, ignoreNoLongerInScope: false, orderByDeliveryTime: false, restricted: v.restricted },
+      });
+      assert.deepEqual([quiet.changes.length, quiet.readChanges.length, quiet.deleted.length], [0, 0, 0], 'nothing is sent twice');
+    }
+  }
+});
+
+test('review: a state of another mailbox (another replica GUID) names nothing here — a full download, no deletions', () => {
+  const server = new FolderModel();
+  for (let i = 0; i < 5; i++) server.add([]);
+  const foreign = emptyState();
+  foreign.idsetGiven = IdSet.of(replicaGuid('mb2'), [1n, 2n, 3n, 99n]);
+  foreign.cnsetSeen = IdSet.of(replicaGuid('mb2'), [1n, 2n, 3n, 4n, 5n]);
+  const plan = planContents({
+    guids: storeGuids('mb1'), messages: server.summaries(), inScope: () => true, state: foreign, highestModSeq: server.modSeq,
+    replaced: new Set(),
+    options: { normal: true, readState: true, noDeletions: false, ignoreNoLongerInScope: false, orderByDeliveryTime: false, restricted: false },
+  });
+  assert.deepEqual(plan.changes.map((m) => m.uid), [1, 2, 3, 4, 5]);
+  assert.deepEqual([plan.readChanges.length, plan.deleted.length, plan.noLongerInScope.length], [0, 0, 0]);
+});
+
+// ── Hierarchy, upload and limits ─────────────────────────────────────────────
+
+test('review: hierarchy sync sends a folder again when it returns to an earlier name or place; a folder moved out of the synchronized subtree is deleted', async () => {
+  const h = new Harness();
+  const mailbox = h.store.mailboxes.get('mb1')!;
+  const projects = h.store.addFolder('mb1', 'Projects', null);
+  await h.logon();
+  const opts = { flags: ICS.FlagUnicode };
+  let state = decodeIcsStream((await download(h, h.ipmSubtree, ICS.SyncHierarchy, opts)).stream).state;
+  const step = async (): Promise<Array<unknown>> => {
+    const stream = (await download(h, h.ipmSubtree, ICS.SyncHierarchy, { ...opts, state })).stream;
+    state = decodeIcsStream(stream).state;
+    return decodeHierarchyStream(stream).map((f) => f.get(TAG.DisplayName));
+  };
+  await h.store.renameFolder(mailbox, projects.id, null, 'Renamed');
+  assert.deepEqual(await step(), ['Renamed']);
+  await h.store.renameFolder(mailbox, projects.id, null, 'Projects');
+  assert.deepEqual(await step(), ['Projects'], 'renamed back: the client still shows "Renamed"');
+  assert.deepEqual(await step(), [], 'then nothing');
+
+  // A hierarchy synchronization of the Inbox: its subfolder moves to the top level.
+  const inboxRecord = h.store.folderByName('mb1', 'INBOX');
+  const child = h.store.addFolder('mb1', 'INBOX.Child', inboxRecord.id, 'Child');
+  const inboxState = decodeIcsStream((await download(h, h.inbox, ICS.SyncHierarchy, opts)).stream).state;
+  await h.store.renameFolder(mailbox, child.id, null, 'Child');
+  const moved = decodeIcsStream((await download(h, h.inbox, ICS.SyncHierarchy, { ...opts, state: inboxState })).stream);
+  assert.equal(moved.deleted.length, 1, 'the folder left the synchronized subtree');
+});
+
+test('review: hierarchy import of an unchanged special folder below the root is accepted; changing it is still refused', async () => {
+  const h = new Harness();
+  await h.logon();
+  const finder = sourceKey(8n); // SpecialCounter.Finder, a child of the root folder
+  let r = await h.run(rop.openFolder(0, 1, h.root), rop.openCollector(1, 4, false), rop.importHierarchyChange(4, Buffer.alloc(0), finder, 'Finder'));
+  ok(r, RopId.OpenFolder); r.u8(); r.u8();
+  ok(r, RopId.SynchronizationOpenCollector);
+  ok(r, RopId.SynchronizationImportHierarchyChange);
+  r = await h.run(rop.importHierarchyChange(4, Buffer.alloc(0), finder, 'Search'));
+  assert.equal(responseHead(r).returnValue, 0x80070005);
+});
+
+test('review: replaced client IDs per mailbox are capped (the oldest go); client IDs per session are bounded', async () => {
+  const redis = new MemoryRedis();
+  let clock = 0;
+  const ids = createRedisLocalIdStore(() => redis, () => ++clock);
+  const many = Array.from({ length: MAX_REPLACED_IDS + 5 }, (_, i) => LOCAL_ID_BASE + BigInt(i));
+  await ids.addReplaced('mb1', many);
+  const kept = await ids.replaced('mb1');
+  assert.equal(kept.size, MAX_REPLACED_IDS);
+  assert.equal(kept.has(LOCAL_ID_BASE), false, 'the oldest entry went');
+  assert.equal(kept.has(many.at(-1)!), true);
+
+  const h = new Harness();
+  await h.logon();
+  const batch = Array.from({ length: 64 }, () => rop.getLocalReplicaIds(0, 0x10000));
+  for (let i = 0; i < 4; i++) {
+    const res = await h.run(...batch);
+    for (let k = 0; k < 64; k++) { ok(res, RopId.GetLocalReplicaIds); res.bytes(22); }
+  }
+  assert.equal(responseHead(await h.run(rop.getLocalReplicaIds(0, 1))).returnValue, 0x000004d9, 'the 257th batch is refused');
+});
+
+test('review: address book ISO-8859 code pages keep their C1 controls (no Windows characters at 0x80–0x9F)', () => {
+  assert.equal(encoderFor(28591)!('€\u0080é').toString('hex'), '3f80e9');
+  assert.equal(encoderFor(28599)!('€\u0080ş').toString('hex'), '3f80fe');
+  assert.equal(encoderFor(1252)!('€\u0080é').toString('hex'), '803fe9', 'Windows-1252 has the euro sign at 0x80');
 });

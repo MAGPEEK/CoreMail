@@ -23,7 +23,7 @@ import { MessageFlag, Tag, propIdOf } from '../../props/tags.js';
 import { readTaggedValue, type PropValue, type TaggedValue } from '../../props/values.js';
 import { globcntOfSourceKey, isLocalReplicaId, isServerMessageId } from '../../ics/keys.js';
 import { emptyState, type SyncKind } from '../../ics/state.js';
-import { MAX_LOCAL_IDS_PER_REQUEST } from '../../store/local-ids.js';
+import { MAX_LOCAL_IDS_PER_REQUEST, MAX_LOCAL_IDS_PER_SESSION } from '../../store/local-ids.js';
 import { composeMessage } from './compose.js';
 import { folderNode, folderRecordId, refreshView } from './common.js';
 import type { FolderNode } from '../../objects/mailbox-view.js';
@@ -178,9 +178,13 @@ export const ropImportHierarchyChange = defineRop<ImportHierarchyReq>({
     const parent = parentOf(logon, sync, binaryOf(req.hierarchy, Tag.ParentSourceKey));
     const name = (stringProp(new Map(req.hierarchy.map((v) => [v.tag, v.value])), Tag.DisplayName) ?? '').trim();
     if (!name) throw new RopError(Ec.InvalidParameter, 'empty folder name');
-    if (!parent.record && parent.special !== 'ipmSubtree') throw new RopError(Ec.AccessDenied, 'folders cannot be created here');
     const gc = globcntOfSourceKey(logon.guids, binaryOf(req.hierarchy, Tag.SourceKey));
     const existing = gc !== null ? view.get(gc) : undefined;
+    // An unchanged folder (also a special one outside the IPM subtree) is accepted as it is.
+    const unchanged = existing !== undefined && existing.displayName === name && existing.parentCounter === parent.counter;
+    if (!unchanged && !parent.record && parent.special !== 'ipmSubtree') {
+      throw new RopError(Ec.AccessDenied, 'folders cannot be created or moved here');
+    }
     if (existing) {
       await updateFolder(ctx.store, logon, existing, parent, name);
     } else {
@@ -320,6 +324,10 @@ export const ropGetLocalReplicaIds = defineRop<LocalIdsReq>({
     const { logon } = objectOf(ctx, req.inputIndex, 'logon');
     if (req.count < 1 || req.count > MAX_LOCAL_IDS_PER_REQUEST) throw new RopError(Ec.InvalidParameter, 'IdCount out of range');
     assertWritable(logon);
+    if (ctx.session.localIdsReserved + req.count > MAX_LOCAL_IDS_PER_SESSION) {
+      throw new RopError(Ec.QuotaExceeded, 'client IDs of this session used up');
+    }
+    ctx.session.localIdsReserved += req.count;
     const first = await ctx.store.reserveLocalIds(logon.mailbox.mailboxId, req.count);
     const gc = Buffer.alloc(6);
     gc.writeUIntBE(Number(first), 0, 6);

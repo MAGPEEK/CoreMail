@@ -12,7 +12,7 @@
  */
 import { BufferReader } from '../../wire/reader.js';
 import { Ec, RopError, RopId } from '../codes.js';
-import { defineRop, NeedsMoreSpace, objectOf, okResponse, putObject, assertMemory, type RopDef } from '../context.js';
+import { defineRop, NeedsMoreSpace, objectOf, okResponse, putObject, assertMemory, memoryLeft, type RopDef } from '../context.js';
 import { parseRestriction, restrictionNodeCount, type Restriction } from '../../props/restriction.js';
 import { folderNode, refreshView } from './common.js';
 import { MAX_RESTRICTION_NODES } from './table.js';
@@ -21,6 +21,7 @@ import { globcntOfId } from '../../ics/keys.js';
 import { has, SyncFlag, SyncType, type SyncConfig } from '../../ics/config.js';
 import { startDownload } from '../../ics/download.js';
 import { FxWriter } from '../../ics/fx-stream.js';
+import { RANGE_BYTES } from '../../ics/globset.js';
 import { fixedSource, MIN_TRANSFER_BUFFER, type FastTransferSource } from '../../ics/transfer.js';
 import {
   beginStateUpload, continueStateUpload, emptyState, endStateUpload, writeState,
@@ -173,7 +174,8 @@ export const ropUploadStateStreamEnd = defineRop<IndexReq>({
     const upload = sync.stateUpload;
     if (!upload) throw new RopError(Ec.InvalidParameter, 'no state upload in progress');
     sync.stateUpload = null;
-    endStateUpload(upload, sync.state, logon.guids);
+    // The decoded state counts against the session's memory budget (objects/footprint.ts).
+    endStateUpload(upload, sync.state, logon.guids, Math.floor(memoryLeft(ctx) / RANGE_BYTES));
     return okResponse(RopId.SynchronizationUploadStateStreamEnd, req.inputIndex).toBuffer();
   },
 });

@@ -151,6 +151,8 @@ export interface HierarchyInput {
 }
 
 export interface HierarchyPlan {
+  /** Every folder below the synchronization root, parents before children. */
+  inScope: FolderNode[];
   /** New or changed folders, parents before children. */
   changes: FolderNode[];
   deleted: Range[];
@@ -158,24 +160,32 @@ export interface HierarchyPlan {
 
 export function planHierarchy(input: HierarchyInput): HierarchyPlan {
   const replica = input.guids.replica;
-  const changes = input.view.descendants(input.root)
-    .map((d) => d.node)
-    .filter((node) => !input.state.cnsetSeen.has(replica, folderChangeNumber(node)));
+  const inScope = input.view.descendants(input.root).map((d) => d.node);
+  const changes = inScope.filter((node) => !input.state.cnsetSeen.has(replica, folderChangeNumber(node)));
   let deleted: Range[] = [];
   if (!input.noDeletions) {
-    const present = rangesOf(input.view.descendants(input.view.special('root').counter).map((d) => d.node.counter)
-      .concat(input.view.special('root').counter));
+    // Folders the client has that left the synchronization scope (deleted, or moved out of the root's subtree).
+    const present = rangesOf(inScope.map((n) => n.counter).concat(input.root));
     deleted = subtract(deletable(input.state.idsetGiven.ranges(replica), input.replaced, FOLDER_RANGES), present);
   }
-  return { changes, deleted };
+  return { inScope, changes, deleted };
 }
 
+/**
+ * The ICS state after `sent` folder changes. A folder's CN is derived from
+ * what the hierarchy shows (keys.ts), so it recurs when a folder returns to an
+ * earlier state (renamed or moved back): the final CnsetSeen therefore names
+ * exactly the CNs of the folders in scope — all of them were sent or already
+ * seen — instead of every CN ever seen, so such a return is sent again.
+ */
 export function hierarchyStateAfter(input: HierarchyInput, plan: HierarchyPlan, sent: number, complete: boolean): IcsState {
   const replica = input.guids.replica;
   const changes = plan.changes.slice(0, sent);
   const out = emptyState();
   out.idsetGiven = input.state.idsetGiven.clone().add(replica, changes.map((n) => n.counter));
   if (complete) out.idsetGiven.removeRanges(replica, plan.deleted);
-  out.cnsetSeen = input.state.cnsetSeen.clone().add(replica, changes.map(folderChangeNumber));
+  out.cnsetSeen = complete
+    ? input.state.cnsetSeen.clone().setRanges(replica, rangesOf(plan.inScope.map(folderChangeNumber)))
+    : input.state.cnsetSeen.clone().add(replica, changes.map(folderChangeNumber));
   return out;
 }

@@ -24,9 +24,6 @@ export const SyncFlag = {
   Progress: 0x8000,
 } as const;
 
-/** Every flag a client may send (3.2.5.9.1.1: unknown bits fail the ROP). */
-export const KNOWN_SYNC_FLAGS = Object.values(SyncFlag).reduce((a, b) => a | b, 0) & ~SyncFlag.Reserved;
-
 export const SyncExtraFlag = { Eid: 0x01, MessageSize: 0x02, CN: 0x04, OrderByDeliveryTime: 0x08 } as const;
 
 export interface SyncConfig {

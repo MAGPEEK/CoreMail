@@ -26,6 +26,14 @@ const LABELS: Readonly<Record<number, string>> = {
   28603: 'iso-8859-13', 28605: 'iso-8859-15',
 };
 const DOUBLE_BYTE = new Set([932, 936, 949, 950]);
+/**
+ * ISO-8859 code pages: bytes 0x80–0x9F are the C1 controls. The runtime's
+ * decoder treats iso-8859-1 / -9 as windows-1252 / -1254 (WHATWG labels),
+ * whose 0x80–0x9F are printable characters (€ …) that these code pages lack.
+ */
+const ISO_8859 = (codePage: number): boolean => codePage >= 28591 && codePage <= 28605;
+const C1_FIRST = 0x80;
+const C1_LAST = 0x9f;
 
 export type Encoder = (s: string) => Buffer;
 
@@ -48,6 +56,13 @@ function buildTable(decoder: TextDecoder, doubleByte: boolean): Map<string, Buff
   return table;
 }
 
+/** An ISO-8859 table with C1 controls at 0x80–0x9F. */
+function withC1Controls(table: Map<string, Buffer>): Map<string, Buffer> {
+  for (const [ch, bytes] of table) if (bytes.length === 1 && bytes[0]! >= C1_FIRST && bytes[0]! <= C1_LAST) table.delete(ch);
+  for (let b = C1_FIRST; b <= C1_LAST; b++) table.set(String.fromCharCode(b), Buffer.from([b]));
+  return table;
+}
+
 function tableEncoder(table: Map<string, Buffer>): Encoder {
   return (s) => Buffer.concat([...s].map((ch) => table.get(ch) ?? Buffer.from([QUESTION])));
 }
@@ -65,6 +80,7 @@ export function encoderFor(codePage: number): Encoder | null {
     const decoder = decoderFor(label);
     if (!decoder) return null;
     table = buildTable(decoder, DOUBLE_BYTE.has(codePage));
+    if (ISO_8859(codePage)) table = withC1Controls(table);
     tables.set(codePage, table);
   }
   return tableEncoder(table);

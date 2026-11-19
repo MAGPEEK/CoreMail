@@ -18,7 +18,7 @@
 - MailStore: `importMessage`, `renameFolder`, local replica ID ranges and replaced client IDs
   (Redis `mapi:local-ids:<mailboxId>`, `mapi:replaced-ids:<mailboxId>`), `foreignAccess`.
 - e2e step `mapi`: ICS initial and incremental synchronization of the Inbox (new mail + read
-  change), hierarchy synchronization.
+  change), a malformed state upload (`RpcFormat`), hierarchy synchronization.
 
 ### Changed
 
@@ -38,7 +38,25 @@
 - MAPI over HTTP: revoking a Shared Mailbox permission or a delegation (or deactivating the owner)
   ends that mailbox's logon in open MAPI sessions at once (objects released, no further
   notifications); a permission reduced to read-only applies to the next write.
+- MAPI cached mode (review): an uploaded ICS state is bounded — its decoded ranges count against
+  the session memory budget (over it → `ecMAPIOOM`), all GLOBSETs of one state share one range
+  budget and a repeated replica is merged once (no quadratic merging); a malformed IDSET is
+  answered with `RpcFormat`. Replaced client IDs are capped at the newest 100 000 per mailbox
+  (`mapi:replaced-ids`), client IDs at 256 × 0x10000 per session (`ecQuotaExceeded`). A
+  FastTransfer atom that cannot fit a buffer fails the ROP instead of returning empty Partial
+  buffers forever.
+
+### Fixed
+
+- MAPI cached mode (review): a folder renamed or moved back to an earlier name / place is sent
+  again by the hierarchy synchronization (folder change numbers derive from the folder's state, so
+  the final state keeps only the change numbers of the folders in scope); a folder moved out of the
+  synchronized subtree is reported deleted; an unchanged special folder below the root (uploaded by
+  the client with other properties) is accepted instead of `ecAccessDenied`.
+- MAPI address book (review): ISO-8859-1 / ISO-8859-9 strings keep the C1 controls at 0x80–0x9F
+  (the runtime decodes these labels as Windows-1252 / -1254).
 
 SemVer: MINOR (compatible protocol additions). Behaviour change to note: an address book `Bind`
-with `STAT.CodePage` = 1200 (CP_WINUNICODE) is now refused as the specification requires; Outlook
-binds with its ANSI code page.
+with `STAT.CodePage` = 1200 (CP_WINUNICODE) is now refused with `InvalidCodepage` (MS-OXNSPI
+3.1.4.1.1: the client must not bind with CP_WINUNICODE, the server returns an error; a code page
+the server does not serve → InvalidCodepage); Outlook binds with its ANSI code page.

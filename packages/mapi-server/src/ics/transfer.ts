@@ -56,6 +56,8 @@ export class FastTransferSource {
         head.piece = { bytes: head.piece.bytes.subarray(room), splittable: true };
         size = max;
       }
+      // An atom larger than a whole buffer would leave the client asking forever.
+      if (size === 0) throw new Error(`FastTransfer atom of ${head.piece.bytes.length} bytes exceeds the ${max}-byte buffer`);
       break;
     }
     // Look ahead so the buffer with the last bytes already says Done.

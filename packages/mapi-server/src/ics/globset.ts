@@ -9,6 +9,11 @@
  * Ranges are kept sorted and merged; set operations work on those arrays.
  * The encoder uses Push / Range / Pop only (every decoder understands them);
  * the decoder accepts every command. Pure module.
+ *
+ * Decoding is bounded by a range budget shared by every GLOBSET of one
+ * serialized value (a hostile ICS state cannot allocate without limit, review
+ * 9.5): exceeding it throws IdsetTooLargeError, a malformed command sequence
+ * WireFormatError (MS-OXCFXICS 3.1.5.4.3.2: RpcFormat).
  */
 import { WireFormatError, type BufferReader } from '../wire/reader.js';
 import { BufferWriter } from '../wire/writer.js';
@@ -24,8 +29,16 @@ const CMD_BITMASK = 0x42;
 const CMD_RANGE = 0x52;
 const CMD_END = 0x00;
 
-/** Upper bound for decoded ranges (a hostile state cannot allocate without limit). */
+/** Upper bound for the ranges of one decoded value (a hostile state cannot allocate without limit). */
 export const MAX_RANGES = 1_000_000;
+/** Approximate heap bytes of one decoded range (object + two bigints + array slot). */
+export const RANGE_BYTES = 96;
+
+/** More ranges than the decode budget allows. */
+export class IdsetTooLargeError extends Error {}
+
+/** Ranges a decode may still produce; shared by the GLOBSETs of one serialized value. */
+export interface RangeBudget { left: number }
 
 function globcntBytes(v: bigint): Buffer {
   const b = Buffer.alloc(GLOBCNT_BYTES);
@@ -33,8 +46,11 @@ function globcntBytes(v: bigint): Buffer {
   return b;
 }
 
-function globcntOfBytes(b: Buffer): bigint {
-  return BigInt(b.readUIntBE(0, GLOBCNT_BYTES));
+/** Big-endian bytes → GLOBCNT (at most six bytes: exact as a double). */
+function globcntOf(bytes: readonly number[]): bigint {
+  let v = 0;
+  for (const b of bytes) v = v * 256 + b;
+  return BigInt(v);
 }
 
 /** Sorted, merged (adjacent ranges joined) copy of `ranges`. */
@@ -96,15 +112,6 @@ export function intersect(a: readonly Range[], b: readonly Range[]): Range[] {
   return subtract(a, subtract(a, b));
 }
 
-/** Every single value of the ranges (callers bound the size). */
-export function* valuesOf(ranges: readonly Range[]): Generator<bigint> {
-  for (const r of ranges) for (let v = r.low; v <= r.high; v++) yield v;
-}
-
-export function count(ranges: readonly Range[]): bigint {
-  return ranges.reduce((n, r) => n + (r.high - r.low + 1n), 0n);
-}
-
 function commonPrefix(a: Buffer, b: Buffer, from: number, max: number): number {
   let n = 0;
   while (n < max && a[from + n] === b[from + n]) n++;
@@ -148,15 +155,20 @@ function writeRange(w: BufferWriter, r: Range, depth: number): void {
 
 // ── Decoding ─────────────────────────────────────────────────────────────────
 
-/** Reads one GLOBSET (up to and including its End command). */
-export function decodeGlobset(r: BufferReader): Range[] {
+/** Reads one GLOBSET (up to and including its End command); sorted and merged. */
+export function decodeGlobset(r: BufferReader, budget: RangeBudget = { left: MAX_RANGES }): Range[] {
+  return normalize(decodeGlobsetRaw(r, budget));
+}
+
+/** The ranges of one GLOBSET in command order (callers normalize once per replica). */
+export function decodeGlobsetRaw(r: BufferReader, budget: RangeBudget): Range[] {
   const pushes: number[] = []; // byte count of each push on the stack
   const stack: number[] = [];
   const out: Range[] = [];
-  const value = (low: number[]): bigint => globcntOfBytes(Buffer.from([...stack, ...low]));
+  const value = (low: readonly number[]): bigint => globcntOf([...stack, ...low]);
   const add = (low: bigint, high: bigint): void => {
     if (low > high) throw new WireFormatError('GLOBSET range with low > high');
-    if (out.length >= MAX_RANGES) throw new WireFormatError('GLOBSET has too many ranges');
+    if (--budget.left < 0) throw new IdsetTooLargeError('IDSET has too many ranges');
     out.push({ low, high });
   };
   for (;;) {
@@ -199,5 +211,5 @@ export function decodeGlobset(r: BufferReader): Range[] {
       throw new WireFormatError(`unknown GLOBSET command 0x${cmd.toString(16)}`);
     }
   }
-  return normalize(out);
+  return out;
 }

@@ -246,6 +246,26 @@ export async function run(state) {
       return `delta: ${subjects.length} change(s), ${delta.read.length} read change(s)`;
     });
 
+    await check('mapi: cached mode — a malformed ICS state upload is refused with RpcFormat (no session failure)', async () => {
+      const logon = await client.execute([rop.logon(0)], [U]);
+      const l = decodeLogon(logon.rop.responses);
+      assert(l.returnValue === 0, `RopLogon 0x${l.returnValue.toString(16)}`);
+      const bad = Buffer.concat([Buffer.alloc(16, 1), Buffer.from([0x99])]); // REPLGUID + an unknown GLOBSET command
+      const r = await client.execute([
+        rop.openFolder(0, 1, l.folderIds[4]), rop.syncConfigure(1, 2, ICS.SyncContents, ICS.FlagUnicode | ICS.FlagNormal, 0),
+        rop.uploadStateBegin(2, ICS.CnsetSeen, bad.length), rop.uploadStateContinue(2, bad), rop.uploadStateEnd(2),
+      ], [logon.rop.handles[0], U, U]);
+      const resp = r.rop.responses;
+      assert(responseHead(resp).returnValue === 0, 'OpenFolder');
+      resp.bytes(2);
+      for (const what of ['SynchronizationConfigure', 'UploadStateStreamBegin', 'UploadStateStreamContinue']) {
+        assert(responseHead(resp).returnValue === 0, what);
+      }
+      const end = responseHead(resp).returnValue;
+      assert(end === 0x4b6, `UploadStateStreamEnd → 0x${end.toString(16)} (expected RpcFormat 0x4b6)`);
+      return 'RpcFormat';
+    });
+
     await check('mapi: cached mode — hierarchy sync lists the folder tree below Top of Information Store', async () => {
       const tree = decodeHierarchyStream((await icsDownload(client, 3, ICS.SyncHierarchy)).stream);
       const names = tree.map((f) => f.get(TAG.DisplayName));

@@ -165,10 +165,19 @@ property tag or fixed-size value. `RopSynchronizationGetTransferState` returns t
 before the download, the state of what was handed out completely during it (checkpoint) and the
 final state afterwards.
 
+An uploaded state property may be at most 16 MB; decoded, its ranges count against the session's
+memory budget (`MAPI_SESSION_MEMORY_MB`, about 96 bytes per range, at most 1 000 000 ranges per
+property): a larger state ends `RopSynchronizationUploadStateStreamEnd` with `ecMAPIOOM`, a malformed
+IDSET with `RpcFormat` (MS-OXCFXICS 3.1.5.4.3.2); the context stays usable.
+
 Identifiers: IDs are those of online mode (message ID = UID, folder ID from the folder id);
 PidTagSourceKey = replica GUID + the ID's 6-byte counter. The **change number** of a message is its
 modSeq (the message store gives every changed row the mailbox's next modSeq); folders have no
 modSeq — their change number is derived from what the hierarchy shows (name, parent, class, hidden).
+Such a change number recurs when a folder returns to an earlier state (renamed or moved back), so
+the final hierarchy state's MetaTagCnsetSeen names exactly the change numbers of the folders in
+scope rather than every one ever seen — a folder renamed back is sent again. A folder that left the
+synchronized subtree (deleted, or moved elsewhere) is reported deleted.
 PidTagChangeKey = replica GUID + the change number; PidTagPredecessorChangeList holds that change
 key. IDSETs (MetaTag*) are encoded as GLOBSETs (Push / Range / Pop / End; Bitmask is understood when
 decoding).
@@ -176,7 +185,9 @@ decoding).
 Read state: CoreMail never rewrites a stored message (saving a draft again, a move or a copy gives
 a new UID, so a new ID); an ID the client has can therefore only change its flags. Such a change is
 sent as a read-state change, unless the message carries `\Answered`, `$Forwarded` or `\Draft` (the
-icon or the draft state may have changed too) — then it is a full message change.
+icon or the draft state may have changed too) — then it is a full message change. Clearing one of
+these flags (another client removes `\Answered`) is not detected: the message store keeps no
+separate change number for the read state, see [Limits](#limits).
 
 **Upload** (`RopSynchronizationOpenCollector` on a folder): every write goes through the message
 store and the folder helpers, like online mode.
@@ -187,13 +198,13 @@ store and the folder helpers, like online mode.
 | `RopSynchronizationImportReadStateChanges` | read / unread (`\Seen` through the message store) |
 | `RopSynchronizationImportDeletes` | messages: tombstoned like `RopDeleteMessages` (recoverable 30 days, also with *HardDelete*); folders: deleted with their subfolders, mail to Deleted Items; default and special folders → `ecAccessDenied` |
 | `RopSynchronizationImportMessageMove` | move through the message store (new UID in the target) |
-| `RopSynchronizationImportHierarchyChange` | new folder; rename / move of a stored folder (default and special folders keep name and place → `ecAccessDenied`) |
-| `RopGetLocalReplicaIds`, `RopSetLocalReplicaMidsetDeleted` | ID ranges for objects the client creates offline (above every UID, Redis counter `mapi:local-ids:<mailboxId>`, seeded from the clock); unused ranges need nothing on the server |
+| `RopSynchronizationImportHierarchyChange` | new folder; rename / move of a stored folder (default and special folders keep name and place → `ecAccessDenied`; an unchanged one is accepted) |
+| `RopGetLocalReplicaIds`, `RopSetLocalReplicaMidsetDeleted` | ID ranges for objects the client creates offline (above every UID, Redis counter `mapi:local-ids:<mailboxId>`, seeded from the clock; at most 0x10000 per request and 256 × 0x10000 per session, beyond that `ecQuotaExceeded`); unused ranges need nothing on the server |
 
 An object the client created offline is stored under a server ID; its client ID is remembered
-(`mapi:replaced-ids:<mailboxId>`, 90 days) and the next download reports it deleted and sends the
-server's copy, so the client swaps its copy. Read-only (shared / delegated) logons refuse every
-import with `ecAccessDenied`.
+(`mapi:replaced-ids:<mailboxId>`, 90 days, the newest 100 000 per mailbox) and the next download
+reports it deleted and sends the server's copy, so the client swaps its copy. Read-only (shared /
+delegated) logons refuse every import with `ecAccessDenied`.
 
 ## Limits
 
@@ -204,6 +215,14 @@ import with `ecAccessDenied`.
   / `CopyMessages` / `CopyFolder` / `CopyProperties`, `RopFastTransferDestination*`) are not
   implemented; strings for a client without the *Unicode* flag are Latin-1. Changes of received
   messages other than the read state (categories, follow-up flags of the client) are not uploaded.
+  Client-assigned IDs are replaced, not adopted (MS-OXCFXICS 3.3.5.2.1 expects the server to keep
+  them): until the next download swaps the copy, the client cannot address an object it created
+  offline by its own ID (opening a folder it just created, changing or moving a message it created
+  offline → `ecNotFound` or, for a message change, a second copy). No conflict detection on upload
+  (the last change wins), and the upload context's state does not record the uploaded change
+  numbers, so the next download sends the client's own changes back once. A flag cleared by
+  another client (`\Answered`, `$Forwarded`, `\Draft`) keeps the old icon / draft state in Outlook
+  until the message changes otherwise.
 - Unknown ROPs fail the whole Execute with `ecRpcFormat` (as the specification requires) — Outlook
   operations that need further ROPs (rules, permissions, search folders, `ReadRecipients`,
   `GetPropertiesList`, bookmarks …) do not work yet.

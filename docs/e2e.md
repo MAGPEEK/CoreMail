@@ -187,7 +187,8 @@ Cached mode (9.5): an ICS contents synchronization of the Inbox (`RopSynchroniza
 `RopFastTransferSourceGetBuffer` until Done) carries the mail and ends with an ICS state; after a new
 mail and `RopSetMessageReadFlag` on the first one, a synchronization with that state (uploaded with
 `RopSynchronizationUploadStateStream*`) sends only the new mail as a change and the read state as
-`IncrSyncRead`, a third one nothing; a hierarchy synchronization lists INBOX, Sent and Outbox. A
+`IncrSyncRead`, a third one nothing; a malformed uploaded state is refused with `RpcFormat`; a
+hierarchy synchronization lists INBOX, Sent and Outbox. A
 then creates a message in the Outbox (`SetProperties`, `ModifyRecipients`, `SubmitMessage`) that
 reaches B (IMAP search). The address book: `Bind`, `GetSpecialTable`, `QueryRows` (paged) lists A and
 B, `ResolveNames` finds B by address (an unknown address stays unresolved), `DNToMId` maps A's DN,

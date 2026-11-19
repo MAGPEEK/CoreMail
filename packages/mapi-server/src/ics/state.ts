@@ -12,9 +12,10 @@
  */
 import { Ec, RopError } from '../rop/codes.js';
 import { REPLID, type StoreGuids } from '../ids.js';
+import { WireFormatError } from '../wire/reader.js';
 import { IdSet } from './idset.js';
 import { Marker, type FxWriter } from './fx-stream.js';
-import type { Range } from './globset.js';
+import { IdsetTooLargeError, MAX_RANGES, RANGE_BYTES, type Range } from './globset.js';
 
 export const MetaTag = {
   IdsetGiven: 0x40170003,
@@ -71,14 +72,26 @@ export function continueStateUpload(upload: StateUpload, data: Buffer): void {
   upload.size += data.length;
 }
 
-/** Ends an upload: the property replaces the one in `state` (a malformed IDSET → ecRpcFormat-like failure). */
-export function endStateUpload(upload: StateUpload, state: IcsState, guids: StoreGuids): void {
+/**
+ * Ends an upload: the property replaces the one in `state`. At most
+ * `maxRanges` decoded ranges (the session's memory budget) → else ecMAPIOOM;
+ * a malformed IDSET → RpcFormat (MS-OXCFXICS 3.1.5.4.3.2).
+ */
+export function endStateUpload(upload: StateUpload, state: IcsState, guids: StoreGuids, maxRanges: number): void {
   const value = Buffer.concat(upload.chunks);
   try {
-    state[upload.key] = IdSet.decodeStateValue(value, (replid) => (replid === REPLID ? guids.replica : null));
+    state[upload.key] = IdSet.decodeStateValue(value, (replid) => (replid === REPLID ? guids.replica : null), Math.min(maxRanges, MAX_RANGES));
   } catch (err) {
-    throw new RopError(Ec.InvalidParameter, `malformed ${upload.key}: ${(err as Error).message}`);
+    if (err instanceof IdsetTooLargeError) throw new RopError(Ec.OutOfMemory, `${upload.key} has too many ranges`);
+    if (err instanceof WireFormatError) throw new RopError(Ec.RpcFormat, `malformed ${upload.key}: ${err.message}`);
+    throw err;
   }
+}
+
+/** Approximate heap bytes of a decoded ICS state (session memory accounting). */
+export function stateBytes(state: IcsState): number {
+  const ranges = state.idsetGiven.rangeCount + state.cnsetSeen.rangeCount + state.cnsetSeenFai.rangeCount + state.cnsetRead.rangeCount;
+  return ranges * RANGE_BYTES;
 }
 
 export type SyncKind = 'contents' | 'hierarchy';

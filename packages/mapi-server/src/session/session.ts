@@ -52,6 +52,8 @@ export class MapiSession {
   /** Byte budget of the open server objects (messages, attachments, streams). */
   readonly memoryLimit: number;
   readonly endpoint: Endpoint;
+  /** Client IDs reserved by RopGetLocalReplicaIds in this session (bounded, store/local-ids.ts). */
+  localIdsReserved = 0;
   private draftCounter = DRAFT_COUNTER_BASE;
 
   constructor(

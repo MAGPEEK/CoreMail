@@ -11,7 +11,9 @@
  */
 import { BufferReader, WireFormatError } from '../wire/reader.js';
 import { BufferWriter } from '../wire/writer.js';
-import { contains, decodeGlobset, encodeGlobset, normalize, rangesOf, subtract, union, type Range } from './globset.js';
+import {
+  contains, decodeGlobsetRaw, encodeGlobset, normalize, rangesOf, subtract, union, MAX_RANGES, type Range,
+} from './globset.js';
 
 const GUID_BYTES = 16;
 
@@ -23,37 +25,49 @@ export class IdSet {
     return new IdSet().add(guid, values);
   }
 
-  /** REPLGUID-based serialization (ICS state properties). */
-  static decodeGuidForm(buf: Buffer): IdSet {
-    const set = new IdSet();
+  /**
+   * Replica / GLOBSET pairs of a serialized IDSET; the ranges of one replica
+   * are collected and merged once (a replica may repeat: linear, not
+   * quadratic), at most `maxRanges` ranges in all (IdsetTooLargeError).
+   */
+  private static decode(buf: Buffer, replicaOf: (r: BufferReader) => Buffer, maxRanges: number): IdSet {
+    const budget = { left: maxRanges };
+    const raw = new Map<string, Range[]>();
     const r = new BufferReader(buf);
     while (!r.atEnd) {
-      const guid = r.bytes(GUID_BYTES);
-      set.addRanges(guid, decodeGlobset(r));
+      const key = replicaOf(r).toString('hex');
+      const ranges = decodeGlobsetRaw(r, budget);
+      const list = raw.get(key);
+      if (list) for (const range of ranges) list.push(range);
+      else raw.set(key, ranges);
     }
+    const set = new IdSet();
+    for (const [key, ranges] of raw) set.byGuid.set(key, normalize(ranges));
     return set;
+  }
+
+  /** REPLGUID-based serialization (ICS state properties). */
+  static decodeGuidForm(buf: Buffer, maxRanges = MAX_RANGES): IdSet {
+    return IdSet.decode(buf, (r) => r.bytes(GUID_BYTES), maxRanges);
   }
 
   /** REPLID-based serialization; `guidOf` maps a REPLID to its replica GUID (null: unknown → error). */
-  static decodeReplidForm(buf: Buffer, guidOf: (replid: number) => Buffer | null): IdSet {
-    const set = new IdSet();
-    const r = new BufferReader(buf);
-    while (!r.atEnd) {
+  static decodeReplidForm(buf: Buffer, guidOf: (replid: number) => Buffer | null, maxRanges = MAX_RANGES): IdSet {
+    return IdSet.decode(buf, (r) => {
       const replid = r.u16();
       const guid = guidOf(replid);
       if (!guid) throw new WireFormatError(`IDSET names unknown REPLID ${replid}`);
-      set.addRanges(guid, decodeGlobset(r));
-    }
-    return set;
+      return guid;
+    }, maxRanges);
   }
 
   /** An ICS state value: REPLGUID form, or REPLID form when it does not parse as such. */
-  static decodeStateValue(buf: Buffer, guidOf: (replid: number) => Buffer | null): IdSet {
+  static decodeStateValue(buf: Buffer, guidOf: (replid: number) => Buffer | null, maxRanges = MAX_RANGES): IdSet {
     try {
-      return IdSet.decodeGuidForm(buf);
+      return IdSet.decodeGuidForm(buf, maxRanges);
     } catch (err) {
       if (!(err instanceof WireFormatError)) throw err;
-      return IdSet.decodeReplidForm(buf, guidOf);
+      return IdSet.decodeReplidForm(buf, guidOf, maxRanges);
     }
   }
 
@@ -87,8 +101,17 @@ export class IdSet {
     return contains(this.ranges(guid), value);
   }
 
-  get isEmpty(): boolean {
-    return [...this.byGuid.values()].every((r) => r.length === 0);
+  /** Ranges held over every replica (session memory accounting). */
+  get rangeCount(): number {
+    let n = 0;
+    for (const r of this.byGuid.values()) n += r.length;
+    return n;
+  }
+
+  /** Replaces the values of one replica. */
+  setRanges(guid: Buffer, ranges: readonly Range[]): this {
+    this.byGuid.set(guid.toString('hex'), normalize(ranges));
+    return this;
   }
 
   add(guid: Buffer, values: Iterable<bigint>): this {

@@ -102,6 +102,11 @@ export function assertMemory(ctx: RopContext, extraBytes: number, code: number =
   if (!fitsMemory(ctx, extraBytes)) throw new RopError(code, 'session memory budget exceeded');
 }
 
+/** Bytes the session's server objects may still grow by. */
+export function memoryLeft(ctx: RopContext): number {
+  return Math.max(0, ctx.session.memoryLimit - sessionFootprint(ctx.session.objects.all()));
+}
+
 export function fitsMemory(ctx: RopContext, extraBytes: number): boolean {
   return extraBytes <= 0 || sessionFootprint(ctx.session.objects.all()) + extraBytes <= ctx.session.memoryLimit;
 }
