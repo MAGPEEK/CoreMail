@@ -33,3 +33,7 @@ notes: rooms and equipment that receive invitations by mail now send reply mails
 - No automatic answer to an unauthenticated organizer (no backscatter to forged addresses), a null
   envelope sender, automatically submitted, bulk or mailing-list mail, automated senders, the
   resource itself or another resource mailbox — no reply loops between resources or with bounces.
+- No answer to an `ORGANIZER` that is not one plain address (an address list such as `a@x,b@y`
+  could otherwise add recipients to the reply envelope), and at most 30 answers per resource and
+  organizer within an hour (the booking is still decided; no Redis = no mail). The subject carries
+  at most 120 characters of the meeting title.

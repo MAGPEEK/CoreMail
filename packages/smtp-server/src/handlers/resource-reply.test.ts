@@ -48,7 +48,7 @@ const db = {
 const { processResourceMailboxes } = await import('./resource-booking.js');
 const {
   replySuppression, partstatFor, replySubject, buildResourceReplies, answerOrganizer, answeredEvents,
-  setResourceReplyDeps, MAX_OCCURRENCE_REPLIES, MAX_TEXT_CONFLICTS,
+  setResourceReplyDeps, isPlainAddress, replyRateKey, MAX_OCCURRENCE_REPLIES, MAX_TEXT_CONFLICTS, MAX_SUBJECT_SUMMARY, REPLY_LIMIT,
 } = await import('./resource-reply.js');
 const { parseITipReply } = await import('@coremail/storage');
 
@@ -57,11 +57,19 @@ const ORG = 'org@ext.test';
 const AUTH = { verifiedDomains: ['ext.test'] };
 
 const sent: Array<{ from: string; to: string; raw: Buffer }> = [];
-setResourceReplyDeps({
-  isResourceAddress: async (a) => a === room.email || a === OTHER_ROOM,
-  enqueue: async (job) => { sent.push(job); },
-});
-beforeEach(() => { bookings.length = 0; sent.length = 0; room = { ...ROOM }; });
+/** In-memory reply counters (the Redis window never expires within a test). */
+const counters = new Map<string, number>();
+const testDeps = {
+  isResourceAddress: async (a: string) => a === room.email || a === OTHER_ROOM,
+  enqueue: async (job: { from: string; to: string; raw: Buffer }) => { sent.push(job); },
+  allow: async (key: string, count: number) => {
+    const total = (counters.get(key) ?? 0) + count;
+    counters.set(key, total);
+    return total <= REPLY_LIMIT;
+  },
+};
+setResourceReplyDeps(testDeps);
+beforeEach(() => { bookings.length = 0; sent.length = 0; counters.clear(); room = { ...ROOM }; });
 
 function vcal(method: string, events: string[][]): string {
   return ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Test//EN', `METHOD:${method}`,
@@ -116,7 +124,7 @@ test('loop safety: another resource mailbox as organizer gets no answer; a faili
   const answer = { decision: { status: 'ACCEPTED' as const }, conflicts: [], occurrencesOnly: false };
   assert.equal(await answerOrganizer(room, { ...REQ, organizer: OTHER_ROOM, envelopeFrom: OTHER_ROOM }, 'u', answer, NOW), 'organizer is a resource');
   assert.equal(sent.length, 0);
-  const previous = setResourceReplyDeps({ isResourceAddress: async () => false, enqueue: async () => { throw new Error('redis down'); } });
+  const previous = setResourceReplyDeps({ ...testDeps, isResourceAddress: async () => false, enqueue: async () => { throw new Error('redis down'); } });
   try {
     assert.equal(await answerOrganizer(room, REQ, 'u', answer, NOW), 'error');
   } finally {
@@ -288,4 +296,62 @@ test('a REPLY (e.g. echoed back inside a bounce) sent to a room neither books it
   assert.deepEqual(await send(reply), [ROOM.email]);
   assert.equal(bookings.length, 0);
   assert.equal(sent.length, 0);
+});
+
+// ── review: backscatter and abuse limits ─────────────────────────────────────
+
+test('review: an ORGANIZER that is an address list never gets an answer (no extra envelope recipient)', async () => {
+  assert.equal(isPlainAddress('org@ext.test'), true);
+  assert.equal(isPlainAddress('o.rg+tag@sub.ext.test'), true);
+  for (const bad of ['victim@other.test,org@ext.test', 'a@b', 'a b@ext.test', '<org@ext.test>', 'org@ext.test.', 'org@@ext.test', '@ext.test', 'org@ext..test']) {
+    assert.equal(isPlainAddress(bad), false, bad);
+  }
+  assert.equal(replySuppression(room, { ...REQ, organizer: 'victim@other.test,org@ext.test' }), 'invalid organizer address');
+  // wiring: the domain after the last "@" is the authenticated one, the list still gets no mail
+  const listOrganizer = vcal('REQUEST', [[
+    'UID:l1', 'ORGANIZER:mailto:victim@other.test,org@ext.test', 'DTSTART:20261201T090000Z', 'DTEND:20261201T100000Z', 'SUMMARY:x',
+  ]]);
+  await send(listOrganizer);
+  assert.equal(sent.length, 0);
+});
+
+test('review: replies per resource and organizer are rate limited; the booking is decided anyway', async () => {
+  const answer = { decision: { status: 'ACCEPTED' as const }, conflicts: [], occurrencesOnly: false };
+  for (let i = 0; i < REPLY_LIMIT; i++) assert.equal(await answerOrganizer(room, REQ, `u${i}`, answer, NOW), 1);
+  assert.equal(await answerOrganizer(room, REQ, 'over', answer, NOW), 'rate limited');
+  assert.equal(sent.length, REPLY_LIMIT);
+  // another organizer (and another resource) has its own counter
+  assert.equal(await answerOrganizer(room, { ...REQ, organizer: 'other@ext.test', envelopeFrom: 'other@ext.test' }, 'o', answer, NOW), 1);
+  assert.notEqual(replyRateKey(room.email, ORG), replyRateKey(OTHER_ROOM, ORG));
+  assert.equal(replyRateKey('Room@Corp.test', 'ORG@ext.test'), replyRateKey(room.email, ORG));
+
+  sent.length = 0;
+  await send(vcal('REQUEST', [event('late', '20261201T090000Z', '20261201T100000Z')]));
+  assert.equal(booking('late').status, 'ACCEPTED');
+  assert.equal(sent.length, 0);
+});
+
+test('review: occurrence replies count one each against the limit; no counter → no mail (fail closed)', async () => {
+  const occurrences = vcal('REQUEST', Array.from({ length: 4 }, (_, i) =>
+    event('s', `2026120${i + 1}T140000Z`, `2026120${i + 1}T150000Z`, [`RECURRENCE-ID:2026120${i + 1}T093000Z`])));
+  const answer = { decision: { status: 'ACCEPTED' as const }, conflicts: [], occurrencesOnly: false };
+  assert.equal(await answerOrganizer(room, { ...REQ, icalData: occurrences }, 's', answer, NOW), 4);
+  assert.equal(counters.get(replyRateKey(room.email, ORG)), 4);
+  const previous = setResourceReplyDeps({ ...testDeps, allow: async () => { throw new Error('redis down'); } });
+  try {
+    sent.length = 0;
+    assert.equal(await answerOrganizer(room, REQ, 'u', answer, NOW), 'error');
+    assert.equal(sent.length, 0);
+  } finally {
+    setResourceReplyDeps(previous);
+  }
+});
+
+test('review: a very long meeting title is shortened in the subject (header line stays short)', () => {
+  const subject = replySubject('ACCEPTED', 'A'.repeat(5000));
+  assert.equal([...subject.slice('Angenommen: '.length)].length, MAX_SUBJECT_SUMMARY);
+  assert.ok(subject.endsWith('…'));
+  const longReq = { ...REQ, icalData: vcal('REQUEST', [['UID:u', `ORGANIZER:mailto:${ORG}`, 'DTSTART:20261201T090000Z', 'DTEND:20261201T100000Z', `SUMMARY:${'Ä'.repeat(3000)}`]]) };
+  const [raw] = buildResourceReplies(room, longReq, 'u', { decision: { status: 'ACCEPTED' }, conflicts: [], occurrencesOnly: false }, NOW);
+  for (const line of head(raw!).split('\r\n')) assert.ok(line.length <= 998, `header line of ${line.length} octets`);
 });

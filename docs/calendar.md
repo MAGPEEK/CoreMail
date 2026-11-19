@@ -167,6 +167,7 @@ calendar servers (smtp-server `handlers/resource-reply.ts`, REPLY format from st
   is a `DECLINED` reply for exactly those occurrences while the series keeps the answer it had
   (iTIP allows several `VEVENT`s in one `REPLY`; one occurrence per mail is understood by every
   client, including CoreMail's own reply processing, which reads one component).
+- The subject shows at most 120 characters of the meeting title.
 - German text part: accepted / declined with the reason — the conflicting dates (up to 20 listed),
   outside the booking window, longer than allowed, series not allowed, series repeats too often,
   not bookable — or "muss noch genehmigt werden". Times are shown in the meeting's time zone.
@@ -180,8 +181,11 @@ No answer is sent (loop and backscatter safety) for `CANCEL`, `PUBLISH` and othe
 methods, an unauthenticated organizer (pending, no mail to a possibly forged address), a null
 envelope sender, mail with `Auto-Submitted` other than `no`, `Precedence: bulk|list|junk`,
 mailing-list headers or `X-Auto-Response-Suppress: All|AutoReply`, automated senders
-(MAILER-DAEMON, noreply …), an organizer that is the room itself or another resource mailbox,
-and rooms whose **send replies** setting is off (`ResourceMailbox.sendReplies`, default on;
+(MAILER-DAEMON, noreply …), an organizer that is not one plain address (e.g. a list
+`a@x,b@y` in `ORGANIZER`), an organizer that is the room itself or another resource mailbox,
+more than 30 answers of one room to one organizer within an hour (Redis counter; the booking is
+still decided, only the mail is skipped; no Redis = no mail), and rooms whose **send replies**
+setting is off (`ResourceMailbox.sendReplies`, default on;
 `POST`/`PUT /api/v1/admin/resources[/:id]` field `sendReplies`). A failed answer is logged and
 never fails the delivery.
 

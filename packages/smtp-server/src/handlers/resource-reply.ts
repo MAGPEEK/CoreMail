@@ -16,15 +16,19 @@
  *    window, duration, series not allowed, too frequent, not bookable) / needs approval.
  *  - Sent through the outbound queue with the resource as envelope sender and From
  *    (the worker signs with its domain's DKIM key), `Auto-Submitted: auto-replied`.
+ *  - Rate limit: at most {@link REPLY_LIMIT} REPLY mails per resource and organizer
+ *    within {@link REPLY_WINDOW_SEC} (Redis counter); beyond it the booking is still
+ *    decided, only the mail is skipped. No Redis = no mail (fail closed).
  *
  * Never answered (loop and backscatter safety): requests other than REQUEST (CANCEL,
- * PUBLISH …), an unauthenticated organizer (forged addresses get no mail), a null
+ * PUBLISH …), an unauthenticated organizer (forged addresses get no mail), an organizer
+ * that is not one plain address (a list such as `a@x,b@y` never reaches the envelope), a null
  * envelope sender (bounces), automatically submitted, bulk or list mail, automated
  * senders (MAILER-DAEMON, noreply …), the resource itself or another resource mailbox
  * as organizer, and resources with `sendReplies` switched off.
  */
-import { randomUUID } from 'node:crypto';
-import { createLogger } from '@coremail/core';
+import { createHash, randomUUID } from 'node:crypto';
+import { createLogger, getRedisClient } from '@coremail/core';
 import {
   getProperty, isValidTimeZone, parseIcal, parseVEventComponent, type ParsedVEvent,
 } from '@coremail/core/calendar';
@@ -40,6 +44,25 @@ const log = createLogger('smtp:resource-reply');
 export const MAX_OCCURRENCE_REPLIES = 10;
 /** Conflicting dates listed in the text part. */
 export const MAX_TEXT_CONFLICTS = 20;
+/** Most REPLY mails one resource sends one organizer within {@link REPLY_WINDOW_SEC}. */
+export const REPLY_LIMIT = 30;
+export const REPLY_WINDOW_SEC = 3600;
+/** Characters of the meeting title in the subject (the header line stays short). */
+export const MAX_SUBJECT_SUMMARY = 120;
+
+const ADDR_ATOM = String.raw`[^\s@<>()\[\]",;:\\]+`;
+const PLAIN_ADDRESS = new RegExp(String.raw`^${ADDR_ATOM}@(?:[^\s@<>()\[\]",;:\\.]+\.)+[^\s@<>()\[\]",;:\\.]+$`);
+
+/** Pure: one plain addr-spec (`local@domain.tld`) — no list, route, comment or whitespace. */
+export function isPlainAddress(address: string): boolean {
+  return PLAIN_ADDRESS.test(address);
+}
+
+/** Pure: the Redis key of the reply counter of one resource and organizer. */
+export function replyRateKey(resourceEmail: string, organizer: string): string {
+  const digest = createHash('sha256').update(`${resourceEmail.toLowerCase()}\n${organizer.toLowerCase()}`).digest('hex');
+  return `resource-reply:rate:${digest}`;
+}
 
 /** The resource as the answer needs it. */
 export interface ReplyResource {
@@ -86,6 +109,7 @@ export function replySuppression(resource: Pick<ReplyResource, 'email' | 'sendRe
   if (!envelope || !envelope.includes('@')) return 'null sender';
   const organizer = req.organizer.toLowerCase();
   if (!organizer.includes('@')) return 'no organizer';
+  if (!isPlainAddress(organizer)) return 'invalid organizer address';
   if (organizer === resource.email.toLowerCase()) return 'own address';
   if (isAutomatedSender(organizer) || isAutomatedSender(envelope)) return 'automated sender';
   return automaticMailReason(parseHeaderBlock(req.raw), /\b(all|autoreply)\b/i);
@@ -104,9 +128,11 @@ const SUBJECT_PREFIX: Record<ITipPartstat, string> = {
   TENTATIVE: 'Mit Vorbehalt angenommen',
 };
 
-/** Pure: the German subject of the answer. */
+/** Pure: the German subject of the answer (a long meeting title is shortened). */
 export function replySubject(partstat: ITipPartstat, summary: string): string {
-  return `${SUBJECT_PREFIX[partstat]}: ${summary.trim() || 'Besprechung'}`;
+  const title = [...(summary.trim() || 'Besprechung')];
+  const shown = title.length > MAX_SUBJECT_SUMMARY ? `${title.slice(0, MAX_SUBJECT_SUMMARY - 1).join('').trimEnd()}…` : title.join('');
+  return `${SUBJECT_PREFIX[partstat]}: ${shown}`;
 }
 
 /** Pure: German date (and time, with zone) of an instant in `tz` (IANA; UTC when unknown). */
@@ -223,6 +249,8 @@ export interface ResourceReplyDeps {
   isResourceAddress(address: string): Promise<boolean>;
   /** Queue one REPLY: envelope sender = the resource. */
   enqueue(job: { from: string; to: string; raw: Buffer }): Promise<void>;
+  /** Counts `count` more replies under `key`; false once the window's limit is exceeded. */
+  allow(key: string, count: number): Promise<boolean>;
 }
 
 const defaultDeps: ResourceReplyDeps = {
@@ -232,6 +260,13 @@ const defaultDeps: ResourceReplyDeps = {
     const { enqueueOutbound } = await import('../outbound/queue.js');
     // DKIM: the worker signs with the key of the envelope domain (outbound/dkim.ts)
     await enqueueOutbound({ messageId: `resource-reply-${randomUUID()}`, from, to: [to], resourceReply: true, rawMessage: raw.toString('base64') });
+  },
+  allow: async (key, count) => {
+    const redis = getRedisClient();
+    const total = await redis.incrby(key, count);
+    // a fresh counter (or one that lost its expiry) gets the window
+    if (total === count || (await redis.ttl(key)) < 0) await redis.expire(key, REPLY_WINDOW_SEC);
+    return total <= REPLY_LIMIT;
   },
 };
 
@@ -260,6 +295,11 @@ export async function answerOrganizer(
     if (suppressed) return suppressed;
     if (await activeDeps.isResourceAddress(req.organizer)) return 'organizer is a resource';
     const replies = buildResourceReplies(resource, req, uid, answer, now);
+    if (replies.length === 0) return 'nothing to answer';
+    if (!(await activeDeps.allow(replyRateKey(resource.email, req.organizer), replies.length))) {
+      log.warn({ resource: resource.email, organizer: req.organizer, uid }, 'Resource reply rate limit reached — no mail sent');
+      return 'rate limited';
+    }
     for (const raw of replies) await activeDeps.enqueue({ from: resource.email, to: req.organizer, raw });
     log.info({ resource: resource.email, organizer: req.organizer, uid, replies: replies.length, partstat: partstatFor(answer.decision) }, 'Resource reply enqueued');
     return replies.length;
