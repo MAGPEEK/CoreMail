@@ -54,9 +54,11 @@ export const messageFindFirstArgs: Row[] = [];
 const mailboxOwner: Record<string, string> = { 'mb-alice': 'alice', 'mb-erin': 'erin', 'mb-gina': 'gina' };
 /** w3: FolderPermission rows ({folderId, mailboxId, granteeKey, granteeId, rights, applyToSubfolders}). */
 export const folderPerms: Row[] = [];
-const users: Row[] = ['alice', 'bob', 'carol', 'dave', 'erin', 'frank', 'gina', 'hank'].map((id) => ({
+const users: Row[] = ['alice', 'bob', 'carol', 'dave', 'erin', 'frank', 'gina', 'hank', 'ivy'].map((id) => ({
   id, email: `${id}@ex.com`, displayName: id[0]!.toUpperCase() + id.slice(1), active: id !== 'gina',
   domainId: id === 'carol' ? 'd2' : 'd1', // admin scope tests: carol lives in another domain
+  // w3 scope leaks: ivy is hidden from the address list
+  mailFlowPolicy: id === 'ivy' ? { hiddenFromGal: true } : null,
 }));
 const mailboxRows = (): Row[] => [
   ...Object.entries(mailboxOwner).map(([id, userId]) => ({ id, userId, sharedBoxId: null })),
@@ -133,6 +135,10 @@ export function matches(row: Row, where: Row | undefined): boolean {
     if (v === null) { if (have !== null && have !== undefined) return false; continue; }
     if (typeof v === 'object' && !(v instanceof Date)) {
       const o = v as Row;
+      if ('is' in o) { // to-one relation filter (GAL_VISIBLE_WHERE: mailFlowPolicy is hiddenFromGal)
+        if (!have || !matches(have as Row, o['is'] as Row)) return false;
+        continue;
+      }
       if ('in' in o && !(o['in'] as unknown[]).includes(have)) return false;
       if ('not' in o && have === o['not']) return false;
       if ('lte' in o && !(have !== null && (have as Date) <= (o['lte'] as Date))) return false;

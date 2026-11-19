@@ -13,7 +13,7 @@
 import { Router, type Router as RouterType, type Request, type Response, type NextFunction } from 'express';
 import { prisma } from '@coremail/storage';
 import { requireAuth } from '../middleware/auth.js';
-import { replaceFolderPermissions, sendFolderPermissions, type PermissionFolder } from '../lib/folder-permissions-api.js';
+import { replaceFolderPermissions, sendFolderPermissions, webmailGranteeDirectory, type PermissionFolder } from '../lib/folder-permissions-api.js';
 
 const auth = (req: Request, res: Response, next: NextFunction): void => requireAuth(req, res, next);
 
@@ -40,5 +40,7 @@ ownFolderPermissionsRouter.get('/folders/:folderId/permissions', auth, async (re
 
 ownFolderPermissionsRouter.put('/folders/:folderId/permissions', auth, async (req: Request, res: Response) => {
   const folder = await ownFolder(req, res);
-  if (folder) await replaceFolderPermissions(req, res, folder, folder.ownerId, 'webmail');
+  if (folder) {
+    await replaceFolderPermissions(req, res, folder, folder.ownerId, 'webmail', { directory: await webmailGranteeDirectory(folder.ownerId) });
+  }
 });

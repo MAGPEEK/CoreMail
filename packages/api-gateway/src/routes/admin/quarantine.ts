@@ -13,11 +13,14 @@ import { prisma, downloadBuffer, quarantineEnvelope } from '@coremail/storage';
 import { getOutboundJobOptions } from '@coremail/storage/queue-options';
 import { createLogger, createBullMqConnection } from '@coremail/core';
 import { Queue } from 'bullmq';
+import { domainVariants } from '@coremail/storage/idn';
 import { requireArea } from '../../middleware/auth.js';
 import { audit, auditContext } from '../../lib/audit.js';
 import { releaseQuarantine, ReleaseError, type ReleaseDeps, type ReleaseJob } from '../../lib/quarantine-release.js';
-import { requireUnscoped, scopeOf, scopeParam } from '../../middleware/admin-scope.js';
-import { OUT_OF_SCOPE_REFUSAL, addressWhere, allAddressesInScope, andWhere, isScoped } from '../../lib/admin-scope.js';
+import { redactorOf, requireUnscoped, scopeOf, scopeParam } from '../../middleware/admin-scope.js';
+import {
+  OUT_OF_SCOPE_REFUSAL, addressWhere, allAddressesInScope, andWhere, isScoped, type AddressRedactor,
+} from '../../lib/admin-scope.js';
 
 const log = createLogger('admin:quarantine');
 
@@ -69,6 +72,36 @@ adminQuarantineRouter.param('id', scopeParam('quarantine'));
 /** Prisma `where` of the items the admin may see (9.5). */
 const visibleWhere = (req: Request): Record<string, unknown> => addressWhere(scopeOf(req), 'toAddr');
 
+/**
+ * Pure (w3 scope leaks): an item as a scoped admin sees it — the other
+ * recipients (`details`), a sender and the preview headers of another hosted
+ * domain read "(andere Domain)". The first recipient (`toAddr`) is in the scope.
+ */
+export function redactQuarantineItem<T extends { fromAddr: string; details: unknown }>(r: AddressRedactor, item: T): T {
+  return r.active ? { ...item, fromAddr: r.text(item.fromAddr), details: r.deep(item.details) } : item;
+}
+
+/**
+ * Pure (w3): the free-text search of the list. For a scoped admin a sender of
+ * another hosted domain never matches (it is shown redacted — no oracle) — in
+ * either spelling of the domain (punycode and Unicode, review) and with a
+ * trailing root dot; case is ignored by the database.
+ */
+export function quarantineSearchWhere(search: string, r: AddressRedactor): Record<string, unknown> {
+  const fromAddr = { fromAddr: { contains: search, mode: 'insensitive' } };
+  const hiddenSender = r.hiddenDomains
+    .flatMap((d) => domainVariants(d))
+    .flatMap((d) => [`@${d}`, `@${d}.`])
+    .map((suffix) => ({ fromAddr: { endsWith: suffix, mode: 'insensitive' } }));
+  return {
+    OR: [
+      hiddenSender.length > 0 ? { AND: [fromAddr, { NOT: { OR: hiddenSender } }] } : fromAddr,
+      { toAddr:   { contains: search, mode: 'insensitive' } },
+      { subject:  { contains: search, mode: 'insensitive' } },
+    ],
+  };
+}
+
 /** 403 OUT_OF_SCOPE unless every recipient of the item is inside the scope; true = go on. */
 async function allowAllRecipients(req: Request, res: Response, id: string): Promise<boolean> {
   const scope = scopeOf(req);
@@ -105,16 +138,11 @@ adminQuarantineRouter.get('/', async (req: Request, res: Response) => {
     return;
   }
 
+  const redactor = await redactorOf(req);
   const where: Record<string, unknown> = {};
   if (reason) where['reason'] = reason;
   if (released !== '') where['released'] = released === 'true';
-  if (search) {
-    where['OR'] = [
-      { fromAddr: { contains: search, mode: 'insensitive' } },
-      { toAddr:   { contains: search, mode: 'insensitive' } },
-      { subject:  { contains: search, mode: 'insensitive' } },
-    ];
-  }
+  if (search) Object.assign(where, quarantineSearchWhere(search, redactor));
 
   const scoped = andWhere(visibleWhere(req), where);
   const [items, total] = await Promise.all([
@@ -130,7 +158,7 @@ adminQuarantineRouter.get('/', async (req: Request, res: Response) => {
     }),
     prisma.quarantine.count({ where: scoped }),
   ]);
-  res.json({ items, total, page, limit });
+  res.json({ items: items.map((i) => redactQuarantineItem(redactor, i)), total, page, limit });
 });
 
 // ── GET /:id ──────────────────────────────────────────────────────────────────
@@ -169,7 +197,8 @@ adminQuarantineRouter.get('/:id', async (req: Request, res: Response) => {
     // MinIO not available or object missing — return without preview
   }
 
-  res.json({ ...item, preview });
+  const redactor = await redactorOf(req);
+  res.json({ ...redactQuarantineItem(redactor, item), preview: redactor.deep(preview) });
 });
 
 // ── POST /:id/release ─────────────────────────────────────────────────────────

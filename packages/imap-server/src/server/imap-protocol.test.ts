@@ -84,12 +84,14 @@ function matches(row: Row, where: Row | undefined): boolean {
   if (!where) return true;
   return Object.entries(where).every(([key, cond]) => {
     if (key === 'OR') return (cond as Row[]).some((c) => matches(row, c));
+    if (key === 'AND') return (cond as Row[]).every((c) => matches(row, c));
     if (key === 'NOT') return !matches(row, cond as Row);
     const value = row[key];
     if (cond === null) return value === null || value === undefined;
     if (typeof cond === 'object') {
-      const c = cond as { has?: unknown; in?: unknown[]; gte?: number; lte?: number };
+      const c = cond as { has?: unknown; in?: unknown[]; gte?: number; lte?: number; is?: Row };
       if ('has' in c) return (value as unknown[]).includes(c.has);
+      if ('is' in c) return value !== null && value !== undefined && matches(value as Row, c.is);
       if ('in' in c) return (c.in ?? []).includes(value);
       if ('gte' in c || 'lte' in c) {
         return (c.gte === undefined || (value as number) >= c.gte) && (c.lte === undefined || (value as number) <= c.lte);
@@ -187,11 +189,15 @@ function installFakes(): { db: FakeDb; redis: RedisFake } {
 
   const users = [{
     id: 'u1', email: 'bob@example.test', active: true, passwordHash: 'hash:secret', mailbox: { id: 'mb1' },
-    quotaBytes: 1024n * 1024n,
+    quotaBytes: 1024n * 1024n, domainId: 'd1', mailFlowPolicy: null as { hiddenFromGal: boolean } | null,
   }, {
     // w3: a grantee for SETACL (never logs in here)
     id: 'u2', email: 'alice@example.test', active: true, passwordHash: 'hash:other', mailbox: { id: 'mb2' },
-    quotaBytes: 1024n * 1024n,
+    quotaBytes: 1024n * 1024n, domainId: 'd1', mailFlowPolicy: null,
+  }, {
+    // w3 scope leaks: a user of another domain (SETACL answers it like an unknown one)
+    id: 'u3', email: 'eve@other.test', active: true, passwordHash: 'hash:other', mailbox: { id: 'mb3' },
+    quotaBytes: 1024n * 1024n, domainId: 'd2', mailFlowPolicy: null,
   }];
   const withMailbox = (f: FakeFolder | undefined): (FakeFolder & { mailbox: FakeMailbox }) | null =>
     f ? { ...f, mailbox: { ...mailbox } } : null;
@@ -204,6 +210,7 @@ function installFakes(): { db: FakeDb; redis: RedisFake } {
     mailboxDelegate: { findMany: async () => [] },
     user: {
       findFirst: async ({ where }: { where: Row }) => { await tick(); return users.find((u) => matches(asRow(u), where)) ?? null; },
+      findUnique: async ({ where }: { where: { id: string } }) => users.find((u) => u.id === where.id) ?? null,
       findMany: async ({ where }: { where: Row }) => users
         .filter((u) => matches(asRow(u), where)).map((u) => ({ id: u.id, email: u.email, displayName: null, active: u.active })),
     },
@@ -2838,7 +2845,8 @@ describe('ACL (RFC 4314, w3: folder permissions)', () => {
       ['SETACL INBOX bob@example.test lr', /NO \[CANNOT\]/],
       ['SETACL INBOX anonymous lr', /NO \[CANNOT\]/],
       ['SETACL INBOX -alice@example.test lr', /NO \[CANNOT\]/],
-      ['SETACL INBOX nobody@example.test lr', /NO \[CANNOT\]/],
+      ['SETACL INBOX nobody@example.test lr', /NO \[CANNOT\] Unknown identifier/],
+      ['SETACL INBOX eve@other.test lr', /NO \[CANNOT\] Unknown identifier/], // w3: another domain, same answer
       ['GETACL Nope', /NO \[NONEXISTENT\]/],
       ['SETACL Nope alice@example.test lr', /NO \[NONEXISTENT\]/],
     ] as const) {

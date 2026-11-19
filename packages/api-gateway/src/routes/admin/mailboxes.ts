@@ -12,7 +12,7 @@ import { publishPermissionChange } from '../../lib/permission-events.js';
 import { addressCollision } from '../../lib/address-collision.js';
 import { getMailFlowHandler, putMailFlowHandler } from '../../lib/mail-flow-admin.js';
 import { listFolderPermissionsHandler, getFolderPermissionsHandler, putFolderPermissionsHandler } from '../../lib/folder-permissions-admin.js';
-import { allowDomain, requireUnscoped, scopeOf, scopeParam, targetInScope } from '../../middleware/admin-scope.js';
+import { allowDomain, redactorOf, requireUnscoped, scopeOf, scopeParam, targetInScope } from '../../middleware/admin-scope.js';
 import { domainIdWhere } from '../../lib/admin-scope.js';
 
 export const adminMailboxesRouter: RouterType = Router();
@@ -490,7 +490,9 @@ adminMailboxesRouter.get('/:id/delegates', async (req: Request, res: Response) =
       },
     },
   });
-  res.json(mailbox?.delegates ?? []);
+  // w3: grantees of other domains are shown as "(andere Domain)" to a scoped admin
+  const redactor = await redactorOf(req);
+  res.json((mailbox?.delegates ?? []).map((d) => (d.grantee ? { ...d, grantee: redactor.person(d.grantee) } : d)));
 });
 
 // POST /api/v1/admin/mailboxes/:id/delegates — grant / update access

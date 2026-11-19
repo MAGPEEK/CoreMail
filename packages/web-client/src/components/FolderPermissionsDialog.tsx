@@ -17,13 +17,11 @@ import { api } from '../api/client.js';
 import { toastError } from '../lib/errors.js';
 import {
   READ_OPTIONS, WRITE_OPTIONS, DELETE_OPTIONS, OTHER_OPTIONS,
-  addGrantee, buildPermissionsBody, formFromRights, granteeLabel, hasGrantee, inheritedFromLabel,
+  addGrantee, buildPermissionsBody, directorySuggestions, formFromRights, granteeLabel, hasGrantee, inheritedFromLabel,
   isFixedEntry, isRemovableEntry, permissionsChanged, removeGrantee, rightsFromForm, roleChoices, roleLabel,
   setEntryApplyToSubfolders, setEntryRights, setEntryRole,
-  type FolderPermissionsView, type PermissionEntry, type RightsForm, type RoleChoice,
+  type ContactSuggest, type FolderPermissionsView, type PermissionEntry, type RightsForm, type RoleChoice,
 } from '../lib/folderPermissions.js';
-
-interface ContactSuggest { id: string; displayName: string; email: string }
 
 const SUGGEST_DEBOUNCE_MS = 220;
 const MAX_SUGGESTIONS = 8;
@@ -200,9 +198,7 @@ function GranteeSearch({ entries, onPick, onCancel }: {
     enabled: query.length >= 1,
     staleTime: 30_000,
   });
-  const suggestions = (data ?? [])
-    .filter((c) => c.id.startsWith('gal-') && c.email && !hasGrantee(entries, { email: c.email }))
-    .slice(0, MAX_SUGGESTIONS);
+  const suggestions = directorySuggestions(data ?? [], entries, MAX_SUGGESTIONS);
   const showList = text.trim().length > 0 && suggestions.length > 0;
   const optionId = (i: number) => `${listId}-o${i}`;
 

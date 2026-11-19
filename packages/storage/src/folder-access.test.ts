@@ -8,7 +8,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   FolderPermissionError, accessToFolder, describeFolderPermissions, folderAccessForUser, listFolderGrantMailboxes,
-  listVisibleForeignMailboxes, listableFolders, loadMailboxFolderAccess, mergeForeignMailboxes,
+  listVisibleForeignMailboxes, listableFolders, loadMailboxFolderAccess, mergeForeignMailboxes, folderNameCollision,
   planFolderPermissionChanges, readableFolderIds, setFolderPermissions, addsRights, affectsSubfolders, subfolderAuthorizer,
   type FolderPermissionWriteDb,
 } from './folder-access.js';
@@ -173,6 +173,20 @@ test('folder lists: visible folders, their ancestors as non-selectable path, not
   const again = await loadMailboxFolderAccess(prisma, 'bob', { mailboxId: 'mb-a', readOnly: true, folderScoped: true });
   assert.deepEqual(listableFolders(folders, again), [{ id: 'a-proj', noSelect: true }, { id: 'a-sub', noSelect: false }]);
   assert.equal(listableFolders(folders, { mailboxId: 'mb-a', level: 'full', rights: null }).length, 4);
+});
+
+test('w3 scope leaks: folderNameCollision — a name taken by a folder the user cannot list is "hidden"', async () => {
+  const { db, grant, prisma } = fakeDb();
+  grant('a-sub', 'user:bob', ROLE_RIGHTS.reviewer);
+  const bob = await loadMailboxFolderAccess(prisma, 'bob', { mailboxId: 'mb-a', readOnly: true, folderScoped: true });
+  const folders = db.folders.filter((f) => f.mailboxId === 'mb-a');
+  const hidden = folders.find((f) => f.id !== 'a-sub' && f.id !== 'a-proj')!.id;
+  assert.equal(folderNameCollision(folders, bob, []), 'free');
+  assert.equal(folderNameCollision(folders, bob, ['a-sub']), 'visible');
+  assert.equal(folderNameCollision(folders, bob, ['a-proj']), 'visible', 'a path entry is listed (its name is known)');
+  assert.equal(folderNameCollision(folders, bob, [hidden]), 'hidden');
+  assert.equal(folderNameCollision(folders, bob, [hidden, 'a-sub']), 'visible');
+  assert.equal(folderNameCollision(folders, { mailboxId: 'mb-a', level: 'full', rights: null }, [hidden]), 'visible', 'mailbox-level access');
 });
 
 test('folderAccessForUser: own folder, foreign folder through a grant, no access', async () => {

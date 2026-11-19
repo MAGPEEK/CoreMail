@@ -15,15 +15,21 @@
  * removed) and answers with the new view. Storage folder-access.ts validates,
  * writes and audits (`mailbox.folder.permission.set|remove`); the grantees get
  * `permission-change` (live IMAP sessions re-check at once).
+ *
+ * w3 scope leaks: a PUT resolves new grantees only inside the caller's
+ * directory (GranteeDirectory) — an unknown, hidden or not grantable address
+ * gets the same 400 UNKNOWN_GRANTEE; a scoped admin's view shows grantees of
+ * other domains as "(andere Domain)".
  */
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import {
-  prisma, describeFolderPermissions, setFolderPermissions, publishFolderPermissionChange,
+  prisma, describeFolderPermissions, resolvableGrantees, shownGranteeIds, webmailGranteeDirectory as webmailDirectoryOf, setFolderPermissions, publishFolderPermissionChange,
   FolderPermissionError, FOLDER_ROLES, ROLE_RIGHTS, ALL_FOLDER_RIGHTS, DEFAULT_GRANTEE_KEY, userGranteeKey,
-  type FolderPermissionAuthorizer, type FolderPermissionInput, type FolderPermissionView, type FolderPermissionWriteDb, type PermissionActor,
+  type FolderPermissionAuthorizer, type FolderPermissionInput, type GranteeDb, type GranteeDirectory, type ResolvableGrantees, type FolderPermissionView, type FolderPermissionWriteDb, type PermissionActor,
 } from '@coremail/storage';
 import { auditContext } from './audit.js';
+import { NO_REDACTION, type AddressRedactor } from './admin-scope.js';
 
 export const ANONYMOUS_GRANTEE = 'anonymous';
 
@@ -72,26 +78,41 @@ export function parsePermissionBody(body: unknown): { ok: true; entries: Permiss
   return { ok: true, entries: out };
 }
 
-/** Resolves e-mail grantees to users; null when one is unknown. */
-async function storageInputs(entries: PermissionRequestEntry[]): Promise<FolderPermissionInput[] | null> {
-  const emails = entries.flatMap((e) => (typeof e.grantee === 'object' && 'email' in e.grantee ? [e.grantee.email.toLowerCase()] : []));
-  const users = emails.length
-    ? await prisma.user.findMany({ where: { email: { in: emails } }, select: { id: true, email: true } })
-    : [];
-  const byEmail = new Map(users.map((u) => [u.email.toLowerCase(), u.id]));
+/**
+ * Pure: the storage inputs of a PUT body; null when it names a user that is not
+ * resolvable for the caller — unknown, or not grantable (w3: every such case
+ * gets the same answer, UNKNOWN_GRANTEE).
+ */
+export function granteeInputs(entries: readonly PermissionRequestEntry[], known: ResolvableGrantees): FolderPermissionInput[] | null {
   const out: FolderPermissionInput[] = [];
   for (const e of entries) {
-    let key: string;
-    if (e.grantee === DEFAULT_GRANTEE_KEY) key = DEFAULT_GRANTEE_KEY;
-    else if ('userId' in e.grantee) key = userGranteeKey(e.grantee.userId);
-    else {
-      const id = byEmail.get(e.grantee.email.toLowerCase());
-      if (!id) return null;
-      key = userGranteeKey(id);
+    let id: string | undefined;
+    if (e.grantee === DEFAULT_GRANTEE_KEY) {
+      out.push({ granteeKey: DEFAULT_GRANTEE_KEY, rights: e.rights, applyToSubfolders: e.applyToSubfolders });
+      continue;
     }
-    out.push({ granteeKey: key, rights: e.rights, applyToSubfolders: e.applyToSubfolders });
+    if ('userId' in e.grantee) id = known.ids.has(e.grantee.userId) ? e.grantee.userId : undefined;
+    else id = known.byEmail.get(e.grantee.email.trim().toLowerCase());
+    if (!id) return null;
+    out.push({ granteeKey: userGranteeKey(id), rights: e.rights, applyToSubfolders: e.applyToSubfolders });
   }
   return out;
+}
+
+const granteeDb = (): GranteeDb => prisma as unknown as GranteeDb;
+
+/** Webmail callers: the active users of their own domain shown in the address list (storage folder-grantees.ts). */
+export function webmailGranteeDirectory(userId: string): Promise<GranteeDirectory> {
+  return webmailDirectoryOf(granteeDb(), userId);
+}
+
+/** I/O: the users of the body the caller may name (storage folder-grantees.ts, the rule IMAP SETACL shares). */
+function resolvableIn(entries: readonly PermissionRequestEntry[], directory: GranteeDirectory, alwaysIds: readonly string[]): Promise<ResolvableGrantees> {
+  const named = entries.flatMap((e) => (typeof e.grantee === 'object' ? [e.grantee] : []));
+  return resolvableGrantees(granteeDb(), {
+    emails: named.flatMap((g) => ('email' in g ? [g.email] : [])),
+    ids: named.flatMap((g) => ('userId' in g ? [g.userId] : [])),
+  }, directory, alwaysIds);
 }
 
 export interface PermissionFolder { id: string; mailboxId: string; name: string; displayName: string }
@@ -107,10 +128,29 @@ export function withFixedEntries(entries: FolderPermissionView[]) {
   ];
 }
 
-/** GET: the folder's permissions. */
-export async function sendFolderPermissions(res: Response, folder: PermissionFolder): Promise<void> {
-  const view = await describeFolderPermissions(prisma as unknown as FolderPermissionWriteDb, folder);
-  res.json({ folderId: folder.id, folderName: folder.displayName || folder.name, entries: withFixedEntries(view.entries), inherited: view.inherited });
+/** Pure (w3): entries with the grantees of other domains redacted for a scoped admin. */
+export function redactEntries<E extends { user: { email: string; displayName: string } | null }>(r: AddressRedactor, entries: E[]): E[] {
+  return r.active ? entries.map((e) => (e.user ? { ...e, user: r.person(e.user) } : e)) : entries;
+}
+
+const describe = (folder: PermissionFolder) => describeFolderPermissions(prisma as unknown as FolderPermissionWriteDb, folder);
+
+/** GET: the folder's permissions (`redactor`: a scoped admin sees other domains' grantees redacted). */
+export async function sendFolderPermissions(res: Response, folder: PermissionFolder, redactor: AddressRedactor = NO_REDACTION): Promise<void> {
+  const view = await describe(folder);
+  res.json({
+    folderId: folder.id,
+    folderName: folder.displayName || folder.name,
+    entries: withFixedEntries(redactEntries(redactor, view.entries)),
+    inherited: redactEntries(redactor, view.inherited),
+  });
+}
+
+/** How a caller of the PUT is limited (see GranteeDirectory, FolderPermissionAuthorizer, sendFolderPermissions). */
+export interface PermissionWriteRules {
+  directory: GranteeDirectory;
+  authorize?: FolderPermissionAuthorizer;
+  redactor?: AddressRedactor;
 }
 
 const ERROR_TEXT: Record<string, string> = {
@@ -132,12 +172,15 @@ export async function replaceFolderPermissions(
   folder: PermissionFolder,
   mailboxOwnerId: string | null,
   source: PermissionActor['source'],
-  authorize?: FolderPermissionAuthorizer,
+  rules: PermissionWriteRules,
 ): Promise<void> {
   const parsed = parsePermissionBody(req.body);
   if (!parsed.ok) { res.status(400).json({ error: parsed.error }); return; }
-  const inputs = await storageInputs(parsed.entries);
+  const shown = await describe(folder);
+  const alwaysIds = [...shownGranteeIds(shown), req.apiUser!.userId, ...(mailboxOwnerId ? [mailboxOwnerId] : [])];
+  const inputs = granteeInputs(parsed.entries, await resolvableIn(parsed.entries, rules.directory, alwaysIds));
   if (!inputs) { res.status(400).json({ error: ERROR_TEXT['UNKNOWN_GRANTEE'], code: 'UNKNOWN_GRANTEE' }); return; }
+  const { authorize } = rules;
   const ctx = auditContext(req);
   const actor: PermissionActor = {
     userId: req.apiUser!.userId, email: req.apiUser!.email, source,
@@ -153,5 +196,5 @@ export async function replaceFolderPermissions(
     if (err instanceof FolderPermissionError) { res.status(FORBIDDEN_CODES.has(err.code) ? 403 : 400).json({ error: ERROR_TEXT[err.code] ?? err.message, code: err.code }); return; }
     throw err;
   }
-  await sendFolderPermissions(res, folder);
+  await sendFolderPermissions(res, folder, rules.redactor);
 }

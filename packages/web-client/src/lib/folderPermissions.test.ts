@@ -5,7 +5,7 @@ import {
   normalizeRights, roleOf, roleLabel, roleChoices, formFromRights, rightsFromForm,
   granteeLabel, isFixedEntry, isRemovableEntry, addGrantee, removeGrantee, hasGrantee,
   setEntryRights, setEntryRole, setEntryApplyToSubfolders, granteeOf, buildPermissionsBody,
-  permissionsChanged, inheritedFromLabel, folderMenuAccess,
+  permissionsChanged, inheritedFromLabel, folderMenuAccess, directorySuggestions,
   READ_OPTIONS, WRITE_OPTIONS, DELETE_OPTIONS, OTHER_OPTIONS,
   type PermissionEntry, type FolderMyRights,
 } from './folderPermissions.ts';
@@ -107,6 +107,18 @@ test('adding a user: by address (webmail) or id (BCP), no duplicates', () => {
   const byId = addGrantee(loaded(), { id: 'u9', email: 'u9@example.test', displayName: 'U9' });
   assert.deepEqual(granteeOf(byId[3]!), { userId: 'u9' });
   assert.ok(hasGrantee(byId, { id: 'u9', email: 'other@example.test' }));
+});
+
+test('w3 scope leaks: the grantee picker offers address-list users only, none already listed', () => {
+  const found = [
+    { id: 'c-1', displayName: 'Privatkontakt', email: 'friend@elsewhere.test' }, // private contact
+    { id: 'gal-u1', displayName: 'Max Muster', email: 'max@example.test' }, // already a grantee
+    { id: 'gal-u2', displayName: 'Eva', email: 'eva@example.test' },
+    { id: 'group-g1', displayName: 'Team', email: '' },
+    { id: 'gal-u3', displayName: 'Ute', email: 'ute@example.test' },
+  ];
+  assert.deepEqual(directorySuggestions(found, loaded(), 8).map((c) => c.id), ['gal-u2', 'gal-u3']);
+  assert.deepEqual(directorySuggestions(found, loaded(), 1).map((c) => c.id), ['gal-u2']);
 });
 
 test('PUT body: role when it matches, else rights; Anonymous left out', () => {

@@ -48,6 +48,7 @@ export * from '${storageUrl('folder-delete.ts')}';
 // changes are collected in globalThis.__coremailTest.permissionEvents.
 export * from '${storageUrl('folder-permissions.ts')}';
 export * from '${storageUrl('folder-access.ts')}';
+export * from '${storageUrl('folder-grantees.ts')}';
 export const publishFolderPermissionChange = async (changes, fallbackUserId) => {
   (g.permissionEvents ??= []).push({ changes, fallbackUserId });
 };

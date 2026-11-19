@@ -260,6 +260,23 @@ it there).
   themselves or to Default (which includes them) — 403 `FORBIDDEN_GRANTEE`; a
   scoped administrator gives rights only to users of its domains (others answer
   like an unknown user). Lowering and removing entries is always allowed.
+* No address oracle: a PUT names new grantees only from the caller's directory —
+  webmail (owner or a grantee with the folder owner right): the active users of
+  the caller's domain shown in the address list (the source of the
+  "Benutzer hinzufügen" picker); administrators: the users of their scope. Users
+  the folder's permission view already shows (own and inherited entries), the
+  mailbox owner and the caller stay addressable. Every other address — unknown,
+  hidden from the address list, deactivated, another domain — gets the same
+  answer, `400 UNKNOWN_GRANTEE` (also with the role "Keine").
+* No folder-name oracle: a grantee (folder permissions, no mailbox-level
+  FULL_ACCESS) whose create / rename collides with a folder it cannot list gets
+  the refusal of any other forbidden change (REST `403 NO_PERMISSION`, IMAP
+  `NO [NOPERM]`), never `409` / `[ALREADYEXISTS]`; a collision with a folder it
+  can list stays `409` / `[ALREADYEXISTS]` (storage `folderNameCollision`). IMAP
+  RENAME of a folder the grantee can neither see nor read answers
+  `[NONEXISTENT]` like a missing one.
+* A scoped administrator sees grantees of other domains as `(andere Domain)`
+  (docs/rbac.md, "Addresses of other domains").
 * `GET /api/v1/mail/delegated-mailboxes` lists the folders of a delegation only
   for FULL_ACCESS / READ_ONLY of an active owner (SEND_AS / SEND_ON_BEHALF:
   `folders: []`).
@@ -298,7 +315,8 @@ GET|PUT /api/v1/admin/shared-mailboxes/:id/folders/:folderId/permissions
 GET answers `{ folderId, folderName, entries, inherited }` — Default and
 Anonymous first. PUT takes the complete list `{ entries: [{ grantee:
 "default" | "anonymous" | {userId} | {email}, role? | rights?, applyToSubfolders? }] }`
-(400 for unknown users, the mailbox owner, Anonymous with rights). Admin
+(400 for unknown or not grantable users — the same answer, see "Limits for
+grantees and administrators" — the mailbox owner, Anonymous with rights). Admin
 mailboxes: ORGANIZATION_MANAGEMENT only (403 `FORBIDDEN`).
 
 Webmail: folder context menu → "Berechtigungen…" (own folders; foreign folders

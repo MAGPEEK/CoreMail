@@ -24,8 +24,8 @@ import { publishPermissionChange, sharedMailboxGrantees } from '../../lib/permis
 import { addressCollision } from '../../lib/address-collision.js';
 import { getMailFlowHandler, putMailFlowHandler } from '../../lib/mail-flow-admin.js';
 import { listFolderPermissionsHandler, getFolderPermissionsHandler, putFolderPermissionsHandler } from '../../lib/folder-permissions-admin.js';
-import { allowDomain, scopeOf, scopeParam, targetInScope } from '../../middleware/admin-scope.js';
-import { domainIdWhere } from '../../lib/admin-scope.js';
+import { allowDomain, redactorOf, scopeOf, scopeParam, targetInScope } from '../../middleware/admin-scope.js';
+import { domainIdWhere, type AddressRedactor } from '../../lib/admin-scope.js';
 
 const log = createLogger('admin:shared-mailboxes');
 export const adminSharedMailboxesRouter: RouterType = Router();
@@ -46,6 +46,18 @@ const SELECT = {
   },
 };
 
+type GranteeUser = { email: string; displayName: string | null } | null;
+
+/** w3: permission grantees of other domains as "(andere Domain)" for a scoped admin. */
+function redactGrantees<P extends { user?: GranteeUser }>(r: AddressRedactor, perms: P[]): P[] {
+  return r.active ? perms.map((p) => (p.user ? { ...p, user: r.person(p.user) } : p)) : perms;
+}
+
+/** A shared mailbox row (SELECT) with its grantees redacted. */
+function redactItem<T extends { permissions: Array<{ user?: GranteeUser }> }>(r: AddressRedactor, item: T): T {
+  return r.active ? { ...item, permissions: redactGrantees(r, item.permissions) } : item;
+}
+
 // ── GET / ─────────────────────────────────────────────────────────────────────
 adminSharedMailboxesRouter.get('/', async (req: Request, res: Response) => {
   const { search = '', page = '1', limit = '50' } = req.query as Record<string, string>;
@@ -65,7 +77,8 @@ adminSharedMailboxesRouter.get('/', async (req: Request, res: Response) => {
     prisma.sharedMailbox.findMany({ where, select: SELECT, orderBy: { email: 'asc' }, skip, take: limitN }),
     prisma.sharedMailbox.count({ where }),
   ]);
-  res.json({ items, total, page: pageN, limit: limitN });
+  const redactor = await redactorOf(req);
+  res.json({ items: items.map((i) => redactItem(redactor, i)), total, page: pageN, limit: limitN });
 });
 
 // ── GET /:id ──────────────────────────────────────────────────────────────────
@@ -73,7 +86,7 @@ adminSharedMailboxesRouter.get('/:id', async (req: Request, res: Response) => {
   const id = req.params['id'] ?? '';
   const item = await prisma.sharedMailbox.findUnique({ where: { id }, select: SELECT });
   if (!item) { res.status(404).json({ error: 'Not found' }); return; }
-  res.json(item);
+  res.json(redactItem(await redactorOf(req), item));
 });
 
 // ── POST / ────────────────────────────────────────────────────────────────────
@@ -180,7 +193,7 @@ adminSharedMailboxesRouter.put('/:id', async (req: Request, res: Response) => {
     if (p.data.quotaBytes !== undefined || p.data.quotaWarningBytes !== undefined || p.data.quotaProhibitSendBytes !== undefined) {
       announceUserEvent(await sharedMailboxGrantees(id), { type: 'quota' });
     }
-    res.json(item);
+    res.json(redactItem(await redactorOf(req), item));
   } catch { res.status(404).json({ error: 'Not found' }); }
 });
 
@@ -212,7 +225,7 @@ adminSharedMailboxesRouter.get('/:id/permissions', async (req: Request, res: Res
     where: { sharedMailboxId },
     include: { user: { select: { email: true, displayName: true } } },
   });
-  res.json(perms);
+  res.json(redactGrantees(await redactorOf(req), perms));
 });
 
 // ── POST /:id/permissions ─────────────────────────────────────────────────────

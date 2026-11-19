@@ -149,14 +149,14 @@ matrix already limits the route to ORGANIZATION_MANAGEMENT (never scoped) ·
 | `GET /mailboxes/quota-defaults` | unchanged (server default percentages, read only) |
 | `PUT /mailboxes/quota-defaults`, `POST /mailboxes/recalculate-all-quotas`, `POST /mailboxes/bulk-provision` | org |
 | `POST /mailboxes` | OUT_OF_SCOPE unless `domainId` is in the scope (the address must match the domain — existing rule); role ≠ USER → `FORBIDDEN_ROLE` |
-| `GET/PUT/DELETE /mailboxes/:id`, `POST /:id/recoverable/purge`, `/:id/recalculate-quota`, `/:id/revoke-sessions`, `/:id/provision`, `GET/PUT /:id/mail-flow`, `GET/POST /:id/delegates`, `DELETE /:id/delegates/:granteeId` | 404 (`router.param('id')`); delegate grantee outside → 404 `Grantee not found`; admin accounts → `FORBIDDEN_ROLE` |
-| `GET /mailboxes/:id/folder-permissions`, `GET/PUT /:id/folders/:folderId/permissions` and the same under `/shared-mailboxes/:id` (w3) | 404 (`router.param('id')`); a grantee outside the scope gets no rights (400 `UNKNOWN_GRANTEE`, like an unknown user); no rights to oneself or to Default below ORGANIZATION_MANAGEMENT (403 `FORBIDDEN_GRANTEE`); admin accounts → `FORBIDDEN` |
+| `GET/PUT/DELETE /mailboxes/:id`, `POST /:id/recoverable/purge`, `/:id/recalculate-quota`, `/:id/revoke-sessions`, `/:id/provision`, `GET/PUT /:id/mail-flow`, `GET/POST /:id/delegates`, `DELETE /:id/delegates/:granteeId` | 404 (`router.param('id')`); delegate grantee outside → 404 `Grantee not found`; listed grantees of other domains redacted; admin accounts → `FORBIDDEN_ROLE` |
+| `GET /mailboxes/:id/folder-permissions`, `GET/PUT /:id/folders/:folderId/permissions` and the same under `/shared-mailboxes/:id` (w3) | 404 (`router.param('id')`); a new grantee outside the scope answers exactly like an unknown user (400 `UNKNOWN_GRANTEE`, also with role "none"), existing entries stay editable by id; no rights to oneself or to Default below ORGANIZATION_MANAGEMENT (403 `FORBIDDEN_GRANTEE`); admin accounts → `FORBIDDEN`; grantees of other domains redacted |
 | `GET /shared-mailboxes` | filter |
 | `POST /shared-mailboxes` | OUT_OF_SCOPE (domainId) |
-| `GET/PUT/DELETE /shared-mailboxes/:id`, `/:id/provision`, `/:id/mail-flow`, `/:id/permissions…` | 404; permission grantee outside → 404 `User not found` |
+| `GET/PUT/DELETE /shared-mailboxes/:id`, `/:id/provision`, `/:id/mail-flow`, `/:id/permissions…` | 404; permission grantee outside → 404 `User not found`; listed grantees of other domains redacted |
 | `GET /resources` | filter |
 | `POST /resources` | OUT_OF_SCOPE (domainId and the address's domain) |
-| `GET/PUT/DELETE /resources/:id`, `GET /:id/bookings`, `DELETE /:id/bookings/:bookingId` | 404; a booking must belong to the resource of the path (was not checked before 9.5) |
+| `GET/PUT/DELETE /resources/:id`, `GET /:id/bookings`, `DELETE /:id/bookings/:bookingId` | 404; a booking must belong to the resource of the path (was not checked before 9.5); organizers / attendees of other domains in bookings redacted |
 | `GET /resources/freebusy/query?email=` | 404 for a resource outside the scope |
 | `GET /aliases` | filter (alias domain and target domain) |
 | `GET/POST /mailboxes/:id/aliases`, `GET/POST /shared-mailboxes/:id/aliases` | 404 for the owner; alias address in another domain → OUT_OF_SCOPE; list filtered |
@@ -184,8 +184,8 @@ matrix already limits the route to ORGANIZATION_MANAGEMENT (never scoped) ·
 | `POST /security/sender-lists` | GLOBAL or a target outside → OUT_OF_SCOPE |
 | `POST /security/sender-lists/import` | rows outside the scope are row errors (nothing written) |
 | `PATCH/DELETE /security/sender-lists/:id` | 404 |
-| `GET /quarantine`, `GET /quarantine/stats` | filter by the first recipient (`toAddr`) |
-| `GET /quarantine/:id` | 404 |
+| `GET /quarantine`, `GET /quarantine/stats` | filter by the first recipient (`toAddr`); other recipients / senders of other domains redacted |
+| `GET /quarantine/:id` | 404; other recipients of other domains redacted |
 | `POST /quarantine/:id/release`, `DELETE /quarantine/:id` | 404 outside; OUT_OF_SCOPE unless EVERY envelope recipient is in the scope (a release delivers to all) |
 | `DELETE /quarantine` (bulk) | org |
 | `/security/settings`, `/security/status`, `/security/rspamd/*`, `/security/dnsbl*`, `/security/dns-check`, `/security/clamav*`, `/security/capabilities`, `/security/spoofing`, `/security/attacks*`, `/transport-rules*`, `/ems/transport-rules*` | org |
@@ -194,10 +194,10 @@ matrix already limits the route to ORGANIZATION_MANAGEMENT (never scoped) ·
 
 | Route | Decision |
 |---|---|
-| `GET /audit-log`, `/export.csv`, `/export.json`, `/export.pdf` | filter: entries whose `targetId` is an object of the scope (user, its mailbox, shared mailbox and its mailbox, resource, alias, domain), whose `targetName` is an address of the scope's domains, or whose actor is the admin itself |
+| `GET /audit-log`, `/export.csv`, `/export.json`, `/export.pdf` | filter: entries whose `targetId` is an object of the scope (user, its mailbox, shared mailbox and its mailbox, resource, alias, domain), whose `targetName` names an address of the scope's domains, or whose actor is the admin itself; addresses of other domains redacted (see "Addresses of other domains") |
 | `GET /audit-log/stats`, `GET /audit-log/anomalies` | org |
 | `POST /audit-log/verify-export` | unchanged (checks a file, returns no data) |
-| `GET /message-trace`, `GET /message-trace/export` (mail-flow log) | filter: sender or a recipient in the scope's domains (always the filtered scan, `TRACE_SCAN_LIMIT`) |
+| `GET /message-trace`, `GET /message-trace/export` (mail-flow log) | filter: sender or a recipient in the scope's domains (always the filtered scan, `TRACE_SCAN_LIMIT`); addresses of other domains redacted |
 | `/compliance/retention*` | org |
 
 ### dashboard
@@ -232,17 +232,75 @@ Every route of `/settings` (except the public `GET /settings/public`),
   server-wide routes), 404 = unknown id, OUT_OF_SCOPE creates, scope
   assignment (audit, session revocation, cache) and escalation.
 - `admin-panel/src/lib/permissions.test.ts` — scope parsing, hidden pages.
+- `api-gateway/src/routes/admin/scope-redaction.test.ts` (w3) — redaction of
+  other domains' addresses in every detail view and export, no search oracle;
+  `lib/admin-scope.test.ts` covers `addressRedactor`.
 - `cli/src/commands/role.test.ts`; e2e step `scopes` (docs/e2e.md).
+
+## Addresses of other domains (redaction)
+
+A scoped admin never reads an address of another **hosted** domain (a row of
+the Domain table outside its scope — another tenant of the server) in a detail
+view of an in-scope object. One helper does it everywhere:
+`addressRedactor()` in `lib/admin-scope.ts`, loaded per request by
+`redactorOf(req)` in `middleware/admin-scope.ts` (organisation-wide admins:
+`NO_REDACTION`, no query; a failed domain lookup answers 500, never an
+unredacted view).
+
+- Such an address — bare or with its display name — reads `(andere Domain)`;
+  a run of several in a list becomes one label with their count,
+  `(andere Domain, 3 Adressen)`. A person row (`{ email, displayName }`) gets the
+  label in both fields; ids stay (a grant of another domain's user can still be
+  revoked).
+- Addresses of external domains stay visible (quarantine senders, mail-flow
+  partners, forwarding targets — the correspondents of the scope's mailboxes),
+  and so does the viewer's own address.
+- Text filters of a scoped admin run on the redacted data, so a search for a
+  hidden address finds nothing (no search oracle).
+- Domains are compared in their canonical form (lower-case A-label, storage
+  `idn.ts` `canonicalDomain`): a Unicode, punycode, upper-case or decomposed
+  spelling of a hidden domain, and the IDNA full stops (U+3002, U+FF0E, U+FF61),
+  are hidden as well; the quarantine search excludes both spellings of a hidden
+  sender domain (and a trailing root dot).
+
+| View | Redacted |
+|---|---|
+| `GET /mailboxes/:id/delegates` | grantees |
+| `GET /shared-mailboxes`, `GET/PUT /shared-mailboxes/:id`, `GET /:id/permissions` | permission grantees |
+| `GET …/folder-permissions`, `GET/PUT …/folders/:folderId/permissions` (mailboxes, shared mailboxes) | folder-permission grantees (own and inherited entries) |
+| `GET /quarantine`, `GET /quarantine/:id` | other recipients (`details`), the sender, preview headers; `search` never matches a hidden sender |
+| `GET /message-trace`, `GET /message-trace/export` | metadata (sender, recipients, …) and message text; the sender / recipient / subject filters match the redacted row |
+| `GET /resources/:id`, `GET /resources/:id/bookings` | booking organizer, attendees and every iCalendar line naming such an address (its `CN` display name removed as well) |
+| `GET /audit-log`, `/export.csv`, `/export.json`, `/export.pdf` | actor e-mail, target name, error text and every string, list element and key of `changes`; `actorEmail` / `searchText` filters run on the redacted entries over the newest 5000 entries of the scope (`truncated: true` in the list when the scan was capped) |
+
+**Audit log scope filter**: an entry belongs to the scope when its `targetId` is
+an object of the scope, when its actor is the admin itself, or when its
+`targetName` contains an address of the scope's domains anywhere — one address,
+a `", "` list (`…@a.example,`) or the angle form (`…@a.example>`), matched on the
+domain boundary (`x@a.example.other` is not `a.example`). Every other address of
+such an entry is redacted (above), so a list ending in an in-scope address no
+longer shows the addresses before it. `GET /audit-log/stats` and `/anomalies`
+remain organisation-wide only.
 
 ## Known limits
 
-- Read views of an in-scope object can name addresses of other domains that
-  belong to it: the grantees of a delegation / shared-mailbox permission, the
-  other recipients of a quarantined message or mail-flow row, the `changes` of an
-  audit entry about an in-scope object.
 - Admin mail-flow forwarding (`PUT /mailboxes/:id/mail-flow` `forwardTo`) of an
   in-scope USER mailbox accepts any address, the admin's own included — like the
   password reset a recipient admin already holds, it is part of the role.
+- The mail-flow settings of an in-scope mailbox (`GET …/mail-flow`: accept /
+  reject lists, forwarding target) are shown as stored, not redacted — they are
+  configuration the scoped admin may set itself, they say where the scope's mail
+  goes, and the BCP saves the whole form (`PUT`), so a redacted value would come
+  back as an invalid entry (review decision).
+- Display names are redacted where they stand next to a hidden address (person
+  rows, `Name <a@b>`, iCalendar `CN`); a display name stored in a separate
+  field of an audit entry's `changes` is not linked to its address and stays.
+- The quarantine search compares the stored sender in the database: a hidden
+  sender domain written in decomposed Unicode (NFD) is not excluded there (the
+  listed row still shows it redacted).
+- Redaction works on address syntax: an identifier that looks like an address of
+  a hosted domain (a Message-ID such as `<id@b.example>`) reads
+  `(andere Domain)` as well.
 
 - `GET /api/v1/user/me` → `adminAreas` (fallback for pre-8.x BCPs) is not
   scope-aware; the BCP uses `/admin/me/permissions`, the API enforces anyway.

@@ -59,6 +59,7 @@ export * from './task-store.js';
 export * from './resource-lock.js';
 export * from './folder-permissions.js';
 export * from './folder-access.js';
+export * from './folder-grantees.js';
 export * from './permission-events.js';
 export * from './resource-booking-rules.js';
 export * from './room-booking.js';

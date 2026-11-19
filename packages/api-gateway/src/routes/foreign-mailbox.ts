@@ -35,7 +35,9 @@
  * owner grant nothing. No access / unknown mailbox → 403 NO_ACCESS (no existence
  * oracle); a write without any write right → 403 READ_ONLY, with some write
  * right but not this one → 403 NO_PERMISSION; a folder (or message in a folder)
- * the caller can neither see nor read → 404. A folder list shows the visible
+ * the caller can neither see nor read → 404; a new folder name taken by such a
+ * folder → 403 NO_PERMISSION like any other refusal (w3: no name oracle, 409
+ * only for folders the caller can list). A folder list shows the visible
  * folders and their ancestors (non-selectable, without counts). Every
  * folder/message lookup is scoped to the resolved mailbox id, and moves never
  * leave it. Message writes go through the storage message store (moveMessages /
@@ -53,7 +55,7 @@ import {
   prisma, moveMessages, setFlags, touchMessages, expunge, loadRawMessage, folderSubtree,
   reservedFolderPrefix, reservedFolderNameError, loadMailboxFolderAccess, accessToFolder, listableFolders,
   canSeeFolder, canReadFolder, canCreateItems, canEditItem, canDeleteItem, canCreateSubfolder, canManageFolder,
-  canAdministerFolder, hasWriteRightSomewhere, folderRightsView, reparentedFolders, subfolderAuthorizer,
+  canAdministerFolder, hasWriteRightSomewhere, folderRightsView, reparentedFolders, subfolderAuthorizer, folderNameCollision,
   type AccessibleMailbox, type FolderAccess, type FolderAccessDb, type FolderTreeNode, type MailboxFolderAccess,
 } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
@@ -65,7 +67,7 @@ import { checkFolderParent, type FolderLookup } from '../lib/folder-tree.js';
 import { contentDisposition } from '../lib/attachment-download.js';
 import { deleteFolder, folderDeleteFailure, folderDeleteOptions, folderDeleteRefusal } from '../lib/folder-delete.js';
 import { auditForeignOpen, auditForeignWrite, type ForeignAuditAction, type ForeignAuditTarget } from '../lib/foreign-audit.js';
-import { replaceFolderPermissions, sendFolderPermissions } from '../lib/folder-permissions-api.js';
+import { replaceFolderPermissions, sendFolderPermissions, webmailGranteeDirectory } from '../lib/folder-permissions-api.js';
 import { markReadRequested } from '../lib/mark-read.js';
 import { messageOrderBy } from '../lib/message-sort.js';
 import {
@@ -215,6 +217,16 @@ async function reshapesOthers(f: Foreign, change: (tree: FolderTreeNode[]) => Fo
   return reparentedFolders(tree, change(tree), new Set(exempt)).length > 0;
 }
 
+/**
+ * w3 scope leaks: is the wanted name taken only by folders the caller cannot
+ * see? The change is then refused like any other (403), never answered with
+ * "already exists" — a grantee cannot probe the names of hidden folders.
+ */
+async function takenByHiddenFolder(f: Foreign, takenIds: string[]): Promise<boolean> {
+  if (f.rights.level !== 'grants') return false;
+  return folderNameCollision(await mailboxTree(f), f.rights, takenIds) === 'hidden';
+}
+
 /** Route-level auth (the router is mounted next to other routers on the same prefix). */
 const auth = (req: Request, res: Response, next: NextFunction): void => requireAuth(req, res, next);
 
@@ -261,6 +273,7 @@ export function createForeignMailboxRouter(kind: Kind): RouterType {
     }
     if (!mayPlaceUnder(f, parentId)) { refuse(f, res); return; }
     const exists = await prisma.folder.findFirst({ where: { mailboxId: f.entry.mailboxId, name } });
+    if (exists && await takenByHiddenFolder(f, [exists.id])) { refuse(f, res); return; }
     if (exists) { res.status(409).json({ error: 'Ordner existiert bereits' }); return; }
     if (await reshapesOthers(f, (tree) => [...tree, { id: NEW_FOLDER, name, parentId }])) { refuse(f, res); return; }
     const folder = await prisma.folder.create({
@@ -299,6 +312,7 @@ export function createForeignMailboxRouter(kind: Kind): RouterType {
       const collision = await prisma.folder.findFirst({
         where: { mailboxId: f.entry.mailboxId, name, id: { not: folderId } },
       });
+      if (collision && await takenByHiddenFolder(f, [collision.id])) { refuse(f, res); return; }
       if (collision) { res.status(409).json({ error: 'Name bereits vergeben' }); return; }
     }
     if (parsed.data.parentId !== undefined && parsed.data.parentId !== folder.parentId) {
@@ -421,7 +435,8 @@ export function createForeignMailboxRouter(kind: Kind): RouterType {
     if (!hit) return;
     // w3 review: entries that reach subfolders only with the owner right on all of them
     const authorize = subfolderAuthorizer(await mailboxTree(hit.f), hit.folder.id, hit.f.rights);
-    await replaceFolderPermissions(req, res, hit.folder, hit.f.entry.ownerUserId, 'webmail', authorize);
+    const directory = await webmailGranteeDirectory(hit.f.userId);
+    await replaceFolderPermissions(req, res, hit.folder, hit.f.entry.ownerUserId, 'webmail', { directory, authorize });
   });
 
   // ── Message list + search ─────────────────────────────────────────────────

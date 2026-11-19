@@ -22,11 +22,12 @@ import PDFDocument from 'pdfkit';
 import { prisma } from '@coremail/storage/prisma';
 import { requireArea } from '../../middleware/auth.js';
 import { csvCell, exportSignature, verifyExportSignature } from '../../lib/export-safety.js';
-import { requireUnscoped, scopeOf } from '../../middleware/admin-scope.js';
-import { andWhere, isScoped } from '../../lib/admin-scope.js';
+import { redactorOf, requireUnscoped, scopeOf } from '../../middleware/admin-scope.js';
+import { andWhere, isScoped, type AddressRedactor } from '../../lib/admin-scope.js';
 
 // 9.5 management scopes: a scoped admin's list and exports contain only entries
-// about objects of its domains and its own actions (auditScopeWhere); the
+// about objects of its domains and its own actions (auditScopeWhere), with the
+// addresses of other domains redacted (redactAuditEntry, w3); the
 // organisation-wide statistics and anomaly views are for unscoped admins only.
 export const adminAuditLogRouter: RouterType = Router();
 adminAuditLogRouter.use(requireArea('compliance'));
@@ -69,7 +70,7 @@ adminAuditLogRouter.post(
 
 // ─── Filter parsing (shared by list + exports) ───────────────────────────────
 
-interface AuditFilters {
+export interface AuditFilters {
   actorId?: string;
   actorEmail?: string;
   action?: string;
@@ -158,18 +159,66 @@ export interface AuditScopeTargets {
 /**
  * Pure (9.5): Prisma `where` of the audit entries a scoped admin may read —
  * entries about an object of its domains (by target id, or by an address of
- * its domains as target name) and its own actions. Combined with the request
- * filters through AND (the filters' own OR stays intact).
+ * its domains anywhere in the target name — one address or a ", " list, bare or
+ * in angle brackets) and its own actions. Combined with the request filters
+ * through AND (the filters' own OR stays intact). The addresses of other
+ * domains in an entry are redacted before it is returned (redactAuditEntry).
  */
 export function auditScopeWhere(t: AuditScopeTargets): Record<string, unknown> {
+  const nameOf = (op: 'endsWith' | 'contains', value: string) => ({ targetName: { [op]: value, mode: 'insensitive' } });
   return {
     OR: [
       { targetId: { in: [...t.ids] } },
-      ...t.domainNames.map((d) => ({ targetName: { endsWith: `@${d}`, mode: 'insensitive' } })),
+      ...t.domainNames.flatMap((d) => [
+        nameOf('endsWith', `@${d}`), nameOf('contains', `@${d},`), nameOf('contains', `@${d}>`),
+      ]),
       { actorId: t.actorId },
     ],
   };
 }
+
+/** The columns of an audit entry that can name addresses. */
+interface AuditAddressColumns {
+  actorEmail: string | null;
+  targetName: string | null;
+  errorMsg: string | null;
+  changes: unknown;
+}
+
+/**
+ * Pure (w3 scope leaks): an entry as a scoped admin sees it — every address of
+ * another hosted domain in the actor, target name, error and `changes` is
+ * replaced by "(andere Domain)" (lib/admin-scope.ts addressRedactor).
+ */
+export function redactAuditEntry<T extends AuditAddressColumns>(r: AddressRedactor, e: T): T {
+  if (!r.active) return e;
+  return {
+    ...e,
+    actorEmail: r.optionalText(e.actorEmail),
+    targetName: r.optionalText(e.targetName),
+    errorMsg: r.optionalText(e.errorMsg),
+    changes: r.deep(e.changes),
+  };
+}
+
+/** The request filters that match text which may name addresses (actor, free-text search). */
+const hasTextFilter = (f: AuditFilters): boolean => !!f.actorEmail || !!f.searchText;
+
+/**
+ * Pure: the text filters of buildWhere (actor e-mail, free-text search over
+ * action / target name / actor / error; case-insensitive substrings) on an
+ * entry. A scoped admin's text filters run on the redacted entries, so a search
+ * for a hidden address finds nothing (no oracle).
+ */
+export function matchesAuditText(e: Pick<AuditAddressColumns, 'actorEmail' | 'targetName' | 'errorMsg'> & { action: string }, f: AuditFilters): boolean {
+  const has = (value: string | null, needle: string): boolean => !!value && value.toLowerCase().includes(needle.toLowerCase());
+  if (f.actorEmail && !has(e.actorEmail, f.actorEmail)) return false;
+  if (f.searchText && ![e.action, e.targetName, e.actorEmail, e.errorMsg].some((v) => has(v, f.searchText!))) return false;
+  return true;
+}
+
+/** Max. entries a scoped admin's text search scans (the filter runs in memory, newest first). */
+export const AUDIT_SCOPED_SCAN_LIMIT = 5000;
 
 /** I/O: the scope targets of a scoped admin (organisation-wide → null). */
 async function auditScopeTargets(req: Request): Promise<AuditScopeTargets | null> {
@@ -193,10 +242,48 @@ async function auditScopeTargets(req: Request): Promise<AuditScopeTargets | null
   return { ids, domainNames: scope.domains.map((d) => d.name), actorId: req.apiUser!.userId };
 }
 
-/** The request's filters limited to the admin's management scope (9.5). */
-async function scopedWhere(req: Request, filters: AuditFilters): Promise<Record<string, unknown>> {
+type AuditRow = Awaited<ReturnType<typeof prisma.auditLog.findMany>>[number];
+
+/**
+ * I/O: one window of the entries the admin may read, newest first, and their
+ * total. Organisation-wide admins: the request filters as they are. Scoped
+ * admins (9.5 + w3): limited to the scope (auditScopeWhere), addresses of other
+ * domains redacted; text filters then run on the redacted entries over the
+ * newest AUDIT_SCOPED_SCAN_LIMIT entries of the scope (`truncated`).
+ */
+async function readEntries(
+  req: Request, filters: AuditFilters, window: { skip: number; take: number },
+): Promise<{ entries: AuditRow[]; total: number; truncated: boolean }> {
   const targets = await auditScopeTargets(req);
-  return targets ? andWhere(buildWhere(filters), auditScopeWhere(targets)) : buildWhere(filters);
+  if (!targets) {
+    const where = buildWhere(filters);
+    const [entries, total] = await Promise.all([
+      prisma.auditLog.findMany({ where, orderBy: { timestamp: 'desc' }, skip: window.skip, take: window.take }),
+      prisma.auditLog.count({ where }),
+    ]);
+    return { entries, total, truncated: false };
+  }
+  const redactor = await redactorOf(req);
+  if (!hasTextFilter(filters)) {
+    const where = andWhere(buildWhere(filters), auditScopeWhere(targets));
+    const [rows, total] = await Promise.all([
+      prisma.auditLog.findMany({ where, orderBy: { timestamp: 'desc' }, skip: window.skip, take: window.take }),
+      prisma.auditLog.count({ where }),
+    ]);
+    return { entries: rows.map((e) => redactAuditEntry(redactor, e)), total, truncated: false };
+  }
+  const { actorEmail: _actor, searchText: _search, ...dbFilters } = filters;
+  const rows = await prisma.auditLog.findMany({
+    where: andWhere(buildWhere(dbFilters), auditScopeWhere(targets)),
+    orderBy: { timestamp: 'desc' },
+    take: AUDIT_SCOPED_SCAN_LIMIT,
+  });
+  const matched = rows.map((e) => redactAuditEntry(redactor, e)).filter((e) => matchesAuditText(e, filters));
+  return {
+    entries: matched.slice(window.skip, window.skip + window.take),
+    total: matched.length,
+    truncated: rows.length >= AUDIT_SCOPED_SCAN_LIMIT,
+  };
 }
 
 /** Only string query values count (a repeated parameter arrives as an array). */
@@ -241,19 +328,8 @@ adminAuditLogRouter.get('/', async (req: Request, res: Response) => {
   if (!filters) return;
   const q = stringQuery(req.query);
   const { limit, offset } = auditPage(q['limit'], q['offset']);
-  const where = await scopedWhere(req, filters);
-
-  const [entries, total] = await Promise.all([
-    prisma.auditLog.findMany({
-      where,
-      orderBy: { timestamp: 'desc' },
-      take: limit,
-      skip: offset,
-    }),
-    prisma.auditLog.count({ where }),
-  ]);
-
-  res.json({ total, limit, offset, entries });
+  const { entries, total, truncated } = await readEntries(req, filters, { skip: offset, take: limit });
+  res.json({ total, limit, offset, entries, ...(truncated ? { truncated } : {}) });
 });
 
 // ─── GET /api/v1/admin/audit-log/stats ───────────────────────────────────────
@@ -313,13 +389,7 @@ adminAuditLogRouter.get('/stats', requireUnscoped, async (_req: Request, res: Re
 adminAuditLogRouter.get('/export.csv', async (req: Request, res: Response) => {
   const filters = requestFilters(req, res);
   if (!filters) return;
-  const where = await scopedWhere(req, filters);
-
-  const entries = await prisma.auditLog.findMany({
-    where,
-    orderBy: { timestamp: 'desc' },
-    take: 10_000, // hard cap to prevent OOM
-  });
+  const { entries } = await readEntries(req, filters, { skip: 0, take: 10_000 }); // hard cap to prevent OOM
 
   const csvHeader = [
     'timestamp',
@@ -377,13 +447,7 @@ adminAuditLogRouter.get('/export.csv', async (req: Request, res: Response) => {
 adminAuditLogRouter.get('/export.json', async (req: Request, res: Response) => {
   const filters = requestFilters(req, res);
   if (!filters) return;
-  const where = await scopedWhere(req, filters);
-
-  const entries = await prisma.auditLog.findMany({
-    where,
-    orderBy: { timestamp: 'desc' },
-    take: 10_000,
-  });
+  const { entries } = await readEntries(req, filters, { skip: 0, take: 10_000 });
 
   const payloadObj = {
     metadata: {
@@ -427,13 +491,7 @@ adminAuditLogRouter.get('/export.json', async (req: Request, res: Response) => {
 adminAuditLogRouter.get('/export.pdf', async (req: Request, res: Response) => {
   const filters = requestFilters(req, res);
   if (!filters) return;
-  const where = await scopedWhere(req, filters);
-
-  const entries = await prisma.auditLog.findMany({
-    where,
-    orderBy: { timestamp: 'desc' },
-    take: 1000, // PDF cap (use CSV for larger exports)
-  });
+  const { entries } = await readEntries(req, filters, { skip: 0, take: 1000 }); // PDF cap (use CSV for larger exports)
 
   const dateStr = new Date().toISOString().slice(0, 10);
 

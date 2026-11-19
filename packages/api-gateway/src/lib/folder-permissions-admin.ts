@@ -17,15 +17,20 @@
  * includes it (403 FORBIDDEN_GRANTEE) — and a scoped administrator gives rights
  * only to users of its domains (others answer like an unknown user). Lowering
  * or removing entries is always allowed.
+ *
+ * w3 scope leaks: a scoped administrator sees grantees of other domains as
+ * "(andere Domain)" and can name new grantees only inside its scope — any other
+ * address answers exactly like an unknown one (400 UNKNOWN_GRANTEE).
  */
 import type { Request, Response } from 'express';
 import {
   prisma, listMailboxFolderPermissions, addsRights, granteeUserId,
   type FolderAccessDb, type FolderPermissionAuthorizer,
 } from '@coremail/storage';
-import { replaceFolderPermissions, sendFolderPermissions, withFixedEntries } from './folder-permissions-api.js';
+import { redactEntries, replaceFolderPermissions, sendFolderPermissions, withFixedEntries } from './folder-permissions-api.js';
 import { canManageAccount } from './rbac.js';
-import { targetInScope } from '../middleware/admin-scope.js';
+import { domainIdWhere } from './admin-scope.js';
+import { redactorOf, scopeOf, targetInScope } from '../middleware/admin-scope.js';
 
 export type FolderPermissionTargetKind = 'user' | 'shared';
 
@@ -49,7 +54,8 @@ export function listFolderPermissionsHandler(kind: FolderPermissionTargetKind) {
     const target = await loadTarget(kind, String(req.params['id'] ?? ''));
     if (!target) { res.status(404).json(NOT_FOUND); return; }
     const folders = await listMailboxFolderPermissions(prisma as unknown as FolderAccessDb, target.mailboxId);
-    res.json(folders.map((f) => ({ ...f, entries: withFixedEntries(f.entries) })));
+    const redactor = await redactorOf(req);
+    res.json(folders.map((f) => ({ ...f, entries: withFixedEntries(redactEntries(redactor, f.entries)) })));
   };
 }
 
@@ -80,7 +86,7 @@ async function targetFolder(kind: FolderPermissionTargetKind, req: Request, res:
 export function getFolderPermissionsHandler(kind: FolderPermissionTargetKind) {
   return async (req: Request, res: Response): Promise<void> => {
     const hit = await targetFolder(kind, req, res);
-    if (hit) await sendFolderPermissions(res, hit.folder);
+    if (hit) await sendFolderPermissions(res, hit.folder, await redactorOf(req));
   };
 }
 
@@ -93,6 +99,10 @@ export function putFolderPermissionsHandler(kind: FolderPermissionTargetKind) {
       res.status(403).json({ error: 'Nur die Organisationsverwaltung darf Admin-Postfächer ändern', code: 'FORBIDDEN' });
       return;
     }
-    await replaceFolderPermissions(req, res, hit.folder, hit.target.ownerUserId, 'admin', adminAuthorizer(req));
+    await replaceFolderPermissions(req, res, hit.folder, hit.target.ownerUserId, 'admin', {
+      directory: domainIdWhere(scopeOf(req)), // w3: new grantees only from the admin's scope
+      authorize: adminAuthorizer(req),
+      redactor: await redactorOf(req),
+    });
   };
 }
