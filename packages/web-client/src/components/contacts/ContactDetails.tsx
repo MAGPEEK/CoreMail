@@ -4,7 +4,7 @@
  */
 import type { ReactNode } from 'react';
 import {
-  AtSign, Briefcase, Cake, Globe, Heart, Mail, MapPin, MessageCircle, MessageSquare, Pencil, Phone, Tag, Trash2, User,
+  AtSign, Briefcase, Cake, Globe, Heart, MapPin, MessageCircle, MessageSquare, Phone, Tag, User,
 } from 'lucide-react';
 import {
   PHONE_TYPE_LABEL, PLACE_TYPE_LABEL, addressLines, formatGermanDate, formFromContact, isWebUrl, type ContactDetail,
@@ -34,18 +34,12 @@ export function ContactAvatar({ name, email, className }: { name: string; email?
   );
 }
 
-interface Props {
-  contact: ContactDetail;
-  onEdit: () => void;
-  onDelete: () => void;
-  onMail: (address: string) => void;
-}
-
-export function ContactDetails({ contact, onEdit, onDelete, onMail }: Props) {
+/** The commands (edit, delete, e-mail, call) live in the ribbon (lib/contactsRibbon.ts). */
+export function ContactDetails({ contact }: { contact: ContactDetail }) {
   const view = formFromContact(contact);
   const primary = view.emails[0]?.value;
   return (
-    <div className="p-6 max-w-2xl">
+    <div className="p-4 sm:p-6 max-w-2xl">
       <div className="flex items-start gap-4 mb-6">
         <ContactAvatar name={contact.displayName} email={primary} className="w-16 h-16 text-xl" />
         <div className="flex-1 min-w-0">
@@ -55,19 +49,6 @@ export function ContactDetails({ contact, onEdit, onDelete, onMail }: Props) {
           )}
           {contact.company && <p className="text-sm text-fg-subtle">{contact.company}</p>}
           {view.categories.length > 0 && <div className="mt-2"><CategoryChips names={view.categories} /></div>}
-        </div>
-        <div className="flex gap-1 shrink-0">
-          {primary && (
-            <button type="button" onClick={() => onMail(primary)} className="btn-secondary text-xs flex items-center gap-1">
-              <Mail size={13} aria-hidden="true" /> E-Mail
-            </button>
-          )}
-          <button type="button" onClick={onEdit} className="btn-secondary text-xs flex items-center gap-1">
-            <Pencil size={13} aria-hidden="true" /> Bearbeiten
-          </button>
-          <button type="button" onClick={onDelete} className="btn-ghost text-xs text-danger-fg flex items-center gap-1">
-            <Trash2 size={13} aria-hidden="true" /> Löschen
-          </button>
         </div>
       </div>
 

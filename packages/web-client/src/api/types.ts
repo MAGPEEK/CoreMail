@@ -246,6 +246,7 @@ export interface Contact {
   jobTitle: string;
   notes: string;
   photoUrl?: string | null;
+  categories?: string[];
   vcardData?: string;
 }
 
