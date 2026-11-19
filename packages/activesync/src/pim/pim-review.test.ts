@@ -1,7 +1,7 @@
 /**
  * w3 review of the ActiveSync PIM classes against the in-memory Prisma fake: ClientIds of
- * earlier requests, re-priming without Supported, rooms of meetings written by a phone (the
- * REST booking path), a UTC event turned into a series (device / Region zone), the calendar
+ * earlier requests, re-priming without Supported, a former room address in a meeting written by
+ * a phone (10.0: an ordinary attendee), a UTC event turned into a series (device / Region zone), the calendar
  * FilterType window, a completed task sent again with its rule, FolderSync retried with the
  * previous key (no endless Ping Status 7) and Ping with an unreadable policy (Status 8).
  * Run: node --import tsx --test src/pim/pim-review.test.ts
@@ -41,20 +41,10 @@ const db = installFakeDb({
   calendar: [{ id: 'calA', userId: 'u1', name: 'Kalender', isDefault: true, sortOrder: 0, createdAt: new Date(1) }],
   calendarEvent: [
     event('evUtc', '2026-11-23T09:00:00Z'),
-    event('evCopy', '2026-11-24T09:00:00Z', { organizer: 'olga@example.com', attendees: [{ email: 'bob@example.com' }, { email: 'raum@example.com', cutype: 'ROOM', partstat: 'ACCEPTED' }] }),
+    event('evCopy', '2026-11-24T09:00:00Z', { organizer: 'olga@example.com', attendees: [{ email: 'bob@example.com' }] }),
   ],
   task: [],
   note: [],
-  resourceMailbox: [{
-    id: 'r1', email: 'raum@example.com', displayName: 'Raum 1', resourceType: 'ROOM', capacity: 4, location: '', domainId: 'dom1',
-    active: true, autoAccept: true, autoDeclineConflict: true, allowRecurring: true, maxDurationMinutes: null, bookingWindowDays: 365, requireApproval: false,
-  }],
-  resourceCalendar: [{ id: 'rc1', resourceId: 'r1', bookingSeq: 0 }],
-  resourceBooking: [{
-    id: 'b-other', calendarId: 'rc1', uid: 'other@test', summary: 'Andere', organizer: 'mallory@example.com',
-    dtStart: new Date('2026-11-26T09:00:00Z'), dtEnd: new Date('2026-11-26T10:00:00Z'), status: 'ACCEPTED', conflicts: [],
-    icalData: buildVCalendar({ uid: 'other@test', summary: 'Andere', start: new Date('2026-11-26T09:00:00Z'), end: new Date('2026-11-26T10:00:00Z') }),
-  }],
   activeSyncDevice: [{ id: 'd1', userId: 'u1', deviceId: 'dev1', status: 'OK', policyKey: '42', protocolVersion: '14.1', syncKeys: {} }],
   activeSyncItem: [],
 });
@@ -98,8 +88,6 @@ const meeting = (subject: string, start: string, end: string, attendees: string[
   C(0x05, utcZone), C(0x06, '0'), C(0x26, subject), C(0x27, start), C(0x12, end), C(0x0d, '2'),
   C(0x07, attendees.map((email) => C(0x08, [C(0x09, email), C(0x0a, email), C(0x29, '0'), C(0x2a, '1')]))), ...extra,
 ];
-const roomEntry = (id: string) => parseCalendarObject(String(row('calendarEvent', id)['icalData']))!.main.attendees.find((a) => a.email === 'raum@example.com');
-const booking = (uid: string) => rows('resourceBooking').find((b) => b['uid'] === uid);
 
 let calKey = '';
 test('setup: calendar primed with a two-week window', async () => {
@@ -126,59 +114,15 @@ test('ClientIds of an earlier request are never matched (devices reuse them); a 
   calKey = (await sync('cal:calA', retry.key)).key;
 });
 
-let meetingId = '';
-test('rooms: a meeting added on the phone books the room (any AttendeeType); the answer replaces what the phone sent', async () => {
+test('10.0: a former room address in a meeting from the phone is an ordinary attendee — nothing is booked', async () => {
+  const before = db.calls.length;
   const r = await sync('cal:calA', calKey, { commands: [add('m1', meeting('Planung', '20261125T130000Z', '20261125T140000Z', ['carol@example.com', 'raum@example.com']))] });
-  meetingId = r.addIds[0]!.split('>')[1]!;
-  const uid = String(row('calendarEvent', meetingId)['uid']);
-  assert.deepEqual([booking(uid)?.['status'], booking(uid)?.['organizer']], ['ACCEPTED', 'bob@example.com']);
-  assert.deepEqual([roomEntry(meetingId)?.cutype, roomEntry(meetingId)?.partstat, roomEntry(meetingId)?.role], ['ROOM', 'ACCEPTED', 'NON-PARTICIPANT']);
-  // the device gets the stored meeting back (room answer, room type 3)
-  assert.ok(r.changes.includes(meetingId));
-  const room = kids(kid(r.data(meetingId), 'Attendees'), 'Attendee').find((a) => kid(a, 'Email')?.text === 'raum@example.com')!;
-  assert.deepEqual([kid(room, 'AttendeeType')?.text, kid(room, 'AttendeeStatus')?.text], ['3', '3']);
-  calKey = (await sync('cal:calA', r.key)).key;
-});
-
-test('rooms: moved onto another booking → declined; the phone cannot mark it accepted; removed → released', async () => {
-  const uid = String(row('calendarEvent', meetingId)['uid']);
-  const moved = await sync('cal:calA', calKey, { commands: [change(meetingId, meeting('Planung', '20261126T090000Z', '20261126T100000Z', ['carol@example.com', 'raum@example.com']))] });
-  assert.deepEqual([roomEntry(meetingId)?.partstat, booking(uid)?.['status']], ['DECLINED', 'DECLINED']);
-  calKey = (await sync('cal:calA', moved.key)).key;
-  // same time, the phone claims the room accepted (AttendeeStatus 3): the stored answer stays
-  const claim = meeting('Planung', '20261126T090000Z', '20261126T100000Z', []).map((n) => (n[1] === 0x07
-    ? C(0x07, [C(0x08, [C(0x09, 'carol@example.com'), C(0x0a, 'Carol')]), C(0x08, [C(0x09, 'raum@example.com'), C(0x0a, 'Raum'), C(0x29, '3'), C(0x2a, '3')])])
-    : n));
-  calKey = (await sync('cal:calA', (await sync('cal:calA', calKey, { commands: [change(meetingId, claim)] })).key)).key;
-  assert.equal(roomEntry(meetingId)?.partstat, 'DECLINED');
-  // the room removed from the meeting → its booking is released
-  const removed = await sync('cal:calA', calKey, { commands: [change(meetingId, meeting('Planung', '20261126T090000Z', '20261126T100000Z', ['carol@example.com']))] });
-  assert.equal(booking(uid), undefined);
-  calKey = (await sync('cal:calA', removed.key)).key;
-});
-
-test('rooms: a deleted meeting releases its room; the copy of another organizer\'s meeting and a foreign UID touch no booking', async () => {
-  const r = await sync('cal:calA', calKey, { commands: [add('m2', meeting('Kurz', '20261130T080000Z', '20261130T090000Z', ['raum@example.com']))] });
   const id = r.addIds[0]!.split('>')[1]!;
-  const uid = String(row('calendarEvent', id)['uid']);
-  assert.equal(booking(uid)?.['status'], 'ACCEPTED');
+  const attendees = parseCalendarObject(String(row('calendarEvent', id)['icalData']))!.main.attendees;
+  assert.deepEqual(attendees.map((a) => a.email).sort(), ['carol@example.com', 'raum@example.com']);
+  assert.equal(attendees.find((a) => a.email === 'raum@example.com')?.cutype, 'INDIVIDUAL', 'no room type is added');
+  assert.deepEqual(db.calls.slice(before).filter((c) => /^resource/.test(c.model)), [], 'no resource model is touched');
   calKey = (await sync('cal:calA', r.key)).key;
-  calKey = (await sync('cal:calA', (await sync('cal:calA', calKey, { commands: [A(0x09, [A(0x0d, id)])] })).key)).key;
-  assert.equal(booking(uid), undefined);
-
-  // the user's copy of Olga's meeting moved on the phone: Olga's room booking is not the user's
-  const before = rows('resourceBooking').length;
-  const copy = await sync('cal:calA', calKey, { commands: [change('evCopy', [...meeting('evCopy', '20261124T100000Z', '20261124T110000Z', ['raum@example.com']), C(0x19, 'olga@example.com')])] });
-  assert.equal(rows('resourceBooking').length, before);
-  assert.equal(booking('evCopy@test'), undefined);
-  calKey = (await sync('cal:calA', copy.key)).key;
-
-  // a phone meeting with the UID of someone else's booking: declined, the booking stays theirs
-  const takeover = await sync('cal:calA', calKey, { commands: [add('m3', [...meeting('Kapern', '20261201T080000Z', '20261201T090000Z', ['raum@example.com']), C(0x28, 'other@test')])] });
-  const tid = takeover.addIds[0]!.split('>')[1]!;
-  assert.equal(roomEntry(tid)?.partstat, 'DECLINED');
-  assert.deepEqual([booking('other@test')?.['organizer'], (booking('other@test')?.['dtStart'] as Date).toISOString()], ['mallory@example.com', '2026-11-26T09:00:00.000Z']);
-  calKey = (await sync('cal:calA', takeover.key)).key;
 });
 
 test('a timed UTC event turned into a weekly series on the phone keeps its local time across DST (Region zone)', async () => {

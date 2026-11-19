@@ -3,7 +3,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  check, assert, creds, DOMAIN, PORTS, STATE_DIR, http, session, sleep, waitFor, smtpOpen, smtpCmd, smtpStartTls, smtpAuthPlain, smtpSend, buildMime,
+  check, assert, creds, DOMAIN, PORTS, STATE_DIR, http, session, sleep, smtpOpen, smtpCmd, smtpStartTls, smtpAuthPlain, smtpSend, buildMime,
 } from '../lib.mjs';
 
 export async function run(state) {
@@ -74,52 +74,6 @@ export async function run(state) {
     } finally { s.close(); }
   });
 
-  await check('smtp587: mailed invitation to a room is booked and the organizer receives the room REPLY (9.5)', async () => {
-    const admin = await session(state, 'admin', state.adminEmail, c.admin);
-    const room = await http('POST', '/api/v1/admin/resources', { token: admin, body: {
-      email: `e2e-raum-mail-${Date.now()}@${A.split('@')[1]}`, displayName: 'E2E Raum Mail', resourceType: 'ROOM', domainId: state.domainId, bookingWindowDays: 365,
-    } });
-    assert(room.status === 201 && room.json?.sendReplies === true, `create room ${room.status} ${room.text.slice(0, 200)}`);
-    try {
-      const summary = `E2E Raumbuchung ${Date.now()}`;
-      const start = new Date(Math.ceil(Date.now() / 36e5) * 36e5 + 15 * 864e5);
-      const ical = (d) => d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
-      const vcal = [
-        'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//E2E//EN', 'METHOD:REQUEST', 'BEGIN:VEVENT',
-        `UID:e2e-room-reply-${Date.now()}@e2e-client.test`, `DTSTAMP:${ical(new Date())}`, `DTSTART:${ical(start)}`, `DTEND:${ical(new Date(start.getTime() + 36e5))}`,
-        `SUMMARY:${summary}`, 'SEQUENCE:0', `ORGANIZER:mailto:${A}`,
-        `ATTENDEE;CUTYPE=ROOM;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:${room.json.email}`,
-        'END:VEVENT', 'END:VCALENDAR', '',
-      ].join('\r\n');
-      const invite = [
-        `From: Alice E2E <${A}>`, `To: ${room.json.email}`, `Subject: Einladung: ${summary}`,
-        `Date: ${new Date().toUTCString().replace('GMT', '+0000')}`, `Message-ID: <room-invite-${Date.now()}@e2e-client.test>`,
-        'MIME-Version: 1.0', 'Content-Type: text/calendar; charset=utf-8; method=REQUEST', 'Content-Transfer-Encoding: 7bit', '', vcal,
-      ].join('\r\n');
-      const s = await smtpOpen(PORTS.submission);
-      try {
-        await smtpStartTls(s);
-        await smtpAuthPlain(s, A, c.userA);
-        const r = await smtpSend(s, A, [room.json.email], invite);
-        assert(r.code === 250, `${r.stage}: ${r.text}`);
-      } finally { s.close(); }
-      const tok = await session(state, 'a', A, c.userA);
-      const reply = await waitFor(async () => {
-        const q = await http('GET', `/api/v1/mail/search?q=${encodeURIComponent(summary)}`, { token: tok });
-        return (q.json?.messages ?? q.json ?? []).find((m) => String(m.subject ?? '').startsWith('Angenommen:'));
-      }, { timeout: 30000, what: 'the room REPLY in the organizer inbox' });
-      const m = await http('GET', `/api/v1/mail/messages/${reply.id}?markRead=false`, { token: tok });
-      const detail = JSON.stringify(m.json ?? {});
-      assert(detail.includes(room.json.email), 'REPLY not sent by the room');
-      assert(detail.includes('invite.ics'), 'REPLY without its calendar part');
-      const b = await http('GET', `/api/v1/admin/resources/${room.json.id}/bookings`, { token: admin });
-      assert((b.json ?? []).some((x) => x.summary === summary && x.status === 'ACCEPTED'), `booking ${b.status} ${b.text.slice(0, 200)}`);
-      return `booked ACCEPTED, "${reply.subject}" from the room`;
-    } finally {
-      await http('DELETE', `/api/v1/admin/resources/${room.json.id}`, { token: admin });
-    }
-  });
-
   await check('smtps465: implicit TLS + AUTH works', async () => {
     const s = await smtpOpen(PORTS.smtps, { implicitTls: true });
     try {
@@ -160,6 +114,20 @@ export async function run(state) {
       const r = await smtpCmd(s, `RCPT TO:<nobody-${Date.now()}@${DOMAIN}>`);
       assert(r.code >= 550, r.text);
       return r.text;
+    } finally { s.close(); }
+  });
+  await check('smtp25 (10.0): rooms are gone — no room admin API, a room address is an unknown recipient (550 5.1.1)', async () => {
+    const admin = await session(state, 'admin', state.adminEmail, c.admin);
+    const api = await http('POST', '/api/v1/admin/resources', { token: admin, body: {
+      email: `e2e-raum-${Date.now()}@${DOMAIN}`, displayName: 'E2E Raum', resourceType: 'ROOM', domainId: state.domainId,
+    } });
+    assert(api.status === 404, `room admin API still answers: ${api.status} ${api.text.slice(0, 200)}`);
+    const s = await smtpOpen(PORTS.smtp, { ehlo: 'mx.external-e2e.test' });
+    try {
+      await smtpCmd(s, `MAIL FROM:<${ext}>`);
+      const r = await smtpCmd(s, `RCPT TO:<e2e-raum-${Date.now()}@${DOMAIN}>`);
+      assert(r.code === 550 && /5\.1\.1/.test(r.text), r.text);
+      return `admin API 404, RCPT ${r.text}`;
     } finally { s.close(); }
   });
   await check('smtp25: open relay to external domain refused', async () => {

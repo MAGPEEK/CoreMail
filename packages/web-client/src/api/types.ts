@@ -217,21 +217,6 @@ export interface EventAttendee {
   partstat?: 'NEEDS-ACTION' | 'ACCEPTED' | 'DECLINED' | 'TENTATIVE';
   role?: 'REQ-PARTICIPANT' | 'OPT-PARTICIPANT' | 'CHAIR' | 'NON-PARTICIPANT';
   rsvp?: boolean;
-  /** 9.4: ROOM / RESOURCE for booked rooms (answer in partstat, decline reason in `reason`) */
-  cutype?: string;
-  reason?: 'inactive' | 'recurring' | 'too-frequent' | 'duration' | 'window' | 'conflict';
-}
-
-/** 9.4: GET /calendar/rooms */
-export interface RoomAvailability {
-  id: string;
-  email: string;
-  displayName: string;
-  resourceType: string;
-  capacity: number | null;
-  location: string;
-  available: boolean;
-  busy: Array<{ start: string; end: string; kind: 'tentative' | 'busy' | 'oof' }>;
 }
 
 /** 9.4: POST /calendar/freebusy */

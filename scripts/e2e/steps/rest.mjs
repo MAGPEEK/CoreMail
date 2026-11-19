@@ -218,16 +218,18 @@ export async function run(state) {
     return `next due ${done.json.next.dueDate}`;
   });
 
-  await check('rest: scheduling assistant — rooms list and meeting-time suggestions answer', async () => {
-    const rooms = await http('GET', '/api/v1/calendar/rooms?start=2026-12-07T08:00:00.000Z&end=2026-12-07T09:00:00.000Z', { token: tok });
-    assert(rooms.status === 200 && Array.isArray(rooms.json), `${rooms.status} ${rooms.text}`);
+  await check('rest: scheduling assistant — meeting-time suggestions answer; the rooms list is gone (10.0)', async () => {
     const s = await http('POST', '/api/v1/calendar/schedule-suggestions', { token: tok, body: {
       attendees: [], start: '2026-12-07T00:00:00.000Z', end: '2026-12-12T00:00:00.000Z', durationMinutes: 30,
     } });
     assert(s.status === 200 && Array.isArray(s.json.suggestions), `${s.status} ${s.text}`);
-    const tooLong = await http('GET', '/api/v1/calendar/rooms?start=2026-12-01T00:00:00.000Z&end=2027-03-01T00:00:00.000Z', { token: tok });
+    const tooLong = await http('POST', '/api/v1/calendar/schedule-suggestions', { token: tok, body: {
+      attendees: [], start: '2026-12-01T00:00:00.000Z', end: '2027-03-01T00:00:00.000Z', durationMinutes: 30,
+    } });
     assert(tooLong.status === 400, `window > 31 days → ${tooLong.status}`);
-    return `${rooms.json.length} rooms, ${s.json.suggestions.length} suggestions`;
+    const rooms = await http('GET', '/api/v1/calendar/rooms?start=2026-12-07T08:00:00.000Z&end=2026-12-07T09:00:00.000Z', { token: tok });
+    assert(rooms.status === 404, `rooms list still answers: ${rooms.status}`);
+    return `${s.json.suggestions.length} suggestions, rooms 404`;
   });
 
   await check('rest (review): free/busy finds no address outside the own address list; a repeated completion creates no second task', async () => {

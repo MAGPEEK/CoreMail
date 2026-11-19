@@ -6,7 +6,6 @@ import { enqueueRuleForward, isRuleForwardedAlready, planAdminForward, forwardSo
 import { handleTransportOutcome } from './transport-actions.js';
 import { sendAutoReplyIfNeeded } from './auto-reply.js';
 import { withReturnPath } from './trace.js';
-import { processResourceMailboxes } from './resource-booking.js';
 // Journaling feature completely removed in v3.13.6
 
 const log = createLogger('smtp:message-handler');
@@ -45,15 +44,14 @@ export interface StoreOptions {
 /**
  * Result of one local delivery:
  *  - 'stored'   the message is in the mailbox (or a rule/transport rule took it over)
- *  - 'resource' the recipient is a resource mailbox — the invitation was processed
- *  - 'unknown'  no active mailbox/resource of that address — the caller sends an
+ *  - 'unknown'  no active mailbox of that address — the caller sends an
  *               NDR to the sender (never a silent drop)
  *  - 'quota'    v8.1: the mailbox is at/over its ProhibitSendReceiveQuota — not
  *               stored; the caller sends an NDR (5.2.2)
  *  - 'policy'   9.4: refused by the mailbox's mail flow policy (accept-only-from,
  *               reject-from, receive size limit) — not stored; NDR (5.7.1)
  */
-export type StoreResult = 'stored' | 'resource' | 'unknown' | 'quota' | 'policy';
+export type StoreResult = 'stored' | 'unknown' | 'quota' | 'policy';
 
 /** Pure: the delivery-ledger outcome of a store result. */
 export function toLocalOutcome(result: StoreResult | void): LocalOutcome {
@@ -87,10 +85,7 @@ async function deliverInbound(rawBuffer: Buffer, opts: StoreOptions): Promise<St
   const ownerType: 'user' | 'shared' = user?.mailbox ? 'user' : 'shared';
 
   if (!mailbox) {
-    // Room/equipment mailbox: process the invitation for every delivery path
-    // (port 25, submission, worker for MWA/JMAP/EAS) with the sender's auth.
-    const handled = await processResourceMailboxes(rawBuffer, [opts.rcptTo], opts.fromAddr, opts.senderAuth ?? null);
-    if (handled.length > 0) return 'resource';
+    // 10.0: room/equipment mailboxes are gone — a former room address is unknown.
     log.warn({ rcptTo: opts.rcptTo }, 'Mailbox not found — recipient unknown at delivery time');
     return 'unknown';
   }

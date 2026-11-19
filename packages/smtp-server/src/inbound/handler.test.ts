@@ -18,7 +18,6 @@ const none = async () => null;
   domain: { findFirst: async ({ where }: { where: { name: string } }) => (where.name === 'corp.test' ? { id: 'd1' } : null) },
   user: { findFirst: none },
   sharedMailbox: { findFirst: none },
-  resourceMailbox: { findFirst: none },
   emailAlias: { findFirst: none },
   systemLog: { create: async () => ({}) },
 };

@@ -46,11 +46,6 @@ const db: Record<string, Row[]> = {
     { id: 'smA', email: 'team@a.example', displayName: 'Team A', domainId: 'dA', active: true, quotaBytes: 1n, quotaWarningBytes: null, quotaProhibitSendBytes: null, permissions: [], mailbox: { id: 'mb-smA' } },
     { id: 'smB', email: 'team@b.example', displayName: 'Team B', domainId: 'dB', active: true, quotaBytes: 1n, quotaWarningBytes: null, quotaProhibitSendBytes: null, permissions: [], mailbox: { id: 'mb-smB' } },
   ],
-  resourceMailbox: [
-    { id: 'resA', email: 'room@a.example', displayName: 'Room A', domainId: 'dA', active: true, calendar: { bookings: [] } },
-    { id: 'resB', email: 'room@b.example', displayName: 'Room B', domainId: 'dB', active: true, calendar: { bookings: [] } },
-  ],
-  resourceBooking: [{ id: 'bkB', calendar: { resourceId: 'resB' } }],
   emailAlias: [
     { id: 'alA', address: 'x@a.example', domainId: 'dA', targetUserId: 'ua1', targetUser: { domainId: 'dA' }, targetShared: null },
     { id: 'alB', address: 'x@b.example', domainId: 'dB', targetUserId: 'ub1', targetUser: { domainId: 'dB' }, targetShared: null },
@@ -223,22 +218,10 @@ test('shared mailboxes: list, 404, create and grantee in scope', async () => {
   assert.deepEqual([g.status, g.json['error']], [404, 'User not found']);
 });
 
-test('resources: list, 404, bookings must belong to the resource', async () => {
-  assert.deepEqual(ids((await call('hdA', 'GET', '/resources')).json), ['resA']);
-  assert.deepEqual((await call('hdA', 'GET', '/resources/resB')).json, NOT_FOUND);
-  const b = await call('rmA', 'DELETE', '/resources/resA/bookings/bkB');
-  assert.deepEqual([b.status, b.json['error']], [404, 'Booking not found'], 'a booking of an out-of-scope resource via an in-scope path');
-  const c = await call('rmA', 'POST', '/resources', { email: 'r@b.example', displayName: 'R', domainId: 'dA' });
-  assert.deepEqual([c.status, c.json['code']], [403, OUT_OF_SCOPE], 'address of another domain');
-});
-
-test('9.5 resources: "send replies" (answers to mailed invitations) can be switched; only a boolean is accepted', async () => {
-  const off = await call('rmA', 'PUT', '/resources/resA', { sendReplies: false });
-  assert.deepEqual([off.status, off.json['sendReplies']], [200, false]);
-  const bad = await call('rmA', 'PUT', '/resources/resA', { sendReplies: 'no' });
-  assert.equal(bad.status, 400);
-  const on = await call('rmA', 'PUT', '/resources/resA', { sendReplies: true });
-  assert.deepEqual([on.status, on.json['sendReplies']], [200, true]);
+test('10.0: the room/equipment admin API is gone', async () => {
+  for (const [method, path] of [['GET', '/resources'], ['POST', '/resources'], ['GET', '/ems/resource-mailboxes']] as const) {
+    assert.equal((await call('org', method, path, method === 'POST' ? {} : undefined)).status, 404, `${method} ${path}`);
+  }
 });
 
 test('aliases: alias domain and target must be in scope', async () => {

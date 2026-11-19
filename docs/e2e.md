@@ -86,9 +86,8 @@ Steps: `setup users smtp imap pop3 jmap dav dav-tasks contacts eas eas-body eas-
 Sync with the event id as ServerId; a task added by the device (ClientId → ServerId) is a task over
 REST, a REST change of it reaches the device as a Change and a device Delete removes it; a note
 added by the device is a note over REST; a weekly meeting with a deleted occurrence added by the
-device expands without that occurrence over REST; a meeting added by the device with a room (created
-over the admin API, listed as an ordinary attendee) books it like the event form (ACCEPTED, CUTYPE
-ROOM, the room busy in `/calendar/rooms`) and the device Delete frees it. Contacts (w3): the
+device expands without that occurrence over REST (10.0: the room booking check is gone with the
+room feature). Contacts (w3): the
 FolderSync lists `contacts:default` (9); a contact created over REST arrives in the contacts Sync
 (names, Email1Address, MobilePhoneNumber, CompanyName); a contact added by the device (names,
 e-mail, business phone, business address, NickName, body) is a contact over REST and its vCard is
@@ -111,7 +110,7 @@ VTODO `PUT` is a task in `GET /api/v1/tasks/:id` (status rules applied), a webma
 `GET` (WAITING as `NEEDS-ACTION`, `CATEGORIES` kept), a task created with `POST /api/v1/tasks` is in
 `REPORT calendar-query` (VTODO time-range), completing a recurring task over CalDAV creates the
 next one, `DELETE` honours `If-Match`. See [caldav.md](caldav.md).
-`schema-upgrade` builds a database from the 8.0.0 schema (`E2E_SCHEMA_BASE`, default `d5ad681`) and checks that schema-sync upgrades it, refuses duplicates and fails closed on a dropped column with data; 9.5: it also upgrades a 9.4.0 database (`E2E_SCHEMA_BASE_9_4`, default `46ec9d80`) whose user has two tasks — the new `UNIQUE (userId, uid)` over the new optional `tasks.uid` is applied without a duplicate check, the tasks are kept (`E2E_PG_CONTAINER` selects the PostgreSQL container).
+`schema-upgrade` builds a database from the 8.0.0 schema (`E2E_SCHEMA_BASE`, default `d5ad681`) and checks that schema-sync upgrades it (new unique constraint over the new optional `tasks.uid`, two tasks of one user kept); on 9.5.x databases (`E2E_SCHEMA_BASE_9_5`, default `af6bd185` = v9.5.1) it refuses duplicates for a new unique constraint and fails closed on a dropped column with data — both times the room tables next to it stay untouched; 9.5: it also upgrades a 9.4.0 database (`E2E_SCHEMA_BASE_9_4`, default `46ec9d80`) whose user has two tasks — the new `UNIQUE (userId, uid)` over the new optional `tasks.uid` is applied without a duplicate check, the tasks are kept. 10.0: a 9.5.x database with room rows is upgraded **without** `COREMAIL_ALLOW_SCHEMA_DATA_LOSS` — every retired room table is logged, the pre-migration dump is written first and holds the room rows, then the tables and the `ResourceType` enum are gone and the other data is kept (`E2E_PG_CONTAINER` selects the PostgreSQL container). `rest` checks that `/calendar/rooms` answers 404, `smtp` that `/admin/resources` answers 404 and a room address is refused at RCPT with 550 5.1.1.
 `webmail` (9.3): shared / delegated mailboxes in the mail view at API level — A lists the team
 mailbox in `GET /api/v1/user/accessible-mailboxes` (FULL_ACCESS + SEND_AS), hides and shows it
 (persisted; B without access gets 404, an invalid ref 400), lists folders / messages / search and

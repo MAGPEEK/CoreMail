@@ -1,9 +1,8 @@
 /**
  * Inbound authentication hardening: SMTP session data reaches the content
  * filter, forged Authentication-Results with our authserv-id are removed, the
- * filter's AR header is sanitised, resource bookings are scoped per resource
- * and only changed by the authenticated organizer, queue jobs carry the
- * authenticated sender, MX targets are SSRF-checked, the delay DSN is sent once
+ * filter's AR header is sanitised, former room addresses are unknown recipients
+ * (10.0), queue jobs carry the authenticated sender, MX targets are SSRF-checked, the delay DSN is sent once
  * and the tarpit slows down error-producing clients.
  * Run: node --import tsx --test src/inbound/mail-auth.test.ts  (in packages/smtp-server)
  */
@@ -15,43 +14,19 @@ process.env['JWT_SECRET'] ??= 'test-secret-test-secret-test-secret-1234';
 process.env['PEPPER'] ??= 'test-pepper-test-pepper-test-pepper-1234';
 process.env['LOG_LEVEL'] = 'error';
 
-interface Booking { id: string; calendarId: string; uid: string; organizer: string; status: string; summary?: string }
-const bookings: Booking[] = [];
-// the resource settings of the BCP (9.5: the mail path applies the same rules as the event form)
-const POLICY = {
-  active: true, autoAccept: true, requireApproval: false, autoDeclineConflict: false,
-  allowRecurring: true, maxDurationMinutes: null, bookingWindowDays: 3650,
-};
-const resources: Record<string, typeof POLICY & { id: string; calendar: { id: string } }> = {
-  'room1@corp.test': { id: 'r1', ...POLICY, calendar: { id: 'cal1' } },
-  'room2@corp.test': { id: 'r2', ...POLICY, calendar: { id: 'cal2' } },
-};
 const none = async () => null;
 (globalThis as unknown as { __prisma: unknown }).__prisma = {
   $on: () => undefined,
-  // 9.4: bookings run in a transaction under the resource's booking lock
   $transaction: async (fn: (tx: unknown) => unknown) => fn((globalThis as unknown as { __prisma: unknown }).__prisma),
-  resourceCalendar: { update: async ({ where }: { where: { id: string } }) => ({ id: where.id }) },
   smtpSettings: { findUnique: async () => ({ localDeliveryEnabled: true }) },
   domain: { findFirst: async ({ where }: { where: { name: string } }) => (where.name === 'corp.test' ? { id: 'd1' } : null) },
   user: { findFirst: none, findMany: async () => [] },
   sharedMailbox: { findFirst: none },
   emailAlias: { findFirst: none },
   systemLog: { create: async () => ({}) },
-  resourceMailbox: { findFirst: async ({ where }: { where: { email: string } }) => resources[where.email] ?? null },
-  resourceBooking: {
-    // v8.1: unique per (calendarId, uid)
-    findUnique: async ({ where }: { where: { calendarId_uid: { calendarId: string; uid: string } } }) =>
-      bookings.find((b) => b.calendarId === where.calendarId_uid.calendarId && b.uid === where.calendarId_uid.uid) ?? null,
-    // 9.5: the shared conflict check reads the resource's bookings
-    findMany: async ({ where }: { where: { calendarId: string } }) => bookings.filter((b) => b.calendarId === where.calendarId),
-    create: async ({ data }: { data: Omit<Booking, 'id'> }) => { const b = { id: `b${bookings.length + 1}`, ...data }; bookings.push(b); return b; },
-    update: async ({ where, data }: { where: { id: string }; data: Partial<Booking> }) => { const b = bookings.find((x) => x.id === where.id)!; Object.assign(b, data); return b; },
-    delete: async ({ where }: { where: { id: string } }) => { const i = bookings.findIndex((x) => x.id === where.id); return bookings.splice(i, 1)[0]; },
-  },
 };
 
-const { inboundHandlers, processResourceMailboxes } = await import('./handler.js');
+const { inboundHandlers, verifyRecipient } = await import('./handler.js');
 const { interpretContentFilterResponse } = await import('./connection-filter.js');
 const { stripOwnAuthResults, sanitizeAuthHeaders } = await import('../handlers/trace.js');
 const { resolveMxTarget, relayMessage } = await import('../outbound/relay.js');
@@ -110,58 +85,11 @@ test('content-filter answer carries authHeaders and validated verifiedDomains', 
   }
 });
 
-// ── resource bookings ─────────────────────────────────────────────────────────
+// ── 10.0: room/equipment mailboxes removed ────────────────────────────────────
 
-// v8.1 review: the organizer identity is the iCal ORGANIZER (else the header From), never the envelope
-const invite = (method: string, uid: string, start = '20261201T090000Z', organizer = 'org@ext.test') => Buffer.from([
-  `From: Org <${organizer}>`, 'Subject: Meeting', '', 'BEGIN:VCALENDAR', `METHOD:${method}`, 'BEGIN:VEVENT', `UID:${uid}`,
-  `ORGANIZER;CN="Org: Team":mailto:${organizer}`,
-  `DTSTART:${start}`, 'DTEND:20261201T100000Z', 'SUMMARY:Sync', 'END:VEVENT', 'END:VCALENDAR', '',
-].join('\r\n'));
-const AUTH_EXT = { verifiedDomains: ['ext.test'] };
-
-test('resource bookings: scoped per resource; update/cancel only by the authenticated organizer', async () => {
-  bookings.length = 0;
-  await processResourceMailboxes(invite('REQUEST', 'u-1'), ['room1@corp.test'], 'Org <org@ext.test>', AUTH_EXT);
-  assert.deepEqual(bookings.map((b) => [b.calendarId, b.uid, b.organizer, b.status]), [['cal1', 'u-1', 'org@ext.test', 'ACCEPTED']]);
-
-  // another resource with the same UID never touches room1's booking …
-  await processResourceMailboxes(invite('CANCEL', 'u-1'), ['room2@corp.test'], 'org@ext.test', AUTH_EXT);
-  assert.equal(bookings.length, 1);
-  // … and (v8.1) the same meeting books room2 as well: one booking per room
-  await processResourceMailboxes(invite('REQUEST', 'u-1', '20261205T090000Z'), ['room2@corp.test'], 'org@ext.test', AUTH_EXT);
-  assert.deepEqual(bookings.map((b) => [b.calendarId, b.uid, b.status]), [['cal1', 'u-1', 'ACCEPTED'], ['cal2', 'u-1', 'ACCEPTED']]);
-  // cancelling at room2 removes only room2's booking
-  await processResourceMailboxes(invite('CANCEL', 'u-1'), ['room2@corp.test'], 'org@ext.test', AUTH_EXT);
-  assert.equal(bookings.length, 1);
-  assert.equal(bookings[0]!.calendarId, 'cal1');
-
-  // a different (even authenticated) sender cannot cancel or overwrite
-  await processResourceMailboxes(invite('CANCEL', 'u-1', undefined, 'mallory@ext.test'), ['room1@corp.test'], 'mallory@ext.test', AUTH_EXT);
-  await processResourceMailboxes(invite('REQUEST', 'u-1', '20261203T090000Z', 'mallory@ext.test'), ['room1@corp.test'], 'mallory@ext.test', AUTH_EXT);
-  // the organizer's envelope address does not help when ORGANIZER names someone else
-  await processResourceMailboxes(invite('CANCEL', 'u-1', undefined, 'mallory@ext.test'), ['room1@corp.test'], 'org@ext.test', AUTH_EXT);
-  // the organizer address without authentication (spoofed) cannot either
-  await processResourceMailboxes(invite('CANCEL', 'u-1'), ['room1@corp.test'], 'org@ext.test', { verifiedDomains: [] });
-  await processResourceMailboxes(invite('CANCEL', 'u-1'), ['room1@corp.test'], 'org@ext.test', null);
-  assert.equal(bookings.length, 1);
-  assert.equal(bookings[0]!.status, 'ACCEPTED');
-
-  // the authenticated organizer can
-  await processResourceMailboxes(invite('CANCEL', 'u-1'), ['room1@corp.test'], 'org@ext.test', AUTH_EXT);
-  assert.equal(bookings.length, 0);
-});
-
-test('resource bookings: one invitation to two rooms creates a booking in each', async () => {
-  bookings.length = 0;
-  await processResourceMailboxes(invite('REQUEST', 'u-3'), ['room1@corp.test', 'room2@corp.test'], 'org@ext.test', AUTH_EXT);
-  assert.deepEqual(bookings.map((b) => b.calendarId).sort(), ['cal1', 'cal2']);
-});
-
-test('resource bookings: an unauthenticated new request is only PENDING (no auto-accept)', async () => {
-  bookings.length = 0;
-  await processResourceMailboxes(invite('REQUEST', 'u-2'), ['room1@corp.test'], 'someone@ext.test', null);
-  assert.deepEqual(bookings.map((b) => b.status), ['PENDING']);
+test('10.0: mail to a former room address is refused at RCPT TO with 5.1.1 (no resource lookup left)', async () => {
+  assert.equal(await verifyRecipient('room1@corp.test'), false);
+  assert.equal(await inboundHandlers.onRcptTo('room1@corp.test', 'org@ext.test', null, '192.0.2.1'), '5.1.1 User unknown');
 });
 
 // ── queue: sender authentication of local deliveries ─────────────────────────
@@ -177,13 +105,9 @@ test('queue jobs: only an authenticated user job (not rule forwards / redirects 
   assert.deepEqual(senderAuthForJob({ ...base, senderUserId: 'u1' }, Buffer.from('X-CoreMail-RuleForwarded: u1\r\nSubject: x\r\n\r\nb')), {});
 });
 
-test('9.5: a resource reply job is sent by the resource itself; the flag never lends a forward or a null sender authentication', () => {
-  const base = { messageId: 'm', from: 'room@corp.test', to: ['alice@corp.test'] };
-  const raw = Buffer.from('Subject: x\r\n\r\nb');
-  assert.deepEqual(senderAuthForJob({ ...base, resourceReply: true }, raw), { senderAuth: { authenticatedSender: 'room@corp.test' } });
-  assert.deepEqual(senderAuthForJob({ ...base, resourceReply: true, from: '' }, raw), {});
-  assert.deepEqual(senderAuthForJob({ ...base, resourceReply: true, ruleForward: true }, raw), {});
-  assert.deepEqual(senderAuthForJob({ ...base, resourceReply: true, quarantineReleaseId: 'q' }, raw), {});
+test('10.0: a room reply job queued by 9.5 (job field resourceReply) lends no sender authentication', () => {
+  const job = { messageId: 'm', from: 'room@corp.test', to: ['alice@corp.test'], resourceReply: true };
+  assert.deepEqual(senderAuthForJob(job as never, Buffer.from('Subject: x\r\n\r\nb')), {});
 });
 
 // ── outbound: MX SSRF ─────────────────────────────────────────────────────────

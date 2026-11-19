@@ -44,7 +44,6 @@ const none = async () => null;
   },
   sharedMailbox: { findFirst: none, findUnique: none },
   mailFlowPolicy: { findUnique: none },
-  resourceMailbox: { findFirst: none },
   emailAlias: { findFirst: none, findMany: async () => [] },
   sharedMailboxPerm: { findMany: async () => [] },
   serverSettings: { findUnique: async () => ({ quotaWarningPercent: 80, quotaProhibitSendPercent: 90, publicHostname: 'mail.corp.test' }) },

@@ -80,7 +80,7 @@
 | Shared Mailbox-Reader im MWA — „Weiteres Postfach öffnen" über Konto-Dropdown | ✅ |
 | Folder-CRUD in Shared Mailboxes (Neuer Ordner, Umbenennen, Löschen, Standard-Folder geschützt) | ✅ |
 | E-Mail-Aliase pro User-Postfach und Shared-Mailbox | ✅ |
-| Raum- und Gerätepostfächer mit Auto-Accept | ⚠️ nur über die REST-/EMS-API verwaltbar (keine BCP-Seite); siehe Raumbuchung unten |
+| Raum- und Gerätepostfächer | ❌ in 10.0.0 entfernt — stattdessen ein freigegebenes Postfach oder ein freigegebener Kalender ([Upgrade-Hinweise](docs/changes/remove-resources.md)) |
 | Abwesenheitsassistent (automatische Antworten nach RFC 3834) | ✅ |
 | Posteingangsregeln & Transportregeln + 9 Exchange-Vorlagen (Disclaimer, CEO-Phishing, PCI-DSS, …) | ⚠️ Transportregeln greifen nur bei lokaler Zustellung (nicht bei Mails an externe Empfänger); Ablehnen sendet nur an lokale Absender einen DSN |
 | Postfachsuche im MWA (Betreff, Absender, Text; Ordner oder ganzes Postfach, seitenweise) | ⚠️ Teilstring-Suche ohne Volltextindex |
@@ -88,7 +88,7 @@
 | SMTP-Gateway-Modus (Relay zu Upstream-MTA) | ✅ |
 | Aufbewahrungsrichtlinien Exchange-2019-konform (DPT/RPT/Personal Tags · 8 Vorlagen · Recoverable Items) | ✅ |
 | Managed Folder Assistant (Tag-Hierarchie, Soft/Hard Delete) | ✅ |
-| EMS-artige REST-Admin-Bridge (`/api/v1/admin/ems/` — Mailbox/Domain/TransportRule/ResourceMailbox) | ✅ |
+| EMS-artige REST-Admin-Bridge (`/api/v1/admin/ems/` — Mailbox/Domain/TransportRule) | ✅ |
 
 ### Kalender & Zusammenarbeit
 
@@ -98,16 +98,14 @@
 | Geteilte Teamkalender | ✅ |
 | Besprechungsanfragen (iCal-Standard) | ✅ |
 | Frei/Gebucht-Abfrage (inkl. Serienterminen) | ⚠️ nur eigene und mit dir geteilte Kalender |
-| Raum- und Ressourcenbuchung mit Auto-Accept | ⚠️ nur für Einladungen, die per eingehendem SMTP ankommen; der Organisator erhält keine Antwort; ausstehende Buchungen können nicht genehmigt werden; Zeitzonen werden nicht zuverlässig behandelt |
 | CalDAV (iOS, Android, Thunderbird — REPORT, MKCALENDAR, ETag/If-Match, TZID/RRULE) | ✅ |
 | Kontakte & CardDAV (inkl. REPORT) | ✅ |
 | Aufgaben & Notizen | ✅ |
-| Kalender: Serien-Editor, einzelnen Termin einer Serie ändern/löschen, Terminplanungs-Assistent mit Terminvorschlägen, Räume mit Konfliktprüfung, „Anzeigen als" (frei / mit Vorbehalt / gebucht / abwesend), Erinnerungen (auch per Mail) — [docs/calendar.md](docs/calendar.md) | ✅ |
+| Kalender: Serien-Editor, einzelnen Termin einer Serie ändern/löschen, Terminplanungs-Assistent mit Terminvorschlägen, „Anzeigen als" (frei / mit Vorbehalt / gebucht / abwesend), Erinnerungen (auch per Mail) — [docs/calendar.md](docs/calendar.md) | ✅ |
 | Aufgaben mit vollständigem Aufgabenformular, Nachverfolgungs-Flags für Mails (mit Datum und Erinnerung, auch über ActiveSync), Liste „Gekennzeichnete Elemente und Aufgaben" — [docs/tasks.md](docs/tasks.md) | ✅ |
 | CalDAV-Aufgabenliste (VTODO), in beide Richtungen mit Apple Erinnerungen, Thunderbird und DAVx⁵ synchronisiert — [docs/caldav.md](docs/caldav.md) | ✅ |
 | Kontakte mit mehreren typisierten E-Mail-Adressen, Telefonnummern, Postanschriften, Web- und Chat-Adressen, strukturiertem Namen, Geburtstag / Jahrestag und Kategorien; Kontaktlisten (auch über CardDAV); Kategorien für Notizen — [docs/contacts.md](docs/contacts.md) | ✅ |
 | Ordnerberechtigungen wie in Outlook (Rollen pro Ordner für einen Benutzer oder „Standard"; Webmail, BCP, REST, IMAP-ACL) — [docs/mailbox-management.md](docs/mailbox-management.md) | ✅ |
-| Räume beantworten Einladungen per Mail mit einer iMIP-Antwort; Serieneinladungen für Räume werden Termin für Termin geprüft | ✅ |
 | Globale Adressliste (GAL) | ✅ |
 
 ### Sicherheit

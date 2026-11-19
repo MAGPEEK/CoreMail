@@ -2,20 +2,19 @@ import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Loader2, Sparkles } from 'lucide-react';
 import { api } from '../../api/client.js';
-import type { FreeBusyUser, RoomAvailability, ScheduleSuggestions } from '../../api/types.js';
+import type { FreeBusyUser, ScheduleSuggestions } from '../../api/types.js';
 import { instantToWallClock, wallClockToInstant } from '../../lib/zonedTime.js';
 import { BUSY_LABEL, barPosition, suggestionNote, timelineHours, type BusyKind } from '../../lib/scheduling.js';
 
 /**
  * 9.4: scheduling assistant of the event form — one free/busy row per attendee
- * and room for the chosen day, the selected time as an overlay, and meeting-time
+ * for the chosen day, the selected time as an overlay, and meeting-time
  * suggestions for the next seven days (click to take one). Attendees without a
  * calendar share show "keine Informationen" (not "frei").
  */
 interface Props {
   organizerEmail: string;
   attendees: Array<{ email: string; cn?: string }>;
-  rooms: Array<{ email: string; displayName: string }>;
   /** Selected slot (ISO instants) and its day in the user's zone. */
   startIso: string;
   endIso: string;
@@ -23,7 +22,6 @@ interface Props {
   timeZone: string;
   workStart: string;
   workEnd: string;
-  uid?: string;
   onPick: (startIso: string, endIso: string) => void;
 }
 
@@ -39,7 +37,7 @@ function addDays(date: string, days: number): string {
 }
 
 export function SchedulingAssistant(props: Props) {
-  const { organizerEmail, attendees, rooms, startIso, endIso, date, timeZone, workStart, workEnd, uid, onPick } = props;
+  const { organizerEmail, attendees, startIso, endIso, date, timeZone, workStart, workEnd, onPick } = props;
   const dayStart = wallClockToInstant(date, '00:00', timeZone);
   const dayEnd = wallClockToInstant(addDays(date, 1), '00:00', timeZone);
   const emails = useMemo(() => [organizerEmail, ...attendees.map((a) => a.email)], [organizerEmail, attendees]);
@@ -50,17 +48,12 @@ export function SchedulingAssistant(props: Props) {
     queryFn: () => api.post<{ users: FreeBusyUser[] }>('/calendar/freebusy', { userEmails: emails, start: dayStart, end: dayEnd }),
     enabled: !!dayStart && !!dayEnd,
   });
-  const { data: roomList } = useQuery({
-    queryKey: ['calendar-rooms', dayStart, uid ?? ''],
-    queryFn: () => api.get<RoomAvailability[]>(`/calendar/rooms?start=${encodeURIComponent(dayStart)}&end=${encodeURIComponent(dayEnd)}${uid ? `&uid=${encodeURIComponent(uid)}` : ''}`),
-    enabled: rooms.length > 0 && !!dayStart,
-  });
   const { data: suggestions } = useQuery({
-    queryKey: ['schedule-suggestions', emails.join(','), rooms.map((r) => r.email).join(','), dayStart, durationMinutes],
+    queryKey: ['schedule-suggestions', emails.join(','), dayStart, durationMinutes],
     queryFn: () => api.post<ScheduleSuggestions>('/calendar/schedule-suggestions', {
-      attendees: attendees.map((a) => a.email), rooms: rooms.map((r) => r.email),
+      attendees: attendees.map((a) => a.email),
       start: dayStart, end: wallClockToInstant(addDays(date, 7), '00:00', timeZone),
-      durationMinutes, ...(uid ? { uid } : {}),
+      durationMinutes,
     }),
     enabled: !!dayStart,
   });
@@ -73,18 +66,13 @@ export function SchedulingAssistant(props: Props) {
   const selected = barPosition(startIso, endIso, viewStart, viewEnd);
   const hourMarks = Array.from({ length: hours.to - hours.from }, (_, i) => hours.from + i);
 
-  const rows: Array<{ key: string; label: string; visible: boolean; busy: Array<{ start: string; end: string; kind: BusyKind; subject?: string }> }> = [
-    ...(freeBusy?.users ?? []).map((u, i) => ({
+  const rows: Array<{ key: string; label: string; visible: boolean; busy: Array<{ start: string; end: string; kind: BusyKind; subject?: string }> }> =
+    (freeBusy?.users ?? []).map((u, i) => ({
       key: u.email,
       label: i === 0 ? 'Ich' : (attendees.find((a) => a.email.toLowerCase() === u.email.toLowerCase())?.cn || u.displayName || u.email),
       visible: u.found && u.visible,
       busy: u.busy.map((b) => ({ start: b.start, end: b.end, kind: b.type, ...(b.subject ? { subject: b.subject } : {}) })),
-    })),
-    ...rooms.map((r) => {
-      const info = roomList?.find((x) => x.email.toLowerCase() === r.email.toLowerCase());
-      return { key: r.email, label: r.displayName, visible: !!info, busy: info?.busy ?? [] };
-    }),
-  ];
+    }));
 
   const fmtSlot = (s: { start: string; end: string }) => {
     const a = instantToWallClock(s.start, timeZone);

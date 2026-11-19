@@ -3,9 +3,8 @@
  * ActiveSync) — the default one as FolderSync type 8, the others as type 13.
  *
  * Writes follow the device-protocol writer of CalDAV: the calendar object is built / patched
- * (pim/calendar-ical.ts), the rooms of the user's own meetings are booked like the REST event
- * form does (pim/calendar-rooms.ts → storage room-booking.ts), the row columns are derived
- * from the object, and owner + grantees hear about it through announceCalendarChange
+ * (pim/calendar-ical.ts), the row columns are derived from the object, and owner + grantees
+ * hear about it through announceCalendarChange
  * (realtime). Meeting invitations to people are not sent by the server: an ActiveSync device
  * sends them itself (SendMail with text/calendar), as for MeetingResponse before 16.0.
  */
@@ -17,7 +16,6 @@ import type { WbxmlElement } from '../wbxml.js';
 import { filterCutoff } from '../commands/body.js';
 import { parseCalendar, renderCalendar, type CalendarInput } from './calendar-codec.js';
 import { changedEventIcal, columnsOf, newEventIcal, parsedEvent, type CalendarRow } from './calendar-ical.js';
-import { releaseMeetingRooms, withRoomBookings } from './calendar-rooms.js';
 import { PIM_STATUS, versionOf, type PimClassModule, type PimCollection, type WriteContext, type WriteResult } from './types.js';
 
 const PREFIX = 'cal:';
@@ -43,12 +41,11 @@ async function saveChange(row: CalendarRow, icalData: string, calendarIds: strin
 }
 
 /**
- * The stored object differs from what the device sent: room answers were set, or a timed
- * event moved into another zone than the device's TimeZone (calendar-ical.ts) — the device
- * gets the stored item back as a Change.
+ * The stored object differs from what the device sent: a timed event moved into another
+ * zone than the device's TimeZone (calendar-ical.ts) — the device gets the stored item
+ * back as a Change.
  */
-function differsFromDevice(written: string, stored: string, input: CalendarInput, before: CalendarRow | null): boolean {
-  if (written !== stored) return true;
+function differsFromDevice(stored: string, input: CalendarInput, before: CalendarRow | null): boolean {
   const tzid = parseCalendarObject(stored)?.main.tzid ?? null;
   const hadTzid = before ? parsedEvent(before).main.tzid : null;
   return tzid !== null && tzid !== hadTzid && tzid !== input.zone;
@@ -56,10 +53,9 @@ function differsFromDevice(written: string, stored: string, input: CalendarInput
 
 /** A device Change of a stored event (also an Add whose UID the calendar already has). */
 async function changeEvent(col: PimCollection, row: CalendarRow, input: CalendarInput, ctx: WriteContext): Promise<WriteResult> {
-  const written = changedEventIcal(row, input, ctx);
-  const stored = await withRoomBookings(written, row.icalData, ctx.user, ctx.now);
+  const stored = changedEventIcal(row, input, ctx);
   const result = await saveChange(row, stored, [col.key]);
-  return result.ok && differsFromDevice(written, stored, input, row) ? { ...result, normalized: true } : result;
+  return result.ok && differsFromDevice(stored, input, row) ? { ...result, normalized: true } : result;
 }
 
 export const calendarModule: PimClassModule<CalendarRow> = {
@@ -120,13 +116,12 @@ export const calendarModule: PimClassModule<CalendarRow> = {
       return merged.ok ? { ...merged, normalized: true } : merged;
     }
     const uid = input.uid ?? randomUUID();
-    const written = newEventIcal(input, ctx, uid);
-    const icalData = written ? await withRoomBookings(written, null, ctx.user, ctx.now) : null;
+    const icalData = newEventIcal(input, ctx, uid);
     const columns = icalData ? columnsOf(icalData) : null;
-    if (!written || !icalData || !columns) return { ok: false, status: PIM_STATUS.CONVERSION_ERROR };
+    if (!icalData || !columns) return { ok: false, status: PIM_STATUS.CONVERSION_ERROR };
     const saved = await prisma.calendarEvent.create({ data: { calendarId: col.key, uid, ...columns }, select: { id: true, updatedAt: true } });
     announceCalendarChange([col.key], { action: 'create', ids: [saved.id] });
-    return { ok: true, serverId: saved.id, version: versionOf(saved.updatedAt), ...(differsFromDevice(written, icalData, input, null) ? { normalized: true } : {}) };
+    return { ok: true, serverId: saved.id, version: versionOf(saved.updatedAt), ...(differsFromDevice(icalData, input, null) ? { normalized: true } : {}) };
   },
 
   async update(col, serverId, data, ctx) {
@@ -135,13 +130,11 @@ export const calendarModule: PimClassModule<CalendarRow> = {
     return changeEvent(col, row, parseCalendar(data, ctx.user.timeZone), ctx);
   },
 
-  async remove(col, serverId, ctx) {
+  async remove(col, serverId) {
     const row = await findEvent(col, serverId);
     if (!row) return false;
     await prisma.calendarEvent.delete({ where: { id: row.id } });
     announceCalendarChange([col.key], { action: 'delete', ids: [row.id] });
-    // as the REST delete: the rooms of the user's own meeting are free again
-    await releaseMeetingRooms(row.icalData, ctx.user);
     return true;
   },
 

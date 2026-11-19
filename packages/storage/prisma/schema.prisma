@@ -60,11 +60,6 @@ enum AuthSource {
 
 // v5.6.1: enum GroupType removed (DistributionGroup feature deleted)
 
-enum ResourceType {
-  ROOM
-  EQUIPMENT
-}
-
 // ─────────────────────────────────────────────
 // Domains & Users
 // ─────────────────────────────────────────────
@@ -81,7 +76,6 @@ model Domain {
   ldapConfig         LdapConfig?
   oidcProviders      OidcProvider[]
   // v5.6.1: distributionGroups relation removed
-  resourceMailboxes  ResourceMailbox[]
   aliases            EmailAlias[]
   // 9.4: per-protocol access switches of the domain (none = everything inherited)
   protocolPolicy     ProtocolPolicy?
@@ -454,7 +448,6 @@ model Mailbox {
   userId          String?          @unique
   sharedBox       SharedMailbox?   @relation(fields: [sharedBoxId], references: [id])
   sharedBoxId     String?          @unique
-  resourceMailbox ResourceMailbox?
   uidValidity     Int              @default(1)
   uidNext         Int              @default(1)
   highestModSeq   BigInt           @default(0)
@@ -1292,80 +1285,9 @@ model UserCertificate {
 // start. Recommendation for distribution-list mail: external tools such as
 // Sympa, GNU mailman, or simple e-mail aliases in the mail client.
 
-// ─────────────────────────────────────────────
-// Phase 7 — Resource Mailboxes (Rooms & Equipment)
-// ─────────────────────────────────────────────
-
-model ResourceMailbox {
-  id                  String           @id @default(cuid())
-  email               String           @unique
-  displayName         String
-  resourceType        ResourceType     @default(ROOM)
-  domain              Domain           @relation(fields: [domainId], references: [id])
-  domainId            String
-  capacity            Int?
-  location            String           @default("")
-  phone               String           @default("")
-  autoAccept          Boolean          @default(true)
-  autoDeclineConflict Boolean          @default(true)
-  allowRecurring      Boolean          @default(true)
-  maxDurationMinutes  Int?
-  bookingWindowDays   Int              @default(180)
-  requireApproval     Boolean          @default(false)
-  // 9.5: invitations that arrive by mail get an automatic reply to the organizer
-  // (smtp-server handlers/resource-reply.ts); off = the answer is only stored
-  sendReplies         Boolean          @default(true)
-  delegateIds         String[]
-  active              Boolean          @default(true)
-  mailboxId           String?          @unique
-  mailbox             Mailbox?         @relation(fields: [mailboxId], references: [id])
-  calendar            ResourceCalendar?
-  createdAt           DateTime         @default(now())
-  updatedAt           DateTime         @updatedAt
-
-  @@index([domainId])
-  @@map("resource_mailboxes")
-}
-
-model ResourceCalendar {
-  id         String           @id @default(cuid())
-  resource   ResourceMailbox  @relation(fields: [resourceId], references: [id], onDelete: Cascade)
-  resourceId String           @unique
-  bookings   ResourceBooking[]
-  // 9.4: incremented under the row lock by every booking write (lockResourceCalendar) —
-  // serialises conflict check + booking per resource, so a slot is booked only once
-  bookingSeq Int              @default(0)
-  createdAt  DateTime         @default(now())
-
-  @@map("resource_calendars")
-}
-
-model ResourceBooking {
-  id         String           @id @default(cuid())
-  calendar   ResourceCalendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
-  calendarId String
-  // iCal UID — unique per resource calendar (v9.0; was globally unique, so a
-  // meeting that books two rooms could only ever create one booking)
-  uid        String
-  summary    String
-  organizer  String
-  attendees  Json             @default("[]")
-  dtStart    DateTime
-  dtEnd      DateTime
-  status     String           @default("ACCEPTED") // ACCEPTED | DECLINED | TENTATIVE | PENDING
-  icalData   String
-  // 9.5: occurrences of the meeting that overlap other bookings of the resource
-  // ([{ start, end }] ISO, capped) — the reason of a decline, or the dates listed with an
-  // acceptance when the resource does not decline conflicts (resource-booking-rules.ts)
-  conflicts  Json             @default("[]")
-  createdAt  DateTime         @default(now())
-
-  @@unique([calendarId, uid])
-  @@index([calendarId, dtStart])
-  @@index([dtStart, dtEnd])
-  @@map("resource_bookings")
-}
-
+// (Phase 7 Resource Mailboxes — the room/equipment models, their booking calendars and
+//  bookings — completely removed in 10.0.0. schema-sync drops the retired tables after
+//  a pre-migration dump: infra/docker/schema-sync-classify.mjs RETIRED_TABLES)
 // (Phase 7 Public Folders — completely removed in v3.18.31)
 // (Phase 8 eDiscovery & Legal Hold — completely removed in v3.18.5)
 
@@ -2113,7 +2035,7 @@ model AddressList {
   id          String   @id @default(cuid())
   name        String
   description String   @default("")
-  // LDAP-like filter: {type: "all"|"users"|"groups"|"rooms", domainId?, department?}
+  // LDAP-like filter: {type: "all"|"users"|"groups", domainId?, department?}
   filter      Json     @default("{}")
   isGal       Boolean  @default(false) // Global address list
   createdAt   DateTime @default(now())

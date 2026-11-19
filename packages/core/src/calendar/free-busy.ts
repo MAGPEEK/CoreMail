@@ -65,7 +65,7 @@ export interface WorkingHours {
 export interface SlotSuggestion {
   start: Date;
   end: Date;
-  /** Attendees (incl. rooms) busy or absent in the slot. */
+  /** Attendees busy or absent in the slot. */
   conflicts: number;
   /** Attendees only tentatively busy in the slot. */
   tentative: number;

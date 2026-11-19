@@ -79,15 +79,6 @@ const db: Record<string, Row[]> = {
     // a domain whose name only starts like the scope's domain
     audit('auLookalike', { targetId: 'q-z', targetName: 'x@a.example.evil, y@b.example' }),
   ],
-  // review: an in-scope room booked by a user of another domain
-  resourceMailbox: [{ id: 'rA', email: 'room@a.example', displayName: 'Raum A', domainId: 'dA', active: true, resourceType: 'ROOM',
-    calendar: { id: 'rcA', resourceId: 'rA', bookings: [] as Row[] } }],
-  resourceCalendar: [{ id: 'rcA', resourceId: 'rA' }],
-  resourceBooking: [{
-    id: 'bk1', calendarId: 'rcA', calendar: { resourceId: 'rA' }, uid: 'u1', summary: 'Termin', organizer: 'ub1@b.example', attendees: [],
-    dtStart: now, dtEnd: now, status: 'ACCEPTED', conflicts: [],
-    icalData: 'BEGIN:VEVENT\r\nORGANIZER;CN="Name ub1":mailto:ub1@b.example\r\nATTENDEE;CN=Name\r\n  ub1;ROLE=REQ-PARTICIPANT:mailto:ub1@b.example\r\nATTENDEE;CN=Raum A:mailto:room@a.example\r\nEND:VEVENT',
-  }],
   systemLog: [
     { id: 'lMix', category: 'MAIL_FLOW', timestamp: now, level: 'INFO', message: 'delivered to ub1@b.example', userId: null,
       metadata: { sender: 'ext@other.test', recipient: 'ua1@a.example, ub1@b.example', subject: 'Angebot', status: 'DELIVERED', messageId: 'm1' } },
@@ -238,18 +229,6 @@ test('quarantine: other recipients and senders of other domains redacted, search
   assert.deepEqual(((await call('hyA', '/quarantine?search=spam.test')).json['items'] as Row[]).map((i) => i['id']), ['qMix'], 'external senders stay searchable');
   assert.equal(((await call('org', '/quarantine?search=ub1%40b')).json['items'] as Row[]).length, 1);
   assert.ok((await call('org', '/quarantine/qMix')).text.includes('ub1@b.example'));
-});
-
-test('resource bookings: organizer and attendees of other domains redacted (review)', async () => {
-  (db['resourceMailbox']![0]!['calendar'] as Row)['bookings'] = db['resourceBooking'];
-  for (const path of ['/resources/rA/bookings', '/resources/rA']) {
-    const r = await call('rmA', path);
-    assert.equal(r.status, 200, path);
-    assert.ok(!leaks(r.text), `${path}: ${r.text}`);
-    assert.ok(r.text.includes('Raum A:mailto:room@a.example'), 'in-scope attendee kept');
-    assert.ok(r.text.includes(`"organizer":"${OTHER}"`), r.text);
-  }
-  assert.ok((await call('org', '/resources/rA/bookings')).text.includes('ub1@b.example'), 'organisation-wide unchanged');
 });
 
 test('message trace: rows, CSV export and filters use the redacted rows', async () => {

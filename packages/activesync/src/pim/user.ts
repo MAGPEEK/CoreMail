@@ -1,7 +1,6 @@
 /**
  * The user PIM items are rendered for and written by: own addresses (organizer / attendee
- * matching), the Settings → Region time zone (all-day events, task dates) and the domain
- * (rooms a meeting books).
+ * matching) and the Settings → Region time zone (all-day events, task dates).
  */
 import { prisma } from '@coremail/storage/prisma';
 import { isValidTimeZone } from '@coremail/core/calendar';
@@ -15,7 +14,7 @@ export function preferredTimeZone(preferences: unknown): string | null {
 }
 
 export async function loadPimUser(userId: string): Promise<PimUser | null> {
-  const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true, email: true, displayName: true, domainId: true } });
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true, email: true, displayName: true } });
   if (!user) return null;
   const [aliases, settings] = await Promise.all([
     prisma.emailAlias.findMany({ where: { targetUserId: userId, active: true }, select: { address: true } }),
@@ -27,6 +26,5 @@ export async function loadPimUser(userId: string): Promise<PimUser | null> {
     displayName: user.displayName ?? '',
     addresses: [user.email, ...aliases.map((a) => a.address)].map((a) => a.toLowerCase()),
     timeZone: preferredTimeZone(settings?.preferences),
-    domainId: user.domainId ?? null,
   };
 }

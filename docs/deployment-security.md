@@ -65,6 +65,14 @@ runs `coremail-schema-sync` (`infra/docker/schema-sync.sh`):
      server version and the free space allow it (otherwise skipped with a
      warning). With duplicates the start **stops**, names the table and prints
      the query that finds them — merge/remove them and start again.
+   - **Retired tables** (10.0.0): the tables of a feature CoreMail removed on
+     purpose — `RETIRED_TABLES` in the classifier, today the room/equipment
+     tables `resource_mailboxes`, `resource_calendars`, `resource_bookings` —
+     are dropped without `COREMAIL_ALLOW_SCHEMA_DATA_LOSS`, but only when every
+     other warning is a safe unique constraint. Each retired table is logged
+     with its row count; the pre-migration dump is **mandatory** (as in step 3:
+     no dump → the start stops, nothing changed; `COREMAIL_SCHEMA_BACKUP=skip`
+     if you made your own backup) and the push runs only after it succeeded.
    - **Anything else** (dropped table/column that still has rows, type change,
      removed enum value, a warning schema-sync does not recognise): the start
      **stops**, nothing is changed, and the log says what to do. Before, such

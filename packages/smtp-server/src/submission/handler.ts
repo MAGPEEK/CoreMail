@@ -204,7 +204,6 @@ async function onMessage(
   const { outcomes } = await deliverOnce(txKey, expandedLocalRcpts, externalRcpts, {
     ledger: redisDeliveryLedger,
     // MAIL FROM was checked against the SMTP AUTH identity in onMailFrom.
-    // Resource mailboxes (room bookings) are handled inside storeInboundMessage.
     storeLocal: async (rcpt) => {
       const result = await storeInboundMessage(localRaw, {
         fromAddr: from, rcptTo: rcpt, toJunk: false, deliveryKey: txKey,

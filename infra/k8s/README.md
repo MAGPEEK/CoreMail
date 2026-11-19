@@ -218,7 +218,12 @@ the right owner or use `objectStorage.filesystem.existingClaim`.
   are classified: a change that only **adds unique constraints** (e.g. 8.0.0 →
   9.0, `resource_bookings (calendarId, uid)`) is applied automatically after a
   duplicate check per constraint (best-effort dump to `backupClaim` first);
-  duplicates stop the rollout with the table and the query to find them. Any
+  duplicates stop the rollout with the table and the query to find them. The
+  10.0.0 room/equipment tables (`resource_mailboxes`, `resource_calendars`,
+  `resource_bookings`) are **retired**: dropped without `allowDataLoss`, but only
+  after the mandatory pre-migration dump — set `app.schemaSync.backupClaim` (or
+  `app.schemaSync.skipBackup=true` after your own backup) for the 9.5 → 10.0
+  rollout, otherwise the init container stops without changes. Any
   other warning (dropped table/column with data, type change, removed enum
   value) fails the init container and nothing is changed. After a backup, set
   `app.schemaSync.allowDataLoss=true` plus either `app.schemaSync.backupClaim`

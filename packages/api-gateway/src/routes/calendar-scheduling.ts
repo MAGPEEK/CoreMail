@@ -1,16 +1,14 @@
 /**
- * 9.4: scheduling assistant of the event form — rooms/resources with their
- * availability and meeting-time suggestions over the attendees' free/busy.
+ * 9.4: scheduling assistant of the event form — meeting-time suggestions over the
+ * attendees' free/busy (10.0: rooms removed).
  * Mounted inside calendarRouter (authentication already done there).
  *
- *   GET  /calendar/rooms?start=&end=[&uid=]   rooms of the user's domain, `available` for the slot
- *   POST /calendar/schedule-suggestions        { attendees, rooms?, start, end, durationMinutes, workingHoursOnly? }
+ *   POST /calendar/schedule-suggestions        { attendees, start, end, durationMinutes, workingHoursOnly? }
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { mergeBusy, suggestSlots, type BusyInterval, type WorkingHours } from '@coremail/core/free-busy';
 import { busyForUser, freeBusyDirectory } from '../lib/calendar-busy.js';
-import { listRooms } from '../lib/room-booking.js';
 import { loadPreferences } from '../lib/preferences-store.js';
 
 export const calendarSchedulingRouter: RouterType = Router();
@@ -31,22 +29,12 @@ const hhmmToMinutes = (s: string): number => {
   return (h ?? 0) * 60 + (m ?? 0);
 };
 
-calendarSchedulingRouter.get('/rooms', async (req: Request, res: Response) => {
-  const window = parseWindow(req.query['start'], req.query['end']);
-  if (!window) { res.status(400).json({ error: 'Invalid date range (max 31 days)' }); return; }
-  const uid = typeof req.query['uid'] === 'string' ? req.query['uid'] : undefined;
-  res.json(await listRooms(req.apiUser!.domainId, window.start, window.end, uid));
-});
-
 const SuggestSchema = z.object({
   attendees: z.array(z.string().email()).max(50).default([]),
-  rooms: z.array(z.string().email()).max(10).default([]),
   start: z.string(),
   end: z.string(),
   durationMinutes: z.number().int().min(5).max(24 * 60),
   workingHoursOnly: z.boolean().default(true),
-  /** UID of the meeting being edited — its own room bookings do not count. */
-  uid: z.string().max(500).optional(),
 });
 
 calendarSchedulingRouter.post('/schedule-suggestions', async (req: Request, res: Response) => {
@@ -65,13 +53,6 @@ calendarSchedulingRouter.post('/schedule-suggestions', async (req: Request, res:
     const info = user ? await busyForUser(callerId, user.id, window.start, window.end) : null;
     if (!info?.visible) { unknown.push(email); continue; }
     busy.push(mergeBusy(info.slots));
-  }
-  if (parsed.data.rooms.length > 0) {
-    const wanted = new Set(parsed.data.rooms.map((e) => e.toLowerCase()));
-    for (const room of await listRooms(req.apiUser!.domainId, window.start, window.end, parsed.data.uid)) {
-      if (!wanted.has(room.email.toLowerCase())) continue;
-      busy.push(room.busy.map((b) => ({ start: new Date(b.start), end: new Date(b.end), kind: b.kind })));
-    }
   }
 
   const prefs = await loadPreferences(callerId);

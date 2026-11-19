@@ -148,7 +148,7 @@ function buildWhere(filters: AuditFilters): Record<string, unknown> {
 
 /** Ids and names of the objects inside a management scope (9.5) — what scoped audit entries may be about. */
 export interface AuditScopeTargets {
-  /** ids of users, their Mailbox rows, shared mailboxes (+ Mailbox rows), resources, aliases, domains */
+  /** ids of users, their Mailbox rows, shared mailboxes (+ Mailbox rows), aliases, domains */
   ids: readonly string[];
   /** domain names: entries whose targetName is an address of these domains */
   domainNames: readonly string[];
@@ -226,17 +226,15 @@ async function auditScopeTargets(req: Request): Promise<AuditScopeTargets | null
   if (!isScoped(scope)) return null;
   const domainIds = scope.domains.map((d) => d.id);
   const inDomains = { domainId: { in: domainIds } };
-  const [users, shared, resources, aliases] = await Promise.all([
+  const [users, shared, aliases] = await Promise.all([
     prisma.user.findMany({ where: inDomains, select: { id: true, mailbox: { select: { id: true } } } }),
     prisma.sharedMailbox.findMany({ where: inDomains, select: { id: true, mailbox: { select: { id: true } } } }),
-    prisma.resourceMailbox.findMany({ where: inDomains, select: { id: true } }),
     prisma.emailAlias.findMany({ where: inDomains, select: { id: true } }),
   ]);
   const ids = [
     ...domainIds,
     ...users.flatMap((u) => [u.id, ...(u.mailbox ? [u.mailbox.id] : [])]),
     ...shared.flatMap((s) => [s.id, ...(s.mailbox ? [s.mailbox.id] : [])]),
-    ...resources.map((r) => r.id),
     ...aliases.map((a) => a.id),
   ];
   return { ids, domainNames: scope.domains.map((d) => d.name), actorId: req.apiUser!.userId };

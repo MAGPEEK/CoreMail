@@ -3,7 +3,7 @@
  *
  * - onConnect: DNSBL / rate-limit check via security-filter
  * - onMailFrom: accept all senders (Port 25 — inter-MTA relay)
- * - onRcptTo: verify recipient exists (User / SharedMailbox / DistGroup / ResourceMailbox)
+ * - onRcptTo: verify recipient exists (User / SharedMailbox / alias)
  * - onMessage: content scan → quarantine or store for each expanded recipient
  */
 
@@ -290,7 +290,6 @@ async function onMessage(
   const txKey = deliveryKey(from, receivedRaw);
   const { outcomes } = await deliverOnce(txKey, localDeliveries, externalDeliveries, {
     ledger: redisDeliveryLedger,
-    // Resource mailboxes (room bookings) are handled inside storeInboundMessage.
     storeLocal: async (rcpt) => {
       const result = await storeInboundMessage(delivered, {
         fromAddr: from,
@@ -333,7 +332,7 @@ async function onMessage(
  * The DATA-stage refusal when the mail flow policy of every local delivery
  * target refuses the message and there is no external target; null otherwise
  * (then each refused target is handled by the store → NDR). Targets without a
- * policy-bearing mailbox (resources, postmaster) count as accepting.
+ * policy-bearing mailbox (postmaster) count as accepting.
  */
 export async function refusalForAllRecipients(
   local: readonly string[],
@@ -401,11 +400,11 @@ export async function verifyRecipient(rcptTo: string): Promise<boolean> {
     if (local) return true;
   }
 
-  const [user, sharedMailbox, resourceMailbox, alias] = await Promise.all([
+  const [user, sharedMailbox, alias] = await Promise.all([
     prisma.user.findFirst({ where: { email, active: true }, select: { id: true } }),
     prisma.sharedMailbox.findFirst({ where: { email, active: true }, select: { id: true } }),
-    // v5.6.1: distributionGroup lookup removed (feature completely dropped)
-    prisma.resourceMailbox.findFirst({ where: { email, active: true }, select: { id: true } }),
+    // v5.6.1: distributionGroup lookup removed; 10.0: resource (room) mailbox lookup
+    // removed — mail to a former room address is refused with 550 5.1.1
     // Alias must be active and the target must be active as well
     prisma.emailAlias.findFirst({
       where: {
@@ -420,13 +419,9 @@ export async function verifyRecipient(rcptTo: string): Promise<boolean> {
     }),
   ]);
 
-  return !!(user ?? sharedMailbox ?? resourceMailbox ?? alias);
+  return !!(user ?? sharedMailbox ?? alias);
 }
 
 // The expandRecipients helper was moved to handlers/expand.ts so it can also be
 // used by the outbound queue worker and the submission handler
 // (local delivery needs alias resolution BEFORE storeInboundMessage).
-
-// Resource mailboxes (room/equipment bookings) are processed inside
-// storeInboundMessage() for every delivery path — see handlers/resource-booking.ts.
-export { processResourceMailboxes } from '../handlers/resource-booking.js';
