@@ -53,7 +53,7 @@ export interface OverviewPort {
   allowLegacyTls: boolean;
 }
 
-/** The integrated HTTPS server (port 443 by default) and its certificate. */
+/** The integrated HTTPS server (port 443 by default) and the certificate it serves for the public host name (SNI). */
 export interface HttpsState {
   active: boolean;
   port: number;
