@@ -119,7 +119,7 @@ async function replacementCerts(): Promise<LoadedCert[]> {
 }
 
 /**
- * BCP → Dienste → HTTPS: "Ältere Clients erlauben (TLS 1.0/1.1)"
+ * BCP → Dienste → HTTPS: "Zusätzlich veraltete TLS-Versionen 1.0/1.1 zulassen (optional)"
  * (ServerSettings.httpsAllowLegacyTls). Read on every reload; an unreadable
  * setting keeps the secure default (TLS 1.2+).
  */

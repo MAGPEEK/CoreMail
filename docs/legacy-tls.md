@@ -8,9 +8,9 @@ Some old mail programs and devices (for example Outlook 2010 on Windows 7 withou
 update, old multifunction printers, embedded Android builds) cannot negotiate TLS 1.2. For them a
 single listener can be opened for TLS 1.0 and 1.1:
 
-* **BCP → Dienste → \<Dienst\> → Listener bearbeiten → „Ältere Clients erlauben (TLS 1.0/1.1)"**
+* **BCP → Dienste → \<Dienst\> → Listener bearbeiten → „Zusätzlich veraltete TLS-Versionen 1.0/1.1 zulassen (optional)"**
   (per listener, default off)
-* **BCP → Dienste → Übersicht → HTTPS → „Ältere Clients erlauben (TLS 1.0/1.1)"** (integrated
+* **BCP → Dienste → Übersicht → HTTPS → „Zusätzlich veraltete TLS-Versionen 1.0/1.1 zulassen (optional)"** (integrated
   HTTPS proxy: webmail, Autodiscover, ActiveSync, CalDAV/CardDAV)
 
 The BCP shows a warning while the switch is on and marks the listener with a `TLS 1.0/1.1` badge.
