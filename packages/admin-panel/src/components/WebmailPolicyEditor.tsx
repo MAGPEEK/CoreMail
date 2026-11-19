@@ -28,6 +28,7 @@ const FEATURE_KEYS: Record<WebmailFeature, TranslationKey> = {
   rules: 'wp_feature_rules', signatures: 'wp_feature_signatures', categories: 'wp_feature_categories',
   recoverItems: 'wp_feature_recoverItems', changePassword: 'wp_feature_changePassword', themes: 'wp_feature_themes',
   externalClients: 'wp_feature_externalClients', appPasswords: 'wp_feature_appPasswords', sharedMailboxes: 'wp_feature_sharedMailboxes',
+  profilePhoto: 'wp_feature_profilePhoto',
 };
 const SOURCE_KEYS: Record<ValueSource, TranslationKey> = {
   default: 'wp_source_default', global: 'wp_source_global', domain: 'wp_source_domain', user: 'wp_source_user',

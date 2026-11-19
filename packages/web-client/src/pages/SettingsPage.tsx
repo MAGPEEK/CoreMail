@@ -15,6 +15,7 @@ import { MailboxAccessLog } from '../components/MailboxAccessLog.js';
 import { QuotaIndicator } from '../components/QuotaIndicator.js';
 import { quotaColor, type QuotaLevel } from '../lib/quota.js';
 import { SignatureSettings } from '../components/settings/SignatureSettings.js';
+import { ProfilePhotoSettings } from '../components/settings/ProfilePhotoSettings.js';
 import { ReadingSettings } from '../components/settings/ReadingSettings.js';
 import { ComposeSettings } from '../components/settings/ComposeSettings.js';
 import { RegionalSettings } from '../components/settings/RegionalSettings.js';
@@ -176,6 +177,7 @@ function ProfileSection() {
         <h2 className="text-lg font-semibold text-fg">E-Mail-Konto</h2>
         <p className="text-sm text-fg-subtle mt-0.5">Kontoinformationen und Anzeigename</p>
       </div>
+      <ProfilePhotoSettings />
       <div className="space-y-4 max-w-md">
         <div>
           <label className="block text-sm font-medium text-fg-muted mb-1">E-Mail-Adresse</label>

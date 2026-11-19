@@ -1,6 +1,9 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { prisma, resetQuotaCache, purgeRecoverableItems, getQuotaStatus, announceUserEvent } from '@coremail/storage';
+import {
+  prisma, resetQuotaCache, purgeRecoverableItems, getQuotaStatus, announceUserEvent, profilePhotoInfo, releaseProfilePhotoQuietly,
+} from '@coremail/storage';
+import { getMailboxPhotoHandler, deleteMailboxPhotoHandler } from '../../lib/profile-photo/admin.js';
 import { hashPassword } from '@coremail/core';
 import { checkPasswordPolicy, publishUserAuthChange, revokeAllSessions } from '@coremail/storage/auth';
 import { requireArea } from '../../middleware/auth.js';
@@ -173,6 +176,7 @@ adminMailboxesRouter.get('/:id', async (req: Request, res: Response) => {
       // v6: explicit select — never return passwordHash
       select: {
         ...PUBLIC_USER_SELECT,
+        photoKey: true, photoUpdatedAt: true,
         mailbox: { include: { folders: { select: { id: true, name: true, displayName: true, totalCount: true, unreadCount: true } } } },
       },
     }),
@@ -183,8 +187,17 @@ adminMailboxesRouter.get('/:id', async (req: Request, res: Response) => {
   void prisma.user.update({ where: { id }, data: { usedBytes: BigInt(usedBytes) } }).catch(() => null);
   // v8.1: effective quota levels (explicit or server default) + current level
   const quota = await getQuotaStatus({ kind: 'user', id }, { fresh: true }).catch(() => null);
-  res.json({ ...user, usedBytes, ...(quota ? { quotaLimits: quota.limits, quotaLevel: quota.level } : {}) });
+  const { photoKey, photoUpdatedAt, ...rest } = user;
+  res.json({
+    ...rest, usedBytes, ...(quota ? { quotaLimits: quota.limits, quotaLevel: quota.level } : {}),
+    // 9.5: profile photo (bytes via GET /:id/photo)
+    photo: profilePhotoInfo(id, photoKey, photoUpdatedAt),
+  });
 });
+
+// ── 9.5: profile photo (lib/profile-photo/admin.ts) ─────────────────────────
+adminMailboxesRouter.get('/:id/photo', getMailboxPhotoHandler);
+adminMailboxesRouter.delete('/:id/photo', deleteMailboxPhotoHandler);
 
 // POST /api/v1/admin/mailboxes/:id/recoverable/purge — v8.1: permanently remove
 // the user's recoverable (deleted) items before DELETED_ITEM_RETENTION_DAYS ends.
@@ -422,7 +435,7 @@ adminMailboxesRouter.put('/:id', async (req: Request, res: Response) => {
 adminMailboxesRouter.delete('/:id', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
 
-  const user = await prisma.user.findUnique({ where: { id }, select: { id: true, role: true, active: true } });
+  const user = await prisma.user.findUnique({ where: { id }, select: { id: true, role: true, active: true, photoKey: true } });
   if (!user) { res.status(404).json({ error: 'Mailbox not found' }); return; }
   if (!canManageAccount(req.apiUser?.role, user.role)) {
     forbidden(res, 'Only Organization Management may delete admin accounts'); return;
@@ -436,6 +449,8 @@ adminMailboxesRouter.delete('/:id', async (req: Request, res: Response) => {
   // v7.1.0: access tokens + cached mail logins of the deleted user end now
   // (session rows are already gone via cascade; this sets the revocation mark).
   await revokeAllSessions(id, { reason: 'deleted' });
+  // 9.5: the photo object goes with the account (unless another account shares it)
+  await releaseProfilePhotoQuietly(user.photoKey);
   res.json({ ok: true });
 });
 

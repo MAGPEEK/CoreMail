@@ -8,6 +8,8 @@ export default defineConfig({
     port: 4000,
     proxy: {
       '/api': 'http://localhost:3000',
+      // session restore (/auth/refresh) and login, as in the admin panel's dev server
+      '/auth': 'http://localhost:3003',
     },
   },
   build: {

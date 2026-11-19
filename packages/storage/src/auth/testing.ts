@@ -240,7 +240,7 @@ export function webmailPolicyDefaults(): Row {
     domainId: null, userId: null, updatedAt: new Date(),
     calendar: 'INHERIT', contacts: 'INHERIT', tasks: 'INHERIT', notes: 'INHERIT', rules: 'INHERIT',
     signatures: 'INHERIT', categories: 'INHERIT', recoverItems: 'INHERIT', changePassword: 'INHERIT',
-    themes: 'INHERIT', externalClients: 'INHERIT', appPasswords: 'INHERIT', sharedMailboxes: 'INHERIT',
+    themes: 'INHERIT', externalClients: 'INHERIT', appPasswords: 'INHERIT', sharedMailboxes: 'INHERIT', profilePhoto: 'INHERIT',
     blockedExtensions: null, downloadOnlyExtensions: null, maxUploadMb: null, externalImages: null,
   };
 }

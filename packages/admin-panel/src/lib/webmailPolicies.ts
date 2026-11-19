@@ -8,7 +8,7 @@ import type { ProtocolSetting } from './protocolAccess.ts';
 
 export const WEBMAIL_FEATURES = [
   'calendar', 'contacts', 'tasks', 'notes', 'rules', 'signatures', 'categories', 'recoverItems',
-  'changePassword', 'themes', 'externalClients', 'appPasswords', 'sharedMailboxes',
+  'changePassword', 'themes', 'externalClients', 'appPasswords', 'sharedMailboxes', 'profilePhoto',
 ] as const;
 export type WebmailFeature = typeof WEBMAIL_FEATURES[number];
 

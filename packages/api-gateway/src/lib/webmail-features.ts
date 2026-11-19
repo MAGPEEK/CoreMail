@@ -13,7 +13,9 @@
  *    contacts module and then returns address-list entries only;
  *  - themes and signature defaults inside PUT/PATCH /user/preferences
  *    (routes/user-settings.ts);
- *  - app passwords are served by the auth-service (router/app-passwords.ts).
+ *  - app passwords are served by the auth-service (router/app-passwords.ts);
+ *  - profile photo (9.5): only the upload (PUT /user/photo) needs the module —
+ *    removing the own photo and seeing other photos stay available.
  */
 import type { Request } from 'express';
 import {
@@ -50,6 +52,9 @@ function under(path: string, prefix: string): boolean {
 /** Recover deleted items of a shared / delegated mailbox needs that module too. */
 const FOREIGN_RECOVERABLE = /^\/api\/v1\/(user\/shared-mailboxes|mail\/delegated-mailboxes)\/[^/]+\/recoverable(\/|$)/;
 
+/** 9.5: uploading / changing the own profile photo. */
+const OWN_PHOTO = '/api/v1/user/photo';
+
 /** w3: sharing an own folder (folder permissions) belongs to the shared-mailboxes module. */
 const OWN_FOLDER_PERMISSIONS = /^\/api\/v1\/mail\/folders\/[^/]+\/permissions$/;
 
@@ -70,6 +75,7 @@ export function featuresForRequest(method: string, originalUrl: string | undefin
   if (hit && !autocomplete) out.push(hit[1]);
   if (FOREIGN_RECOVERABLE.test(path)) out.push('recoverItems');
   if (OWN_FOLDER_PERMISSIONS.test(path)) out.push('sharedMailboxes');
+  if (path === OWN_PHOTO && method === 'PUT') out.push('profilePhoto');
   return out;
 }
 

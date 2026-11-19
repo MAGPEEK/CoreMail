@@ -5,6 +5,7 @@ import { hashPassword, verifyPassword } from '@coremail/core';
 import {
   prisma, expunge, countRegexConditions, MAX_REGEX_CONDITIONS_PER_USER, saveOofSettings, getQuotaStatus, hasMfa,
   reservedFolderPrefix, reservedFolderNameError, effectiveProtocolAccess, MAILBOX_ACCESS_ACTION_PREFIX,
+  profilePhotoInfo,
 } from '@coremail/storage';
 import { invalidRegexConditionMessage } from '../lib/rule-validation.js';
 import { checkPasswordPolicy, revokeAllSessions } from '@coremail/storage/auth';
@@ -116,15 +117,21 @@ userRouter.get('/client-config', async (req: Request, res: Response) => {
   });
 });
 
-// GET /api/v1/user/profile
+// GET /api/v1/user/profile — 9.5: `photo` { userId, version, updatedAt } | null (routes/profile-photo.ts)
 userRouter.get('/profile', async (req: Request, res: Response) => {
-  
-  const user = await prisma.user.findUnique({
+  const row = await prisma.user.findUnique({
     where: { id: req.apiUser!.userId },
-    select: { id: true, email: true, displayName: true, role: true, quotaBytes: true, usedBytes: true, domainId: true, createdAt: true },
+    select: {
+      id: true, email: true, displayName: true, role: true, quotaBytes: true, usedBytes: true, domainId: true, createdAt: true,
+      photoKey: true, photoUpdatedAt: true,
+    },
   });
-  if (!user) { res.status(404).json({ error: 'User not found' }); return; }
-  res.json({ ...user, isAdmin: isAdminRole(user.role), adminAreas: allowedAreas(user.role) });
+  if (!row) { res.status(404).json({ error: 'User not found' }); return; }
+  const { photoKey, photoUpdatedAt, ...user } = row;
+  res.json({
+    ...user, isAdmin: isAdminRole(user.role), adminAreas: allowedAreas(user.role),
+    photo: profilePhotoInfo(user.id, photoKey, photoUpdatedAt),
+  });
 });
 
 // GET /api/v1/user/me — v6: caller identity + admin RBAC areas (no DB hit).

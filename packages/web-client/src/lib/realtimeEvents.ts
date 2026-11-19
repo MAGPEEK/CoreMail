@@ -12,6 +12,7 @@
 import { foldersQueryKey, parseMailboxKey } from './mailboxContext.ts';
 import { quotaQueryKey } from './quota.ts';
 import { recoverableQueryKey } from './recoverable.ts';
+import { PHOTO_LOOKUP_KEY } from './photoDirectory.ts';
 
 export type QueryKey = readonly unknown[];
 
@@ -72,7 +73,8 @@ function mailboxPlan(d: Obj): RealtimePlan {
 }
 
 const SETTINGS_KEYS: Record<string, QueryKey[]> = {
-  profile: [['user-profile'], ['user', 'profile']],
+  // 9.5: a new / removed profile photo changes the version the lookups return
+  profile: [['user-profile'], ['user', 'profile'], [PHOTO_LOOKUP_KEY]],
   preferences: [['user-preferences']],
   signature: [['user-signature'], ['user', 'signature'], ['user', 'signatures']],
   oof: [['user-oof']],

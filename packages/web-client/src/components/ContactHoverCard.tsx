@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { Mail, Copy, Check } from 'lucide-react';
 import { Avatar } from './Avatar.js';
 import { copyToClipboard } from '../api/clipboard.js';
+import { usePhotoForAddress } from '../hooks/useUserPhoto.js';
 
 interface ContactHoverCardProps {
   /** Email address */
@@ -19,6 +20,7 @@ export function ContactHoverCard({ email, name, anchorRef, onClose }: ContactHov
   const [pos, setPos] = useState({ x: 0, y: 0 });
   const [copied, setCopied] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
+  const photoUrl = usePhotoForAddress(email);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -66,7 +68,7 @@ export function ContactHoverCard({ email, name, anchorRef, onClose }: ContactHov
       onMouseLeave={handleLeave}
     >
       <div className="flex items-start gap-3">
-        <Avatar seed={email} size="lg" />
+        <Avatar seed={email} name={name} photoUrl={photoUrl} size="lg" />
         <div className="flex-1 min-w-0">
           <p className="font-semibold text-fg text-sm truncate">
             {name || email.split('@')[0]}
