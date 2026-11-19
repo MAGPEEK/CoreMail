@@ -40,7 +40,7 @@ export interface UserPreferences {
     markRead: MarkReadMode; markReadDelaySec: number;
     requestReceipts: ReceiptPolicy; answerReceipts: ReceiptPolicy; emptyTrashOnLogout: boolean;
   };
-  compose: { format: ComposeFormat; fontFamily: string; fontSize: string; attachmentReminder: boolean };
+  compose: { format: ComposeFormat; fontFamily: string; fontSize: string; attachmentReminder: boolean; composeFormatBar: boolean };
   calendar: {
     workDays: number[]; workStart: string; workEnd: string; weekStart: WeekStart;
     defaultReminderMinutes: number | null; slotMinutes: 5 | 10 | 15 | 30 | 60; defaultEventMinutes: number;
@@ -68,7 +68,7 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
     markRead: 'immediately', markReadDelaySec: 5,
     requestReceipts: 'never', answerReceipts: 'ask', emptyTrashOnLogout: false,
   },
-  compose: { format: 'html', fontFamily: '', fontSize: '', attachmentReminder: true },
+  compose: { format: 'html', fontFamily: '', fontSize: '', attachmentReminder: true, composeFormatBar: true },
   calendar: {
     workDays: [1, 2, 3, 4, 5], workStart: '08:00', workEnd: '17:00', weekStart: 1,
     defaultReminderMinutes: 15, slotMinutes: 30, defaultEventMinutes: 30,

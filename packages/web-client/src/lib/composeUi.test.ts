@@ -69,24 +69,35 @@ test('i18n: compose texts in German and English; Spanish/Italian fall back to En
       assert.ok(m[1]! in translations.de, `${f}: unknown key ${m[1]}`);
     }
   }
-  assert.equal(translations.de.draft_saved_at, 'Entwurf gespeichert um {time}');
+  assert.equal(translations.de.draft_saved_at, 'Entwurf gespeichert {time}');
 });
 
-test('9.4 layout: command row on top, formatting toolbar and action bar below the body; no ribbon tabs', () => {
+test('card layout: header row on top, fields, body, the formatting bar at the bottom; no ribbon tabs, no action bar', () => {
   assert.equal(existsSync(join(src, 'components/compose/ComposeRibbon.tsx')), false, 'the ribbon is gone');
+  assert.equal(existsSync(join(src, 'components/compose/ComposeActionBar.tsx')), false, 'the bottom action bar is gone');
   const pane = read('components/compose/ComposePane.tsx');
-  const order = ['<ComposeCommandRow', '<ComposeFields', '<EditorContent', '<ComposeFormatBar', '<ComposeActionBar'].map((s) => pane.indexOf(s));
+  const order = ['<ComposeCommandRow', '<ComposeFields', '<EditorContent', '<ComposeFormatBar'].map((s) => pane.indexOf(s));
   assert.ok(order.every((i) => i > 0), 'all bars are rendered');
-  assert.deepEqual([...order].sort((a, b) => a - b), order, 'top → fields → body → formatting → actions');
-  assert.match(pane, /\{formatBarVisible\(plainText\) && \(\s*<ComposeFormatBar/, 'no formatting toolbar in plain-text format');
+  assert.deepEqual([...order].sort((a, b) => a - b), order, 'header → fields → body → formatting');
+  assert.doesNotMatch(pane, /ComposeActionBar/);
+  assert.match(pane, /\{formatBarShown && \(\s*<ComposeFormatBar/, 'no formatting toolbar in plain text or when switched off');
+  assert.match(pane, /formatBarVisible\(plainText, composePrefs\.composeFormatBar\)/, 'the roaming preference decides');
+  assert.match(pane, /md:rounded-xl md:border md:border-line md:shadow-md/, 'a raised card inline from 768 px');
+  assert.match(pane, /bg-canvas md:p-3/, 'the pane around the card is tinted, 12 px margin');
+  assert.match(pane, /window: 'relative flex flex-col flex-1 min-w-0 min-h-0 bg-surface'/, 'the own window has no margin or shadow');
   assert.match(pane, /editor\?\.isEmpty && \(/, 'body placeholder while the body is empty');
-  for (const f of ['ComposeCommandRow', 'ComposeFormatBar', 'ComposeActionBar']) {
+  for (const f of ['ComposeCommandRow', 'ComposeFormatBar']) {
     const code = read(`components/compose/${f}.tsx`);
     assert.match(code, /<CommandBar\b/, `${f} uses the shared command bar (roving focus, overflow)`);
     assert.doesNotMatch(code, /role="tab(list|panel)?"/, f);
   }
   assert.match(read('components/compose/ComposeFields.tsx'), /placeholder=\{t\('compose_subject_placeholder'\)\}/);
-  assert.match(read('components/compose/ComposeActionBar.tsx'), /commandMenuItem\(item, anchor\)/, 'the chevron reuses the "…" entries');
+  const header = read('components/compose/ComposeCommandRow.tsx');
+  assert.match(header, /tone: 'primary'/, 'Senden is the accent-filled control');
+  assert.equal((header.match(/tone: 'primary'/g) ?? []).length, 1, 'and the only one');
+  assert.match(header, /Alt\+ArrowDown/, 'the keyboard shortcut of the Senden menu is announced');
+  assert.match(read('components/CommandBar.tsx'), /e\.altKey && e\.key === 'ArrowDown'/, 'Alt+↓ opens a split button menu');
+  assert.match(read('hooks/useComposeEditor.ts'), /max-w-\[72ch\] text-\[15px\] leading-\[1\.6\]/, 'the editor line length and type size');
   assert.match(read('hooks/useComposeEditor.ts'), /'aria-placeholder': o\.placeholder/);
   for (const f of ['MessageOptionsDialog', 'AccessibilityDialog']) assert.match(read(`components/compose/${f}.tsx`), /<Modal\b/, `${f} is an accessible modal`);
   assert.match(read('components/MessageReader.tsx'), /<SensitivityBadge value=\{msg\.sensitivity\} \/>/);
@@ -112,6 +123,11 @@ test('ARIA: recipient combobox + pills, live status, labelled region, drafts str
   assert.match(pane, /e\.key === 'Enter' && \(e\.metaKey \|\| e\.ctrlKey\)/);
   assert.match(pane, /max-md:fixed max-md:inset-0/, 'full screen below 768 px');
   assert.match(read('components/compose/ComposeCommandRow.tsx'), /<CommandBar\b/);
+  assert.match(
+    read('components/compose/ComposeCommandRow.tsx'),
+    /onClick=\{actions\.close\}\s+aria-label=\{t\('compose_close'\)\}\s+title=\{t\('compose_close_icon_tip'\)\}/,
+    'a visible close button next to Verwerfen (keeps the draft)',
+  );
   assert.match(read('components/compose/DraftTabStrip.tsx'), /<nav aria-label=\{t\('compose_strip_label'\)\}/);
   assert.match(read('components/compose/AnchoredPopover.tsx'), /role="dialog"/);
   assert.match(read('components/ContextMenu.tsx'), /'menuitemcheckbox'/, 'checkable "…" entries');

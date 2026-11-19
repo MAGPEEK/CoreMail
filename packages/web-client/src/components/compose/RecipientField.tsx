@@ -5,6 +5,7 @@
  * field removes the last one. Invalid addresses and entries "Namen prüfen" could
  * not resolve are marked (the reason as tooltip and for screen readers). Suggestions come from
  * `/contacts?q=` (ARIA combobox: ↑/↓, Enter/Tab picks, Escape closes).
+ * Redesign: a pill is a neutral chip with a 20 px avatar (photo or initials); its ✕ shows on hover / focus.
  * 9.5: contact groups are suggested too; picking one adds its expanded members.
  * Rules: lib/recipients.ts, lib/contactGroups.ts.
  */
@@ -13,6 +14,8 @@ import { useQuery } from '@tanstack/react-query';
 import { Users, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { api } from '../../api/client.js';
+import { Avatar } from '../Avatar.js';
+import { usePhotoForAddress } from '../../hooks/useUserPhoto.js';
 import {
   addEntries, backspace, commitText, commitsOnKey, formatRecipient, parseRecipient, pillLabel, removeEntry, typeText,
   type RecipientValue,
@@ -35,27 +38,31 @@ function RecipientPill({ entry, unresolved, onRemove }: { entry: string; unresol
   const label = pillLabel(r);
   const full = r.name ? `${r.name} <${r.address}>` : r.address;
   const problem = unresolved ? t(UNRESOLVED_TEXT[unresolved]) : r.valid ? null : t('compose_recipient_invalid');
-  const tone = problem ? 'bg-danger-bg border-danger-line text-danger-fg' : 'bg-surface-2 border-line text-fg';
+  const photoUrl = usePhotoForAddress(r.address);
+  const tone = problem ? 'bg-danger-bg border-danger-line text-danger-fg' : 'bg-surface-3 border-transparent text-fg';
   return (
-    <li className={`inline-flex items-center max-w-full rounded-full border text-xs ${tone}`}>
+    <li className={`group inline-flex items-center max-w-full h-[24px] rounded-full border text-[13px] ${tone}`}>
       <button
         type="button"
         aria-expanded={expanded}
         onClick={() => setExpanded((v) => !v)}
         title={problem ? `${full} – ${problem}` : full}
-        className="pl-2.5 pr-1 py-0.5 truncate max-w-[20rem] rounded-l-full"
+        className="flex items-center gap-1.5 pl-0.5 pr-1 min-w-0 h-full rounded-l-full"
       >
-        {expanded ? full : label}
-        {problem && <span className="sr-only">{`, ${problem}`}</span>}
+        <Avatar seed={r.address || label} name={r.name || null} photoUrl={photoUrl} size="chip" />
+        <span className="truncate max-w-[18rem]">
+          {expanded ? full : label}
+          {problem && <span className="sr-only">{`, ${problem}`}</span>}
+        </span>
       </button>
       <button
         type="button"
         onClick={onRemove}
         aria-label={fmt(t('compose_remove_recipient'), { name: label })}
         title={fmt(t('compose_remove_recipient'), { name: label })}
-        className="pr-1.5 pl-0.5 py-0.5 rounded-r-full opacity-70 hover:opacity-100"
+        className="w-[24px] h-full shrink-0 inline-flex items-center justify-center rounded-r-full opacity-0 group-hover:opacity-100 focus-visible:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100 hover:text-danger-fg"
       >
-        <X size={11} aria-hidden="true" />
+        <X size={12} aria-hidden="true" />
       </button>
     </li>
   );

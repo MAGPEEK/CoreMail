@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  ALIGNMENTS, FORMAT_BAR, TEXT_DIRECTIONS, actionBarCommands, formatBarVisible, formatFlyout, formatSwitchLabel,
-  moreMenuCommands, sizeInPoints, stepFontSize, tableCommandsFor, type FlyoutState,
+  ALIGNMENTS, FORMAT_BAR, SEND_MENU, TEXT_DIRECTIONS, fieldRowHeights, formatBarAvailable, formatBarToggleLabel, formatBarVisible,
+  formatFlyout, formatSwitchLabel, headerCommands, moreMenuCommands, sizeInPoints, statusLayoutClass, stepFontSize, tableCommandsFor, type FlyoutState,
 } from './composeToolbar.ts';
 import { TABLE_COMMANDS } from './composeFormat.ts';
 import { SENSITIVITY_LEVELS, sensitivityBadge, toSensitivity } from './sensitivity.ts';
@@ -14,10 +14,17 @@ const idle: FlyoutState = {
 };
 const ids = (s: FlyoutState) => formatFlyout(s).map((section) => section.map((e) => e.id));
 
-test('formatting toolbar: the buttons below the body, hidden in plain-text format', () => {
-  assert.deepEqual(FORMAT_BAR, ['grow', 'shrink', 'bold', 'italic', 'underline', 'highlight', 'color', 'bullets', 'numbering', 'indent']);
-  assert.equal(formatBarVisible(false), true);
-  assert.equal(formatBarVisible(true), false);
+test('formatting toolbar: the buttons at the bottom of the card, hidden in plain text or by the preference', () => {
+  assert.deepEqual(FORMAT_BAR, ['grow', 'shrink', 'bold', 'italic', 'underline', 'highlight', 'color', 'bullets', 'numbering', 'indent', 'link', 'emoji']);
+  assert.equal(formatBarAvailable(false), true);
+  assert.equal(formatBarAvailable(true), false);
+  assert.equal(formatBarVisible(false, true), true);
+  assert.equal(formatBarVisible(false, false), false, 'switched off with "Formatleiste ausblenden"');
+  assert.equal(formatBarVisible(true, true), false, 'plain text has nothing to format');
+  assert.equal(formatBarToggleLabel(true), 'compose_format_bar_hide');
+  assert.equal(formatBarToggleLabel(false), 'compose_format_bar_show');
+  assert.equal(translations.de.compose_format_bar_hide, 'Formatleiste ausblenden');
+  assert.equal(translations.de.compose_format_bar_show, 'Formatleiste einblenden');
   assert.deepEqual(ALIGNMENTS, ['left', 'center', 'right', 'justify']);
   assert.deepEqual(TEXT_DIRECTIONS, ['ltr', 'rtl']);
 });
@@ -58,16 +65,28 @@ test('font size steps: next size of the list from the text size or the default; 
   assert.equal(stepFontSize(null, 'bad', 1), null);
 });
 
-test('action bar and "…" menu: pictures need HTML, the picker needs signatures, no popout in the own window', () => {
-  assert.deepEqual(actionBarCommands(false, true), ['send', 'discard', 'attach', 'inlineImage', 'emoji', 'signature', 'more']);
-  assert.deepEqual(actionBarCommands(true, true), ['send', 'discard', 'attach', 'emoji', 'signature', 'more']);
-  assert.deepEqual(actionBarCommands(false, false), ['send', 'discard', 'attach', 'inlineImage', 'emoji', 'more']);
-  assert.deepEqual(moreMenuCommands(false), ['save', 'showFrom', 'checkNames', 'importance', 'format', 'options', 'a11y', 'popout']);
-  assert.deepEqual(moreMenuCommands(true), ['save', 'showFrom', 'checkNames', 'importance', 'format', 'options', 'a11y']);
+test('header row: quiet icon buttons, the Senden menu and the "…" menu (nothing of the old bars is lost)', () => {
+  assert.deepEqual(headerCommands(false, true), ['attach', 'inlineImage', 'signature', 'formatBar']);
+  assert.deepEqual(headerCommands(true, true), ['attach', 'signature'], 'plain text: no pictures, no toolbar toggle');
+  assert.deepEqual(headerCommands(false, false), ['attach', 'inlineImage', 'formatBar'], 'the picker needs named signatures');
+  assert.deepEqual([...SEND_MENU], ['send', 'schedule', 'importance', 'options']);
+  assert.deepEqual(moreMenuCommands(false), ['save', 'showFrom', 'checkNames', 'datetime', 'format', 'formatBar', 'a11y']);
+  assert.deepEqual(moreMenuCommands(true), ['save', 'showFrom', 'checkNames', 'datetime', 'format', 'a11y', 'emoji']);
+  assert.equal(translations.de.compose_schedule, 'Später senden …');
+  assert.deepEqual(fieldRowHeights('normal'), { row: 36, subject: 40 });
+  assert.deepEqual(fieldRowHeights('comfortable'), { row: 36, subject: 40 });
+  assert.deepEqual(fieldRowHeights('compact'), { row: 32, subject: 36 });
   assert.equal(formatSwitchLabel(false), 'compose_to_plain');
   assert.equal(formatSwitchLabel(true), 'compose_to_html');
   assert.equal(translations.de[formatSwitchLabel(false)], 'Zu Nur-Text wechseln');
   assert.equal(translations.de[formatSwitchLabel(true)], 'Zu HTML wechseln');
+});
+
+test('draft status never changes the toolbar width on narrow inline panes (no layout jump)', () => {
+  assert.match(statusLayoutClass(false, false), /max-\[1179px\]:sr-only/, 'narrow: text for screen readers only');
+  assert.match(statusLayoutClass(false, false), /min-\[1180px\]:min-w-\[10rem\]/, 'wide: fixed width');
+  assert.doesNotMatch(statusLayoutClass(false, true), /sr-only/, 'a failure is always visible');
+  assert.match(statusLayoutClass(true, false), /^min-w-\[10rem\]/, 'own window: always reserved');
 });
 
 test('sensitivity: levels, server values and the reader badge', () => {

@@ -26,6 +26,14 @@ test('normalizePreferences: defaults for garbage, wrong kinds dropped, cache own
   assert.deepEqual(DEFAULT_PREFERENCES.calendar.workDays, [1, 2, 3, 4, 5]);
 });
 
+test('composeFormatBar: on by default, a stored value is kept, a wrong kind falls back', () => {
+  assert.equal(DEFAULT_PREFERENCES.compose.composeFormatBar, true);
+  assert.equal(normalizePreferences({ compose: { composeFormatBar: false } }).compose.composeFormatBar, false);
+  assert.equal(normalizePreferences({ compose: { composeFormatBar: 'no' } }).compose.composeFormatBar, true);
+  assert.equal(normalizePreferences({ compose: { format: 'plain' } }).compose.composeFormatBar, true, 'an older server copy gets the default');
+  assert.equal(applyPatch(DEFAULT_PREFERENCES, { compose: { composeFormatBar: false } }).compose.composeFormatBar, false);
+});
+
 test('applyPatch / mergePatches follow the server rules', () => {
   let p = applyPatch(DEFAULT_PREFERENCES, { view: { sortBy: 'from' }, signatures: { defaults: { own: { newId: 'a', replyId: null } } } });
   assert.equal(p.view.sortBy, 'from');
