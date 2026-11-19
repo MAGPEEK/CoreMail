@@ -6,10 +6,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   applyContactPatch, contactListsFromRow, emptyContactCard, finalizeContactCard, flatContactColumns, fileAsOf,
-  isContactDate, normalizeContactDate, type ContactCard,
+  isContactDate, normalizeContactDate, photoMediaType, type ContactCard,
 } from './contact-card.js';
 import {
-  applyContactCard, buildContactVcard, contactCardFromVcard, contactColumnsFromVcard, uidKey, vcardSaysCard,
+  applyContactCard, buildContactVcard, contactCardFromVcard, contactColumnsFromVcard, setVcardPhoto, setVcardText, uidKey, vcardPhoto,
+  setVcardRelated, vcardPhoneKinds, vcardRelated, vcardSaysCard, vcardText, CONTACT_RELATED_TYPES, CONTACT_TEXT_PROPERTIES, OFFICE_LOCATION_PROPERTY,
 } from './contact-vcard.js';
 
 const lines = (vcard: string): string[] => vcard.replace(/\r\n[ \t]/g, '').split('\r\n').filter(Boolean);
@@ -211,4 +212,98 @@ test('a patch of the legacy fields keeps every untouched line; text is escaped (
 test('uidKey strips urn:uuid: only', () => {
   assert.equal(uidKey(' urn:uuid:ABC '), 'ABC');
   assert.equal(uidKey('plain-uid'), 'plain-uid');
+});
+
+test('vCard text property outside the card: read, set (group + parameters kept, duplicates dropped), removed', () => {
+  const v3 = ['BEGIN:VCARD', 'VERSION:3.0', 'FN:A', 'item2.X-OFFICE-LOCATION;X-P=1:Raum 1', 'X-OFFICE-LOCATION:alt', 'NOTE:n', 'END:VCARD', ''].join('\r\n');
+  assert.equal(vcardText(v3, OFFICE_LOCATION_PROPERTY), 'Raum 1');
+  const set = lines(setVcardText(v3, OFFICE_LOCATION_PROPERTY, 'Raum 2; Süd'));
+  assert.deepEqual(set.filter((l) => l.includes('X-OFFICE-LOCATION')), ['item2.X-OFFICE-LOCATION;X-P=1:Raum 2\\; Süd']);
+  assert.equal(vcardText(set.join('\r\n'), OFFICE_LOCATION_PROPERTY), 'Raum 2; Süd');
+  const removed = lines(setVcardText(v3, OFFICE_LOCATION_PROPERTY, ''));
+  assert.ok(!removed.some((l) => l.includes('X-OFFICE-LOCATION')));
+  assert.ok(removed.includes('NOTE:n'), 'everything else untouched');
+  assert.ok(lines(setVcardText('BEGIN:VCARD\r\nVERSION:3.0\r\nFN:B\r\nEND:VCARD\r\n', OFFICE_LOCATION_PROPERTY, 'R')).includes('X-OFFICE-LOCATION:R'));
+});
+
+test('vCard photo: inline v3 / 2.1 / v4 data URI read, URL and non-image ignored, written in the version spelling', () => {
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]);
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 9, 9]);
+  const card = (...l: string[]) => ['BEGIN:VCARD', ...l, 'FN:A', 'END:VCARD', ''].join('\r\n');
+  assert.deepEqual(vcardPhoto(card('VERSION:3.0', `PHOTO;ENCODING=b;TYPE=JPEG:${jpeg.toString('base64')}`)), { mediaType: 'image/jpeg', data: jpeg });
+  assert.equal(vcardPhoto(card('VERSION:2.1', `PHOTO;ENCODING=BASE64;TYPE=PNG:${png.toString('base64')}`))?.mediaType, 'image/png');
+  assert.deepEqual(vcardPhoto(card('VERSION:4.0', `PHOTO:data:image/jpeg;base64,${jpeg.toString('base64')}`))?.data, jpeg);
+  assert.equal(vcardPhoto(card('VERSION:3.0', 'PHOTO;VALUE=uri:https://example.org/a.jpg')), null);
+  assert.equal(vcardPhoto(card('VERSION:3.0', `PHOTO;ENCODING=b:${Buffer.from('text').toString('base64')}`)), null);
+  assert.equal(photoMediaType(Buffer.from('GIF89a')), 'image/gif');
+  const v3 = lines(setVcardPhoto(card('VERSION:3.0', 'PHOTO;VALUE=uri:https://example.org/a.jpg', 'X-KEEP:1'), { mediaType: 'image/jpeg', data: jpeg }));
+  assert.deepEqual(v3.filter((l) => l.startsWith('PHOTO')), [`PHOTO;ENCODING=b;TYPE=JPEG:${jpeg.toString('base64')}`]);
+  assert.ok(v3.includes('X-KEEP:1'));
+  const v4 = lines(setVcardPhoto(card('VERSION:4.0'), { mediaType: 'image/png', data: png }));
+  assert.ok(v4.includes(`PHOTO:data:image/png;base64,${png.toString('base64')}`));
+  const none = lines(setVcardPhoto(card('VERSION:3.0', `PHOTO;ENCODING=b;TYPE=JPEG:${jpeg.toString('base64')}`), null));
+  assert.ok(!none.some((l) => l.startsWith('PHOTO')));
+});
+
+test('phone kinds (ActiveSync slots): read from TEL TYPE, written in the version spelling, kept by REST / CardDAV edits', () => {
+  const card = (...l: string[]) => ['BEGIN:VCARD', ...l, 'FN:A', 'UID:u1', 'END:VCARD', ''].join('\r\n');
+  const v3 = card('VERSION:3.0', 'TEL;TYPE=CAR:1', 'TEL;TYPE=X-RADIO,VOICE:2', 'TEL;type=X-ASSISTANT:3', 'TEL;TYPE=X-COMPANY-MAIN:4',
+    'TEL;TYPE=WORK,FAX:5', 'TEL;TYPE=HOME;TYPE=FAX:6', 'TEL;TYPE=FAX:7', 'TEL;TYPE=VOICE:8', 'TEL;TYPE=WORK,CAR:9', 'TEL;TYPE=CAR:');
+  assert.deepEqual(vcardPhoneKinds(v3), ['car', 'radio', 'assistant', 'company-main', 'work-fax', 'home-fax', '', '', ''],
+    'aligned with the card numbers (the empty one is no entry); a work number stays a work number');
+  assert.deepEqual(contactCardFromVcard(v3).phones.map((p) => p.type), ['other', 'other', 'other', 'other', 'fax', 'fax', 'fax', 'other', 'work']);
+  assert.deepEqual(vcardPhoneKinds('kein vCard'), []);
+
+  const base = card('VERSION:3.0', 'TEL;TYPE=VOICE:8');
+  const phones = (...p: Array<[string, string]>) => ({ ...contactCardFromVcard(base), phones: p.map(([type, value]) => ({ type, value })) as ContactCard['phones'] });
+  const written = lines(applyContactCard(base, phones(['other', '8'], ['other', '1'], ['fax', '5'], ['fax', '6'], ['other', '4'], ['mobile', '0']),
+    { phoneKinds: ['', 'car', 'work-fax', 'home-fax', 'company-main', 'car'] }));
+  assert.deepEqual(written.filter((l) => l.startsWith('TEL')),
+    ['TEL;TYPE=VOICE:8', 'TEL;TYPE=CAR,VOICE:1', 'TEL;TYPE=WORK,FAX:5', 'TEL;TYPE=HOME,FAX:6', 'TEL;TYPE=X-COMPANY-MAIN,VOICE:4', 'TEL;TYPE=CELL:0'],
+    'a kind the type cannot have (a car mobile) is none');
+  assert.deepEqual(vcardPhoneKinds(written.join('\r\n')),['', 'car', 'work-fax', 'home-fax', 'company-main', '']);
+  const v4 = lines(applyContactCard(card('VERSION:4.0'), phones(['other', '2']), { phoneKinds: ['radio'] }));
+  assert.ok(v4.includes('TEL;TYPE=x-radio,voice:2'), v4.join(' | '));
+
+  // only the kind changes (a number moved to another slot): the line is rewritten
+  const moved = lines(applyContactCard(v3, contactCardFromVcard(v3), { phoneKinds: ['radio', ...vcardPhoneKinds(v3).slice(1)] }));
+  assert.deepEqual(vcardPhoneKinds(moved.join('\r\n')).slice(0, 2), ['radio', 'radio']);
+  // a removed plain number does not lend its line to a new car number at its position
+  const swapped = lines(applyContactCard(base, phones(['other', '1']), { phoneKinds: ['car'] }));
+  assert.deepEqual(swapped.filter((l) => l.startsWith('TEL')), ['TEL;TYPE=CAR,VOICE:1']);
+  // REST / CardDAV (no kinds): a changed number keeps its line head and so its kind; kinds stay untouched
+  const rest = applyContactCard(v3, { ...contactCardFromVcard(v3), phones: contactCardFromVcard(v3).phones.map((p, i) => (i === 0 ? { ...p, value: '11' } : p)) });
+  assert.ok(lines(rest).includes('TEL;TYPE=CAR:11'));
+  assert.deepEqual(vcardPhoneKinds(rest), vcardPhoneKinds(v3));
+  assert.equal(applyContactCard(v3, contactCardFromVcard(v3), { phoneKinds: vcardPhoneKinds(v3) }), applyContactCard(v3, contactCardFromVcard(v3)),
+    'the same kinds: nothing rewritten');
+  const mms = lines(applyContactCard(base, phones(['other', '7']), { phoneKinds: ['mms'] }));
+  assert.ok(mms.includes('TEL;TYPE=X-MMS:7'), mms.join(' | '));
+  assert.deepEqual(vcardPhoneKinds(mms.join('\r\n')), ['mms']);
+});
+
+test('related persons as text: vCard 4 RELATED;VALUE=text, vCard 3 X-RELATED; references untouched; kept by REST / CardDAV edits', () => {
+  const card = (...l: string[]) => ['BEGIN:VCARD', ...l, 'FN:A', 'UID:u1', 'END:VCARD', ''].join('\r\n');
+  const v4 = card('VERSION:4.0', 'RELATED;TYPE=spouse:urn:uuid:other-card', 'RELATED;TYPE=spouse;VALUE=text:Sam',
+    'RELATED;TYPE=child;VALUE=text:Lena', 'item1.RELATED;TYPE=child;VALUE=text:Tom', 'RELATED;TYPE=x-manager;VALUE=text:Bernd');
+  assert.deepEqual([vcardRelated(v4, CONTACT_RELATED_TYPES.spouse), vcardRelated(v4, 'child'), vcardRelated(v4, 'x-manager'), vcardRelated(v4, 'x-assistant')],
+    [['Sam'], ['Lena', 'Tom'], ['Bernd'], []], 'a RELATED by reference is no name');
+  const kids = lines(setVcardRelated(v4, 'child', ['Lena', 'Thomas', 'Mia; Sophie']));
+  assert.deepEqual(kids.filter((l) => l.includes('TYPE=child')),
+    ['RELATED;TYPE=child;VALUE=text:Lena', 'item1.RELATED;TYPE=child;VALUE=text:Thomas', 'RELATED;TYPE=child;VALUE=text:Mia\\; Sophie']);
+  assert.deepEqual(vcardRelated(kids.join('\r\n'), 'child'), ['Lena', 'Thomas', 'Mia; Sophie']);
+  const noSpouse = lines(setVcardRelated(v4, 'spouse', []));
+  assert.ok(noSpouse.includes('RELATED;TYPE=spouse:urn:uuid:other-card') && !noSpouse.some((l) => l.endsWith(':Sam')), 'the reference stays');
+  const v3 = lines(setVcardRelated(card('VERSION:3.0'), 'x-assistant', ['Anna']));
+  assert.ok(v3.includes('X-RELATED;TYPE=X-ASSISTANT:Anna'), v3.join(' | '));
+  assert.deepEqual(vcardRelated(v3.join('\r\n'), 'x-assistant'), ['Anna']);
+
+  const texts = lines(setVcardText(setVcardText(card('VERSION:3.0'), CONTACT_TEXT_PROPERTIES.phoneticGiven, 'エリカ'), CONTACT_TEXT_PROPERTIES.customerId, 'K-1'));
+  assert.ok(texts.includes('X-PHONETIC-FIRST-NAME:エリカ') && texts.includes('X-CUSTOMER-ID:K-1'));
+  // a REST / CardDAV card edit leaves them alone
+  const all = [...kids, ...texts.filter((l) => l.startsWith('X-'))].join('\r\n').replace('END:VCARD\r\n', '') + '\r\nEND:VCARD\r\n';
+  const edited = applyContactCard(all, { ...contactCardFromVcard(all), jobTitle: 'Leitung', phones: [{ type: 'mobile', value: '1' }] });
+  for (const kept of ['RELATED;TYPE=spouse:urn:uuid:other-card', 'item1.RELATED;TYPE=child;VALUE=text:Thomas', 'X-PHONETIC-FIRST-NAME:エリカ', 'X-CUSTOMER-ID:K-1']) {
+    assert.ok(lines(edited).includes(kept), `lost ${kept}`);
+  }
 });

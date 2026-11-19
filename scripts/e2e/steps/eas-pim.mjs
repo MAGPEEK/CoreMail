@@ -1,9 +1,10 @@
-// Step 8d (w3): ActiveSync Calendar, Tasks and Notes on a 14.1 device — FolderSync announces the
-// own calendar / tasks / notes folders; an event created over REST arrives in the calendar Sync
-// (ServerId = event id); a task, a note and a recurring meeting with a deleted occurrence added
-// by the device are visible over REST; a REST change of the task reaches the device as a Change;
-// a device Delete removes the task. Requests use the [MS-ASWBXML] code pages (4 Calendar,
-// 9 Tasks, 23 Notes); every response carries only 14.1 tags. Runs after `eas` (needs the users).
+// Step 8d (w3): ActiveSync Calendar, Tasks, Notes and Contacts on a 14.1 device — FolderSync
+// announces the own calendar / tasks / notes / contacts folders; an event and a contact created
+// over REST arrive in their Sync (ServerId = row id); a task, a note, a recurring meeting with a
+// deleted occurrence and a contact added by the device are visible over REST (the contact also
+// over CardDAV); a REST change of the task reaches the device as a Change; a device Delete removes
+// the task. Requests use the [MS-ASWBXML] code pages (1 Contacts, 4 Calendar, 9 Tasks,
+// 12 Contacts2, 23 Notes); every response carries only 14.1 tags. Runs after `eas` (needs the users).
 import { check, assert, creds, http, basic, session } from '../lib.mjs';
 import { decodeWbxml, tagsNewerThan } from '../../../packages/activesync/src/wbxml.ts';
 
@@ -27,6 +28,8 @@ const A = (t, k) => [0, t, k];
 const C = (t, k) => [4, t, k];
 const T = (t, k) => [9, t, k];
 const N = (t, k) => [23, t, k];
+const Ct = (t, k) => [1, t, k];
+const C2 = (t, k) => [12, t, k];
 const B = (t, k) => [17, t, k];
 const PV = (t, k) => [14, t, k];
 const compact = (d) => d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
@@ -64,7 +67,7 @@ export async function run(state) {
   };
   const tok = await session(state, 'b', B_MAIL, c.userB);
   const keys = {};
-  const created = { events: [], notes: [] };
+  const created = { events: [], notes: [], contacts: [] };
 
   await check('eas-pim: Provision a 14.1 device', async () => {
     const p1 = await post('Provision', PV(0x05, [PV(0x06, [PV(0x07, [PV(0x08, 'MS-EAS-Provisioning-WBXML')])])]));
@@ -78,12 +81,13 @@ export async function run(state) {
   });
 
   let calendarId, calendarCollection;
-  await check('eas-pim: FolderSync announces the default calendar (8), tasks (7) and notes (10)', async () => {
+  await check('eas-pim: FolderSync announces the default calendar (8), tasks (7), notes (10) and contacts (9)', async () => {
     const fs = await post('FolderSync', [7, 0x16, [[7, 0x12, '0']]]);
     const adds = all(kid(fs, 'Changes'), 'Add').map((a) => ({ id: kid(a, 'ServerId')?.text, type: kid(a, 'Type')?.text, name: kid(a, 'DisplayName')?.text }));
     const byType = (t) => adds.filter((a) => a.type === t);
     assert(byType('8').length === 1 && byType('8')[0].id.startsWith('cal:'), `default calendar: ${JSON.stringify(adds)}`);
     assert(byType('7')[0]?.id === 'tasks:default' && byType('10')[0]?.id === 'notes:default', `tasks/notes: ${JSON.stringify(adds)}`);
+    assert(byType('9')[0]?.id === 'contacts:default', `contacts: ${JSON.stringify(adds)}`);
     calendarCollection = byType('8')[0].id;
     calendarId = calendarCollection.slice('cal:'.length);
     return adds.filter((a) => a.id.includes(':')).map((a) => `${a.name}/${a.type}`).join(', ');
@@ -213,9 +217,56 @@ export async function run(state) {
     }
   });
 
+  await check('eas-pim: a contact created over REST arrives in the contacts Sync (ServerId = contact id)', async () => {
+    const family = `E2EEas${Date.now()}`;
+    const r = await http('POST', '/api/v1/contacts', { token: tok, body: {
+      name: { prefix: '', given: 'Erika', middle: '', family, suffix: '' }, company: 'E2E GmbH',
+      emails: [{ type: 'work', value: 'erika@firma-e2e.test' }], phones: [{ type: 'mobile', value: '+49 170 5550101' }],
+    } });
+    assert(r.status === 201, `create contact ${r.status} ${r.text.slice(0, 200)}`);
+    created.contacts.push(r.json.id);
+    const primed = await sync('contacts:default', '0');
+    assert(primed.status === '1', `priming ${JSON.stringify(primed)}`);
+    const first = await sync('contacts:default', primed.key);
+    const data = kid(first.adds.find((a) => kid(a, 'ServerId')?.text === r.json.id), 'ApplicationData');
+    assert(kid(data, 'LastName')?.text === family && kid(data, 'Email1Address')?.text === 'erika@firma-e2e.test'
+      && kid(data, 'MobilePhoneNumber')?.text === '+49 170 5550101' && kid(data, 'CompanyName')?.text === 'E2E GmbH',
+      `contact not in the Sync: ${first.adds.map((a) => kid(a, 'ServerId')?.text).join(', ')}`);
+    keys.contacts = first.key;
+    return `${first.adds.length} Add(s), key ${first.key}`;
+  });
+
+  await check('eas-pim: a contact added by the device is a contact over REST and CardDAV', async () => {
+    const family = `E2EPhone${Date.now()}`;
+    const r = await sync('contacts:default', keys.contacts, [A(0x16, [A(0x07, [A(0x0c, 'e2e-contact-1'), A(0x1d, [
+      Ct(0x1f, 'Alex'), Ct(0x29, family), Ct(0x1b, 'alex@phone-e2e.test'), Ct(0x13, '+49 30 5550102'),
+      Ct(0x14, '+49 171 5550103'), C2(0x0e, '+49 170 5550104'), Ct(0x34, 'Sam Beispiel'), Ct(0x17, [Ct(0x18, 'Mia')]), Ct(0x11, 'Hauptstr. 1'), Ct(0x0d, 'Berlin'), C2(0x0d, 'Lex'), B(0x0a, [B(0x06, '1'), B(0x0b, 'vom Telefon')]),
+    ])])])]);
+    const id = kid(r.responses[0], 'ServerId')?.text;
+    assert(kid(r.responses[0], 'Status')?.text === '1' && id, `Add response ${JSON.stringify(r.responses)}`);
+    created.contacts.push(id);
+    const rest = await http('GET', `/api/v1/contacts/${id}`, { token: tok });
+    const x = rest.json;
+    assert(rest.status === 200 && x.name?.family === family && x.nickname === 'Lex' && x.notes === 'vom Telefon'
+      && x.emails?.[0]?.value === 'alex@phone-e2e.test' && x.phones?.[0]?.type === 'work' && x.addresses?.[0]?.city === 'Berlin',
+      `REST contact ${rest.status} ${rest.text.slice(0, 300)}`);
+    // a car number (no CoreMail type) is `other` over REST and stays in its slot: no Change back
+    assert(x.phones?.some((p) => p.type === 'other' && p.value === '+49 171 5550103') && !r.changes.some((ch) => kid(ch, 'ServerId')?.text === id),
+      `car number: ${JSON.stringify(x.phones)}, ${r.changes.length} Change(s)`);
+    const dav = await http('GET', `/dav/addressbooks/${state.users.b.id}/default/${id}.vcf`, { headers: { Authorization: auth } });
+    const vcard = dav.text.replace(/\r?\n[ \t]/g, '');
+    assert(dav.status === 200 && vcard.includes(`N:${family};Alex;;;`) && /^UID:/m.test(vcard) && vcard.includes('alex@phone-e2e.test')
+      && vcard.includes('TEL;TYPE=CAR,VOICE:+49 171 5550103') && vcard.includes('TEL;TYPE=X-MMS:+49 170 5550104')
+      && vcard.includes('X-RELATED;TYPE=SPOUSE:Sam Beispiel') && vcard.includes('X-RELATED;TYPE=CHILD:Mia'),
+      `CardDAV ${dav.status}:\n${vcard.slice(0, 400)}`);
+    keys.contacts = r.key;
+    return `contact ${id}`;
+  });
+
   await check('eas-pim: clean up the items of this step', async () => {
     for (const id of created.events) await http('DELETE', `/api/v1/calendar/events/${id}`, { token: tok });
     for (const id of created.notes) await http('DELETE', `/api/v1/notes/${id}`, { token: tok });
+    for (const id of created.contacts) await http('DELETE', `/api/v1/contacts/${id}`, { token: tok });
     const r = await sync(calendarCollection, keys.calendar);
     return `${r.deletes.length} calendar Delete(s) sent to the device`;
   });

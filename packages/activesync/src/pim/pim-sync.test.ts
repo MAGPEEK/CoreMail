@@ -115,10 +115,10 @@ let folderKey = '';
 test('FolderSync: own calendars (default 8, others 13), tasks 7, notes 10 — nothing of other users; 12.1 without notes', async () => {
   const fs = await folderSync('0');
   assert.equal(fs.status, '1');
-  assert.deepEqual(fs.add.filter((a) => a.includes(':')), ['cal:calA=Kalender/8', 'cal:calB=Projekte/13', 'tasks:default=Aufgaben/7', 'notes:default=Notizen/10']);
+  assert.deepEqual(fs.add.filter((a) => a.includes(':')), ['cal:calA=Kalender/8', 'cal:calB=Projekte/13', 'tasks:default=Aufgaben/7', 'notes:default=Notizen/10', 'contacts:default=Kontakte/9']);
   folderKey = fs.key;
   const old = await folderSync('0', 'dev12', '12.1');
-  assert.deepEqual(old.add.filter((a) => a.includes(':')), ['cal:calA=Kalender/8', 'cal:calB=Projekte/13', 'tasks:default=Aufgaben/7']);
+  assert.deepEqual(old.add.filter((a) => a.includes(':')), ['cal:calA=Kalender/8', 'cal:calB=Projekte/13', 'tasks:default=Aufgaben/7', 'contacts:default=Kontakte/9']);
 });
 
 let calKey = '';

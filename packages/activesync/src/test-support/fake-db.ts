@@ -5,8 +5,8 @@
  * gt/lt/lte, OR/AND/NOT, relation filters (folder.mailbox, message.folder,
  * calendarEvent.calendar, resourceBooking.calendar.resource), select/include of those
  * relations, compound unique keys (findUnique / upsert), increment updates,
- * count/aggregate and `$transaction(fn)`; `updatedAt` of calendar events, tasks and notes
- * is set on every write. Every call is logged in `calls`.
+ * count/aggregate and `$transaction(fn)`; `updatedAt` of calendar events, tasks, notes,
+ * contacts and contact groups is set on every write. Every call is logged in `calls`.
  * Test-only module.
  */
 type Row = Record<string, unknown>;
@@ -14,7 +14,7 @@ type Row = Record<string, unknown>;
 export type Tables = Record<string, Row[]>;
 
 /** Models with a Prisma `@updatedAt` column the fake maintains. */
-const UPDATED_AT_MODELS = new Set(['calendarEvent', 'task', 'note']);
+const UPDATED_AT_MODELS = new Set(['calendarEvent', 'task', 'note', 'contact', 'contactGroup']);
 
 const RELATIONS: Record<string, Record<string, { table: string; local: string; foreign: string; many?: boolean }>> = {
   folder: { mailbox: { table: 'mailbox', local: 'mailboxId', foreign: 'id' } },
@@ -221,7 +221,7 @@ export function createFakeDb(tables: Tables) {
   }
 
   const db: Row = { $on: () => undefined, calls, tables };
-  for (const name of ['user', 'emailAlias', 'userSettings', 'activeSyncDevice', 'activeSyncItem', 'mailbox', 'folder', 'message', 'attachment', 'sharedMailbox', 'sharedMailboxPerm', 'mailFlowPolicy', 'contact', 'calendar', 'calendarShare', 'calendarEvent', 'task', 'note', 'systemLog', 'webmailPolicy',
+  for (const name of ['user', 'emailAlias', 'userSettings', 'activeSyncDevice', 'activeSyncItem', 'mailbox', 'folder', 'message', 'attachment', 'sharedMailbox', 'sharedMailboxPerm', 'mailFlowPolicy', 'contact', 'contactGroup', 'calendar', 'calendarShare', 'calendarEvent', 'task', 'note', 'systemLog', 'webmailPolicy',
     'resourceMailbox', 'resourceCalendar', 'resourceBooking']) {
     db[name] = model(name);
   }

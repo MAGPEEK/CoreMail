@@ -12,6 +12,8 @@ import { Can } from '../components/Can.js';
 import { ProtocolAccessEditor } from '../components/ProtocolAccessEditor.js';
 import { WebmailPolicyEditor } from '../components/WebmailPolicyEditor.js';
 import { DataTable, type Column } from '../components/DataTable.js';
+import { IdnText } from '../components/IdnText.js';
+import { describeDomain } from '../lib/idn.js';
 import { clientSetupRows, clientSetupSummary, srvParts, srvZoneLine, type SrvParts } from '../lib/dnsClientSetup.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -623,7 +625,7 @@ export function DomainsPage() {
   const columns: Column<Domain>[] = [
     {
       key: 'name', header: t('domain_col_domain'),
-      cell: (d) => <span className="text-fg text-sm font-medium">{d.name}</span>,
+      cell: (d) => <IdnText display={describeDomain(d.name)} className="text-fg text-sm font-medium break-all" />,
     },
     {
       key: 'primary', header: t('domain_primary_label'), srOnlyHeader: true, className: 'w-44',

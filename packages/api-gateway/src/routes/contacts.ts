@@ -1,7 +1,7 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import {
   prisma, GAL_VISIBLE_WHERE, isWebmailFeatureEnabled,
-  applyContactCard, applyContactPatch, contactCardFromRow, contactCardFromVcard, contactColumnsFromVcard, contactRowData, detachCardFromGroups,
+  applyContactCard, applyContactPatch, contactCardFromRow, contactCardFromVcard, createContactRow, deleteContactRow, updateContactRow,
   emptyContactCard, flatContactColumns, isGroupVcard, membersFromJson, sameContactCard, vcardUidKey, type ContactRowFlat,
 } from '@coremail/storage';
 import { protocolSubject, requireAuth } from '../middleware/auth.js';
@@ -222,9 +222,7 @@ contactsRouter.post('/', async (req: Request, res: Response) => {
   if (!card.displayName) { res.status(400).json({ error: 'Invalid request', field: 'displayName', message: 'Name fehlt' }); return; }
 
   const vcardData = applyContactCard(source, card);
-  const contact = await prisma.contact.create({
-    data: { userId: req.apiUser!.userId, vcardData, ...contactRowData(contactColumnsFromVcard(vcardData)) },
-  });
+  const contact = await createContactRow(req.apiUser!.userId, vcardData);
   res.status(201).json(contactView(contact));
 });
 
@@ -251,10 +249,7 @@ contactsRouter.put('/:id', async (req: Request, res: Response) => {
   }
 
   const vcardData = applyContactCard(contact.vcardData, card);
-  const updated = await prisma.contact.update({
-    where: { id: contact.id },
-    data: { vcardData, ...contactRowData(contactColumnsFromVcard(vcardData)) },
-  });
+  const updated = await updateContactRow(contact.id, vcardData);
   res.json(contactView(updated));
 });
 
@@ -263,7 +258,6 @@ contactsRouter.delete('/:id', async (req: Request, res: Response) => {
   const userId = req.apiUser!.userId;
   const contact = await findOwnContact(userId, String(req.params['id']));
   if (!contact) { res.status(404).json({ error: 'Contact not found' }); return; }
-  await prisma.contact.delete({ where: { id: contact.id } });
-  await detachCardFromGroups(userId, contact.uid || vcardUidKey(contact.vcardData));
+  await deleteContactRow(userId, contact);
   res.json({ ok: true });
 });

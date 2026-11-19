@@ -1,6 +1,5 @@
 /**
- * The PIM classes of ActiveSync (w3): Calendar, Tasks, Notes — Contacts plugs in as one
- * more module. A class module owns everything class-specific (its folders, its items,
+ * The PIM classes of ActiveSync (w3): Calendar, Tasks, Notes and Contacts. A class module owns everything class-specific (its folders, its items,
  * the WBXML codec, the writers); the generic layer (pim/sync.ts, pim/state.ts and the
  * FolderSync / Ping / GetItemEstimate / MoveItems / ItemOperations hooks) only talks to
  * this interface.
@@ -13,13 +12,13 @@ import type { WbxmlElement } from '../wbxml.js';
 import type { EasFeature, EasVersion } from '../protocol-version.js';
 import type { BodyPreference } from '../commands/body.js';
 
-export type PimClassName = 'Calendar' | 'Tasks' | 'Notes';
+export type PimClassName = 'Calendar' | 'Tasks' | 'Notes' | 'Contacts';
 
 /** A FolderSync entry of a class (ParentId is always the root, '0'). */
 export interface PimFolder {
   serverId: string;
   displayName: string;
-  /** [MS-ASCMD] FolderSync Type: 7 tasks, 8 calendar, 10 notes, 13 user calendar. */
+  /** [MS-ASCMD] FolderSync Type: 7 tasks, 8 calendar, 9 contacts, 10 notes, 13 user calendar. */
   type: string;
 }
 
@@ -27,7 +26,7 @@ export interface PimFolder {
 export interface PimCollection {
   id: string;
   userId: string;
-  /** Class-specific key: the calendar id; the user id for tasks and notes. */
+  /** Class-specific key: the calendar id; the user id for tasks, notes and contacts. */
   key: string;
 }
 

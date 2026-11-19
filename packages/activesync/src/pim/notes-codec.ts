@@ -4,11 +4,10 @@
  * categories (9.5, notes:Categories — the same names the webmail sets, normalised and capped
  * like the REST API does). The note colour stays untouched by device changes.
  */
-import { CONTACT_LIMITS, normalizeCategories } from '@coremail/storage/contact-card';
 import { pel, CP, type WbxmlElement } from '../wbxml.js';
 import { buildTextBody } from '../commands/body.js';
 import { formatEasDate } from './dates.js';
-import { changedBody, clears, itemData } from './codec.js';
+import { changedBody, clears, deviceCategories, itemData } from './codec.js';
 import type { RenderContext, WriteContext } from './types.js';
 
 const N = CP.Notes;
@@ -29,14 +28,6 @@ export function renderNote(n: NoteRow, ctx: RenderContext): WbxmlElement[] {
 }
 
 export interface NoteColumns { subject?: string; body?: string; categories?: string[] }
-
-/** The device's category names as the REST API would store them (trimmed, unique, capped). */
-function deviceCategories(list: WbxmlElement): string[] {
-  const names = (list.children ?? [])
-    .filter((c): c is WbxmlElement => typeof c !== 'string' && c.name === 'Category')
-    .map((c) => (c.text ?? '').trim().slice(0, CONTACT_LIMITS.category));
-  return normalizeCategories(names).slice(0, CONTACT_LIMITS.categories);
-}
 
 /** Columns of a client Add (`stored` null) or Change (absent elements cleared unless ghosted). */
 export function noteChange(appData: WbxmlElement, stored: Pick<NoteRow, 'body'> | null, ctx: WriteContext): NoteColumns {
