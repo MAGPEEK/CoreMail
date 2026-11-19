@@ -11,6 +11,7 @@ import { Loader2, Network } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
 import { WriteGuard } from './Can.js';
+import { useReportDirty } from './EditPanel.js';
 import { useT } from '../i18n/useT.js';
 import type { TranslationKey } from '../i18n/translations.js';
 import type { AdminArea } from '../lib/adminAreas.js';
@@ -56,13 +57,15 @@ export function ProtocolAccessEditor({ path, area }: {
     onError: (e) => toast.error(`${t('proto_save_error')}: ${errorMessage(e)}`),
   });
 
+  const dirty = view !== undefined && draft !== null && Object.keys(changedSettings(view.settings, draft)).length > 0;
+  useReportDirty(dirty);
+
   if (isLoading) {
     return <div className="flex items-center gap-2 text-xs text-fg-subtle"><Loader2 size={14} className="animate-spin" /> {t('proto_title')}</div>;
   }
   if (isError || !view || !draft) return <p className="text-xs text-danger-fg">{t('proto_load_error')}</p>;
 
   const patch = changedSettings(view.settings, draft);
-  const dirty = Object.keys(patch).length > 0;
   const options = settingsForLevel(view.level);
   const state = (on: boolean) => (on ? t('proto_state_on') : t('proto_state_off'));
   /** "aus (Domain)", "an (serverweit)" — the effective value and the level that decides it. */

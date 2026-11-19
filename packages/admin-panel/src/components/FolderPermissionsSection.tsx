@@ -1,17 +1,20 @@
 /**
- * w3: "Ordnerberechtigungen" of a user mailbox or Shared Mailbox. Lists every
- * folder with its grantees and roles; "Bearbeiten" opens the folder's editor
- * (same model as the webmail dialog: lib/folderPermissions.ts). Saving replaces
+ * w3: "Ordnerberechtigungen" of a user mailbox or Shared Mailbox. Lists only the
+ * folders with explicit grants (a mailbox can have hundreds of folders); "Ordner
+ * freigeben…" finds any other folder by search. "Bearbeiten" opens the folder's
+ * editor (same model as the webmail dialog: lib/folderPermissions.ts). Saving replaces
  * the folder's list (PUT, audited). Admin mailboxes are ORGANIZATION_MANAGEMENT-only
  * — the server answers 403 FORBIDDEN, whose text is shown.
  */
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { FolderLock, Loader2, Trash2, UserPlus } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
 import { WriteGuard } from './Can.js';
+import { FolderPicker } from './FolderPicker.js';
 import { errorMessage } from '../lib/errors.js';
+import { folderChoices, foldersWithGrants } from '../lib/folderPicker.js';
 import {
   READ_OPTIONS, WRITE_OPTIONS, DELETE_OPTIONS, OTHER_OPTIONS,
   addGrantee, buildPermissionsBody, folderDisplayName, formFromRights, grantSummary, granteeLabel, hasGrantee,
@@ -37,6 +40,9 @@ export function FolderPermissionsSection({ basePath, ownerUserId }: {
     queryFn: () => api.get<FolderPermissionsOverview[]>(`${basePath}/folder-permissions`),
   });
   const [editing, setEditing] = useState<string | null>(null);
+  const [picking, setPicking] = useState(false);
+  const choices = useMemo(() => folderChoices(folders ?? []), [folders]);
+  const granted = useMemo(() => foldersWithGrants(folders ?? []), [folders]);
   const nameOf = (id: string): string | undefined => {
     const f = folders?.find((x) => x.id === id);
     return f ? folderDisplayName(f.name) : undefined;
@@ -53,7 +59,8 @@ export function FolderPermissionsSection({ basePath, ownerUserId }: {
       </p>
       {isLoading && <p className="flex items-center gap-2 text-xs text-fg-subtle" role="status"><Loader2 size={12} className="animate-spin" aria-hidden="true" /> Lade Ordner…</p>}
       {isError && <p className="text-xs text-danger-fg" role="alert">Ordnerberechtigungen konnten nicht geladen werden.</p>}
-      {folders && (
+      {folders && granted.length === 0 && <p className="text-xs text-fg-muted">Keine Ordnerfreigaben</p>}
+      {folders && granted.length > 0 && (
         <div className="border border-line rounded-lg overflow-hidden">
           <table className="w-full text-xs">
             <thead>
@@ -64,7 +71,7 @@ export function FolderPermissionsSection({ basePath, ownerUserId }: {
               </tr>
             </thead>
             <tbody className="divide-y divide-line">
-              {folders.map((f) => (
+              {granted.map((f) => (
                 <tr key={f.id} className={editing === f.id ? 'bg-accent/10' : ''}>
                   <th scope="row" className="px-3 py-1.5 text-left font-normal text-fg-muted">{folderDisplayName(f.name)}</th>
                   <td className="px-3 py-1.5 text-fg-muted">{grantSummary(f.entries)}</td>
@@ -81,6 +88,18 @@ export function FolderPermissionsSection({ basePath, ownerUserId }: {
             </tbody>
           </table>
         </div>
+      )}
+      {folders && !picking && (
+        <WriteGuard area="recipients">
+          <button type="button" onClick={() => setPicking(true)} className="btn-secondary">Ordner freigeben…</button>
+        </WriteGuard>
+      )}
+      {picking && (
+        <FolderPicker
+          choices={choices}
+          onPick={(folderId) => { setPicking(false); setEditing(folderId); }}
+          onCancel={() => setPicking(false)}
+        />
       )}
       {editing && (
         <FolderPermissionsEditor

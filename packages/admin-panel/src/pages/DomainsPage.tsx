@@ -9,6 +9,7 @@ import { Toggle } from '../components/Toggle.js';
 import { copyToClipboard } from '../utils/clipboard.js';
 import { useT } from '../i18n/useT.js';
 import { Can } from '../components/Can.js';
+import { EditPanel, ReportDirty, type EditPanelTab } from '../components/EditPanel.js';
 import { ProtocolAccessEditor } from '../components/ProtocolAccessEditor.js';
 import { WebmailPolicyEditor } from '../components/WebmailPolicyEditor.js';
 import { DataTable, type Column } from '../components/DataTable.js';
@@ -394,21 +395,12 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
     }
   };
 
-  const titleId = useId();
-  return (
-    <Modal
-      onClose={onClose}
-      labelledBy={titleId}
-
-      closeOnBackdrop={false}
-      overlayClassName="fixed inset-0 bg-scrim/40 flex items-center justify-center z-50 p-4"
-      className={`bg-surface rounded-lg shadow-2xl w-full ${dnsCheck ? 'max-w-2xl' : 'max-w-lg'} p-6 max-h-[90vh] overflow-y-auto transition-all`}
-    >
-        <div className="flex items-center justify-between mb-5">
-          <h2 id={titleId} className="text-base font-semibold text-fg">{t('domain_edit_title')}</h2>
-          <button type="button" onClick={onClose} aria-label={t('action_close')} className="p-1 text-fg-subtle hover:text-fg-muted rounded"><X size={16} /></button>
-        </div>
-
+  const tabs: EditPanelTab[] = [
+    {
+      id: 'general', label: t('mbox_tab_general'),
+      content: (
+        <>
+          <ReportDirty dirty={name !== domain.name || selector !== domain.dkimSelector} />
         <div className="space-y-3">
           <div>
             <label className="block text-xs font-medium text-fg-muted mb-1">{t('domain_edit_name_label')}</label>
@@ -534,16 +526,6 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
               </div>
             )}
           </div>
-
-          {/* ── 9.4: protocol access (domain level; write = servers area) ───── */}
-          <div className="pt-3 border-t border-line">
-            <ProtocolAccessEditor path={`/admin/protocol-access/domains/${domain.id}`} area="servers" />
-          </div>
-
-          {/* ── 9.4: webmail policies (domain level; write = servers area) ──── */}
-          <div className="pt-3 border-t border-line">
-            <WebmailPolicyEditor path={`/admin/webmail-policies/domains/${domain.id}`} area="servers" />
-          </div>
         </div>
 
         <div className="flex items-center justify-between mt-5">
@@ -571,8 +553,16 @@ function EditDomainModal({ domain, onClose }: { domain: Domain; onClose: () => v
             </button>
           </div>
         </div>
-    </Modal>
-  );
+        </>
+      ),
+    },
+    // 9.4: protocol access (domain level; write = servers area)
+    { id: 'protocols', label: t('mbox_tab_protocols'), content: <ProtocolAccessEditor path={`/admin/protocol-access/domains/${domain.id}`} area="servers" /> },
+    // 9.4: webmail policies (domain level; write = servers area)
+    { id: 'webmail', label: t('mbox_tab_webmail'), content: <WebmailPolicyEditor path={`/admin/webmail-policies/domains/${domain.id}`} area="servers" /> },
+  ];
+
+  return <EditPanel kind="domain" title={t('domain_edit_title')} subtitle={domain.name} tabs={tabs} onClose={onClose} />;
 }
 
 // ── Main component ────────────────────────────────────────────────────────────

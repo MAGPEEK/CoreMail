@@ -6,6 +6,7 @@ import { Inbox, Plus, Trash2, Pencil, UserPlus, X, Loader2, Shield, RefreshCw, H
 import { api } from '../api/client.js';
 import { MailboxAliasesSection } from '../components/MailboxAliasesSection.js';
 import { MailFlowEditor } from '../components/MailFlowEditor.js';
+import { EditPanel, ReportDirty, type EditPanelTab } from '../components/EditPanel.js';
 import { FolderPermissionsSection } from '../components/FolderPermissionsSection.js';
 import { useT } from '../i18n/useT.js';
 import type { TranslationKey } from '../i18n/translations.js';
@@ -201,41 +202,35 @@ export function SharedMailboxesPage() {
         )}
       />
 
-      {createOpen && <SharedMailboxModal onClose={() => setCreateOpen(false)} />}
-      {editItem   && <SharedMailboxModal key={editItem.id} item={editItem} onClose={() => setEditId(null)} />}
+      {createOpen && <SharedMailboxCreateModal onClose={() => setCreateOpen(false)} />}
+      {editItem   && <SharedMailboxEditPanel key={editItem.id} item={editItem} onClose={() => setEditId(null)} />}
       {permItem   && <PermissionsModal key={permItem.id} item={permItem} onClose={() => setPermId(null)} />}
     </div>
   );
 }
 
-// ── Create/Edit Modal ─────────────────────────────────────────────────────────
-function SharedMailboxModal({ item, onClose }: { item?: SharedMailbox; onClose: () => void }) {
+// ── Create modal ──────────────────────────────────────────────────────────────
+function SharedMailboxCreateModal({ onClose }: { onClose: () => void }) {
   const t = useT();
   const qc = useQueryClient();
-  const [name, setName]         = useState(item?.displayName ?? '');
-  const [localPart, setLocalPart] = useState(item?.email?.split('@')[0] ?? '');
-  const [domainId, setDomainId] = useState(item?.domainId ?? '');
-  const [active, setActive]     = useState(item?.active ?? true);
-  const [quotaBytes, setQuotaBytes] = useState<number>(item?.quotaBytes ?? 5 * 1024 ** 3);
-  const [warningGb, setWarningGb]   = useState(bytesToGbInput(item?.quotaWarningBytes));
-  const [sendGb, setSendGb]         = useState(bytesToGbInput(item?.quotaProhibitSendBytes));
-  const [copySendAs, setCopySendAs]         = useState(item?.sentCopySendAs ?? false);
-  const [copyOnBehalf, setCopyOnBehalf]     = useState(item?.sentCopySendOnBehalf ?? false);
-  const levelsValid = gbInputValid(warningGb) && gbInputValid(sendGb);
+  const [name, setName]         = useState('');
+  const [localPart, setLocalPart] = useState('');
+  const [domainId, setDomainId] = useState('');
+  const [quotaBytes, setQuotaBytes] = useState<number>(5 * 1024 ** 3);
 
   const { data: allDomains = [] } = useQuery<Domain[]>({
     queryKey: ['admin-domains-list'],
     queryFn: () => api.get<{ domains: Domain[] }>('/admin/domains?limit=200').then(r => r.domains),
   });
   // New mailboxes only on active domains (same rule as user mailboxes)
-  const domains = item ? allDomains : allDomains.filter((d) => d.active !== false);
+  const domains = allDomains.filter((d) => d.active !== false);
 
   // Set default domain once the list is available
   useEffect(() => {
-    if (!item && !domainId && domains.length > 0) {
+    if (!domainId && domains.length > 0) {
       setDomainId(domains[0]!.id);
     }
-  }, [domains, item, domainId]);
+  }, [domains, domainId]);
 
   const selectedDomain = domains.find(d => d.id === domainId);
   // simplified local-part rule: a-z, 0-9, dot, dash, underscore, plus
@@ -244,17 +239,10 @@ function SharedMailboxModal({ item, onClose }: { item?: SharedMailbox; onClose: 
   const fullEmail        = localPartTrimmed && selectedDomain ? `${localPartTrimmed}@${selectedDomain.name}` : '';
 
   const mutation = useMutation({
-    mutationFn: () => item
-      ? api.put(`/admin/shared-mailboxes/${item.id}`, {
-          displayName: name.trim(), active, quotaBytes,
-          quotaWarningBytes: gbInputToBytes(warningGb),
-          quotaProhibitSendBytes: gbInputToBytes(sendGb),
-          sentCopySendAs: copySendAs, sentCopySendOnBehalf: copyOnBehalf,
-        })
-      : api.post('/admin/shared-mailboxes', { email: fullEmail, displayName: name.trim(), domainId, quotaBytes }),
+    mutationFn: () => api.post('/admin/shared-mailboxes', { email: fullEmail, displayName: name.trim(), domainId, quotaBytes }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['admin-shared-mailboxes'] });
-      toast.success(item ? t('shared_saved') : t('shared_created'));
+      toast.success(t('shared_created'));
       onClose();
     },
     onError: (e: Error) => toast.error(e.message || t('shared_save_error')),
@@ -268,10 +256,10 @@ function SharedMailboxModal({ item, onClose }: { item?: SharedMailbox; onClose: 
 
       closeOnBackdrop={false}
       overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-scrim/40 p-4"
-      className="bg-surface rounded-xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto"
+      className="bg-surface rounded-xl shadow-2xl w-full max-w-md"
     >
         <div className="flex items-center justify-between px-5 py-4 border-b border-line">
-          <h2 id={titleId} className="font-semibold text-fg">{item ? t('shared_edit_title') : t('shared_create_title')}</h2>
+          <h2 id={titleId} className="font-semibold text-fg">{t('shared_create_title')}</h2>
           <button type="button" onClick={onClose} aria-label={t('action_close')} className="text-fg-subtle hover:text-fg-muted"><X size={18} /></button>
         </div>
         <div className="p-5 space-y-4">
@@ -279,124 +267,184 @@ function SharedMailboxModal({ item, onClose }: { item?: SharedMailbox; onClose: 
             <label className="field-label" htmlFor="sm-name">{t('shared_displayname')}</label>
             <input id="sm-name" value={name} onChange={e => setName(e.target.value)} className="input" placeholder={t('shared_displayname_ph')} />
           </div>
-          {!item && (
-            <div>
-              <label className="field-label" htmlFor="sm-local">{t('shared_email')}</label>
-              <div className="flex items-stretch gap-0">
-                <input
-                  id="sm-local"
-                  value={localPart}
-                  onChange={e => setLocalPart(e.target.value)}
-                  className="input rounded-r-none border-r-0 flex-1 min-w-0"
-                  placeholder="support"
-                  autoComplete="off"
-                />
-                <span className="inline-flex items-center px-2 bg-surface-2 border border-line-strong text-fg-subtle text-sm select-none">@</span>
-                <select
-                  value={domainId}
-                  onChange={e => setDomainId(e.target.value)}
-                  aria-label={t('mbox_col_domain')}
-                  className="input rounded-l-none border-l-0 w-44 flex-shrink-0"
-                >
-                  {domains.length === 0 ? (
-                    <option value="">{t('shared_no_domain')}</option>
-                  ) : (
-                    domains.map(d => <option key={d.id} value={d.id}>{d.name}</option>)
-                  )}
-                </select>
-              </div>
-              {fullEmail && (
-                <p className="mt-1 text-xs text-fg-subtle font-mono">{fullEmail}</p>
-              )}
-              {localPart && !localPartValid && (
-                <p className="mt-1 text-xs text-danger-fg">{t('shared_localpart_invalid')}</p>
-              )}
+          <div>
+            <label className="field-label" htmlFor="sm-local">{t('shared_email')}</label>
+            <div className="flex items-stretch gap-0">
+              <input
+                id="sm-local"
+                value={localPart}
+                onChange={e => setLocalPart(e.target.value)}
+                className="input rounded-r-none border-r-0 flex-1 min-w-0"
+                placeholder="support"
+                autoComplete="off"
+              />
+              <span className="inline-flex items-center px-2 bg-surface-2 border border-line-strong text-fg-subtle text-sm select-none">@</span>
+              <select
+                value={domainId}
+                onChange={e => setDomainId(e.target.value)}
+                aria-label={t('mbox_col_domain')}
+                className="input rounded-l-none border-l-0 w-44 flex-shrink-0"
+              >
+                {domains.length === 0 ? (
+                  <option value="">{t('shared_no_domain')}</option>
+                ) : (
+                  domains.map(d => <option key={d.id} value={d.id}>{d.name}</option>)
+                )}
+              </select>
             </div>
-          )}
+            {fullEmail && (
+              <p className="mt-1 text-xs text-fg-subtle font-mono">{fullEmail}</p>
+            )}
+            {localPart && !localPartValid && (
+              <p className="mt-1 text-xs text-danger-fg">{t('shared_localpart_invalid')}</p>
+            )}
+          </div>
           <div>
             <label className="field-label flex items-center gap-1" htmlFor="sm-quota"><HardDrive size={12} aria-hidden="true" /> {t('shared_quota')}</label>
             <select id="sm-quota" className="input w-full" value={quotaBytes} onChange={(e) => setQuotaBytes(parseInt(e.target.value, 10))}>
-              {quotaOptions(item?.quotaBytes).map((v) => (
+              {quotaOptions(undefined).map((v) => (
                 <option key={v} value={v}>{quotaLabel(v) ?? t('mbox_quota_unlimited')}</option>
               ))}
             </select>
           </div>
-          {item && (
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="field-label" htmlFor="sm-quota-warning">{t('mbox_quota_warning')}</label>
-                <input id="sm-quota-warning" className="input w-full" inputMode="decimal" value={warningGb}
-                  placeholder={t('mbox_quota_default_hint')} onChange={(e) => setWarningGb(e.target.value)} />
-              </div>
-              <div>
-                <label className="field-label" htmlFor="sm-quota-send">{t('mbox_quota_prohibit_send')}</label>
-                <input id="sm-quota-send" className="input w-full" inputMode="decimal" value={sendGb}
-                  placeholder={t('mbox_quota_default_hint')} onChange={(e) => setSendGb(e.target.value)} />
-              </div>
-              {!levelsValid && <p className="col-span-2 text-xs text-danger-fg" role="alert">{t('mbox_quota_invalid')}</p>}
-            </div>
-          )}
-          {item && (
-            <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
-              <input type="checkbox" checked={active} onChange={e => setActive(e.target.checked)} className="rounded" />
-              {t('shared_active')}
-            </label>
-          )}
-          {/* 9.4: sent items of send as / send on behalf */}
-          {item && (
-            <fieldset className="space-y-1.5">
-              <legend className="field-label">{t('shared_sent_copy_title')}</legend>
-              <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
-                <input type="checkbox" checked={copySendAs} onChange={e => setCopySendAs(e.target.checked)} className="rounded" />
-                {t('shared_sent_copy_send_as')}
-              </label>
-              <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
-                <input type="checkbox" checked={copyOnBehalf} onChange={e => setCopyOnBehalf(e.target.checked)} className="rounded" />
-                {t('shared_sent_copy_on_behalf')}
-              </label>
-            </fieldset>
-          )}
           <div className="flex justify-end gap-2 pt-2">
             <button onClick={onClose} className="btn-secondary">{t('action_cancel')}</button>
             <button onClick={() => mutation.mutate()}
-              disabled={
-                mutation.isPending ||
-                !name.trim() ||
-                !levelsValid ||
-                (!item && (!localPartValid || !domainId))
-              }
+              disabled={mutation.isPending || !name.trim() || !localPartValid || !domainId}
               className="btn-primary flex items-center gap-1.5">
               {mutation.isPending && <Loader2 size={14} className="animate-spin" />}
-              {item ? t('action_save') : t('mbox_create_btn')}
+              {t('mbox_create_btn')}
             </button>
           </div>
-
-          {/* Aliases — edit mode only (mailbox must already exist) */}
-          {item && (
-            <div className="border-t border-line pt-4 mt-2">
-              <MailboxAliasesSection
-                mailboxType="shared"
-                mailboxId={item.id}
-                defaultDomainId={item.domainId}
-                allDomains={allDomains.map((d) => ({ id: d.id, name: d.name }))}
-              />
-            </div>
-          )}
-          {/* 9.4: per-mailbox mail flow — edit mode only */}
-          {item && (
-            <div className="border-t border-line pt-4 mt-2">
-              <MailFlowEditor path={`/admin/shared-mailboxes/${item.id}/mail-flow`} kind="shared" />
-            </div>
-          )}
-          {/* w3: folder permissions — edit mode only */}
-          {item && (
-            <div className="border-t border-line pt-4 mt-2">
-              <FolderPermissionsSection basePath={`/admin/shared-mailboxes/${item.id}`} />
-            </div>
-          )}
         </div>
     </Modal>
   );
+}
+
+// ── Edit panel ────────────────────────────────────────────────────────────────
+function SharedMailboxEditPanel({ item, onClose }: { item: SharedMailbox; onClose: () => void }) {
+  const t = useT();
+  const qc = useQueryClient();
+  const [name, setName]         = useState(item.displayName);
+  const [active, setActive]     = useState(item.active);
+  const [quotaBytes, setQuotaBytes] = useState<number>(item.quotaBytes);
+  const [warningGb, setWarningGb]   = useState(bytesToGbInput(item.quotaWarningBytes));
+  const [sendGb, setSendGb]         = useState(bytesToGbInput(item.quotaProhibitSendBytes));
+  const [copySendAs, setCopySendAs]         = useState(item.sentCopySendAs ?? false);
+  const [copyOnBehalf, setCopyOnBehalf]     = useState(item.sentCopySendOnBehalf ?? false);
+  const levelsValid = gbInputValid(warningGb) && gbInputValid(sendGb);
+
+  const { data: allDomains = [] } = useQuery<Domain[]>({
+    queryKey: ['admin-domains-list'],
+    queryFn: () => api.get<{ domains: Domain[] }>('/admin/domains?limit=200').then(r => r.domains),
+  });
+
+  const generalDirty = name !== item.displayName || active !== item.active
+    || copySendAs !== (item.sentCopySendAs ?? false) || copyOnBehalf !== (item.sentCopySendOnBehalf ?? false);
+  const limitsDirty = quotaBytes !== item.quotaBytes
+    || warningGb !== bytesToGbInput(item.quotaWarningBytes) || sendGb !== bytesToGbInput(item.quotaProhibitSendBytes);
+
+  const mutation = useMutation({
+    mutationFn: () => api.put(`/admin/shared-mailboxes/${item.id}`, {
+      displayName: name.trim(), active, quotaBytes,
+      quotaWarningBytes: gbInputToBytes(warningGb),
+      quotaProhibitSendBytes: gbInputToBytes(sendGb),
+      sentCopySendAs: copySendAs, sentCopySendOnBehalf: copyOnBehalf,
+    }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['admin-shared-mailboxes'] });
+      toast.success(t('shared_saved'));
+      onClose();
+    },
+    onError: (e: Error) => toast.error(e.message || t('shared_save_error')),
+  });
+
+  const save = (
+    <div className="flex justify-end pt-1">
+      <button onClick={() => mutation.mutate()}
+        disabled={mutation.isPending || !name.trim() || !levelsValid}
+        className="btn-primary flex items-center gap-1.5">
+        {mutation.isPending && <Loader2 size={14} className="animate-spin" />}
+        {t('action_save')}
+      </button>
+    </div>
+  );
+
+  const tabs: EditPanelTab[] = [
+    {
+      id: 'general', label: t('mbox_tab_general'),
+      content: (
+        <>
+          <ReportDirty dirty={generalDirty} />
+          <div>
+            <label className="field-label" htmlFor="sm-name">{t('shared_displayname')}</label>
+            <input id="sm-name" value={name} onChange={e => setName(e.target.value)} className="input" placeholder={t('shared_displayname_ph')} />
+          </div>
+          <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+            <input type="checkbox" checked={active} onChange={e => setActive(e.target.checked)} className="rounded" />
+            {t('shared_active')}
+          </label>
+          {/* 9.4: sent items of send as / send on behalf */}
+          <fieldset className="space-y-1.5">
+            <legend className="field-label">{t('shared_sent_copy_title')}</legend>
+            <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+              <input type="checkbox" checked={copySendAs} onChange={e => setCopySendAs(e.target.checked)} className="rounded" />
+              {t('shared_sent_copy_send_as')}
+            </label>
+            <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+              <input type="checkbox" checked={copyOnBehalf} onChange={e => setCopyOnBehalf(e.target.checked)} className="rounded" />
+              {t('shared_sent_copy_on_behalf')}
+            </label>
+          </fieldset>
+          {save}
+          <div className="border-t border-line pt-4">
+            <MailboxAliasesSection
+              mailboxType="shared"
+              mailboxId={item.id}
+              defaultDomainId={item.domainId}
+              allDomains={allDomains.map((d) => ({ id: d.id, name: d.name }))}
+            />
+          </div>
+        </>
+      ),
+    },
+    {
+      id: 'limits', label: t('mbox_tab_limits'),
+      content: (
+        <>
+          <ReportDirty dirty={limitsDirty} />
+          <div>
+            <label className="field-label flex items-center gap-1" htmlFor="sm-quota"><HardDrive size={12} aria-hidden="true" /> {t('shared_quota')}</label>
+            <select id="sm-quota" className="input w-full" value={quotaBytes} onChange={(e) => setQuotaBytes(parseInt(e.target.value, 10))}>
+              {quotaOptions(item.quotaBytes).map((v) => (
+                <option key={v} value={v}>{quotaLabel(v) ?? t('mbox_quota_unlimited')}</option>
+              ))}
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="field-label" htmlFor="sm-quota-warning">{t('mbox_quota_warning')}</label>
+              <input id="sm-quota-warning" className="input w-full" inputMode="decimal" value={warningGb}
+                placeholder={t('mbox_quota_default_hint')} onChange={(e) => setWarningGb(e.target.value)} />
+            </div>
+            <div>
+              <label className="field-label" htmlFor="sm-quota-send">{t('mbox_quota_prohibit_send')}</label>
+              <input id="sm-quota-send" className="input w-full" inputMode="decimal" value={sendGb}
+                placeholder={t('mbox_quota_default_hint')} onChange={(e) => setSendGb(e.target.value)} />
+            </div>
+            {!levelsValid && <p className="col-span-2 text-xs text-danger-fg" role="alert">{t('mbox_quota_invalid')}</p>}
+          </div>
+          {save}
+        </>
+      ),
+    },
+    // 9.4: per-mailbox mail flow
+    { id: 'flow', label: t('mbox_tab_flow'), content: <MailFlowEditor path={`/admin/shared-mailboxes/${item.id}/mail-flow`} kind="shared" /> },
+    // w3: folder permissions
+    { id: 'folders', label: t('mbox_tab_folders'), content: <FolderPermissionsSection basePath={`/admin/shared-mailboxes/${item.id}`} /> },
+  ];
+
+  return <EditPanel kind="shared-mailbox" title={item.displayName} subtitle={item.email} tabs={tabs} onClose={onClose} />;
 }
 
 // ── Permissions modal — multiple permissions per user ────

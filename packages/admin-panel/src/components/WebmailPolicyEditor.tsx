@@ -11,6 +11,7 @@ import { Loader2, LayoutGrid } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
 import { WriteGuard } from './Can.js';
+import { useReportDirty } from './EditPanel.js';
 import { useT } from '../i18n/useT.js';
 import type { TranslationKey } from '../i18n/translations.js';
 import type { AdminArea } from '../lib/adminAreas.js';
@@ -74,13 +75,15 @@ export function WebmailPolicyEditor({ path, area }: {
     onError: (e) => toast.error(`${t('wp_save_error')}: ${errorMessage(e)}`),
   });
 
+  const result = view && draft ? patchFromDraft(view, draft) : null;
+  const dirty = result !== null && (!result.ok || !isEmptyPatch(result.patch));
+  useReportDirty(dirty);
+
   if (isLoading) {
     return <div className="flex items-center gap-2 text-xs text-fg-subtle"><Loader2 size={14} className="animate-spin" /> {t('wp_title')}</div>;
   }
-  if (isError || !view || !draft) return <p className="text-xs text-danger-fg">{t('wp_load_error')}</p>;
+  if (isError || !view || !draft || !result) return <p className="text-xs text-danger-fg">{t('wp_load_error')}</p>;
 
-  const result = patchFromDraft(view, draft);
-  const dirty = !result.ok || !isEmptyPatch(result.patch);
   const global = view.level === 'global';
   const state = (on: boolean) => (on ? t('proto_state_on') : t('proto_state_off'));
   const reason = (s: ValueSource) => t(SOURCE_KEYS[s]);

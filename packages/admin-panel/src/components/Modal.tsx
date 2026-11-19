@@ -6,6 +6,8 @@ const openStack: symbol[] = [];
 const FOCUSABLE =
   'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
+const DIALOG_SAFE_PANEL = 'max-h-[calc(100dvh-2rem)] overflow-y-auto';
+
 interface ModalProps {
   onClose: () => void;
   /** Accessible name of the dialog (aria-label) — or use labelledBy */
@@ -19,6 +21,11 @@ interface ModalProps {
   overlayClassName?: string;
   /** Close when clicking the backdrop (default true) */
   closeOnBackdrop?: boolean;
+  /**
+   * 'dialog' (default): the panel never grows beyond the viewport, tall content scrolls inside it.
+   * 'drawer': the caller sizes the panel (full-height side panel with its own scrolling body).
+   */
+  layout?: 'dialog' | 'drawer';
 }
 
 /**
@@ -31,6 +38,7 @@ export function Modal({
   className = 'bg-surface rounded-lg shadow-2xl',
   overlayClassName = 'fixed inset-0 z-50 flex items-center justify-center bg-scrim/50 p-4',
   closeOnBackdrop = true,
+  layout = 'dialog',
 }: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
@@ -74,7 +82,7 @@ export function Modal({
 
   return (
     <div
-      className={overlayClassName}
+      className={`${overlayClassName} ${layout === 'dialog' ? 'overflow-y-auto' : ''}`}
       onMouseDown={(e) => { if (closeOnBackdrop && e.target === e.currentTarget) onClose(); }}
     >
       <div
@@ -84,7 +92,7 @@ export function Modal({
         {...(label ? { 'aria-label': label } : {})}
         {...(labelledBy ? { 'aria-labelledby': labelledBy } : {})}
         tabIndex={-1}
-        className={`${className} outline-none`}
+        className={`${className} ${layout === 'dialog' ? DIALOG_SAFE_PANEL : ''} outline-none`}
       >
         {children}
       </div>
