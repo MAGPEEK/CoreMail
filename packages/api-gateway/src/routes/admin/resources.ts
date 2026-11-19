@@ -8,9 +8,13 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { requireArea } from '../../middleware/auth.js';
+import { allowAddress, allowDomain, scopeOf, scopeParam, targetInScope } from '../../middleware/admin-scope.js';
+import { domainIdWhere } from '../../lib/admin-scope.js';
 
 export const adminResourcesRouter: RouterType = Router();
 adminResourcesRouter.use(requireArea('recipients'));
+// 9.5: a resource outside the admin's management scope is "not found" on every /:id route.
+adminResourcesRouter.param('id', scopeParam('resource'));
 
 // ──────────────────────────────────────────────────────────
 // Resource Mailboxes CRUD
@@ -20,7 +24,7 @@ adminResourcesRouter.use(requireArea('recipients'));
 adminResourcesRouter.get('/', async (req: Request, res: Response) => {
   const { type } = req.query as { type?: string };
   const resources = await prisma.resourceMailbox.findMany({
-    where: { ...(type ? { resourceType: type === 'ROOM' ? 'ROOM' : 'EQUIPMENT' } : {}) },
+    where: { ...domainIdWhere(scopeOf(req)), ...(type ? { resourceType: type === 'ROOM' ? 'ROOM' : 'EQUIPMENT' } : {}) },
     orderBy: { displayName: 'asc' },
   });
   res.json(resources);
@@ -65,6 +69,8 @@ adminResourcesRouter.post('/', async (req: Request, res: Response) => {
   const { email, displayName, resourceType, domainId, capacity, location, phone,
     autoAccept, autoDeclineConflict, allowRecurring, maxDurationMinutes,
     bookingWindowDays, requireApproval, delegateIds } = parsed.data;
+  // 9.5: a scoped admin creates resources only in its own domains (domain and address)
+  if (!allowDomain(req, res, domainId) || !allowAddress(req, res, email)) return;
 
   const existing = await prisma.resourceMailbox.findUnique({ where: { email } });
   if (existing) { res.status(409).json({ error: 'Email already in use' }); return; }
@@ -190,8 +196,9 @@ adminResourcesRouter.get('/:id/bookings', async (req: Request, res: Response) =>
 
 // DELETE /api/v1/admin/resources/:id/bookings/:bookingId
 adminResourcesRouter.delete('/:id/bookings/:bookingId', async (req: Request, res: Response) => {
-  const { bookingId } = req.params as { id: string; bookingId: string };
-  const booking = await prisma.resourceBooking.findUnique({ where: { id: bookingId } });
+  const { id, bookingId } = req.params as { id: string; bookingId: string };
+  // 9.5: the booking must belong to the resource of the path (whose scope was checked)
+  const booking = await prisma.resourceBooking.findFirst({ where: { id: bookingId, calendar: { resourceId: id } }, select: { id: true } });
   if (!booking) { res.status(404).json({ error: 'Booking not found' }); return; }
   await prisma.resourceBooking.delete({ where: { id: bookingId } });
   res.status(204).end();
@@ -222,7 +229,8 @@ adminResourcesRouter.get('/freebusy/query', async (req: Request, res: Response) 
     } } },
   });
 
-  if (!resource || !resource.active) {
+  // 9.5: a resource outside the admin's management scope is "not found"
+  if (!resource || !resource.active || !(await targetInScope(req, 'resource', resource.id))) {
     res.status(404).json({ error: 'Resource not found' });
     return;
   }

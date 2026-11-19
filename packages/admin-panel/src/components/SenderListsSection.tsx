@@ -8,7 +8,9 @@ import toast from 'react-hot-toast';
 import { api, downloadFile } from '../api/client.js';
 import { ApiError, errorMessage } from '../lib/errors.js';
 import { Toggle } from './Toggle.js';
+import { usePermissions } from '../hooks/usePermissions.js';
 import {
+  creatableScopes, effectiveScope,
   filterEntries, importErrorText, patternPlaceholder, LIST_TYPE_LABEL, SCOPE_LABEL, PATTERN_TYPE_LABEL,
   type ListScope, type ListType, type PatternType, type SenderListEntry,
 } from '../lib/senderLists.js';
@@ -24,7 +26,11 @@ export function SenderListsSection() {
   const [query, setQuery] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const [scope, setScope] = useState<ListScope>('GLOBAL');
+  const [chosenScope, setScope] = useState<ListScope>('GLOBAL');
+  // 9.5: no GLOBAL entries for an admin limited to domains
+  const { scoped } = usePermissions();
+  const scopeOptions = creatableScopes(scoped);
+  const scope = effectiveScope(chosenScope, scopeOptions);
   const [target, setTarget] = useState('');
   const [patternType, setPatternType] = useState<PatternType>('EXACT');
   const [pattern, setPattern] = useState('');
@@ -116,7 +122,7 @@ export function SenderListsSection() {
           <label className="text-xs text-fg-muted flex flex-col gap-1">
             Geltungsbereich
             <select value={scope} onChange={(e) => setScope(e.target.value as ListScope)} className={inputCls}>
-              {(['GLOBAL', 'DOMAIN', 'USER'] as const).map((s) => <option key={s} value={s}>{SCOPE_LABEL[s]}</option>)}
+              {scopeOptions.map((s) => <option key={s} value={s}>{SCOPE_LABEL[s]}</option>)}
             </select>
           </label>
           <label className="text-xs text-fg-muted flex flex-col gap-1">

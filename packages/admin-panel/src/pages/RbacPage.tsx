@@ -6,7 +6,7 @@ import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
 import { useT } from '../i18n/useT.js';
 import { usePermissions } from '../hooks/usePermissions.js';
-import { canAssignRoles } from '../lib/permissions.js';
+import { canAssignRoles, isScopableRole, isScoped, parseScope, scopeDomainIds, type AdminScope } from '../lib/permissions.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -23,7 +23,11 @@ interface AdminUser {
   role: UserRole;
   active: boolean;
   domainId: string;
+  /** 9.5: management scope (missing on older backends → organisation-wide) */
+  scope?: unknown;
 }
+
+interface DomainOption { id: string; name: string }
 
 // ─── Role Metadata (labels/descriptions via i18n role_label_* / role_desc_*) ──
 
@@ -102,6 +106,95 @@ function RoleSelector({ userId, currentRole }: { userId: string; currentRole: Us
   );
 }
 
+// ─── Management scope (9.5) ───────────────────────────────────────────────────
+
+function ScopeBadges({ scope }: { scope: AdminScope }) {
+  const t = useT();
+  if (!isScoped(scope)) return <span className="text-xs text-fg-subtle">{t('rbac_scope_org')}</span>;
+  return (
+    <span className="inline-flex flex-wrap justify-end gap-1">
+      {scope.domains.map((d) => (
+        <span key={d.id} className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-info-bg text-info-fg">{d.name}</span>
+      ))}
+    </span>
+  );
+}
+
+/**
+ * Domain checklist for one admin account (ORGANIZATION_MANAGEMENT only, the
+ * server enforces it): PUT /admin/organisation/role-assignments/:id/scope.
+ */
+function ScopeEditor({ user, scope, domains }: { user: AdminUser; scope: AdminScope; domains: DomainOption[] }) {
+  const t = useT();
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [picked, setPicked] = useState<string[]>([]);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  usePopoverDismiss(open, () => setOpen(false), triggerRef, panelRef);
+
+  const save = useMutation({
+    mutationFn: (domainIds: string[]) => api.put(`/admin/organisation/role-assignments/${user.id}/scope`, { domainIds }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['admin-rbac-users'] });
+      toast.success(t('rbac_scope_updated'));
+      setOpen(false);
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const toggleOpen = () => {
+    if (!open) setPicked(scopeDomainIds(scope));
+    setOpen((o) => !o);
+  };
+  const toggle = (id: string) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
+  const apply = () => {
+    if (!confirm(t('rbac_scope_confirm'))) return;
+    save.mutate(picked);
+  };
+
+  return (
+    <div className="relative inline-block">
+      <button ref={triggerRef} type="button" onClick={toggleOpen} disabled={save.isPending}
+        aria-haspopup="dialog" aria-expanded={open} aria-label={`${t('rbac_scope_edit_aria')} ${user.email}`}
+        className="px-2 py-1 rounded border border-line text-xs text-fg-muted hover:border-accent hover:bg-accent/5 transition-colors disabled:cursor-wait">
+        {t('rbac_scope_edit')}
+      </button>
+      {open && (
+        <div ref={panelRef} role="dialog" aria-label={`${t('rbac_scope_edit_aria')} ${user.email}`}
+          className="absolute right-0 top-full mt-1 w-72 bg-surface rounded-lg border border-line shadow-lg z-20 p-3 text-left">
+          <p className="text-xs text-fg-subtle mb-2">{t('rbac_scope_hint')}</p>
+          <div className="max-h-56 overflow-y-auto space-y-1 mb-3">
+            {domains.map((d) => (
+              <label key={d.id} className="flex items-center gap-2 text-sm text-fg cursor-pointer">
+                <input type="checkbox" checked={picked.includes(d.id)} onChange={() => toggle(d.id)} />
+                {d.name}
+              </label>
+            ))}
+          </div>
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={() => setOpen(false)} className="btn-secondary text-xs">{t('rbac_scope_cancel')}</button>
+            <button type="button" onClick={apply} disabled={save.isPending} className="btn-primary text-xs">{t('rbac_scope_save')}</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ScopeCell({ user, mayAssign, domains }: { user: AdminUser; mayAssign: boolean; domains: DomainOption[] }) {
+  const t = useT();
+  if (user.role === 'USER') return null;
+  const scope = parseScope(user.scope);
+  const editable = mayAssign && (isScopableRole(user.role) || isScoped(scope));
+  return (
+    <div className="flex items-center justify-end gap-2" {...(mayAssign && !editable ? { title: t('rbac_scope_not_scopable') } : {})}>
+      <ScopeBadges scope={scope} />
+      {editable && <ScopeEditor user={user} scope={scope} domains={domains} />}
+    </div>
+  );
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export function RbacPage() {
@@ -118,6 +211,12 @@ export function RbacPage() {
   const { data: users = [], isLoading, isError, error } = useQuery<AdminUser[]>({
     queryKey: ['admin-rbac-users'],
     queryFn: () => api.get<AdminUser[]>('/admin/organisation/role-assignments').then((r) => (Array.isArray(r) ? r : [])),
+  });
+  // 9.5: domains for the scope editor (only ORGANIZATION_MANAGEMENT assigns scopes)
+  const { data: domains = [] } = useQuery<DomainOption[]>({
+    queryKey: ['admin-rbac-domains'],
+    queryFn: () => api.get<{ domains: DomainOption[] }>('/admin/domains?limit=200').then((r) => r.domains ?? []),
+    enabled: mayAssign,
   });
 
   const q = search.trim().toLowerCase();
@@ -181,18 +280,19 @@ export function RbacPage() {
             <tr className="bg-surface-2 border-b border-line text-xs font-semibold text-fg-subtle uppercase tracking-wide">
               <th scope="col" className="text-left px-4 py-3">{t('rbac_col_user')}</th>
               <th scope="col" className="text-left px-4 py-3">{t('rbac_col_status')}</th>
+              <th scope="col" className="text-right px-4 py-3">{t('rbac_col_scope')}</th>
               <th scope="col" className="text-right px-4 py-3">{mayAssign ? t('rbac_col_change') : t('rbac_col_role')}</th>
             </tr>
           </thead>
           <tbody>
             {isLoading ? (
-              <tr><td colSpan={3} className="text-center py-12 text-fg-subtle">{t('rbac_loading')}</td></tr>
+              <tr><td colSpan={4} className="text-center py-12 text-fg-subtle">{t('rbac_loading')}</td></tr>
             ) : isError ? (
-              <tr><td colSpan={3} className="text-center py-12 text-danger-fg" role="alert">
+              <tr><td colSpan={4} className="text-center py-12 text-danger-fg" role="alert">
                 {t('rbac_load_error')}{error instanceof Error && error.message ? `: ${error.message}` : ''}
               </td></tr>
             ) : filtered.length === 0 ? (
-              <tr><td colSpan={3} className="text-center py-12 text-fg-subtle">{t('rbac_empty')}</td></tr>
+              <tr><td colSpan={4} className="text-center py-12 text-fg-subtle">{t('rbac_empty')}</td></tr>
             ) : filtered.map(u => (
               <tr key={u.id} className="border-b border-line hover:bg-surface-2">
                 <td className="px-4 py-3">
@@ -205,6 +305,9 @@ export function RbacPage() {
                   }`}>
                     {u.active ? t('status_active') : t('status_inactive')}
                   </span>
+                </td>
+                <td className="px-4 py-3 text-right">
+                  <ScopeCell user={u} mayAssign={mayAssign} domains={domains} />
                 </td>
                 <td className="px-4 py-3 text-right">
                   {mayAssign ? <RoleSelector userId={u.id} currentRole={u.role} /> : <RoleBadge role={u.role} />}

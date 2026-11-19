@@ -261,9 +261,9 @@ export async function apiFetch(path: string, init: RequestInit = {}, contentType
 
 /** Read-only page without a narrow action of its area (lib/permissions.ts blocksWrite). */
 function pageBlocksWrite(): boolean {
-  const { areas, actions } = useAccessStore.getState();
+  const { areas, actions, scope } = useAccessStore.getState();
   const path = window.location.pathname;
-  const access = pageAccessFor(areas, actions, { path, access: accessForPath(areas, path) });
+  const access = pageAccessFor(areas, actions, { path, access: accessForPath(areas, path) }, scope);
   return blocksWrite(areas, actions, { area: areaForPath(path), access });
 }
 

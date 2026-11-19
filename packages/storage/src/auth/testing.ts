@@ -199,6 +199,7 @@ export interface FakePrisma {
   webmailPolicy: FakeTable;
   trustedImageSender: FakeTable;
   contact: FakeTable;
+  adminScope: FakeTable;
   [k: string]: unknown;
 }
 
@@ -295,6 +296,8 @@ export function createFakePrisma(): FakePrisma {
   p.webmailPolicy = new FakeTable(webmailPolicyDefaults, ['id', 'domainId', 'userId']);
   p.trustedImageSender = new FakeTable(() => ({ createdAt: new Date() }));
   p.contact = new FakeTable(() => ({ email2: null }));
+  // 9.5: admin management scopes (api-gateway admin guards read them for every non-org admin)
+  p.adminScope = new FakeTable(() => ({ grantedBy: null, createdAt: new Date() }), ['id'], { domain: () => p.domain });
   return p;
 }
 

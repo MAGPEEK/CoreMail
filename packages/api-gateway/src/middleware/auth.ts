@@ -4,7 +4,12 @@ import { prisma } from '@coremail/storage';
 import {
   isAccessTokenRevoked, isAccessTokenRevokedShared, webAccessRefusal, type WebSurface,
 } from '@coremail/storage/auth';
-import { canAccess, hasAdminAction, isAdminRole, isReadMethod, stricterRole, type AdminAction, type AdminArea, type UserRoleName } from '../lib/rbac.js';
+import {
+  canAccess, hasAdminAction, isAdminRole, isReadMethod, isUnscopedOnlyArea, stricterRole,
+  type AdminAction, type AdminArea, type UserRoleName,
+} from '../lib/rbac.js';
+import { ORGANISATION_SCOPE, isScoped, type AdminScope } from '../lib/admin-scope.js';
+import { loadAdminScope } from './admin-scope.js';
 import { redeemEventTicket, type TicketPurpose } from '../lib/event-tickets.js';
 import { featureRefusal } from '../lib/webmail-features.js';
 
@@ -34,6 +39,12 @@ export interface ApiUser {
   authStartedAt?: number;
   /** Domain of the user (token claim, 9.4 protocol switches — saves a lookup). */
   domainId?: string;
+  /**
+   * 9.5: management scope of an admin, set by every admin guard from the
+   * database (never from the token). Read it through scopeOf(req)
+   * (middleware/admin-scope.ts), which fails closed when it is missing.
+   */
+  adminScope?: AdminScope;
 }
 
 declare module 'express' {
@@ -262,15 +273,18 @@ function enforceAdminMfa(req: Request, res: Response, next: NextFunction): void 
   })();
 }
 
-// ── Current role (v7.1.0) ─────────────────────────────────────────────────────
+// ── Current role + management scope (v7.1.0, 9.5) ─────────────────────────────
 // The role travels inside the access token (up to JWT_ACCESS_TTL). A role
 // change revokes the user's sessions, but an admin guard must not rely on that
 // event alone: when a token claims admin rights, the CURRENT role is read from
 // the database (short in-process cache, dropped on every auth invalidation
-// event of the user) and the stricter of both roles applies.
+// event of the user) and the stricter of both roles applies. 9.5: the admin's
+// management scope (AdminScope rows) is read and cached together with the role;
+// a scope change publishes the same invalidation event as a role change.
 
 const ROLE_CACHE_TTL_MS = 15_000;
-const roleCache = new Map<string, { role: string | null; expires: number }>();
+interface AdminState { role: string | null; scope: AdminScope }
+const roleCache = new Map<string, { state: AdminState; expires: number }>();
 const roleInvalidatedAt = new Map<string, number>();
 
 onAuthInvalidation((e) => {
@@ -288,44 +302,61 @@ export function clearCurrentRoleCache(): void {
   roleInvalidatedAt.clear();
 }
 
-/** Current role of an active user; null when the user is gone or inactive. Throws on database errors. */
-export async function currentRole(userId: string): Promise<string | null> {
+/**
+ * Current role (null when the user is gone or inactive) and management scope
+ * of a user. Throws on database errors.
+ */
+export async function currentAdminState(userId: string): Promise<AdminState> {
   const now = Date.now();
   const hit = roleCache.get(userId);
-  if (hit && hit.expires > now) return hit.role;
+  if (hit && hit.expires > now) return hit.state;
   const row = await prisma.user.findUnique({ where: { id: userId }, select: { role: true, active: true } });
   const role = row && row.active !== false ? String(row.role) : null;
+  const scope = role && isAdminRole(role) ? await loadAdminScope(userId, role) : ORGANISATION_SCOPE;
+  const state = { role, scope };
   // A lookup that raced with an invalidation is not cached (could be stale).
   if ((roleInvalidatedAt.get(userId) ?? 0) < now) {
     if (roleCache.size > 10_000) roleCache.clear();
-    roleCache.set(userId, { role, expires: now + ROLE_CACHE_TTL_MS });
+    roleCache.set(userId, { state, expires: now + ROLE_CACHE_TTL_MS });
   }
-  return role;
+  return state;
 }
 
+/** Current role of an active user; null when the user is gone or inactive. Throws on database errors. */
+export async function currentRole(userId: string): Promise<string | null> {
+  return (await currentAdminState(userId)).role;
+}
+
+/** Is `role` allowed for this request? `scoped` = the admin is limited to domains (9.5). */
+type AdminCheck = (role: string, req: Request, scoped: boolean) => boolean;
+
 /** Authenticate (unless an earlier guard already did), check `allowed`, enforce admin MFA. */
-function adminGuard(allowed: (role: string, req: Request) => boolean) {
+function adminGuard(allowed: AdminCheck) {
   return function adminGuardMiddleware(req: Request, res: Response, next: NextFunction): void {
     const check = (): void => {
       const apiUser = req.apiUser;
       const tokenRole = apiUser?.role;
-      if (!apiUser || !tokenRole || !allowed(tokenRole, req)) {
+      // early refusal on the token alone (the scope is not known yet — checked below)
+      if (!apiUser || !tokenRole || !allowed(tokenRole, req, false)) {
         res.status(403).json({ error: 'Insufficient admin role for this operation', code: 'FORBIDDEN_ROLE' });
         return;
       }
       // v7.1.0: the token claims admin rights → both the token role and the
       // current role must pass; the stricter one is what the route sees.
-      currentRole(apiUser.userId).then((dbRole) => {
+      // 9.5: both checked again with the admin's current management scope.
+      currentAdminState(apiUser.userId).then(({ role: dbRole, scope }) => {
         if (dbRole === null) {
           res.status(401).json({ error: 'Account is disabled or no longer exists', code: 'SESSION_REVOKED' });
           return;
         }
-        if (!allowed(dbRole, req)) {
-          log.warn({ userId: apiUser.userId, tokenRole, currentRole: dbRole }, 'Admin access denied: role in the token is outdated');
+        const scoped = isScoped(scope);
+        if (!allowed(dbRole, req, scoped) || !allowed(tokenRole, req, scoped)) {
+          log.warn({ userId: apiUser.userId, tokenRole, currentRole: dbRole, scoped }, 'Admin access denied: current role or scope does not allow this route');
           res.status(403).json({ error: 'Insufficient admin role for this operation', code: 'FORBIDDEN_ROLE' });
           return;
         }
         if (dbRole !== tokenRole) apiUser.role = stricterRole(tokenRole, dbRole);
+        apiUser.adminScope = scope;
         enforceAdminMfa(req, res, next);
       }, (err: unknown) => {
         log.error({ err }, 'Current role check failed — denying admin access');
@@ -338,7 +369,8 @@ function adminGuard(allowed: (role: string, req: Request) => boolean) {
 }
 
 /**
- * Any admin role (no USER). VIEW_ONLY_ORG only for GET/HEAD.
+ * Any admin role (no USER). VIEW_ONLY_ORG only for GET/HEAD. Scoped admins
+ * pass (what such a route returns must then follow the scope).
  * Prefer requireArea() — this is the coarse fallback.
  */
 export const requireAdmin = adminGuard((role, req) =>
@@ -346,26 +378,30 @@ export const requireAdmin = adminGuard((role, req) =>
 
 /**
  * Explicit role list for all methods. ORGANIZATION_MANAGEMENT always passes.
+ * Server-wide by nature: a scoped admin never passes (9.5).
  * Example: router.post('/x', requireRole('SERVER_MANAGEMENT'), handler)
  */
 export function requireRole(...roles: UserRoleName[]) {
-  return adminGuard((role) => role === 'ORGANIZATION_MANAGEMENT' || (roles as string[]).includes(role));
+  return adminGuard((role, _req, scoped) => !scoped && (role === 'ORGANIZATION_MANAGEMENT' || (roles as string[]).includes(role)));
 }
 
 /**
  * Area guard based on AREA_MATRIX (method-aware: read roles get GET/HEAD only).
  * `extra` may grant additional, narrowly scoped access (e.g. HELP_DESK
- * password reset); the route must then enforce its own limits.
+ * password reset); the route must then enforce its own limits. 9.5: a scoped
+ * admin never reaches a server-wide area (lib/rbac.ts UNSCOPED_ONLY_AREAS),
+ * not even through `extra`.
  */
-export function requireArea(area: AdminArea, extra?: (role: string, req: Request) => boolean) {
-  return adminGuard((role, req) => canAccess(role, area, req.method) || (!!extra && isAdminRole(role) && extra(role, req)));
+export function requireArea(area: AdminArea, extra?: AdminCheck) {
+  return adminGuard((role, req, scoped) => canAccess(role, area, req.method, scoped)
+    || (!!extra && isAdminRole(role) && !(scoped && isUnscopedOnlyArea(area)) && extra(role, req, scoped)));
 }
 
 /**
  * Guard for a narrow admin action (8.x, lib/rbac.ts ADMIN_ACTIONS) — e.g. the
  * mailbox-content backup routes (`backupMailboxData`). Same checks as every
- * admin guard (current role, admin MFA).
+ * admin guard (current role, scope, admin MFA).
  */
 export function requireAction(action: AdminAction) {
-  return adminGuard((role) => hasAdminAction(role, action));
+  return adminGuard((role, _req, scoped) => hasAdminAction(role, action, scoped));
 }

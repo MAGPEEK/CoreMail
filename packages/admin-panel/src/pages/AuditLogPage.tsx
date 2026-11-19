@@ -8,6 +8,7 @@ import {
 import { api, apiFetch, saveBlob } from '../api/client.js';
 import toast from 'react-hot-toast';
 import { useT } from '../i18n/useT.js';
+import { usePermissions } from '../hooks/usePermissions.js';
 import { DataTable, type Column } from '../components/DataTable.js';
 import { apiErrorFromBody } from '../lib/errors.js';
 import { dayEndIso, dayStartIso, signatureFromHeader } from '../lib/auditFilters.js';
@@ -391,6 +392,7 @@ const DISMISS_KEY = 'coremail:audit-immutable-notice-dismissed';
 
 export function AuditLogPage() {
   const t = useT();
+  const { scoped } = usePermissions();
   const [filters, setFilters] = useState({
     action: '', targetType: '', from: '', to: '', success: '',
     actorEmail: '', ipAddress: '', searchText: '', category: '',
@@ -430,6 +432,7 @@ export function AuditLogPage() {
     queryKey: ['admin-audit-log-stats'],
     queryFn: () => api.get('/admin/audit-log/stats'),
     refetchInterval: 30_000,
+    enabled: !scoped, // 9.5: organisation-wide statistics (API: SCOPE_ORG_ONLY for scoped admins)
   });
 
   // v3.18.34: Anomalies query removed — banner was too noisy

@@ -23,6 +23,7 @@ import { registerAudit } from './commands/audit.js';
 import { registerBranding } from './commands/branding.js';
 import { registerProtocol } from './commands/protocol.js';
 import { registerPolicy } from './commands/policy.js';
+import { registerRole } from './commands/role.js';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json') as { version: string };
@@ -56,6 +57,7 @@ registerAudit(program, api, json);
 registerBranding(program, api, json);
 registerProtocol(program, api, json);
 registerPolicy(program, api, json);
+registerRole(program, api, json);
 
 program.addHelpText('after', `
 Examples:

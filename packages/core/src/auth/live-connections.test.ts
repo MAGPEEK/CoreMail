@@ -75,6 +75,9 @@ test('neutral events keep protocol connections', () => {
   // Role change revokes web sessions (revokeAllSessions) but keeps mail logins.
   assert.equal(connectionAffected(revokeAll('role-change'), conn('password')), false);
   assert.equal(connectionAffected(revokeAll('role-change'), conn('token', { sessionId: 's1', issuedAt: 1000 })), true);
+  // 9.5: a management-scope change behaves like a role change
+  assert.equal(connectionAffected(revokeAll('scope-change'), conn('password')), false);
+  assert.equal(connectionAffected(revokeAll('scope-change'), conn('token', { sessionId: 's1', issuedAt: 1000 })), true);
   // Logout of one web session does not touch IMAP & co.
   assert.equal(connectionAffected(ev('sessions-revoked', { sessionIds: ['s9'] }), conn('password')), false);
 });

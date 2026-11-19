@@ -38,11 +38,13 @@ import { prisma } from '@coremail/storage/prisma';
 import { z } from 'zod';
 import { patchSchema } from '../../lib/zod-compat.js';
 import { requireArea } from '../../middleware/auth.js';
+import { requireUnscoped } from '../../middleware/admin-scope.js';
 import { internalAuthHeaders } from '@coremail/core';
 import { invalidInputMessage } from '../../lib/zod-message.js';
 
 export const adminRetentionRouter: RouterType = Router();
-adminRetentionRouter.use(requireArea('compliance'));
+// 9.5: retention policies and tags apply organisation-wide — unscoped admins only.
+adminRetentionRouter.use(requireArea('compliance'), requireUnscoped);
 
 // ── Tag CRUD ─────────────────────────────────────────────────────────────────
 

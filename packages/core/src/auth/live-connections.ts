@@ -94,7 +94,8 @@ export function connectionAffected(event: AuthInvalidationEvent, conn: LiveConne
     return ACCOUNT_REASONS.has(reason);
   }
 
-  if (NEUTRAL_REASONS.has(reason) || reason === 'role-change') return false;
+  // admin rights (role, 9.5 management scope) do not change a mail login
+  if (NEUTRAL_REASONS.has(reason) || reason === 'role-change' || reason === 'scope-change') return false;
   if (reason === 'sessions-revoked' && !event.revokeBefore) return false; // single web sessions
   if (reason === 'app-password-revoked') {
     if (credential === 'password' || credential === 'external') return false;

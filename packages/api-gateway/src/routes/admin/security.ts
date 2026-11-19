@@ -3,6 +3,7 @@ import { createConnection } from 'node:net';
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { requireArea } from '../../middleware/auth.js';
+import { requireUnscoped } from '../../middleware/admin-scope.js';
 import { rspamdControllerHeaders } from '../../lib/rspamd-controller.js';
 import { getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 import { adminClamavRouter } from './security-clamav.js';
@@ -12,12 +13,17 @@ import { adminSpoofingRouter } from './security-spoofing.js';
 
 export const adminSecurityRouter: RouterType = Router();
 adminSecurityRouter.use(requireArea('hygiene'));
+// Sender block / allow lists (9.4) — 9.5: the only part of /security a scoped
+// admin reaches (DOMAIN / USER entries of its domains, see the router).
+adminSecurityRouter.use('/sender-lists', adminSenderListsRouter);
+// 9.5: everything below is server-wide (filter engines, DNSBL, spoofing policy,
+// rspamd) — organisation-wide admins only.
+adminSecurityRouter.use(requireUnscoped);
 // ClamAV policy, status and EICAR self-test (9.2)
 adminSecurityRouter.use('/clamav', adminClamavRouter);
 // rspamd / ClamAV deployment state for the BCP (9.3)
 adminSecurityRouter.use('/capabilities', adminSecurityCapabilitiesRouter);
-// Sender block / allow lists and local-domain anti-spoofing (9.4)
-adminSecurityRouter.use('/sender-lists', adminSenderListsRouter);
+// Local-domain anti-spoofing (9.4)
 adminSecurityRouter.use('/spoofing', adminSpoofingRouter);
 
 const RSPAMD_URL  = process.env['RSPAMD_URL']  ?? 'http://rspamd:11334';
