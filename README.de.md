@@ -9,7 +9,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-22+-green.svg)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.5-blue.svg)](https://www.typescriptlang.org)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED.svg)](https://www.docker.com)
-[![Version](https://img.shields.io/badge/Version-9.5.0-brightgreen.svg)](https://github.com/MAGPEEK/CoreMail/releases)
+[![Version](https://img.shields.io/badge/Version-9.5.1-brightgreen.svg)](https://github.com/MAGPEEK/CoreMail/releases)
 [![IMAP4rev2](https://img.shields.io/badge/IMAP4-rev2-blue.svg)](https://datatracker.ietf.org/doc/html/rfc9051)
 [![CalDAV](https://img.shields.io/badge/CalDAV%2FCardDAV-supported-blue.svg)](https://datatracker.ietf.org/doc/html/rfc4791)
 
@@ -22,7 +22,7 @@
 
 **🎯 Standard-Mail-Protokolle.** CoreMail spricht **IMAP4rev2** (RFC 9051) + **JMAP** (RFC 8620/8621, seit v5.7.1) + **SMTP-Submission** + **POP3** + **CalDAV/CardDAV** + **ActiveSync** — Standard-Clients (Apple Mail, Thunderbird, Outlook, K-9 Mail, eM Client, iOS Mail) verbinden sich über IMAP/SMTP. **App-Passwörter** für MFA-kompatible Anmeldung. Kein VPN, kein Connector, keine Drittanbieter-Software.
 
-> **Aktuelle Version: v9.5.0** — ActiveSync-Telefone synchronisieren Kalender, Aufgaben, Notizen und Kontakte in beide Richtungen, eine CalDAV-Aufgabenliste für Apple Erinnerungen / Thunderbird / DAVx⁵, Kontakte mit mehreren Adressen und Telefonnummern sowie Kontaktlisten, Ordnerberechtigungen wie in Outlook (auch als IMAP-ACL), auf Domains beschränkte Admin-Rollen, der zwischengespeicherte Outlook-Modus über MAPI, Profilfotos, Räume, die Einladungen per Mail beantworten, ein barrierefreies und responsives Webmail sowie DMARC-Ausrichtung nach der Public Suffix List ([Release-Notes](docs/releases/v9.5.0.md)). **v9.4.0:** klassisches Outlook verbindet sich wieder als Exchange-Konto über **MAPI over HTTP** (Opt-in, Online-Modus), Protokollzugriffs-Schalter pro Server, Domain und Postfach, ActiveSync 12.1/14.0/14.1, Echtzeit-Push mit installierbarem Webmail (PWA, Web Push), ein Webmail im Outlook-Stil (Verfassen im Lesebereich mit Entwurfs-Tabs, Kalender mit Serienausnahmen, Terminplanungs-Assistent und Räumen, Aufgaben und Nachverfolgungs-Flags), Postfachverwaltung (Auto-Mapping, Gesendet-Kopien, Mailfluss), mitwandernde persönliche Einstellungen, Webmail-Richtlinien, Absenderlisten und Spoofing-Einstellungen sowie TLS 1.0/1.1 für alte Clients als Opt-in ([Release-Notes](docs/releases/v9.4.0.md)). **v9.3.0:** Branding (Name, Farben, Logo, Login-Seite), Let's Encrypt funktioniert hinter NAT und Mail-Zertifikate wirken sofort, freigegebene und delegierte Postfächer im Ordnerbereich des Webmails, Wiederherstellung aus gespeicherten Sicherungen plus empfohlene Sicherung ([Release-Notes](docs/releases/v9.3.0.md)). **v9.2.0:** barrierefreier Dark Mode (WCAG 2.2 AA) in Webmail und Admin-Panel, jede BCP-Funktion geprüft und korrigiert, ClamAV-Einstellungen mit EICAR-Selbsttest ([Release-Notes](docs/releases/v9.2.0.md)). **v9.1.0:** freigegebene und delegierte Postfächer in IMAP-Clients (`Shared/`, `Other Users/`), vollständiges RFC-5256-REFERENCES-Threading, gelöschte Elemente in Shared Mailboxes wiederherstellen, Helm-Chart auf echtem Cluster getestet ([Release-Notes](docs/releases/v9.1.0.md)). **v9.0.0:** Sicherheitshärtung nach OWASP (gemeinsame Login-Sperre, HttpOnly-Refresh-Cookies, DMARC-Durchsetzung, ReDoS-/DoS-Grenzen, verschlüsselte Backups, Schema-Sync ohne stillen Datenverlust); Mail-Logik auf Exchange-Niveau (DSN, CHUNKING, SMTPUTF8, QRESYNC, SORT/THREAD, Quota-Stufen, gelöschte Elemente wiederherstellen, Server-Entwürfe mit Rückgängig-Senden); automatische Einrichtung für Thunderbird/Apple; Docker-Compose-Varianten minimal/standard/full; Helm-Chart 2.0.0; Ende-zu-Ende in beiden Speichermodi getestet ([docs/e2e.md](docs/e2e.md)). **Breaking — vor dem Upgrade die [Upgrade-Hinweise](docs/releases/v9.0.0.md) lesen** · Admin-CLI `coremail` ([Doku](docs/cli.md)) · JMAP-Server ([Doku](docs/jmap.md)) · IMAP4rev2 · [Changelog](CHANGELOG.md) · [Releases](https://github.com/MAGPEEK/CoreMail/releases) · [Docker Hub](https://hub.docker.com/r/magpeek/coremail-app)
+> **Aktuelle Version: v9.5.1** — ActiveSync-Telefone synchronisieren Kalender, Aufgaben, Notizen und Kontakte in beide Richtungen, eine CalDAV-Aufgabenliste für Apple Erinnerungen / Thunderbird / DAVx⁵, Kontakte mit mehreren Adressen und Telefonnummern sowie Kontaktlisten, Ordnerberechtigungen wie in Outlook (auch als IMAP-ACL), auf Domains beschränkte Admin-Rollen, der zwischengespeicherte Outlook-Modus über MAPI, Profilfotos, Räume, die Einladungen per Mail beantworten, ein barrierefreies und responsives Webmail sowie DMARC-Ausrichtung nach der Public Suffix List ([Release-Notes](docs/releases/v9.5.1.md)). **v9.4.0:** klassisches Outlook verbindet sich wieder als Exchange-Konto über **MAPI over HTTP** (Opt-in, Online-Modus), Protokollzugriffs-Schalter pro Server, Domain und Postfach, ActiveSync 12.1/14.0/14.1, Echtzeit-Push mit installierbarem Webmail (PWA, Web Push), ein Webmail im Outlook-Stil (Verfassen im Lesebereich mit Entwurfs-Tabs, Kalender mit Serienausnahmen, Terminplanungs-Assistent und Räumen, Aufgaben und Nachverfolgungs-Flags), Postfachverwaltung (Auto-Mapping, Gesendet-Kopien, Mailfluss), mitwandernde persönliche Einstellungen, Webmail-Richtlinien, Absenderlisten und Spoofing-Einstellungen sowie TLS 1.0/1.1 für alte Clients als Opt-in ([Release-Notes](docs/releases/v9.4.0.md)). **v9.3.0:** Branding (Name, Farben, Logo, Login-Seite), Let's Encrypt funktioniert hinter NAT und Mail-Zertifikate wirken sofort, freigegebene und delegierte Postfächer im Ordnerbereich des Webmails, Wiederherstellung aus gespeicherten Sicherungen plus empfohlene Sicherung ([Release-Notes](docs/releases/v9.3.0.md)). **v9.2.0:** barrierefreier Dark Mode (WCAG 2.2 AA) in Webmail und Admin-Panel, jede BCP-Funktion geprüft und korrigiert, ClamAV-Einstellungen mit EICAR-Selbsttest ([Release-Notes](docs/releases/v9.2.0.md)). **v9.1.0:** freigegebene und delegierte Postfächer in IMAP-Clients (`Shared/`, `Other Users/`), vollständiges RFC-5256-REFERENCES-Threading, gelöschte Elemente in Shared Mailboxes wiederherstellen, Helm-Chart auf echtem Cluster getestet ([Release-Notes](docs/releases/v9.1.0.md)). **v9.0.0:** Sicherheitshärtung nach OWASP (gemeinsame Login-Sperre, HttpOnly-Refresh-Cookies, DMARC-Durchsetzung, ReDoS-/DoS-Grenzen, verschlüsselte Backups, Schema-Sync ohne stillen Datenverlust); Mail-Logik auf Exchange-Niveau (DSN, CHUNKING, SMTPUTF8, QRESYNC, SORT/THREAD, Quota-Stufen, gelöschte Elemente wiederherstellen, Server-Entwürfe mit Rückgängig-Senden); automatische Einrichtung für Thunderbird/Apple; Docker-Compose-Varianten minimal/standard/full; Helm-Chart 2.0.0; Ende-zu-Ende in beiden Speichermodi getestet ([docs/e2e.md](docs/e2e.md)). **Breaking — vor dem Upgrade die [Upgrade-Hinweise](docs/releases/v9.0.0.md) lesen** · Admin-CLI `coremail` ([Doku](docs/cli.md)) · JMAP-Server ([Doku](docs/jmap.md)) · IMAP4rev2 · [Changelog](CHANGELOG.md) · [Releases](https://github.com/MAGPEEK/CoreMail/releases) · [Docker Hub](https://hub.docker.com/r/magpeek/coremail-app)
 >
 > **Hinweis zu Outlook** (seit v9.4.0): klassisches Outlook kann über **MAPI over HTTP** ein **Exchange-Konto** anlegen — Opt-in (Protokollschalter `mapi`, **standardmäßig aus**), Online- und **zwischengespeicherter Modus** (zwischengespeichert seit v9.5.0), Basic-Authentifizierung über HTTPS (kein NTLM; bei aktivem MFA ein App-Passwort), Anleitung in [docs/mapi.md](docs/mapi.md). EWS bleibt entfernt. Alternativ wird Outlook über **„Andere E-Mail-Konten" → IMAP** eingerichtet, Kalender + Kontakte via CalDAV/CardDAV (Outlook-CalDav-Synchronizer-Plugin; oder Apple Kalender, Thunderbird Lightning).
 >
@@ -67,9 +67,9 @@
 | **JMAP** (Core + Mail + WebSocket/Blob/Quota/Sharing/VAPID) | ✅ | 8620, 8621, 8887, 9404, 9425, 9670, 9749 |
 | Admin-CLI `coremail` im Container (Benutzer, Postfächer, Konnektoren, Banner, Zertifikate) | ✅ | — |
 | Autodiscover v1 (XML) + v2 (JSON) — IMAP/SMTP/ActiveSync | ✅ | MS-OXDISCO |
-| ActiveSync EAS 12.1 / 14.0 / 14.1 — pro Anfrage ausgehandelt und pro Gerät gemerkt — iOS Mail, Android, Outlook Mobile (Provision, FolderSync, Sync mit AirSyncBase-Bodies, Ping, SendMail, SmartReply/Forward, GetAttachment, ItemOperations, GetItemEstimate, Settings, Search, MoveItems, MeetingResponse, ResolveRecipients; Nachverfolgungs-Flags; seit v9.5.0 Kalender, Aufgaben, Notizen und Kontakte in beide Richtungen — [docs/activesync.md](docs/activesync.md)) | ⚠️ nicht mit echten Geräten getestet; Ordner anlegen/umbenennen/löschen vom Gerät aus wird nicht unterstützt |
+| ActiveSync EAS 12.1 / 14.0 / 14.1 — pro Anfrage ausgehandelt und pro Gerät gemerkt — iOS Mail, Android, Outlook Mobile (Provision, FolderSync, Sync mit AirSyncBase-Bodies, Ping, SendMail, SmartReply/Forward, GetAttachment, ItemOperations, GetItemEstimate, Settings, Search, MoveItems, MeetingResponse, ResolveRecipients; Nachverfolgungs-Flags; seit v9.5.1 Kalender, Aufgaben, Notizen und Kontakte in beide Richtungen — [docs/activesync.md](docs/activesync.md)) | ⚠️ nicht mit echten Geräten getestet; Ordner anlegen/umbenennen/löschen vom Gerät aus wird nicht unterstützt |
 | MWA — Mail Web Access (React, Outlook-ähnliches Layout: App-Leiste, Befehlsleiste, Verfassen im Lesebereich mit Entwurfs-Tabs oder im eigenen Fenster; Endlos-Scrollen, Anhang-Download, Inline-Bilder) | ✅ |
-| **MAPI over HTTP** für klassisches Outlook (Exchange-Konto; Postfach- und Adressbuch-Endpunkt, Benachrichtigungen, Autodiscover `mapiHttp`) — Opt-in, standardmäßig aus (Protokollschalter `mapi`), Online- und zwischengespeicherter Modus (zwischengespeichert seit v9.5.0), Basic über HTTPS, kein NTLM — [docs/mapi.md](docs/mapi.md) | ✅ | MS-OXCMAPIHTTP, MS-OXNSPI |
+| **MAPI over HTTP** für klassisches Outlook (Exchange-Konto; Postfach- und Adressbuch-Endpunkt, Benachrichtigungen, Autodiscover `mapiHttp`) — Opt-in, standardmäßig aus (Protokollschalter `mapi`), Online- und zwischengespeicherter Modus (zwischengespeichert seit v9.5.1), Basic über HTTPS, kein NTLM — [docs/mapi.md](docs/mapi.md) | ✅ | MS-OXCMAPIHTTP, MS-OXNSPI |
 | Protokollzugriffs-Schalter IMAP / POP3 / SMTP-Versand / ActiveSync / JMAP / CalDAV·CardDAV / Webmail / MAPI pro Server, Domain und Postfach (live: offene Verbindungen enden sofort) — [docs/protocol-access.md](docs/protocol-access.md) | ✅ |
 | Echtzeit-Push für jede Änderung (IMAP IDLE, JMAP-Push, Webmail-Live-Aktualisierung, Web Push; installierbares Webmail / PWA) — [docs/realtime.md](docs/realtime.md) | ✅ |
 | Ältere Clients: TLS 1.0/1.1 pro Listener und für HTTPS (Opt-in, standardmäßig aus) und optionales Geräte-Relay für Scanner / Drucker ([docs/legacy-tls.md](docs/legacy-tls.md), [docs/device-relay.md](docs/device-relay.md)) | ✅ |
@@ -353,7 +353,7 @@ CoreMail besteht aus **sechs Containern** (ein Custom-Image, fünf Standard-Imag
 
 | Container | Image | Aufgabe |
 |-----------|-------|---------|
-| `coremail` | `magpeek/coremail-app:9.5.0` | Alle Mail-Dienste + Webmail + Admin-Panel + CLI |
+| `coremail` | `magpeek/coremail-app:9.5.1` | Alle Mail-Dienste + Webmail + Admin-Panel + CLI |
 | `rspamd` | `rspamd/rspamd:4.0.0` | Anti-Spam Engine (Bayes, DKIM/SPF/DMARC, Fuzzy) |
 | `clamav` | `clamav/clamav:stable` | Open-Source Antivirus (GPL), freshclam Updates |
 | `postgres` | `postgres:16-alpine` | Datenbank für Mails, Benutzer, Kalender |
@@ -370,7 +370,7 @@ Die Datei `infra/docker/docker-compose.yml` ist seit v5.8.0 auf das Nötigste re
 # Auszug — vollständige Datei im Repository
 services:
   coremail:
-    image: magpeek/coremail-app:${COREMAIL_VERSION:-9.5.0}
+    image: magpeek/coremail-app:${COREMAIL_VERSION:-9.5.1}
     environment:
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET fehlt in .env  →  openssl rand -hex 32}
       PEPPER:     ${PEPPER:?PEPPER fehlt in .env  →  openssl rand -hex 32}
@@ -476,7 +476,7 @@ COREMAIL_DB_USER=coremail_app   # DB-Rolle ohne Superuser-Rechte (nur bei neuer 
 COREMAIL_DB_PASSWORD=…          #   ungesetzt = Superuser „coremail")
 
 # ── Optional (Defaults in Klammern) ────────────────────────
-#COREMAIL_VERSION=9.5.0         # Image-Tag
+#COREMAIL_VERSION=9.5.1         # Image-Tag
 #RSPAMD_NET_PREFIX=10.253.253   # /29 des App ↔ rspamd-Netzes (nur bei Kollision ändern)
 #LOG_LEVEL=info                 # error | warn | info | debug
 #TZ=Europe/Berlin
@@ -643,7 +643,7 @@ docker compose -f infra/docker/docker-compose.yml pull
 docker compose -f infra/docker/docker-compose.yml up -d
 
 # Bestimmte Version
-docker pull magpeek/coremail-app:9.5.0
+docker pull magpeek/coremail-app:9.5.1
 ```
 
 **Multi-Arch:** Das Image wird für `linux/amd64` und `linux/arm64` gebaut (Synology NAS, Raspberry Pi, Apple Silicon).
@@ -656,6 +656,7 @@ docker pull magpeek/coremail-app:9.5.0
 
 | Version | Highlights |
 |---------|-----------|
+| **v9.5.1** | **Fehlerbehebung.** „Protokolle & Dienste“ zeigt keine falsche MAPI-HTTPS-Warnung mehr, wenn Port 443 ein gültiges Zertifikat per SNI ausliefert; klarere Beschriftung des optionalen Schalters für TLS 1.0/1.1. |
 | **v9.5.0** | **ActiveSync-Kalender / -Aufgaben / -Notizen / -Kontakte, Ordnerberechtigungen, auf Domains beschränkte Admins, zwischengespeicherter Outlook-Modus.** ActiveSync-Klassen Kalender, Aufgaben, Notizen und Kontakte in beide Richtungen (EAS 12.1–14.1); CalDAV-Aufgabenliste (VTODO); Kontakte mit mehreren Werten und Kontaktlisten (CardDAV), Kategorien für Notizen; Berechtigungen pro Ordner (Webmail, BCP, REST, IMAP-ACL); auf Domains beschränkte Admin-Rollen mit Schwärzung anderer Domains; zwischengespeicherter MAPI-Modus (ICS-Download / -Upload, Client-IDs bleiben, Konflikterkennung); Profilfotos; Räume beantworten Einladungen per Mail, Serieneinladungen für Räume pro Termin geprüft; barrierefreies und responsives Webmail; BCP-Bearbeitungsbereich, IDN-Anzeige; Backups mit Kontaktlisten, Wiederherstellung behält das Empfangsdatum; DMARC-Ausrichtung nach der Public Suffix List. Helm-Chart 2.3.0. |
 | **v9.4.0** | **Webmail im Outlook-Stil, MAPI over HTTP, Protokollzugriffs-Schalter.** MAPI over HTTP für klassisches Outlook (Opt-in, Online-Modus, Basic über TLS); Protokollzugriffs-Schalter pro Server / Domain / Postfach; ActiveSync 12.1 / 14.0 / 14.1; Echtzeit-Ereignisse (IMAP IDLE, JMAP-Push, Webmail-Live-Aktualisierung, Web Push, installierbares Webmail); Webmail mit App-Leiste, Befehlsleiste, Verfassen im Lesebereich mit Entwurfs-Tabs, schlankes Verfassen (Formatierungsleiste, Namen prüfen, Barrierefreiheitsprüfung, Vertraulichkeit); Kalender (Serienausnahmen, Terminplanungs-Assistent, Räume, Anzeigen als, Erinnerungen), Aufgaben und Nachverfolgungs-Flags; Postfachverwaltung (Auto-Mapping, Gesendet-Kopien, Mailfluss, Zugriffs-Audit); mitwandernde persönliche Einstellungen; Webmail-Richtlinien; Absenderlisten, Spoofing- und API-Ratenbegrenzungs-Einstellungen; TLS 1.0/1.1 für alte Clients (Opt-in) und Geräte-Relay; Zertifikats-Schlüssel verschlüsselt gespeichert. Das Empfängerlimit von Webmail / REST folgt jetzt der SMTP-Einstellung „max. Empfänger" (Standard 100). |
 | **v9.3.0** | Branding (Produktname, Farben, Logos, Favicon, Login-Seite; SVG-Bereinigung); Let's Encrypt repariert (kein Hairpin-NAT nötig, echte Fehlergründe, Vorabprüfung, Staging) und Mail-Zertifikate wirken bei Zuweisung, mit Startreparatur und Anzeige je Port; freigegebene/delegierte Postfächer im Ordnerbereich des Webmails; Wiederherstellung aus gespeicherten Sicherungen, Systemsicherung (pg_dump), empfohlene Zeitpläne; Scanner-Erkennung blendet rspamd/ClamAV-Einstellungen aus, wenn nicht bereitgestellt. 2.462 Tests; e2e MinIO 166/166, Dateisystem 153/153. |
@@ -754,7 +755,7 @@ MIT License — siehe [LICENSE](LICENSE)
 ---
 
 <div align="center">
-  <b>CoreMail v9.5.0</b> · Der OpenSource Mailserver für kleine und mittlere Umgebungen<br>
+  <b>CoreMail v9.5.1</b> · Der OpenSource Mailserver für kleine und mittlere Umgebungen<br>
   <sub>IMAP4rev2 + JMAP + SMTP + POP3 + CalDAV + CardDAV + ActiveSync</sub><br>
   <sub>Entwickelt mit ❤️ · <a href="https://github.com/MAGPEEK/CoreMail">github.com/MAGPEEK/CoreMail</a></sub>
 </div>

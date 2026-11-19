@@ -13,6 +13,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [9.5.1] — 2026-11-19 — MAPI HTTPS warning fix
+
+### Fixed
+
+- BCP → Protokolle & Dienste no longer shows the false warning "MAPI über HTTP ist eingeschaltet, aber HTTPS (Port 443) ist nicht aktiv oder hat kein vertrauenswürdiges Zertifikat" when port 443 serves a valid certificate for the public host name. The overview took only the certificate marked `isActiveHttps`, while the integrated HTTPS server serves every valid certificate by SNI (exact → wildcard → default). The overview now evaluates the certificate the HTTPS server actually serves for `ServerSettings.publicHostname` (shared selection `servedProxyCert()` in `lib/cert-lifecycle.ts`, also used by the TLS proxy's SNI callback), and the HTTPS card names that certificate. The warning stays when no certificate covers the host name or the served one is self-signed, Let's Encrypt staging or expired.
+
+### Changed
+
+- BCP → Dienste → HTTPS card: a status line that is always shown says whether HTTPS is active and with which TLS versions ("HTTPS ist aktiv mit TLS 1.2 und 1.3 — für Webmail, ActiveSync, MAPI usw. ist kein weiterer Schalter nötig.", or "HTTPS ist nicht aktiv — Zertifikat unter SSL/TLS zuweisen."). The legacy-TLS switch (HTTPS and mail listeners) is now labelled "Zusätzlich veraltete TLS-Versionen 1.0/1.1 zulassen (optional)", with the hint "Nur für sehr alte Geräte nötig. Moderne Clients und Outlook brauchen das nicht." while it is off. While it is on, the warning starts with "Optionaler Kompatibilitätsmodus aktiv:". Admins had read the old label ("Ältere Clients erlauben") as the switch that turns HTTPS on and that MAPI requires.
+
+---
+
 ## [9.5.0] — 2026-11-19 — ActiveSync calendar, tasks, notes and contacts, CalDAV tasks, folder permissions, domain-scoped admins, Outlook cached mode, profile photo
 
 Minor release (SemVer: new features, additive schema, previous API contracts kept; behaviour changes that deserve attention are listed under "Upgrade notes"). Every change was reviewed independently; every finding was fixed with a regression test.
