@@ -15,7 +15,7 @@ import { DEFAULT_BODY_PREFERENCE } from '../commands/body.js';
 import {
   contactChange, emailOf, formatContactDate, parseContactDate, parsePicture, renderContact, EMPTY_CONTACT, PICTURE_MAX_BYTES,
 } from './contacts-codec.js';
-import { contactView, type ContactItem } from './contacts-view.js';
+import { contactView, CHILDREN_MAX, type ContactItem } from './contacts-view.js';
 import type { PimUser, RenderContext, WriteContext } from './types.js';
 
 const USER: PimUser = { id: 'u1', email: 'bob@example.com', displayName: 'Bob', addresses: ['bob@example.com'], timeZone: 'Europe/Berlin', domainId: null };
@@ -29,7 +29,7 @@ const Ct = (t: number, k?: WNode[] | string): WNode => [1, t, k];
 const C2 = (t: number, k?: WNode[] | string): WNode => [12, t, k];
 const B = (t: number, k?: WNode[] | string): WNode => [17, t, k];
 const card = (over: Partial<ContactCard>): ContactCard => finalizeContactCard({ ...emptyContactCard(), ...over });
-const item = (over: Partial<ContactCard>, extra: Partial<ContactItem> = {}): ContactItem => ({ card: card(over), officeLocation: '', picture: '', phoneKinds: [], ...extra });
+const item = (over: Partial<ContactCard>, extra: Partial<ContactItem> = {}): ContactItem => ({ card: card(over), extras: {}, children: [], picture: '', phoneKinds: [], ...extra });
 /** The Sync item the device got, decoded the way the device sends it back. */
 const echo = (it: ContactItem, user = USER): WbxmlElement => decodeWbxml(encodeWbxml(el('ApplicationData', undefined, renderContact(it, render('14.1', user)))));
 const JPEG = (size: number) => Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(size - 4, 7)]);
@@ -97,7 +97,15 @@ const RICH: ContactItem = item({
   urls: [{ type: 'work', value: 'https://firma.example' }, { type: 'home', value: 'https://privat.example' }],
   ims: [{ type: 'home', value: 'xmpp:erika@chat.example' }],
   birthday: '1980-05-17', anniversary: '--06-12', categories: ['Kunden', 'VIP'], notes: 'Zeile 1\nZeile 2',
-}, { officeLocation: 'Raum 4.12', picture: JPEG(64).toString('base64') });
+}, {
+  extras: {
+    OfficeLocation: 'Raum 4.12', Spouse: 'Max Muster', AssistantName: 'Anna Assistenz', ManagerName: 'Bernd Chef',
+    YomiFirstName: 'エリカ', YomiLastName: 'ムスター', YomiCompanyName: 'バイシュピール', CustomerId: 'K-4711', GovernmentId: 'X 123',
+    AccountName: 'erika.m',
+  },
+  children: ['Lena', 'Tom'],
+  picture: JPEG(64).toString('base64'),
+});
 
 test('contact → Sync item: every slot, dates as local midnights, Contacts2 fields, 12.1 tags only', () => {
   const tree = echo(RICH);
@@ -124,7 +132,7 @@ test('round trip: the device sends the item back unchanged → the stored contac
     const back = contactChange(echo(RICH, user), RICH, write({ user }));
     assert.equal(back.normalized, false);
     assert.ok(sameContactCard(back.item.card, RICH.card), JSON.stringify(back.item.card));
-    assert.deepEqual([back.item.officeLocation, back.item.picture], [RICH.officeLocation, RICH.picture]);
+    assert.deepEqual([back.item.extras, back.item.children, back.item.picture], [RICH.extras, RICH.children, RICH.picture]);
   }
   // as an Add (another device): what it sees is what is stored
   const added = contactChange(echo(RICH), null, write());
@@ -150,7 +158,8 @@ test('overflow: a device edit changes only the values it saw — the 4th e-mail,
     ['work', 'Neue Str. 5', 'Berlin', '', 'PF 12', 'Haus B'], ['work', 'Zweitbüro 3', 'Hamburg', '', '', ''],
   ], 'the home address was cleared; PO box / extended part and the 2nd work address stay');
   assert.deepEqual(c.urls, [{ type: 'work', value: 'https://neu.example' }, { type: 'home', value: 'https://privat.example' }]);
-  assert.deepEqual([c.ims, c.categories, c.notes, c.birthday, out.officeLocation, out.picture], [[], [], '', '', '', ''], 'no Supported list: absent = cleared');
+  assert.deepEqual([c.ims, c.categories, c.notes, c.birthday, out.picture, out.children], [[], [], '', '', '', []], 'no Supported list: absent = cleared');
+  assert.deepEqual(Object.values(out.extras).filter(Boolean), [], 'office, spouse, assistant, manager, Yomi names, ids cleared too');
 });
 
 test('ghosting: elements outside the priming Supported list keep their values', () => {
@@ -159,9 +168,10 @@ test('ghosting: elements outside the priming Supported list keep their values', 
   assert.deepEqual(out.card.emails.map((e) => e.value), ['erika@privat.example', 'e3@example.org', 'e4@example.org'], 'Email1 listed and absent → cleared');
   assert.equal(normalized, true, 'the next address moves up into Email1: the device gets it');
   assert.equal(out.card.phones.find((p) => p.type === 'mobile')?.value, '+49 170 99');
-  assert.deepEqual([out.card.name.prefix, out.card.birthday, out.card.anniversary, out.card.categories, out.card.notes, out.officeLocation, out.picture],
-    ['Dr.', '1980-05-17', '--06-12', ['Kunden', 'VIP'], 'Zeile 1\nZeile 2', 'Raum 4.12', RICH.picture],
-    'Title, dates, categories, body, office and picture are ghosted');
+  assert.deepEqual([out.card.name.prefix, out.card.birthday, out.card.anniversary, out.card.categories, out.card.notes, out.picture],
+    ['Dr.', '1980-05-17', '--06-12', ['Kunden', 'VIP'], 'Zeile 1\nZeile 2', RICH.picture],
+    'Title, dates, categories, body and picture are ghosted');
+  assert.deepEqual([out.extras, out.children], [RICH.extras, RICH.children], 'spouse, children, assistant, manager, Yomi names, ids, office are ghosted');
 });
 
 test('device Add: new entries get the slot type; kinds without a CoreMail type are `other` with their kind and stay in their slot', () => {
@@ -193,13 +203,18 @@ test('phone kinds: every phone slot round-trips to the same slot; numbers withou
     [0x14, 'CarPhoneNumber', '+1 8', 'other', 'car'], [0x33, 'RadioPhoneNumber', '+1 9', 'other', 'radio'],
     [0x07, 'AssistantPhoneNumber', '+1 10', 'other', 'assistant'],
   ];
-  const add = contactChange(appData([Ct(0x1f, 'Kim'), C2(0x0b, '+1 7'), ...PHONES.map(([t, , v]) => Ct(t, v))]), null, write());
+  const add = contactChange(appData([Ct(0x1f, 'Kim'), C2(0x0b, '+1 7'), C2(0x0e, '+1 11'), ...PHONES.map(([t, , v]) => Ct(t, v))]), null, write());
   assert.equal(add.normalized, false, 'every number is shown in the slot the device used');
   const view = contactView(add.item);
   for (const [, slotName, value] of PHONES) assert.equal(view[slotName], value, slotName);
-  assert.equal(view['CompanyMainPhone'], '+1 7');
+  assert.deepEqual([view['CompanyMainPhone'], view['MMS']], ['+1 7', '+1 11']);
   const kinds = add.item.card.phones.map((p, i) => `${p.value}=${p.type}/${add.item.phoneKinds[i]}`);
-  for (const [, , value, type, kind] of [...PHONES, [0, '', '+1 7', 'other', 'company-main'] as const]) assert.ok(kinds.includes(`${value}=${type}/${kind}`), kinds.join(' '));
+  for (const [, , value, type, kind] of [...PHONES, [0, '', '+1 7', 'other', 'company-main'] as const, [0, '', '+1 11', 'other', 'mms'] as const]) {
+    assert.ok(kinds.includes(`${value}=${type}/${kind}`), kinds.join(' '));
+  }
+  const others = item({ phones: ['1', '2', '3', '4', '5'].map((value) => ({ type: 'other' as const, value })) });
+  assert.deepEqual(['CompanyMainPhone', 'CarPhoneNumber', 'RadioPhoneNumber', 'AssistantPhoneNumber', 'MMS'].map((e) => contactView(others)[e]),
+    ['1', '2', '3', '4', ''], 'MMS shows only an MMS number; a fifth plain number stays hidden as before');
   const back = contactChange(echo(add.item), add.item, write());
   assert.equal(back.normalized, false);
   assert.deepEqual([back.item.card.phones, back.item.phoneKinds], [add.item.card.phones, add.item.phoneKinds], 'the echo changes nothing');
@@ -214,6 +229,35 @@ test('phone kinds: every phone slot round-trips to the same slot; numbers withou
   assert.equal(edit.normalized, false);
   assert.deepEqual(edit.item.card.phones.map((p, i) => `${p.value}/${edit.item.phoneKinds[i]}`), ['P1/', 'C/car', 'P2 neu/', 'F/', 'A/assistant'],
     'an edited number keeps its (missing) kind; the new one gets the slot kind');
+});
+
+test('spouse, children, assistant, manager, Yomi names, ids: a device Add keeps them, the echo changes nothing, too many children come back', () => {
+  const add = contactChange(appData([
+    Ct(0x1f, 'Kim'), Ct(0x34, 'Sam'), Ct(0x17, [Ct(0x18, 'Lena'), Ct(0x18, ' '), Ct(0x18, 'Tom')]), Ct(0x06, 'Anna'), C2(0x0a, 'Bernd'),
+    Ct(0x39, 'キム'), Ct(0x3a, 'ヤマ'), Ct(0x38, 'カイシャ'), C2(0x05, 'K-1'), C2(0x06, 'G-2'), C2(0x0c, 'kim.a'), Ct(0x2c, 'Raum 1'),
+  ]), null, write());
+  assert.deepEqual(add.item.extras, {
+    OfficeLocation: 'Raum 1', Spouse: 'Sam', AssistantName: 'Anna', ManagerName: 'Bernd', YomiFirstName: 'キム', YomiLastName: 'ヤマ',
+    YomiCompanyName: 'カイシャ', CustomerId: 'K-1', GovernmentId: 'G-2', AccountName: 'kim.a',
+  });
+  assert.deepEqual(add.item.children, ['Lena', 'Tom']);
+  assert.equal(add.normalized, false, 'a blank child is no child');
+  const tree = echo(add.item);
+  assert.deepEqual(kid(tree, 'Children')?.children?.map((c) => (c as WbxmlElement).text), ['Lena', 'Tom']);
+  assert.equal(kid(tree, 'ManagerName')?.page, 12, 'contacts2:ManagerName');
+  const back = contactChange(tree, add.item, write());
+  assert.deepEqual([back.normalized, back.item.extras, back.item.children], [false, add.item.extras, add.item.children]);
+
+  const many = Array.from({ length: CHILDREN_MAX + 2 }, (_, i) => `Kind ${i + 1}`);
+  const stored = item({ displayName: 'K' }, { children: many });
+  const sent = echo(stored);
+  assert.equal(kid(sent, 'Children')?.children?.length, CHILDREN_MAX, 'a device gets the first children only');
+  const kept = contactChange(sent, stored, write());
+  assert.deepEqual([kept.normalized, kept.item.children], [false, many], 'the children it never saw stay');
+  const renamed = contactChange(appData([Ct(0x17, [Ct(0x18, 'Erste')])]), stored, write({ supported: new Set(['Children']) }));
+  assert.deepEqual(renamed.item.children, ['Erste', ...many.slice(CHILDREN_MAX)]);
+  const tooMany = contactChange(appData([Ct(0x17, many.map((n) => Ct(0x18, n)))]), null, write());
+  assert.deepEqual([tooMany.normalized, tooMany.item.children.length], [true, CHILDREN_MAX]);
 });
 
 test('file as and display name: derived values follow the names; values set apart stay', () => {

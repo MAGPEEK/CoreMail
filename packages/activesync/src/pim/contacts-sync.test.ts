@@ -57,6 +57,8 @@ const CARDDAV_VCARD = [
   'item1.EMAIL;type=INTERNET;type=WORK;type=pref:erika@firma.example', 'item1.X-ABLabel:Büro',
   'EMAIL;type=INTERNET;type=HOME:erika@privat.example', 'EMAIL;type=INTERNET:e3@example.org', 'EMAIL;type=INTERNET:e4@example.org',
   'TEL;type=CELL:+49 170 1', 'TEL;type=WORK;type=VOICE:+49 30 2', 'X-CUSTOM:kept', `PHOTO;ENCODING=b;TYPE=JPEG:${BIG_PHOTO}`,
+  'X-RELATED;TYPE=SPOUSE:Max Muster', 'RELATED;TYPE=spouse:urn:uuid:ref-1', 'X-RELATED;TYPE=CHILD:Lena', 'X-PHONETIC-FIRST-NAME:エリカ',
+  'TEL;TYPE=X-MMS:+49 170 3',
   'END:VCARD', '',
 ].join('\r\n');
 const contactRow = (id: string, userId: string, vcardData: string) => ({
@@ -92,7 +94,9 @@ async function sync(key: string, o: SyncOpts = {}) {
 const asNodes = (data: E, replace: Record<string, string> = {}): WNode[] => (data.children ?? []).filter((c): c is E => typeof c !== 'string')
   .map((c) => [c.page ?? 0, tokenOf(c), c.children?.some((x) => typeof x !== 'string') ? asNodes(c) : (replace[c.name] ?? c.text ?? '')] as WNode);
 const TOKENS: Record<number, Record<string, number>> = {
-  1: { Email1Address: 0x1b, Email2Address: 0x1c, Email3Address: 0x1d, FileAs: 0x1e, FirstName: 0x1f, LastName: 0x29, CompanyName: 0x19,
+  12: { MMS: 0x0e },
+  1: { Spouse: 0x34, YomiFirstName: 0x39, Children: 0x17, Child: 0x18,
+    Email1Address: 0x1b, Email2Address: 0x1c, Email3Address: 0x1d, FileAs: 0x1e, FirstName: 0x1f, LastName: 0x29, CompanyName: 0x19,
     Department: 0x1a, MobilePhoneNumber: 0x2b, BusinessPhoneNumber: 0x13, Categories: 0x15, Category: 0x16, HomePhoneNumber: 0x27 },
   17: { Body: 0x0a, Type: 0x06, EstimatedDataSize: 0x0c, Truncated: 0x0d, Data: 0x0b },
 };
@@ -138,14 +142,18 @@ test('Sync: priming, then the own contacts as Adds — a CardDAV card (slots, no
 test('device Change of the CardDAV card: only the values it saw change — 4th e-mail, X- property, labels, ORG unit, photo, groups survive; no echo', async () => {
   const first = await sync('0', { dev: 'dev12', version: '12.1' }); // a second device just to read the item
   const got = (await sync(first.key, { dev: 'dev12', version: '12.1' })).data('c1')!;
-  const change = A(0x08, [A(0x0d, 'c1'), A(0x1d, asNodes(got, { Email1Address: 'erika@neu.example', FirstName: 'Erika-Maria' }))]);
+  assert.deepEqual(['Spouse', 'YomiFirstName', 'MMS'].map((n) => kid(got, n)?.text), ['Max Muster', 'エリカ', '+49 170 3']);
+  assert.deepEqual(kids(kid(got, 'Children'), 'Child').map((c) => c.text), ['Lena']);
+  const change = A(0x08, [A(0x0d, 'c1'), A(0x1d, asNodes(got, { Email1Address: 'erika@neu.example', FirstName: 'Erika-Maria', Spouse: 'Maximilian Muster' }))]);
   const r = await sync(key, { commands: [change] });
   assert.deepEqual([r.status, r.responses], ['1', []]);
   assert.deepEqual(r.changes, ['c1'], 'the derived FileAs changed with the name: the same response sends it');
   assert.equal(kid(r.data('c1'), 'FileAs')?.text, 'Muster, Erika-Maria');
   const stored = row('contact', 'c1')!;
   const vcard = lines(stored['vcardData']);
-  for (const kept of ['X-CUSTOM:kept', 'item1.X-ABLabel:Büro', 'EMAIL;type=INTERNET:e4@example.org', 'ORG:Beispiel GmbH;Vertrieb;Nord', 'UID:uid-c1']) {
+  assert.ok(vcard.includes('X-RELATED;TYPE=SPOUSE:Maximilian Muster'), 'the spouse changed in its line');
+  for (const kept of ['X-CUSTOM:kept', 'item1.X-ABLabel:Büro', 'EMAIL;type=INTERNET:e4@example.org', 'ORG:Beispiel GmbH;Vertrieb;Nord', 'UID:uid-c1',
+    'RELATED;TYPE=spouse:urn:uuid:ref-1', 'X-RELATED;TYPE=CHILD:Lena', 'X-PHONETIC-FIRST-NAME:エリカ', 'TEL;TYPE=X-MMS:+49 170 3']) {
     assert.ok(vcard.includes(kept), `lost ${kept}`);
   }
   assert.ok(vcard.includes('item1.EMAIL;type=INTERNET;type=WORK;type=pref:erika@neu.example'), 'the changed address keeps its line head');
@@ -156,6 +164,23 @@ test('device Change of the CardDAV card: only the values it saw change — 4th e
   const next = await sync(r.key);
   assert.deepEqual([next.adds, next.changes, next.deletes], [[], [], []], 'no echo');
   key = next.key;
+});
+
+test('a phone that lists only some elements as Supported: its edit keeps spouse, children, Yomi names and the MMS number', async () => {
+  rows('activeSyncDevice').push({ id: 'd3', userId: 'u1', deviceId: 'dev3', status: 'OK', policyKey: '42', protocolVersion: '14.1', syncKeys: {} });
+  const p = await sync('0', { dev: 'dev3', extra: [A(0x20, [Ct(0x1f), Ct(0x29), Ct(0x1b)])] });
+  const first = await sync(p.key, { dev: 'dev3' });
+  assert.ok(first.adds.includes('c1'));
+  const change = A(0x08, [A(0x0d, 'c1'), A(0x1d, [Ct(0x1f, 'Erika'), Ct(0x29, 'Muster'), Ct(0x1b, 'erika@ghost.example')])]);
+  const r = await sync(first.key, { dev: 'dev3', commands: [change] });
+  assert.equal(r.status, '1');
+  const vcard = lines(row('contact', 'c1')!['vcardData']);
+  assert.ok(vcard.some((l) => l.endsWith(':erika@ghost.example')), 'the Supported element changed');
+  for (const kept of ['X-RELATED;TYPE=SPOUSE:Maximilian Muster', 'RELATED;TYPE=spouse:urn:uuid:ref-1', 'X-RELATED;TYPE=CHILD:Lena',
+    'X-PHONETIC-FIRST-NAME:エリカ', 'TEL;TYPE=X-MMS:+49 170 3', 'TEL;type=CELL:+49 170 1']) {
+    assert.ok(vcard.includes(kept), `lost ${kept}`);
+  }
+  key = (await sync(key)).key; // dev1 takes the change
 });
 
 let added = '';

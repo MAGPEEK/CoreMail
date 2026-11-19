@@ -49,9 +49,9 @@ contact or group leaves every group it was a member of (`detachCardFromGroups`).
 |--------|---------|
 | `contacts/contact-card.ts` | the `ContactCard` model, type lists, limits, `applyContactPatch()` (structured fields + the legacy single slots `email`/`email2`/`phone`/`mobile`), `flatContactColumns()`, `contactSearchText()`, date normalisation, tolerant JSON readers, `photoMediaType()` |
 | `contacts/contact-vcard.ts` | `contactCardFromVcard()`, `applyContactCard()` (writes only changed properties), `buildContactVcard()`, `contactColumnsFromVcard()`; properties outside the card: `vcardText()` / `setVcardText()` (e.g. `OFFICE_LOCATION_PROPERTY`), `vcardPhoto()` / `setVcardPhoto()` (inline PHOTO in the spelling of the vCard version) |
-| `contacts/contact-store.ts` | the contact row writer: `createContactRow()`, `updateContactRow()` (vCard + derived columns), `deleteContactRow()` (also leaves every group) — realtime announcements stay with the caller |
+| `contacts/contact-store.ts` | the contact row writer: `createContactRow()`, `updateContactRow()` (vCard + derived columns), `deleteContactRow()` (also leaves every group), `ensureContactUid()` — realtime announcements stay with the caller |
 | `contacts/contact-group-vcard.ts` | group vCards (both spellings), `applyContactGroup()`, `expandGroupMembers()` (pure) |
-| `contacts/contact-groups.ts` | group columns, `detachCardFromGroups()`, `resolveCards()`, `expandContactGroup()`, `ensureContactUid()` |
+| `contacts/contact-groups.ts` | group columns, `detachCardFromGroups()`, `resolveCards()`, `expandContactGroup()` |
 
 A protocol implementation maps its item to a `ContactPatch`, applies it with
 `applyContactPatch(contactCardFromRow(row), patch)`, writes
@@ -71,7 +71,7 @@ path the REST API and CardDAV take. ActiveSync does exactly this
 | company / department | `ORG` (further units kept) | `ORG` | |
 | e-mail | `EMAIL;TYPE=INTERNET[,WORK\|HOME]` | `EMAIL[;TYPE=work\|home]` | |
 | phone | `TEL;TYPE=WORK,VOICE` / `HOME,VOICE` / `CELL` / `FAX` / `PAGER` / `VOICE` | same, lower case | `tel:` URIs, quoted TYPE lists |
-| phone kind (ActiveSync slots, not in the card: `vcardPhoneKinds()`, `applyContactCard(…, { phoneKinds })`) | `other` numbers `TEL;TYPE=CAR,VOICE` / `X-RADIO,VOICE` / `X-ASSISTANT,VOICE` / `X-COMPANY-MAIN,VOICE`; fax numbers `WORK,FAX` / `HOME,FAX` | same, lower case | REST and CardDAV keep the kind: a changed number keeps its line |
+| phone kind (ActiveSync slots, not in the card: `vcardPhoneKinds()`, `applyContactCard(…, { phoneKinds })`) | `other` numbers `TEL;TYPE=CAR,VOICE` / `X-RADIO,VOICE` / `X-ASSISTANT,VOICE` / `X-COMPANY-MAIN,VOICE` / `X-MMS`; fax numbers `WORK,FAX` / `HOME,FAX` | same, lower case | REST and CardDAV keep the kind: a changed number keeps its line |
 | address | `ADR[;TYPE=WORK\|HOME]` (PO box; extended; street; city; region; code; country) | same | |
 | web page | `URL[;TYPE=…]` | same | Apple's escaped `http\://` |
 | chat | `IMPP[;TYPE=…]:<scheme>:<handle>` | same | |
@@ -79,6 +79,9 @@ path the REST API and CardDAV take. ActiveSync does exactly this
 | anniversary | `X-ANNIVERSARY` | `ANNIVERSARY` | Apple `itemN.X-ABDATE` labelled `_$!<Anniversary>!$_` |
 | categories | `CATEGORIES` (one line; several lines are merged) | same | |
 | office location (ActiveSync only, not in the card) | `X-OFFICE-LOCATION` | same | |
+| phonetic names (ActiveSync Yomi names, not in the card) | `X-PHONETIC-FIRST-NAME`, `X-PHONETIC-LAST-NAME`, `X-PHONETIC-ORG` | same | |
+| customer id / government id / account name (ActiveSync only) | `X-CUSTOMER-ID`, `X-GOVERNMENT-ID`, `X-ACCOUNT-NAME` | same | |
+| spouse / children / assistant / manager (ActiveSync only, `vcardRelated()` / `setVcardRelated()`) | `X-RELATED;TYPE=SPOUSE` / `CHILD` / `X-ASSISTANT` / `X-MANAGER` (the vCard 3 form, like `X-ANNIVERSARY`) | `RELATED;TYPE=spouse;VALUE=text` / `child` / `x-assistant` / `x-manager` | only text values are names: a RELATED by reference (`urn:uuid:`, URL) is neither read nor changed |
 | photo (ActiveSync Picture, not in the card) | `PHOTO;ENCODING=b;TYPE=JPEG:<base64>` | `PHOTO:data:image/jpeg;base64,<base64>` | vCard 2.1 `ENCODING=BASE64`; a photo by URL is kept but not read |
 
 A webmail edit rewrites only the properties whose field changed. Within a

@@ -245,9 +245,14 @@ group item.
 | Categories / Category | categories (trimmed, unique, capped like the REST API) |
 | airsyncbase:Body | notes (plain text; an HTML body from a device is converted; a truncated copy sent back unchanged keeps the full note) |
 | Picture | an inline JPEG / PNG / GIF PHOTO of at most 48 KiB; a larger photo or one by URL is not sent and never touched by device changes; a device picture over the bound or not an image is refused (the stored one stays and is sent back) |
+| Spouse, AssistantName, contacts2:ManagerName | the first related person of its type as text (vCard 4 `RELATED;TYPE=spouse` / `x-assistant` / `x-manager;VALUE=text`, vCard 3 `X-RELATED;TYPE=SPOUSE` …); further ones and a RELATED by reference (`urn:uuid:`, URL) stay untouched |
+| Children / Child | every `RELATED;TYPE=child;VALUE=text` (vCard 3 `X-RELATED;TYPE=CHILD`), the first 20 sent; further ones stay; a device list over 20 keeps the first 20 and is sent back |
+| YomiFirstName, YomiLastName, YomiCompanyName | `X-PHONETIC-FIRST-NAME`, `X-PHONETIC-LAST-NAME`, `X-PHONETIC-ORG` (as Apple writes them) |
+| contacts2:CustomerId, GovernmentId, AccountName | `X-CUSTOMER-ID`, `X-GOVERNMENT-ID`, `X-ACCOUNT-NAME` |
+| contacts2:MMS | the first `other` phone of kind mms (`TEL;TYPE=X-MMS`); no other number moves into this slot |
 
-Not stored (a device value is dropped): AssistantName, Spouse, Children, the Yomi names,
-contacts2:CustomerId, GovernmentId, ManagerName, AccountName, MMS.
+Every contact element is stored: none of them is dropped, and REST / CardDAV edits leave the
+properties above untouched.
 
 **Fixed slots, more values** (`src/pim/contacts-view.ts`): a contact can hold more e-mail
 addresses, phones, addresses, web pages and chat addresses than ActiveSync has slots. Each slot

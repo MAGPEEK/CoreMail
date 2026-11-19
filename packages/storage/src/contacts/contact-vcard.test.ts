@@ -10,7 +10,7 @@ import {
 } from './contact-card.js';
 import {
   applyContactCard, buildContactVcard, contactCardFromVcard, contactColumnsFromVcard, setVcardPhoto, setVcardText, uidKey, vcardPhoto,
-  vcardPhoneKinds, vcardSaysCard, vcardText, OFFICE_LOCATION_PROPERTY,
+  setVcardRelated, vcardPhoneKinds, vcardRelated, vcardSaysCard, vcardText, CONTACT_RELATED_TYPES, CONTACT_TEXT_PROPERTIES, OFFICE_LOCATION_PROPERTY,
 } from './contact-vcard.js';
 
 const lines = (vcard: string): string[] => vcard.replace(/\r\n[ \t]/g, '').split('\r\n').filter(Boolean);
@@ -277,4 +277,33 @@ test('phone kinds (ActiveSync slots): read from TEL TYPE, written in the version
   assert.deepEqual(vcardPhoneKinds(rest), vcardPhoneKinds(v3));
   assert.equal(applyContactCard(v3, contactCardFromVcard(v3), { phoneKinds: vcardPhoneKinds(v3) }), applyContactCard(v3, contactCardFromVcard(v3)),
     'the same kinds: nothing rewritten');
+  const mms = lines(applyContactCard(base, phones(['other', '7']), { phoneKinds: ['mms'] }));
+  assert.ok(mms.includes('TEL;TYPE=X-MMS:7'), mms.join(' | '));
+  assert.deepEqual(vcardPhoneKinds(mms.join('\r\n')), ['mms']);
+});
+
+test('related persons as text: vCard 4 RELATED;VALUE=text, vCard 3 X-RELATED; references untouched; kept by REST / CardDAV edits', () => {
+  const card = (...l: string[]) => ['BEGIN:VCARD', ...l, 'FN:A', 'UID:u1', 'END:VCARD', ''].join('\r\n');
+  const v4 = card('VERSION:4.0', 'RELATED;TYPE=spouse:urn:uuid:other-card', 'RELATED;TYPE=spouse;VALUE=text:Sam',
+    'RELATED;TYPE=child;VALUE=text:Lena', 'item1.RELATED;TYPE=child;VALUE=text:Tom', 'RELATED;TYPE=x-manager;VALUE=text:Bernd');
+  assert.deepEqual([vcardRelated(v4, CONTACT_RELATED_TYPES.spouse), vcardRelated(v4, 'child'), vcardRelated(v4, 'x-manager'), vcardRelated(v4, 'x-assistant')],
+    [['Sam'], ['Lena', 'Tom'], ['Bernd'], []], 'a RELATED by reference is no name');
+  const kids = lines(setVcardRelated(v4, 'child', ['Lena', 'Thomas', 'Mia; Sophie']));
+  assert.deepEqual(kids.filter((l) => l.includes('TYPE=child')),
+    ['RELATED;TYPE=child;VALUE=text:Lena', 'item1.RELATED;TYPE=child;VALUE=text:Thomas', 'RELATED;TYPE=child;VALUE=text:Mia\\; Sophie']);
+  assert.deepEqual(vcardRelated(kids.join('\r\n'), 'child'), ['Lena', 'Thomas', 'Mia; Sophie']);
+  const noSpouse = lines(setVcardRelated(v4, 'spouse', []));
+  assert.ok(noSpouse.includes('RELATED;TYPE=spouse:urn:uuid:other-card') && !noSpouse.some((l) => l.endsWith(':Sam')), 'the reference stays');
+  const v3 = lines(setVcardRelated(card('VERSION:3.0'), 'x-assistant', ['Anna']));
+  assert.ok(v3.includes('X-RELATED;TYPE=X-ASSISTANT:Anna'), v3.join(' | '));
+  assert.deepEqual(vcardRelated(v3.join('\r\n'), 'x-assistant'), ['Anna']);
+
+  const texts = lines(setVcardText(setVcardText(card('VERSION:3.0'), CONTACT_TEXT_PROPERTIES.phoneticGiven, 'エリカ'), CONTACT_TEXT_PROPERTIES.customerId, 'K-1'));
+  assert.ok(texts.includes('X-PHONETIC-FIRST-NAME:エリカ') && texts.includes('X-CUSTOMER-ID:K-1'));
+  // a REST / CardDAV card edit leaves them alone
+  const all = [...kids, ...texts.filter((l) => l.startsWith('X-'))].join('\r\n').replace('END:VCARD\r\n', '') + '\r\nEND:VCARD\r\n';
+  const edited = applyContactCard(all, { ...contactCardFromVcard(all), jobTitle: 'Leitung', phones: [{ type: 'mobile', value: '1' }] });
+  for (const kept of ['RELATED;TYPE=spouse:urn:uuid:other-card', 'item1.RELATED;TYPE=child;VALUE=text:Thomas', 'X-PHONETIC-FIRST-NAME:エリカ', 'X-CUSTOMER-ID:K-1']) {
+    assert.ok(lines(edited).includes(kept), `lost ${kept}`);
+  }
 });

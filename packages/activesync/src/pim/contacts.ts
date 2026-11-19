@@ -9,11 +9,12 @@
 import { prisma } from '@coremail/storage/prisma';
 import {
   announceUserEvent, applyContactCard, contactCardFromRow, createContactRow, deleteContactRow, photoMediaType, sameContactCard,
-  setVcardPhoto, setVcardText, updateContactRow, vcardPhoneKinds, vcardPhoto, vcardText, vcardUidKey, OFFICE_LOCATION_PROPERTY,
+  setVcardPhoto, setVcardRelated, setVcardText, updateContactRow, vcardPhoneKinds, vcardPhoto, vcardRelated, vcardText, vcardUidKey,
+  CONTACT_RELATED_TYPES, CONTACT_TEXT_PROPERTIES,
 } from '@coremail/storage';
 import type { UserEventAction } from '@coremail/core';
 import { contactChange, renderContact, PICTURE_MAX_BYTES } from './contacts-codec.js';
-import type { ContactItem } from './contacts-view.js';
+import { EXTRA_ELEMENTS, type ContactItem, type ExtraElement } from './contacts-view.js';
 import { PIM_STATUS, versionOf, type PimClassModule, type PimCollection } from './types.js';
 
 export const CONTACTS_COLLECTION_ID = 'contacts:default';
@@ -30,6 +31,33 @@ export interface ContactRow {
   company: string; department: string; jobTitle: string; notes: string; updatedAt: Date;
 }
 
+/** Where an element outside the card lives in the vCard: its own property or a related person (the first of its type). */
+const EXTRA_STORE: Readonly<Record<ExtraElement, { property: string } | { related: string }>> = {
+  OfficeLocation: { property: CONTACT_TEXT_PROPERTIES.officeLocation },
+  YomiFirstName: { property: CONTACT_TEXT_PROPERTIES.phoneticGiven },
+  YomiLastName: { property: CONTACT_TEXT_PROPERTIES.phoneticFamily },
+  YomiCompanyName: { property: CONTACT_TEXT_PROPERTIES.phoneticCompany },
+  CustomerId: { property: CONTACT_TEXT_PROPERTIES.customerId },
+  GovernmentId: { property: CONTACT_TEXT_PROPERTIES.governmentId },
+  AccountName: { property: CONTACT_TEXT_PROPERTIES.accountName },
+  Spouse: { related: CONTACT_RELATED_TYPES.spouse },
+  AssistantName: { related: CONTACT_RELATED_TYPES.assistant },
+  ManagerName: { related: CONTACT_RELATED_TYPES.manager },
+};
+
+function readExtra(vcard: string, e: ExtraElement): string {
+  const at = EXTRA_STORE[e];
+  return 'property' in at ? vcardText(vcard, at.property) : vcardRelated(vcard, at.related)[0] ?? '';
+}
+
+/** `vcard` with element `e` set to `value`; for a related person only the first one of its type (the one the device saw). */
+function writeExtra(vcard: string, e: ExtraElement, value: string): string {
+  const at = EXTRA_STORE[e];
+  if ('property' in at) return setVcardText(vcard, at.property, value);
+  const rest = vcardRelated(vcard, at.related).slice(1);
+  return setVcardRelated(vcard, at.related, value ? [value, ...rest] : rest);
+}
+
 function announce(userId: string, action: UserEventAction, ids: string[]): void {
   if (ids.length > 0) announceUserEvent(userId, { type: 'contacts', action, ids });
 }
@@ -39,16 +67,23 @@ export function contactItemOf(row: ContactRow): ContactItem {
   const photo = vcardPhoto(row.vcardData);
   return {
     card: contactCardFromRow(row),
-    officeLocation: vcardText(row.vcardData, OFFICE_LOCATION_PROPERTY),
+    extras: Object.fromEntries(EXTRA_ELEMENTS.map((e) => [e, readExtra(row.vcardData, e)])),
+    children: vcardRelated(row.vcardData, CONTACT_RELATED_TYPES.child),
     picture: photo && photo.data.length <= PICTURE_MAX_BYTES ? photo.data.toString('base64') : '',
     phoneKinds: vcardPhoneKinds(row.vcardData),
   };
 }
 
+const sameList = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((x, i) => x === b[i]);
+
 /** The stored vCard with `item` written into it (only what differs from `stored`). */
 export function contactVcard(vcard: string, stored: ContactItem | null, item: ContactItem): string {
   let out = applyContactCard(vcard, item.card, { phoneKinds: item.phoneKinds });
-  if (item.officeLocation !== (stored?.officeLocation ?? '')) out = setVcardText(out, OFFICE_LOCATION_PROPERTY, item.officeLocation);
+  for (const e of EXTRA_ELEMENTS) {
+    const value = item.extras[e] ?? '';
+    if (value !== (stored?.extras[e] ?? '')) out = writeExtra(out, e, value);
+  }
+  if (!sameList(item.children, stored?.children ?? [])) out = setVcardRelated(out, CONTACT_RELATED_TYPES.child, item.children);
   if (item.picture !== (stored?.picture ?? '')) {
     const data = Buffer.from(item.picture, 'base64');
     const mediaType = photoMediaType(data);
@@ -57,10 +92,11 @@ export function contactVcard(vcard: string, stored: ContactItem | null, item: Co
   return out;
 }
 
-const kindsOf = (item: ContactItem): string => item.card.phones.map((_, i) => item.phoneKinds[i] ?? '').join(',');
+const kindsOf = (item: ContactItem): string[] => item.card.phones.map((_, i) => item.phoneKinds[i] ?? '');
 
 const sameItem = (a: ContactItem, b: ContactItem): boolean =>
-  sameContactCard(a.card, b.card) && a.officeLocation === b.officeLocation && a.picture === b.picture && kindsOf(a) === kindsOf(b);
+  sameContactCard(a.card, b.card) && a.picture === b.picture && sameList(kindsOf(a), kindsOf(b)) && sameList(a.children, b.children)
+  && EXTRA_ELEMENTS.every((e) => (a.extras[e] ?? '') === (b.extras[e] ?? ''));
 
 async function findContact(col: PimCollection, id: string): Promise<ContactRow | null> {
   return prisma.contact.findFirst({ where: { id, userId: col.key }, select: CONTACT_SELECT });

@@ -27,6 +27,14 @@ for the calendar, tasks and notes folders.
   `HOME,FAX`) and return to the same ActiveSync slot; REST shows them as `other` / `fax` as before
   and keeps the kind when the number changes. Storage: `vcardPhoneKinds()`, `ContactPhoneKind`,
   `applyContactCard(vcard, card, { phoneKinds })`.
+- Every ActiveSync contact element is stored, none is dropped: Spouse, Children, AssistantName and
+  ManagerName as related persons (`RELATED;TYPE=spouse|child|x-assistant|x-manager;VALUE=text`,
+  vCard 3 `X-RELATED;TYPE=…`; a RELATED by reference stays untouched), the Yomi names as
+  `X-PHONETIC-FIRST-NAME` / `X-PHONETIC-LAST-NAME` / `X-PHONETIC-ORG`, CustomerId / GovernmentId /
+  AccountName as `X-CUSTOMER-ID` / `X-GOVERNMENT-ID` / `X-ACCOUNT-NAME`, MMS as a phone of kind mms
+  (`TEL;TYPE=X-MMS`). REST and CardDAV edits keep them; a phone that ghosts them keeps them.
+  Storage: `vcardRelated()` / `setVcardRelated()`, `CONTACT_TEXT_PROPERTIES`, `CONTACT_RELATED_TYPES`.
+- Storage: `ensureContactUid()` moved to `contacts/contact-store.ts` and writes through `updateContactRow()`.
 - Sync, GetItemEstimate, ItemOperations Fetch and Ping for the contacts folder with the per-device
   item state of the other classes (ClientId retries, no echo, airsync:Supported ghosting, truncated
   bodies); MoveItems refuses moves between the contacts folder and any other class.

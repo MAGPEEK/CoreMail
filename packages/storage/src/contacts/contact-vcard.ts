@@ -82,24 +82,28 @@ function phoneType(types: string[]): ContactPhoneType {
 
 /**
  * Kinds of numbers the card has no type of their own for (ActiveSync has a slot for each):
- * the card shows car / radio / assistant / company main numbers as `other` and both fax
- * kinds as `fax`; the vCard keeps the kind in a TEL TYPE value (vCard 3 CAR, x-names for
+ * the card shows car / radio / assistant / company main / MMS numbers as `other` and both
+ * fax kinds as `fax`; the vCard keeps the kind in a TEL TYPE value (vCard 3 CAR, x-names for
  * the rest; WORK / HOME next to FAX), so the number comes back in the same slot.
  */
-export const CONTACT_PHONE_KINDS = ['car', 'radio', 'assistant', 'company-main', 'work-fax', 'home-fax'] as const;
+export const CONTACT_PHONE_KINDS = ['car', 'radio', 'assistant', 'company-main', 'mms', 'work-fax', 'home-fax'] as const;
 /** A phone kind; '' = none beyond the card type. */
 export type ContactPhoneKind = typeof CONTACT_PHONE_KINDS[number] | '';
 
-/** TYPE value of the kinds of an `other` number. */
-const OTHER_KIND_TYPE: Readonly<Record<string, string>> = {
-  car: 'CAR', radio: 'X-RADIO', assistant: 'X-ASSISTANT', 'company-main': 'X-COMPANY-MAIN',
+/** The kinds of an `other` number: the TYPE value that marks it and the TYPE list written for it. */
+const OTHER_KINDS: Readonly<Record<string, { mark: string; param: string }>> = {
+  car: { mark: 'CAR', param: 'car,voice' },
+  radio: { mark: 'X-RADIO', param: 'x-radio,voice' },
+  assistant: { mark: 'X-ASSISTANT', param: 'x-assistant,voice' },
+  'company-main': { mark: 'X-COMPANY-MAIN', param: 'x-company-main,voice' },
+  mms: { mark: 'X-MMS', param: 'x-mms' },
 };
 
 function phoneKind(types: string[]): ContactPhoneKind {
   const type = phoneType(types);
   if (type === 'fax') return types.includes('WORK') ? 'work-fax' : types.includes('HOME') ? 'home-fax' : '';
   if (type !== 'other') return '';
-  return CONTACT_PHONE_KINDS.find((k) => OTHER_KIND_TYPE[k] !== undefined && types.includes(OTHER_KIND_TYPE[k])) ?? '';
+  return CONTACT_PHONE_KINDS.find((k) => OTHER_KINDS[k] !== undefined && types.includes(OTHER_KINDS[k].mark)) ?? '';
 }
 
 /** True when a number of card type `type` can have `kind`. */
@@ -235,7 +239,7 @@ function emailLine(e: ContactEmail, v4: boolean): string {
 }
 function phoneLine(p: ContactPhone, v4: boolean, kind: ContactPhoneKind = ''): string {
   const t = kind === '' || !kindFits(p.type, kind) ? PHONE_TYPE_PARAM[p.type]
-    : kind.endsWith('-fax') ? `${kind.slice(0, -4)},fax` : `${OTHER_KIND_TYPE[kind]!.toLowerCase()},voice`;
+    : kind.endsWith('-fax') ? `${kind.slice(0, -4)},fax` : OTHER_KINDS[kind]!.param;
   return `TEL;TYPE=${v4 ? t : t.toUpperCase()}:${escapeText(p.value)}`;
 }
 function addressLine(a: ContactAddress, v4: boolean): string {
@@ -424,7 +428,60 @@ export function buildContactVcard(card: ContactCard): string {
 /** Office location of a contact (ActiveSync OfficeLocation; no standard vCard property). */
 export const OFFICE_LOCATION_PROPERTY = 'X-OFFICE-LOCATION';
 
+/** Single-value text properties outside the card (ActiveSync fields; phonetic names as Apple writes them). */
+export const CONTACT_TEXT_PROPERTIES = {
+  officeLocation: OFFICE_LOCATION_PROPERTY,
+  phoneticGiven: 'X-PHONETIC-FIRST-NAME',
+  phoneticFamily: 'X-PHONETIC-LAST-NAME',
+  phoneticCompany: 'X-PHONETIC-ORG',
+  customerId: 'X-CUSTOMER-ID',
+  governmentId: 'X-GOVERNMENT-ID',
+  accountName: 'X-ACCOUNT-NAME',
+} as const;
+
+/** RELATED types of the related persons CoreMail reads and writes as text (spouse, children, assistant, manager). */
+export const CONTACT_RELATED_TYPES = { spouse: 'spouse', child: 'child', assistant: 'x-assistant', manager: 'x-manager' } as const;
+
 const docOf = (vcard: string): VcardDocument => parseVcard(vcard) ?? parseVcard(EMPTY_V3)!;
+
+/**
+ * A related person given as text: vCard 4 `RELATED;TYPE=<type>;VALUE=text`, the vCard 3 form
+ * `X-RELATED;TYPE=<type>` (like X-ANNIVERSARY for ANNIVERSARY). A RELATED by reference
+ * (`urn:uuid:` of another card, a URL) is not a name: it is neither read nor touched.
+ */
+function isRelatedText(p: VcardProperty, type: string): boolean {
+  if (!p.types.includes(type.toUpperCase()) || text(p) === '') return false;
+  const value = (p.params['VALUE'] ?? '').toUpperCase();
+  if (p.name === 'X-RELATED') return value !== 'URI';
+  return p.name === 'RELATED' && value === 'TEXT';
+}
+
+/** The names of the related persons of `type` (CONTACT_RELATED_TYPES), in vCard order. */
+export function vcardRelated(vcard: string, type: string): string[] {
+  return (parseVcard(vcard)?.properties ?? []).filter((p) => isRelatedText(p, type)).map((p) => text(p));
+}
+
+/**
+ * `vcard` with the related persons of `type` set to `names`: the n-th stored one keeps its
+ * line (group, parameters) and gets the n-th name, surplus ones are removed, further names
+ * are added in the spelling of the vCard version. Everything else is untouched.
+ */
+export function setVcardRelated(vcard: string, type: string, names: readonly string[]): string {
+  const doc = docOf(vcard);
+  const wanted = names.map((n) => n.trim()).filter(Boolean);
+  let next = 0;
+  const props: VcardProperty[] = [];
+  for (const p of doc.properties) {
+    if (!isRelatedText(p, type)) { props.push(p); continue; }
+    const name = wanted[next++];
+    if (name !== undefined) props.push(text(p) === name ? p : prop(`${headOf(p)}:${escapeText(name)}`));
+  }
+  const fresh = (name: string): string => (isVcard4(doc)
+    ? `RELATED;TYPE=${type.toLowerCase()};VALUE=text:${escapeText(name)}`
+    : `X-RELATED;TYPE=${type.toUpperCase()}:${escapeText(name)}`);
+  for (const name of wanted.slice(next)) props.push(prop(fresh(name)));
+  return serializeVcard({ properties: props });
+}
 
 /** Unescaped text of the first `name` property ("" when absent). */
 export function vcardText(vcard: string, name: string): string {

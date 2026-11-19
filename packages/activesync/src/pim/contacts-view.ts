@@ -1,6 +1,6 @@
 /**
  * The ActiveSync view of a contact ([MS-ASCNTC]) — pure. ActiveSync has fixed slots
- * (Email1–3Address, twelve phone kinds, three addresses, one web page, three IM addresses);
+ * (Email1–3Address, thirteen phone slots, three addresses, one web page, three IM addresses);
  * a CoreMail contact has typed lists of any length. The view is the slot → value table a
  * device gets; every slot points at the list entry it shows (`assignSlots`).
  *
@@ -19,10 +19,16 @@
  *     `fax` phones. The card has no type for these kinds; the vCard keeps the kind of a number
  *     (storage ContactPhoneKind, e.g. TEL;TYPE=CAR, TYPE=WORK,FAX). A slot first shows the
  *     first number of its kind; a slot still free then shows the next number of its card type
- *     no slot shows yet (e.g. an `other` / `fax` number a CardDAV client stored without a kind). A number a
- *     device puts into an empty slot is stored with the slot's kind and comes back there.
+ *     no slot shows yet (e.g. an `other` / `fax` number a CardDAV client stored without a
+ *     kind). A number a device puts into an empty slot is stored with the slot's kind and
+ *     comes back there.
+ *   MMS               the first `other` phone of kind mms (no other number moves into it)
  *   Business/Home/OtherAddress  the first `work` / `home` / `other` address
  *   WebPage           the first web page              IMAddress1–3  the first three chat addresses
+ *
+ * Outside the card (contacts.ts maps them to vCard properties): OfficeLocation, Spouse,
+ * AssistantName, ManagerName, the Yomi names, CustomerId, GovernmentId, AccountName (single
+ * values, EXTRA_ELEMENTS) and Children (the first CHILDREN_MAX children; further ones stay).
  */
 import {
   ADDRESS_FIELDS, applyContactPatch, displayNameFromParts, emptyAddress, fileAsOf,
@@ -30,11 +36,23 @@ import {
 } from '@coremail/storage/contact-card';
 import type { ContactPhoneKind } from '@coremail/storage';
 
+/** Single-value elements stored outside the card (each one vCard property / related person). */
+export const EXTRA_ELEMENTS = [
+  'OfficeLocation', 'Spouse', 'AssistantName', 'ManagerName', 'YomiFirstName', 'YomiLastName', 'YomiCompanyName',
+  'CustomerId', 'GovernmentId', 'AccountName',
+] as const;
+export type ExtraElement = typeof EXTRA_ELEMENTS[number];
+
+/** Children a device gets (contacts:Children); further ones stay on the server untouched. */
+export const CHILDREN_MAX = 20;
+
 /** A contact as ActiveSync sees it: the card plus the vCard properties outside it. */
 export interface ContactItem {
   card: ContactCard;
-  /** OfficeLocation (a vCard property of its own). */
-  officeLocation: string;
+  /** The EXTRA_ELEMENTS values (missing = ''). */
+  extras: Readonly<Partial<Record<ExtraElement, string>>>;
+  /** The children's names (every one stored; the device sees the first CHILDREN_MAX). */
+  children: readonly string[];
   /** Base64 of the inline photo when it is within the picture bound, else '' (no or hidden photo). */
   picture: string;
   /** The kind of each `card.phones` entry (same order; missing = none) — vcardPhoneKinds(). */
@@ -55,10 +73,12 @@ export interface ListSlot {
   newType: string;
   /** Phone kind the slot stands for (its numbers are stored with it). */
   kind?: ContactPhoneKind;
+  /** Only numbers of the slot's kind (no other number of its type moves into a free slot). */
+  strict?: true;
 }
 
-const slot = (element: string, list: ListName, newType: string, type?: string, kind?: ContactPhoneKind): ListSlot =>
-  ({ element, list, newType, ...(type ? { type } : {}), ...(kind ? { kind } : {}) });
+const slot = (element: string, list: ListName, newType: string, type?: string, kind?: ContactPhoneKind, strict?: true): ListSlot =>
+  ({ element, list, newType, ...(type ? { type } : {}), ...(kind ? { kind } : {}), ...(strict ? { strict } : {}) });
 
 export const LIST_SLOTS: readonly ListSlot[] = [
   slot('Email1Address', 'emails', 'other'), slot('Email2Address', 'emails', 'other'), slot('Email3Address', 'emails', 'other'),
@@ -69,6 +89,7 @@ export const LIST_SLOTS: readonly ListSlot[] = [
   slot('PagerNumber', 'phones', 'pager', 'pager'),
   slot('CompanyMainPhone', 'phones', 'other', 'other', 'company-main'), slot('CarPhoneNumber', 'phones', 'other', 'other', 'car'),
   slot('RadioPhoneNumber', 'phones', 'other', 'other', 'radio'), slot('AssistantPhoneNumber', 'phones', 'other', 'other', 'assistant'),
+  slot('MMS', 'phones', 'other', 'other', 'mms', true),
   slot('WebPage', 'urls', 'other'),
   slot('IMAddress', 'ims', 'other'), slot('IMAddress2', 'ims', 'other'), slot('IMAddress3', 'ims', 'other'),
 ];
@@ -98,7 +119,7 @@ const addressElements = (prefix: string): string[] => ADDRESS_PARTS.map(([suffix
 
 /** Every element of the view. */
 export const VIEW_ELEMENTS: readonly string[] = [
-  ...NAME_ELEMENT_NAMES, ...CARD_ELEMENT_NAMES, 'FileAs', 'OfficeLocation', 'Picture',
+  ...NAME_ELEMENT_NAMES, ...CARD_ELEMENT_NAMES, 'FileAs', ...EXTRA_ELEMENTS, 'Picture',
   ...LIST_SLOTS.map((s) => s.element), ...ADDRESS_SLOTS.flatMap((a) => addressElements(a.prefix)),
 ];
 
@@ -122,7 +143,7 @@ function assignSlots(item: ContactItem): SlotAssignment {
   };
   // a kind slot shows a number of its kind first; a slot still free then any number of its type
   for (const s of LIST_SLOTS) take(s, s.kind !== undefined);
-  for (const s of LIST_SLOTS) if (s.kind !== undefined && !lists.has(s.element)) take(s, false);
+  for (const s of LIST_SLOTS) if (s.kind !== undefined && !s.strict && !lists.has(s.element)) take(s, false);
   const addresses = new Map<string, number>();
   for (const a of ADDRESS_SLOTS) {
     const i = card.addresses.findIndex((x) => x.type === a.type);
@@ -133,7 +154,8 @@ function assignSlots(item: ContactItem): SlotAssignment {
 
 export function contactView(item: ContactItem): ContactView {
   const { card } = item;
-  const view: ContactView = { FileAs: fileAsOf(card), OfficeLocation: item.officeLocation, Picture: item.picture };
+  const view: ContactView = { FileAs: fileAsOf(card), Picture: item.picture };
+  for (const e of EXTRA_ELEMENTS) view[e] = item.extras[e] ?? '';
   for (const [e, f] of NAME_ELEMENTS) view[e] = card.name[f];
   for (const [e, f] of CARD_ELEMENTS) view[e] = card[f];
   const slots = assignSlots(item);
@@ -153,6 +175,8 @@ export function contactView(item: ContactItem): ContactView {
 export interface DesiredContact {
   view: ContactView;
   categories: string[];
+  /** The children the device lists (at most CHILDREN_MAX). */
+  children: string[];
   notes: string;
   /** The device sent a value CoreMail cannot store (a picture over the bound, a malformed date). */
   refused: boolean;
@@ -230,8 +254,11 @@ export function buildContact(stored: ContactItem, desired: DesiredContact): Cont
   const nameSetApart = old.displayName.trim() !== '' && old.displayName.trim() !== derivedDisplayName(old);
   const displayName = nameSetApart ? old.displayName : derivedDisplayName(withFileAs);
   const card = applyContactPatch(old, { ...withFileAs, displayName, name });
+  const extras = Object.fromEntries(EXTRA_ELEMENTS.map((e) => [e, v[e] ?? '']));
+  // the device saw the first CHILDREN_MAX children: the rest stays
+  const children = [...desired.children, ...stored.children.slice(CHILDREN_MAX)];
   // (no number is empty here, so the card keeps every entry of `phones` in order)
-  return { card, officeLocation: v['OfficeLocation'] ?? '', picture: v['Picture'] ?? '', phoneKinds: phones.map((p) => p.kind) };
+  return { card, extras, children, picture: v['Picture'] ?? '', phoneKinds: phones.map((p) => p.kind) };
 }
 
 /**
@@ -241,6 +268,7 @@ export function buildContact(stored: ContactItem, desired: DesiredContact): Cont
  */
 export function differsFromDevice(result: ContactItem, desired: DesiredContact): boolean {
   if (desired.refused) return true;
+  if (result.children.slice(0, CHILDREN_MAX).join('\n') !== desired.children.join('\n')) return true;
   const view = contactView(result);
   return VIEW_ELEMENTS.some((e) => !(e === 'FileAs' && !desired.view[e]) && view[e] !== (desired.view[e] ?? ''));
 }

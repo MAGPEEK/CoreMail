@@ -2,8 +2,9 @@
  * Contacts class codec ([MS-ASCNTC]; code pages 1 Contacts and 12 Contacts2) — pure.
  * Rendering and reading go through the ActiveSync view of a contact (contacts-view.ts):
  * names, "file as", company / department / job title / office location, nickname,
- * Email1–3Address, the phone and address slots, web page, IM addresses, birthday /
- * anniversary, categories, the notes as airsyncbase:Body and the picture.
+ * Email1–3Address, the phone and address slots (MMS included), web page, IM addresses,
+ * birthday / anniversary, spouse / children / assistant / manager, the Yomi names, customer /
+ * government id, account name, categories, the notes as airsyncbase:Body and the picture.
  *
  * Dates: Birthday / Anniversary are sent as the local midnight of the date in the user's
  * Settings → Region zone (UTC midnight without one); a date without year (`--MM-DD`) as year
@@ -23,7 +24,8 @@ import { buildTextBody } from '../commands/body.js';
 import { formatEasDate, parseEasDate } from './dates.js';
 import { changedBody, clears, deviceCategories, itemData } from './codec.js';
 import {
-  LIST_SLOTS, NAME_ELEMENT_NAMES, VIEW_ELEMENTS, buildContact, contactView, differsFromDevice, type ContactItem, type DesiredContact,
+  CHILDREN_MAX, LIST_SLOTS, NAME_ELEMENT_NAMES, VIEW_ELEMENTS, buildContact, contactView, differsFromDevice,
+  type ContactItem, type DesiredContact,
 } from './contacts-view.js';
 import type { RenderContext, WriteContext } from './types.js';
 
@@ -34,11 +36,18 @@ const NO_YEAR = '1604';
 const DAY_MS = 86_400_000;
 
 /** Elements of code page 12 (Contacts2); every other contact element is on page 1. */
-const CONTACTS2 = new Set(['NickName', 'CompanyMainPhone', 'IMAddress', 'IMAddress2', 'IMAddress3']);
+const CONTACTS2 = new Set([
+  'CustomerId', 'GovernmentId', 'IMAddress', 'IMAddress2', 'IMAddress3', 'ManagerName', 'CompanyMainPhone', 'AccountName',
+  'NickName', 'MMS',
+]);
 const pageOf = (element: string): number => (CONTACTS2.has(element) ? CP.Contacts2 : CP.Contacts);
 const DATE_ELEMENTS = new Set(['Birthday', 'Anniversary']);
+/** Person names outside the card (capped like name parts). */
+const PERSON_ELEMENTS = new Set(['Spouse', 'AssistantName', 'ManagerName', 'YomiFirstName', 'YomiLastName']);
 
-export const EMPTY_CONTACT: ContactItem = { card: finalizeContactCard(emptyContactCard()), officeLocation: '', picture: '', phoneKinds: [] };
+export const EMPTY_CONTACT: ContactItem = {
+  card: finalizeContactCard(emptyContactCard()), extras: {}, children: [], picture: '', phoneKinds: [],
+};
 
 // ─── Values ──────────────────────────────────────────────────────────────────
 
@@ -95,8 +104,16 @@ function parseElement(element: string, text: string, ctx: WriteContext): string 
   if (EMAIL_ELEMENTS.has(element)) return emailOf(text);
   if (PHONE_ELEMENTS.has(element)) return line(text, CONTACT_LIMITS.phone);
   if (URI_ELEMENTS.has(element)) return line(text, CONTACT_LIMITS.uri);
-  if (NAME_ELEMENTS.has(element)) return line(text, CONTACT_LIMITS.namePart);
+  if (NAME_ELEMENTS.has(element) || PERSON_ELEMENTS.has(element)) return line(text, CONTACT_LIMITS.namePart);
   return line(text, CONTACT_LIMITS.text);
+}
+
+/** The device's children (`Children` → `Child`): single-line names, empty ones dropped. */
+function deviceChildren(list: WbxmlElement): string[] {
+  return (list.children ?? [])
+    .filter((c): c is WbxmlElement => typeof c !== 'string' && c.name === 'Child')
+    .map((c) => line(c.text ?? '', CONTACT_LIMITS.namePart))
+    .filter(Boolean);
 }
 
 // ─── Rendering ───────────────────────────────────────────────────────────────
@@ -119,6 +136,10 @@ export function renderContact(item: ContactItem, ctx: RenderContext): WbxmlEleme
   const categories = item.card.categories;
   if (categories.length > 0) {
     out.push([orderOf(CP.Contacts, tokenOf('Categories')), pel(CP.Contacts, 'Categories', categories.map((c) => pel(CP.Contacts, 'Category', c)))]);
+  }
+  const children = item.children.slice(0, CHILDREN_MAX);
+  if (children.length > 0) {
+    out.push([orderOf(CP.Contacts, tokenOf('Children')), pel(CP.Contacts, 'Children', children.map((c) => pel(CP.Contacts, 'Child', c)))]);
   }
   return out.sort((a, b) => a[0] - b[0]).map(([, e]) => e);
 }
@@ -144,10 +165,16 @@ export function desiredContact(appData: WbxmlElement, stored: ContactItem | null
     else if (clear(e)) view[e] = '';
   }
   const categories = d.child('Categories');
+  const sentChildren = d.child('Children');
+  const children = sentChildren ? deviceChildren(sentChildren)
+    : clear('Children') ? [] : base.children.slice(0, CHILDREN_MAX);
+  // more children than a device is sent: the first ones are kept, the device gets them back
+  if (children.length > CHILDREN_MAX) refused = true;
   const body = d.body();
   return {
     view,
     refused,
+    children: children.slice(0, CHILDREN_MAX),
     categories: categories ? deviceCategories(categories) : clear('Categories') ? [] : base.card.categories,
     notes: body ? changedBody(base.card.notes, body.text, ctx.truncatedAt) : clear('Body') ? '' : base.card.notes,
   };
