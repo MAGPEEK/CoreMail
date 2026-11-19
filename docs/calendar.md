@@ -85,9 +85,11 @@ free/busy access.
 domain (BCP → Ressourcen) with capacity, location, `available` for the slot and their busy time.
 
 Rooms selected in the event form (`rooms: [addresses]` on `POST`/`PUT /calendar/events`) are
-booked when the event is saved — no invitation mail goes to them. The resource settings decide
-(storage `resource-booking-rules.ts`, used by `api-gateway/src/lib/room-booking.ts` and the mail
-path):
+booked when the event is saved — no invitation mail goes to them. Meetings written by an
+ActiveSync phone book their rooms the same way (storage `room-booking.ts`, 9.5 — see
+[activesync.md](activesync.md#calendar-tasks-and-notes-w3)); a booking of a UID belongs to its
+organizer and is never changed or released by another one. The resource settings decide
+(storage `resource-booking-rules.ts`, used by `room-booking.ts` and the mail path):
 
 | Setting | Effect |
 |---------|--------|

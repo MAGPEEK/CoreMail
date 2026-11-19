@@ -201,13 +201,13 @@ const compose = (command: ComposeCommand) => async (c: CommandContext): Promise<
 
 const HANDLERS: Record<string, CommandHandler> = {
   Provision: { needsBody: true, run: wbxml((c) => handleProvision(c.body, c.user.userId, c.deviceId, c.deviceType, c.version)) },
-  FolderSync: { needsBody: true, run: wbxml((c) => handleFolderSync(c.body, c.user.userId, c.deviceId)) },
+  FolderSync: { needsBody: true, run: wbxml((c) => handleFolderSync(c.body, c.user.userId, c.deviceId, c.version)) },
   Sync: { needsBody: true, run: wbxml((c) => handleSync(c.body, c.user.userId, c.deviceId, {}, c.version)) },
   SendMail: { needsBody: true, mimeBody: legacyCompose, run: compose('SendMail') },
   SmartReply: { needsBody: true, mimeBody: legacyCompose, run: compose('SmartReply') },
   SmartForward: { needsBody: true, mimeBody: legacyCompose, run: compose('SmartForward') },
   // Ping holds the connection; an empty Ping reuses the device's last parameters.
-  Ping: { needsBody: false, run: (c) => handlePing(c.raw.length ? c.body : null, c.user.userId, c.res, c.user, { deviceId: c.deviceId }) },
+  Ping: { needsBody: false, run: (c) => handlePing(c.raw.length ? c.body : null, c.user.userId, c.res, c.user, { deviceId: c.deviceId, version: c.version }) },
   GetAttachment: {
     needsBody: false,
     run: async ({ res, user, params }) => {
@@ -228,7 +228,7 @@ const HANDLERS: Record<string, CommandHandler> = {
   GetItemEstimate: { needsBody: true, run: wbxml((c) => handleGetItemEstimate(c.body, c.user.userId, c.deviceId, undefined, c.version)) },
   Settings: { needsBody: true, run: wbxml((c) => handleSettings(c.body, c.user.userId, c.deviceId, c.version)) },
   Search: { needsBody: true, run: wbxml((c) => handleSearch(c.body, c.user.userId)) },
-  MoveItems: { needsBody: true, run: wbxml((c) => handleMoveItems(c.body, c.user.userId, c.deviceId)) },
+  MoveItems: { needsBody: true, run: wbxml((c) => handleMoveItems(c.body, c.user.userId, c.deviceId, c.version)) },
   MeetingResponse: { needsBody: true, run: wbxml((c) => handleMeetingResponse(c.body, c.user.userId, undefined, c.requestedVersion || c.version)) },
   ResolveRecipients: { needsBody: true, run: wbxml((c) => handleResolveRecipients(c.body, c.user.userId, c.version)) },
 };

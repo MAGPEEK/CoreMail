@@ -46,6 +46,21 @@ const CODE_PAGES: Record<number, Record<number, string>> = {
     0x3c: 'ContentClass', 0x3d: 'FlagType', 0x3e: 'CompleteTime',
     0x3f: 'DisallowNewTimeProposal',
   },
+  // Code page 4: Calendar ([MS-ASWBXML] 2.1.2.1.5; the 2.5-only Body / BodyTruncated /
+  // Compressed RTF tokens 0x0B, 0x0C, 0x10 are left out — 12.1+ uses airsyncbase:Body)
+  4: {
+    0x05: 'TimeZone', 0x06: 'AllDayEvent', 0x07: 'Attendees', 0x08: 'Attendee', 0x09: 'Email',
+    0x0a: 'Name', 0x0d: 'BusyStatus', 0x0e: 'Categories', 0x0f: 'Category', 0x11: 'DtStamp',
+    0x12: 'EndTime', 0x13: 'Exception', 0x14: 'Exceptions', 0x15: 'Deleted',
+    0x16: 'ExceptionStartTime', 0x17: 'Location', 0x18: 'MeetingStatus', 0x19: 'OrganizerEmail',
+    0x1a: 'OrganizerName', 0x1b: 'Recurrence', 0x1c: 'Type', 0x1d: 'Until', 0x1e: 'Occurrences',
+    0x1f: 'Interval', 0x20: 'DayOfWeek', 0x21: 'DayOfMonth', 0x22: 'WeekOfMonth',
+    0x23: 'MonthOfYear', 0x24: 'Reminder', 0x25: 'Sensitivity', 0x26: 'Subject',
+    0x27: 'StartTime', 0x28: 'UID', 0x29: 'AttendeeStatus', 0x2a: 'AttendeeType',
+    0x33: 'DisallowNewTimeProposal', 0x34: 'ResponseRequested', 0x35: 'AppointmentReplyTime',
+    0x36: 'ResponseType', 0x37: 'CalendarType', 0x38: 'IsLeapMonth', 0x39: 'FirstDayOfWeek',
+    0x3a: 'OnlineMeetingConfLink', 0x3b: 'OnlineMeetingExternalLink',
+  },
   // Code page 6: GetItemEstimate ([MS-ASWBXML]; Version/Class/DateTime are EAS 12.1 only)
   6: {
     0x05: 'GetItemEstimate', 0x06: 'Version', 0x07: 'Collections', 0x08: 'Collection',
@@ -191,6 +206,10 @@ const CODE_PAGES: Record<number, Record<number, string>> = {
     0x0f: 'CalendarType', 0x10: 'IsLeapMonth', 0x11: 'AccountId',
     0x12: 'FirstDayOfWeek', 0x13: 'MeetingMessageType',
   },
+  // Code page 23: Notes ([MS-ASWBXML] 2.1.2.1.24; EAS 14.0+)
+  23: {
+    0x05: 'Subject', 0x06: 'MessageClass', 0x07: 'LastModifiedDate', 0x08: 'Categories', 0x09: 'Category',
+  },
 };
 
 /**
@@ -199,9 +218,9 @@ const CODE_PAGES: Record<number, Record<number, string>> = {
  * (`pel(CP.AirSyncBase, 'Body')`) or a qualified name (`el('AirSyncBase:Body')`).
  */
 export const CP = {
-  AirSync: 0, Email: 2, Move: 5, GetItemEstimate: 6, FolderHierarchy: 7, MeetingResponse: 8, Tasks: 9,
+  AirSync: 0, Email: 2, Calendar: 4, Move: 5, GetItemEstimate: 6, FolderHierarchy: 7, MeetingResponse: 8, Tasks: 9,
   ResolveRecipients: 10, Ping: 13, Provision: 14, Search: 15, GAL: 16, AirSyncBase: 17,
-  Settings: 18, ItemOperations: 20, ComposeMail: 21, Email2: 22,
+  Settings: 18, ItemOperations: 20, ComposeMail: 21, Email2: 22, Notes: 23,
 } as const;
 
 // Default map: element name → [codePage, token] (lowest page wins) …
@@ -225,12 +244,14 @@ const NAMESPACE_PAGES: Record<string, number> = CP;
 // First version of each token, from the "Protocol versions" column of the [MS-ASWBXML]
 // 2.1.2.1.x code page tables. Everything not listed exists in 12.1, the oldest version this
 // server speaks (pages 5, 6, 7, 13, 14 have no token newer than 12.1).
-/** Code pages introduced after 12.1: ComposeMail (2.1.2.1.22), Email2 (2.1.2.1.23). */
-const PAGE_SINCE: Record<number, string> = { 21: '14.0', 22: '14.0' };
+/** Code pages introduced after 12.1: ComposeMail (2.1.2.1.22), Email2 (2.1.2.1.23), Notes (2.1.2.1.24). */
+const PAGE_SINCE: Record<number, string> = { 21: '14.0', 22: '14.0', 23: '14.0' };
 /** Single tokens introduced after 12.1 (overrides PAGE_SINCE). */
 const TOKEN_SINCE: Record<number, Record<number, string>> = {
   0: { 0x27: '14.0', 0x28: '14.0', 0x29: '14.0' }, // 2.1.2.1.1: ConversationMode, MaxItems, HeartbeatInterval
   2: { 0x1b: '14.0', 0x1c: '14.0', 0x3f: '14.0' }, // 2.1.2.1.3: Categories, Category, DisallowNewTimeProposal
+  // 2.1.2.1.5: DisallowNewTimeProposal … IsLeapMonth (14.0); FirstDayOfWeek, OnlineMeeting* (14.1)
+  4: { 0x33: '14.0', 0x34: '14.0', 0x35: '14.0', 0x36: '14.0', 0x37: '14.0', 0x38: '14.0', 0x39: '14.1', 0x3a: '14.1', 0x3b: '14.1' },
   // 2.1.2.1.9: InstanceId (14.1), SendResponse (16.0), ProposedStartTime / ProposedEndTime (16.1)
   8: { 0x0e: '14.1', 0x10: '16.1', 0x11: '16.1', 0x12: '16.0' },
   9: { 0x24: '14.0', 0x25: '14.0', 0x26: '14.1' }, // 2.1.2.1.10: CalendarType, IsLeapMonth, FirstDayOfWeek

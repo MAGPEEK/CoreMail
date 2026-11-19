@@ -59,6 +59,7 @@ let alicePrefs: Row = {};
   resourceCalendar: { update: async () => ({ id: 'rc1' }) },
   resourceBooking: {
     findMany: async () => roomBookings.map((b) => ({ ...b })),
+    findUnique: async (a: { where: { calendarId_uid: { uid: string } } }) => roomBookings.find((b) => b['uid'] === a.where.calendarId_uid.uid) ?? null,
     upsert: async (a: { where: { calendarId_uid: { uid: string } }; create: Row; update: Row }) => {
       const existing = roomBookings.find((b) => b['uid'] === a.where.calendarId_uid.uid);
       if (existing) Object.assign(existing, a.update); else roomBookings.push({ calendarId: 'rc1', ...a.create });

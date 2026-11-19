@@ -112,7 +112,7 @@ tasksRouter.post('/', async (req: Request, res: Response) => {
 // PUT /api/v1/tasks/:id
 // 9.4: status / % / completion date stay consistent (task-rules.ts); completing a
 // recurring task closes this occurrence and creates the next one (returned as `next`).
-// 9.5: the write itself is storage task-store.ts, shared with the CalDAV task list.
+// 9.5: the write itself is storage task-store.ts, shared with the CalDAV task list and ActiveSync.
 tasksRouter.put('/:id', async (req: Request, res: Response) => {
   const { id } = req.params as { id: string };
   const parsed = patchSchema(TaskSchema).safeParse(req.body);

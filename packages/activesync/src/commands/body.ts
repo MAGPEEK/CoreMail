@@ -88,12 +88,13 @@ function intOrUndefined(s: string): number | undefined {
 
 /**
  * Body options of an airsync/itemoperations `Options` element (null when absent).
- * Several Options (EAS 14.1, one per Class) → the one without Class or Class=Email.
+ * Several Options (EAS 14.1, one per Class) → the one without Class or with the
+ * collection's class (`className`, default Email).
  */
-export function parseBodyOptions(parent: WbxmlElement | undefined): BodyOptions | null {
+export function parseBodyOptions(parent: WbxmlElement | undefined, className = 'Email'): BodyOptions | null {
   if (!parent) return null;
   const all = (parent.children ?? []).filter((c): c is WbxmlElement => typeof c !== 'string' && c.name === 'Options');
-  const options = all.find((o) => { const cls = getText(o, 'Class'); return cls === '' || cls === 'Email'; });
+  const options = all.find((o) => { const cls = getText(o, 'Class'); return cls === '' || cls === className; });
   if (!options) return null;
   const prefs: BodyPreference[] = [];
   for (const c of options.children ?? []) {
@@ -116,10 +117,13 @@ export function parseBodyOptions(parent: WbxmlElement | undefined): BodyOptions 
   return out;
 }
 
-/** airsync:FilterType text → 1..7; undefined for absent, 0 (no filter) or invalid. */
+/**
+ * airsync:FilterType text → 1..8; undefined for absent, 0 (no filter) or invalid. 1–7 are
+ * age windows (email, calendar), 8 is "incomplete tasks" of the Tasks class.
+ */
 export function parseFilterType(text: string): number | undefined {
   const ft = intOrUndefined(text);
-  return ft !== undefined && ft >= 1 && ft <= 7 ? ft : undefined;
+  return ft !== undefined && ft >= 1 && ft <= 8 ? ft : undefined;
 }
 
 // [MS-ASCMD] FilterType for email: 1 = 1 day, 2 = 3 days, 3 = 1 week, 4 = 2 weeks,
@@ -191,7 +195,13 @@ export function truncateUtf8(buf: Buffer, max: number): Buffer {
   return buf.subarray(0, end);
 }
 
-function previewOf(msg: Pick<EasMessage, 'bodyText' | 'bodyHtml'>, chars: number): string {
+/** The text of an item body in its two stored forms (either may be empty). */
+export interface TextBodySource {
+  bodyText: string;
+  bodyHtml: string;
+}
+
+function previewOf(msg: TextBodySource, chars: number): string {
   const text = (msg.bodyText || htmlToText(msg.bodyHtml)).replace(/\s+/g, ' ').trim();
   return Array.from(text).slice(0, chars).join('');
 }
@@ -202,12 +212,20 @@ export function nativeBodyType(msg: Pick<EasMessage, 'bodyHtml'>): 1 | 2 {
 
 /** airsyncbase:Body for `pref` (Type, EstimatedDataSize, Truncated, Data, Preview — 14.0+). */
 export async function buildBody(pref: BodyPreference, msg: EasMessage, loadRaw: LoadRaw, version: EasVersion): Promise<WbxmlElement> {
-  let type: BodyType = pref.type === 3 ? 1 : pref.type;
-  let full: Buffer;
-  if (type === 4) full = await loadRaw(msg);
-  else if (type === 2) full = Buffer.from(msg.bodyHtml || textToHtml(msg.bodyText), 'utf8');
-  else { type = 1; full = Buffer.from(msg.bodyText || htmlToText(msg.bodyHtml), 'utf8'); }
+  if (pref.type !== 4) return buildTextBody(pref, msg, version);
+  return bodyElement(4, await loadRaw(msg), pref, msg, version);
+}
 
+/**
+ * airsyncbase:Body of a plain-text / HTML body (no MIME) — mail items and the PIM classes
+ * (calendar, tasks, notes). RTF is answered as plain text.
+ */
+export function buildTextBody(pref: BodyPreference, src: TextBodySource, version: EasVersion): WbxmlElement {
+  if (pref.type === 2) return bodyElement(2, Buffer.from(src.bodyHtml || textToHtml(src.bodyText), 'utf8'), pref, src, version);
+  return bodyElement(1, Buffer.from(src.bodyText || htmlToText(src.bodyHtml), 'utf8'), pref, src, version);
+}
+
+function bodyElement(type: BodyType, full: Buffer, pref: BodyPreference, src: TextBodySource, version: EasVersion): WbxmlElement {
   let data: Buffer | null = full;
   let truncated = false;
   if (pref.truncationSize !== undefined && full.length > pref.truncationSize) {
@@ -223,7 +241,7 @@ export async function buildBody(pref: BodyPreference, msg: EasMessage, loadRaw: 
   ];
   if (data && data.length > 0) kids.push(pel(CP.AirSyncBase, 'Data', data));
   if (pref.preview && supports(version, 'bodyPreview')) {
-    const p = previewOf(msg, pref.preview);
+    const p = previewOf(src, pref.preview);
     if (p) kids.push(pel(CP.AirSyncBase, 'Preview', p));
   }
   return pel(CP.AirSyncBase, 'Body', kids);

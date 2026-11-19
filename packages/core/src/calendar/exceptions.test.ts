@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildVCalendar, parseCalendarObject, patchVEvent } from './ical.js';
-import { excludeOccurrence, isSeriesOccurrence, upsertOccurrence } from './exceptions.js';
+import { excludeOccurrence, isSeriesOccurrence, restoreOccurrence, upsertOccurrence } from './exceptions.js';
 import { expandStoredEvent } from './recurrence.js';
 
 const d = (iso: string): Date => new Date(iso);
@@ -129,4 +129,30 @@ test('show-as fallback: TRANSP only (CalDAV clients), unknown values are busy', 
   assert.equal(parseCalendarObject(transparent)!.main.showAs, 'FREE');
   const elsewhere = base.replace('SUMMARY:s', 'SUMMARY:s\r\nX-MICROSOFT-CDO-BUSYSTATUS:WORKINGELSEWHERE');
   assert.equal(parseCalendarObject(elsewhere)!.main.showAs, 'BUSY');
+});
+
+test('restoreOccurrence: drops the override and the EXDATE value of one instance, keeps the others', () => {
+  const excluded = excludeOccurrence(excludeOccurrence(ZONED, d('2026-04-02T08:00:00Z'))!, d('2026-03-26T09:00:00Z'))!;
+  const moved = upsertOccurrence(excluded, d('2026-04-09T08:00:00Z'), { summary: 'Anders' })!;
+  const restored = restoreOccurrence(restoreOccurrence(moved, d('2026-04-02T08:00:00Z'))!, d('2026-04-09T08:00:00Z'))!;
+  const parsed = parseCalendarObject(restored)!;
+  assert.equal(parsed.overrides.length, 0);
+  assert.deepEqual(parsed.main.exdates.map((x) => x.date.toISOString()), ['2026-03-26T09:00:00.000Z']);
+  const starts = expandStoredEvent(stored(restored), ...window).map((i) => i.dtStart.toISOString());
+  assert.deepEqual(starts, ['2026-03-19T09:00:00.000Z', '2026-04-02T08:00:00.000Z', '2026-04-09T08:00:00.000Z']);
+  // one EXDATE property with a comma list: only the matching value goes
+  const list = ZONED.replace('RRULE:FREQ=WEEKLY;COUNT=4', 'RRULE:FREQ=WEEKLY;COUNT=4\r\nEXDATE;TZID=Europe/Berlin:20260326T100000,20260402T100000');
+  assert.match(restoreOccurrence(list, d('2026-03-26T09:00:00Z'))!, /EXDATE;TZID=Europe\/Berlin:20260402T100000\r\n/);
+  const single = buildVCalendar({ uid: 's', summary: 's', start: d('2026-01-01T10:00:00Z'), end: d('2026-01-01T11:00:00Z') });
+  assert.equal(restoreOccurrence(single, d('2026-01-01T10:00:00Z')), null);
+});
+
+test('buildVCalendar: a timed event with tzid is written as local time with TZID', () => {
+  const ical = buildVCalendar({
+    uid: 'z', summary: 'z', start: d('2026-07-01T08:00:00Z'), end: d('2026-07-01T09:00:00Z'), tzid: 'Europe/Berlin', rrule: 'FREQ=WEEKLY',
+  });
+  assert.match(ical, /DTSTART;TZID=Europe\/Berlin:20260701T100000/);
+  const parsed = parseCalendarObject(ical)!;
+  assert.equal(parsed.main.tzid, 'Europe/Berlin');
+  assert.equal(parsed.main.start.toISOString(), '2026-07-01T08:00:00.000Z');
 });

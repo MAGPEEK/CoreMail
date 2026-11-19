@@ -1,11 +1,13 @@
 /**
- * 9.5: task writes with the status rules (task-rules.ts) — shared by the REST task
- * routes (api-gateway) and the CalDAV task list (caldav-server), so both keep status,
- * % complete and completion date consistent and both create the next task of a
- * completed recurring task exactly once.
+ * 9.5: the one task writer with the status rules (task-rules.ts) — shared by the REST
+ * task routes (api-gateway), the CalDAV task list (caldav-server) and the ActiveSync Tasks
+ * class, so all of them keep status, % complete and completion date consistent, create the
+ * next task of a completed recurring task exactly once and never revive the rule of a
+ * completed occurrence.
  *
- * Realtime announcements stay with the callers (REST: announceOnWrite, CalDAV:
- * announceUserEvent) — they know the acting user and the protocol.
+ * Realtime announcements stay with the callers (REST: announceOnWrite, CalDAV and
+ * ActiveSync: announceUserEvent with the saved and the next task) — they know the acting
+ * user and the protocol.
  */
 import type { Task } from '@prisma/client';
 import { prisma } from './prisma/index.js';
@@ -63,6 +65,20 @@ export interface TaskUpdateResult {
 }
 
 /**
+ * A task that is completed and stays completed keeps its stored rule: completing a recurring
+ * task handed the rule to the next task, so a client sending the completed occurrence again
+ * (a retry, a stale local copy with its RRULE / Recurrence) must not revive the series on it
+ * — reopened later, it would create a second next task. Reopening it with a rule is the
+ * client's explicit choice.
+ */
+function withKeptRule(task: Task, columns: TaskColumns, status: TaskProgress['status']): TaskColumns {
+  if (normTaskStatus(task.status) !== 'COMPLETED' || status !== 'COMPLETED' || columns.rrule === undefined) return columns;
+  const kept = { ...columns };
+  delete kept.rrule;
+  return kept;
+}
+
+/**
  * Update a task: only the given columns change; the progress patch goes through the
  * status rules. Completing a recurring occurrence removes its rule and creates the next
  * task — as a conditional update (only while the task is still open) in one transaction
@@ -77,7 +93,8 @@ export async function updateTaskWithRules(
   const current: TaskProgress = { status: normTaskStatus(task.status), percentComplete: task.percentComplete, completedAt: task.completedAt };
   const progressTouched = Object.keys(patch).length > 0;
   const progress = progressTouched ? applyTaskProgress(current, patch, now) : current;
-  const rrule = columns.rrule !== undefined ? columns.rrule : task.rrule;
+  const written = withKeptRule(task, columns, progress.status);
+  const rrule = written.rrule !== undefined ? written.rrule : task.rrule;
   const justCompleted = progress.status === 'COMPLETED' && current.status !== 'COMPLETED';
   const next = justCompleted && rrule
     ? nextTaskOccurrence({
@@ -89,7 +106,7 @@ export async function updateTaskWithRules(
     : null;
 
   // only the fields that were sent (a one-field update must not rewrite the others)
-  const data = { ...columns, ...(progressTouched ? progress : {}), ...(justCompleted && rrule ? { rrule: null } : {}) };
+  const data = { ...written, ...(progressTouched ? progress : {}), ...(justCompleted && rrule ? { rrule: null } : {}) };
   if (!next) return { updated: await prisma.task.update({ where: { id: task.id }, data }), created: null };
   return prisma.$transaction(async (tx) => {
     const won = await tx.task.updateMany({ where: { id: task.id, userId: task.userId, status: { not: 'COMPLETED' } }, data });

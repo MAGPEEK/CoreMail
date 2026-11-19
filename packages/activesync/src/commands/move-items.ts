@@ -6,12 +6,17 @@
  * as DstMsgId) and gets a new UID + modSeq in the target, so IMAP/JMAP clients
  * see the move as well. The device's item state follows the move (item-state.ts), so the
  * next Sync neither re-adds the item in the destination nor deletes it in the source.
+ * w3: calendar / tasks / notes items move only inside their class (pim/move.ts); a move
+ * between classes or between mail and a PIM class is an invalid destination (Status 2).
  */
 import { prisma } from '@coremail/storage/prisma';
 import { moveMessages } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import { encodeWbxml, el, getText, type WbxmlElement } from '../wbxml.js';
 import { forgetItems, markKnown } from './item-state.js';
+import { HIGHEST_EAS_VERSION, type EasVersion } from '../protocol-version.js';
+import { moduleFor } from '../pim/registry.js';
+import { movePimItem } from '../pim/move.js';
 
 const log = createLogger('activesync:move-items');
 
@@ -27,7 +32,7 @@ export const MOVE_STATUS = {
 const kids = (e: WbxmlElement | undefined): WbxmlElement[] =>
   (e?.children ?? []).filter((c): c is WbxmlElement => typeof c !== 'string');
 
-async function moveOne(move: WbxmlElement, userId: string, mailboxId: string, deviceRowId: string | null): Promise<WbxmlElement> {
+async function moveOne(move: WbxmlElement, userId: string, mailboxId: string, deviceRowId: string | null, version: EasVersion): Promise<WbxmlElement> {
   const srcMsgId = getText(move, 'SrcMsgId');
   const srcFldId = getText(move, 'SrcFldId');
   const dstFldId = getText(move, 'DstFldId');
@@ -40,6 +45,12 @@ async function moveOne(move: WbxmlElement, userId: string, mailboxId: string, de
   if (!srcMsgId || !srcFldId) return response(MOVE_STATUS.INVALID_SOURCE);
   if (!dstFldId) return response(MOVE_STATUS.INVALID_DESTINATION);
   if (srcFldId === dstFldId) return response(MOVE_STATUS.SAME_FOLDER);
+  // w3: calendar / tasks / notes items move inside their class only (pim/move.ts)
+  if (moduleFor(srcFldId) || moduleFor(dstFldId)) {
+    const r = await movePimItem({ userId, deviceRowId, version, srcCollectionId: srcFldId, dstCollectionId: dstFldId, serverId: srcMsgId });
+    if (r.kind === 'moved') return response(MOVE_STATUS.SUCCESS, r.serverId);
+    return response(r.kind === 'invalid-source' ? MOVE_STATUS.INVALID_SOURCE : MOVE_STATUS.INVALID_DESTINATION);
+  }
 
   // Both folders must belong to the caller's own mailbox (no cross-mailbox moves).
   const [src, dst] = await Promise.all([
@@ -73,7 +84,7 @@ async function moveOne(move: WbxmlElement, userId: string, mailboxId: string, de
   }
 }
 
-export async function handleMoveItems(body: WbxmlElement, userId: string, deviceId?: string): Promise<Buffer> {
+export async function handleMoveItems(body: WbxmlElement, userId: string, deviceId?: string, version: EasVersion = HIGHEST_EAS_VERSION): Promise<Buffer> {
   const moves = kids(body).filter((c) => c.name === 'Move');
   const mailbox = await prisma.mailbox.findFirst({ where: { userId }, select: { id: true, userId: true } });
   const device = deviceId
@@ -85,7 +96,7 @@ export async function handleMoveItems(body: WbxmlElement, userId: string, device
       responses.push(el('Response', undefined, [el('SrcMsgId', getText(move, 'SrcMsgId')), el('Status', MOVE_STATUS.INVALID_SOURCE)]));
       continue;
     }
-    responses.push(await moveOne(move, userId, mailbox.id, device?.id ?? null));
+    responses.push(await moveOne(move, userId, mailbox.id, device?.id ?? null, version));
   }
   return encodeWbxml(el('MoveItems', undefined, responses));
 }

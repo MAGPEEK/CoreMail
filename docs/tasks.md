@@ -92,8 +92,17 @@ still open) in one transaction with the creation, so two concurrent or repeated 
 create the next task once. A task rule repeats at most daily (`FREQ=DAILY|WEEKLY|MONTHLY|YEARLY`
 with `NAME=value` parts); anything else is refused with 400.
 
+### ActiveSync Tasks folder (w3)
+
+Phones sync the tasks as the ActiveSync Tasks class (`tasks:default`, FolderSync type 7) both
+ways — mapping in [activesync.md](activesync.md#calendar-tasks-and-notes-w3). A task completed on
+a phone follows the same rules (a recurring one brings the next task to the phone).
+
 The writes themselves (`createTaskWithRules` / `updateTaskWithRules`) live in
-`storage/src/task-store.ts` (9.5) and are shared by the REST routes and the CalDAV task list.
+`storage/src/task-store.ts` (9.5) — the only task writer, shared by the REST routes, the CalDAV task
+list and ActiveSync. A task that is completed and stays completed keeps its stored rule (none after a
+recurring completion): a client sending the completed occurrence again with its old rule does not
+revive it; reopening it with a rule is the client's explicit choice.
 
 ### CalDAV task list (9.5)
 
@@ -104,8 +113,8 @@ Mapping, preconditions and limits: [caldav.md](caldav.md#task-list-vtodo).
 
 ### Not covered
 
-CoreMail has no ActiveSync Tasks folder. Flags of mails are visible over IMAP, JMAP (keyword) and
-ActiveSync; they are not tasks of the CalDAV task list.
+Flags of mails are visible over IMAP, JMAP (keyword) and ActiveSync (Email class); they are not
+tasks of the CalDAV task list or the ActiveSync Tasks folder.
 
 Tests: `storage/src/follow-up.test.ts`, `task-rules.test.ts`, `message-store.test.ts`,
 `activesync/src/commands/flag.test.ts`, `api-gateway/src/routes/tasks-followup.test.ts`,

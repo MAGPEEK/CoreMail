@@ -120,9 +120,11 @@ test('remote wipe is the same for every version: Provision answers <RemoteWipe/>
 });
 
 for (const v of VERSIONS) {
-  test(`${v} FolderSync: hierarchy with the version's tags`, async () => {
-    const tree = valid(await handleFolderSync(req([7, 0x16, [[7, 0x12, '0']]]), 'u1', dev(v)), v);
-    assert.equal(kid(kid(tree, 'Changes'), 'Count')?.text, '3');
+  test(`${v} FolderSync: hierarchy with the version's tags; the Notes folder only from 14.0 (w3)`, async () => {
+    const tree = valid(await handleFolderSync(req([7, 0x16, [[7, 0x12, '0']]]), 'u1', dev(v), v), v);
+    const pim = kids(kid(tree, 'Changes'), 'Add').map((a) => `${kid(a, 'ServerId')?.text}/${kid(a, 'Type')?.text}`).filter((x) => x.includes(':'));
+    assert.deepEqual(pim, v === '12.1' ? ['tasks:default/7'] : ['tasks:default/7', 'notes:default/10']);
+    assert.equal(kid(kid(tree, 'Changes'), 'Count')?.text, String(3 + pim.length));
   });
 }
 
@@ -245,14 +247,14 @@ for (const v of VERSIONS) {
     const res = new FakeRes();
     const P = (t: number, k?: WNode[] | string): WNode => [13, t, k];
     await handlePing(req(P(0x05, [P(0x08, '480'), P(0x09, [P(0x0a, [P(0x0b, 'inbox'), P(0x0c, 'Email')])])])), 'u1', res as never, {},
-      { deviceId: dev(v), pollIntervalMs: 5 });
+      { deviceId: dev(v), pollIntervalMs: 5, version: v });
     const tree = valid(res.body!, v);
     assert.equal(kid(tree, 'Status')?.text, '2');
   });
 
   test(`${v} MoveItems: moves with the version's tags`, async () => {
     const M = (t: number, k?: WNode[] | string): WNode => [5, t, k];
-    const move = async (from: string, to: string) => valid(await handleMoveItems(req(M(0x05, [M(0x06, [M(0x07, 'm1'), M(0x08, from), M(0x09, to)])])), 'u1', dev(v)), v);
+    const move = async (from: string, to: string) => valid(await handleMoveItems(req(M(0x05, [M(0x06, [M(0x07, 'm1'), M(0x08, from), M(0x09, to)])])), 'u1', dev(v), v), v);
     assert.equal(kid(kid(await move('inbox', 'trash'), 'Response'), 'Status')?.text, '3');
     assert.equal(kid(kid(await move('trash', 'inbox'), 'Response'), 'Status')?.text, '3');
   });

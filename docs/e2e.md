@@ -80,7 +80,17 @@ node scripts/e2e/run.mjs imap pop3       # single steps (state is kept in state.
 node --test scripts/e2e/repo-hygiene.test.mjs   # static regression checks (no stack needed)
 ```
 
-Steps: `setup users smtp imap pop3 jmap dav dav-tasks contacts eas eas-body eas-commands eas-legacy rest webmail admin tls legacy-clients backup branding mfa live protocols policies scopes mapi lockout restart storage schema-upgrade`.
+Steps: `setup users smtp imap pop3 jmap dav dav-tasks contacts eas eas-body eas-commands eas-legacy eas-pim rest webmail admin tls legacy-clients backup branding mfa live protocols policies scopes mapi lockout restart storage schema-upgrade`.
+`eas-pim` (w3): a 14.1 device provisions and its FolderSync lists the default calendar (type 8),
+`tasks:default` (7) and `notes:default` (10); an event created over REST arrives in the calendar
+Sync with the event id as ServerId; a task added by the device (ClientId → ServerId) is a task over
+REST, a REST change of it reaches the device as a Change and a device Delete removes it; a note
+added by the device is a note over REST; a weekly meeting with a deleted occurrence added by the
+device expands without that occurrence over REST; a meeting added by the device with a room (created
+over the admin API, listed as an ordinary attendee) books it like the event form (ACCEPTED, CUTYPE
+ROOM, the room busy in `/calendar/rooms`) and the device Delete frees it. Every response carries
+only 14.1 tags. See
+[activesync.md](activesync.md#calendar-tasks-and-notes-w3).
 `eas-legacy`: OPTIONS announces `12.1,14.0,14.1` and an unannounced version (2.5) is served as 14.1
 (Status 142 in WBXML for the unprovisioned device); a 12.1
 device gets HTTP 449 without a policy key, provisions, syncs (no Email2 / 14.x tags in any

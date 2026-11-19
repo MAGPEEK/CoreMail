@@ -1201,7 +1201,7 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
   // not the old calendar data.
   let roomJson: Array<Record<string, unknown> | BookedRoom> = stored.rooms;
   if (roomsTouched) {
-    await releaseRooms(event.uid, stored.rooms.map(roomEmail).filter((e) => !wantedRooms.includes(e)));
+    await releaseRooms(event.uid, stored.rooms.map(roomEmail).filter((e) => !wantedRooms.includes(e)), event.organizer ?? req.apiUser!.email);
     roomJson = await bookRooms(
       { uid: event.uid, summary: summary ?? event.summary, organizer: event.organizer ?? req.apiUser!.email,
         dtStart: range.start, dtEnd: range.end, allDay: effectiveAllDay, rrule: effectiveRrule,
@@ -1265,7 +1265,7 @@ calendarRouter.delete('/events/:id', async (req: Request, res: Response) => {
     if (!view || !icalData) { res.status(404).json({ error: 'Occurrence not found' }); return; }
     const updated = await prisma.calendarEvent.update({ where: { id }, data: { icalData, sequence: event.sequence + 1 } });
     // the rooms' bookings get the EXDATE too, so the occurrence's slot is free again
-    await refreshRoomBookings(event.uid, splitAttendees(event.attendees).rooms.map(roomEmail), icalData);
+    await refreshRoomBookings(event.uid, splitAttendees(event.attendees).rooms.map(roomEmail), icalData, event.organizer ?? req.apiUser!.email);
     announceCalendarChange([event.calendarId], { action: 'update', ids: [id] });
     void notifyAttendees(updated, 'CANCEL', { ...occurrenceFields(view, event), recurrenceId: occurrence });
     res.json({ ok: true });
@@ -1274,7 +1274,7 @@ calendarRouter.delete('/events/:id', async (req: Request, res: Response) => {
 
   await prisma.calendarEvent.delete({ where: { id } });
   announceCalendarChange([event.calendarId], { action: 'delete', ids: [id] });
-  await releaseRooms(event.uid, splitAttendees(event.attendees).rooms.map(roomEmail));
+  await releaseRooms(event.uid, splitAttendees(event.attendees).rooms.map(roomEmail), event.organizer ?? req.apiUser!.email);
 
   // v3.18.25 A5: CANCEL mails to all attendees (with sequence+1)
   void notifyAttendees({ ...event, sequence: event.sequence + 1 }, 'CANCEL');

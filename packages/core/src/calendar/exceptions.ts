@@ -5,6 +5,8 @@
  *  - delete one occurrence → EXDATE on the master (an override for it is dropped)
  *  - change one occurrence → a VEVENT with RECURRENCE-ID (override); a new one is
  *    cloned from the master without RRULE/RDATE/EXDATE, then patched
+ *  - restore one occurrence → its override and EXDATE value removed (ActiveSync clients
+ *    send the complete exception list of a series)
  *
  * RECURRENCE-ID and EXDATE are written in the form of the master DTSTART: a date
  * for all-day series, local time with the master's TZID for zoned series (stays
@@ -111,6 +113,28 @@ export function excludeOccurrence(icalText: string, recurrenceId: Date): string 
     const exdate = seriesDateProp('EXDATE', recurrenceId, series.master, series.root);
     series.master.properties.splice(at >= 0 ? at + 1 : series.master.properties.length, 0, exdate);
   }
+  return serializeComponent(series.root) + '\r\n';
+}
+
+/**
+ * Undo an exception: the override for `recurrenceId` and its EXDATE value are removed, so
+ * the RRULE instance is back as generated. Null when the object is not a series.
+ */
+export function restoreOccurrence(icalText: string, recurrenceId: Date): string | null {
+  const series = loadSeries(icalText);
+  if (!series) return null;
+  const idx = overrideIndex(series, recurrenceId);
+  if (idx >= 0) series.root.components.splice(idx, 1);
+  const kept: IcalProperty[] = [];
+  for (const p of series.master.properties) {
+    if (p.name !== 'EXDATE') { kept.push(p); continue; }
+    const values = p.value.split(',').filter((v) => {
+      const date = parseDateList([{ ...p, value: v }], series.root)[0]?.date;
+      return !date || !sameInstance(date, recurrenceId, series.allDay);
+    });
+    if (values.length > 0) kept.push({ ...p, value: values.join(',') });
+  }
+  series.master.properties = kept;
   return serializeComponent(series.root) + '\r\n';
 }
 

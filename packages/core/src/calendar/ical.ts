@@ -750,6 +750,11 @@ export function buildVCalendar(opts: VEventFields & {
   recurrenceId?: { date: Date; dateOnly: boolean };
   /** 9.4: display alarm this many minutes before the start (VALARM); `alarm` wins when both are set. */
   alarmMinutes?: number;
+  /**
+   * IANA zone of a timed DTSTART/DTEND (written as local time with TZID, so a series keeps
+   * its wall-clock time across DST changes); omitted or unknown = UTC.
+   */
+  tzid?: string;
 }): string {
   const ev: IcalComponent = { name: 'VEVENT', properties: [], components: [] };
   const now = opts.dtstamp ?? new Date();
@@ -760,7 +765,7 @@ export function buildVCalendar(opts: VEventFields & {
       ? { name: 'RECURRENCE-ID', params: { VALUE: 'DATE' }, value: formatDateOnly(opts.recurrenceId.date) }
       : { name: 'RECURRENCE-ID', params: {}, value: formatUtcDateTime(opts.recurrenceId.date) });
   }
-  ev.properties.push(...dateProps(opts.start, opts.end, opts.allDay ?? false, null));
+  ev.properties.push(...dateProps(opts.start, opts.end, opts.allDay ?? false, opts.tzid ?? null));
   ev.properties.push(textProp('SUMMARY', opts.summary));
   if (opts.description) ev.properties.push(textProp('DESCRIPTION', opts.description));
   if (opts.location) ev.properties.push(textProp('LOCATION', opts.location));
@@ -798,14 +803,23 @@ export function buildVCalendar(opts: VEventFields & {
   return serializeComponent(cal) + '\r\n';
 }
 
+/** Fields of patchVEvent / patchComponent. */
+export type VEventPatch = VEventFields & {
+  dtstamp?: Date;
+  /** IANA zone the timed DTSTART / DTEND are written in (only with start / end / allDay); absent = keep the stored zone. */
+  tzid?: string;
+};
+
 /**
  * Patch the main VEVENT of a stored calendar object. Only the fields present in
  * `patch` are rewritten; every other property/sub-component (RRULE, EXDATE, VALARM,
  * ATTENDEE, VTIMEZONE, X-…) is preserved. A timed DTSTART that carried a TZID keeps
- * its zone (the new instant is written as wall-clock time in that zone).
+ * its zone (the new instant is written as wall-clock time in that zone); `tzid` (with
+ * start / end) moves timed times into another zone (e.g. a single UTC event turned into a
+ * series that must keep its wall-clock time across DST changes).
  * Returns null when the document has no VEVENT (caller should rebuild).
  */
-export function patchVEvent(icalText: string, patch: VEventFields & { dtstamp?: Date }): string | null {
+export function patchVEvent(icalText: string, patch: VEventPatch): string | null {
   const root = parseIcal(icalText);
   if (!root) return null;
   const ev = findMainVEvent(root);
@@ -819,7 +833,7 @@ export function patchVEvent(icalText: string, patch: VEventFields & { dtstamp?: 
  * RECURRENCE-ID override in calendar/exceptions.ts). Untouched properties and
  * sub-components are kept verbatim.
  */
-export function patchComponent(ev: IcalComponent, root: IcalComponent, patch: VEventFields & { dtstamp?: Date }): void {
+export function patchComponent(ev: IcalComponent, root: IcalComponent, patch: VEventPatch): void {
   const current = parseVEventComponent(ev, root);
 
   const setSingle = (name: string, prop: IcalProperty | null): void => {
@@ -837,7 +851,8 @@ export function patchComponent(ev: IcalComponent, root: IcalComponent, patch: VE
     const start = patch.start ?? current?.start ?? new Date();
     const end = patch.end ?? current?.end ?? start;
     const startProp = getProperty(ev, 'DTSTART');
-    const tz = !allDay && startProp?.params['TZID'] ? resolveTzid(startProp.params['TZID'], root) : null;
+    const storedTz = startProp?.params['TZID'] ? resolveTzid(startProp.params['TZID'], root) : null;
+    const tz = allDay ? null : patch.tzid && isValidTimeZone(patch.tzid) ? patch.tzid : storedTz;
     const [s, e] = dateProps(start, end, allDay, tz);
     setSingle('DTSTART', s ?? null);
     ev.properties = ev.properties.filter((p) => p.name !== 'DURATION');

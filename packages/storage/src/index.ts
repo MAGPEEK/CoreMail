@@ -61,4 +61,5 @@ export * from './folder-permissions.js';
 export * from './folder-access.js';
 export * from './permission-events.js';
 export * from './resource-booking-rules.js';
+export * from './room-booking.js';
 export * from './contacts/index.js';

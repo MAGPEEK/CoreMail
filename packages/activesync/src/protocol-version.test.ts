@@ -92,13 +92,13 @@ test('atLeast orders the versions', () => {
 });
 
 test('features: 12.1 has neither global status codes nor ComposeMail/Email2/Preview/Availability; 14.1-only elements', () => {
-  const v14 = ['globalStatus', 'composeMailWbxml', 'email2', 'bodyPreview', 'recipientAvailability', 'estimateOptions'] as const;
+  const v14 = ['globalStatus', 'composeMailWbxml', 'email2', 'bodyPreview', 'recipientAvailability', 'estimateOptions', 'notesClass', 'meetingResponseType'] as const;
   for (const f of v14) {
     assert.equal(supports('12.1', f), false, f);
     assert.equal(supports('14.0', f), true, f);
     assert.equal(supports('14.1', f), true, f);
   }
-  for (const f of ['provisionDeviceInformation', 'userInformationAccounts', 'rightsManagement'] as const) {
+  for (const f of ['provisionDeviceInformation', 'userInformationAccounts', 'rightsManagement', 'recurrenceFirstDayOfWeek'] as const) {
     assert.equal(supports('12.1', f), false, f);
     assert.equal(supports('14.0', f), false, f);
     assert.equal(supports('14.1', f), true, f);

@@ -5,6 +5,11 @@ import { PROTOCOL_ACCESS_CHANGE } from '@coremail/core';
 import { easLiveRequests, sendEasDisabled, type EasCredentialInfo } from '../live-sessions.js';
 import { knownItems } from './item-state.js';
 import { mergeSyncKeys } from './sync-keys.js';
+import { storedOptions } from './sync-options.js';
+import { hierarchyChanged } from './folder-sync.js';
+import { HIGHEST_EAS_VERSION, type EasVersion } from '../protocol-version.js';
+import { moduleFor } from '../pim/registry.js';
+import { pimChanged, pimWatches, type PimWatch } from '../pim/watch.js';
 
 /** [MS-ASCMD] Ping status values. */
 export const PING_STATUS = {
@@ -13,6 +18,7 @@ export const PING_STATUS = {
   MISSING_PARAMETERS: '3',
   BAD_HEARTBEAT: '5',
   FOLDER_HIERARCHY_SYNC: '7',
+  SERVER_ERROR: '8',
 } as const;
 
 export const MIN_HEARTBEAT = 60;    // seconds
@@ -26,6 +32,8 @@ export interface PingOptions {
   pollIntervalMs?: number;
   minHeartbeatSec?: number;
   maxHeartbeatSec?: number;
+  /** Negotiated protocol version (which PIM classes exist, e.g. Notes from 14.0). */
+  version?: EasVersion;
 }
 
 interface PingParams { heartbeat: number; folders: string[] }
@@ -52,7 +60,10 @@ function cachedParams(syncKeys: Record<string, string>): Partial<PingParams> {
  * Parameters: HeartbeatInterval + Folders from the request; a Ping without them (or an
  * empty Ping) reuses the last parameters of the device, else Status 3. A heartbeat outside
  * [MIN_HEARTBEAT, MAX_HEARTBEAT] → Status 5 with the allowed limit; a folder that is not
- * the user's → Status 7 (folder hierarchy sync required).
+ * the user's → Status 7 (folder hierarchy sync required). w3: also Status 7 when the hierarchy
+ * differs from the device's last FolderSync snapshot (a new calendar, a PIM class switched on
+ * or off), so devices discover the PIM folders; calendar / tasks / notes collections are
+ * watched by their class module (pim/watch.ts).
  *
  * Changes are detected against the SyncKey the device last received for each folder (a
  * modSeq bound, see sync-window.ts): any row of the folder with a newer modSeq (new mail,
@@ -74,6 +85,7 @@ export async function handlePing(
   const pollIntervalMs = opts.pollIntervalMs ?? 10_000;
   const minHeartbeat = opts.minHeartbeatSec ?? MIN_HEARTBEAT;
   const maxHeartbeat = opts.maxHeartbeatSec ?? MAX_HEARTBEAT;
+  const version = opts.version ?? HIGHEST_EAS_VERSION;
 
   const device = opts.deviceId
     ? await prisma.activeSyncDevice.findUnique({
@@ -105,14 +117,26 @@ export async function handlePing(
     return;
   }
 
+  // w3: calendar / tasks / notes collections are watched by their class module (pim/watch.ts)
+  const mailIds = folderIds.filter((id) => !moduleFor(id));
   const folders = await prisma.folder.findMany({
-    where: { id: { in: folderIds }, mailbox: { userId } },
+    where: { id: { in: mailIds }, mailbox: { userId } },
     select: { id: true, mailboxId: true },
   });
-  if (folders.length !== folderIds.length) {
+  const pim = await pimWatches(userId, folderIds.filter((id) => moduleFor(id)), version,
+    (id) => storedOptions(syncKeys, id)?.filterType);
+  // an unreadable webmail policy is temporary: Status 8 (a FolderSync now would fail as well)
+  if (pim.status === 'error') {
+    send(res, [el('Status', PING_STATUS.SERVER_ERROR)]);
+    return;
+  }
+  // a folder that is not the user's (any more), or a hierarchy the device does not have yet
+  // (new calendar, class switched on / off) → the device runs FolderSync first
+  if (folders.length !== mailIds.length || pim.status === 'hierarchy' || (device && await hierarchyChanged(userId, syncKeys, version))) {
     send(res, [el('Status', PING_STATUS.FOLDER_HIERARCHY_SYNC)]);
     return;
   }
+  const watches: PimWatch[] = pim.watches;
 
   if (device) {
     const params = JSON.stringify({ heartbeat, folders: folderIds });
@@ -159,6 +183,9 @@ export async function handlePing(
         const since = baseline.get(f.id)!;
         if (hi >= since && await folderChanged(f.id, mailboxId, since)) changed.push(f.id);
       }
+    }
+    for (const w of watches) {
+      if (await pimChanged(w, device?.id ?? null, syncKeys[w.collectionId], new Date())) changed.push(w.collectionId);
     }
     return changed;
   }

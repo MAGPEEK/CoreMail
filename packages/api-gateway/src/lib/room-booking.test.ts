@@ -22,6 +22,7 @@ installFakePrisma({
   resourceCalendar: { update: async (a: unknown) => { locks.push((a as { where: { id: string } }).where.id); return { id: 'rc1' }; } },
   resourceBooking: {
     findMany: async () => bookings.map((b) => ({ ...b })),
+    findUnique: async (a: unknown) => bookings.find((b) => b['uid'] === (a as { where: { calendarId_uid: { uid: string } } }).where.calendarId_uid.uid) ?? null,
     upsert: async (a: unknown) => {
       const { where, create, update } = a as { where: { calendarId_uid: { uid: string } }; create: Row; update: Row };
       const existing = bookings.find((b) => b['uid'] === where.calendarId_uid.uid);
@@ -114,6 +115,19 @@ test('bookRooms (review): the occurrences of the stored calendar data are checke
   // the row columns are absent (rrule null) — the RRULE in the data still makes it a series
   const declined = await bookRooms({ uid: 'mv', summary: 'mv', organizer: 'alice@example.com', dtStart: d('2026-06-08T09:00:00Z'), dtEnd: d('2026-06-08T10:00:00Z'), allDay: false, rrule: null, icalData: stored }, ['raum-a@example.com'], 'd1', now);
   assert.equal(declined[0]!.partstat, 'DECLINED');
+});
+
+test('bookRooms (w3 review): a booking of the same UID by another organizer is neither changed nor taken over', async () => {
+  const ical = buildVCalendar({ uid: 'own', summary: 'own', start: d('2026-07-01T09:00:00Z'), end: d('2026-07-01T10:00:00Z') });
+  const meeting = { uid: 'own', summary: 'own', organizer: 'Alice@Example.com', dtStart: d('2026-07-01T09:00:00Z'), dtEnd: d('2026-07-01T10:00:00Z'), allDay: false, rrule: null, icalData: ical };
+  assert.equal((await bookRooms(meeting, ['raum-a@example.com'], 'd1', now))[0]!.partstat, 'ACCEPTED');
+  // a client-chosen UID of someone else's meeting (CalDAV / ActiveSync): DECLINED, the booking stays alice's
+  const takeover = await bookRooms({ ...meeting, organizer: 'mallory@example.com', dtStart: d('2026-07-02T09:00:00Z'), dtEnd: d('2026-07-02T10:00:00Z') }, ['raum-a@example.com'], 'd1', now);
+  assert.deepEqual([takeover[0]!.partstat, takeover[0]!.reason], ['DECLINED', 'conflict']);
+  const row = bookings.find((b) => b['uid'] === 'own')!;
+  assert.deepEqual([row['organizer'], (row['dtStart'] as Date).toISOString(), row['status']], ['Alice@Example.com', '2026-07-01T09:00:00.000Z', 'ACCEPTED']);
+  // the organizer itself (address case aside) re-books as before
+  assert.equal((await bookRooms({ ...meeting, organizer: 'alice@example.com' }, ['raum-a@example.com'], 'd1', now))[0]!.partstat, 'ACCEPTED');
 });
 
 test('bookRooms / listRooms (review): no domain → no rooms (never another domain\'s)', async () => {
