@@ -17,10 +17,13 @@ import itLocale from '@fullcalendar/core/locales/it';
 import type { DateSelectArg, DatesSetArg, EventClickArg } from '@fullcalendar/core';
 import { api } from '../api/client.js';
 import type { Calendar, CalendarEvent, Task } from '../api/types.js';
-import { useUiPrefs } from '../store/ui.js';
+import { useUiPrefs, useUiStore } from '../store/ui.js';
 import { useLanguageStore } from '../store/language.js';
 import { useT } from '../i18n/useT.js';
 import { CalendarSidebar } from '../components/CalendarSidebar.js';
+import { CalendarNavBar } from '../components/calendar/CalendarNavBar.js';
+import { CardSurface } from '../components/calendar/CardSurface.js';
+import { parseAction, type CalendarAction } from '../lib/calendarRibbon.js';
 import {
   CalendarToolbar,
   FILTER_DEFAULT,
@@ -32,7 +35,6 @@ import { EventEditDialog } from '../components/EventEditDialog.js';
 import toast from 'react-hot-toast';
 import { readableTextOn } from '../lib/readableText.js';
 import { PageShell } from '../components/PageShell.js';
-import { PAGE_CONTENT_PAD } from '../lib/pageShell.js';
 import { usePreferences, useRegional } from '../store/preferences.js';
 import { calendarTimeZone, eventFetchRange, localDay } from '../lib/zonedTime.js';
 import { businessHours, hiddenDaysForWorkWeek, slotDuration } from '../lib/calendarPrefs.js';
@@ -59,6 +61,9 @@ export function CalendarPage() {
   const [eventDialog, setEventDialog] = useState<EventDialogState>(null);
   // 9.4: Settings → Kalender (work week, week start, time grid)
   const calPrefs = usePreferences((s) => s.prefs.calendar);
+  const updatePrefs = usePreferences((s) => s.update);
+  const openCompose = useUiStore((s) => s.openCompose);
+  const setShortcutHelpOpen = useUiStore((s) => s.setShortcutHelpOpen);
   // 9.4: the grid shows wall-clock times of the chosen zone (Settings → Region)
   const regionalTimeZone = useRegional().timeZone;
   const fcTimeZone = calendarTimeZone(regionalTimeZone);
@@ -89,7 +94,10 @@ export function CalendarPage() {
   const calendarRef = useRef<FullCalendar | null>(null);
   // Visible FullCalendar range — the server expands recurring events only inside it
   const [visibleRange, setVisibleRange] = useState<{ start: string; end: string } | null>(null);
+  // Title of the visible range for the navigation row ("November 2026")
+  const [gridTitle, setGridTitle] = useState('');
   const handleDatesSet = (arg: DatesSetArg) => {
+    setGridTitle(arg.view.title);
     // widened: with a named zone FullCalendar hands out UTC-coerced dates
     const next = eventFetchRange(arg.start, arg.end);
     setVisibleRange((prev) => (prev && prev.start === next.start && prev.end === next.end ? prev : next));
@@ -100,7 +108,6 @@ export function CalendarPage() {
     const fcApi = calendarRef.current?.getApi();
     if (!fcApi) return;
     if (v === 'workWeek') fcApi.changeView('timeGridWeek');
-    else if (v === 'split') return;
     else fcApi.changeView(v);
   };
 
@@ -241,41 +248,60 @@ export function CalendarPage() {
     ...taskEvents,
   ];
 
+  const ownedCalendars = (calendars ?? []).filter((c) => !c.shared);
+
+  const shareCalendar = () => {
+    if (ownedCalendars.length === 0) {
+      toast.error('Du hast noch keinen eigenen Kalender zum Teilen');
+      return;
+    }
+    setShareDialogOpen(true);
+  };
+
+  // v3.18.21: Print only the calendar (sidebar, toolbar, app chrome hidden via print:hidden
+  // in print.css). The class on <html> lets FullCalendar render full-width for the print job.
+  const printCalendar = () => {
+    document.documentElement.classList.add('coremail-printing');
+    window.print();
+    // Cleanup after the print dialog (both on cancel and after printing)
+    setTimeout(() => {
+      document.documentElement.classList.remove('coremail-printing');
+    }, 500);
+  };
+
+  /** One dispatcher for every ribbon command (lib/calendarRibbon.ts); the filter popover lives in the toolbar. */
+  const runRibbonAction = (action: CalendarAction) => {
+    const parsed = parseAction(action);
+    if (parsed.kind === 'view') { changeView(parsed.view); return; }
+    if (parsed.kind === 'slot') { updatePrefs({ calendar: { slotMinutes: parsed.minutes } }); return; }
+    switch (parsed.action) {
+      case 'new-event': setEventDialog({ mode: 'create', defaults: { calendarId: defaultWritableCalId } }); break;
+      case 'new-mail': openCompose({ mode: 'new' }); navigate('/mail'); break;
+      case 'today': handleSelectDate(new Date()); break;
+      case 'share': shareCalendar(); break;
+      case 'print': printCalendar(); break;
+      case 'agenda': setAgendaOpen((o) => !o); break;
+      case 'settings': navigate('/settings#calendar'); break;
+      case 'shortcuts': setShortcutHelpOpen(true); break;
+      case 'filter': case 'about': break;
+    }
+  };
+
+  const fcApi = () => calendarRef.current?.getApi();
+
   return (
     <PageShell
       title="Kalender"
+      bodyClassName="gap-0"
       commandBar={
         <CalendarToolbar
           view={view}
-          onChangeView={changeView}
-          onNewEvent={() => setEventDialog({
-            mode: 'create',
-            defaults: { calendarId: defaultWritableCalId },
-          })}
-          onShare={() => {
-            const owned = (calendars ?? []).filter((c) => !c.shared);
-            if (owned.length === 0) {
-              toast.error('Du hast noch keinen eigenen Kalender zum Teilen');
-              return;
-            }
-            setShareDialogOpen(true);
-          }}
-          onPrint={() => {
-            // v3.18.21: Print only the calendar (sidebar, toolbar, app chrome hidden via
-            // print:hidden in print.css). Set class on <html>
-            // so FullCalendar renders full-width for the print job.
-            document.documentElement.classList.add('coremail-printing');
-            window.print();
-            // Cleanup after the print dialog (both on cancel and after printing)
-            setTimeout(() => {
-              document.documentElement.classList.remove('coremail-printing');
-            }, 500);
-          }}
           filters={filters}
           onFiltersChange={setFilters}
-          onToday={() => handleSelectDate(new Date())}
+          hasOwnCalendar={ownedCalendars.length > 0}
+          slotMinutes={calPrefs.slotMinutes}
           agendaOpen={agendaOpen}
-          onToggleAgenda={() => setAgendaOpen((o) => !o)}
+          onAction={runRibbonAction}
         />
       }
     >
@@ -287,26 +313,35 @@ export function CalendarPage() {
         />
       )}
 
-      {/* Main area: FullCalendar */}
-      <div className={`flex-1 min-w-0 flex flex-col overflow-auto ${PAGE_CONTENT_PAD}`}>
+      {/* Main area: navigation row + FullCalendar in a card on the canvas */}
+      <div className="flex-1 min-w-0 min-h-0 flex flex-col overflow-auto">
+      <CardSurface label="Kalenderraster" className="flex-1 min-h-[26rem] flex flex-col">
         {compactScreen && (
           <button
             type="button"
             id="calendar-list-toggle"
             onClick={() => setCalendarListOpen(true)}
             aria-haspopup="dialog"
-            className="self-start mb-2 inline-flex items-center gap-1.5 min-h-[2rem] px-2 rounded text-sm font-medium text-accent-fg hover:bg-surface-2"
+            className="self-start m-1 inline-flex items-center gap-1.5 min-h-[2rem] px-2 rounded text-sm font-medium text-accent-fg hover:bg-surface-2"
           >
             <PanelLeft size={16} aria-hidden="true" />
             Kalender
           </button>
         )}
-        <div className="flex-1 min-h-0">
+        <CalendarNavBar
+          title={gridTitle}
+          selectedDate={selectedDate}
+          onToday={() => handleSelectDate(new Date())}
+          onPrev={() => fcApi()?.prev()}
+          onNext={() => fcApi()?.next()}
+          onJump={handleSelectDate}
+        />
+        <div className="flex-1 min-h-0 p-2">
         <FullCalendar
           ref={calendarRef}
           plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin, luxonPlugin]}
           timeZone={fcTimeZone}
-          initialView={initialView === 'split' ? 'dayGridMonth' : initialView === 'workWeek' ? 'timeGridWeek' : initialView}
+          initialView={initialView === 'workWeek' ? 'timeGridWeek' : initialView}
           locale={fcLocale}
           weekNumbers={calendarShowWeekNumbers}
           weekNumberCalculation="ISO"
@@ -316,7 +351,7 @@ export function CalendarPage() {
           slotDuration={slotDuration(calPrefs.slotMinutes)}
           scrollTime={`${calPrefs.workStart}:00`}
           hiddenDays={hiddenDays}
-          headerToolbar={{ left: 'prev,next today', center: 'title', right: '' }}
+          headerToolbar={false}
           events={fcEvents}
           selectable
           select={handleDateSelect}
@@ -325,6 +360,7 @@ export function CalendarPage() {
           height="100%"
         />
         </div>
+      </CardSurface>
       </div>
 
       {/* Phones: the calendar list is a sheet (Modal: focus trap, Escape, focus returns to the button) */}

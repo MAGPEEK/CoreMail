@@ -994,7 +994,7 @@ const de = {
   // v3.18.14/15 Calendar sharing
   cal_share_title:                   'Kalender teilen',
   cal_share_my_calendars:            'Meine Kalender',
-  cal_share_shared_with_me:          'Geteilt mit mir',
+  cal_share_shared_with_me:          'Freigegebene Kalender',
   cal_share_add_user:                'Benutzer hinzufügen',
   cal_share_perm_read:               'Nur lesen',
   cal_share_perm_write:              'Lesen und Schreiben',

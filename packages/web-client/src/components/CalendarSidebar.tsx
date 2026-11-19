@@ -356,17 +356,23 @@ export function CalendarSidebar({
     return (
       <div
         key={cal.id}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setMenu({ x: e.clientX, y: e.clientY, items: isShared ? buildSharedMenu(cal) : buildOwnedMenu(cal) });
+        }}
         className="group flex items-center gap-2 px-2 py-1.5 rounded hover:bg-surface-2 transition-colors"
       >
         {/* Checkbox / color circle */}
         <button
           onClick={() => toggleCalendar(cal.id)}
-          className="shrink-0 w-4 h-4 rounded-sm border-2 flex items-center justify-center transition-all duration-150 active:scale-90"
+          className="shrink-0 w-4 h-4 rounded-full border-2 flex items-center justify-center transition-all duration-150 active:scale-90"
           style={{
             borderColor: cal.color,
             backgroundColor: isHidden ? 'transparent' : cal.color,
           }}
-          aria-label={isHidden ? 'Kalender anzeigen' : 'Kalender ausblenden'}
+          role="checkbox"
+          aria-checked={!isHidden}
+          aria-label={cal.name}
         >
           {!isHidden && <span className="text-[10px] leading-none" style={{ color: readableTextOn(cal.color) }}>✓</span>}
         </button>
@@ -395,7 +401,7 @@ export function CalendarSidebar({
               items: isShared ? buildSharedMenu(cal) : buildOwnedMenu(cal),
             });
           }}
-          className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-surface-3 text-fg-subtle transition-all duration-150 active:scale-90"
+          className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 max-md:opacity-100 p-1 rounded hover:bg-surface-3 text-fg-subtle transition-all duration-150 active:scale-90"
           aria-label="Optionen"
         >
           <MoreHorizontal size={14} />
@@ -405,7 +411,7 @@ export function CalendarSidebar({
   };
 
   return (
-    <aside aria-label="Kalenderliste" className="w-60 max-w-full shrink-0 bg-surface-2 border-r border-line flex flex-col">
+    <aside aria-label="Kalenderliste" className="w-60 max-w-full shrink-0 flex flex-col pt-2 pl-2">
       {/* Mini calendar at the top */}
       <MiniCalendar selectedDate={selectedDate} onSelectDate={onSelectDate} />
 
@@ -425,6 +431,7 @@ export function CalendarSidebar({
         {/* Own calendars */}
         <button
           onClick={() => setExpandedOwned(!expandedOwned)}
+          aria-expanded={expandedOwned}
           className="w-full flex items-center gap-1 mt-2 mb-1 px-2 text-xs font-semibold text-fg-subtle uppercase tracking-wide hover:text-fg-muted"
         >
           {expandedOwned ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
@@ -438,6 +445,7 @@ export function CalendarSidebar({
           <>
             <button
               onClick={() => setExpandedShared(!expandedShared)}
+              aria-expanded={expandedShared}
               className="w-full flex items-center gap-1 mt-3 mb-1 px-2 text-xs font-semibold text-fg-subtle uppercase tracking-wide hover:text-fg-muted"
             >
               {expandedShared ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
