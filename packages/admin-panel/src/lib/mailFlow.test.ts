@@ -4,7 +4,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { formFromView, limitFromInput, listFromText, patchFromForm } from './mailFlow.ts';
+import { formChanged, formFromView, limitFromInput, listFromText, patchFromForm } from './mailFlow.ts';
 
 const view = {
   hiddenFromGal: false, forwardTo: null, forwardKeepCopy: true, acceptFrom: ['partner.example'], rejectFrom: [],
@@ -17,6 +17,13 @@ test('view → form: lists one per line, limits as text, empty for the global li
   assert.equal(f.maxSendSizeMb, '10');
   assert.equal(f.maxReceiveSizeMb, '');
   assert.equal(f.forwardTo, '');
+});
+
+test('formChanged is false for the saved values and true after an edit', () => {
+  const f = formFromView(view);
+  assert.equal(formChanged(view, f), false);
+  assert.equal(formChanged(view, { ...f, forwardTo: 'a@x.test' }), true);
+  assert.equal(formChanged(view, { ...f, hiddenFromGal: true }), true);
 });
 
 test('lists split on lines, commas and semicolons; limits validated', () => {

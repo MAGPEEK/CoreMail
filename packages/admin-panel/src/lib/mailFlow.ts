@@ -33,6 +33,12 @@ export type MailFlowField = 'forwardTo' | 'maxReceiveSizeMb' | 'maxSendSizeMb' |
 
 const num = (v: number | null | undefined): string => (v === null || v === undefined ? '' : String(v));
 
+/** True when the form differs from the values the server returned. */
+export function formChanged(view: MailFlowView, form: MailFlowForm): boolean {
+  const saved = formFromView(view);
+  return (Object.keys(saved) as Array<keyof MailFlowForm>).some((k) => saved[k] !== form[k]);
+}
+
 export function formFromView(v: MailFlowView): MailFlowForm {
   return {
     hiddenFromGal: v.hiddenFromGal,

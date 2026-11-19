@@ -12,7 +12,8 @@ import { api } from '../api/client.js';
 import { WriteGuard } from './Can.js';
 import { useT } from '../i18n/useT.js';
 import { errorMessage } from '../lib/errors.js';
-import { formFromView, patchFromForm, type MailFlowForm, type MailFlowKind, type MailFlowView } from '../lib/mailFlow.js';
+import { useReportDirty } from './EditPanel.js';
+import { formChanged, formFromView, patchFromForm, type MailFlowForm, type MailFlowKind, type MailFlowView } from '../lib/mailFlow.js';
 
 export function MailFlowEditor({ path, kind }: {
   /** API path, e.g. /admin/mailboxes/<userId>/mail-flow. */
@@ -34,6 +35,8 @@ export function MailFlowEditor({ path, kind }: {
     onSuccess: (next) => { qc.setQueryData(['mail-flow', path], next); toast.success(t('mflow_saved')); },
     onError: (e) => toast.error(`${t('mflow_save_error')}: ${errorMessage(e)}`),
   });
+
+  useReportDirty(view !== undefined && form !== null && formChanged(view, form));
 
   if (isLoading) {
     return <div className="flex items-center gap-2 text-xs text-fg-subtle"><Loader2 size={14} className="animate-spin" /> {t('mflow_title')}</div>;

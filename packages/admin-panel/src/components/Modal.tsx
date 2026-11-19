@@ -1,10 +1,13 @@
 import { useEffect, useRef, type ReactNode } from 'react';
+import { trapTab } from '../lib/focusTrap.js';
 
 // Stack of open dialogs — only the topmost one reacts to Escape/Tab
 const openStack: symbol[] = [];
 
 const FOCUSABLE =
   'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+const DIALOG_SAFE_PANEL = 'max-h-[calc(100dvh-2rem)] overflow-y-auto';
 
 interface ModalProps {
   onClose: () => void;
@@ -19,6 +22,11 @@ interface ModalProps {
   overlayClassName?: string;
   /** Close when clicking the backdrop (default true) */
   closeOnBackdrop?: boolean;
+  /**
+   * 'dialog' (default): the panel never grows beyond the viewport, tall content scrolls inside it.
+   * 'drawer': the caller sizes the panel (full-height side panel with its own scrolling body).
+   */
+  layout?: 'dialog' | 'drawer';
 }
 
 /**
@@ -31,6 +39,7 @@ export function Modal({
   className = 'bg-surface rounded-lg shadow-2xl',
   overlayClassName = 'fixed inset-0 z-50 flex items-center justify-center bg-scrim/50 p-4',
   closeOnBackdrop = true,
+  layout = 'dialog',
 }: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
@@ -57,11 +66,10 @@ export function Modal({
       if (e.key !== 'Tab' || !panelRef.current) return;
       const items = Array.from(panelRef.current.querySelectorAll<HTMLElement>(FOCUSABLE))
         .filter((el) => el.offsetParent !== null || el === document.activeElement);
-      if (items.length === 0) { e.preventDefault(); return; }
-      const first = items[0]!;
-      const last = items[items.length - 1]!;
-      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
-      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      const action = trapTab(items, document.activeElement as HTMLElement | null, e.shiftKey);
+      if (action.kind === 'default') return;
+      e.preventDefault();
+      if (action.kind === 'focus') action.target.focus();
     };
     document.addEventListener('keydown', onKey);
     return () => {
@@ -74,8 +82,12 @@ export function Modal({
 
   return (
     <div
-      className={overlayClassName}
-      onMouseDown={(e) => { if (closeOnBackdrop && e.target === e.currentTarget) onClose(); }}
+      className={`${overlayClassName} ${layout === 'dialog' ? 'overflow-y-auto' : ''}`}
+      onMouseDown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        // a backdrop click that does not close must not move focus out of the dialog either
+        if (closeOnBackdrop) onClose(); else e.preventDefault();
+      }}
     >
       <div
         ref={panelRef}
@@ -84,7 +96,7 @@ export function Modal({
         {...(label ? { 'aria-label': label } : {})}
         {...(labelledBy ? { 'aria-labelledby': labelledBy } : {})}
         tabIndex={-1}
-        className={`${className} outline-none`}
+        className={`${className} ${layout === 'dialog' ? DIALOG_SAFE_PANEL : ''} outline-none`}
       >
         {children}
       </div>
