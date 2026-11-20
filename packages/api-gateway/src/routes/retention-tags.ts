@@ -1,5 +1,5 @@
 /**
- * User-facing retention tag API (Phase 9, Exchange 2019 compliant)
+ * User-facing retention tag API (Phase 9)
  *
  * Lists the PERSONAL retention tags that end users can assign to folders/items
  * themselves. DPT/RPT tags are managed centrally by the admin and are

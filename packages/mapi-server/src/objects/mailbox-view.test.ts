@@ -15,7 +15,7 @@ const PROVISIONED: Record<string, Array<[string, string]>> = {
   imapNames: [['INBOX', 'INBOX'], ['Drafts', 'Drafts'], ['Sent', 'Sent'], ['Trash', 'Trash'], ['Junk', 'Junk'], ['Archive', '']],
 };
 
-test('role folders always carry the Outlook display names, however the mailbox was provisioned', () => {
+test('role folders always carry the MAPI display names, however the mailbox was provisioned', () => {
   for (const [how, rows] of Object.entries(PROVISIONED)) {
     const view = new MailboxView(rows.map(([name, displayName], i) => folder(`f${i}`, name, displayName)));
     for (const [role, name] of Object.entries(ROLE_DISPLAY_NAME)) {

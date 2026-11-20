@@ -88,7 +88,7 @@ adminServersRouter.put('/settings', async (req: Request, res: Response) => {
 
   try {
     // v3.18.35+36: if the admin only changes publicHostname/useHttps/httpPort
-    // without adjusting the derived URLs, they would be stale and Outlook
+    // without adjusting the derived URLs, they would be stale and
     // Autodiscover would return wrong addresses. We check: does the request
     // contain old mail.local URLs OR do URLs still point to port 8080 although
     // httpPort != 8080? Then auto-derive from publicHostname.
@@ -136,7 +136,7 @@ adminServersRouter.put('/settings', async (req: Request, res: Response) => {
 });
 
 // POST /api/v1/admin/servers/settings/derive
-// Derive URLs automatically from hostname + port (convenience endpoint for ECP)
+// Derive URLs automatically from hostname + port (convenience endpoint for the BCP)
 adminServersRouter.post('/settings/derive', async (req: Request, res: Response) => {
   const schema = z.object({
     publicHostname: hostnameSchema,

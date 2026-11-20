@@ -7,7 +7,7 @@
  * change of the user). Basic over a connection the gateway verified as plain
  * HTTP is refused unless MAPI_ALLOW_PLAIN_HTTP=true (test setups).
  * A locked account (shared lockout) and a temporary failure are answered
- * 503 + Retry-After — never 401, which would make Outlook ask for the
+ * 503 + Retry-After — never 401, which would make the client ask for the
  * password again (MS-OXCMAPIHTTP 2.2.2.2: 5xx for exceptional conditions).
  *
  * 9.5 review: a cached check is also dropped when the account got a

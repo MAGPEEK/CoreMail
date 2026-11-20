@@ -195,7 +195,7 @@ export async function buildRawFromMessage(
   const info = await transport.sendMail({
     messageId: msg.messageId,
     from:      fromField,
-    // Sender: for SEND_ON_BEHALF — Outlook shows "Stefan on behalf of info@firma.de"
+    // Sender: for SEND_ON_BEHALF — mail clients show "Stefan on behalf of info@firma.de"
     ...(msg.sender ? { sender: msg.sender } : {}),
     to:        msg.to,
     subject:   msg.subject,

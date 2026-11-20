@@ -5,7 +5,7 @@
  * public MS-OXDSCLI / MS-OXDISCO / MS-ASCMD specifications and typical client
  * behaviour. Every client must
  *  - get 401 + `WWW-Authenticate: Basic` before any answer,
- *  - get IMAP/SMTP (Outlook schema) or the ActiveSync URL (mobilesync schema)
+ *  - get IMAP/SMTP (outlook/2006a schema) or the ActiveSync URL (mobilesync schema)
  *    after authenticating — never EXCH/EXPR/MAPI blocks,
  *  - see endpoints that match the enabled listeners (BCP → Dienste),
  *  - learn nothing about other or unknown accounts.

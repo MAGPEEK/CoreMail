@@ -12,7 +12,7 @@ export function createAutodiscoverApp(): Express {
 
   app.get('/health', (_req, res) => res.json({ ok: true, service: 'autodiscover' }));
 
-  // Autodiscover v1 (POX) — Outlook and ActiveSync clients (mobilesync schema).
+  // Autodiscover v1 (POX) — desktop clients and ActiveSync clients (mobilesync schema).
   // Paths are matched case-insensitively (Express default): clients use
   // /autodiscover/autodiscover.xml, /Autodiscover/Autodiscover.xml, /AutoDiscover/….
   // Some device clients send the XML without (or with an unusual) Content-Type;
@@ -21,7 +21,7 @@ export function createAutodiscoverApp(): Express {
   app.post('/Autodiscover/Autodiscover.xml', anyText, handleAutodiscoverV1);
   app.get('/Autodiscover/Autodiscover.xml', handleAutodiscoverV1);
 
-  // Autodiscover v2 (JSON) — Outlook 2019/365, both documented URL forms:
+  // Autodiscover v2 (JSON) — newer desktop clients, both documented URL forms:
   //   /autodiscover/autodiscover.json/v1.0/{email}?Protocol=…
   //   /autodiscover/autodiscover.json?Email={email}&Protocol=…
   app.get('/autodiscover/autodiscover.json/v1.0/:email', handleAutodiscoverV2);

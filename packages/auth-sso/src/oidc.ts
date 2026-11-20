@@ -384,7 +384,7 @@ export async function completeSsoCallback(
   return { ok: true, code, target };
 }
 
-// ── Exchange ──────────────────────────────────────────────────────────────────
+// ── Code exchange ─────────────────────────────────────────────────────────────
 
 type ExchangeOutcome =
   | { kind: 'session'; userId: string; mfaVerified: boolean }

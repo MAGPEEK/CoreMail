@@ -68,7 +68,7 @@ export function importanceMailOption(level: Importance): { priority: 'high' | 'l
  * 9.4: importance stored with a delivered message — an inbox rule's "set
  * importance" (mail-rules RuleOutcome.importance) replaces the value of the
  * headers; no rule (null): the header value. Normal is stored as null. The raw
- * message stays unchanged (like Outlook, the rule sets the message property).
+ * message stays unchanged (the rule sets the message property).
  */
 export function deliveredImportance(header: 'high' | 'low' | null | undefined, rule: Importance | null | undefined): 'high' | 'low' | null {
   if (rule === 'high' || rule === 'normal' || rule === 'low') return storedImportance(rule);

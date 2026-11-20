@@ -8,7 +8,7 @@
  * server name sent by the client.
  *
  * v3.18.32: SNI multi-cert refactor — previously only the one cert with
- * `isActiveHttps=true` was loaded. Outlook Autodiscover (`autodiscover.<domain>`)
+ * `isActiveHttps=true` was loaded. Autodiscover (`autodiscover.<domain>`)
  * therefore always got the `mail.<domain>` cert → hostname mismatch →
  * certificate error. Now: ALL ACTIVE certs are loaded, one TLS context per
  * hostname (CN + all SANs + `domains[]`). SNICallback matches exact +

@@ -2,7 +2,7 @@ import type { ShowAs } from '../api/types.js';
 import { readableTextOn } from './readableText.ts';
 
 /**
- * Outlook-style rendering of an event's "Anzeigen als" (show-as) value in the
+ * Rendering of an event's "Anzeigen als" (show-as) value in the
  * calendar grid (FullCalendar) and the day agenda:
  *
  *   BUSY (default) — solid fill in the calendar colour, black/white text (readableTextOn)

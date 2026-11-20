@@ -156,7 +156,7 @@ adminSharedMailboxesRouter.put('/:id', async (req: Request, res: Response) => {
     displayName: z.string().min(1).max(200).optional(),
     active:      z.boolean().optional(),
     quotaBytes:  z.number().int().min(0).optional(), // 0 = unlimited
-    // v8.1: Exchange quota levels (null = server default percent of quotaBytes)
+    // v8.1: quota levels (null = server default percent of quotaBytes)
     quotaWarningBytes:      z.number().int().min(0).nullable().optional(),
     quotaProhibitSendBytes: z.number().int().min(0).nullable().optional(),
     // 9.4: copy of mail sent as / on behalf of the box into its Sent folder

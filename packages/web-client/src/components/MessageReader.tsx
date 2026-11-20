@@ -276,7 +276,7 @@ export function MessageReader({ messageId }: Props) {
     <div className="flex-1 flex flex-col bg-surface overflow-hidden">
       <CommandBar label={t('reader_actions_label')} groups={actionGroups} className="px-3 py-1.5 border-b border-line shrink-0" />
 
-      {/* Spam banner — Outlook style. Visible when rspamd score ≥ 3.0 OR the mail is in the junk folder */}
+      {/* Spam banner. Visible when rspamd score ≥ 3.0 OR the mail is in the junk folder */}
       {(() => {
         const score = msg.spamScore ?? null;
         const showSpamBanner = (score !== null && score >= 3.0) || isJunkFolder;
@@ -349,7 +349,7 @@ export function MessageReader({ messageId }: Props) {
         </div>
       )}
 
-      {/* Scheduled send banner (Outlook style) — visible for PENDING/SENT/CANCELLED */}
+      {/* Scheduled send banner — visible for PENDING/SENT/CANCELLED */}
       {msg.scheduledAt && msg.scheduledStatus && (
         <div className={`px-4 py-2.5 border-b shrink-0 flex items-center gap-2.5 text-sm ${
           msg.scheduledStatus === 'PENDING'   ? 'bg-info-bg border-info-line text-info-fg' :
@@ -454,7 +454,7 @@ export function MessageReader({ messageId }: Props) {
         </div>
       )}
 
-      {/* Body — with privacy images banner (Outlook/Gmail style) */}
+      {/* Body — with privacy images banner */}
       {(() => {
         // First: pre-process HTML so external images get blocked if needed
         if (!msg.bodyHtml) {

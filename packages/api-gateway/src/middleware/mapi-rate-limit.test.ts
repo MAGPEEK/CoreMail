@@ -1,5 +1,5 @@
 /**
- * 9.4 lead decision: /mapi (classic Outlook, chatty, often many clients behind
+ * 9.4 lead decision: /mapi (MAPI clients, chatty, often many clients behind
  * one NAT address) is not counted by the global API limiter (lib/api-rate-limit.ts) — the MAPI
  * server limits per authenticated account. Every other path keeps the limit.
  * Run: node --import tsx --test --test-force-exit src/middleware/mapi-rate-limit.test.ts

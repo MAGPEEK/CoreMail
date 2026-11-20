@@ -213,12 +213,12 @@ function internalProxy(targetBase: string): express.RequestHandler {
   return proxy as express.RequestHandler;
 }
 
-// v7.0.0: Exchange Web Services removed (EWS service package gone). Answer 404
+// v7.0.0: EWS removed (EWS service package gone). Answer 404
 // for every method instead of letting GET fall through to the SPA index.html.
 // Express paths are case-insensitive, so /EWS also covers /ews.
 const GONE_PREFIXES = ['/EWS', '/OAB'];
 app.use(GONE_PREFIXES, (_req, res) => { res.status(404).json({ error: 'Not found' }); });
-// 9.4: MAPI over HTTP (classic Outlook) — mapi-server, off per account by default
+// 9.4: MAPI over HTTP (desktop mail clients) — mapi-server, off per account by default
 // (protocol switch `mapi`). Binary bodies: proxied before express.json().
 const MAPI_URL = process.env['MAPI_SERVICE_URL'] ?? 'http://localhost:3007';
 app.use('/mapi', internalProxy(MAPI_URL));
@@ -292,7 +292,7 @@ app.use('/auth/mfa',           mfaRateLimit, authServiceProxy);
 app.use('/auth/app-passwords', authServiceProxy);
 app.use('/auth/sessions',      authServiceProxy);
 // v5.6.0: /oauth2/* proxy removed (OAuth2 server gone).
-// v5.4.0: ADFS emulation removed (was for Outlook 2024 LTSC Modern Auth).
+// v5.4.0: ADFS emulation removed (was for Modern Auth of LTSC 2024 desktop clients).
 
 // ── Body parser ───────────────────────────────────────────────────────────────
 // JSON — 10 MB limit (for mail content with inline images)
@@ -338,7 +338,7 @@ app.get('/healthz', (_req, res) => {
 app.get('/livez', livenessHandler);
 
 // ── Public maintenance-mode status (no auth needed) ───────────────────────────
-// Queried by the OWA LoginPage to display the maintenance banner.
+// Queried by the MWA LoginPage to display the maintenance banner.
 app.get('/api/v1/maintenance', async (_req, res) => {
   try {
     const cfg = await prisma.serverSettings.findUnique({
@@ -426,7 +426,7 @@ app.use('/api/v1/admin', adminMutationRateLimit);
 mountAdminRoutes(app);
 app.use('/api/v1/admin/me', adminMeRouter); // 8.x: GET /me/permissions for the BCP
 
-// ── Static frontend files (OWA under root + BCP under /bcp) ──────────────────
+// ── Static frontend files (MWA under root + BCP under /bcp) ──────────────────
 const WWW_DIR = process.env['WWW_DIR'] ?? '/app/www';
 const owaDir  = join(WWW_DIR, 'owa');
 const bcpDir  = join(WWW_DIR, 'bcp');
@@ -469,7 +469,7 @@ if (existsSync(bcpDir)) {
   log.info({ dir: bcpDir }, 'Serving BCP static files');
 }
 
-// OWA frontend under root — must come AFTER all API routes so that
+// MWA frontend under root — must come AFTER all API routes so that
 // /auth/* /api/* /jmap/* etc. take precedence. Catch-all `app.get('*')` sends
 // all unknown routes back to index.html (SPA routing).
 if (existsSync(owaDir)) {
@@ -486,7 +486,7 @@ if (existsSync(owaDir)) {
     },
   }));
   // SPA catch-all: everything not matched so far that is NOT a known
-  // API/proxy route is an OWA route → return index.html.
+  // API/proxy route is an MWA route → return index.html.
   const API_PREFIXES = [
     '/api/', '/auth/', '/.well-known/', '/jmap', '/Autodiscover', '/autodiscover',
     '/Microsoft-Server-ActiveSync', '/dav', '/bcp', '/branding/', '/mapi',
@@ -499,7 +499,7 @@ if (existsSync(owaDir)) {
   });
   log.info({ dir: owaDir }, 'Serving webmail static files (root)');
 } else {
-  // No OWA bundle mounted — root redirects to /bcp or plain info
+  // No MWA bundle mounted — root redirects to /bcp or plain info
   app.get('/', (_req, res) => res.redirect(302, '/bcp/'));
 }
 
@@ -583,8 +583,8 @@ async function start() {
 
   // v3.18.35+36: URL synchronization. When the admin changed publicHostname
   // (e.g. from mail.local to mail.<real-domain>), the derived URLs were not
-  // migrated along. Outlook Autodiscover then returns stale addresses →
-  // Outlook cannot connect. This migration fixes all URL fields at container
+  // migrated along. Autodiscover then returns stale addresses →
+  // clients cannot connect. This migration fixes all URL fields at container
   // start (in addition to the synchronous updates on domain-create /
   // make-primary / settings-PUT).
   void syncServerUrlsFromHostname().catch(err =>

@@ -1,6 +1,6 @@
 /**
  * 10.2: growing tables in the compose editor — the size picker of "Tabelle
- * einfügen" (8 × 8 grid, Word / Outlook style), the "+" handles at the right
+ * einfügen" (8 × 8 grid, word-processor style), the "+" handles at the right
  * and bottom edge of a table (add a column / row at the end) and Enter on an
  * empty last paragraph of the table's last cell (adds a row, like Enter on an
  * empty list item). Pure — unit-tested with `node --test`; the editor wiring

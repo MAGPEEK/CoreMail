@@ -159,7 +159,7 @@ export function parseReceived(value: string): ReceivedHop {
     if (t.kind === 'comment') {
       comments.push(t.text);
       if (section === 'from') {
-        // "(rdns [ip])", "([ip])", "(helo=name)", "(rdns. [IPv6:…])", Outlook "(2603:10a6::34)"
+        // "(rdns [ip])", "([ip])", "(helo=name)", "(rdns. [IPv6:…])", bare IPv6 "(2603:10a6::34)"
         // Exim: "from rdns ([ip] helo=name)" / "from [ip] (helo=name)" — `from` was the
         // looked-up name or the literal, the HELO name is in the comment.
         const helo = /\bhelo=([^\s)]+)/i.exec(t.text)?.[1];

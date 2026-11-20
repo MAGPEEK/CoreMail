@@ -1,5 +1,5 @@
 /**
- * Managed Folder Assistant (MFA) — Exchange 2019 style retention.
+ * Retention worker ("MFA", managed folder assistant) — tag-based retention.
  *
  * What the MFA does per run:
  *   1. Resolve the mailboxes of every enabled policy: GLOBAL (all active users and
@@ -16,7 +16,7 @@
  *          default folder (top level: INBOX, Sent, Trash, Junk, Drafts, Outbox, Archive)
  *        → the same for the parent folder, its parent, … (subfolders inherit)
  *        → the DPT.
- *      A disabled personal tag means "not processed" (Exchange semantics).
+ *      A disabled personal tag means "not processed".
  *   4. If `createdAt (delivery) + tag.retentionDays <= now` the tag action runs
  *      (never the sender-controlled Date header, see ./expiry.ts; a restored item
  *      gets a grace period after its restore, `Message.restoredAt`):

@@ -8,7 +8,7 @@
  *  2. an iTIP REPLY (RFC 5546) is sent to the organizer through the outbound
  *     queue (`smtp-outbound`, same path as SendMail) — only for protocol ≥ 16.0
  *     with SendResponse; at 14.1 the device sends the reply itself,
- *  3. the request mail is moved to Deleted Items (Exchange behaviour — devices
+ *  3. the request mail is moved to Deleted Items (MS-ASCMD default — devices
  *     drop it from the Inbox).
  * Result: Status 1 + CalendarId (= CalendarEvent id) for accept/tentative.
  */

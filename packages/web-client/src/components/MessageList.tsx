@@ -119,7 +119,7 @@ function MessageRow({
   const spamScore = (msg.spamScore ?? null);
   const isSpam = spamScore !== null && spamScore >= 3.0;
   const isHighRiskSpam = spamScore !== null && spamScore >= 6.0;
-  // v3.18.7: Scheduled send (Outlook-style "Will be sent on…")
+  // v3.18.7: Scheduled send ("Will be sent on…")
   const isScheduledPending = msg.scheduledStatus === 'PENDING' && !!msg.scheduledAt;
 
   const py = density === 'compact' ? 'py-1.5' : density === 'comfortable' ? 'py-3.5' : 'py-2.5';
@@ -546,7 +546,7 @@ export function MessageList({ folderId }: Props) {
     return ids.map(locate);
   };
 
-  /** OWA: after the open mail leaves the list, the next one opens. */
+  /** After the open mail leaves the list, the next one opens. */
   const selectAfterRemoval = (removed: string[]) => {
     const gone = new Set(removed);
     const neighbourOf = (id: string) => {

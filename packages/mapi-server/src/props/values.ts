@@ -2,7 +2,7 @@
  * Property values in ROP buffers (MS-OXCDATA 2.11): PropertyValue,
  * TaggedPropertyValue and TypedPropertyValue. In ROP buffers PtypBinary byte
  * counts are 16 bits and PtypMultiple value counts 32 bits (2.11.1.1).
- * PtypString8 is written in Latin-1 (the Western code page Outlook sends in
+ * PtypString8 is written in Latin-1 (the Western code page desktop clients send in
  * Connect); characters outside it become '?'.
  */
 import { BufferReader, WireFormatError } from '../wire/reader.js';

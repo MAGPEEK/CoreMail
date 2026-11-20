@@ -26,9 +26,9 @@ userRouter.use(announceUserSettings);
 
 // GET /api/v1/user/client-config
 // v3.18.40: returns ALL setup data for external mail/calendar/contacts
-// clients (Outlook + CalDAV plugin, Apple Calendar, Thunderbird, eM Client).
-// Outlook desktop has no native CalDAV/CardDAV support → calendar + contacts
-// require the (free, OSS) „Outlook CalDav Synchronizer" plugin.
+// clients (desktop clients + CalDAV plugin, Apple Calendar, Thunderbird, eM Client).
+// Desktop clients without native CalDAV/CardDAV support need a sync plugin
+// (e.g. the free, OSS „Outlook CalDav Synchronizer") for calendar + contacts.
 // 9.4: only protocols switched on for the account — `protocols` lists them,
 // the setup data of a protocol that is off is null.
 userRouter.get('/client-config', async (req: Request, res: Response) => {
@@ -318,7 +318,7 @@ userRouter.get('/storage', async (req: Request, res: Response) => {
   });
 });
 
-// GET /api/v1/user/quota — v8.1: mailbox usage + Exchange-style quota levels
+// GET /api/v1/user/quota — v8.1: mailbox usage + quota levels
 // (cached usage, cheap enough for the sidebar). level: ok | warning |
 // prohibitSend | prohibitSendReceive; limits in bytes, 0 = unlimited.
 userRouter.get('/quota', async (req: Request, res: Response) => {
@@ -343,7 +343,7 @@ userRouter.delete('/folders/:id/empty', async (req: Request, res: Response) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Mail Rules (Outlook-style inbox rules, v3.18.0)
+// Mail Rules (server-side inbox rules, v3.18.0)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const RuleConditionSchema = z.object({

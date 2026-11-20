@@ -121,7 +121,7 @@ export const DEFAULT_ESMTP_EXTENSIONS: EsmtpExtensions = {
   starttls: true, authPlain: true, authLogin: true,
   pipelining: true, size: true, bit8mime: true, enhancedStatus: true,
   // v8.1: SMTPUTF8 (RFC 6531), DSN (RFC 3461) and CHUNKING + BINARYMIME
-  // (RFC 3030) are implemented — Exchange 2019 EHLO parity.
+  // (RFC 3030) are implemented.
   smtputf8: true, dsn: true, chunking: true,
   // CRAM-MD5 (RFC 4954) stays off — handleAuth only recognizes PLAIN + LOGIN.
   authCramMd5: false,
@@ -153,7 +153,7 @@ export interface SmtpSessionConfig {
   allowLegacyTls?: boolean;
   /**
    * If true (default), STARTTLS is advertised in the EHLO response (if a TLS config exists).
-   * On port 25 with a self-signed cert: set to false so that strict MTAs (Microsoft Exchange)
+   * On port 25 with a self-signed cert: set to false so that strict MTAs
    * can deliver in plain instead of getting stuck on a failed TLS handshake.
    */
   advertiseStarttls?: boolean;

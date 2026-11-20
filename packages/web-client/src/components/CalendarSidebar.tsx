@@ -41,7 +41,7 @@ export const ICON_MAP: Record<string, React.ElementType> = {
   CreditCard, DollarSign, Wallet,
 };
 
-// Order in the icon grid (curated, same meaning as Outlook)
+// Order in the icon grid (curated)
 const ICON_PALETTE: string[] = [
   'Plane', 'Calendar', 'Briefcase', 'Trophy', 'Home',
   'Badge', 'ShoppingBag', 'Users', 'AlertCircle', 'Music', 'Car',
@@ -51,7 +51,7 @@ const ICON_PALETTE: string[] = [
   'Building', 'Wrench', 'Footprints', 'CheckSquare', 'ClipboardCheck', 'Flag',
 ];
 
-// 16 Outlook-inspired calendar colors
+// 16 calendar colors
 const COLOR_PALETTE = [
   '#A2433D', '#E64A19', '#F37E2F', '#FBC02D', '#8B5E3C', '#7CB342', '#388E3C', '#0EA5A4',
   '#06B6D4', '#3B82F6', '#1E40AF', '#5E35B1', '#9333EA', '#D81B60', '#EC4899', '#64748B',

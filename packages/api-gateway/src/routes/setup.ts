@@ -96,8 +96,8 @@ setupRouter.post('/complete', async (req: Request, res: Response) => {
 
       // v3.18.36: derive publicHostname + all derived server URLs from the
       // setup domain immediately — otherwise the system stays stuck on the
-      // unusable schema defaults `mail.local:8080` and Outlook Autodiscover
-      // hands Outlook clients wrong URLs.
+      // unusable schema defaults `mail.local:8080` and Autodiscover
+      // hands clients wrong URLs.
       const newHostname = `mail.${domain}`;
       const derivedUrls = deriveServerUrls(newHostname, true, 443);
       await tx.serverSettings.upsert({

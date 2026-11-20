@@ -78,7 +78,7 @@ interface Category {
   sortOrder?: number;
 }
 
-// 14 predefined pastel colors (Outlook style)
+// 14 predefined pastel colors
 const CATEGORY_PALETTE = [
   '#EF4444', '#F97316', '#F59E0B', '#EAB308',
   '#84CC16', '#22C55E', '#10B981', '#14B8A6',
@@ -1495,7 +1495,7 @@ function AppPasswordsSection() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// CATEGORIES SECTION (Outlook style)
+// CATEGORIES SECTION
 // ═══════════════════════════════════════════════════════════════════════════════
 function CategoriesSection() {
   const t = useT();
@@ -2064,7 +2064,7 @@ function RetentionSection() {
 // ═══════════════════════════════════════════════════════════════════════════════
 // ExternalClientsSection (v3.18.40)
 //
-// Shows all setup data for external clients (Outlook + CalDAV plugin,
+// Shows all setup data for external clients (desktop clients + CalDAV plugin,
 // Apple Calendar, Thunderbird, eM Client, iPhone, Android).
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -2108,7 +2108,7 @@ function CopyRow({ label, value, mono = true }: { label: string; value: string; 
 }
 
 // v8.1: automatic setup — Apple configuration profile (.mobileconfig) download and
-// hints for clients that configure themselves (Thunderbird autoconfig, Outlook).
+// hints for clients that configure themselves (autoconfig / Autodiscover).
 // Module level (never define components inline). 9.4: `profiles` = the variants
 // the account's protocol switches allow (lib/externalClients.ts).
 function AutoSetupCard({ email, requiresAppPassword, profiles }: {
@@ -2481,7 +2481,7 @@ export function SettingsPage() {
     // 10.1: one card floating on the canvas (lib/paneLayout.ts) — the background shows around it
     <div className="flex flex-1 min-w-0 min-h-0 md:p-2">
     <div className={`flex flex-col md:flex-row flex-1 min-w-0 ${PANE_CARD_CLASS}`}>
-      {/* Left navigation — OWA style */}
+      {/* Left navigation */}
       <aside className="w-full md:w-56 shrink-0 max-md:max-h-[35%] md:border-r max-md:border-b border-line pt-4 overflow-y-auto">
         {NAV.map(({ group, items }) => (
           <div key={group} className="mb-2">

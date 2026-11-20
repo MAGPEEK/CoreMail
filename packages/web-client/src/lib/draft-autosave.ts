@@ -1,5 +1,5 @@
 /**
- * Compose autosave (OWA style): after `idleMs` without changes the current
+ * Compose autosave: after `idleMs` without changes the current
  * compose state is saved as a server draft (POST /mail/drafts, then PUT
  * /mail/drafts/:id — every save returns the id of the new version). Saves never
  * overlap: changes made while a save is running are saved afterwards. `flush()`

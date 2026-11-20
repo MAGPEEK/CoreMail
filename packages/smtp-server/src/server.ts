@@ -133,7 +133,7 @@ async function refreshHostname(): Promise<void> {
  */
 /**
  * Detects whether a PEM certificate is self-signed (Issuer == Subject).
- * Self-signed certs are rejected by strict MTAs (Microsoft Exchange, Google)
+ * Self-signed certs are rejected by strict MTAs (large hosted providers)
  * → in that case we do not advertise STARTTLS on port 25 so MTAs deliver in plain.
  */
 function isCertSelfSigned(certPem: string): boolean {
@@ -151,7 +151,7 @@ function isCertSelfSigned(certPem: string): boolean {
 
 /**
  * Checks whether the cert was issued for `expectedHostname` (CN or SAN match).
- * If not: cert hostname mismatch → strict MTAs (Outlook 365) reject.
+ * If not: cert hostname mismatch → strict MTAs (large hosted providers) reject.
  * Returns true on match, false on mismatch.
  */
 function certMatchesHostname(certPem: string, expectedHostname: string): boolean {

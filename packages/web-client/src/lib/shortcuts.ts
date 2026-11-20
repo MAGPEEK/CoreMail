@@ -2,8 +2,8 @@
  * Keyboard shortcut definitions + matcher (framework-free, unit-tested).
  *
  * Two switchable shortcut sets:
- *  - "gmail"    — the Gmail set OWA offers (c/r/a/f, e, #, !, s, v, z, j/k, g-sequences …)
- *  - "coremail" — the default: the Gmail set plus Outlook-style Ctrl combinations
+ *  - "gmail"    — the Gmail single-key set (c/r/a/f, e, #, !, s, v, z, j/k, g-sequences …)
+ *  - "coremail" — the default: the Gmail set plus desktop-style Ctrl combinations
  *                 (Ctrl+N/R/Shift+R/F, Ctrl+Q/U, Insert, Ctrl+Z) and Delete.
  *
  * Keys are written as normalised combos: "c", "shift+i", "ctrl+shift+r",
@@ -104,11 +104,11 @@ const GMAIL_BINDINGS: Binding[] = [
 ];
 
 /**
- * Outlook-like extras of the CoreMail default set. 8.1: browser shortcuts are
+ * Ctrl extras of the CoreMail default set. 8.1: browser shortcuts are
  * never taken over — no Ctrl/⌘+F (find), Ctrl/⌘+R and Ctrl+Shift+R (reload),
  * Ctrl/⌘+U (view source). Reply / reply all / forward / unread use the
- * single letters r / a / f / Shift+U; forward additionally Ctrl+Shift+F (OWA
- * uses Ctrl+F, but browser find matters more). Ctrl-only (noMeta) where the ⌘
+ * single letters r / a / f / Shift+U; forward additionally Ctrl+Shift+F (Ctrl+F
+ * stays browser find). Ctrl-only (noMeta) where the ⌘
  * variant is a macOS browser/system shortcut.
  */
 const COREMAIL_EXTRAS: Binding[] = [

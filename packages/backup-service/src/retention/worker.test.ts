@@ -1,5 +1,5 @@
 /**
- * Managed Folder Assistant (retention worker): pure tag resolution + full runs
+ * Retention worker: pure tag resolution + full runs
  * over in-memory mailboxes (storage test-support fake behind globalThis.__prisma,
  * real message store, real purge path).
  * Run: node --import tsx --import ../storage/src/test-support/realtime-off.ts --test src/retention/worker.test.ts

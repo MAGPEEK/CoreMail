@@ -104,9 +104,9 @@ adminDomainsRouter.post('/', async (req: Request, res: Response) => {
   log.info({ name: parsed.data.name, primary: isPrimary }, 'Domain created');
 
   // v3.18.36: if this is the FIRST domain (= automatically primary), derive
-  // publicHostname + all derived URLs (OWA/EAS/Autodiscover base)
+  // publicHostname + all derived URLs (webmail/EAS/Autodiscover base)
   // automatically. Guards against the old bug: the schema default was
-  // `mail.local:8080`, which made Outlook Autodiscover unusable for 1000+
+  // `mail.local:8080`, which made Autodiscover unusable for 1000+
   // users because the URLs were not visible anywhere.
   if (isPrimary) {
     await syncFromPrimaryDomain(parsed.data.name).catch((err: unknown) =>
@@ -345,7 +345,7 @@ export async function mxTargetProblem(
 
 // ── Client auto-setup records (v8.1) ─────────────────────────────────────────
 // RFC 6186 / RFC 8314 SRV records for mail clients, RFC 6764 SRV + TXT for CalDAV/
-// CardDAV, Outlook's _autodiscover._tcp SRV and the Thunderbird autoconfig host.
+// CardDAV, the Autodiscover _autodiscover._tcp SRV and the Thunderbird autoconfig host.
 // All of them are RECOMMENDED: missing → shown yellow in the BCP, never red, and not
 // counted with the required records (VISIBLE_DNS_KEYS in the BCP).
 export interface ClientSetupRecord {

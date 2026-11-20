@@ -270,7 +270,7 @@ export function FolderTree() {
       }],
     });
 
-    // w3: folder permissions (Outlook folder properties → Berechtigungen)
+    // w3: folder permissions (folder properties → Berechtigungen)
     items.push({
       label: 'Berechtigungen…',
       icon: <Shield size={14} />,
@@ -418,7 +418,7 @@ export function FolderTree() {
         )}
         {/* Public folders completely removed in v3.18.31 */}
 
-        {/* 9.3: shared + delegated mailboxes (OWA "add shared folder"); 9.4: module switch */}
+        {/* 9.3: shared + delegated mailboxes ("add shared folder"); 9.4: module switch */}
         {features.sharedMailboxes && <SharedMailboxTree />}
       </nav>
 

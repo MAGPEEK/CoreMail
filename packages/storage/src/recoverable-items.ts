@@ -1,13 +1,13 @@
 /**
- * Recover deleted items (v8.1, Exchange "Recoverable Items").
+ * Recover deleted items (v8.1, "Recoverable Items").
  *
  * Every user deletion that removes a message from its folder (IMAP EXPUNGE,
  * JMAP Email/set destroy, EAS Delete, POP3 DELE, MWA "delete" in the Trash,
  * emptying the Trash/Junk) leaves a soft-delete tombstone (message-store
  * expunge(): deletedAt set, row + raw object + attachments kept). Tombstones
  * stay recoverable for DELETED_ITEM_RETENTION_DAYS (default 30, the 8.0
- * documented window and Exchange's maximum) and are then
- * removed by the background purge. Items the Managed Folder Assistant moved to
+ * documented window) and are then
+ * removed by the background purge. Items the retention worker moved to
  * "Recoverable Items/Deletions" (retention action DELETE_AND_ALLOW_RECOVERY)
  * are listed and restorable as well; their expiry stays with the MFA.
  *
@@ -35,7 +35,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /**
  * 30 days: 8.0 documented a 30-day window for deleted items, so a shorter
  * default would purge items deleted 15–30 days ago on the first start after
- * the upgrade. 30 is also Exchange's maximum deleted item retention.
+ * the upgrade.
  */
 export const DEFAULT_DELETED_ITEM_RETENTION_DAYS = 30;
 export const RECOVERABLE_ROOT = 'Recoverable Items';

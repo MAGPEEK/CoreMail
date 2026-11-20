@@ -2,8 +2,8 @@
  * Folder permissions (w3) — the rights model, pure.
  *
  * A mailbox owner (or an administrator) grants another user, or "Default"
- * (every user of the organisation), a role on one folder — like the
- * "Permissions" tab of a folder's properties in Outlook. The rights are the
+ * (every user of the organisation), a role on one folder (the
+ * "Berechtigungen" of a folder). The rights are the
  * member-rights bitmask of the public MS-OXCPERM specification, so roles and
  * individual rights map one to one:
  *

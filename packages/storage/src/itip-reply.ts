@@ -128,7 +128,7 @@ function base64Lines(data: string): string {
 /**
  * Pure: RFC 5322 REPLY mail — multipart/mixed { multipart/alternative { text/plain,
  * text/calendar;method=REPLY }, invite.ics } — the layout of the organizer-side
- * invitations in api-gateway lib/imip.ts (Gmail reads the inline part, Outlook the .ics).
+ * invitations in api-gateway lib/imip.ts (web clients read the inline part, Win32 desktop clients the .ics).
  */
 export function buildITipReplyMime(args: {
   ics: string;

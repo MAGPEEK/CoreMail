@@ -50,7 +50,7 @@ const ROLE_BY_NAME: Readonly<Record<string, FolderRole>> = {
 };
 
 /**
- * Display names of the role folders as Outlook knows them. They never come from
+ * Display names of the role folders as MAPI clients know them. They never come from
  * the database row: its displayName depends on how the mailbox was provisioned
  * (admin API "Sent Items", setup wizard "Gesendet", restored or older rows the
  * IMAP name) — and role folders cannot be renamed over MAPI.

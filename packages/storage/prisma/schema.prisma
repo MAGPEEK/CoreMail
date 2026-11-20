@@ -109,7 +109,7 @@ model User {
   role            UserRole       @default(USER)
   quotaBytes      BigInt         @default(5368709120)
   usedBytes       BigInt         @default(0)
-  // v9.0: Exchange-style quota levels. quotaBytes = ProhibitSendReceiveQuota;
+  // v9.0: quota levels. quotaBytes = ProhibitSendReceiveQuota;
   // null = server default (ServerSettings.quota*Percent of quotaBytes).
   quotaWarningBytes      BigInt?
   quotaProhibitSendBytes BigInt?
@@ -546,7 +546,7 @@ model Message {
   scheduledAt     DateTime?   // time of the scheduled send
   scheduledStatus String?     // 'PENDING' | 'SENT' | 'CANCELLED' | null
   scheduledJobId  String?     // BullMQ job ID for cancellation (delay job in smtp-outbound)
-  // ── Retention (Phase 9 / Exchange 2019 compliant) ────────────────────────────
+  // ── Retention (Phase 9, tag-based) ───────────────────────────────────────────
   // Effective tag computed by the MFA or set by the user
   retentionTag     RetentionTag? @relation("MessageRetentionTag", fields: [retentionTagId], references: [id])
   retentionTagId   String?
@@ -626,7 +626,7 @@ model Attachment {
 }
 
 // ─────────────────────────────────────────────
-// Mail categories (Outlook-style tags)
+// Mail categories (coloured tags)
 // ─────────────────────────────────────────────
 model Category {
   id         String   @id @default(cuid())
@@ -733,7 +733,7 @@ model SharedMailboxPerm {
   grantedAt       DateTime             @default(now())
   grantedBy       String
 
-  // Multiple permissions per user possible (Exchange-style: Full Access + Send As + …)
+  // Multiple permissions per user possible (Full Access + Send As + …)
   @@unique([sharedMailboxId, userId, permission])
   @@index([sharedMailboxId, userId])
   @@map("shared_mailbox_perms")
@@ -742,7 +742,7 @@ model SharedMailboxPerm {
 // ─────────────────────────────────────────────
 // Mailbox delegation (user mailbox access rights)
 // ─────────────────────────────────────────────
-// Gives user B access to the mailbox of user A (Exchange Delegate Access)
+// Gives user B access to the mailbox of user A (delegate access)
 // Permissions analogous to SharedMailboxPerm: FULL_ACCESS / SEND_AS / SEND_ON_BEHALF / READ_ONLY
 model MailboxDelegate {
   id          String               @id @default(cuid())
@@ -761,7 +761,7 @@ model MailboxDelegate {
   @@map("mailbox_delegates")
 }
 
-// w3 folder permissions (Outlook "Properties → Permissions"): a role on one
+// w3 folder permissions ("Berechtigungen" of a folder): a role on one
 // folder of a mailbox for one user or for "Default" (every user of the
 // organisation). `rights` is the member-rights bitmask (storage
 // folder-permissions.ts). "Anonymous" is never stored (always none for mail).
@@ -870,7 +870,7 @@ model CalendarEvent {
   // X-MICROSOFT-CDO-BUSYSTATUS in icalData; overrides carry their own value there).
   showAs      String   @default("BUSY")
   // v3.18.25 A5: iMIP/iTIP — sequence counter is incremented on every UPDATE (subject,
-  // date, attendee change). Mail clients (Outlook, Gmail) only show
+  // date, attendee change). Mail clients only show
   // the HIGHEST sequence — old REPLY mails with a lower sequence are
   // ignored.
   sequence    Int      @default(0)
@@ -1274,7 +1274,7 @@ model ActiveSyncItem {
   @@map("active_sync_items")
 }
 
-// MAPI over HTTP cached mode (9.5, docs/mapi.md): an object classic Outlook created keeps the ID
+// MAPI over HTTP cached mode (9.5, docs/mapi.md): an object a desktop client created keeps the ID
 // the client assigned from its RopGetLocalReplicaIds ranges (clientId, MS-OXCFXICS 3.3.5.2.1) —
 // also when a draft is saved again (new row, same ID); pcl = PidTagPredecessorChangeList of the
 // version a client uploaded (conflict detection, 3.1.5.6). The row outlives its object
@@ -1402,7 +1402,7 @@ model RetentionPolicy {
   action      RetentionAction       @default(ARCHIVE)
   targetFolder String?
   scope       RetentionScope        @default(ALL_ITEMS)
-  // ── New (Exchange 2019 compliant tag model) ──
+  // ── New (tag model) ──
   policyTags  RetentionPolicyTag[]
   assignments RetentionPolicyAssignment[]
   createdBy   String
@@ -1412,7 +1412,7 @@ model RetentionPolicy {
   @@map("retention_policies")
 }
 
-// ── Retention Tag — analogous to Exchange 2019: DPT / RPT / Personal ─────────────
+// ── Retention Tag — DPT / RPT / Personal ────────────────────────────────────────────
 enum RetentionTagType {
   DPT       // Default Policy Tag — applies to all items when nothing more specific matches
   RPT       // Retention Policy Tag — binds to a default folder
@@ -1432,7 +1432,7 @@ enum RetentionFolderTarget {
   ALL_OTHER  // for DPT binding "all other folders"
 }
 
-// The three Exchange 2019 actions
+// The three retention actions
 enum RetentionTagAction {
   MOVE_TO_ARCHIVE             // → Archive folder
   DELETE_AND_ALLOW_RECOVERY   // → Recoverable Items\Deletions (soft delete, 14 days)
@@ -1474,7 +1474,7 @@ model RetentionPolicyTag {
   @@map("retention_policy_tags")
 }
 
-// ── Managed Folder Assistant — run history ───────────────────────────────────
+// ── Retention worker — run history ──────────────────────────────────────────
 model ManagedFolderRun {
   id                 String   @id @default(cuid())
   startedAt          DateTime @default(now())
@@ -1823,8 +1823,8 @@ model DnsblHit {
 }
 
 // ── Server settings (singleton) ─────────────────────────────────────────
-// Stores public URLs for Autodiscover, OWA, EAS, IMAP, SMTP.
-// Outlook 2019/2022/365 reads these automatically via Autodiscover.
+// Stores public URLs for Autodiscover, webmail, EAS, IMAP, SMTP.
+// Desktop clients read these automatically via Autodiscover.
 model ServerSettings {
   id              String   @id @default("singleton")
   // Public hostname (for Autodiscover + TLS certificate)
@@ -1833,9 +1833,9 @@ model ServerSettings {
   useHttps        Boolean  @default(false)
   // HTTP port (external, e.g. 8080 on Synology or 443 behind a reverse proxy)
   httpPort        Int      @default(8080)
-  // Outlook Web Access
+  // Mail Web Access (MWA)
   owaUrl          String   @default("http://mail.local:8080/owa/")
-  // Exchange ActiveSync (Mobile)
+  // ActiveSync (Mobile)
   easUrl          String   @default("http://mail.local:8080/Microsoft-Server-ActiveSync")
   // Autodiscover base URL
   autodiscoverBase String  @default("http://mail.local:8080")
@@ -1902,7 +1902,7 @@ model ServerSettings {
   // 404 only while no switch anywhere turns JMAP on.
   jmapEnabled        Boolean @default(true)
 
-  // ── v9.0: mailbox quota defaults (Exchange 2019 ratios 1.9 / 2.0 / 2.3 GB) ──
+  // ── v9.0: mailbox quota defaults (ratios 1.9 / 2.0 / 2.3 GB) ──
   // Percent of the mailbox quota (= ProhibitSendReceiveQuota) at which the
   // warning mail is sent / sending is refused, when the mailbox sets no own level.
   quotaWarningPercent      Int    @default(83)
@@ -2105,7 +2105,7 @@ model Certificate {
   id          String     @id @default(cuid())
   name        String                          // display name, e.g. "mail.example.com Wildcard"
   domains     String[]                        // primary domain + SANs
-  services    String[]                        // assigned services: OWA, ECP, SMTP, IMAP, POP3, DAV
+  services    String[]                        // assigned services: OWA (webmail), ECP (BCP), SMTP, IMAP, POP3, DAV — stored keys
   type        CertType   @default(LETSENCRYPT)
   status      CertStatus @default(PENDING)
   // PEM data (stored in plaintext for internal use)

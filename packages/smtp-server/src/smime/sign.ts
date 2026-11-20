@@ -3,7 +3,7 @@
  *
  * Signs a raw email message using CMS SignedData (RFC 5652).
  * The result is a `multipart/signed` MIME message (detached signature)
- * which is compatible with Outlook, Apple Mail, Thunderbird.
+ * which is compatible with common desktop and mobile mail clients.
  *
  * RFC 3851 / RFC 8551 (S/MIME 4.0)
  */

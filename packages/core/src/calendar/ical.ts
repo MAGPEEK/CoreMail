@@ -193,7 +193,7 @@ export function findMainVEvent(root: IcalComponent): IcalComponent | null {
 
 // ─── Time zones ─────────────────────────────────────────────────────────────
 
-/** Common Windows (Outlook/Exchange) zone names → IANA. */
+/** Common Windows time zone names (sent by Windows clients) → IANA. */
 const WINDOWS_ZONES: Record<string, string> = {
   'W. Europe Standard Time': 'Europe/Berlin',
   'Central Europe Standard Time': 'Europe/Budapest',

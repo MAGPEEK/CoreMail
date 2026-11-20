@@ -1,5 +1,5 @@
 /**
- * w3: "Berechtigungen – <Ordner>" — folder permissions in the Outlook folder
+ * w3: "Berechtigungen – <Ordner>" — folder permissions in the folder
  * properties layout. The list holds Standard, Anonym (fixed to "Keine") and the
  * users; the selected entry is edited through the "Berechtigungsstufe" role or
  * the individual rights (a changed checkbox switches to the matching role or

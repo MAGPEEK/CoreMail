@@ -6,7 +6,7 @@
  *  - Database error: the last value read from the database is served (stale) if
  *    there is one; otherwise {@link ServerConfigUnavailableError} is thrown and the
  *    handlers answer 503. The built-in `mail.local` defaults are never served or
- *    cached because of a database error — Outlook would store those hosts in the
+ *    cached because of a database error — clients would store those hosts in the
  *    profile.
  */
 import { prisma, getBranding, brandingDefaults } from '@coremail/storage';

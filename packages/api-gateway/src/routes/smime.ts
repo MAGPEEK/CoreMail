@@ -179,7 +179,7 @@ smimeRouter.get('/public-key/:email', async (req: Request, res: Response) => {
 
 /**
  * GET /api/v1/smime/devices (admin)
- * List all ActiveSync devices — needed for the ECP mobile device management panel
+ * List all ActiveSync devices — needed for the BCP mobile device management panel
  */
 smimeRouter.get('/devices', async (req: Request, res: Response) => {
   const devices = await prisma.activeSyncDevice.findMany({

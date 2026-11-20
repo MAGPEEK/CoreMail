@@ -845,7 +845,7 @@ export class SmtpSession {
     const esmtp = this.extensions();
     const lines: string[] = [`${this.config.hostname}`];
 
-    // Order as Exchange 2019 (port 25): SIZE, PIPELINING, DSN, ENHANCEDSTATUSCODES,
+    // Order (port 25): SIZE, PIPELINING, DSN, ENHANCEDSTATUSCODES,
     // STARTTLS, 8BITMIME, BINARYMIME, CHUNKING, SMTPUTF8 (+ AUTH after TLS).
     if (esmtp.size)           lines.push(`SIZE ${this.config.maxSize}`);
     if (esmtp.pipelining)     lines.push('PIPELINING');
@@ -854,7 +854,7 @@ export class SmtpSession {
 
     // STARTTLS only if TLS configured AND extension enabled AND not yet upgraded
     // AND advertiseStarttls != false. On port 25 with a self-signed cert the server suppresses
-    // this so that strict MTAs (Microsoft Exchange) do not get stuck in the TLS handshake.
+    // this so that strict MTAs do not get stuck in the TLS handshake.
     const advertise = this.config.advertiseStarttls !== false;
     if (esmtp.starttls && this.config.tls && !this.tlsUpgraded && advertise) {
       lines.push('STARTTLS');

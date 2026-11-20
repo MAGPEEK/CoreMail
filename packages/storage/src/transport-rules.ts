@@ -1,5 +1,5 @@
 /**
- * TransportRule engine — server-wide rules (admin-configured, Exchange-style).
+ * TransportRule engine — server-wide rules (admin-configured).
  *
  * Unlike MailRule (per user), TransportRules are evaluated on EVERY incoming
  * and outgoing mail. They modify the mail before delivery
@@ -139,7 +139,7 @@ export function ruleFailsClosed(actions: readonly { type: string }[]): boolean {
 }
 
 /**
- * Conditions are AND-combined (Exchange Transport Rules standard). A regex
+ * Conditions are AND-combined. A regex
  * condition whose step budget ran out (a sender padded the message) counts as
  * MATCH for a fail-closed rule (reject/quarantine/redirect) and as no-match
  * otherwise — padding can no longer switch a blocking rule off.

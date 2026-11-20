@@ -1,10 +1,10 @@
 /**
  * v3.18.25 A5 — iMIP/iTIP Calendar Invitations (RFC 6047 / 5546).
  *
- * Generates iMIP-compliant invitation mails for calendar events. Outlook +
- * Gmail compatible: ICS body both as `text/calendar; method=REQUEST` in
- * `multipart/alternative` (for Gmail) AND as a separate `.ics` attachment
- * in `multipart/mixed` (for Outlook Win32).
+ * Generates iMIP-compliant invitation mails for calendar events, readable by
+ * common mail clients: ICS body both as `text/calendar; method=REQUEST` in
+ * `multipart/alternative` (for web mail clients) AND as a separate `.ics` attachment
+ * in `multipart/mixed` (for Win32 desktop clients).
  *
  * Research: research_imip report v3.18.24 — sources RFC 6047, RFC 5546,
  * MS-OXCICAL, Apple Calendar Server CalDAV scheduling examples.
@@ -125,7 +125,7 @@ function buildIcs(ev: EventData, method: ICalCalendarMethod, status: ICalEventSt
     organizer: { name: ev.organizer.cn ?? ev.organizer.email, email: ev.organizer.email },
   });
 
-  // Outlook quirks — improves free/busy status + force-inspector
+  // Client-specific properties — improve free/busy status + force-inspector
   // (see research v3.18.24, MS-OXCICAL)
   e.x([
     { key: 'X-MICROSOFT-CDO-INTENDEDSTATUS', value: ev.showAs ?? 'BUSY' },
@@ -205,7 +205,7 @@ export function buildEventUid(eventId: string, publicHostname: string): string {
  *   │   ├── text/plain          ← fallback for plain-text readers
  *   │   ├── text/html           ← human-readable HTML
  *   │   └── text/calendar; method=REQUEST   ← inline iMIP
- *   └── application/ics; name="invite.ics"  ← Outlook Win32 needs the
+ *   └── application/ics; name="invite.ics"  ← Win32 desktop clients need the
  *                                              attachment for RSVP buttons
  */
 export async function buildInvitationMime(args: {
@@ -234,7 +234,7 @@ export async function buildInvitationMime(args: {
         content: args.ics,
       },
     ],
-    // Additional .ics attachment for Outlook Win32 RSVP buttons
+    // Additional .ics attachment for the RSVP buttons of Win32 desktop clients
     attachments: [
       {
         filename: `invite.ics`,

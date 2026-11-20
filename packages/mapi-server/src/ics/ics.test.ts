@@ -468,7 +468,7 @@ function folderIdOf(h: Harness, recordId: string): bigint {
 
 interface ClientItem { subject: string; read: boolean; pcl: Buffer | null }
 
-/** Classic Outlook's view of the Drafts folder: its items, pending changes and ICS state. */
+/** A cached-mode client's view of the Drafts folder: its items, pending changes and ICS state. */
 class CachedClient {
   readonly items = new Map<bigint, ClientItem>();
   readonly pendingEdits = new Set<bigint>();

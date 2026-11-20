@@ -1,6 +1,6 @@
 /**
  * w3: folder permissions — the client model of the "Berechtigungen" dialog
- * (Outlook folder properties layout). Pure, no imports; unit-tested with
+ * (folder properties dialog layout). Pure, no imports; unit-tested with
  * `node --test`.
  *
  * KEEP IN STEP with packages/storage/src/folder-permissions.ts (rights bits,

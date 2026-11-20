@@ -1,5 +1,5 @@
 /**
- * Mail actions with undo (OWA style): delete (→ Trash), archive, move and
+ * Mail actions with undo: delete (→ Trash), archive, move and
  * mark-as-junk show an 8 s "Undo" toast (also `z`). Undo moves every message
  * back to the folder it came from — selections spanning several folders
  * (search results) are restored folder by folder. Permanent deletes

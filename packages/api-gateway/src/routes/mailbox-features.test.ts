@@ -1,5 +1,5 @@
 /**
- * v8.1 Exchange-style mailbox features on the REST API (loopback Express app,
+ * v8.1 mailbox features on the REST API (loopback Express app,
  * Prisma faked via globalThis.__prisma):
  *  - POST /mail/send refused at ProhibitSendQuota (403 MAILBOX_QUOTA_EXCEEDED)
  *  - GET /user/quota (levels + usage)
