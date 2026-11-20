@@ -4,7 +4,8 @@ import { createProxyMiddleware } from 'http-proxy-middleware';
 import { existsSync, readFileSync } from 'node:fs';
 import { parseChangelog } from './lib/changelog.js';
 import { join, resolve } from 'node:path';
-import type { ClientRequest, IncomingMessage } from 'node:http';
+import { createServer as createHttpServer, type ClientRequest, type IncomingMessage } from 'node:http';
+import { httpHardening, httpServerOptions, hardenHttpServer, guardedRequestHandler } from './lib/http-hardening.js';
 import {
   connectDatabase, prisma, migrateMailboxCounters,
   getObjectStore, getStorageHealth, peekStorageHealth, startObjectStorageCleaner, type CleanerRedis,
@@ -567,9 +568,23 @@ async function start() {
     }
   }).catch((err) => log.error({ err }, 'Object storage check failed'));
   log.info({ port: PORT }, 'API Gateway listening');
-  const httpServer = app.listen(PORT);
+  // 10.5: header/request/keep-alive timeouts + per-IP and global connection caps
+  // against slowloris, slow POST and idle-connection floods (lib/http-hardening.ts).
+  // On port 3000 a TRUST_PROXY-trusted peer (the reverse proxy all clients share)
+  // is not subject to the per-IP cap; the global cap still applies.
+  const hardening = httpHardening();
+  const trustFn = app.get('trust proxy fn') as TrustFn;
+  const httpServer = createHttpServer(httpServerOptions(hardening.config), guardedRequestHandler(hardening.guard, app));
+  hardenHttpServer(httpServer, {
+    kind: 'http',
+    guard: hardening.guard,
+    config: hardening.config,
+    isTrustedProxyPeer: (ip) => trustFn(ip, 0),
+  });
+  httpServer.listen(PORT);
   // v5.7.1: JMAP over WebSocket (RFC 8887) — pass upgrade requests through to the jmap-server
   httpServer.on('upgrade', (req, socket, head) => {
+    if (hardening.guard.isRefused(req.socket)) { socket.destroy(); return; }
     if (req.url?.startsWith('/jmap/ws') && jmapUpgrade) jmapUpgrade(req, socket as never, head);
     else socket.destroy();
   });

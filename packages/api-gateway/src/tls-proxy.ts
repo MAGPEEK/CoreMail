@@ -31,6 +31,7 @@ import {
   selectProxyCerts, planSni, matchSni, resolveSni, buildFullChainPem, needsHttpsReplacement, replacementProxyCert,
   type SelectedProxyCert, type SniPlan,
 } from './lib/cert-lifecycle.js';
+import { httpHardening, httpsServerOptions, hardenHttpServer } from './lib/http-hardening.js';
 
 const log  = createLogger('tls-proxy');
 const PORT = parseInt(process.env['HTTPS_PORT'] ?? '443', 10);
@@ -245,8 +246,13 @@ async function reloadServer(app: Application): Promise<void> {
   // cert/key pair as fallback (Node requires it in the TLS server in some
   // versions).
   const fallbackCert = certs.find((c) => c.isActiveHttps) ?? certs[0]!;
+  // 10.5: TLS handshake + header/request/keep-alive timeouts, and the per-IP /
+  // global connection cap shared with port 3000 (counted on the raw TCP socket,
+  // before the handshake; TRUST_PROXY never applies here) — lib/http-hardening.ts.
+  const hardening = httpHardening();
   const server = https.createServer(
     {
+      ...httpsServerOptions(hardening.config),
       cert: buildFullChainPem(fallbackCert.certPem, fallbackCert.chainPem),
       key:  fallbackCert.keyPem,
       ...policy,
@@ -259,6 +265,7 @@ async function reloadServer(app: Application): Promise<void> {
       app(req, res);
     },
   );
+  hardenHttpServer(server, { kind: 'https', guard: hardening.guard, config: hardening.config });
 
   // v5.7.1: forward WebSocket upgrades (JMAP /jmap/ws) to the gateway handler
   server.on('upgrade', (req, socket, head) => {
