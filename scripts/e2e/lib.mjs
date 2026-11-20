@@ -328,13 +328,86 @@ export async function http(method, path, { token, body, headers = {}, raw = fals
   let json; try { json = text ? JSON.parse(text) : undefined; } catch { json = undefined; }
   return { status: res.status, headers: res.headers, text, json };
 }
+/** Claims of an access token (no verification — the harness only reads its own tokens). */
+function jwtClaims(token) {
+  try { return JSON.parse(Buffer.from(String(token).split('.')[1], 'base64url').toString('utf8')); } catch { return {}; }
+}
+/**
+ * 10.5: a fresh installation requires MFA for admin roles (requireMfaForAdmins,
+ * set by /setup/complete). An admin token is usable on the admin API only when
+ * its session was established with the second factor.
+ */
+const needsAdminMfa = (token) => { const c = jwtClaims(token); return !!c.role && c.role !== 'USER' && c.mfaVerified !== true; };
+
+/** TOTP secret of an account enrolled by the harness (credentials.json `totp`, outside the repo). */
+export function totpSecretOf(email) { return creds().totp?.[email.toLowerCase()]; }
+export function rememberTotpSecret(email, secret) { setCred('totp', { ...(creds().totp ?? {}), [email.toLowerCase()]: secret }); }
+
+/**
+ * A TOTP code of a step the server has not seen for this account yet (replay
+ * protection: one code per 30-s step; the steps used are kept in state.totpSteps).
+ */
+async function freshTotpCode(state, email, secret) {
+  state.totpSteps ??= {};
+  const key = email.toLowerCase();
+  let step = Math.floor(Date.now() / 30000);
+  if ((state.totpSteps[key] ?? -1) >= step) { await nextTotpWindow(); step = Math.floor(Date.now() / 30000); }
+  state.totpSteps[key] = step;
+  return totp(secret, step * 30000 + 1);
+}
+
+/** Second factor for a login challenge; one retry in the next step (a code may have been used elsewhere). */
+async function verifyMfaChallenge(state, email, challengeToken) {
+  const secret = totpSecretOf(email);
+  if (!secret) throw new Error(`login ${email}: MFA required, but the harness holds no TOTP secret for the account`);
+  let v;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt) state.totpSteps[email.toLowerCase()] = Math.floor(Date.now() / 30000); // force the next step
+    v = await http('POST', '/auth/mfa/verify', { body: { challengeToken, code: await freshTotpCode(state, email, secret) } });
+    if (v.status === 200 && v.json?.accessToken) return v.json;
+    if (v.json?.code !== 'MFA_INVALID_CODE') break;
+  }
+  throw new Error(`MFA verify ${email}: ${v.status} ${v.text.slice(0, 200)}`);
+}
+
+/**
+ * Enrols TOTP for an admin account through the real API — what an admin does
+ * after the setup wizard (setup with the password, confirm with a code).
+ */
+async function enrolAdminTotp(state, email, password, accessToken) {
+  const s = await http('POST', '/auth/mfa/totp/setup', { token: accessToken, body: { currentPassword: password, accountName: email } });
+  if (s.status !== 200 || !s.json?.secret) {
+    throw new Error(`TOTP setup ${email}: ${s.status} ${s.text.slice(0, 200)}${s.status === 409 ? ' (enrolled, but no secret in credentials.json)' : ''}`);
+  }
+  const conf = await http('POST', '/auth/mfa/totp/confirm', { token: accessToken, body: { code: await freshTotpCode(state, email, s.json.secret) } });
+  if (conf.status !== 200) throw new Error(`TOTP confirm ${email}: ${conf.status} ${conf.text.slice(0, 200)}`);
+  rememberTotpSecret(email, s.json.secret); // test-only secret, kept in the state dir outside the repo
+  console.log(`  (enrolled TOTP for admin ${email} — requireMfaForAdmins)`);
+}
+
+/** Web login; MFA-enrolled accounts answer the challenge, admin accounts without MFA enrol first. */
+async function webLogin(state, email, password) {
+  for (let round = 0; round < 2; round++) {
+    const r = await http('POST', '/auth/login', { body: { email, password } });
+    if (r.status === 200 && r.json?.mfaRequired && r.json.challengeToken) return verifyMfaChallenge(state, email, r.json.challengeToken);
+    if (r.status !== 200 || !r.json?.accessToken) throw new Error(`login ${email}: ${r.status} ${r.text.slice(0, 200)}`);
+    if (!needsAdminMfa(r.json.accessToken)) return r.json;
+    if (round) break;
+    await enrolAdminTotp(state, email, password, r.json.accessToken);
+  }
+  throw new Error(`login ${email}: admin session without MFA after enrolling TOTP`);
+}
+
 /**
  * Returns a valid access token for `key` (state.sessions[key]), logging in with
  * `email`/`password` or rotating the stored refresh token when it is about to expire.
+ * 10.5: admin-role accounts get an MFA-verified session (TOTP enrolled on first
+ * use, secret in credentials.json) — the admin API refuses anything else.
  */
 export async function session(state, key, email, password) {
   state.sessions ??= {};
-  const s = state.sessions[key];
+  let s = state.sessions[key];
+  if (s && needsAdminMfa(s.access)) s = undefined; // a password-only admin session is useless
   if (s && s.exp > Date.now() + 60_000) return s.access;
   if (s?.refresh) {
     const r = await http('POST', '/auth/refresh', { body: { refreshToken: s.refresh } });
@@ -343,10 +416,24 @@ export async function session(state, key, email, password) {
       return r.json.accessToken;
     }
   }
-  const r = await http('POST', '/auth/login', { body: { email, password } });
-  if (r.status !== 200 || !r.json?.accessToken) throw new Error(`login ${email}: ${r.status} ${r.text.slice(0, 200)}`);
-  state.sessions[key] = { access: r.json.accessToken, refresh: r.json.refreshToken, exp: Date.now() + r.json.expiresIn * 1000 };
-  return r.json.accessToken;
+  const t = await webLogin(state, email, password);
+  state.sessions[key] = { access: t.accessToken, refresh: t.refreshToken, exp: Date.now() + t.expiresIn * 1000 };
+  return t.accessToken;
+}
+/**
+ * Password for the mail protocols (IMAP/SMTP/POP3/…): accounts with MFA (e.g.
+ * admins enrolled by session()) need an app password there — created once
+ * through the web session and kept in credentials.json `appPw`.
+ */
+export async function mailPassword(state, key, email, password) {
+  if (!totpSecretOf(email)) return password;
+  const stored = creds().appPw?.[email.toLowerCase()];
+  if (stored) return stored;
+  const tok = await session(state, key, email, password);
+  const ap = await http('POST', '/auth/app-passwords', { token: tok, body: { name: 'e2e mail client', currentPassword: password } });
+  if (ap.status !== 201 || !ap.json?.password) throw new Error(`app password ${email}: ${ap.status} ${ap.text.slice(0, 200)}`);
+  setCred('appPw', { ...(creds().appPw ?? {}), [email.toLowerCase()]: ap.json.password });
+  return ap.json.password;
 }
 export const basic = (u, p) => 'Basic ' + Buffer.from(`${u}:${p}`, 'utf8').toString('base64');
 

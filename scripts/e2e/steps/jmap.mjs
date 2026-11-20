@@ -1,5 +1,5 @@
 // Step 6: JMAP (RFC 8620/8621) — discovery, query/get, draft + EmailSubmission, Bcc stripping, /changes after IMAP.
-import { check, assert, creds, http, basic, imapCmd, imapQuote, waitFor } from '../lib.mjs';
+import { check, assert, creds, http, basic, imapCmd, imapQuote, waitFor, mailPassword } from '../lib.mjs';
 import { imapLogin } from './imap.mjs';
 
 const USING = ['urn:ietf:params:jmap:core', 'urn:ietf:params:jmap:mail', 'urn:ietf:params:jmap:submission'];
@@ -83,7 +83,8 @@ export async function run(state) {
       } finally { im.close(); }
     };
     const rawB = await fetchRaw(B, c.userB);
-    const rawH = await fetchRaw(H, c.helpdesk);
+    // the HELP_DESK admin has MFA (requireMfaForAdmins) → app password on IMAP
+    const rawH = await fetchRaw(H, await mailPassword(state, 'helpdesk', H, c.helpdesk));
     const hdrB = rawB.split('\r\n\r\n')[0];
     const hdrH = rawH.split('\r\n\r\n')[0];
     assert(!/^bcc:/im.test(hdrB), 'Bcc header present in B\'s copy');
