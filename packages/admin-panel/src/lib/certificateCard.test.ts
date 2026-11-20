@@ -1,6 +1,24 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { acmeDomains, pollOutcome, preflightProblems, runCertificateCard, type CardApi, type CardPhase } from './certificateCard.ts';
+import { acmeDomains, cardHost, cardVariant, pollOutcome, preflightProblems, runCertificateCard, type CardApi, type CardPhase } from './certificateCard.ts';
+import { isLocalHostname } from './localHostname.ts';
+
+test('10.5: a local / private host name gets "Eigene Domain hinzufügen", never Let\'s Encrypt', () => {
+  for (const host of ['mail.example.local', 'mail.box.lan', 'mx.corp.internal', 'mail.home.arpa', 'mail.example.test', 'srv.localdomain', '192.168.1.5', '::1']) {
+    assert.equal(cardVariant({ publicHostname: null, hostname: host }), 'add-domain', host);
+    assert.equal(cardHost({ publicHostname: null, hostname: host }), host);
+    // even if an older server still reported the name as public
+    assert.equal(cardVariant({ publicHostname: host, hostname: host }), 'add-domain', host);
+    assert.equal(isLocalHostname(host), true, host);
+  }
+});
+
+test('10.5: a public host name keeps the Let\'s Encrypt card (also from servers without the hostname field)', () => {
+  assert.equal(cardVariant({ publicHostname: 'mail.firma.de', hostname: 'mail.firma.de' }), 'letsencrypt');
+  assert.equal(cardVariant({ publicHostname: 'mail.firma.de' }), 'letsencrypt');
+  assert.equal(cardHost({ publicHostname: 'mail.firma.de' }), 'mail.firma.de');
+  assert.equal(isLocalHostname('mail.firma.de'), false);
+});
 
 type Call = [method: 'GET' | 'POST', path: string, body?: unknown];
 

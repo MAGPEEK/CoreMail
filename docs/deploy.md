@@ -92,17 +92,26 @@ docker compose logs -f coremail   # first start: schema, then "CoreMail setup: o
 
 1. Read the token: `cat ./secrets/setup-token` (the files belong to root:
    `sudo cat ./secrets/setup-token` when needed, or `docker exec coremail cat /secrets/setup-token`).
-2. Open `http://<server-ip>:3000/setup` and enter the token, your mail domain and host name, the
-   first admin address and its password. The token is deleted once the setup is complete.
+2. Open `http://<server-ip>:3000/setup` and enter the token. The wizard starts with a **local
+   domain** (`example.local`, host name `mail.example.local`) and a self-signed certificate, so it
+   needs no DNS yet — keep it, or type your real domain if its DNS is ready. Then the first admin
+   address (`admin@example.local`) and its password. The token is deleted once the setup is complete.
 3. **Secrets sichern**: download the secrets file with **Secrets herunterladen**
    (`coremail-secrets-<host>-<date>.env`, possible only while the wizard runs and at most 24 h
    after the setup) and keep it off the server. Over plain HTTP the wizard warns to download it
    only on a local network; you can also copy `./secrets/coremail.env` yourself.
 4. The wizard has no DNS or certificate step: sign in to the admin panel
-   `http://<server-ip>:3000/bcp/`, enter the DNS records shown under **Domains**, then request
-   the Let's Encrypt certificate with the dashboard card **Zertifikat einrichten** (or under
-   **Certificates**; DNS must point at the server first) and create the mailboxes. From then on
-   the webmail is at `https://<your-host>/`, the admin panel at `https://<your-host>/bcp/`.
+   `http://<server-ip>:3000/bcp/` (after enrolling the second factor in the webmail). With the
+   local domain the dashboard shows **Eigene Domain hinzufügen**:
+   1. **Domains** → add your real domain (e.g. `example.com`) and enter the DNS records shown there;
+   2. **Als primär festlegen** — the public host name moves from `mail.example.local` to
+      `mail.example.com` and the client URLs follow;
+   3. request the Let's Encrypt certificate with the dashboard card **Zertifikat einrichten**
+      (or under **Certificates**; DNS must point at the server first).
+
+   Then create the mailboxes. From then on the webmail is at `https://<your-host>/`, the admin
+   panel at `https://<your-host>/bcp/`. The `example.local` domain can stay (mail from outside
+   never reaches it) or be deleted once no mailbox uses it.
 
 Details of every step: [setup-wizard.md](setup-wizard.md).
 

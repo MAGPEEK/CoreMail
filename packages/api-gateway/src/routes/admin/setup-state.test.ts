@@ -39,7 +39,7 @@ const express = (await import('express')).default;
 const core = await import('@coremail/core');
 const { requireAuth } = await import('../../middleware/auth.js');
 const { adminSetupStateRouter } = await import('./setup-state.js');
-const { certificateCardVisible, isIssuableHostname } = await import('../../lib/setup-state.js');
+const { certificateCardVisible, isIssuableHostname, isLocalSetupHostname } = await import('../../lib/setup-state.js');
 
 const token = (role: string) => core.signAccessToken({
   sub: `actor-${role}`, email: `actor-${role}@ex.com`, role: role as never, domainId: 'd1', sessionId: `s-${role}`, mfaVerified: true,
@@ -77,7 +77,7 @@ before(async () => {
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/v1/admin/setup-state`;
 });
 after(() => server?.close());
-beforeEach(() => { settings = { publicHostname: 'mail.example.test', adminEmail: 'certs@example.test' }; certs = []; });
+beforeEach(() => { settings = { publicHostname: 'mail.example.com', adminEmail: 'certs@example.com' }; certs = []; });
 
 async function call(method: string, path: string, role?: string, body?: unknown) {
   const r = await fetch(`${base}${path}`, {
@@ -89,15 +89,23 @@ async function call(method: string, path: string, role?: string, body?: unknown)
 }
 
 test('visibility rule (pure)', () => {
-  const on = { publicHostname: 'mail.example.test', servedTrusted: false, dismissedAt: null, canManageCertificates: true };
+  const on = { publicHostname: 'mail.example.com', servedTrusted: false, dismissedAt: null, canManageCertificates: true };
   assert.equal(certificateCardVisible(on), true);
   assert.equal(certificateCardVisible({ ...on, servedTrusted: true }), false, 'a trusted certificate covers the host');
   assert.equal(certificateCardVisible({ ...on, dismissedAt: new Date() }), false, '"Später"');
   assert.equal(certificateCardVisible({ ...on, canManageCertificates: false }), false, 'read-only role');
-  for (const h of [null, '', 'mail.local', 'mail.localhost', 'localhost', 'box.localhost', 'nodot']) {
+  for (const h of [null, '', 'mail.local', 'mail.localhost', 'localhost']) {
     assert.equal(certificateCardVisible({ ...on, publicHostname: h }), false, String(h));
   }
-  assert.equal(isIssuableHostname('Mail.Example.test'), true);
+  // 10.5: local / private names show the card ("Eigene Domain hinzufügen"), never as issuable
+  for (const h of ['mail.example.local', 'box.localhost', 'nodot', 'mail.box.lan', '192.168.1.5']) {
+    assert.equal(certificateCardVisible({ ...on, publicHostname: h }), true, h);
+    assert.equal(certificateCardVisible({ ...on, publicHostname: h, dismissedAt: new Date() }), false, h);
+    assert.equal(isIssuableHostname(h), false, h);
+    assert.equal(isLocalSetupHostname(h), true, h);
+  }
+  assert.equal(isIssuableHostname('Mail.Example.com'), true);
+  assert.equal(isLocalSetupHostname('mail.example.com'), false);
 });
 
 test('anonymous 401, non-server roles 403, VIEW_ONLY_ORG may read (never sees the card) but not dismiss', async () => {
@@ -109,35 +117,46 @@ test('anonymous 401, non-server roles 403, VIEW_ONLY_ORG may read (never sees th
   }
   const ro = await call('GET', '/', 'VIEW_ONLY_ORG');
   assert.equal(ro.status, 200);
-  assert.deepEqual(ro.json, { certificateCard: false, publicHostname: 'mail.example.test', acmeEmail: 'certs@example.test' });
+  assert.deepEqual(ro.json, { certificateCard: false, publicHostname: 'mail.example.com', hostname: 'mail.example.com', acmeEmail: 'certs@example.com' });
   assert.equal((await call('POST', '/certificate-hint/dismiss', 'VIEW_ONLY_ORG')).status, 403);
   assert.equal(settings['setupCertificateHintDismissedAt'], undefined, 'nothing written');
 });
 
 test('no certificate, or only self-signed / staging / other names → card shows', async () => {
-  assert.deepEqual((await call('GET', '/', 'ORGANIZATION_MANAGEMENT')).json, { certificateCard: true, publicHostname: 'mail.example.test', acmeEmail: 'certs@example.test' });
+  assert.deepEqual((await call('GET', '/', 'ORGANIZATION_MANAGEMENT')).json, { certificateCard: true, publicHostname: 'mail.example.com', hostname: 'mail.example.com', acmeEmail: 'certs@example.com' });
   certs = [
-    certRow('self', 'mail.example.test', 'mail.example.test', { type: 'SELF_SIGNED' }),
-    certRow('stage', 'mail.example.test', 'Staging CA', { acmeStaging: true }),
-    certRow('other', 'other.example.test', 'Test CA', { isActiveHttps: true }),
+    certRow('self', 'mail.example.com', 'mail.example.com', { type: 'SELF_SIGNED' }),
+    certRow('stage', 'mail.example.com', 'Staging CA', { acmeStaging: true }),
+    certRow('other', 'other.example.com', 'Test CA', { isActiveHttps: true }),
   ];
-  assert.deepEqual((await call('GET', '/', 'SERVER_MANAGEMENT')).json, { certificateCard: true, publicHostname: 'mail.example.test', acmeEmail: 'certs@example.test' });
+  assert.deepEqual((await call('GET', '/', 'SERVER_MANAGEMENT')).json, { certificateCard: true, publicHostname: 'mail.example.com', hostname: 'mail.example.com', acmeEmail: 'certs@example.com' });
 });
 
 test('a trusted certificate for the public host name hides the card', async () => {
-  certs = [certRow('le', 'mail.example.test', 'Test CA')];
-  assert.deepEqual((await call('GET', '/', 'ORGANIZATION_MANAGEMENT')).json, { certificateCard: false, publicHostname: 'mail.example.test', acmeEmail: 'certs@example.test' });
+  certs = [certRow('le', 'mail.example.com', 'Test CA')];
+  assert.deepEqual((await call('GET', '/', 'ORGANIZATION_MANAGEMENT')).json, { certificateCard: false, publicHostname: 'mail.example.com', hostname: 'mail.example.com', acmeEmail: 'certs@example.com' });
 });
 
 test('placeholder host name → no card, publicHostname null', async () => {
   settings = { publicHostname: 'mail.local' };
-  assert.deepEqual((await call('GET', '/', 'ORGANIZATION_MANAGEMENT')).json, { certificateCard: false, publicHostname: null, acmeEmail: 'actor-ORGANIZATION_MANAGEMENT@ex.com' }, 'no adminEmail → the own address');
+  assert.deepEqual((await call('GET', '/', 'ORGANIZATION_MANAGEMENT')).json, { certificateCard: false, publicHostname: null, hostname: null, acmeEmail: 'actor-ORGANIZATION_MANAGEMENT@ex.com' }, 'no adminEmail → the own address');
+});
+
+test('10.5: local setup host name (mail.example.local) → card without a Let\'s Encrypt name', async () => {
+  settings = { publicHostname: 'mail.example.local', adminEmail: 'admin@example.local' };
+  certs = [certRow('self', 'mail.example.local', 'mail.example.local', { type: 'SELF_SIGNED', isActiveHttps: false })];
+  assert.deepEqual((await call('GET', '/', 'ORGANIZATION_MANAGEMENT')).json, {
+    certificateCard: true, publicHostname: null, hostname: 'mail.example.local', acmeEmail: 'admin@example.local',
+  });
+  assert.equal((await call('GET', '/', 'VIEW_ONLY_ORG')).json?.['certificateCard'], false, 'read-only role');
+  const r = await call('POST', '/certificate-hint/dismiss', 'SERVER_MANAGEMENT');
+  assert.equal(r.json?.['certificateCard'], false, '"Später" hides the local hint as well');
 });
 
 test('"Später" hides the card for everyone', async () => {
   const r = await call('POST', '/certificate-hint/dismiss', 'SERVER_MANAGEMENT');
   assert.equal(r.status, 200);
-  assert.deepEqual(r.json, { certificateCard: false, publicHostname: 'mail.example.test', acmeEmail: 'certs@example.test' });
+  assert.deepEqual(r.json, { certificateCard: false, publicHostname: 'mail.example.com', hostname: 'mail.example.com', acmeEmail: 'certs@example.com' });
   assert.ok(settings['setupCertificateHintDismissedAt'] instanceof Date);
   assert.equal((await call('GET', '/', 'ORGANIZATION_MANAGEMENT')).json?.['certificateCard'], false);
 });

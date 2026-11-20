@@ -5,19 +5,21 @@
  * may manage certificates (area servers, write). One button runs the
  * certificates page's Let's Encrypt flow and assigns the new certificate to
  * HTTPS as well (lib/certificateCard.ts); "Später" hides the card for everyone.
+ *
+ * 10.5: for a local / private host name (the setup wizard's mail.example.local,
+ * a bare IP) there is no Let's Encrypt button — the card is "Eigene Domain
+ * hinzufügen" with the three steps and a link to Domains (cardVariant()).
  */
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { CheckCircle2, Loader2, ShieldAlert } from 'lucide-react';
+import { CheckCircle2, Globe, Loader2, ShieldAlert } from 'lucide-react';
 import { api } from '../api/client.js';
 import { usePermissions } from '../hooks/usePermissions.js';
 import { useT } from '../i18n/useT.js';
 import type { TranslationKey } from '../i18n/translations.js';
 import { SERVED_CERT_QUERY_KEY } from './ServedCert.js';
-import { runCertificateCard, type CardPhase, type CardResult } from '../lib/certificateCard.js';
-
-interface SetupState { certificateCard: boolean; publicHostname: string | null; acmeEmail: string | null }
+import { cardHost, cardVariant, runCertificateCard, type CardPhase, type CardResult, type SetupState } from '../lib/certificateCard.js';
 
 const QUERY_KEY = ['admin-setup-state'] as const;
 
@@ -51,6 +53,34 @@ function CardFailure({ result }: { result: CardResult }) {
   );
 }
 
+/** 10.5: the card for a local host name — add the real domain first. */
+function AddDomainCard({ host, busy, onLater }: { host: string; busy: boolean; onLater: () => void }) {
+  const t = useT();
+  return (
+    <section
+      aria-labelledby="setup-cert-card-title"
+      className="px-4 py-3 bg-info-bg border border-info-line rounded-xl flex flex-wrap sm:flex-nowrap items-start gap-3 text-sm text-info-fg"
+    >
+      <Globe size={16} className="shrink-0 mt-0.5" aria-hidden="true" />
+      <div className="flex-1 min-w-0">
+        <h2 id="setup-cert-card-title" className="font-semibold">{t('dash_setup_domain_title')}</h2>
+        <p className="text-xs mt-0.5 break-words">{t('dash_setup_domain_text').replace('{host}', host)}</p>
+        <ol className="list-decimal pl-5 mt-1 space-y-0.5 text-xs">
+          <li>{t('dash_setup_domain_step1')}</li>
+          <li>{t('dash_setup_domain_step2')}</li>
+          <li>{t('dash_setup_domain_step3')}</li>
+        </ol>
+      </div>
+      <div className="flex flex-wrap items-center gap-2 shrink-0">
+        <Link to="/domains" className="btn-primary text-xs">{t('dash_setup_domain_link')}</Link>
+        <button type="button" onClick={onLater} disabled={busy} className="btn-secondary text-xs">
+          {t('dash_setup_cert_later')}
+        </button>
+      </div>
+    </section>
+  );
+}
+
 export function CertificateSetupCard() {
   const t = useT();
   const { can } = usePermissions();
@@ -76,6 +106,9 @@ export function CertificateSetupCard() {
   const busy = phase === 'preflight' || phase === 'ordering' || phase === 'waiting' || phase === 'activating';
   // keep the card while a run is going or its outcome is shown
   if (!allowed || (!data?.certificateCard && phase === 'idle')) return null;
+  if (data && phase === 'idle' && cardVariant(data) === 'add-domain') {
+    return <AddDomainCard host={cardHost(data)} busy={dismiss.isPending} onLater={() => dismiss.mutate()} />;
+  }
   const host = data?.publicHostname ?? '';
 
   const start = async () => {

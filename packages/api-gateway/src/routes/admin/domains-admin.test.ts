@@ -17,8 +17,15 @@ let domains: Row[] = [];
 let userCount = 0;
 const creates: Record<string, unknown>[] = [];
 const updates: Record<string, unknown>[] = [];
+let settings: Record<string, unknown> = {};
+// 10.5: settings reload of lib/server-urls.ts without a Redis server
+(globalThis as Record<string, unknown>)['__serverUrlsRedis'] = { publish: async () => 1 };
 
 installFakePrisma({
+  serverSettings: {
+    findUnique: () => ({ ...settings }),
+    update: (a: unknown) => { settings = { ...settings, ...(a as { data: Record<string, unknown> }).data }; return settings; },
+  },
   user: {
     findUnique: () => ({ role: 'ORGANIZATION_MANAGEMENT', active: true }),
     count: () => userCount,
@@ -69,6 +76,7 @@ beforeEach(() => {
   userCount = 0;
   creates.length = 0;
   updates.length = 0;
+  settings = { id: 'singleton', publicHostname: 'mail.example.com', useHttps: true, httpPort: 443 };
 });
 
 async function call(method: string, path: string, body?: unknown): Promise<{ status: number; body: { error?: string; code?: string } }> {
@@ -131,4 +139,30 @@ test('make-primary: an inactive domain is refused with 409 DOMAIN_INACTIVE (live
   assert.equal(updates.length, 0);
   const missing = await call('POST', '/nope/make-primary', {});
   assert.equal(missing.status, 404);
+});
+
+test('10.5 make-primary: the setup wizard\'s local host name is replaced by mail.<new domain>, URLs re-derived', async () => {
+  domains = [
+    { id: 'd1', name: 'example.local', dkimSelector: 'default', active: true, primary: true },
+    { id: 'd2', name: 'firma.de', dkimSelector: 'default', active: true, primary: false },
+  ];
+  settings = {
+    id: 'singleton', publicHostname: 'mail.example.local', useHttps: true, httpPort: 443,
+    imapHost: 'mail.example.local', setupCertificateHintDismissedAt: new Date(),
+  };
+  const r = await call('POST', '/d2/make-primary', {});
+  assert.equal(r.status, 200);
+  assert.deepEqual(updates[0], { primary: true });
+  assert.equal(settings['publicHostname'], 'mail.firma.de');
+  assert.equal(settings['imapHost'], 'mail.firma.de');
+  assert.equal(settings['easUrl'], 'https://mail.firma.de/Microsoft-Server-ActiveSync');
+  assert.equal(settings['setupCertificateHintDismissedAt'], null, 'the certificate card offers Let\'s Encrypt again');
+});
+
+test('make-primary: an explicitly configured public host name is kept', async () => {
+  settings = { id: 'singleton', publicHostname: 'mx1.example.com', useHttps: true, httpPort: 443 };
+  const r = await call('POST', '/d2/make-primary', {});
+  assert.equal(r.status, 200);
+  assert.equal(settings['publicHostname'], 'mx1.example.com');
+  assert.equal(settings['imapHost'], 'mx1.example.com', 'URLs synced to the kept host name');
 });

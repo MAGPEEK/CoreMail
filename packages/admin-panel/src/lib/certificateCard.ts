@@ -13,7 +13,36 @@
  *
  * Pure apart from the injected API, so the order (above all: HTTPS only after
  * a successful issuance) is covered by lib/certificateCard.test.ts.
+ *
+ * 10.5 (local domain first): while the public host name is a local / private
+ * name (the setup wizard's mail.example.local, a bare IP — lib/localHostname.ts)
+ * the card offers no Let's Encrypt order but "Eigene Domain hinzufügen"
+ * (Domains → add → make primary → request a certificate): cardVariant().
  */
+import { isLocalHostname } from './localHostname.ts';
+
+/** GET /admin/setup-state (fields of newer servers optional). */
+export interface SetupState {
+  certificateCard: boolean;
+  /** The name a Let's Encrypt order may use (null for a local / private name). */
+  publicHostname: string | null;
+  /** 10.5: the configured host name the card is about (also a local one). */
+  hostname?: string | null;
+  acmeEmail: string | null;
+}
+
+export type CardVariant = 'letsencrypt' | 'add-domain';
+
+/** Which card to show: Let's Encrypt for a public host name, "add your domain" for a local / private one. */
+export function cardVariant(state: Pick<SetupState, 'publicHostname' | 'hostname'>): CardVariant {
+  const host = state.hostname ?? state.publicHostname;
+  return !state.publicHostname || isLocalHostname(host) ? 'add-domain' : 'letsencrypt';
+}
+
+/** The host name the card names. */
+export function cardHost(state: Pick<SetupState, 'publicHostname' | 'hostname'>): string {
+  return state.hostname ?? state.publicHostname ?? '';
+}
 
 export interface CardApi {
   get<T>(path: string): Promise<T>;

@@ -14,13 +14,42 @@ and `packages/api-gateway/src/routes/setup-followup.ts`.
 | # | Step | What happens |
 |---|------|--------------|
 | 1 | Willkommen | Short explanation and the one-time **setup token**. "Weiter" checks the token with `POST /api/v1/setup/verify-token` (read-only). The hint names `./secrets/setup-token` when the server reports a secrets file (`secretsFile` in the status), otherwise the container log command and `SETUP_TOKEN`. |
-| 2 | Domain und Hostname | Primary mail domain, public host name (default `mail.<domain>`, follows the domain until edited), organisation name (optional, `ServerSettings.orgName`). |
-| 3 | Admin-Konto | Name, address in the chosen domain (local part + fixed `@domain`), password with a strength meter (at least 8 characters, like the server). Two-factor sign-in is explained, not set up here: the box says it is required for the BCP (10.5) and is set up in the webmail right after the wizard (Settings → Security; the last step links there). |
+| 2 | Domain und Hostname | Primary mail domain, prefilled with the local domain `example.local` (10.5, see below); public host name (prefilled `mail.example.local`, follows the domain until edited); organisation name (optional and empty, `ServerSettings.orgName`). An info box explains: "CoreMail startet mit einer lokalen Domain und einem selbstsignierten Zertifikat. Deine echte Domain fügst du danach im BCP unter Domains hinzu und machst sie zur primären." (the product name follows the branding). For a local host name the hint under the field says that no public DNS record is needed. |
+| 3 | Admin-Konto | Name, address in the chosen domain (local part + fixed `@domain`, suggested `admin@example.local`), password with a strength meter (at least 8 characters, like the server). For a local domain an info box says that mail from outside cannot be delivered to that address (signing in works). Two-factor sign-in is explained, not set up here: the box says it is required for the BCP (10.5) and is set up in the webmail right after the wizard (Settings → Security; the last step links there). |
 | – | *Einrichten* | Leaving the admin step runs `POST /api/v1/setup/complete` and signs in with the new account through the normal `/auth/login` (refresh cookie, same lockout and audit rules as the login page). The password and the token are dropped from the page afterwards. |
 | 4 | Secrets sichern | Only when the status reports `secretsGenerated: true`. Button **Secrets herunterladen** downloads the secrets file as `coremail-secrets-<host>-<YYYY-MM-DD>.env` (`GET /api/v1/setup/secrets-download`, below). Next to it, when the page was not loaded over HTTPS (`secureConnection: false` in the status), one line: "Die Verbindung ist unverschlüsselt — lade die Datei nur im lokalen Netz herunter." — the download still works. The warning that no password works without the PEPPER stays, plus one line where the file lives on the server (`secretsFile`, default `./secrets/coremail.env`, next to the Compose file). No shell commands, never secret values on the page. "Weiter" only after the checkbox "Ich habe die Datei gesichert"; the checkbox may be ticked without downloading (some admins copy the file on the server themselves). |
 | 5 | Fertig | Summary (domain, host name, admin), the line "DNS-Einträge und Zertifikat richtest du im BCP unter Domains und Zertifikate ein" with both names linking to `/bcp/domains` and `/bcp/certificates`, an info box (10.5) "Das BCP öffnet sich erst, wenn die Zwei-Faktor-Anmeldung eingerichtet ist …", and links: webmail, BCP (new tab), mail client setup (Settings → External clients), two-factor sign-in. Reaching this step calls `POST /api/v1/setup/finish`, which closes the secrets download. |
 
 "Schritt x von n" counts the shown steps (4 without, 5 with the secrets step).
+
+### Local domain first (10.5)
+
+The wizard always sets CoreMail up with a **local domain and a self-signed certificate** first;
+the real public domain is added afterwards in the BCP. The domain step is prefilled with
+`example.local` / `mail.example.local` (`SUGGESTED_DOMAIN`, `INITIAL_FORM` in
+`lib/setupWizard.ts`), so the wizard completes without any DNS record. A real domain may still be
+typed in — the input checks are the same for public and private names.
+
+- **Private / local names** (shared pure helper `isLocalHostname`, three identical copies kept in
+  step by a parity test: `packages/api-gateway/src/lib/local-hostname.ts`,
+  `packages/web-client/src/lib/localHostname.ts`, `packages/admin-panel/src/lib/localHostname.ts`):
+  names under `.local`, `.lan`, `.internal`, `.home.arpa`, `.test`, `.localdomain`, `.localhost`,
+  single labels, and bare IPv4 / IPv6 addresses.
+- **`POST /api/v1/setup/complete`** accepts these suffixes like any domain. The domain still gets
+  its DKIM key; the host name gets the self-signed certificate (assigned to SMTP/IMAP/POP3 and
+  stored in `ServerSettings.tlsCert`); the HTTPS server is told to reload (`coremail:tls:reload`)
+  and then serves that certificate for the host name. Nothing in the setup needs public DNS.
+- **Dashboard card**: for a local host name the BCP card shows **„Eigene Domain hinzufügen“**
+  instead of a Let's Encrypt button — three steps (Domain anlegen → als primär festlegen →
+  Zertifikat anfordern) and a link to **Domains**; "Später" hides it like the certificate card
+  ([certificates.md](certificates.md#dashboard-card-zertifikat-einrichten)).
+- **Make primary**: `POST /api/v1/admin/domains/:id/make-primary` (and renaming the primary
+  domain) replaces a local public host name with `mail.<new domain>` when the new primary domain
+  is a public one, re-derives the client URLs (`lib/server-urls.ts primaryDomainHostname`) and
+  clears "Später" of the card, which then offers the Let's Encrypt certificate for the new host
+  name. A public host name the admin configured stays as before; a local name stays when the new
+  primary domain is local too. The self-signed certificate of the local name stays in place until
+  the Let's Encrypt certificate takes over SMTP/IMAP/POP3 and HTTPS.
 
 ### Order decisions
 
@@ -119,7 +148,16 @@ enrolled. The optional "MFA für alle Benutzer erzwingen" is described in
   closed after completion, new fields, `secureConnection`, backfill closes the download, staged
   copy removed at start once the window is closed.
 - `packages/api-gateway/src/routes/setup.test.ts` (10.5) — `/complete` sets `requireMfaForAdmins`;
-  the backfill of an existing installation leaves the stored value alone.
+  the backfill of an existing installation leaves the stored value alone; `example.local` gets the
+  admin, a DKIM key and the self-signed certificate (SMTP/IMAP/POP3, TLS reload), the other
+  private suffixes are accepted.
+- `packages/web-client/src/lib/setupWizard.test.ts` (10.5) — `example.local` defaults, private
+  suffixes pass the checks, local-domain detection.
+- `packages/api-gateway/src/lib/local-hostname.test.ts` — local / private names and the parity of
+  the three copies; `src/lib/server-urls.test.ts` and `src/routes/admin/domains-admin.test.ts` —
+  make-primary replaces the local host name, keeps an explicit public one;
+  `src/routes/admin/setup-state.test.ts` — the card for a local host name;
+  `packages/admin-panel/src/lib/certificateCard.test.ts` — card variant.
 - `packages/api-gateway/src/routes/setup-followup.test.ts` — (10.5) the wizard session without
   MFA still downloads and finishes with `requireMfaForAdmins` on; session and role required, window
   (24 h, finished, not completed), absent file / symlink, headers, audit without content (also

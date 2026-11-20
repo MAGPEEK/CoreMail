@@ -4,7 +4,7 @@ import {
   wizardSteps, commitStep, nextStep, previousStep, stepPosition, showTokenFileHint, secretsFilePath,
   isValidDomain, isValidHostname, defaultHostname, isValidLocalPart, passwordScore,
   blockReason, tokenNeedsCheck, completeBody, parseResume, insecureConnection, downloadFilename,
-  defaultSecretsFilename, DEFAULT_SECRETS_FILE, type WizardForm,
+  defaultSecretsFilename, DEFAULT_SECRETS_FILE, INITIAL_FORM, SUGGESTED_DOMAIN, isLocalDomain, type WizardForm,
 } from './setupWizard.ts';
 
 const form = (over: Partial<WizardForm> = {}): WizardForm => ({
@@ -136,4 +136,34 @@ test('resume marker: post-commit steps only, older DNS / certificate markers res
   assert.equal(parseResume(JSON.stringify({ step: 'admin' })), null, 'pre-commit steps never resume');
   assert.equal(parseResume('{'), null);
   assert.equal(parseResume(null), null);
+});
+
+// ── 10.5: local domain first ──────────────────────────────────────────────────
+
+test('10.5: the wizard starts with example.local / mail.example.local, no organisation, admin@example.local', () => {
+  assert.equal(SUGGESTED_DOMAIN, 'example.local');
+  assert.equal(INITIAL_FORM.domain, 'example.local');
+  assert.equal(INITIAL_FORM.hostname, 'mail.example.local');
+  assert.equal(INITIAL_FORM.organizationName, '');
+  assert.equal(INITIAL_FORM.localPart, 'admin');
+  assert.equal(INITIAL_FORM.password, '');
+  assert.equal(blockReason('domain', INITIAL_FORM), null, 'the defaults pass the domain step as they are');
+  assert.equal(completeBody({ ...INITIAL_FORM, password: 'pw-123456', confirm: 'pw-123456' })['email'], 'admin@example.local');
+  // the page derives the host name from the domain while the host name is untouched
+  assert.equal(defaultHostname('firma.de'), 'mail.firma.de');
+});
+
+test('10.5: private suffixes pass the checks; a real domain still works', () => {
+  for (const d of ['example.local', 'firma.lan', 'corp.internal', 'home.arpa', 'example.test', 'box.localdomain', 'firma.de']) {
+    assert.equal(isValidDomain(d), true, d);
+    assert.equal(isValidHostname(defaultHostname(d)), true, d);
+    assert.equal(blockReason('domain', form({ domain: d, hostname: defaultHostname(d) })), null, d);
+  }
+});
+
+test('10.5: local domains are recognised (admin hint, host name hint)', () => {
+  for (const d of ['example.local', 'Mail.Example.LOCAL', 'firma.lan', 'corp.internal', 'home.arpa', 'example.test', 'box.localdomain', '192.168.1.10']) {
+    assert.equal(isLocalDomain(d), true, d);
+  }
+  for (const d of ['firma.de', 'example.com', 'local.example.com', '']) assert.equal(isLocalDomain(d), false, d);
 });

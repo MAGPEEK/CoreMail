@@ -23,6 +23,13 @@ for (const k of ['COREMAIL_SECRETS_FILE_IN_USE', 'COREMAIL_SECRETS_GENERATED', '
 type Row = Record<string, unknown>;
 let settings: Row = {};
 let users: Row[] = [];
+let domainsCreated: Row[] = [];
+let certsCreated: Row[] = [];
+const tlsReloads: string[] = [];
+// 10.5: the HTTPS server reload after the self-signed certificate (lib/cert-acme.ts seam)
+(globalThis as Record<string, unknown>)['__certAcmeRedis'] = {
+  publish: async (ch: string) => { tlsReloads.push(ch); return 1; },
+};
 
 function matchWhere(row: Row, where: Row): boolean {
   return Object.entries(where).every(([k, v]) => row[k] === v || (v === null && (row[k] === null || row[k] === undefined)));
@@ -45,10 +52,10 @@ installFakePrisma({
     count: () => users.length,
     create: (a) => { const u = { id: `u${users.length + 1}`, ...(a as { data: Row }).data }; users.push(u); return u; },
   },
-  domain: { create: (a) => ({ id: 'd1', ...(a as { data: Row }).data }) },
+  domain: { create: (a) => { const d = { id: 'd1', ...(a as { data: Row }).data }; domainsCreated.push(d); return d; } },
   mailbox: { create: () => ({ id: 'mb1' }) },
   folder: { create: () => ({}) },
-  certificate: { create: () => ({}) },
+  certificate: { create: (a) => { certsCreated.push((a as { data: Row }).data); return {}; } },
 });
 
 const express = (await import('express')).default;
@@ -74,7 +81,7 @@ after(() => {
   server?.close();
   rmSync(scratchRoot, { recursive: true, force: true });
 });
-beforeEach(() => { settings = {}; users = []; });
+beforeEach(() => { settings = {}; users = []; domainsCreated = []; certsCreated = []; tlsReloads.length = 0; });
 
 const body = (token?: string) => ({ domain: 'Example.COM', email: 'Admin@Example.com', password: 'supersecret1', ...(token !== undefined ? { setupToken: token } : {}) });
 async function complete(b: unknown, headers: Record<string, string> = {}) {
@@ -212,6 +219,37 @@ test('10.5: a fresh installation starts with MFA mandatory for admins; the backf
   assert.equal(settings['requireMfaForAdmins'], false, 'stored value untouched (no silent lock-out)');
   assert.equal((await complete(body(token))).status, 409, 'and /complete never runs again');
   assert.equal(settings['requireMfaForAdmins'], false);
+});
+
+test('10.5: local domain first — example.local gets the admin, a DKIM key and a self-signed certificate for SMTP/IMAP/POP3 + HTTPS', async () => {
+  const token = (await initSetupToken(quietLog))!;
+  const r = await complete({ domain: 'example.local', hostname: 'mail.example.local', email: 'admin@example.local', password: 'supersecret1', setupToken: token });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.equal(r.json['domain'], 'example.local');
+  assert.equal(r.json['hostname'], 'mail.example.local');
+  assert.equal(users[0]!['email'], 'admin@example.local');
+  assert.equal(domainsCreated[0]!['primary'], true);
+  assert.match(String(domainsCreated[0]!['dkimPrivateKey']), /PRIVATE KEY/, 'DKIM key generated as for a public domain');
+  assert.equal(settings['publicHostname'], 'mail.example.local');
+  assert.equal(settings['owaUrl'], 'https://mail.example.local/owa/');
+  assert.equal(certsCreated.length, 1);
+  const cert = certsCreated[0]!;
+  assert.equal(cert['type'], 'SELF_SIGNED');
+  assert.deepEqual(cert['domains'], ['mail.example.local']);
+  assert.deepEqual(cert['services'], ['SMTP', 'IMAP', 'POP3']);
+  assert.equal(cert['isActiveProtocol'], true);
+  assert.equal(settings['tlsCert'], cert['certPem'], 'protocol servers load it from server_settings');
+  assert.deepEqual(tlsReloads, ['coremail:tls:reload'], 'the HTTPS server reloads and serves it by SNI');
+});
+
+test('10.5: the other private suffixes are accepted like public domains', async () => {
+  for (const domain of ['firma.lan', 'corp.internal', 'home.arpa', 'example.test', 'box.localdomain']) {
+    settings = {}; users = [];
+    const token = (await initSetupToken(quietLog))!;
+    const r = await complete({ domain, email: `admin@${domain}`, password: 'supersecret1', setupToken: token });
+    assert.equal(r.status, 200, `${domain}: ${JSON.stringify(r.json)}`);
+    assert.equal(settings['publicHostname'], `mail.${domain}`);
+  }
 });
 
 test('complete: an invalid host name is refused before anything is written', async () => {

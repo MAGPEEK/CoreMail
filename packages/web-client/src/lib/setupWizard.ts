@@ -9,7 +9,14 @@
  * admin step. Steps before the commit can not be revisited once setup is
  * complete; reaching "done" closes the download (POST /setup/finish), so there
  * is no way back from it either. DNS and the certificate are set up in the BCP.
+ *
+ * 10.5 (local domain first): the domain step starts with the local domain
+ * example.local (host name mail.example.local, following the domain while the
+ * host name is untouched) and a self-signed certificate; the real domain is
+ * added later in the BCP (Domains → make primary). A real domain may still be
+ * typed in; private suffixes (lib/localHostname.ts) pass the same checks.
  */
+import { isLocalHostname } from './localHostname.ts';
 
 export type WizardStepId = 'welcome' | 'domain' | 'admin' | 'secrets' | 'done';
 
@@ -132,6 +139,14 @@ export function defaultHostname(domain: string): string {
   return d ? `mail.${d}` : '';
 }
 
+/** 10.5: the domain the wizard suggests (local — no public DNS, self-signed certificate). */
+export const SUGGESTED_DOMAIN = 'example.local';
+
+/** 10.5: a local / private domain or host name (.local, .lan, .internal, .home.arpa, .test, .localdomain, IPs). */
+export function isLocalDomain(v: string): boolean {
+  return isLocalHostname(normalizeHost(v));
+}
+
 /** Local part of the admin address (the domain is fixed by step 2). */
 export function isValidLocalPart(v: string): boolean {
   return /^[a-z0-9](?:[a-z0-9._%+-]{0,62}[a-z0-9])?$/i.test(v.trim()) && !v.includes('..');
@@ -169,6 +184,13 @@ export interface WizardForm {
   confirm: string;
   secretsConfirmed: boolean;
 }
+
+/** 10.5: the form a new wizard starts with — example.local / mail.example.local, organisation empty, admin@<domain>. */
+export const INITIAL_FORM: WizardForm = {
+  tokenRequired: true, token: '', verifiedToken: null,
+  domain: SUGGESTED_DOMAIN, hostname: defaultHostname(SUGGESTED_DOMAIN), organizationName: '',
+  adminName: '', localPart: 'admin', password: '', confirm: '', secretsConfirmed: false,
+};
 
 export type BlockReason =
   | 'token' | 'domain' | 'hostname' | 'organization' | 'localPart' | 'passwordLength' | 'passwordMismatch' | 'secrets';
