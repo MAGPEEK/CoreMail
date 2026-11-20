@@ -60,6 +60,88 @@ export interface ContentFilterResult {
   verifiedDomains?: string[];
   /** Not scanned clean by ClamAV → X-CoreMail-Virus-Scan header (virus-scan-header.ts). */
   virusScan?: VirusScanNote;
+  /** 10.2: per-stage summary for the message trace (validated, see parseContentChecks). */
+  checks?: ContentChecksSummary;
+}
+
+/**
+ * Per-stage summary of the security-filter content checks (10.2 message
+ * trace) — the validated form of its `checks` field. Absent = stage did not run
+ * (or an older security-filter without the summary).
+ */
+export interface ContentChecksSummary {
+  auth?: {
+    spf: string; spfDomain?: string; dkim: string; dkimDomains?: string[];
+    dmarc: string; dmarcPolicy?: string; headerFrom?: string; arc: string; arcSealer?: string;
+    junk?: 'dmarc' | 'local-spoof'; ms?: number;
+  };
+  senderList?: 'allow' | 'none' | 'block';
+  attachments?: 'ok' | 'blocked' | 'disabled';
+  virus?: { status: 'clean' | 'disabled' | 'infected' | 'suspicious' | 'unscanned'; signature?: string; reason?: string; ms?: number };
+  spam?: { verdict: 'inbox' | 'junk' | 'reject' | 'allowlisted' | 'disabled'; score?: number; dnsblZones?: string[]; ms?: number };
+}
+
+const RESULT_TOKEN = /^[a-z]{1,16}$/;
+const DOMAIN_TOKEN = /^[a-z0-9.-]{1,253}$/i;
+const SIGNATURE_TOKEN = /^[\w.:/-]{1,120}$/;
+
+function oneOf<T extends string>(v: unknown, allowed: readonly T[]): T | undefined {
+  return typeof v === 'string' && (allowed as readonly string[]).includes(v) ? v as T : undefined;
+}
+const token = (v: unknown, re: RegExp): string | undefined => (typeof v === 'string' && re.test(v) ? v : undefined);
+const msOf = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.round(v) : undefined);
+const domains = (v: unknown): string[] | undefined => {
+  if (!Array.isArray(v)) return undefined;
+  const list = v.filter((d): d is string => typeof d === 'string' && DOMAIN_TOKEN.test(d)).map((d) => d.toLowerCase()).slice(0, 8);
+  return list.length ? list : undefined;
+};
+
+/** Pure: validates the `checks` field of a `/check/content` answer (unknown values are dropped). */
+export function parseContentChecks(value: unknown): ContentChecksSummary | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const c = value as Record<string, unknown>;
+  const out: ContentChecksSummary = {};
+  const a = c['auth'];
+  if (a && typeof a === 'object') {
+    const o = a as Record<string, unknown>;
+    const spf = token(o['spf'], RESULT_TOKEN), dkim = token(o['dkim'], RESULT_TOKEN);
+    const dmarc = token(o['dmarc'], RESULT_TOKEN), arc = token(o['arc'], RESULT_TOKEN);
+    if (spf && dkim && dmarc && arc) {
+      const spfDomain = token(o['spfDomain'], DOMAIN_TOKEN), headerFrom = token(o['headerFrom'], DOMAIN_TOKEN);
+      const arcSealer = token(o['arcSealer'], DOMAIN_TOKEN), dmarcPolicy = token(o['dmarcPolicy'], RESULT_TOKEN);
+      const dkimDomains = domains(o['dkimDomains']), junk = oneOf(o['junk'], ['dmarc', 'local-spoof'] as const), ms = msOf(o['ms']);
+      out.auth = {
+        spf, dkim, dmarc, arc,
+        ...(spfDomain ? { spfDomain } : {}), ...(dkimDomains ? { dkimDomains } : {}),
+        ...(dmarcPolicy ? { dmarcPolicy } : {}), ...(headerFrom ? { headerFrom } : {}),
+        ...(arcSealer ? { arcSealer } : {}), ...(junk ? { junk } : {}), ...(ms !== undefined ? { ms } : {}),
+      };
+    }
+  }
+  const senderList = oneOf(c['senderList'], ['allow', 'none', 'block'] as const);
+  if (senderList) out.senderList = senderList;
+  const attachments = oneOf(c['attachments'], ['ok', 'blocked', 'disabled'] as const);
+  if (attachments) out.attachments = attachments;
+  const v = c['virus'];
+  if (v && typeof v === 'object') {
+    const o = v as Record<string, unknown>;
+    const status = oneOf(o['status'], ['clean', 'disabled', 'infected', 'suspicious', 'unscanned'] as const);
+    if (status) {
+      const signature = token(o['signature'], SIGNATURE_TOKEN), reason = oneOf(o['reason'], ['too-large', 'scanner-error'] as const), ms = msOf(o['ms']);
+      out.virus = { status, ...(signature ? { signature } : {}), ...(reason ? { reason } : {}), ...(ms !== undefined ? { ms } : {}) };
+    }
+  }
+  const s = c['spam'];
+  if (s && typeof s === 'object') {
+    const o = s as Record<string, unknown>;
+    const verdict = oneOf(o['verdict'], ['inbox', 'junk', 'reject', 'allowlisted', 'disabled'] as const);
+    if (verdict) {
+      const score = typeof o['score'] === 'number' && Number.isFinite(o['score']) ? Math.round(o['score'] * 100) / 100 : undefined;
+      const dnsblZones = domains(o['dnsblZones']), ms = msOf(o['ms']);
+      out.spam = { verdict, ...(score !== undefined ? { score } : {}), ...(dnsblZones ? { dnsblZones } : {}), ...(ms !== undefined ? { ms } : {}) };
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 /** Body limit of `/check/content` (security-filter: express.raw limit '52mb'). */
@@ -107,6 +189,7 @@ export function interpretContentFilterResponse(
       ...(Array.isArray(b['verifiedDomains'])
         ? { verifiedDomains: (b['verifiedDomains'] as unknown[]).filter((d): d is string => typeof d === 'string' && /^[a-z0-9.-]{1,253}$/i.test(d)).map((d) => d.toLowerCase()) }
         : {}),
+      ...(parseContentChecks(b['checks']) ? { checks: parseContentChecks(b['checks'])! } : {}),
     },
   };
 }

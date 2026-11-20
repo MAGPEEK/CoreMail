@@ -19,8 +19,44 @@ import tls from 'node:tls';
 import crypto from 'node:crypto';
 import { createLogger, tlsServerOptions, PROTOCOL_ACCESS_CHANGE, type AuthInvalidationEvent } from '@coremail/core';
 import { logTlsSocketError } from '@coremail/core/tls-errors';
-import type { SmtpState, AuthMechanism, AuthUser, Transaction, SmtpSessionConfig, MessageMeta, EsmtpExtensions } from './types.js';
+import type { SmtpState, AuthMechanism, AuthUser, Transaction, SmtpSessionConfig, MessageMeta, EsmtpExtensions, MessageConnection } from './types.js';
 import { DEFAULT_ESMTP_EXTENSIONS } from './types.js';
+import type { TraceStage } from '@coremail/storage';
+
+/** 10.2: RCPT-stage trace notes kept per transaction (one per recipient, capped). */
+const MAX_TX_NOTES = 20;
+
+/** Facts the server factory knows before the session starts (10.2 message trace). */
+export interface SessionInit {
+  connectedAt?: Date;
+  /** Connect-stage check verdicts (connection filter). */
+  connectNotes?: readonly TraceStage[];
+}
+
+/** Pure: the connection facts of a message for the trace (TLS details only on an encrypted socket). */
+export function connectionFacts(o: {
+  socket: { localPort?: number | undefined; getProtocol?: () => string | null; getCipher?: () => { name?: string } | null };
+  tls: boolean;
+  authUser?: string | undefined;
+  connectedAt?: Date | undefined;
+  notes: readonly TraceStage[];
+}): MessageConnection {
+  let tlsVersion: string | undefined;
+  let tlsCipher: string | undefined;
+  if (o.tls) {
+    try { tlsVersion = o.socket.getProtocol?.() ?? undefined; } catch { /* closed socket */ }
+    try { tlsCipher = o.socket.getCipher?.()?.name ?? undefined; } catch { /* closed socket */ }
+    tlsVersion ??= 'TLS';
+  }
+  return {
+    ...(typeof o.socket.localPort === 'number' ? { port: o.socket.localPort } : {}),
+    ...(tlsVersion ? { tlsVersion } : {}),
+    ...(tlsCipher ? { tlsCipher } : {}),
+    ...(o.authUser ? { authUser: o.authUser } : {}),
+    ...(o.connectedAt ? { connectedAt: o.connectedAt.toISOString() } : {}),
+    ...(o.notes.length ? { notes: [...o.notes] } : {}),
+  };
+}
 import { smtpLiveSessions } from './live-sessions.js';
 import {
   parseMailFrom, parseRcptTo, decodeBase64Strict, decodeUtf8Command, oneLine, isValidDomain,
@@ -272,10 +308,16 @@ export class SmtpSession {
   private terminationNotice = CREDENTIALS_CHANGED_NOTICE;
   private unregisterLive: (() => void) | null = null;
 
-  constructor(socket: net.Socket | tls.TLSSocket, config: SmtpSessionConfig) {
+  /** 10.2: connection facts for the message trace. */
+  private readonly connectedAt: Date;
+  private readonly connectNotes: readonly TraceStage[];
+
+  constructor(socket: net.Socket | tls.TLSSocket, config: SmtpSessionConfig, init: SessionInit = {}) {
     this.socket = socket;
     this.config = config;
     this.id = crypto.randomUUID().slice(0, 8).toUpperCase();
+    this.connectedAt = init.connectedAt ?? new Date();
+    this.connectNotes = init.connectNotes ?? [];
   }
 
   // ─── Public API ─────────────────────────────────────────────────────────────
@@ -715,6 +757,13 @@ export class SmtpSession {
         chunking,
         ...(hasDsnRequest(tx.dsn) ? { dsn: tx.dsn } : {}),
       },
+      connection: connectionFacts({
+        socket: this.socket as tls.TLSSocket,
+        tls: this.tlsUpgraded,
+        authUser: this.authUser?.email,
+        connectedAt: this.connectedAt,
+        notes: [...this.connectNotes, ...(tx.notes ?? [])],
+      }),
     };
   }
 
@@ -1278,7 +1327,10 @@ export class SmtpSession {
     const addr = parsed.address;
 
     try {
-      const reject = await this.config.handlers.onRcptTo(addr, tx.from, this.authUser, this.ip);
+      const reject = await this.config.handlers.onRcptTo(addr, tx.from, this.authUser, this.ip, (n) => {
+        const notes = (tx.notes ??= []);
+        if (notes.length < MAX_TX_NOTES) notes.push(n);
+      });
       if (reject !== null) {
         this.send(formatRejectReply(reject, 550, 451));
         return;

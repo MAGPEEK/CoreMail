@@ -2,7 +2,7 @@
  * Test-only in-memory Prisma model (9.5 scope tests) for installFakePrisma():
  * evaluates the `where` shapes the admin routes use — equality, `in`, `not`,
  * `contains` / `startsWith` / `endsWith` (with `mode: 'insensitive'`), `gte` /
- * `lte`, `AND` / `OR` / `NOT` and nested relation filters on embedded objects
+ * `lte`, JSON `{ path, equals }`, `AND` / `OR` / `NOT` and nested relation filters on embedded objects
  * (a row stores its relations as plain nested objects). `select` is applied one
  * level deep (nested selects copy the embedded object as-is).
  */
@@ -48,6 +48,12 @@ export function matchesWhere(row: Row, where: Row | undefined): boolean {
       if (!(cond as Row[]).some((w) => matchesWhere(row, w))) return false;
     } else if (key === 'NOT') {
       if (matchesWhere(row, cond as Row)) return false;
+    } else if (isPlainObject(cond) && Array.isArray(cond['path'])) {
+      // JSON column filter: { path: ['a', 'b'], equals: v }
+      let v: unknown = row[key];
+      for (const p of cond['path'] as string[]) v = isPlainObject(v) ? v[p] : undefined;
+      const { path: _path, ...ops } = cond;
+      if (!matchOps(v, ops)) return false;
     } else if (isPlainObject(cond)) {
       const keys = Object.keys(cond);
       if (keys.length > 0 && keys.every((k) => OPS.has(k))) {

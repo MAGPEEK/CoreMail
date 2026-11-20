@@ -8,6 +8,7 @@ import { createLogger, tlsServerOptions } from '@coremail/core';
 import { logTlsSocketError } from '@coremail/core/tls-errors';
 import { SmtpSession } from './session.js';
 import type { SmtpSessionConfig } from './types.js';
+import type { TraceStage } from '@coremail/storage';
 import {
   checkAndTrackConnection,
   releaseConnection,
@@ -80,7 +81,10 @@ export function createSmtpServer(config: SmtpSessionConfig, implicitTls = false)
           socket.end();
           return;
         }
-        return config.handlers.onConnect(ip).then((allowed) => {
+        // 10.2: the connect-stage verdict travels with the session into the message trace.
+        const connectedAt = new Date();
+        const notes: TraceStage[] = [];
+        return config.handlers.onConnect(ip, (n) => { if (notes.length < 4) notes.push(n); }).then((allowed) => {
           if (!allowed) {
             if (socket.writable) {
               socket.write('421 4.7.1 Access denied\r\n');
@@ -89,7 +93,7 @@ export function createSmtpServer(config: SmtpSessionConfig, implicitTls = false)
             log.info({ ip }, 'Connection rejected by onConnect');
             return;
           }
-          new SmtpSession(socket, config).start();
+          new SmtpSession(socket, config, { connectedAt, connectNotes: notes }).start();
         });
       })
       .catch((err) => {

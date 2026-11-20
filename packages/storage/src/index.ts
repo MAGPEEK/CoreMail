@@ -63,3 +63,4 @@ export * from './folder-access.js';
 export * from './folder-grantees.js';
 export * from './permission-events.js';
 export * from './contacts/index.js';
+export * from './message-trace.js';

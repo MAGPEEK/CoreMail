@@ -185,3 +185,43 @@ reply waits 1 s, 2 s, … up to `SMTP_TARPIT_MAX_DELAY_MS`.
   that reuses a connection is not slowed down by the unknown recipients of
   earlier messages.
 - RSET and QUIT are never delayed.
+
+## Message trace (MAIL_FLOW, 10.2)
+
+Every accepted, delivered, rejected, quarantined or deferred message writes a
+`SystemLog` row with `category: 'MAIL_FLOW'` (BCP "Nachrichtenablaufverfolgung",
+admin API `/api/v1/admin/message-trace`). Since 10.2 the rows of the SMTP server
+also carry `metadata.trace = { v: 1, stages: [{ stage, at, ms?, result, detail }] }`
+— what CoreMail did with the message, built with `createTraceRecorder()` from
+`@coremail/storage` (`message-trace.ts`; pure stage builders in smtp-server
+`handlers/trace-stages.ts`). Only facts the path computes anyway are recorded
+(no extra lookups, never message content); at most 48 stages, 16 detail keys,
+300 characters per string and 12 list entries per value.
+
+| Path | Stages |
+|---|---|
+| Port 25 (inbound) | `connection` (client IP, HELO, port, protocol, TLS version + cipher or none), `connection-check` (DNSBL/DNSWL, GeoIP verdict at connect), `recipient-check` (sender lists + greylisting per RCPT), `authentication` (SPF/DKIM/DMARC/ARC with domains), `sender-list`, `attachments`, `virus-scan`, `spam` (rspamd score + verdict, DNSBL zones), `content-filter` (verdict + round trip), `aliases`, `transport-rules` (rule ids + actions), `inbox-rules` (count + effects), `admin-forward`, `delivery` (mailbox + folder, rejected with the reply, quarantine) |
+| Submission (587/465) | `connection` (incl. AUTH user), `submission`, `aliases`, `queued` (tracking id + job id), then the local `delivery` rows |
+| Queue worker (one row per attempt) | `queued` (job id, attempt, hold), `smime`, `local-delivery`, `dkim` (domain + selector), `mx` (records as resolved, implicit MX, NXDOMAIN / null MX), `remote` (host, IP connected, port, STARTTLS / TLS / none, reply code + text, duration), `dsn`, `queue-result` (deferred / final) |
+
+The security-filter answers `/check/content` with a `checks` summary (auth,
+sender lists, attachments, ClamAV, rspamd, per-stage ms); older security-filter
+builds without it are covered by our own `Authentication-Results` header and the
+score. Correlation keys: inbound rows carry `storedMessageId` (the stored copy)
+and the Message-ID; queue rows `jobId`, `attempt` and `headerMessageId`; SMTP
+submission rows `queueTrackingIds`. Rows written before 10.2 have no trace — the
+detail view says that fewer details are stored.
+
+`GET /api/v1/admin/message-trace/:id` (area `compliance`) returns the row, its
+validated trace (`sanitizeTrace()`), the related rows of the same message
+(queue tracking id / Message-ID, −2 / +8 days, scope-filtered) and the delivery
+path: for inbound / internal mail the `Received:` chain of the stored original
+(first 64 KB only, `lib/received-hops.ts`: oldest hop first, delays, TLS, raw
+text when a field cannot be parsed) plus an Authentication-Results / ARC
+summary; for outbound mail CoreMail → each host the queue connected to. Scope
+and redaction: see `docs/rbac.md`.
+
+Not recorded: the client's reverse DNS at connect time (CoreMail does no PTR
+lookup in the SMTP path), the TLS version / cipher of outbound connections
+(nodemailer reports only that STARTTLS was used), and rows for local recipients
+refused at delivery (unknown, over quota, mailbox policy — they get an NDR).

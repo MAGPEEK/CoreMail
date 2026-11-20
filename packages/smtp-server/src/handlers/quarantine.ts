@@ -9,7 +9,7 @@
  */
 import crypto from 'crypto';
 import { createLogger, getRedisClient } from '@coremail/core';
-import { prisma, uploadBuffer, quarantineKey, type QuarantineReason } from '@coremail/storage';
+import { prisma, uploadBuffer, quarantineKey, createTraceRecorder, type QuarantineReason, type TraceStage } from '@coremail/storage';
 
 const log = createLogger('smtp:quarantine');
 
@@ -21,6 +21,8 @@ export interface QuarantineInput {
   /** Extra details (virusName, ruleIds, filterReason …) merged into `details`. */
   details?:   Record<string, unknown>;
   spamScore?: number;
+  /** 10.2: message-trace stages so far (session, content checks); the quarantine stage is added. */
+  trace?:     readonly TraceStage[];
 }
 
 export interface QuarantineDeps {
@@ -76,6 +78,11 @@ export async function quarantineMessage(input: QuarantineInput, deps: Quarantine
   });
 
   // MAIL_FLOW — message flow tracing
+  const trace = createTraceRecorder(input.trace ?? []);
+  trace.add('delivery', 'fail', {
+    outcome: 'quarantine', reason: input.reason,
+    ...(typeof input.details?.['virusName'] === 'string' ? { virusName: input.details['virusName'] } : {}),
+  });
   void prisma.systemLog.create({
     data: {
       level: 'WARN',
@@ -93,6 +100,8 @@ export async function quarantineMessage(input: QuarantineInput, deps: Quarantine
         spamScore: input.spamScore !== undefined ? String(input.spamScore) : '',
         reason: input.reason,
         direction: 'INBOUND',
+        quarantineId: id,
+        trace: trace.toJSON(),
       },
     },
   }).catch((err: unknown) => log.error({ err }, 'MAIL_FLOW log failed'));
