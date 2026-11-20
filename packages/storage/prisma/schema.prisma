@@ -122,6 +122,12 @@ model User {
   // 8.x: last successful login (web/API, SSO, mail protocols). Written by
   // recordLastLogin() (src/auth/last-login.ts), at most once per user per 5 min.
   lastLoginAt     DateTime?
+  // 10.5: start of this user's grace period under "MFA für alle Benutzer
+  // erzwingen" (ServerSettings.requireMfaForAllUsers). Set on the first check
+  // after the enforcement was switched on; a value older than
+  // ServerSettings.mfaEnforcementSince is stale (re-activation starts a new
+  // grace period). src/auth/mfa-enforcement.ts.
+  mfaGraceStartedAt DateTime?
   domain          Domain         @relation(fields: [domainId], references: [id])
   domainId        String
   mailbox         Mailbox?
@@ -1909,7 +1915,20 @@ model ServerSettings {
   sessionTimeoutMinutes      Int     @default(480)
   // 0 = disabled; > 0 = minutes until automatic logout on browser inactivity
   inactivityTimeoutMinutes   Int     @default(30)
+  // false for existing installations (no silent lock-out); 10.5: the setup
+  // wizard (POST /setup/complete) sets it true for fresh installations.
   requireMfaForAdmins        Boolean @default(false)
+  // 10.5: "MFA für alle Benutzer erzwingen" (src/auth/mfa-enforcement.ts):
+  // a user without a second factor must enrol after the grace period
+  // (days from the user's first check after activation); until then the
+  // webmail shows a banner. mfaEnforcementSince = when it was switched on
+  // (written by the settings route). mfaEnforcementBlocksPrimaryPassword:
+  // after the grace period the primary password no longer works on mail
+  // protocols for such users (app passwords keep working).
+  requireMfaForAllUsers               Boolean   @default(false)
+  mfaEnforcementGraceDays             Int       @default(7)
+  mfaEnforcementSince                 DateTime?
+  mfaEnforcementBlocksPrimaryPassword Boolean   @default(false)
   // v3.18.30: audit log globally on/off. Default on. The toggle itself is audited.
   auditLogEnabled            Boolean @default(true)
   // 9.4: mailbox access audit (delegates / shared mailbox users; action prefix

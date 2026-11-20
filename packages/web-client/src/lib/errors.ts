@@ -19,6 +19,8 @@ const CODE_MESSAGES: Record<string, string> = {
   REAUTH_LOCKED:           'Zu viele Fehlversuche. Bitte warten Sie einige Minuten.',
   TOTP_ALREADY_ENABLED:    'Die Zwei-Faktor-Authentifizierung ist bereits aktiv.',
   MFA_NOT_VERIFIED:        'Diese Aktion erfordert eine Anmeldung mit zweitem Faktor.',
+  // 10.5: "MFA für alle Benutzer erzwingen" — the grace period is over
+  MFA_ENROLMENT_REQUIRED:  'Bitte richten Sie zuerst die Zwei-Faktor-Anmeldung ein.',
   SESSION_REVOKED:         'Ihre Sitzung wurde beendet. Bitte melden Sie sich erneut an.',
   REFRESH_INVALID:         'Sitzung abgelaufen',
   REFRESH_EXPIRED:         'Sitzung abgelaufen',

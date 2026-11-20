@@ -3,7 +3,8 @@
  *
  *   welcome (setup token, checked with POST /setup/verify-token)
  *   → domain + host name + organisation
- *   → admin account (MFA only offered)
+ *   → admin account (MFA explained: 10.5 fresh installations require it for
+ *     the BCP — enrolled in the webmail after the wizard, Settings → Security)
  *   ⟨POST /setup/complete, then sign-in with the new admin (normal /auth/login)⟩
  *   → [back up secrets — download, only when the installation generated them]
  *   → done (summary + links; POST /setup/finish closes the secrets download)
@@ -287,6 +288,8 @@ function DoneStep({ summary }: { summary: Summary }) {
           certificates: <a href="/bcp/certificates" target="_blank" rel="noopener" className={inlineLink}>{t('wiz_done_bcp_certificates')}<span className="sr-only"> {t('wiz_new_tab')}</span></a>,
         })}
       </p>
+      {/* 10.5: fresh installations start with MFA mandatory for admins */}
+      <Alert tone="info">{t('wiz_done_mfa_required')}</Alert>
       <div>
         <h3 className="text-sm font-semibold text-fg mb-2">{t('wiz_next_steps')}</h3>
         <ul className="grid gap-2 sm:grid-cols-2">

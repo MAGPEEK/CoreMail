@@ -15,6 +15,10 @@ import { ContactsPage } from './pages/ContactsPage.js';
 import { TasksPage } from './pages/TasksPage.js';
 import { NotesPage } from './pages/NotesPage.js';
 import { SettingsPage } from './pages/SettingsPage.js';
+import { MfaEnrolmentPage } from './pages/MfaEnrolmentPage.js';
+import { MfaGraceBanner } from './components/MfaGraceBanner.js';
+import { useMfaEnforcement } from './hooks/useMfaEnforcement.js';
+import { MFA_ENROLMENT_ROUTE, enforcementView } from './lib/mfaEnforcement.js';
 import { useAuthStore } from './store/auth.js';
 import { useSessionChecked } from './api/client.js';
 import { useThemeStore, resolveIsDark } from './store/ui.js';
@@ -93,6 +97,19 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+/**
+ * 10.5: "MFA für alle Benutzer erzwingen" — after the grace period the app is
+ * replaced by the mandatory enrolment page. Waits for the state once (the app's
+ * own requests would only be refused); a failed request shows the app (the
+ * server enforces, api/client.ts follows a 403 MFA_ENROLMENT_REQUIRED).
+ */
+function MfaEnforcementGate({ children }: { children: React.ReactNode }) {
+  const { data, isLoading } = useMfaEnforcement();
+  if (isLoading) return null;
+  if (enforcementView(data, new Date()).redirect) return <Navigate to={MFA_ENROLMENT_ROUTE} replace />;
+  return <>{children}</>;
+}
+
 function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -113,6 +130,9 @@ function Layout({ children }: { children: React.ReactNode }) {
   const pageFeature = featureForPath(location.pathname);
   const background = useAppBackground();
   const pageDisabled = pageFeature !== null && !features[pageFeature];
+  // 10.5: grace period of "MFA für alle Benutzer erzwingen" → banner
+  const { data: mfaEnforcement } = useMfaEnforcement();
+  const mfaBanner = enforcementView(mfaEnforcement, new Date()).banner;
 
   // MessageList picks up ?q= and runs a mailbox-wide server search
   const handleSearch = (q: string) => {
@@ -130,6 +150,7 @@ function Layout({ children }: { children: React.ReactNode }) {
       >
         Zum Inhalt springen
       </a>
+      {mfaBanner && <MfaGraceBanner daysLeft={mfaBanner.daysLeft} deadline={mfaBanner.deadline} />}
       <TopBar onSearch={handleSearch} />
       {/* App rail left (md+), bottom bar below md (column-reverse puts it last) */}
       {/* 10.1: the canvas below the top bar — plain, or the background picture (Einstellungen → Darstellung) */}
@@ -203,8 +224,11 @@ export function App() {
         {/* OAuth2 consent route removed in v5.6.0 (OAuth2 dropped entirely) */}
         {/* 9.4: a draft in its own window (no app frame) */}
         <Route path={POPOUT_ROUTE} element={<AuthGuard><ComposePopoutPage /></AuthGuard>} />
+        {/* 10.5: mandatory enrolment page of "MFA für alle Benutzer erzwingen" (no app frame) */}
+        <Route path={MFA_ENROLMENT_ROUTE} element={<AuthGuard><MfaEnrolmentPage /></AuthGuard>} />
         <Route path="/*" element={
           <AuthGuard>
+            <MfaEnforcementGate>
             <Layout>
               <Routes>
                 <Route path="/mail/*" element={<MailPage />} />
@@ -217,6 +241,7 @@ export function App() {
                 <Route path="/" element={<Navigate to="/mail" replace />} />
               </Routes>
             </Layout>
+            </MfaEnforcementGate>
           </AuthGuard>
         } />
       </Routes>

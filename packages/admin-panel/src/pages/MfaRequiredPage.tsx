@@ -5,11 +5,14 @@ import { useT } from '../i18n/useT.js';
 /**
  * v3.18.19 D5: Mandatory 2FA setup page.
  * Shown when the API returns a 403 with code=MFA_REQUIRED — i.e.
- * when requireMfaForAdmins=true and the admin has no MFA enabled.
+ * when requireMfaForAdmins=true and the admin has no MFA enabled (10.5: the
+ * default of fresh installations) — or MFA_ENROLMENT_REQUIRED ("MFA für alle
+ * Benutzer erzwingen", grace period over).
  *
- * This page redirects to the MWA (/owa/) so the user can enable 2FA there
- * under Settings → Security (BCP has no
- * MFA setup UI of its own). After activation the user can return to /bcp/.
+ * This page links to the webmail's Settings → Security so the user can enable
+ * 2FA there (BCP has no MFA setup UI of its own; the webmail stays usable for
+ * that). After activation "Erneut prüfen" leads back to /bcp/, which asks for a
+ * sign-in with the second factor.
  */
 export function MfaRequiredPage() {
   const t = useT();
@@ -27,6 +30,9 @@ export function MfaRequiredPage() {
             <p className="text-sm text-fg-muted mt-2">
               {t('mfa_req_text')}
             </p>
+            <p className="text-sm text-fg-muted mt-2">
+              {t('mfa_req_webmail_note')}
+            </p>
 
             <div className="mt-5 p-4 bg-surface-2 rounded border border-line">
               <h2 className="text-sm font-medium text-fg mb-2">
@@ -42,7 +48,7 @@ export function MfaRequiredPage() {
 
             <div className="mt-5 flex flex-wrap gap-2">
               <a
-                href="/"
+                href="/settings#security"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-2 px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-sm font-medium rounded transition-colors"

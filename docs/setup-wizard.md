@@ -15,10 +15,10 @@ and `packages/api-gateway/src/routes/setup-followup.ts`.
 |---|------|--------------|
 | 1 | Willkommen | Short explanation and the one-time **setup token**. "Weiter" checks the token with `POST /api/v1/setup/verify-token` (read-only). The hint names `./secrets/setup-token` when the server reports a secrets file (`secretsFile` in the status), otherwise the container log command and `SETUP_TOKEN`. |
 | 2 | Domain und Hostname | Primary mail domain, public host name (default `mail.<domain>`, follows the domain until edited), organisation name (optional, `ServerSettings.orgName`). |
-| 3 | Admin-Konto | Name, address in the chosen domain (local part + fixed `@domain`), password with a strength meter (at least 8 characters, like the server). Two-factor sign-in is only offered: a note that it can be set up later under Settings → Security; the last step links there. |
+| 3 | Admin-Konto | Name, address in the chosen domain (local part + fixed `@domain`), password with a strength meter (at least 8 characters, like the server). Two-factor sign-in is explained, not set up here: the box says it is required for the BCP (10.5) and is set up in the webmail right after the wizard (Settings → Security; the last step links there). |
 | – | *Einrichten* | Leaving the admin step runs `POST /api/v1/setup/complete` and signs in with the new account through the normal `/auth/login` (refresh cookie, same lockout and audit rules as the login page). The password and the token are dropped from the page afterwards. |
 | 4 | Secrets sichern | Only when the status reports `secretsGenerated: true`. Button **Secrets herunterladen** downloads the secrets file as `coremail-secrets-<host>-<YYYY-MM-DD>.env` (`GET /api/v1/setup/secrets-download`, below). Next to it, when the page was not loaded over HTTPS (`secureConnection: false` in the status), one line: "Die Verbindung ist unverschlüsselt — lade die Datei nur im lokalen Netz herunter." — the download still works. The warning that no password works without the PEPPER stays, plus one line where the file lives on the server (`secretsFile`, default `./secrets/coremail.env`, next to the Compose file). No shell commands, never secret values on the page. "Weiter" only after the checkbox "Ich habe die Datei gesichert"; the checkbox may be ticked without downloading (some admins copy the file on the server themselves). |
-| 5 | Fertig | Summary (domain, host name, admin), the line "DNS-Einträge und Zertifikat richtest du im BCP unter Domains und Zertifikate ein" with both names linking to `/bcp/domains` and `/bcp/certificates`, and links: webmail, BCP (new tab), mail client setup (Settings → External clients), two-factor sign-in. Reaching this step calls `POST /api/v1/setup/finish`, which closes the secrets download. |
+| 5 | Fertig | Summary (domain, host name, admin), the line "DNS-Einträge und Zertifikat richtest du im BCP unter Domains und Zertifikate ein" with both names linking to `/bcp/domains` and `/bcp/certificates`, an info box (10.5) "Das BCP öffnet sich erst, wenn die Zwei-Faktor-Anmeldung eingerichtet ist …", and links: webmail, BCP (new tab), mail client setup (Settings → External clients), two-factor sign-in. Reaching this step calls `POST /api/v1/setup/finish`, which closes the secrets download. |
 
 "Schritt x von n" counts the shown steps (4 without, 5 with the secrets step).
 
@@ -55,7 +55,8 @@ tabs see a completed setup and are sent to `/login` as before.
 `GET /api/v1/setup/secrets-download` (`routes/setup-followup.ts`):
 
 - **Admin session** with the role ORGANIZATION_MANAGEMENT, organisation-wide (`requireRole()`:
-  current role from the database, admin MFA rule) — otherwise `401` / `403`.
+  current role from the database; 10.5: `requireRoleInSetupWindow()`, i.e. without the admin-MFA
+  rule, see "Admin MFA on fresh installations" below) — otherwise `401` / `403`.
 - **Only inside the setup window**: setup completed, `setupWizardFinishedAt` not set, and at most
   24 h after `setupCompletedAt` (`lib/setup-secrets.ts secretsDownloadWindowOpen`). Outside it —
   and when there is no readable file — `404 { error: "Not found" }`, like an unknown route.
@@ -82,6 +83,33 @@ their window never opens. `ServerSettings.setupCertificateChoice` (10.4 certific
 unused since 10.4.2 and kept (additive schema policy);
 `setupCertificateHintDismissedAt` now stores "Später" of the dashboard card.
 
+## Admin MFA on fresh installations (10.5)
+
+`POST /api/v1/setup/complete` stores `ServerSettings.requireMfaForAdmins = true` together with the
+first domain and admin. Only fresh installations pass through it: an existing installation keeps
+its stored value on upgrade (schema default `false`; the start-up backfill of pre-v6
+installations sets only the setup flags) — no silent lock-out.
+
+The flow after the wizard, without a dead end:
+
+1. The wizard's session (password only) still reaches the secrets download and `/setup/finish`
+   (`requireRoleInSetupWindow()`: role checks as usual, no admin-MFA rule; both routes only work
+   inside the setup window).
+2. The summary says the BCP opens only after the second factor is set up and links to
+   Webmail → Settings → Security. The webmail is not affected by `requireMfaForAdmins`, so the
+   admin enrols TOTP or a security key there (`/auth/mfa` is outside the admin API).
+3. Until then every admin API call answers `403 MFA_REQUIRED` and the BCP shows its MFA page
+   (`/bcp/mfa-required`: explanation, a link to the webmail's security settings, "Erneut prüfen",
+   sign-out).
+4. After the enrolment the BCP session is not MFA-verified (`403 MFA_NOT_VERIFIED`), so the BCP
+   asks for a new sign-in, now with the second factor.
+
+The switch stays in BCP → Einstellungen → Sicherheit ("MFA für Administratoren"); every change of
+it is audited (`settings.mfa-policy.update`). With Webmail switched off for the admin account
+(protocol switches) the webmail sign-in is refused — keep Webmail on for admins until they have
+enrolled. The optional "MFA für alle Benutzer erzwingen" is described in
+[user-settings.md](user-settings.md#mfa-enforcement-105).
+
 ## Tests
 
 - `packages/web-client/src/lib/setupWizard.test.ts` — which steps show, commit step, "Weiter"
@@ -90,7 +118,10 @@ unused since 10.4.2 and kept (additive schema policy);
 - `packages/api-gateway/src/routes/setup.test.ts` — token required, read-only token check,
   closed after completion, new fields, `secureConnection`, backfill closes the download, staged
   copy removed at start once the window is closed.
-- `packages/api-gateway/src/routes/setup-followup.test.ts` — session and role required, window
+- `packages/api-gateway/src/routes/setup.test.ts` (10.5) — `/complete` sets `requireMfaForAdmins`;
+  the backfill of an existing installation leaves the stored value alone.
+- `packages/api-gateway/src/routes/setup-followup.test.ts` — (10.5) the wizard session without
+  MFA still downloads and finishes with `requireMfaForAdmins` on; session and role required, window
   (24 h, finished, not completed), absent file / symlink, headers, audit without content (also
   with the audit log off), no content in the log, staged copy served and removed (never the real
   file), rate limit.

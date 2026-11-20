@@ -21,7 +21,7 @@ import { verifyAccessToken, createLogger, CredentialCache } from '@coremail/core
 import {
   prisma, verifyMailCredentials, clientIpFromRequest, isProtocolAllowed,
 } from '@coremail/storage';
-import { isAccessTokenRevokedShared } from '@coremail/storage/auth';
+import { isAccessTokenRevokedShared, mfaEnrolmentRefusal } from '@coremail/storage/auth';
 import type { JmapUser } from './types.js';
 
 const log = createLogger('jmap:auth');
@@ -82,6 +82,9 @@ export async function authenticateBearer(token: string): Promise<JmapUser | null
     if (!payload?.sub) return null;
     // v7.1.0: tokens of revoked sessions (logout, password change, admin revoke)
     if (await isAccessTokenRevokedShared(payload.sub, payload.iat, payload.sessionId, payload.iatMs)) return null;
+    // 10.5: a web session that must enrol a second factor first ("MFA für alle
+    // Benutzer erzwingen") is for the enrolment only — not for JMAP.
+    if ((await mfaEnrolmentRefusal(payload.sub, payload.mfaVerified)) !== null) return null;
     const user = await loadUser({ id: payload.sub });
     return user ? {
       ...user,

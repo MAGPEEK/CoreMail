@@ -15,6 +15,7 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { prisma, clearMessageSizeLimitCache, invalidateMailboxAccessAuditSettings } from '@coremail/storage';
+import { MFA_GRACE_DAYS_BOUNDS, invalidateMfaEnforcementCache } from '@coremail/storage/auth';
 import { requireArea } from '../../middleware/auth.js';
 import { createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 import { audit, auditContext, invalidateAuditCache } from '../../lib/audit.js';
@@ -90,6 +91,12 @@ export const SecuritySchema = z.object({
   // 0 = disabled; 1–1440 = minutes until automatic logout on browser inactivity
   inactivityTimeoutMinutes:   z.number().int().min(0).max(1440),
   requireMfaForAdmins:        z.boolean(),
+  // 10.5: "MFA für alle Benutzer erzwingen" (storage auth/mfa-enforcement.ts):
+  // grace period in days (0 = at once) and the sub-option that blocks the
+  // primary password on mail protocols after the grace period
+  requireMfaForAllUsers:               z.boolean(),
+  mfaEnforcementGraceDays:             z.number().int().min(MFA_GRACE_DAYS_BOUNDS[0]).max(MFA_GRACE_DAYS_BOUNDS[1]),
+  mfaEnforcementBlocksPrimaryPassword: z.boolean(),
   allowSelfRegistration:      z.boolean(),
   selfServicePasswordReset:   z.boolean(),
   // v3.18.30: audit log globally on/off. The toggle is always logged as a
@@ -120,6 +127,37 @@ function invalid(res: Response, issues: z.ZodIssue[]): void {
 /** The provided fields only (partial update; exactOptionalPropertyTypes-safe for Prisma). */
 export function definedOnly<T extends Record<string, unknown>>(o: T): { [K in keyof T]?: Exclude<T[K], undefined> } {
   return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as { [K in keyof T]?: Exclude<T[K], undefined> };
+}
+
+/** 10.5: the MFA policy fields of the security section (audited as `settings.mfa-policy.update`). */
+export const MFA_POLICY_FIELDS = [
+  'requireMfaForAdmins', 'requireMfaForAllUsers', 'mfaEnforcementGraceDays', 'mfaEnforcementBlocksPrimaryPassword',
+] as const;
+type MfaPolicyField = typeof MFA_POLICY_FIELDS[number];
+
+/** Stored values when nothing was saved yet (schema defaults). */
+const MFA_POLICY_DEFAULTS: Record<MfaPolicyField, boolean | number> = {
+  requireMfaForAdmins: false, requireMfaForAllUsers: false, mfaEnforcementGraceDays: 7, mfaEnforcementBlocksPrimaryPassword: false,
+};
+
+/**
+ * 10.5: what a security save changes in the MFA policy — the audit diff and,
+ * when "MFA für alle Benutzer erzwingen" is switched ON, the new activation
+ * time (mfaEnforcementSince: every account without MFA gets a new grace period).
+ */
+export function mfaPolicyChange(
+  before: Partial<Record<MfaPolicyField, unknown>> | null,
+  data: Partial<Record<MfaPolicyField, unknown>>,
+  now: Date,
+): { changes: Record<string, { from: string; to: string }>; since: Date | null } {
+  const changes: Record<string, { from: string; to: string }> = {};
+  for (const k of MFA_POLICY_FIELDS) {
+    if (data[k] === undefined) continue;
+    const from = before?.[k] ?? MFA_POLICY_DEFAULTS[k];
+    if (from !== data[k]) changes[k] = { from: String(from), to: String(data[k]) };
+  }
+  const switchedOn = data.requireMfaForAllUsers === true && (before?.requireMfaForAllUsers ?? false) !== true;
+  return { changes, since: switchedOn ? now : null };
 }
 
 /** Tell the other services (fire-and-forget; a missing Redis must not fail the save). */
@@ -179,16 +217,36 @@ adminGlobalSettingsRouter.put('/security', async (req: Request, res: Response) =
   // logged via ALWAYS_AUDIT („audit.*" + „settings.*").
   const before = await prisma.serverSettings.findUnique({
     where: { id: 'singleton' },
-    select: { auditLogEnabled: true },
+    select: {
+      auditLogEnabled: true, requireMfaForAdmins: true, requireMfaForAllUsers: true,
+      mfaEnforcementGraceDays: true, mfaEnforcementBlocksPrimaryPassword: true,
+    },
   });
   const auditFlagChanged = parsed.data.auditLogEnabled !== undefined
     && (before?.auditLogEnabled ?? true) !== parsed.data.auditLogEnabled;
+  // 10.5: MFA policy diff; switching the enforcement on starts new grace periods
+  const mfa = mfaPolicyChange(before, parsed.data, new Date());
+  const data = { ...definedOnly(parsed.data), ...(mfa.since ? { mfaEnforcementSince: mfa.since } : {}) };
 
   const cfg = await prisma.serverSettings.upsert({
     where:  { id: 'singleton' },
-    create: { id: 'singleton', ...definedOnly(parsed.data) },
-    update: definedOnly(parsed.data),
+    create: { id: 'singleton', ...data },
+    update: data,
   });
+
+  if (Object.keys(mfa.changes).length > 0) {
+    const user = req.apiUser;
+    audit({
+      ...(user?.userId !== undefined ? { actorId: user.userId } : {}),
+      ...(user?.email !== undefined ? { actorEmail: user.email } : {}),
+      action: 'settings.mfa-policy.update',
+      targetType: 'settings',
+      targetId: 'mfa_policy',
+      changes: mfa.changes,
+      ...auditContext(req),
+    });
+  }
+  invalidateMfaEnforcementCache(); // 10.5: this process at once; other services within 15 s
 
   if (auditFlagChanged) {
     const user = (req as Request & { apiUser?: { userId: string; email: string } }).apiUser;

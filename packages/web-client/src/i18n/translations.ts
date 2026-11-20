@@ -940,9 +940,9 @@ const setupUiDe = {
   wiz_strength_3:               'Gut',
   wiz_strength_4:               'Stark',
   wiz_mfa_title:                'Zwei-Faktor-Anmeldung',
-  wiz_mfa_note:                 'Für Administratoren empfohlen, aber jetzt nicht nötig.',
-  wiz_mfa_later:                'Später in den Einstellungen einrichten',
-  wiz_mfa_later_where:          'Nach der Einrichtung: Webmail → Einstellungen → Sicherheit. Der letzte Schritt verlinkt direkt dorthin.',
+  wiz_mfa_note:                 'Für die Verwaltung (BCP) ist sie Pflicht. Du richtest sie direkt nach diesem Assistenten im Webmail ein.',
+  wiz_mfa_later:                'So geht es weiter',
+  wiz_mfa_later_where:          'Nach der Einrichtung: Webmail → Einstellungen → Sicherheit (der letzte Schritt verlinkt direkt dorthin). Danach meldest du dich im BCP mit dem zweiten Faktor an.',
   wiz_err_local:                'Bitte einen gültigen Namen vor dem @ eingeben, z. B. admin.',
   wiz_err_password_length:      'Das Passwort muss mindestens 8 Zeichen haben.',
   wiz_err_password_mismatch:    'Die Passwörter stimmen nicht überein.',
@@ -978,6 +978,7 @@ const setupUiDe = {
   wiz_open_clients:             'Mail-Clients einrichten',
   wiz_open_mfa:                 'Zwei-Faktor-Anmeldung einrichten',
   wiz_new_tab:                  '(öffnet in neuem Tab)',
+  wiz_done_mfa_required:        'Das BCP öffnet sich erst, wenn die Zwei-Faktor-Anmeldung eingerichtet ist: zuerst „Zwei-Faktor-Anmeldung einrichten“ (unten), danach im BCP mit dem zweiten Faktor anmelden.',
 } as const;
 
 const setupUiEn: Record<keyof typeof setupUiDe, string> = {
@@ -1035,9 +1036,9 @@ const setupUiEn: Record<keyof typeof setupUiDe, string> = {
   wiz_strength_3:               'Good',
   wiz_strength_4:               'Strong',
   wiz_mfa_title:                'Two-factor sign-in',
-  wiz_mfa_note:                 'Recommended for administrators, but not needed now.',
-  wiz_mfa_later:                'Set it up later in the settings',
-  wiz_mfa_later_where:          'After the setup: Webmail → Settings → Security. The last step links there directly.',
+  wiz_mfa_note:                 'It is required for the administration (BCP). You set it up in the webmail right after this assistant.',
+  wiz_mfa_later:                'What happens next',
+  wiz_mfa_later_where:          'After the setup: Webmail → Settings → Security (the last step links there directly). Then sign in to the BCP with the second factor.',
   wiz_err_local:                'Please enter a valid name before the @, e.g. admin.',
   wiz_err_password_length:      'The password must have at least 8 characters.',
   wiz_err_password_mismatch:    'The passwords do not match.',
@@ -1073,11 +1074,48 @@ const setupUiEn: Record<keyof typeof setupUiDe, string> = {
   wiz_open_clients:             'Set up mail clients',
   wiz_open_mfa:                 'Set up two-factor sign-in',
   wiz_new_tab:                  '(opens in a new tab)',
+  wiz_done_mfa_required:        'The BCP opens only once two-factor sign-in is set up: first “Set up two-factor sign-in” (below), then sign in to the BCP with the second factor.',
+};
+
+// 10.5: "MFA für alle Benutzer erzwingen" — grace banner + mandatory enrolment page
+const mfaEnforceUiDe = {
+  mfa_enforce_banner:           'Ihr Administrator verlangt für alle Konten die Zwei-Faktor-Anmeldung. Bitte richten Sie sie bis {date} ein ({days}) – danach können Sie das Webmail erst nach der Einrichtung weiter nutzen.',
+  mfa_enforce_days_many:        'noch {n} Tage',
+  mfa_enforce_days_one:         'noch 1 Tag',
+  mfa_enforce_days_zero:        'letzter Tag',
+  mfa_enforce_banner_action:    'Jetzt einrichten',
+  mfa_enrol_title:              'Zwei-Faktor-Anmeldung einrichten',
+  mfa_enrol_subtitle:           'Pflicht für dieses Konto',
+  mfa_enrol_text:               'Ihr Administrator verlangt für alle Konten eine Zwei-Faktor-Anmeldung, und die Übergangsfrist ist abgelaufen. Richten Sie jetzt eine Authenticator-App oder einen Sicherheitsschlüssel ein, um das Webmail weiter zu nutzen.',
+  mfa_enrol_mail_clients:       'Mailprogramme (IMAP, SMTP, ActiveSync …) brauchen danach ein App-Passwort statt Ihres Passworts. App-Passwörter legen Sie nach der Einrichtung unter Einstellungen → App-Passwörter an; bestehende App-Passwörter gelten weiter.',
+  mfa_enrol_sso:                'Ihr Konto meldet sich über einen externen Anbieter (SSO) an und hat kein eigenes Passwort, mit dem sich die Einrichtung bestätigen ließe. Melden Sie sich ab und erneut über den Anbieter mit Zwei-Faktor-Anmeldung an – oder wenden Sie sich an Ihren Administrator.',
+  mfa_enrol_done:               'Die Zwei-Faktor-Anmeldung ist eingerichtet.',
+  mfa_enrol_continue:           'Weiter zum Webmail',
+  mfa_enrol_sign_out:           'Abmelden',
+  mfa_enrol_loading:            'Wird geladen…',
+} as const;
+
+const mfaEnforceUiEn: Record<keyof typeof mfaEnforceUiDe, string> = {
+  mfa_enforce_banner:           'Your administrator requires two-factor sign-in for every account. Please set it up by {date} ({days}) – after that the webmail can only be used once it is set up.',
+  mfa_enforce_days_many:        '{n} days left',
+  mfa_enforce_days_one:         '1 day left',
+  mfa_enforce_days_zero:        'last day',
+  mfa_enforce_banner_action:    'Set up now',
+  mfa_enrol_title:              'Set up two-factor sign-in',
+  mfa_enrol_subtitle:           'Required for this account',
+  mfa_enrol_text:               'Your administrator requires two-factor sign-in for every account and the grace period is over. Set up an authenticator app or a security key now to keep using the webmail.',
+  mfa_enrol_mail_clients:       'Mail programs (IMAP, SMTP, ActiveSync …) then need an app password instead of your password. Create app passwords after the setup under Settings → App passwords; existing app passwords keep working.',
+  mfa_enrol_sso:                'Your account signs in through an external provider (SSO) and has no password of its own to confirm the setup with. Sign out and sign in again through the provider with two-factor sign-in – or contact your administrator.',
+  mfa_enrol_done:               'Two-factor sign-in is set up.',
+  mfa_enrol_continue:           'Continue to the webmail',
+  mfa_enrol_sign_out:           'Sign out',
+  mfa_enrol_loading:            'Loading…',
 };
 
 const de = {
   ...mailUiDe,
   ...setupUiDe,
+  ...mfaEnforceUiDe,
   ...composeUiDe,
   ...followUpUiDe,
   ...layoutUiDe,
@@ -1447,6 +1485,7 @@ export type TranslationKey = keyof typeof de;
 const en: Record<TranslationKey, string> = {
   ...mailUiEn,
   ...setupUiEn,
+  ...mfaEnforceUiEn,
   ...composeUiEn,
   ...followUpUiEn,
   ...layoutUiEn,
@@ -1802,6 +1841,7 @@ const en: Record<TranslationKey, string> = {
 const es: Record<TranslationKey, string> = {
   ...mailUiEn,
   ...setupUiEn,
+  ...mfaEnforceUiEn,
   ...composeUiEn,
   ...followUpUiEn,
   ...layoutUiEn,
@@ -2156,6 +2196,7 @@ const es: Record<TranslationKey, string> = {
 const it: Record<TranslationKey, string> = {
   ...mailUiEn,
   ...setupUiEn,
+  ...mfaEnforceUiEn,
   ...composeUiEn,
   ...followUpUiEn,
   ...layoutUiEn,

@@ -2,7 +2,7 @@ import type { Request, Response, NextFunction } from 'express';
 import { verifyAccessToken, createLogger, onAuthInvalidation } from '@coremail/core';
 import { prisma } from '@coremail/storage';
 import {
-  isAccessTokenRevoked, isAccessTokenRevokedShared, webAccessRefusal, type WebSurface,
+  isAccessTokenRevoked, isAccessTokenRevokedShared, mfaEnrolmentRefusal, webAccessRefusal, type WebSurface,
 } from '@coremail/storage/auth';
 import {
   canAccess, hasAdminAction, isAdminRole, isReadMethod, isUnscopedOnlyArea, stricterRole,
@@ -206,12 +206,33 @@ export function protocolSubject(user: ApiUser): string | { id: string; domainId:
   return user.domainId !== undefined ? { id: user.userId, domainId: user.domainId } : user.userId;
 }
 
+// ── MFA enforcement for all users (10.5) ──────────────────────────────────────
+// With "MFA für alle Benutzer erzwingen" (storage auth/mfa-enforcement.ts) a
+// session of an account that must enrol a second factor may only read its
+// enrolment state and its profile (the webmail login loads it); everything
+// else answers 403 MFA_ENROLMENT_REQUIRED. Enrolment itself (/auth/mfa),
+// the sessions list (/auth/sessions) and logout (/auth/logout) are not behind
+// requireAuth.
+
+/** API paths (GET/HEAD) a session may use while its account must enrol a second factor. */
+export const MFA_ENROLMENT_ALLOWED_PATHS: readonly string[] = ['/api/v1/user/mfa-enforcement', '/api/v1/user/profile'];
+
+/** May this request be served while the account must enrol a second factor? */
+export function mfaEnrolmentAllowed(method: string, originalUrl: string | undefined): boolean {
+  if (method !== 'GET' && method !== 'HEAD') return false;
+  const path = ((originalUrl ?? '').split('?')[0] ?? '').replace(/\/+$/, '');
+  return MFA_ENROLMENT_ALLOWED_PATHS.includes(path);
+}
+
 function enforceWebmailSwitch(req: Request, res: Response, next: NextFunction): void {
   const user = req.apiUser!;
   // Fails closed like the admin guards (database errors → 503, see webAccessRefusal).
   void webAccessRefusal({ id: user.userId, role: user.role, domainId: user.domainId }, webSurfaceOf(req.originalUrl))
     // 9.4: then the webmail module of the path (lib/webmail-features.ts)
     .then((refusal) => refusal ?? featureRefusal(protocolSubject(user), req))
+    // 10.5: then the MFA enforcement (outside the enrolment allow-list)
+    .then((refusal) => refusal
+      ?? (mfaEnrolmentAllowed(req.method, req.originalUrl) ? null : mfaEnrolmentRefusal(user.userId, user.mfaVerified)))
     .then((refusal) => {
       if (!refusal) { next(); return; }
       if (!res.headersSent) res.status(refusal.status).json(refusal.body);
@@ -338,8 +359,11 @@ export async function currentRole(userId: string): Promise<string | null> {
 /** Is `role` allowed for this request? `scoped` = the admin is limited to domains (9.5). */
 type AdminCheck = (role: string, req: Request, scoped: boolean) => boolean;
 
-/** Authenticate (unless an earlier guard already did), check `allowed`, enforce admin MFA. */
-function adminGuard(allowed: AdminCheck) {
+/**
+ * Authenticate (unless an earlier guard already did), check `allowed`, enforce
+ * admin MFA (`adminMfa: false` only for requireRoleInSetupWindow below).
+ */
+function adminGuard(allowed: AdminCheck, opts: { adminMfa?: boolean } = {}) {
   return function adminGuardMiddleware(req: Request, res: Response, next: NextFunction): void {
     const check = (): void => {
       const apiUser = req.apiUser;
@@ -365,7 +389,8 @@ function adminGuard(allowed: AdminCheck) {
         }
         if (dbRole !== tokenRole) apiUser.role = stricterRole(tokenRole, dbRole);
         apiUser.adminScope = scope;
-        enforceAdminMfa(req, res, next);
+        if (opts.adminMfa === false) next();
+        else enforceAdminMfa(req, res, next);
       }, (err: unknown) => {
         log.error({ err }, 'Current role check failed — denying admin access');
         if (!res.headersSent) res.status(503).json({ error: 'Admin access temporarily unavailable' });
@@ -391,6 +416,20 @@ export const requireAdmin = adminGuard((role, req) =>
  */
 export function requireRole(...roles: UserRoleName[]) {
   return adminGuard((role, _req, scoped) => !scoped && (role === 'ORGANIZATION_MANAGEMENT' || (roles as string[]).includes(role)));
+}
+
+/**
+ * 10.5: requireRole() WITHOUT the admin-MFA rule — ONLY for the setup wizard's
+ * follow-up routes (routes/setup-followup.ts: secrets download, finish), which
+ * are themselves limited to the setup window (at most 24 h after the setup,
+ * closed by the wizard's summary). Fresh installations start with
+ * requireMfaForAdmins on; the first admin enrols a second factor after the
+ * wizard, so the wizard's own session (password only) must still reach these
+ * two routes. Role, current role, scope and session checks apply as usual.
+ */
+export function requireRoleInSetupWindow(...roles: UserRoleName[]) {
+  return adminGuard((role, _req, scoped) => !scoped && (role === 'ORGANIZATION_MANAGEMENT' || (roles as string[]).includes(role)),
+    { adminMfa: false });
 }
 
 /**

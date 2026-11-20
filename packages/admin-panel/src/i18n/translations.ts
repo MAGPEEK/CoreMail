@@ -101,6 +101,7 @@ const de = {
   mfa_req_step_setup:      'Authenticator-App (TOTP) oder Sicherheitsschlüssel einrichten',
   mfa_req_step_recheck:    'Hier „Erneut prüfen“ wählen und sich mit dem zweiten Faktor neu anmelden',
   mfa_req_recheck:         'Erneut prüfen',
+  mfa_req_webmail_note:    'Das Webmail bleibt dafür nutzbar: Melde dich dort an und richte unter Einstellungen → Sicherheit eine Authenticator-App oder einen Sicherheitsschlüssel ein.',
 
   // ── TopBar ───────────────────────────────────────────────────────────────
   topbar_brand:           'CoreMail BCP',
@@ -168,6 +169,15 @@ const de = {
   settings_sec_mfa_hint:      'Administratoren müssen beim Login zwingend einen zweiten Faktor verwenden',
   settings_sec_mfa_on:        'Aktiviert — Admins müssen MFA eingerichtet haben',
   settings_sec_mfa_warn:      'Stellen Sie sicher, dass alle Admin-Konten MFA eingerichtet haben, bevor Sie speichern.',
+  // 10.5: "MFA für alle Benutzer erzwingen"
+  settings_sec_mfa_all:              'MFA für alle Benutzer erzwingen',
+  settings_sec_mfa_all_hint:         'Konten ohne zweiten Faktor müssen nach der Übergangsfrist eine Authenticator-App oder einen Sicherheitsschlüssel einrichten. Bis dahin zeigt das Webmail einen Hinweis, danach nur noch die Einrichtung und die Abmeldung. SSO-Konten erfüllen die Regel auch mit der Zwei-Faktor-Anmeldung ihres Anbieters, wenn CoreMail ihr vertraut.',
+  settings_sec_mfa_all_on:           'Aktiviert — Benutzer ohne MFA müssen MFA einrichten',
+  settings_sec_mfa_all_grace:        'Übergangsfrist',
+  settings_sec_mfa_all_grace_hint:   'Je Benutzer ab der ersten Anmeldung nach dem Einschalten (0 = sofort). Erneutes Einschalten startet eine neue Frist.',
+  settings_sec_mfa_all_block_pw:     'Hauptpasswort in Mailprogrammen nach der Frist sperren',
+  settings_sec_mfa_all_block_pw_hint: 'Aus: Benutzer ohne MFA melden sich in Mailprogrammen (IMAP, SMTP, ActiveSync …) weiter mit ihrem Passwort an, bis sie MFA einrichten. An: nach der Übergangsfrist nur noch mit App-Passwort. Bestehende App-Passwörter funktionieren in beiden Fällen weiter.',
+  settings_sec_mfa_all_warn:         'Benutzer ohne MFA können das Webmail nach der Frist erst nach der Einrichtung wieder nutzen. Kündigen Sie die Umstellung vorher an.',
   settings_sec_saved:         'Sicherheitsrichtlinien gespeichert',
 
   settings_maint_title:       'Wartungsmodus',
@@ -1518,6 +1528,7 @@ const en: { [K in keyof DE]: string } = {
   mfa_req_step_setup:      'Set up an authenticator app (TOTP) or a security key',
   mfa_req_step_recheck:    'Choose “Check again” here and sign in again with the second factor',
   mfa_req_recheck:         'Check again',
+  mfa_req_webmail_note:    'The webmail stays usable for this: sign in there and set up an authenticator app or a security key under Settings → Security.',
 
   // ── TopBar ───────────────────────────────────────────────────────────────
   topbar_brand:           'CoreMail BCP',
@@ -1585,6 +1596,14 @@ const en: { [K in keyof DE]: string } = {
   settings_sec_mfa_hint:      'Administrators must use a second factor when signing in',
   settings_sec_mfa_on:        'Enabled — admins must have MFA configured',
   settings_sec_mfa_warn:      'Make sure all admin accounts have MFA set up before saving.',
+  settings_sec_mfa_all:              'Enforce MFA for all users',
+  settings_sec_mfa_all_hint:         'Accounts without a second factor must set up an authenticator app or a security key after the grace period. Until then the webmail shows a notice, afterwards only the setup and sign-out. SSO accounts also meet the rule with their provider’s two-factor sign-in when CoreMail trusts it.',
+  settings_sec_mfa_all_on:           'Enabled — users without MFA must set it up',
+  settings_sec_mfa_all_grace:        'Grace period',
+  settings_sec_mfa_all_grace_hint:   'Per user from the first sign-in after switching it on (0 = at once). Switching it on again starts a new grace period.',
+  settings_sec_mfa_all_block_pw:     'Block the primary password in mail programs after the grace period',
+  settings_sec_mfa_all_block_pw_hint: 'Off: users without MFA keep signing in to mail programs (IMAP, SMTP, ActiveSync …) with their password until they set up MFA. On: after the grace period only with an app password. Existing app passwords keep working either way.',
+  settings_sec_mfa_all_warn:         'Users without MFA can use the webmail again only after the setup once the grace period is over. Announce the change beforehand.',
   settings_sec_saved:         'Security policies saved',
 
   settings_maint_title:       'Maintenance Mode',

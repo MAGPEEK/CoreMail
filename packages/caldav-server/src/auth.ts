@@ -1,7 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import { verifyAccessToken, createLogger } from '@coremail/core';
 import { prisma, verifyMailCredentials, clientIpFromRequest, isProtocolAllowed, isWebmailFeatureEnabled } from '@coremail/storage';
-import { isAccessTokenRevokedShared } from '@coremail/storage/auth';
+import { isAccessTokenRevokedShared, mfaEnrolmentRefusal } from '@coremail/storage/auth';
 import { TASK_COLLECTION_ID } from './caldav/tasks.js';
 
 const log = createLogger('caldav:auth');
@@ -40,6 +40,14 @@ export async function davAuthMiddleware(
         select: { id: true, email: true, active: true, domainId: true },
       });
       if (user?.active) {
+        // 10.5: a web session that must enrol a second factor first ("MFA für
+        // alle Benutzer erzwingen") is for the enrolment only — not for DAV.
+        const enrolment = await mfaEnrolmentRefusal(user.id, payload.mfaVerified);
+        if (enrolment) {
+          if (enrolment.status === 503) res.set('Retry-After', '30');
+          res.status(enrolment.status).send(enrolment.status === 503 ? 'Service Unavailable' : 'Forbidden');
+          return;
+        }
         // 9.4: the CalDAV/CardDAV switch applies to tokens as well (unreadable → 503).
         let allowed: boolean;
         try {

@@ -199,6 +199,21 @@ test('complete: without host name → mail.<domain>, admin name defaults to Admi
   assert.equal(settings['orgName'], undefined, 'organisation name untouched when not given');
 });
 
+test('10.5: a fresh installation starts with MFA mandatory for admins; the backfill of an existing one leaves it alone', async () => {
+  const token = (await initSetupToken(quietLog))!;
+  assert.equal(settings['requireMfaForAdmins'], undefined, 'not set before the setup');
+  assert.equal((await complete(body(token))).status, 200);
+  assert.equal(settings['requireMfaForAdmins'], true);
+
+  // existing installation (users, no setup flag): only the setup flag is backfilled
+  settings = { id: 'singleton', requireMfaForAdmins: false };
+  users = [{ id: 'old', email: 'x@y.z' }];
+  assert.equal(await initSetupToken(quietLog), null);
+  assert.equal(settings['requireMfaForAdmins'], false, 'stored value untouched (no silent lock-out)');
+  assert.equal((await complete(body(token))).status, 409, 'and /complete never runs again');
+  assert.equal(settings['requireMfaForAdmins'], false);
+});
+
 test('complete: an invalid host name is refused before anything is written', async () => {
   const token = (await initSetupToken(quietLog))!;
   for (const hostname of ['localhost', 'mail_x.example.com', 'http://mail.example.com', '-a.example.com']) {

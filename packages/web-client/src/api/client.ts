@@ -3,6 +3,7 @@ import { useAuthStore, takeLegacyRefreshToken } from '../store/auth.js';
 import toast from 'react-hot-toast';
 import { apiErrorFromBody } from '../lib/errors.js';
 import { isWebmailDisabled, refreshFailureVerdict, refreshBackoffMs, shouldRefreshOn401 } from '../lib/authRetry.js';
+import { enrolmentRedirectTarget, isMfaEnrolmentRequired } from '../lib/mfaEnforcement.js';
 
 const BASE = '/api/v1';
 
@@ -197,6 +198,11 @@ export async function apiFetch(path: string, init: RequestInit = {}, contentType
     // 9.4: Webmail was switched off for the account — the session is over (like a refused refresh)
     const body = await res.clone().json().catch(() => null) as { code?: string } | null;
     if (isWebmailDisabled(res.status, body?.code)) sessionExpired();
+    // 10.5: the account must enrol a second factor first → the enrolment page
+    if (isMfaEnrolmentRequired(res.status, body?.code)) {
+      const target = enrolmentRedirectTarget(window.location.pathname);
+      if (target) window.location.assign(target);
+    }
   }
   if (res.status !== 401) return res;
 
