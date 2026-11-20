@@ -19,7 +19,7 @@ import { collectHealth, tcpProbe } from '../../lib/service-health.js';
 import { requireUnscoped } from '../../middleware/admin-scope.js';
 import { auditNow, auditContext, type AuditEntry } from '../../lib/audit.js';
 import {
-  createRestartCooldown, restartAvailability, writeRestartToken,
+  createRestartCooldown, restartAvailability, writeRestartRequest,
   EXPECTED_DOWNTIME_SECONDS, RESTART_COOLDOWN_SECONDS, RESTART_DELAY_MS,
   type CooldownClaim, type RestartAvailability,
 } from '../../lib/server-restart.js';
@@ -235,9 +235,14 @@ const defaultRestartDeps: ServerRestartDeps = {
   release: () => restartCooldown.release(),
   writeAudit: auditNow,
   trigger: () => {
-    log.warn('Container restart: handing the restart token to supervisord');
-    writeRestartToken();
-    // Still alive long after the token → the listener did not act (logged for the operator).
+    log.warn('Container restart: handing the restart request to restart-watch');
+    try {
+      writeRestartRequest();
+    } catch (err) {
+      log.error({ err }, 'Container restart: the restart request could not be written — nothing restarts');
+      return;
+    }
+    // Still alive long after the request → the listener did not act (logged for the operator).
     setTimeout(() => log.error('Container restart was requested 60 s ago but this process is still running — is the supervisord event listener "restart-watch" running?'), 60_000).unref();
   },
   delayMs: RESTART_DELAY_MS,
@@ -265,7 +270,13 @@ adminServersRouter.post('/restart', requireUnscoped, async (req: Request, res: R
   const deps = restartDeps;
   const a = deps.availability();
   if (!a.available) {
-    res.status(409).json({ error: 'This gateway does not run inside the CoreMail container — restart it with your container tooling', code: 'RESTART_UNAVAILABLE' });
+    res.status(409).json({
+      error: a.reason === 'no-listener'
+        ? 'The restart listener (restart-watch) is not running in this container — nothing was restarted'
+        : 'This gateway does not run inside the CoreMail container — restart it with your container tooling',
+      code: 'RESTART_UNAVAILABLE',
+      reason: a.reason,
+    });
     return;
   }
   const slot = await deps.claim();

@@ -216,13 +216,20 @@ Docker socket in the container and no control of other containers.
   `--restart unless-stopped`. **Without a restart policy the container stays stopped** — start
   it again with `docker start coremail`. On Kubernetes the kubelet restarts the exited container
   (`restartPolicy: Always`, the restart count of the pod goes up).
-- **How it works:** the api-gateway (user `node`) cannot signal supervisord (root). It writes a
-  supervisor capture-mode token to its stdout; the root event listener `restart-watch`
-  (`/usr/local/lib/coremail/restart-watch.py`, `[eventlistener:restart-watch]` in
-  `supervisord-app.conf`) accepts exactly that token and only from the program `api-gateway`,
-  then sends SIGTERM to supervisord. supervisord stops all programs and exits with status 0,
-  tini exits, Docker restarts the container. A gateway started outside the container (development)
-  answers `409 RESTART_UNAVAILABLE`.
+- **How it works:** the api-gateway (user `node`) cannot signal supervisord (root). The root
+  event listener `restart-watch` (`/usr/local/lib/coremail/restart-watch.py`,
+  `[eventlistener:restart-watch]` in `supervisord-app.conf`) writes a new random secret
+  (32 bytes, hex) to `/var/run/supervisor/restart.token` (root:node 0440) at every container
+  start. The api-gateway writes that secret into `/var/run/supervisor/restart.request`; every
+  5 seconds (`TICK_5`) the listener reads and deletes the request (regular files only, no
+  symlinks, at most 256 bytes), compares it in constant time and on a match sends SIGTERM to
+  supervisord — at most once per 2 minutes. supervisord stops all programs and exits with
+  status 0, tini exits, Docker restarts the container. Rejected requests are logged as
+  `restart-watch: REJECTED a restart request: …` without their content; the secret is never
+  logged. The api-gateway's log output is not a channel: no program runs in supervisor's
+  stdout capture mode, so text in a log line (a login e-mail, a path) cannot trigger anything.
+  A gateway started outside the container (development) answers `409 RESTART_UNAVAILABLE`
+  (`reason: not-supervised`, or `no-listener` when the secret is missing).
 
 ## Backup
 

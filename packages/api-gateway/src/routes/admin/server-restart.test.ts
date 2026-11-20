@@ -190,17 +190,34 @@ test('GET /restart: readable for VIEW_ONLY_ORG, not for USER', async () => {
 
 // ── lib ──
 
-test('lib: the token line is the supervisor capture-mode envelope restart-watch expects', () => {
-  assert.equal(lib.restartTokenLine(), '<!--XSUPERVISOR:BEGIN-->coremail:restart-container<!--XSUPERVISOR:END-->\n');
-  const written: string[] = [];
-  lib.writeRestartToken((s) => written.push(s));
-  assert.deepEqual(written, [lib.restartTokenLine()], 'exactly one write');
+test('lib: the request file carries the per-boot secret from restart-watch, nothing else', () => {
+  const secret = 'ab'.repeat(32);
+  const files = new Map<string, string>([['/run/sv/restart.token', `${secret}\n`]]);
+  const fs = { readFile: (p: string) => { const v = files.get(p); if (v === undefined) throw new Error('ENOENT'); return v; }, writeFile: (p: string, d: string) => { files.set(p, d); } };
+  lib.writeRestartRequest(fs, { COREMAIL_RESTART_DIR: '/run/sv' });
+  assert.equal(files.get('/run/sv/restart.request'), `${secret}\n`);
+  // missing / malformed secret → throws, no request written
+  files.clear();
+  assert.throws(() => lib.writeRestartRequest(fs, { COREMAIL_RESTART_DIR: '/run/sv' }));
+  files.set('/run/sv/restart.token', 'coremail:restart-container');
+  assert.throws(() => lib.writeRestartRequest(fs, { COREMAIL_RESTART_DIR: '/run/sv' }), /malformed/);
+  assert.equal(files.has('/run/sv/restart.request'), false);
 });
 
-test('lib: available only as supervisord program api-gateway', () => {
-  assert.deepEqual(lib.restartAvailability({ SUPERVISOR_ENABLED: '1', SUPERVISOR_PROCESS_NAME: 'api-gateway' }), { available: true });
-  assert.equal(lib.restartAvailability({ SUPERVISOR_ENABLED: '1', SUPERVISOR_PROCESS_NAME: 'smtp-server' }).available, false);
-  assert.equal(lib.restartAvailability({}).available, false);
+test('lib: no stdout channel — restarting never writes supervisor capture markers', async () => {
+  const src = await import('node:fs').then((f) => f.readFileSync(new URL('../../lib/server-restart.ts', import.meta.url), 'utf8'));
+  assert.doesNotMatch(src, /process\.stdout\.write/);
+  const conf = await import('node:fs').then((f) => f.readFileSync(new URL('../../../../../infra/docker/supervisord-app.conf', import.meta.url), 'utf8'));
+  assert.doesNotMatch(conf, /^\s*std(out|err)_capture_maxbytes\s*=/m, 'no program may run in capture mode');
+  assert.match(conf, /^events=TICK_5\s*$/m);
+});
+
+test('lib: available only as supervisord program api-gateway with the listener secret present', () => {
+  const env = { SUPERVISOR_ENABLED: '1', SUPERVISOR_PROCESS_NAME: 'api-gateway' };
+  assert.deepEqual(lib.restartAvailability(env, () => true), { available: true });
+  assert.deepEqual(lib.restartAvailability(env, () => false), { available: false, reason: 'no-listener' });
+  assert.equal(lib.restartAvailability({ SUPERVISOR_ENABLED: '1', SUPERVISOR_PROCESS_NAME: 'smtp-server' }, () => true).available, false);
+  assert.equal(lib.restartAvailability({}, () => true).available, false);
 });
 
 test('lib: cooldown via Redis SET NX EX; refusal carries the TTL; release deletes the key', async () => {

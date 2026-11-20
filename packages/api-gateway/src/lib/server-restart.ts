@@ -3,28 +3,41 @@
  *
  * Mechanism: the api-gateway runs as user `node` under supervisord (root, child
  * of tini = PID 1). It can neither signal supervisord nor use its control socket
- * (root-only, chmod 0700). Instead it writes a supervisor "process communication"
- * token to its own stdout (`stdout_capture_maxbytes` on [program:api-gateway]);
- * supervisord turns it into a PROCESS_COMMUNICATION_STDOUT event for the root
- * event listener `restart-watch` (infra/docker/restart-watch.py), which checks
- * that the event came from the api-gateway and sends SIGTERM to supervisord.
- * supervisord stops every program gracefully and exits, tini exits, the
- * container stops — and the restart policy (`restart: unless-stopped`,
- * Kubernetes `restartPolicy: Always`) starts it again. PostgreSQL, Redis and the
- * scanners are separate containers and keep running.
+ * (root-only, chmod 0700). The root event listener `restart-watch`
+ * (infra/docker/restart-watch.py) writes a new random secret to
+ * /var/run/supervisor/restart.token on every container start (root:node 0440).
+ * To restart, this gateway writes that secret into
+ * /var/run/supervisor/restart.request; the listener checks the file every 5 s
+ * (TICK_5), compares in constant time and sends SIGTERM to supervisord, which
+ * stops every program gracefully and exits; tini exits, the container stops and
+ * its restart policy (`restart: unless-stopped`, Kubernetes `restartPolicy:
+ * Always`) starts it again. PostgreSQL, Redis and the scanners are separate
+ * containers and keep running.
+ *
+ * Deliberately NOT stdout: supervisor's capture mode would turn attacker text
+ * in any log line (a login e-mail, a path) into events, and an injected BEGIN
+ * marker would swallow every following log line. The secret is never logged.
  *
  * Order (route): cooldown slot → audit row written (awaited) → 202 → after the
- * response has left, ~1 s delay → token. No audit row, no restart.
+ * response has left, ~1 s delay → request file. No audit row, no restart.
  */
+import { accessSync, constants as fsConstants, readFileSync, writeFileSync } from 'node:fs';
+import { posix } from 'node:path';
+
+// Container paths — always POSIX (also when the tests run on Windows).
+const { join } = posix;
 import { getRedisClient, createLogger } from '@coremail/core';
 
 const log = createLogger('admin:restart');
 
-/** The token restart-watch accepts (must match infra/docker/restart-watch.py). */
-export const RESTART_TOKEN = 'coremail:restart-container';
-/** supervisor's capture-mode markers (supervisor.events.ProcessCommunicationEvent). */
-export const CAPTURE_BEGIN = '<!--XSUPERVISOR:BEGIN-->';
-export const CAPTURE_END = '<!--XSUPERVISOR:END-->';
+/** Directory shared with restart-watch (writable by supervisord's run dir owner). */
+export function restartDir(env: NodeJS.ProcessEnv = process.env): string {
+  return env['COREMAIL_RESTART_DIR'] || '/var/run/supervisor';
+}
+export const TOKEN_FILE_NAME = 'restart.token';
+export const REQUEST_FILE_NAME = 'restart.request';
+/** restart-watch writes 32 random bytes as hex. */
+export const TOKEN_RE = /^[0-9a-f]{64}$/;
 
 /** What the BCP shows as the expected downtime. */
 export const EXPECTED_DOWNTIME_SECONDS = 30;
@@ -37,27 +50,46 @@ const COOLDOWN_KEY = 'admin:server-restart:cooldown';
 
 export type RestartAvailability =
   | { available: true }
-  | { available: false; reason: 'not-supervised' };
+  | { available: false; reason: 'not-supervised' | 'no-listener' };
+
+function readable(path: string): boolean {
+  try { accessSync(path, fsConstants.R_OK); return true; } catch { return false; }
+}
 
 /**
  * The trigger only works inside the CoreMail container: supervisord sets
- * SUPERVISOR_ENABLED / SUPERVISOR_PROCESS_NAME for its programs. A gateway
- * started any other way (development, tests) has nobody to read the token.
+ * SUPERVISOR_ENABLED / SUPERVISOR_PROCESS_NAME for its programs, and
+ * restart-watch must have written its secret.
  */
-export function restartAvailability(env: NodeJS.ProcessEnv = process.env): RestartAvailability {
-  return env['SUPERVISOR_ENABLED'] === '1' && env['SUPERVISOR_PROCESS_NAME'] === 'api-gateway'
-    ? { available: true }
-    : { available: false, reason: 'not-supervised' };
+export function restartAvailability(
+  env: NodeJS.ProcessEnv = process.env,
+  canRead: (path: string) => boolean = readable,
+): RestartAvailability {
+  if (env['SUPERVISOR_ENABLED'] !== '1' || env['SUPERVISOR_PROCESS_NAME'] !== 'api-gateway') {
+    return { available: false, reason: 'not-supervised' };
+  }
+  return canRead(join(restartDir(env), TOKEN_FILE_NAME)) ? { available: true } : { available: false, reason: 'no-listener' };
 }
 
-/** The exact bytes written to stdout — one write, below PIPE_BUF, so never interleaved. */
-export function restartTokenLine(): string {
-  return `${CAPTURE_BEGIN}${RESTART_TOKEN}${CAPTURE_END}\n`;
+export interface RestartFs {
+  readFile: (path: string) => string;
+  writeFile: (path: string, data: string) => void;
 }
+const realFs: RestartFs = {
+  readFile: (p) => readFileSync(p, 'utf8'),
+  // 0600, replaced if a stale one exists; restart-watch deletes it after reading
+  writeFile: (p, d) => writeFileSync(p, d, { mode: 0o600 }),
+};
 
-/** Hands the token to supervisord (see the module comment). */
-export function writeRestartToken(write: (s: string) => unknown = (s) => process.stdout.write(s)): void {
-  write(restartTokenLine());
+/**
+ * Hands the restart request to restart-watch: the current per-boot secret into
+ * the request file. Throws when the secret is missing or malformed. Never logs it.
+ */
+export function writeRestartRequest(fs: RestartFs = realFs, env: NodeJS.ProcessEnv = process.env): void {
+  const dir = restartDir(env);
+  const secret = fs.readFile(join(dir, TOKEN_FILE_NAME)).trim();
+  if (!TOKEN_RE.test(secret)) throw new Error('restart-watch secret missing or malformed');
+  fs.writeFile(join(dir, REQUEST_FILE_NAME), `${secret}\n`);
 }
 
 export type CooldownClaim = { ok: true } | { ok: false; retryAfterSec: number };
@@ -71,7 +103,8 @@ interface CooldownRedis {
 /**
  * Server-wide cooldown: Redis `SET NX EX` (survives the restart itself, so a
  * second click right after the container is back is refused too). Redis
- * unavailable → in-process timestamp (never "unlimited").
+ * unavailable → in-process timestamp (never "unlimited"). restart-watch keeps
+ * its own once-per-2-minutes limit on top.
  */
 export function createRestartCooldown(opts: {
   seconds?: number;

@@ -17,8 +17,11 @@ release lead (target 10.4.2).
   expectedDowntimeSeconds }`; the audit entry `server.restart` (always logged) is written
   before the shutdown, one restart per 2 minutes server-wide (`429` + `Retry-After`);
   `GET /api/v1/admin/servers/restart` reports whether the gateway can restart its container.
-  Mechanism: the api-gateway writes a supervisor capture-mode token to its stdout; the new
-  root event listener `restart-watch` (`infra/docker/restart-watch.py`) accepts it only from
-  the program `api-gateway` and stops supervisord. Requires a restart policy
+  Mechanism: the new root event listener `restart-watch` (`infra/docker/restart-watch.py`)
+  writes a per-boot random secret to `/var/run/supervisor/restart.token`; the api-gateway
+  writes it into `/var/run/supervisor/restart.request`; the listener checks the request every
+  5 s (constant-time compare, at most one restart per 2 minutes, rejected requests logged
+  without content) and stops supervisord. No stdout capture mode — log output can never
+  trigger a restart. Requires a restart policy
   (`restart: unless-stopped` in every bundled Compose file and the documented `docker run`
   commands; Kubernetes restarts the container) — docs/deploy.md, docs/rbac.md.
