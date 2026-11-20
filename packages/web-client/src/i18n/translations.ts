@@ -1,4 +1,4 @@
-// ── CoreMail OWA — Translations DE / EN / ES / IT ────────────────────────────
+// ── CoreMail MWA — Translations DE / EN / ES / IT ────────────────────────────
 
 // ── Mail command bar, reading-pane actions, app rail, shared command bar ─────
 // Spanish and Italian fall back to the English texts of this block.

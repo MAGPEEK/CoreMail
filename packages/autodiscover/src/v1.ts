@@ -19,7 +19,7 @@ const log = createLogger('autodiscover:v1');
 //    verifyMailCredentials() (@coremail/storage): login normalisation
 //    (DOMAIN\user, bare user name → primary domain), MFA → app passwords only,
 //    shared lockout, database errors → 503 instead of 401. (v5.2.14: Autodiscover
-//    must validate, otherwise Outlook loops on a wrong password.)
+//    must validate, otherwise the client loops on a wrong password.)
 //  - A caller only gets settings for its OWN address (primary address or one of
 //    its aliases). Any other address — another user, an unknown account, a domain
 //    this server does not host — gets the same Error 500, so nothing about other
@@ -29,14 +29,14 @@ const log = createLogger('autodiscover:v1');
 //    Error 601.
 //  - 9.4: only protocols switched on for the account are announced (IMAP, else
 //    POP3; SMTP; MobileSync) — nothing left → Error 500 "No client protocol …".
-//  - 9.4: MAPI over HTTP (classic Outlook "Exchange" account): the
+//  - 9.4: MAPI over HTTP (a desktop client's MAPI account): the
 //    <Protocol Type="mapiHttp" Version="1"> block (MailStore + AddressBook URLs,
 //    MS-OXDSCLI 3.2.5.1) when the client asks for it (X-MapiHttpCapability ≥ 1),
 //    the account's `mapi` switch is on and HTTPS has a trusted certificate
 //    (storage mapiHttpsTrusted). IMAP / SMTP blocks stay as they are.
 //
 // Never EXCH / EXPR / EXHTTP blocks (MS-OXDSCLI 3.2.5.1 forbids EXCH/EXPR next to
-// mapiHttp; they make Outlook attempt a binary MAPI/RPC connection, v3.18.39) and
+// mapiHttp; they make the client attempt a binary MAPI/RPC connection, v3.18.39) and
 // no EWS (removed in v7.0.0).
 
 const REALM_CHALLENGE = 'Basic realm="CoreMail Autodiscover"';
@@ -56,7 +56,7 @@ const ERROR = {
 export type OutlookProtocol = 'IMAP' | 'POP3' | 'SMTP';
 
 /**
- * 9.4: the internet-mail <Protocol> blocks of an Outlook answer for the
+ * 9.4: the internet-mail <Protocol> blocks of a mail account (outlook/2006a schema) answer for the
  * account's protocol switches — IMAP (else POP3) for incoming mail, SMTP for
  * submission. The mapiHttp block is decided by mapiAnnouncement().
  */
@@ -178,7 +178,7 @@ function sendError(res: Response, err: AutodiscoverError): void {
 </Autodiscover>`);
 }
 
-/** One <Protocol> block of the Outlook answer (login = the account's primary address). */
+/** One <Protocol> block of the mail account answer (login = the account's primary address). */
 function outlookProtocolBlock(protocol: OutlookProtocol, email: string, cfg: ServerConfig): string {
   const login = `
         <LoginName>${escapeXml(email)}</LoginName>
@@ -214,10 +214,10 @@ function outlookProtocolBlock(protocol: OutlookProtocol, email: string, cfg: Ser
 }
 
 /**
- * Outlook schema response. The account is always described by its PRIMARY
+ * Mail account (outlook/2006a) schema response. The account is always described by its PRIMARY
  * address — also when the client asked for one of its aliases: the mail
  * protocols log in with the primary address only, and AutoDiscoverSMTPAddress
- * tells Outlook which address the profile belongs to. (No redirectAddr: the
+ * tells the client which address the profile belongs to. (No redirectAddr: the
  * caller is already authenticated for this account, a redirect would only cost
  * another round trip and a client prompt.) 9.4: only `protocols` (the
  * account's enabled ones, outlookProtocols()) get a <Protocol> block; `mapi`
@@ -225,7 +225,7 @@ function outlookProtocolBlock(protocol: OutlookProtocol, email: string, cfg: Ser
  * names, storage legacyDnFor).
  */
 export function buildOutlookResponse(user: MailAuthUser, cfg: ServerConfig, protocols: OutlookProtocol[], mapi: MapiEndpoints | null = null): string {
-  // Outlook LTSC 2019/2021/2024 compatible (v3.18.38): <User><LegacyDN> is mandatory.
+  // LTSC 2019/2021/2024 desktop clients (v3.18.38): <User><LegacyDN> is mandatory.
   // The LegacyDN carries the caller's own id — the response only ever describes
   // the authenticated account itself.
   const email = user.email;
@@ -342,10 +342,10 @@ async function mapiAnnouncement(req: Request, access: ProtocolAccess, cfg: Serve
 }
 
 export async function handleAutodiscoverV1(req: Request, res: Response): Promise<void> {
-  // v5.2.3: Outlook first probes without an Authorization header and expects
+  // v5.2.3: desktop clients first probe without an Authorization header and expect
   // 401 + WWW-Authenticate before it sends credentials.
   const authHeader = req.get('Authorization') ?? '';
-  // v5.2.15: the scheme is case-insensitive (RFC 7235 §2.1) — some Outlook builds send `basic`.
+  // v5.2.15: the scheme is case-insensitive (RFC 7235 §2.1) — some desktop client builds send `basic`.
   const scheme = authHeader.split(' ')[0]?.toLowerCase() ?? '';
   const httpsTarget = await redirectTargetForPlainHttp(req, authHeader !== '');
   if (httpsTarget) {
@@ -355,7 +355,7 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
     return;
   }
   if (scheme !== 'basic') {
-    // No header, Negotiate/NTLM, Bearer (Outlook Modern Auth tokens we cannot
+    // No header, Negotiate/NTLM, Bearer (Modern Auth tokens we cannot
     // validate) …: ask for Basic. No database access and no persistent log for
     // unauthenticated requests (v7.1: the old Bearer "forensic" SystemLog write
     // let anyone fill the database).
@@ -364,7 +364,7 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
     return;
   }
 
-  // Whitespace-tolerant slicing (Outlook sometimes inserts multiple spaces)
+  // Whitespace-tolerant slicing (some clients insert multiple spaces)
   const tokenStart = authHeader.indexOf(' ');
   const decoded = Buffer.from(tokenStart !== -1 ? authHeader.slice(tokenStart + 1).trim() : '', 'base64').toString('utf8');
   const colonIdx = decoded.indexOf(':');

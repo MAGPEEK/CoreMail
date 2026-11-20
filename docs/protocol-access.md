@@ -12,7 +12,7 @@ the server, per domain and per mailbox.
 | `jmap`       | JMAP (`/jmap/*`, `/.well-known/jmap`, WebSocket)                                       |
 | `dav`        | CalDAV and CardDAV (`/dav/*`)                                                           |
 | `webmail`    | web login (password, MFA, SSO, token refresh) and the webmail / user REST API          |
-| `mapi`       | MAPI over HTTP (`/mapi/emsmdb`, `/mapi/nspi`, classic Outlook — see [mapi.md](mapi.md)), off by default |
+| `mapi`       | MAPI over HTTP (`/mapi/emsmdb`, `/mapi/nspi`, desktop clients with MAPI over HTTP — see [mapi.md](mapi.md)), off by default |
 
 ## Ports vs. Zugriff
 
@@ -30,7 +30,7 @@ page (*Protokolle & Dienste*, `/services`; the old sub-page links `/services/ima
 A port that listens while the protocol is off for everyone accepts connections and refuses every
 login after the password ("Port offen, Anmeldung für alle gesperrt"); a protocol that is allowed
 without an active port cannot be reached at all. The page warns about both, and about MAPI being on
-while HTTPS (Port 443) is off or has no trusted certificate (Outlook connects over HTTPS only,
+while HTTPS (Port 443) is off or has no trusted certificate (MAPI clients connect over HTTPS only,
 unless a reverse proxy in front provides it). A port that listens while the protocol is off on the
 server but on for some domains or mailboxes is consistent; the page says so in a softer notice
 ("Port offen; Anmeldung nur für abweichende Domains/Benutzer") that is not counted as an
@@ -173,7 +173,7 @@ Only enabled protocols are announced:
 - **Webmail → Settings → External clients** (`GET /api/v1/user/client-config`): the answer lists
   the account's switches in `protocols` (`imap`, `pop3`, `smtp`, `activesync`, `dav`); the setup data
   of a protocol that is off is `null`, and the page shows only the enabled parts (mail servers,
-  CalDAV/CardDAV with the Outlook hints, the Apple profile variants).
+  CalDAV/CardDAV with the sync add-in hints, the Apple profile variants).
 
 ## Administration
 

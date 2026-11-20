@@ -289,8 +289,8 @@ export const useUiPrefs = create<UiPrefs>()(
 export type ThemeMode = 'light' | 'dark' | 'system';
 
 export const ACCENT_COLORS = [
-  { name: 'Microsoft Blau', hex: '#0078D4', rgb: '0 120 212'   },
-  { name: 'Teams Lila',     hex: '#6264A7', rgb: '98 100 167'  },
+  { name: 'Blau',           hex: '#0078D4', rgb: '0 120 212'   },
+  { name: 'Lila',           hex: '#6264A7', rgb: '98 100 167'  },
   { name: 'Grün',           hex: '#107C10', rgb: '16 124 16'   },
   { name: 'Orange',         hex: '#D83B01', rgb: '216 59 1'    },
   { name: 'Türkis',         hex: '#008575', rgb: '0 133 117'   },

@@ -1,5 +1,5 @@
 /**
- * 9.3: "Freigegebene Postfächer" in the folder pane (OWA "add shared folder").
+ * 9.3: "Freigegebene Postfächer" in the folder pane ("add shared folder").
  * Every shared / delegated mailbox the user may read is an expandable root with
  * its own folder tree; selecting a folder switches the mail view to that mailbox.
  * Users hide / show roots (stored server-side, PATCH /user/accessible-mailboxes/:ref);

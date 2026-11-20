@@ -155,7 +155,7 @@ export interface SanSuggestion {
 
 /**
  * autodiscover.<domain> and autoconfig.<domain> as additional names for the
- * certificate of the public host name (Outlook / Thunderbird fetch them over
+ * certificate of the public host name (Autodiscover / autoconfig clients fetch them over
  * HTTPS). `resolvesHere` is true when the name has addresses and all of them
  * belong to the public host name — only then the HTTP-01 validation can
  * succeed, so the BCP checks it by default.

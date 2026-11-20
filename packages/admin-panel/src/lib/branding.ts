@@ -14,7 +14,7 @@
  *   - allowUserAccent = true  → an explicit personal choice wins; `null` means
  *     "never chose" and follows the brand colour.
  *   - Migration of the persisted theme store (version 0 → 1): the old default
- *     "0 120 212" (Microsoft blue) was stored for everyone, so it is read as
+ *     "0 120 212" (the old default blue) was stored for everyone, so it is read as
  *     "never chose" (null); any other stored preset stays an explicit choice.
  * The BCP always uses the brand primary colour.
  *
@@ -56,7 +56,7 @@ export const ASSET_SLOTS: readonly AssetSlot[] = ['logoLight', 'logoDark', 'favi
 
 export const DEFAULT_PRODUCT_NAME = 'CoreMail';
 export const DEFAULT_PRIMARY_COLOR = '#0078d4';
-/** Accent channels of the old per-user default (Microsoft blue). */
+/** Accent channels of the old per-user default (blue). */
 export const DEFAULT_ACCENT_RGB = '0 120 212';
 /** Built-in favicon (web-client/public/favicon.svg, served at the site root). */
 export const BUILTIN_FAVICON = '/favicon.svg';

@@ -97,7 +97,7 @@ build_image() {
 }
 
 # ── The only CoreMail image ───────────────────────────────────────────────────
-# All Node.js services + OWA/ECP frontends (no nginx — api-gateway takes over)
+# All Node.js services + MWA/BCP frontends (no nginx — api-gateway takes over)
 
 build_image "coremail-app" "infra/docker/Dockerfile.app"
 

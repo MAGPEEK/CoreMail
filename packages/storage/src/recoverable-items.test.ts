@@ -46,7 +46,7 @@ function seed(): void {
 beforeEach(() => { seed(); resetMessageStoreCache(); });
 
 test('DELETED_ITEM_RETENTION_DAYS parsing', () => {
-  assert.equal(r.deletedItemRetentionDays({}), 30, 'default 30 days (8.0 documented window, Exchange maximum)');
+  assert.equal(r.deletedItemRetentionDays({}), 30, 'default 30 days (8.0 documented window)');
   assert.equal(r.DEFAULT_DELETED_ITEM_RETENTION_DAYS, 30);
   assert.equal(r.deletedItemRetentionDays({ DELETED_ITEM_RETENTION_DAYS: '14' }), 14, 'env override');
   assert.equal(r.deletedItemRetentionDays({ DELETED_ITEM_RETENTION_DAYS: '0' }), 0);

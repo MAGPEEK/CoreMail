@@ -84,7 +84,7 @@ test('g-sequences: g then key within the timeout; timeout and unknown second key
   assert.equal(press('i'), null);
 });
 
-test('sets: Gmail keys in both; Outlook extras only in the CoreMail default', () => {
+test('sets: Gmail keys in both; Ctrl extras only in the CoreMail default', () => {
   const gm = createShortcutMatcher();
   const cm = createShortcutMatcher();
   const mail = (set: 'gmail' | 'coremail') => ({ set, context: 'mail' as const });

@@ -11,7 +11,7 @@
 export const LEGACY_TLS_LABEL = 'Zusätzlich veraltete TLS-Versionen 1.0/1.1 zulassen (optional)';
 
 /** Shown under the switch while it is off. */
-export const LEGACY_TLS_HINT = 'Nur für sehr alte Geräte nötig. Moderne Clients und Outlook brauchen das nicht.';
+export const LEGACY_TLS_HINT = 'Nur für sehr alte Geräte nötig. Moderne Clients brauchen das nicht.';
 
 export const LEGACY_TLS_WARNING =
   'Optionaler Kompatibilitätsmodus aktiv: TLS 1.0 und 1.1 gelten als unsicher und veraltet. Nur eingeschaltet lassen, '

@@ -114,7 +114,7 @@ async function deliverInbound(rawBuffer: Buffer, opts: StoreOptions): Promise<St
 
   // v8.1: ProhibitSendReceiveQuota. Port 25 already refuses at RCPT TO; this
   // covers every other path (submission, outbound worker for MWA/JMAP/EAS, rule
-  // redirects). Null-sender mail (bounces, DSNs) is refused too, like Exchange.
+  // redirects). Null-sender mail (bounces, DSNs) is refused too.
   const quotaOwner: QuotaOwner = ownerType === 'user' && user
     ? { kind: 'user', id: user.id }
     : { kind: 'shared', id: sharedMailbox!.id };
@@ -202,7 +202,7 @@ async function deliverInbound(rawBuffer: Buffer, opts: StoreOptions): Promise<St
   // ── iTIP REPLY handler (v3.18.25 A5) ────────────────────────────────────────
   // If the incoming mail is a REPLY to a calendar invitation, we update the
   // attendee status in the corresponding CalendarEvent. The mail is STILL
-  // delivered normally to the inbox (user awareness, like Outlook).
+  // delivered normally to the inbox (user awareness).
   try {
     const handled = await processITipInbound(effectiveBuffer, {
       envelopeFrom: opts.fromAddr,
@@ -288,7 +288,7 @@ async function deliverInbound(rawBuffer: Buffer, opts: StoreOptions): Promise<St
     }
   }
 
-  // ── User inbox rules (Outlook-style, v3.18.0) ────────────────────────────────
+  // ── User inbox rules (server-side, v3.18.0) ─────────────────────────────────
   // Engine can override folderId, set flags/categories, trigger a forward
   // or discard the mail entirely (hardDelete). User mailboxes only.
   let ruleFolderId   = folder.id;
@@ -376,7 +376,7 @@ async function deliverInbound(rawBuffer: Buffer, opts: StoreOptions): Promise<St
   // and the web preview (truncated, never emptied).
   const { storagePath } = await storeRawMessage(effectiveBuffer);
 
-  // Build S/MIME header JSON for OWA display
+  // Build S/MIME header JSON for MWA display
   const smimeHeader = Object.keys(smimeVerifyResult).length > 0 || smimeDecrypted
     ? JSON.stringify({ ...smimeVerifyResult, decrypted: smimeDecrypted })
     : null;

@@ -4,7 +4,7 @@ By default every CoreMail TLS endpoint — SMTP (465, STARTTLS on 25/587), IMAP 
 on 143), POP3 (995, STLS on 110) and the integrated HTTPS proxy (443) — accepts **TLS 1.2 and
 1.3 only**.
 
-Some old mail programs and devices (for example Outlook 2010 on Windows 7 without the TLS 1.2
+Some old mail programs and devices (for example old desktop mail programs on Windows 7 without the TLS 1.2
 update, old multifunction printers, embedded Android builds) cannot negotiate TLS 1.2. For them a
 single listener can be opened for TLS 1.0 and 1.1:
 

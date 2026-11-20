@@ -37,7 +37,7 @@ test('warningSummary groups ports with the same problem and CN', () => {
     ],
   };
   assert.equal(problemPorts(report).length, 2);
-  assert.equal(warningSummary(report), 'IMAP 993 (TLS), SMTP 465 (TLS): selbstsigniert — Outlook/iPhone vertrauen diesem Zertifikat nicht (CN=mail.localhost)');
+  assert.equal(warningSummary(report), 'IMAP 993 (TLS), SMTP 465 (TLS): selbstsigniert — Desktop-Mailprogramme und iPhone vertrauen diesem Zertifikat nicht (CN=mail.localhost)');
   assert.deepEqual(problemPorts(null), []);
 });
 
@@ -106,7 +106,7 @@ test('chips: warning lists the ports that serve another / self-signed / mismatch
   assert.equal(imap!.state, 'warning');
   assert.deepEqual(imap!.details, [
     'IMAP 993 (TLS): liefert dieses Zertifikat',
-    'IMAP 143 (STARTTLS): selbstsigniert — Outlook/iPhone vertrauen diesem Zertifikat nicht („Standard“)',
+    'IMAP 143 (STARTTLS): selbstsigniert — Desktop-Mailprogramme und iPhone vertrauen diesem Zertifikat nicht („Standard“)',
   ]);
   assert.deepEqual(smtp!.details, ['SMTP 465 (TLS): passt nicht zu mail.example.com (CN=other.example.org)']);
   assert.equal(pop3!.state, 'warning');

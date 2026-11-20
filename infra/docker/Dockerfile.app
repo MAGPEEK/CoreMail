@@ -250,7 +250,7 @@ RUN mkdir -p /var/log/supervisor /var/run/supervisor /tmp/coremail /data/objects
  && chmod 750 /var/log/supervisor /var/run/supervisor /data /data/objects
 
 # Ports:
-#   3000 — HTTP (OWA, ECP, API, Auth, JMAP, ActiveSync, CalDAV, Autodiscover proxy)
+#   3000 — HTTP (MWA, BCP, API, Auth, JMAP, ActiveSync, CalDAV, Autodiscover proxy)
 #         → TLS termination external (Traefik, Caddy, DSM Application Portal …)
 #   25/465/587 — SMTP
 #   143/993    — IMAP

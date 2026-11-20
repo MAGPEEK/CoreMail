@@ -1,6 +1,6 @@
 /**
  * CoreMail MAPI over HTTP server — port 3007, loopback only; the api-gateway
- * proxies /mapi/* to it. Classic Outlook ("Exchange" account type) talks to
+ * proxies /mapi/* to it. Desktop mail clients (MAPI account) talk to
  * /mapi/emsmdb (mailbox) and /mapi/nspi (address book).
  * Off by default: the per-account protocol switch `mapi` (docs/protocol-access.md).
  *

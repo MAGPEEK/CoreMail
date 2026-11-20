@@ -1,7 +1,7 @@
 /**
  * Mail search query language (GET /api/v1/mail/search?q=…).
  *
- * Gmail/OWA-style operators on top of the existing free-text search:
+ * Search operators on top of the existing free-text search:
  *   from:  to:  cc:  subject:            substring (from/subject) or full address (to/cc)
  *   has:attachment  hasattachment:yes|no
  *   is:unread  is:read  is:flagged  is:unflagged  (is:starred = is:flagged)

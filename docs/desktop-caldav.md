@@ -1,13 +1,14 @@
-# Classic Outlook with CoreMail (mail, calendar, contacts)
+# Windows desktop mail programs: mail, calendar, contacts
 
-CoreMail does not speak MAPI/RPC or EWS. Classic Outlook for Windows (2010 – 2021, Microsoft 365
-desktop) is connected as an **IMAP + SMTP** account for mail; calendar and contacts are
+CoreMail does not speak MAPI/RPC or EWS. A Windows desktop mail program without CalDAV/CardDAV
+support is connected as an **IMAP + SMTP** account for mail (or with MAPI over HTTP, see
+[mapi.md](mapi.md)); calendar and contacts are
 synchronised over **CalDAV / CardDAV** with a sync add-in. Webmail (MWA) offers everything in the
 browser without additional software.
 
 ## 1. Mail: IMAP + SMTP account
 
-1. *File → Add Account*, enter the e-mail address. Outlook asks Autodiscover
+1. Add an account in the mail program (in Outlook: *File → Add Account*), enter the e-mail address. The client asks Autodiscover
    ([autodiscover.md](autodiscover.md)) and creates an IMAP account with these settings:
 
    | | Server | Port | Encryption |
@@ -23,12 +24,12 @@ browser without additional software.
    (MWA → Einstellungen → Sicherheit → App-Passwörter). The normal password and MFA codes are not
    accepted by IMAP/SMTP/CalDAV/CardDAV.
 
-Old Outlook versions on old Windows releases that cannot use TLS 1.2 need the opt-in
+Old mail program versions on old Windows releases that cannot use TLS 1.2 need the opt-in
 [TLS 1.0/1.1 switch](legacy-tls.md) — preferably on a dedicated listener and only temporarily.
 
 ## 2. Calendar and contacts: CalDAV / CardDAV
 
-Classic Outlook has no built-in CalDAV/CardDAV support; a sync add-in creates Outlook calendar,
+Such a mail program has no built-in CalDAV/CardDAV support; a sync add-in creates local calendar,
 contacts and task folders and keeps them in sync with CoreMail. A commonly used open-source option
 is **Outlook CalDav Synchronizer** (free, GPL); commercial add-ins work the same way with the
 same URLs.
@@ -47,20 +48,20 @@ instead of typing them.
 
 Steps with a CalDAV/CardDAV sync add-in:
 
-1. Install the add-in, restart Outlook.
+1. Install the add-in, restart the mail program.
 2. Create a new sync profile of type *CalDAV/CardDAV* (generic server, not a hosted provider
    preset).
 3. Enter the CalDAV URL of the calendar (or the account URL and let the add-in discover the
    calendars), the e-mail address as user name and the password — with MFA an **app password**.
-4. Pick or create the Outlook folder to sync with, choose two-way sync and an interval
+4. Pick or create the local folder to sync with, choose two-way sync and an interval
    (e.g. 5 minutes).
-5. Repeat with the CardDAV address book URL for contacts (Outlook contacts folder).
+5. Repeat with the CardDAV address book URL for contacts (local contacts folder).
 6. Shared calendars (MWA → Kalender → Freigeben) appear in the discovery list of the account
    URL; read-only shares are synced one-way.
 
 Notes:
 
-* Invitations: Outlook sends and receives meeting invitations as normal mail (iCalendar
+* Invitations: the mail program sends and receives meeting invitations as normal mail (iCalendar
   attachments); replies update the CoreMail calendar when they arrive.
 * Private/confidential appointments keep their classification; delegates see them masked.
 * Free/busy lookups of other users are available in the MWA; the sync add-ins do not use them.

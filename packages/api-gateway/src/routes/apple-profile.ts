@@ -4,7 +4,7 @@
  *   GET /api/v1/user/apple-profile            → IMAP + SMTP (com.apple.mail.managed),
  *                                               CalDAV (com.apple.caldav.account),
  *                                               CardDAV (com.apple.carddav.account)
- *   GET /api/v1/user/apple-profile?type=eas   → Exchange ActiveSync (com.apple.eas.account):
+ *   GET /api/v1/user/apple-profile?type=eas   → ActiveSync (com.apple.eas.account):
  *                                               mail, calendar and contacts in one account
  *
  * Authenticated (MWA session, Bearer header — the MWA downloads it via fetch, never with

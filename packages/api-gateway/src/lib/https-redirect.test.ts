@@ -80,7 +80,7 @@ test('redirect URL uses HTTPS_PUBLIC_PORT, not the internal listener port', asyn
   assert.equal(trustProxyConfigured({ TRUST_PROXY: '1' }), true);
 });
 
-test('Autodiscover HTTP redirect method: plain-HTTP autodiscover.xml gets 302 (older Outlook does not follow 308)', async () => {
+test('Autodiscover HTTP redirect method: plain-HTTP autodiscover.xml gets 302 (older desktop clients do not follow 308)', async () => {
   const { redirectStatusFor } = await import('./https-redirect.js');
   assert.equal(redirectStatusFor('/autodiscover/autodiscover.xml'), 302);
   assert.equal(redirectStatusFor('/Autodiscover/Autodiscover.xml'), 302);

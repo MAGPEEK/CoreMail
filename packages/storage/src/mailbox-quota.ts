@@ -1,5 +1,5 @@
 /**
- * Mailbox quotas, Exchange 2019 style (v8.1).
+ * Mailbox quotas (v8.1).
  *
  * Three levels per mailbox (User or SharedMailbox):
  *   - IssueWarningQuota        → quotaWarningBytes      (null = ServerSettings.quotaWarningPercent of quotaBytes)
@@ -7,7 +7,7 @@
  *   - ProhibitSendReceiveQuota → quotaBytes (the existing mailbox quota; 0 = unlimited)
  *
  * Usage = sum of rawSize of the live (not soft-deleted) messages of the mailbox,
- * Recoverable Items excluded (Exchange counts them against a separate quota).
+ * Recoverable Items excluded (they would count against a separate quota).
  * The aggregate is cached per process for QUOTA_USAGE_CACHE_SEC (default 60 s)
  * and adjusted on every local delivery, so a delivery never scans the mailbox;
  * the computed value is written back to usedBytes (the stored counter the BCP,
@@ -47,7 +47,7 @@ export interface QuotaDefaults {
   prohibitSendPercent: number;
 }
 
-/** Exchange 2019 ratios: 1.9 GB / 2.0 GB of 2.3 GB. */
+/** Default ratios: 1.9 GB / 2.0 GB of 2.3 GB. */
 export const QUOTA_DEFAULTS: QuotaDefaults = { warningPercent: 83, prohibitSendPercent: 87 };
 
 export interface QuotaStatus {
@@ -93,7 +93,7 @@ export const levelAtLeast = (level: QuotaLevel, min: QuotaLevel): boolean => RAN
 /**
  * Pure: the SMTP reply for a recipient whose mailbox is at/over the
  * prohibit-send-receive level. QUOTA_FULL_PERMANENT:
- *   unset | true | yes | 1  → always 552 5.2.2 (Exchange behaviour, default)
+ *   unset | true | yes | 1  → always 552 5.2.2 (default)
  *   false | no | off        → always 452 4.2.2 (sender retries)
  *   <N> with N ≥ 100        → 452 4.2.2 while usage < N % of the quota, 552 5.2.2 above
  */
@@ -141,7 +141,7 @@ export async function loadQuotaDefaults(now = Date.now()): Promise<QuotaDefaults
     });
     if (s) value = { warningPercent: s.quotaWarningPercent, prohibitSendPercent: s.quotaProhibitSendPercent };
   } catch (err) {
-    log.warn({ err }, 'quota defaults unavailable — using Exchange defaults');
+    log.warn({ err }, 'quota defaults unavailable — using built-in defaults');
   }
   defaultsCache = { value, at: now };
   return value;

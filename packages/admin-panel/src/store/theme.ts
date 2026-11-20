@@ -12,7 +12,7 @@ interface ThemeState {
   setTheme: (theme: ThemeMode) => void;
 }
 
-// Own localStorage key — independent of OWA (coremail-theme)
+// Own localStorage key — independent of the MWA (coremail-theme)
 export const useThemeStore = create<ThemeState>()(
   persist(
     (set) => ({

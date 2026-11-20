@@ -31,7 +31,7 @@ test('rights bits and roles match the storage model', () => {
   for (const r of FOLDER_ROLES) assert.equal(roleOf(ROLE_RIGHTS[r]), r);
 });
 
-test('German role labels in the Outlook order, custom last', () => {
+test('German role labels in the standard role order, custom last', () => {
   assert.deepEqual(roleChoices('reviewer').map(roleLabel), [
     'Besitzer', 'Veröffentlichender Bearbeiter', 'Bearbeiter', 'Veröffentlichender Autor', 'Autor',
     'Nicht bearbeitender Autor', 'Prüfer', 'Mitwirkender', 'Keine',

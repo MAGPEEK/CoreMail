@@ -52,7 +52,7 @@ export interface OutboundJobOptions {
   removeOnFail: { age: number } | { count: number };
 }
 
-// ── Retry schedule (v8.1, Exchange-like) ──────────────────────────────────────
+// ── Retry schedule (v8.1) ────────────────────────────────────────────────────
 //
 // A transient failure is retried until the message expires
 // (outboundRetentionHours, default 48 h): first after retryBackoffDelaySec

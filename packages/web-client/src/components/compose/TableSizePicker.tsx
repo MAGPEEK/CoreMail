@@ -1,5 +1,5 @@
 /**
- * 10.2: size picker of "Tabelle einfügen" (Word / Outlook style) — an 8 × 8
+ * 10.2: size picker of "Tabelle einfügen" (word-processor style) — an 8 × 8
  * grid inside the table submenu. Hovering highlights the top-left rectangle and
  * shows "Spalten × Zeilen" below, a click inserts that size. Keyboard: the grid
  * is one focus stop (role="grid", aria-activedescendant = the rectangle's

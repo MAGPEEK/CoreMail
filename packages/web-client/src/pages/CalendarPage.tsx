@@ -421,7 +421,7 @@ export function CalendarPage() {
       )}
 
       {/* New event dialog */}
-      {/* v3.18.27: Outlook-style event dialog for create & edit */}
+      {/* v3.18.27: event dialog for create & edit */}
       {eventDialog && (
         <EventEditDialog
           key={eventDialog.mode === 'edit' ? `${eventDialog.eventId}:${eventDialog.occurrence ?? ''}` : 'new'}

@@ -91,7 +91,7 @@ function HttpsServedWarning({ data, https, linkToCertificates }: { data: ServedR
       <div className="flex-1 space-y-1">
         <p>
           <strong>{httpsSwitchName(https.port)} liefert kein passendes Zertifikat für {data.hostname}.</strong>{' '}
-          Browser, Outlook und Mobilgeräte warnen oder verbinden sich nicht (Webmail, ActiveSync, Autodiscover, MAPI).
+          Browser, Desktop-Mailprogramme und Mobilgeräte warnen oder verbinden sich nicht (Webmail, ActiveSync, Autodiscover, MAPI).
         </p>
         <p className="text-xs">{httpsWarningText(data, https)}</p>
         {data.suggestedCert
@@ -114,7 +114,7 @@ function ServedPortsWarning({ data, linkToCertificates }: { data: ServedReport; 
       <div className="flex-1 space-y-1">
         <p>
           <strong>Mail-Ports liefern kein passendes Zertifikat für {data.hostname}.</strong>{' '}
-          Mail-Programme (Outlook, iPhone) melden „Zertifikat unbekannt“ und verbinden sich nicht.
+          Mail-Programme (Desktop, iPhone) melden „Zertifikat unbekannt“ und verbinden sich nicht.
         </p>
         <p className="text-xs">{warningSummary(data)}</p>
         {data.suggestedCert

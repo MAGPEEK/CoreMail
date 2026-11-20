@@ -22,7 +22,7 @@ function runUndo(onUndo: () => void | Promise<unknown>): void {
 }
 
 /**
- * Shows a toast with an "Undo" button for `duration` ms (default 8 s, OWA).
+ * Shows a toast with an "Undo" button for `duration` ms (default 8 s).
  * The action is also registered for the keyboard undo (`z`).
  */
 export function showUndoToast({ message, onUndo, duration = UNDO_TTL_MS }: UndoOptions): void {

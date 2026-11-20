@@ -59,7 +59,7 @@ const EXEMPT = [/^\/\.well-known\/acme-challenge\//, /^\/healthz\/?$/, /^\/livez
 /**
  * Autodiscover "HTTP redirect method" (MS-OXDSCLI §3.1.5.2): a client sends an
  * unauthenticated GET to http://autodiscover.<domain>/autodiscover/autodiscover.xml
- * and expects a 302 to the HTTPS endpoint — older Outlook builds do not follow 308.
+ * and expects a 302 to the HTTPS endpoint — older desktop clients do not follow 308.
  */
 const AUTODISCOVER_XML = /^\/autodiscover\/autodiscover\.xml$/i;
 

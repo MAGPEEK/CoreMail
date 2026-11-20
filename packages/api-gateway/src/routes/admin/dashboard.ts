@@ -10,7 +10,7 @@ import os from 'node:os';
 import v8 from 'node:v8';
 import { readFile } from 'node:fs/promises';
 
-// Determine boot time + Coremail version once.
+// Determine boot time + CoreMail version once.
 // Order: COREMAIL_VERSION env (runtime override) → root package.json → 'unknown'.
 const PROCESS_STARTED_AT = new Date();
 let _appVersion: string | null = null;
@@ -206,7 +206,7 @@ adminDashboardRouter.get('/', async (req: Request, res: Response) => {
       // DNSBL hits in the last 24h
       prisma.dnsblHit.count({ where: { hitAt: { gte: new Date(now.getTime() - 24 * 60 * 60 * 1000) } } }).catch(() => 0),
 
-      // Coremail app version
+      // CoreMail app version
       getAppVersion(),
     ]);
 

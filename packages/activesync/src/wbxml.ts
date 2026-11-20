@@ -1,5 +1,5 @@
 /**
- * WBXML codec for Microsoft Exchange ActiveSync (EAS 12.1 – 14.1)
+ * WBXML codec for ActiveSync (EAS 12.1 – 14.1, MS-ASWBXML)
  * Implements the subset of WBXML used by ActiveSync.
  */
 

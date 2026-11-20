@@ -1,7 +1,7 @@
 /**
  * Admin API — Audit Log (Phase 10)
  *
- * ECP → Compliance Management → Audit Log
+ * BCP → Compliance → Audit Log
  *
  * Routes:
  *   GET /api/v1/admin/audit-log               — list (filterable, paginated)

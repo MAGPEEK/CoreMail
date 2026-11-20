@@ -7,7 +7,7 @@
  *   - `POST /api/v1/admin/domains/:id/make-primary` (change primary domain)
  *   - `PUT  /api/v1/admin/servers/settings`   (hostname change in BCP)
  *
- * Microsoft spec for Outlook Autodiscover: `autodiscover.<root-domain>` must
+ * Autodiscover (MS-OXDISCO): `autodiscover.<root-domain>` must
  * be reachable separately (own CNAME). For `mail.example.com` the
  * Autodiscover host is therefore `autodiscover.example.com`.
  */
@@ -39,8 +39,8 @@ export function deriveServerUrls(
     : `:${httpPort}`;
   const base = `${proto}://${publicHostname}${portSuffix}`;
 
-  // Autodiscover must run on its own CNAME (Microsoft spec):
-  //   `autodiscover.<root-domain>` — Outlook ALWAYS looks there first.
+  // Autodiscover must run on its own CNAME (MS-OXDISCO):
+  //   `autodiscover.<root-domain>` — clients ALWAYS look there first.
   // Examples:
   //   mail.example.com    → autodiscover.example.com  (strip sub-domain)
   //   example.com         → autodiscover.example.com  (direct prefix)

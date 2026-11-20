@@ -1,5 +1,5 @@
 /**
- * Undo send (OWA "send delay") with a server-side hold (v8.x).
+ * Undo send ("send delay") with a server-side hold (v8.x).
  *
  * Sending saves the draft and asks the server to send it after N seconds
  * (POST /mail/drafts/:id/send { undoDelaySec }); the server keeps it as a

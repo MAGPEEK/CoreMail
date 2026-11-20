@@ -327,7 +327,7 @@ const UpdateMailboxSchema = z.object({
   role: ROLE_ENUM.optional(), // v6: was z.string() → invalid enum value crashed Prisma
   active: z.boolean().optional(),
   quotaBytes: z.number().int().min(0).optional(),
-  // v8.1: Exchange quota levels (IssueWarningQuota / ProhibitSendQuota);
+  // v8.1: quota levels (warning / prohibit send);
   // null = server default (percent of quotaBytes = ProhibitSendReceiveQuota).
   quotaWarningBytes: z.number().int().min(0).nullable().optional(),
   quotaProhibitSendBytes: z.number().int().min(0).nullable().optional(),

@@ -14,7 +14,7 @@ function queryString(req: Request, name: string): string | undefined {
   return typeof v === 'string' ? v : undefined;
 }
 
-// Autodiscover v2 — JSON response (Outlook 2019/2022/365). Both documented forms:
+// Autodiscover v2 — JSON response (newer desktop clients). Both documented forms:
 //   GET /autodiscover/autodiscover.json/v1.0/{email}?Protocol=…
 //   GET /autodiscover/autodiscover.json?Email={email}&Protocol=…
 // Protocols: AutodiscoverV1 | IMAP | SMTP | ActiveSync | MapiHttp. Anonymous by design: the
@@ -54,7 +54,7 @@ export async function handleAutodiscoverV2(req: Request, res: Response): Promise
     return true;
   };
 
-  // Outlook first asks for AutodiscoverV1 to find the v1 endpoint
+  // Clients first ask for AutodiscoverV1 to find the v1 endpoint
   if (protocol === 'autodiscoverv1') {
     res.json({
       Protocol: 'AutodiscoverV1',
@@ -63,7 +63,7 @@ export async function handleAutodiscoverV2(req: Request, res: Response): Promise
     return;
   }
 
-  // v7.0.0: Exchange Web Services removed — never announce an EWS URL.
+  // v7.0.0: EWS removed — never announce an EWS URL.
   if (protocol === 'ews') {
     res.status(404).json({ ErrorCode: 'NoSuchProtocol', ErrorMessage: 'EWS is not supported (use IMAP/SMTP, JMAP or ActiveSync)' });
     return;

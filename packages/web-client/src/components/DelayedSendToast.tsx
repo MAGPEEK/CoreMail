@@ -1,5 +1,5 @@
 /**
- * Undo send (OWA "send delay") with a server-side hold: the compose window
+ * Undo send ("send delay") with a server-side hold: the compose window
  * saves the draft and hands it to `queueHeldSend()`, which asks the server to
  * send it after the configured delay and shows a countdown toast with "Undo".
  * The server keeps the mail as a delayed job, so it is sent even when the tab

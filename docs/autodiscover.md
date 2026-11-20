@@ -1,15 +1,15 @@
 # Autodiscover
 
-CoreMail answers the automatic account setup of Outlook, iOS Mail, Android ActiveSync clients,
+CoreMail answers the automatic account setup of desktop mail programs, iOS Mail, Android ActiveSync clients,
 Thunderbird and Apple devices. Package `packages/autodiscover` (port 8081, loopback); the
-api-gateway proxies the public paths. The behaviour follows the public Microsoft Open
-Specifications MS-OXDSCLI (Outlook), MS-OXDISCO (discovery order) and MS-ASCMD (ActiveSync
-Autodiscover).
+api-gateway proxies the public paths. The behaviour follows the public Open Specifications
+MS-OXDSCLI (Autodiscover publishing and lookup), MS-OXDISCO (discovery order) and MS-ASCMD
+(ActiveSync Autodiscover).
 
 | Endpoint | Clients | Auth |
 |---|---|---|
-| `POST`/`GET /autodiscover/autodiscover.xml` (v1, POX) | Outlook 2010–2021, Microsoft 365 classic, iOS Mail, Android EAS | Basic |
-| `GET /autodiscover/autodiscover.json/v1.0/<email>?Protocol=…` and `GET /autodiscover/autodiscover.json?Email=…&Protocol=…` (v2, JSON) | Outlook 2016+ | none |
+| `POST`/`GET /autodiscover/autodiscover.xml` (v1, POX) | Windows desktop mail programs (POX schema), iOS Mail, Android EAS | Basic |
+| `GET /autodiscover/autodiscover.json/v1.0/<email>?Protocol=…` and `GET /autodiscover/autodiscover.json?Email=…&Protocol=…` (v2, JSON) | newer Windows desktop mail programs | none |
 | `GET /.well-known/autoconfig/mail/config-v1.1.xml`, `GET /mail/config-v1.1.xml` | Thunderbird, eM Client | none |
 | `GET /api/v1/user/apple-profile` | Apple devices (`.mobileconfig`) | MWA session |
 
@@ -18,7 +18,7 @@ Paths are case-insensitive (`/Autodiscover/Autodiscover.xml`, `/autodiscover/aut
 
 ## DNS
 
-Outlook tries, in this order (MS-OXDISCO):
+Clients try, in this order (MS-OXDISCO):
 
 1. `https://<domain>/autodiscover/autodiscover.xml`
 2. `https://autodiscover.<domain>/autodiscover/autodiscover.xml`
@@ -33,7 +33,7 @@ _autodiscover._tcp.example.com.    SRV    0 0 443 mail.example.com.
 ```
 
 The certificate served for `autodiscover.<domain>` must cover that name (BCP → SSL/TLS; the HTTPS
-proxy selects the certificate by SNI). With the SRV record Outlook asks the user once whether
+proxy selects the certificate by SNI). With the SRV record the client asks the user once whether
 `mail.example.com` may configure the account — expected behaviour.
 
 ## v1 (POX) — request handling
@@ -41,7 +41,7 @@ proxy selects the certificate by SNI). With the SRV record Outlook asks the user
 1. **Plain-HTTP probe.** An unauthenticated `GET` that arrived over plain HTTP is answered with
    `302 Found` to the HTTPS endpoint — never with a password challenge. The gateway does this
    itself while the integrated HTTPS proxy is active (`302` for the Autodiscover XML path, `308`
-   elsewhere — older Outlook builds do not follow `308`); behind an external TLS terminator with
+   elsewhere — older desktop clients do not follow `308`); behind an external TLS terminator with
    `TRUST_PROXY` the autodiscover service does it from `X-Forwarded-Proto` when the configured
    Autodiscover URL (BCP → Server) is `https://`. It only does so when the gateway marks the
    scheme as known (`X-CoreMail-Proto-Verified`: TLS socket, trusted proxy or a direct client).
@@ -64,7 +64,7 @@ proxy selects the certificate by SNI). With the SRV record Outlook asks the user
 The body is read as text whatever the `Content-Type` says (some device clients send none or
 `application/xml`), limited to 64 KiB; namespace prefixes and XML entities are understood.
 
-### Response (Outlook schema)
+### Response (mail account schema)
 
 * `<User>`: display name, `LegacyDN`, `AutoDiscoverSMTPAddress` = the **primary** address.
 * One `<Account>` (`AccountType email`, `Action settings`) with an IMAP and an SMTP `<Protocol>`:
@@ -77,8 +77,8 @@ The body is read as text whatever the `Content-Type` says (some device clients s
   when the client sends `X-MapiHttpCapability` ≥ 1, the account's `mapi` switch is on, a public host
   name is configured and HTTPS has a trusted certificate (a Let's Encrypt production or uploaded
   certificate active for HTTPS, or `MAPI_HTTPS_TRUSTED=true` behind an external TLS terminator).
-  With it Outlook creates an account of the "Exchange" type; see [mapi.md](mapi.md).
-* No `EXCH`, `EXPR`, `EXHTTP` or EWS blocks — those would make Outlook attempt an Exchange RPC
+  With it a MAPI-capable desktop client creates a MAPI over HTTP account; see [mapi.md](mapi.md).
+* No `EXCH`, `EXPR`, `EXHTTP` or EWS blocks — those would make the client attempt an RPC
   connection (and MS-OXDSCLI forbids `EXCH` / `EXPR` next to `mapiHttp`). CoreMail never sends
   `redirectUrl` either (single server, no foreign Autodiscover endpoint to point at).
 
@@ -106,18 +106,18 @@ for the mail domain and HTTPS is trusted (as above), else `404 NoSuchProtocol`;
 
 ## Client matrix (tests)
 
-`packages/autodiscover/src/client-matrix.test.ts` replays the request shapes of Outlook 2010,
-2013, 2016, 2019, 2021 and Microsoft 365 classic, iOS Mail and Android ActiveSync clients (paths,
+`packages/autodiscover/src/client-matrix.test.ts` replays the request shapes of the Windows desktop
+client generations 2010 – 2021 and the current subscription build, iOS Mail and Android ActiveSync clients (paths,
 headers such as `X-MapiHttpCapability`/`X-AnchorMailbox`, bodies, content types) against the app:
 challenge first, correct schema afterwards, no RPC blocks, listener-driven endpoints, identical
 answers for unknown accounts, the plain-HTTP 302 and the v2 discovery sequence. The e2e step
 `legacy-clients` checks the live stack.
 
-## Old Outlook profiles
+## Old desktop client profiles
 
-* Outlook 2010/2013 profiles created against an Exchange server keep failing (they expect
+* Old desktop client profiles created against a MAPI/RPC server keep failing (they expect
   MAPI/RPC). Create a new profile; Autodiscover now sets up IMAP + SMTP.
-* Outlook 2010 on Windows 7 needs TLS 1.2 for HTTPS and the mail ports, or the opt-in
+* Old desktop clients on Windows 7 need TLS 1.2 for HTTPS and the mail ports, or the opt-in
   [TLS 1.0/1.1 switch](legacy-tls.md) on the HTTPS proxy and the IMAP/SMTP listeners it uses.
 * Users with MFA enter an app password (MWA → Einstellungen → Sicherheit).
-* Calendar and contacts: see [outlook-caldav.md](outlook-caldav.md).
+* Calendar and contacts: see [desktop-caldav.md](desktop-caldav.md).

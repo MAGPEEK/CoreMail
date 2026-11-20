@@ -24,7 +24,7 @@ async function main() {
 
   // v3.18.35: on settings changes (e.g. publicHostname update via BCP)
   // invalidate the settings cache — otherwise Autodiscover returns stale URLs
-  // for up to 60s. Outlook clients might then fail to connect.
+  // for up to 60s. Clients might then fail to connect.
   try {
     const sub = getRedisClient().duplicate();
     void sub.subscribe(CHANNEL_SETTINGS_RELOAD);

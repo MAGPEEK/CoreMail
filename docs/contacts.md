@@ -1,6 +1,6 @@
 # Contacts, contact groups and notes
 
-CoreMail 9.5 stores Outlook-level contacts ("Personen"): several typed e-mail
+CoreMail 9.5 stores full contacts ("Personen"): several typed e-mail
 addresses, phone numbers, postal addresses, web pages and chat addresses, the
 structured name, nickname, "file as", birthday, anniversary and categories.
 Contact groups ("Kontaktlisten") hold own contacts, other groups and plain

@@ -13,7 +13,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
-## [10.2.0] — 2026-11-20 — Outlook-style webmail shell, search suggestions, message trace details
+## [10.2.0] — 2026-11-20 — New webmail shell, search suggestions, message trace details
 
 ### Added
 
@@ -42,7 +42,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 ### Fixed
 
 - BCP "Protokolle und Dienste": no "HTTPS ist nicht aktiv" / `mapi-https` warning while the integrated HTTPS server listens and serves a trusted certificate for the public host name without one explicitly marked for HTTPS; the SSL/TLS served-certificate view probes HTTPS in that case too. The HTTP → HTTPS redirect still needs an explicitly marked certificate.
-- Retention (Managed Folder Assistant): soft-deleted items stay recoverable for `DELETED_ITEM_RETENTION_DAYS` (default 30; were removed after 14 days); several policies on one mailbox resolve user → domain → all mailboxes, then the longest period; legacy policies without tags keep their scope; subfolders inherit their parent's tag (a subfolder named "Spam" is no Junk folder); "In Archiv verschieben" keeps archive subfolders; "Nur markieren" no longer rewrites every item each run; personal tags apply without a policy; global / domain policies reach shared mailboxes; permanent deletes go through the message store (quota no longer reduced twice); counters refreshed, failures isolated per mailbox, paging for large folders.
+- Retention (retention worker): soft-deleted items stay recoverable for `DELETED_ITEM_RETENTION_DAYS` (default 30; were removed after 14 days); several policies on one mailbox resolve user → domain → all mailboxes, then the longest period; legacy policies without tags keep their scope; subfolders inherit their parent's tag (a subfolder named "Spam" is no Junk folder); "In Archiv verschieben" keeps archive subfolders; "Nur markieren" no longer rewrites every item each run; personal tags apply without a policy; global / domain policies reach shared mailboxes; permanent deletes go through the message store (quota no longer reduced twice); counters refreshed, failures isolated per mailbox, paging for large folders.
 
 ### Security
 
@@ -127,11 +127,11 @@ Tests: schema-sync classifier (`retire` verdict, cleanup statement against the F
 
 ### Changed
 
-- BCP → Dienste → HTTPS card: a status line that is always shown says whether HTTPS is active and with which TLS versions ("HTTPS ist aktiv mit TLS 1.2 und 1.3 — für Webmail, ActiveSync, MAPI usw. ist kein weiterer Schalter nötig.", or "HTTPS ist nicht aktiv — Zertifikat unter SSL/TLS zuweisen."). The legacy-TLS switch (HTTPS and mail listeners) is now labelled "Zusätzlich veraltete TLS-Versionen 1.0/1.1 zulassen (optional)", with the hint "Nur für sehr alte Geräte nötig. Moderne Clients und Outlook brauchen das nicht." while it is off. While it is on, the warning starts with "Optionaler Kompatibilitätsmodus aktiv:". Admins had read the old label ("Ältere Clients erlauben") as the switch that turns HTTPS on and that MAPI requires.
+- BCP → Dienste → HTTPS card: a status line that is always shown says whether HTTPS is active and with which TLS versions ("HTTPS ist aktiv mit TLS 1.2 und 1.3 — für Webmail, ActiveSync, MAPI usw. ist kein weiterer Schalter nötig.", or "HTTPS ist nicht aktiv — Zertifikat unter SSL/TLS zuweisen."). The legacy-TLS switch (HTTPS and mail listeners) is now labelled "Zusätzlich veraltete TLS-Versionen 1.0/1.1 zulassen (optional)", with the hint "Nur für sehr alte Geräte nötig. Moderne Clients brauchen das nicht." while it is off. While it is on, the warning starts with "Optionaler Kompatibilitätsmodus aktiv:". Admins had read the old label ("Ältere Clients erlauben") as the switch that turns HTTPS on and that MAPI requires.
 
 ---
 
-## [9.5.0] — 2026-11-19 — ActiveSync calendar, tasks, notes and contacts, CalDAV tasks, folder permissions, domain-scoped admins, Outlook cached mode, profile photo
+## [9.5.0] — 2026-11-19 — ActiveSync calendar, tasks, notes and contacts, CalDAV tasks, folder permissions, domain-scoped admins, MAPI cached mode, profile photo
 
 Minor release (SemVer: new features, additive schema, previous API contracts kept; behaviour changes that deserve attention are listed under "Upgrade notes"). Every change was reviewed independently; every finding was fixed with a regression test.
 
@@ -145,13 +145,13 @@ Minor release (SemVer: new features, additive schema, previous API contracts kep
 - **CalDAV task list** (docs/caldav.md): every user has a VTODO collection "Aufgaben" (`/dav/calendars/<id>/tasks/`) that Apple Reminders, Thunderbird and DAVx⁵ (jtx Board, Tasks.org) sync both ways — PROPFIND, REPORT (calendar-query with VTODO comp-filter and time-range, calendar-multiget, sync-collection), GET / PUT / DELETE with ETag / If-Match. SUMMARY, DESCRIPTION, STATUS, PERCENT-COMPLETE, DTSTART, DUE, COMPLETED, PRIORITY, CLASS, RRULE and VALARM map to the task form; unknown properties round-trip. The webmail module "tasks" switches it off. Schema: `Task.uid`, `Task.icalData` (unique `userId` + `uid`).
 - **Contacts with several values and contact groups** (docs/contacts.md): typed e-mail addresses, phone numbers (work, home, mobile, fax, pager, other), postal addresses, web pages and chat addresses, the structured name, nickname, "file as", birthday and anniversary (also without year) and categories per contact (new `contacts` columns derived from the stored vCard; the flat columns stay in step for JMAP, the address list and older clients). **Contact groups** ("Kontaktlisten", table `contact_groups`; members are contacts, other groups or plain addresses): REST `/api/v1/contacts/groups` (CRUD) and `/groups/:id/expand`, compose autocomplete with `?groups=1`, "E-Mail an Liste". CardDAV round-trips the new fields with TYPE and serves groups as vCard 4 `KIND:group` + `MEMBER` and in the Apple form `X-ADDRESSBOOKSERVER-KIND` / `-MEMBER`; unknown vCard properties are preserved. Strictly validated structured fields on `POST` / `PUT /api/v1/contacts`, search over every contact field, contact form with repeatable typed fields; e2e step `contacts`.
 - **Note categories**: REST `categories`, filter `?category=`, category picker and chips in the webmail.
-- **Folder permissions** like Outlook's folder "Permissions": a mailbox owner grants a user — or "Standard" (everyone in the organisation) — a role on one folder (Besitzer, Veröffentlichender Bearbeiter, Bearbeiter, Veröffentlichender Autor, Autor, Nicht bearbeitender Autor, Prüfer, Mitwirkender, Keine, Benutzerdefiniert), optionally also for the subfolders; "Anonym" is always "Keine". Schema: model `FolderPermission`, `Message.createdBy` ("own" items). One central access check in storage (`folder-permissions.ts`, `folder-access.ts`): mailbox FULL_ACCESS stays full, READ_ONLY stays a read floor, folder grants only add.
+- **Folder permissions** ("Berechtigungen"): a mailbox owner grants a user — or "Standard" (everyone in the organisation) — a role on one folder (Besitzer, Veröffentlichender Bearbeiter, Bearbeiter, Veröffentlichender Autor, Autor, Nicht bearbeitender Autor, Prüfer, Mitwirkender, Keine, Benutzerdefiniert), optionally also for the subfolders; "Anonym" is always "Keine". Schema: model `FolderPermission`, `Message.createdBy` ("own" items). One central access check in storage (`folder-permissions.ts`, `folder-access.ts`): mailbox FULL_ACCESS stays full, READ_ONLY stays a read floor, folder grants only add.
   - Webmail: folder context menu "Berechtigungen…"; folders shared with the user appear under "Freigegebene Postfächer" with only the granted folders; actions follow the rights per folder.
   - REST `GET|PUT /api/v1/mail/folders/:folderId/permissions` (also under `/mail/{shared,delegated}-mailboxes/:id/…`), foreign folder lists carry `noSelect` and `myRights`, `GET /user/accessible-mailboxes` marks `folderScoped` mailboxes. Admin API `GET /api/v1/admin/{mailboxes,shared-mailboxes}/:id/folder-permissions` and `GET|PUT …/:id/folders/:folderId/permissions`; BCP "Ordnerberechtigungen".
   - IMAP: real per-folder ACL — MYRIGHTS / GETACL / LISTRIGHTS reflect folder permissions, SETACL / DELETEACL set them ("anyone" = Standard); folders reached through folder permissions appear under `Other Users/` / `Shared/`.
   - Audit `mailbox.folder.permission.set|remove` (always written); e2e step `folder-permissions`.
 - **Domain-scoped admin roles** (docs/rbac.md): HELP_DESK, RECIPIENT_MANAGEMENT, COMPLIANCE_MANAGEMENT, HYGIENE_MANAGEMENT and VIEW_ONLY_ORG can be limited to one or more domains (table `admin_scopes`; no rows = organisation-wide as before; ORGANIZATION_MANAGEMENT stays organisation-wide). A scoped admin never reaches the server-wide areas (organisation, identity, servers incl. backups) or server-wide routes, sees only objects of its domains in every list (mailboxes, shared mailboxes, resources, aliases, mobile devices, domains, sender lists, quarantine, audit log, message trace, dashboard figures), gets 404 for objects of other domains and 403 `OUT_OF_SCOPE` when creating in another domain; addresses of other hosted domains in detail views, audit entries and exports read "(andere Domain)". `PUT /api/v1/admin/organisation/role-assignments/:id/scope` (ORGANIZATION_MANAGEMENT only, audit `user.role.scope`, ends the admin's web sessions), `scope` in `GET …/role-assignments` and `GET /api/v1/admin/me/permissions`; BCP scope column and domain editor on the RBAC page; CLI `coremail role list | set | scope | me`; e2e step `scopes`.
-- **MAPI cached mode** for classic Outlook (MS-OXCFXICS, docs/mapi.md): incremental download of contents and hierarchy (`RopSynchronizationConfigure`, `RopFastTransferSourceGetBuffer` with partial buffers, message changes with recipients and attachments, read-state changes, deletions, final ICS state), ICS state upload / download with checkpoints (IDSETs as GLOBSETs, change numbers = message store modSeq), upload through a collector (`…ImportMessageChange`, `…ImportHierarchyChange`, `…ImportDeletes`, `…ImportReadStateChanges`, `…ImportMessageMove`), `RopGetLocalReplicaIds`, `RopSetLocalReplicaMidsetDeleted`, `RopLongTermIdFromId` / `RopIdFromLongTermId` — every write through the message store. Objects Outlook creates keep the IDs it assigned from its local replica ranges (new table `mapi_objects`, model `MapiObject`); imported changes are recorded in the collector state so they are not downloaded again; conflict detection with PidTagPredecessorChangeList (`IgnoreFailure`, `SyncConflict`). PidTagSourceKey / ChangeKey / PredecessorChangeList / ChangeNumber also in online mode.
+- **MAPI cached mode** for desktop clients (MS-OXCFXICS, docs/mapi.md): incremental download of contents and hierarchy (`RopSynchronizationConfigure`, `RopFastTransferSourceGetBuffer` with partial buffers, message changes with recipients and attachments, read-state changes, deletions, final ICS state), ICS state upload / download with checkpoints (IDSETs as GLOBSETs, change numbers = message store modSeq), upload through a collector (`…ImportMessageChange`, `…ImportHierarchyChange`, `…ImportDeletes`, `…ImportReadStateChanges`, `…ImportMessageMove`), `RopGetLocalReplicaIds`, `RopSetLocalReplicaMidsetDeleted`, `RopLongTermIdFromId` / `RopIdFromLongTermId` — every write through the message store. Objects the client creates keep the IDs it assigned from its local replica ranges (new table `mapi_objects`, model `MapiObject`); imported changes are recorded in the collector state so they are not downloaded again; conflict detection with PidTagPredecessorChangeList (`IgnoreFailure`, `SyncConflict`). PidTagSourceKey / ChangeKey / PredecessorChangeList / ChangeNumber also in online mode.
 - **Profile photos**: Settings → E-Mail-Konto with upload, crop dialog (round mask, drag, zoom, keyboard, previews), change and remove; the browser uploads 512×512. REST `PUT|DELETE /api/v1/user/photo`, `GET /api/v1/users/:id/photo` (same domain only, ETag), `POST /api/v1/users/photos/lookup` (batched, aliases included, max. 100), `photo` in `GET /api/v1/user/profile`. Photos of internal users appear in the message list, reading pane, contact card and list, meeting attendees and the top bar. Webmail module switch `profilePhoto` (server → domain → user, BCP, CLI `coremail policy set --profile-photo`); BCP mailbox detail "Foto entfernen" (`GET|DELETE /api/v1/admin/mailboxes/:id/photo`, audit `mailbox.photo.remove`). Schema: `User.photoKey`, `User.photoUpdatedAt`, `WebmailPolicy.profilePhoto`; object-store keys `profile-photos/<aa>/<sha256>.jpg`; settings `PROFILE_PHOTO_UPLOAD_LIMIT`, `PROFILE_PHOTO_UPLOAD_WINDOW_SEC`; e2e step `profile-photo`.
 - **Rooms answer mailed invitations**: a resource mailbox replies to a meeting request that arrives by mail with an iMIP REPLY (`ACCEPTED`, `DECLINED`, or `TENTATIVE` while awaiting approval; per occurrence for occurrence-only requests) with a German subject and the reason of a decline or the conflicting dates, sent from the resource's address (DKIM of its domain, `Auto-Submitted: auto-replied`, threaded). Resource setting `sendReplies` (default on) in `POST` / `PUT /api/v1/admin/resources[/:id]`. Resource bookings store their conflicting occurrences (`ResourceBooking.conflicts`, up to 50; shown in `GET /api/v1/admin/resources/:id/bookings`).
 - **Webmail accessibility and responsive layout** (docs/webmail-accessibility.md): folder tree as ARIA tree and message list as ARIA grid with roving tabindex and arrow keys, focus moves to the neighbouring message after delete / move, "skip to content" link, labelled landmarks; below 768 px a single-pane flow with a back button, 768–1099 px list and message with the folders in a drawer, the calendar starts in the day view on small screens.
@@ -180,7 +180,7 @@ Minor release (SemVer: new features, additive schema, previous API contracts kep
 
 ### Fixed
 - **Upgrade**: schema-sync no longer stops at the new `tasks` unique constraint (`userId`, `uid`) on a 9.4.0 or older database — a constraint over a new optional column that does not exist yet is skipped (NULLs never conflict); real errors still fail closed.
-- **MAPI**: default folders always carry the names Outlook expects (Inbox, Drafts, Sent Items, Deleted Items, Junk Email, Archive), whatever the folder row holds; cached mode resends folders renamed or moved back, reports folders moved out of the subtree as deleted and accepts unchanged special folders; ISO-8859-1 / -9 address-book strings keep C1 controls.
+- **MAPI**: default folders always carry the names MAPI clients expect (Inbox, Drafts, Sent Items, Deleted Items, Junk Email, Archive), whatever the folder row holds; cached mode resends folders renamed or moved back, reports folders moved out of the subtree as deleted and accepts unchanged special folders; ISO-8859-1 / -9 address-book strings keep C1 controls.
 - **Restore** keeps the original received time of messages (manifest internal date, MBOX separator date, topmost Received header, else Date) instead of the restore time.
 - **Rooms by mail**: every occurrence of a recurring meeting is checked (EXDATE, moved occurrences, recurring bookings expanded, max. 400), series / duration / booking-window settings apply as in the event form, TZID start times are no longer read as UTC; occurrence-only REQUESTs update the stored series and CANCELs of single occurrences free only those slots; a declined moved occurrence is declined alone; the booking is read, merged and answered in one transaction under the resource lock. Simple DAILY / WEEKLY rules expand from the requested window (cheap for old series).
 - **REST calendar**: moving, changing or deleting an attendee's copy of someone else's meeting no longer rebooks, refreshes or releases the organizer's rooms.
@@ -204,7 +204,7 @@ Minor release (SemVer: new features, additive schema, previous API contracts kep
 - **Schema:** all changes are additive (new tables `folder_permissions`, `admin_scopes`, `contact_groups`, `mapi_objects`; new nullable or defaulted columns on tasks, contacts, notes, messages, users, resource mailboxes / bookings and webmail policies) and are applied automatically at start. The new unique constraint on existing data (`tasks` `userId` + `uid`) is checked by schema-sync; because `uid` is new in 9.5 (NULL in every row) it is applied without a duplicate check.
 - **Contacts backfill:** the structured contact columns of existing contacts are filled once in the background after the first start (resumable, no visible change to sync clients).
 - **ActiveSync:** phones get Ping Status 7 once and then see the new Calendar, Tasks, Notes and Contacts folders (with the webmail modules on) — no new account setup needed.
-- **MAPI:** Outlook's default folders now always carry the Outlook names; mailboxes created by the setup wizard (e.g. "Gesendet") see them renamed once in Outlook. Cached mode is supported; Outlook no longer needs it switched off. An address-book bind with CP_WINUNICODE is refused with `InvalidCodepage` (Outlook binds with its ANSI code page).
+- **MAPI:** the default folders now always carry the names MAPI clients expect; mailboxes created by the setup wizard (e.g. "Gesendet") see them renamed once in the desktop client. Cached mode is supported; desktop clients no longer need it switched off. An address-book bind with CP_WINUNICODE is refused with `InvalidCodepage` (desktop clients bind with their ANSI code page).
 - **Rooms send iMIP replies by default** (`sendReplies`, on) to organizers who invite them by mail; switch it off per resource in the admin API if not wanted.
 - **Notes:** `color` values other than `YELLOW BLUE GREEN PINK PURPLE` are now refused with 400 over REST (existing colours stay accepted unchanged).
 - **DMARC alignment:** sibling subdomains of one organization are now aligned (e.g. replies or DSNs authenticated for `bounces.example.com` count for `mail.example.com`); parent domains across a public suffix no longer count.
@@ -216,12 +216,12 @@ Minor release (SemVer: new features, additive schema, previous API contracts kep
 
 ---
 
-## [9.4.0] — 2026-11-18 — Outlook-style webmail, MAPI over HTTP, protocol access switches, realtime push, calendar and tasks
+## [9.4.0] — 2026-11-18 — Webmail redesign, MAPI over HTTP, protocol access switches, realtime push, calendar and tasks
 
 Minor release (SemVer: new features, additive schema, previous API contracts kept; behaviour changes that deserve attention are listed under "Upgrade notes"). Every change was reviewed independently; every finding was fixed with a regression test.
 
 ### Added
-- **MAPI over HTTP for classic Outlook** (new service `mapi-server`, port 3007, loopback; the api-gateway forwards `/mapi/*`; docs/mapi.md): an "Exchange" account in classic Outlook, implemented from the public Open Specifications. **Opt-in** (protocol switch `mapi`, off by default), **online mode only**, **Basic over HTTPS only** (no NTLM / Negotiate; app passwords with MFA).
+- **MAPI over HTTP for desktop mail programs** (new service `mapi-server`, port 3007, loopback; the api-gateway forwards `/mapi/*`; docs/mapi.md): a MAPI account in desktop clients that speak MAPI over HTTP, implemented from the public Open Specifications. **Opt-in** (protocol switch `mapi`, off by default), **online mode only**, **Basic over HTTPS only** (no NTLM / Negotiate; app passwords with MFA).
   - Mailbox endpoint `/mapi/emsmdb`: Connect / Execute / Disconnect / NotificationWait / PING, sessions with rotating `MapiContext` / `MapiSequence` cookies (Redis, 30 min idle, at most 16 per account, ended by credential changes and the switch), ROP engine with 39 ROPs (logon to own, shared and delegated mailboxes, folders, tables, messages, attachments, streams, properties, named properties, notifications), sending with the same rules as SMTP submission and JMAP. Limits: `MAPI_RATE_LIMIT` / `MAPI_RATE_WINDOW_SEC`, `MAPI_SESSION_MEMORY_MB`, 250 attachments, 10 000 recipients.
   - Address book endpoint `/mapi/nspi` with all 19 request types (Global Address List of the account's domain incl. aliases and Shared Mailboxes; hidden mailboxes are not listed; bounded answers).
   - Notifications from `mailbox:changes` (NewMail, folder and table changes; `NotificationWait` returns within about a second).
@@ -231,13 +231,13 @@ Minor release (SemVer: new features, additive schema, previous API contracts kep
 - **Webmail policies** on server, domain and mailbox level (docs/webmail-policies.md; tables `webmail_policies`, `trusted_image_senders`): module switches (Kalender, Kontakte, Aufgaben, Notizen, Regeln, Signaturen, Kategorien, Gelöschte Elemente, Passwort ändern, Designs, Externe Clients, App-Passwörter, Freigegebene Postfächer) hidden in the webmail and refused by the server (403 `FEATURE_DISABLED`, CalDAV/CardDAV 403, ActiveSync), blocked / "save only" attachment types, upload size limit, external-image policy (ask / contacts only / block) with trusted senders per user. `GET /api/v1/user/features`, admin API `/api/v1/admin/webmail-policies`, BCP page and domain / mailbox sections, CLI `coremail policy show|set`.
 - **ActiveSync 12.1 and 14.0** next to 14.1: negotiated per request (`MS-ASProtocolVersion` header or base64 request line) and remembered per device (`ActiveSyncDevice.protocolVersion`); 12.1 SendMail / SmartReply / SmartForward with raw MIME and request-line parameters, GetItemEstimate request form with `Class` / `FilterType`; Ping without `X-MS-PolicyKey` for a known OK device; retries without ClientId are deduplicated for 10 minutes (docs/activesync.md).
 - **Realtime events for every change** (docs/realtime.md): `mailbox:changes` and typed per-user events, published by every writer (SMTP, IMAP, POP3, JMAP, ActiveSync, MAPI, webmail, CalDAV, restore, retention). Webmail refreshes exactly the affected views live, one connection per browser (leader election, logout in one tab logs out all), **Web Push** for new mail (opt-in per device; sender and subject only with an extra opt-in), installable webmail (`/manifest.webmanifest` from the branding, service worker, PNG app icons), `POST /api/v1/push/unsubscribe`, `PushSubscription.showPreview`.
-- **Outlook-style webmail**: app rail (bottom bar below 768 px), mail command bar, reading-pane action bar, shared page frame, toolbar keyboard pattern; compose opens **inline in the reading pane** with draft tabs, or in its own window (`/compose/<draftId>`); slim compose with command row, formatting toolbar below the body (font size, bold / italic / underline, colours, lists, indent, alignment, text direction, links, quote, code, super- / subscript, picture, table, rule, paragraph format, font, undo / redo, clear formatting), recipient pills, quoted original, plain-text switch, larger font lists, **Namen prüfen**, **Auf Barrierefreiheitsprobleme prüfen** (with alternative-text fixes), **Wichtigkeit**, **Vertraulichkeit** (`Message.sensitivity`, `Sensitivity` header), Lesebestätigung and Übermittlungsbestätigung (DSN), Esc saves and closes. New nullable columns `Message.importance` and `Message.sensitivity`; drafts and `POST /mail/send` take optional `importance`, `sensitivity`, `requestDeliveryReceipt`.
+- **Webmail redesign**: app rail (bottom bar below 768 px), mail command bar, reading-pane action bar, shared page frame, toolbar keyboard pattern; compose opens **inline in the reading pane** with draft tabs, or in its own window (`/compose/<draftId>`); slim compose with command row, formatting toolbar below the body (font size, bold / italic / underline, colours, lists, indent, alignment, text direction, links, quote, code, super- / subscript, picture, table, rule, paragraph format, font, undo / redo, clear formatting), recipient pills, quoted original, plain-text switch, larger font lists, **Namen prüfen**, **Auf Barrierefreiheitsprobleme prüfen** (with alternative-text fixes), **Wichtigkeit**, **Vertraulichkeit** (`Message.sensitivity`, `Sensitivity` header), Lesebestätigung and Übermittlungsbestätigung (DSN), Esc saves and closes. New nullable columns `Message.importance` and `Message.sensitivity`; drafts and `POST /mail/send` take optional `importance`, `sensitivity`, `requestDeliveryReceipt`.
 - **Personal settings that roam** (docs/user-settings.md): `GET/PATCH /api/v1/user/preferences` (view, theme, language, region / time zone / date and clock format, calendar work days and hours, reading and compose options, sort order `?sort=&dir=`), several named signatures with defaults per sender identity (`/api/v1/user/signatures`), read receipts (`POST /mail/messages/:id/receipt`, `$MDNSent`), signed-in sessions list (`/auth/sessions`, `revoke-others`), `?markRead=false`, deep links (`/mail/<mailbox>/<folder>/<message>`, `/calendar/event/<id>`, `/contacts/<id>`). Additive: `user_settings.preferences`, table `user_signatures`, `messages.dispositionNotificationTo`.
 - **Calendar** (docs/calendar.md): recurrence editor and presets, edit / delete a single occurrence of a series (`?occurrence=`, `RECURRENCE-ID` / `EXDATE`, attendee updates for that occurrence), **scheduling assistant** (`POST /calendar/schedule-suggestions`), **rooms and resources** with conflict check and booking rules (`GET /calendar/rooms`, `rooms` on events), **Anzeigen als** (`TRANSP` + `X-MICROSOFT-CDO-BUSYSTATUS`), reminders per event (also by mail), "Heute" and a day agenda. Additive: `CalendarEvent.showAs`, `ResourceCalendar.bookingSeq`.
 - **Follow-up flags and tasks** (docs/tasks.md): flags with dates and reminders on mail (`PUT/GET /api/v1/mail/follow-up`, kept in step with `\Flagged` over IMAP, JMAP, REST, rules; ActiveSync `email:Flag` sent and applied), "Gekennzeichnete Elemente und Aufgaben" list, full task form (start / due / completion date, status, % complete, private, recurrence creating the next task, effort, mileage, billing, companies, rich-text note). Additive: `Message.flagStatus` and four flag dates, ten `Task` columns.
 - **Mailbox management** (docs/mailbox-management.md): auto-mapping per grant (`autoMap`), sent copies in the shared mailbox for send as / on behalf (`sentCopySendAs`, `sentCopySendOnBehalf`, from webmail, SMTP, JMAP, ActiveSync), per-mailbox mail flow (`MailFlowPolicy`: hide from the address list, admin forwarding, accept-only / reject-from lists, receive / send size, max. recipients; `GET|PUT /api/v1/admin/{mailboxes,shared-mailboxes}/:id/mail-flow`), mailbox access audit (`mailbox.foreign.*`, switch and retention in BCP, audit filter "Postfachzugriffe", webmail Settings → Sicherheit "Zugriffe auf mein Postfach"). CLI `coremail shared grant --no-automap`, `shared sent-copy`, `mailbox flow`, `shared flow`.
 - **Hygiene settings**: BCP → Schutzfilter → **Absenderlisten** (block / allow lists per scope with exact / wildcard / regex patterns, CSV import / export, `Blacklist.listType`, enforced per recipient at RCPT TO) and **Spoofing** (local anti-spoofing action, trusted senders and ARC sealers as BCP settings; environment variables still override), DNSBL "Score" zones now add their weight to the spam score, configurable global **API rate limit** (BCP → Einstellungen → Sicherheit, `ServerSettings.apiRateLimit*`, `API_RATE_LIMIT_*`).
-- **Legacy clients**: opt-in **TLS 1.0 / 1.1** per listener and for the HTTPS proxy (vetted cipher list, hot reload, warning + audit, docs/legacy-tls.md; `GET/PUT /api/v1/admin/services/https-tls`, `allowLegacyTls`), opt-in **device relay** for scanners / printers (allowed networks, hosted sender domains, rate limit, attachment filter and ClamAV, docs/device-relay.md; `GET/PUT /api/v1/admin/smtp-config/device-relay`), security-filter `POST /check/malware`, Autodiscover client matrix and docs (docs/autodiscover.md, docs/outlook-caldav.md).
+- **Legacy clients**: opt-in **TLS 1.0 / 1.1** per listener and for the HTTPS proxy (vetted cipher list, hot reload, warning + audit, docs/legacy-tls.md; `GET/PUT /api/v1/admin/services/https-tls`, `allowLegacyTls`), opt-in **device relay** for scanners / printers (allowed networks, hosted sender domains, rate limit, attachment filter and ClamAV, docs/device-relay.md; `GET/PUT /api/v1/admin/smtp-config/device-relay`), security-filter `POST /check/malware`, Autodiscover client matrix and docs (docs/autodiscover.md, docs/desktop-caldav.md).
 - BCP → **Protokolle & Dienste**: one page for protocol access, ports (TLS mode, legacy TLS), differing domains / mailboxes and warnings; the SSL/TLS certificate list shows a status chip per service (SMTP, IMAP, POP3, HTTPS) from what the ports really serve (`GET /api/v1/admin/certificates/served` also probes HTTPS and returns `unreadableKeys`).
 - Recursive folder delete: `?recursive=true` on the folder delete routes (own, shared, delegated and the compat route) deletes the folder and its subfolders and moves the messages to Trash; webmail asks with the number of subfolders and messages.
 - Storage helpers `submission-limits.ts` (one source for the limits of a submitted message), `storeRawInFolder()`, `legacyDnFor()`, `policy-levels.ts`, `file-types.ts`, IDN helpers (`@coremail/storage/idn`); `@coremail/core` `createFixedWindowLimiter()`, `tlsProtocolOptions`, `randomCertSerialHex`; `LICENSE` file; translations of login, second-factor, SSO, setup, settings navigation and several BCP pages; e2e steps `mapi`, `protocols`, `policies`, `mailbox-mgmt`, `eas-legacy`, `legacy-clients`.
@@ -284,7 +284,7 @@ Minor release (SemVer: new features, additive schema, previous API contracts kep
 - **Schema:** all changes are additive (new tables `protocol_policies`, `webmail_policies`, `trusted_image_senders`, `user_signatures`, `device_relay_settings`; new nullable or defaulted columns on messages, tasks, calendar events, user settings, server and security settings, listeners, push subscriptions, shared mailbox grants) and are applied automatically at start without data loss.
 - **Recipient limit:** webmail and REST now use the SMTP *max. recipients* setting (BCP SMTP settings, default **100**); the webmail used to allow up to 500 recipients per message. Raise the setting if you rely on larger mailings.
 - **Free/busy:** the free/busy of colleagues is only visible with a calendar share (decision). `POST /calendar/freebusy` answers `found: false` for addresses outside the caller's own address list (own domain, not hidden) that did not share a calendar with the caller; others are `visible: false`.
-- **MAPI over HTTP is off by default** (protocol switch `mapi`; 403 until switched on). Classic Outlook profiles work in **online mode only** (cached mode is not supported yet), authentication is Basic over HTTPS with a trusted certificate — NTLM is not offered. `/mapi/*` no longer answers 404.
+- **MAPI over HTTP is off by default** (protocol switch `mapi`; 403 until switched on). MAPI client profiles work in **online mode only** (cached mode is not supported yet), authentication is Basic over HTTPS with a trusted certificate — NTLM is not offered. `/mapi/*` no longer answers 404.
 - **App passwords policy:** switching off the webmail policy module "App-Passwörter" also blocks existing app passwords on all mail protocols (IMAP, POP3, SMTP submission, ActiveSync, JMAP, CalDAV/CardDAV, MAPI); users with MFA then lose mail-client access. Switching it on again restores them (the BCP label does not say this yet).
 - **Behaviour changes to check:** the global API rate limit counts per user (default 3000 per 15 min) instead of 500 per IP; DNSBL "Score" zones now influence the spam score; ActiveSync 14.x answers a successful SendMail with an empty body; Autodiscover announces only enabled protocols; IMAP `DELETE` of a mailbox with messages moves them to Trash (refused with `NO [CANNOT]` without a Trash folder); the compat folder-delete route no longer answers 409 for a folder with subfolders.
 - **Certificate keys:** private keys are encrypted at rest at the first start; keep `MFA_ENCRYPTION_KEY` (or `JWT_SECRET` + `PEPPER`) and include it in your backup of `.env` — without it, stored certificate keys cannot be read (certificates must then be issued or uploaded again).
@@ -319,7 +319,7 @@ reviewed independently; every finding was fixed with a regression test.
 - **System backup** (schedule / job scope `system`): encrypted `pg_dump` of the database plus a manifest of the mail object store (`system/<day>/<jobId>/…`); credentials passed as PG* environment variables. Download for ORGANIZATION_MANAGEMENT only. Restore procedure in docs/backup.md.
 - Failed or partial scheduled backups notify every active ORGANIZATION_MANAGEMENT / SERVER_MANAGEMENT admin by an internal message (at most once per schedule every 6 h).
 - e2e step `backup`: backup of B → restore of the stored archive into A → IMAP sees the messages byte-exact with flags; re-run and upload add nothing; recommended schedules; system backup run-now.
-- **Webmail: shared and delegated mailboxes in the folder pane** (OWA "add shared folder"). Below the own folders a section „Freigegebene Postfächer" lists every Shared Mailbox and delegated user mailbox the user may read (`listAccessibleMailboxes()` — FULL_ACCESS / READ_ONLY) as an expandable root with its folder tree; selecting a folder shows it in the normal mail view (resizable panes, reading pane right / bottom / off, search with operators, filters, context menus, bulk actions, drag & drop, keyboard shortcuts). Roots can be hidden („Ausblenden") and added back („Postfach hinzufügen", also the profile menu „Weiteres Postfach öffnen"); hidden roots are stored per user server-side, expanded roots per browser. Read-only access shows every write action disabled with a tooltip. Recover deleted items (FULL_ACCESS, now also for delegated mailboxes) and the quota of shared mailboxes are available from the root / Trash context menu.
+- **Webmail: shared and delegated mailboxes in the folder pane** ("add shared folder"). Below the own folders a section „Freigegebene Postfächer" lists every Shared Mailbox and delegated user mailbox the user may read (`listAccessibleMailboxes()` — FULL_ACCESS / READ_ONLY) as an expandable root with its folder tree; selecting a folder shows it in the normal mail view (resizable panes, reading pane right / bottom / off, search with operators, filters, context menus, bulk actions, drag & drop, keyboard shortcuts). Roots can be hidden („Ausblenden") and added back („Postfach hinzufügen", also the profile menu „Weiteres Postfach öffnen"); hidden roots are stored per user server-side, expanded roots per browser. Read-only access shows every write action disabled with a tooltip. Recover deleted items (FULL_ACCESS, now also for delegated mailboxes) and the quota of shared mailboxes are available from the root / Trash context menu.
   - New API (api-gateway `routes/foreign-mailbox.ts`) with the request/response shapes of `/api/v1/mail`: `GET|POST /folders`, `PATCH|DELETE /folders/:folderId`, `POST /folders/:folderId/empty`, `GET /folders/:folderId/messages`, `GET /search`, `GET /messages/:id` (+ `/raw`), `PATCH|DELETE /messages/:id`, `POST /messages/bulk` under (new) `/api/v1/mail/shared-mailboxes/:id` and (new) `/api/v1/mail/delegated-mailboxes/:mailboxId`. FULL_ACCESS reads and writes, READ_ONLY reads only (writes → 403 `READ_ONLY`, opening a mail does not mark it read), no access → 403 `NO_ACCESS`; every lookup is scoped to that mailbox (no cross-mailbox move), expunged messages are only reachable through the FULL_ACCESS `/recoverable` routes (also `/raw`), personal categories are never returned, junk / not-junk is a plain move (no personal block list or Bayes training). Deleting a folder (`?force=true` for a non-empty one, 409 with the count otherwise; subfolders → 409) moves its messages — live ones and recoverable tombstones — into the mailbox's Trash through the message store before the folder is removed (inside Trash: expunged first; no Trash folder → 409). Folder create / rename / delete / empty and message move / delete are written to the audit log as `mailbox.foreign.folder.create|update|delete|empty` and `mailbox.foreign.message.move|delete` (targetType `sharedMailbox` with the SharedMailbox id or `mailbox` with the Mailbox id, mailbox id and counts in `changes`).
   - `GET /api/v1/user/accessible-mailboxes` (ref `shared:<id>` / `delegated:<mailboxId>`, permissions, readOnly, hidden) and `PATCH /api/v1/user/accessible-mailboxes/:ref {hidden}`; additive column `UserSettings.hiddenSharedMailboxes String[] @default([])`.
   - Compose opened inside a shared mailbox offers a „Von" choice — „Senden als" (SEND_AS or FULL_ACCESS) / „im Auftrag von" (SEND_ON_BEHALF) — stored in the server draft (`sendAs` / `sendOnBehalfOf`, checked again on save and send); replies load the original from that mailbox.
@@ -342,7 +342,7 @@ reviewed independently; every finding was fixed with a regression test.
 - Webmail folder rows: Enter / Space select, ArrowRight / ArrowLeft expand / collapse subfolders, `aria-expanded` / `aria-current` on the row.
 
 ### Fixed
-- **SMTP/IMAP/POP3 kept serving the self-signed `mail.localhost` certificate after a Let's Encrypt certificate was assigned to them** — the BCP edit dialog (`PUT /api/v1/admin/certificates/:id`) only moved the `services` label (and took it away from the self-signed certificate, which stayed `isActiveProtocol` and stayed in `server_settings.tlsCert`), so 993 / 465 / 143-STARTTLS / 587-STARTTLS kept presenting `CN=mail.localhost` and Outlook / iPhone refused to connect ("certificate unknown"). The assignment now applies the certificate (see Changed). **Existing installations are repaired at the next start**: the api-gateway reconciles the protocol TLS state — the usable certificate holding the mail services wins and is applied when `server_settings.tlsCert` / `isActiveProtocol` disagree; a certificate activated before 9.3 without services keeps serving and gets them; nothing usable → self-signed default (idempotent, logged).
+- **SMTP/IMAP/POP3 kept serving the self-signed `mail.localhost` certificate after a Let's Encrypt certificate was assigned to them** — the BCP edit dialog (`PUT /api/v1/admin/certificates/:id`) only moved the `services` label (and took it away from the self-signed certificate, which stayed `isActiveProtocol` and stayed in `server_settings.tlsCert`), so 993 / 465 / 143-STARTTLS / 587-STARTTLS kept presenting `CN=mail.localhost` and desktop and iPhone mail clients refused to connect ("certificate unknown"). The assignment now applies the certificate (see Changed). **Existing installations are repaired at the next start**: the api-gateway reconciles the protocol TLS state — the usable certificate holding the mail services wins and is applied when `server_settings.tlsCert` / `isActiveProtocol` disagree; a certificate activated before 9.3 without services keeps serving and gets them; nothing usable → self-signed default (idempotent, logged).
 - A Let's Encrypt certificate was marked ERROR (over its valid, stored PEM) when applying it to SMTP/IMAP/POP3 failed right after the issuance; it stays issued now and the failure is logged. Assigning the mail services to an expired / not-yet-valid certificate is refused (`400 CERT_NOT_VALID`) instead of storing a label the servers never serve. `GET /api/v1/admin/certificates/served` only connects to wildcard, loopback and the server's own interface addresses (a stored listener address was connected to as-is) and probes at most 16 listeners.
 - DNS check (BCP → Domains): an MX record that is an IP address or a CNAME is reported as an error with the suggestion `mail.<domain>` (it was shown as OK).
 - **Let's Encrypt certificates could not be issued** — the certificate stayed PENDING/RENEWING and failed after 5 minutes with "ACME timeout … Port 80 must be publicly reachable" although port 80 was reachable. Root cause: acme-client's `auto()` first fetched the challenge from the server's own public address (no HTTP timeout, 10 × 5 retries). Without hairpin NAT (typical for Docker/NAT hosts) every attempt hung, Let's Encrypt was never asked to validate, and the real reason never reached the logs. New ACME flow (`api-gateway/src/lib/acme-flow.ts`):
@@ -394,7 +394,7 @@ and live against a running stack; every finding was fixed with a regression test
 - The former Antivirus scan options in the BCP (scan archives/HTML, block encrypted archives, max file/scan size) were removed: they were saved but never applied. Their columns stay in the schema.
 - Admin API input is validated more strictly: rspamd score thresholds (range and order), the public hostname, backup schedule values. Invalid values now return `400` with the reason instead of being stored.
 - Making an inactive domain the primary domain returns `409`.
-- User-visible texts no longer mention Exchange or RFC numbers; the Outlook Autodiscover setup box from the MAPI era is gone from BCP → Servers.
+- User-visible texts no longer mention vendor products or RFC numbers; the desktop-client Autodiscover setup box from the MAPI era is gone from BCP → Servers.
 
 ### Fixed
 - SMTP connection limits from BCP (total and per IP) were saved but never applied; smtp-server now enforces them and reloads them without a restart.
@@ -488,8 +488,8 @@ Major release (SemVer: several security fixes and new limits change behaviour fo
 API clients and non-conformant senders — read "Upgrade notes (breaking)" at the end of this
 section before upgrading). CoreMail was audited against OWASP Top 10 2021 / ASVS 4.0.3 L2 in four
 areas (API/auth, frontends, mail protocols, supply chain/deployment); every finding was fixed with
-regression tests. Exchange Server 2019 was analysed as a reference for transport, mailbox, admin
-and webmail logic, and the useful parts were implemented. Two independent review rounds followed,
+regression tests. Transport, mailbox, admin and webmail logic was extended in the same
+release. Two independent review rounds followed,
 and all of their findings were fixed as well.
 
 ### Security
@@ -540,9 +540,9 @@ and all of their findings were fixed as well.
   - `pnpm audit --prod` went from 2 critical / 74 high to 0 critical / 1 high (not reachable).
 
 ### Added
-- SMTP: CHUNKING/BINARYMIME (`BDAT`), DSN (RFC 3461: RET/ENVID/NOTIFY/ORCPT with delivered/relayed/delayed/failed reports), SMTPUTF8 with IDN recipient matching, HELP. EHLO matches Exchange 2019 (`SMTP_EXT_*` switches).
+- SMTP: CHUNKING/BINARYMIME (`BDAT`), DSN (RFC 3461: RET/ENVID/NOTIFY/ORCPT with delivered/relayed/delayed/failed reports), SMTPUTF8 with IDN recipient matching, HELP. EHLO keyword order fixed (`SMTP_EXT_*` switches).
 - IMAP: QRESYNC (RFC 7162), SORT and THREAD=ORDEREDSUBJECT/REFERENCES (RFC 5256), read-only ACL (RFC 4314), COMPRESS=DEFLATE (RFC 4978).
-- Outbound delivery works like Exchange: retries for `outboundRetentionHours` (default 48 h), a delay DSN after 4 h (`OUTBOUND_DELAY_DSN_HOURS`), and a final 5.4.7 NDR.
+- Outbound delivery: retries for `outboundRetentionHours` (default 48 h), a delay DSN after 4 h (`OUTBOUND_DELAY_DSN_HOURS`), and a final 5.4.7 NDR.
 - Mailbox quota levels: warning mail, prohibit send and prohibit send/receive, enforced on SMTP, REST, drafts, JMAP, ActiveSync and IMAP APPEND/COPY. Includes a quota bar in the webmail and `coremail mailbox quota --warning/--prohibit-send`.
 - Recover deleted items for 30 days (`/api/v1/mail/recoverable`, `DELETED_ITEM_RETENTION_DAYS`), with a webmail view and an audited admin purge. The purge also removes unreferenced objects and ActiveSync item state (`DELETED_ITEM_PURGE_OBJECTS`).
 - Out-of-office sends exactly one reply per sender and OOF period (internal/external texts, contacts-only option, schedule).
@@ -733,7 +733,7 @@ container image in both storage modes (MinIO 131/131, filesystem 126/126; `pnpm 
   gets the same changes again; any other old key answers Status 3. Devices synced before this
   release continue without a full resync.
 - ActiveSync: a Delete from the phone moves the mail to Deleted Items (default
-  `DeletesAsMoves`), as Exchange does; only `DeletesAsMoves 0` or a delete inside Deleted Items
+  `DeletesAsMoves`, MS-ASCMD); only `DeletesAsMoves 0` or a delete inside Deleted Items
   removes it.
 - ActiveSync SmartReply / SmartForward add the original message (as an embedded message with
   all its attachments; inline for a reply) unless the phone sends `ReplaceMime`, and mark the
@@ -861,7 +861,7 @@ container image in both storage modes (MinIO 131/131, filesystem 126/126; `pnpm 
   Before, the next Sync could get Status 3 and resync the whole folder, repeatedly.
 - **ActiveSync Sync:** a message whose original (MIME) cannot be read no longer fails the whole
   Sync with HTTP 500 (the device retried forever); it is sent with the stored HTML/text body.
-- Backup schedules and the retention worker (Managed Folder Assistant) ran once per app
+- Backup schedules and the retention worker ran once per app
   instance; with more than one instance every scheduled backup and retention run happened
   several times, and retention runs could overlap. Each cron fire is now claimed by one
   instance (Redis), a run lock held until the work has finished prevents overlapping runs, and
@@ -948,7 +948,7 @@ container image in both storage modes (MinIO 131/131, filesystem 126/126; `pnpm 
   implicit TLS (`SSL`) instead of STARTTLS.
 - Autodiscover v1 honours `AcceptableResponseSchema`: ActiveSync clients asking for the
   `mobilesync` schema (MS-ASCMD) get the MobileSync server URL, unknown schemas get Error 601.
-  The Outlook (2006a) response no longer contains the schema-invalid second `ActiveSync`
+  The mail account (`outlook/2006a` schema) response no longer contains the schema-invalid second `ActiveSync`
   account. `EMailAddress` with a namespace prefix or XML entities is understood.
 - **JMAP `/changes` (RFC 8620 §5.2):** `Email/changes` and `Thread/changes` silently dropped
   everything beyond 5,000 changed rows, answered `maxChanges` with `cannotCalculateChanges`
@@ -1364,7 +1364,7 @@ the stack was verified end to end against the real container image (`docs/e2e.md
    Security) for every mail client and phone; the account password stops working there.
 2. **Clients on ports 143, 110 or 587 without encryption** must use STARTTLS/STLS or switch
    to 993/995/465. A protocol certificate must be active (setup creates a self-signed one).
-3. **EWS clients** (e.g. macOS Mail "Exchange" accounts, eM Client in EWS mode) must switch to
+3. **EWS clients** (e.g. macOS Mail EWS accounts, eM Client in EWS mode) must switch to
    IMAP + CalDAV/CardDAV, JMAP, or ActiveSync on phones.
 4. **Behind a reverse proxy** (Traefik, Caddy, nginx, Synology DSM) set `TRUST_PROXY`,
    otherwise all clients share one IP for rate limits.
@@ -1453,12 +1453,12 @@ renamed, several unused endpoints and the internal `storage-api` service are rem
 
 ### Changed
 
-- **EWS no longer depends on MAPI.** BCP → Server → "Exchange Web Services (EWS)" (default
+- **EWS no longer depends on MAPI.** BCP → Server → "EWS" (default
   off) controls `/EWS/*`, `/OAB/*` and Autodiscover v2 `Protocol=EWS`. Stored in the existing
   field `ServerSettings.mapiHttpEnabled` — no schema migration.
 - **CLI:** `coremail connector enable|disable ews` replaces `mapi` (still accepted as a
   deprecated alias with a warning).
-- **Outlook** is set up via "Other email accounts" → IMAP (calendar/contacts via
+- **Desktop clients** are set up as IMAP accounts (calendar/contacts via
   CalDAV/CardDAV); Autodiscover v1 announces IMAP, SMTP and ActiveSync.
 - **Tests:** every package with logic touched by this release has a `test` script
   (`pnpm -r test`, 113 tests). Reviewer protocol suites for SMTP/IMAP/POP3/JMAP are kept as
@@ -1469,7 +1469,7 @@ renamed, several unused endpoints and the internal `storage-api` service are rem
 - **MAPI over HTTP** completely (`/mapi/emsmdb`, `/mapi/nspi`, all ROP/NSPI code under
   `packages/ews-server/src/mapi/`, Autodiscover `mapiHttp` block, `ENABLE_MAPI_HTTP`,
   `/mapi` routes in api-gateway, nginx and the k8s ingress). The review showed it could not
-  work with a real Outlook client.
+  work with a real desktop client.
 - **Internal `storage-api` service** (port 3001): no callers, served user records including
   `passwordHash` without authentication.
 - **PowerShell Remoting stub** (`/PowerShell/`) and `POST /api/v1/admin/ems/cmdlet` — they
@@ -1478,7 +1478,7 @@ renamed, several unused endpoints and the internal `storage-api` service are rem
 - **Unreferenced BCP pages** (Connectors, Resources, Organisation, Mobile Devices) and unused
   i18n keys; MWA compose no longer queries the removed `/admin/groups/gal` endpoint.
 - **OpenTelemetry** `metrics`/`tracing` modules and dependencies plus unused exports from
-  `@coremail/core`; legal-hold leftovers in the Managed Folder Assistant.
+  `@coremail/core`; legal-hold leftovers in the retention worker.
 
 ### Known open issues
 
@@ -1557,7 +1557,7 @@ Talks to the same REST admin API as the BCP → same role checks, same audit log
 - **EWS tied to the MAPI switch**: `/EWS/Exchange.asmx` and `/OAB/*` return 404
   as long as `ServerSettings.mapiHttpEnabled` is off (default). Autodiscover v2
   `?Protocol=EWS` then answers `NoSuchProtocol`. EWS is no longer a standalone
-  client path (Outlook 2024 LTSC/M365 do not speak Basic-Auth EWS against
+  client path (current desktop client builds do not speak Basic-Auth EWS against
   third-party servers), but remains as a companion protocol of MAPI over HTTP (free/busy,
   out-of-office, OAB). The BCP card is now called "MAPI over HTTP + EWS".
 - README: EWS removed as a standalone path from the protocol overview, client table and access table;
@@ -1575,7 +1575,7 @@ Talks to the same REST admin API as the BCP → same role checks, same audit log
 
 ### Upgrade Notes
 
-- Anyone who previously connected Outlook via EWS (without MAPI) enables
+- Anyone who previously connected a desktop client via EWS (without MAPI) enables
   "MAPI over HTTP + EWS" in BCP → Server or switches to IMAP.
 - Existing `.env` files remain valid; the new Compose reads the same variables.
   Dropped Compose variables (internal ports/URLs) are stored as image defaults.
@@ -1666,9 +1666,9 @@ has been restored from the git history and put behind a switch:
 - 35 MAPI codec tests (`node --test`) run again.
 
 **Not included**: ADFS emulation (v5.3.0) — remains removed. This means:
-Outlook 2013–2021 connect via Basic Auth as an Exchange account; Outlook 2024
-LTSC / M365 Classic enforce Modern Auth against Entra/ADFS and stay on the
-IMAP path; new Outlook + Outlook for Mac do not support MAPI.
+desktop clients of the 2013–2021 generation connect via Basic Auth as a MAPI account; the newest
+desktop builds enforce Modern Auth against their vendor's identity platform and stay on the
+IMAP path; the new web-based desktop apps do not support MAPI.
 
 ### Changed
 
@@ -1862,19 +1862,19 @@ via `/auth/login`. The complete OAuth2 codebase is dead weight.
 
 ### Architecture decision: NO XOAUTH2 for mail protocols
 
-Research result (Grommunio + Mozilla + Microsoft Docs):
-- **Apple Mail**: hardcoded provider list (iCloud/Gmail/Microsoft/Yahoo) — no UI for custom OAuth servers
-- **Outlook 2024 LTSC**: Microsoft has explicitly stated: no OAuth for POP/IMAP
+Research result (public vendor and project documentation):
+- **Apple Mail**: hardcoded provider list of large hosted providers — no UI for custom OAuth servers
+- **Windows desktop client (LTSC 2024)**: its vendor has explicitly stated: no OAuth for POP/IMAP
 - **Thunderbird**: theoretically yes, in practice a `prefs.js` hack per account → unsuitable for end users
 - **eM Client / K-9 Mail**: large providers only
 
-**Verdict**: XOAUTH2 for non-Microsoft servers has a ~1% real user base (mutt/isync power users). They can use **app passwords** instead, which are already implemented. The OAuth2 server remains under `/oauth2/*` for REST API + web app integration.
+**Verdict**: XOAUTH2 for self-hosted servers has a ~1% real user base (mutt/isync power users). They can use **app passwords** instead, which are already implemented. The OAuth2 server remains under `/oauth2/*` for REST API + web app integration.
 
 ### Changed — docs completely updated
 
 **README.md:**
 - MAPI section removed
-- "Connect Outlook natively" section → **"Connecting clients"** with IMAP setup table for all common clients (Outlook 2024 LTSC, Apple Mail, Thunderbird, eM Client, K-9, iOS Mail)
+- "Native desktop connection" section → **"Connecting clients"** with IMAP setup table for all common clients (Windows desktop clients, Apple Mail, Thunderbird, eM Client, K-9, iOS Mail)
 - App passwords section with step-by-step guide
 - IMAP4rev2 badge instead of MAPI/HTTP badge
 - Version history updated: v5.x = "IMAP4rev2 + RFC compliance + MAPI cleanup"
@@ -1892,9 +1892,9 @@ Research result (Grommunio + Mozilla + Microsoft Docs):
 ### Removed (Major)
 
 **MAPI-over-HTTP implementation completely deleted.** User decision:
-"discard the MAPI concept and remove it". Background: Outlook 2024
-LTSC enforces Modern Auth on Exchange endpoints and does not accept
-non-Microsoft OAuth providers. A custom ADFS emulation would have required 3-4 weeks
+"discard the MAPI concept and remove it". Background: the LTSC 2024 desktop
+client enforces Modern Auth on MAPI/EWS endpoints and does not accept
+third-party OAuth providers. A custom ADFS emulation would have required 3-4 weeks
 of effort with no guarantee of success (see research from v5.3.0).
 
 Consistent cleanups:
@@ -1905,7 +1905,7 @@ Consistent cleanups:
 | `<Protocol Type="mapiHttp">` in Autodiscover XML | **removed** | Autodiscover now only announces IMAP+SMTP+ActiveSync |
 | `/mapi/*` proxy in api-gateway | **removed** | — |
 | `/adfs/oauth2/*`, `/adfs/ls/`, `/FederationMetadata/*` routes | **removed** | Was for MAPI Modern Auth |
-| `provisionWellKnownOAuthClients()` (Outlook native client_ids) | **removed** | — |
+| `provisionWellKnownOAuthClients()` (well-known desktop/mobile client_ids) | **removed** | — |
 | `packages/storage/src/oauth-clients-bootstrap.ts` | **deleted** | — |
 | `ENABLE_MAPI_HTTP` environment flag | **removed** | Was dead code only |
 
@@ -1914,7 +1914,7 @@ Consistent cleanups:
 - **IMAP/IMAPS** port 143/993 — fully functional (see v5.3.1 + v5.3.5 fixes)
 - **SMTP/Submission** port 25/465/587 — STARTTLS + Basic Auth
 - **POP3/POP3S** port 110/995 — with app-password fallback (v5.3.1)
-- **EWS** port 8080 — stays for Outlook Web App compatibility
+- **EWS** port 8080 — stays for EWS client compatibility
 - **CalDAV** port 8082 — calendar via Apple Calendar, Thunderbird Lightning, etc.
 - **CardDAV** port 8082 — contacts in sync
 - **ActiveSync** port 3005 — EAS 14.1 for mobile clients
@@ -1925,8 +1925,8 @@ Consistent cleanups:
 
 | Client | Account type | Protocols |
 |--------|-----------|------------|
-| **Outlook 2024 LTSC** | "Other email accounts" → **IMAP** | IMAP+SMTP |
-| **Outlook 2021 LTSC** | IMAP or Exchange (Exchange via EWS) | IMAP+SMTP |
+| **Windows desktop client (LTSC 2024)** | **IMAP** account | IMAP+SMTP |
+| **Windows desktop client (LTSC 2021)** | IMAP or EWS | IMAP+SMTP |
 | **Apple Mail (Mac + iOS)** | IMAP account | IMAP+SMTP+CalDAV+CardDAV |
 | **Thunderbird** | IMAP account | IMAP+SMTP+CalDAV (Lightning)+CardDAV (TbSync) |
 | **eM Client** | IMAP account | IMAP+SMTP+CalDAV+CardDAV |
@@ -1937,7 +1937,7 @@ Consistent cleanups:
 
 The MAPI roadmap v4.0→v5.2 (phases 1-7 + FINAL) is preserved as git history and
 README documentation, but is no longer active code. If
-Microsoft ever relaxes Modern Auth or a realistic path
+the desktop client vendor ever relaxes Modern Auth or a realistic path
 emerges, the code can be reactivated from the git archive.
 
 ---
@@ -2005,9 +2005,9 @@ for POP3 servers.
 
 ### Major Feature
 
-Start of the **ADFS emulation for Outlook 2024 LTSC Modern Auth**.
-Background: research (Grommunio source, Microsoft Q&A, MS Docs) showed
-that Outlook Win32 (incl. 2024 LTSC) accepts **no** non-Microsoft OAuth2
+Start of the **ADFS emulation for Modern Auth of the LTSC 2024 desktop client**.
+Background: research (public vendor documentation and open-source implementations) showed
+that the Win32 desktop client (incl. LTSC 2024) accepts **no** third-party OAuth2
 provider. Modern Auth in the ADAL/MSAL stack is effectively hardcoded
 to `login.microsoftonline.com` OR **ADFS** (Active Directory Federation
 Services). Therefore CoreMail v5.3+ emulates the ADFS protocol step by step.
@@ -2018,12 +2018,12 @@ follows in v5.4.0 (WS-Trust 1.3) + v5.5.0 (login UI) + v5.6.0 (E2E test).
 ### Added — Phase C: Well-Known OAuth2 Clients
 
 `packages/storage/src/oauth-clients-bootstrap.ts` idempotently provisions
-the hardwired Microsoft/Apple client IDs at api-gateway boot:
+the hardwired well-known client IDs at api-gateway boot:
 
-- `d3590ed6-52b3-4102-aeff-aad2292ab01c` — Outlook Desktop (Win + Mac)
-- `27922004-5251-4030-b22d-91ecd9a37ea4` — Outlook Mobile (iOS + Android)
+- `d3590ed6-52b3-4102-aeff-aad2292ab01c` — desktop mail client (Win + Mac)
+- `27922004-5251-4030-b22d-91ecd9a37ea4` — mobile mail app (iOS + Android)
 - `f8d98a96-0999-43f5-8af3-69971c7bb423` — iOS Mail.app
-- `00000003-0000-0000-c000-000000000000` — Microsoft Graph (catch-all)
+- `00000003-0000-0000-c000-000000000000` — Graph API (catch-all)
 
 All as public clients (no secret), PKCE mandatory, trusted (no
 consent prompt). With `redirect_uris` for `msauth://`, `urn:ietf:wg:oauth:
@@ -2035,8 +2035,8 @@ consent prompt). With `redirect_uris` for `msauth://`, `urn:ietf:wg:oauth:
 claim of incoming Bearer tokens. Accepts:
 - Tokens without `aud` (legacy CoreMail tokens — refresh sets `aud`)
 - `aud` = server FQDN (`https://mail.example.de`)
-- `aud` = `https://outlook.office365.com` (Outlook default)
-- `aud` = `00000002-0000-0ff1-ce00-000000000000` (Office 365 Exchange ID)
+- `aud` = `https://outlook.office365.com` (desktop client default)
+- `aud` = `00000002-0000-0ff1-ce00-000000000000` (hosted mail service resource ID)
 
 Protection against token substitution / cross-tenant.
 
@@ -2044,7 +2044,7 @@ Protection against token substitution / cross-tenant.
 
 The API gateway now routes `/adfs/oauth2/*` to the same auth-service
 backend as `/oauth2/*`:
-- `/adfs/oauth2/authorize` ← Outlook 2024 LTSC looks there, hardwired
+- `/adfs/oauth2/authorize` ← the LTSC 2024 desktop client looks there, hardwired
 - `/adfs/oauth2/token`
 - `/adfs/oauth2/jwks`
 - `/adfs/oauth2/.well-known/openid-configuration`
@@ -2068,17 +2068,17 @@ WWW-Authenticate: Bearer realm="https://mail.example.de",
                   authorization_uri="https://mail.example.de/adfs/oauth2/authorize",
                   scope="EWS.AccessAsUser.All", Basic realm="CoreMail EWS"
 ```
-Outlook 2024 LTSC reads `authorization_uri` and starts its
+The LTSC 2024 desktop client reads `authorization_uri` and starts its
 OAuth2 flow against the endpoint given there.
 
-### Roadmap to the complete Outlook 2024 LTSC integration
+### Roadmap to the complete Modern Auth integration for desktop clients
 
 | Version | Content | Effort |
 |---------|--------|---------|
 | **v5.3.0** (today) | Foundation: Phase C+E, ADFS aliases, FederationMetadata, Bearer challenge | ✅ |
 | **v5.4.0** | WS-Trust 1.3 endpoint (`/adfs/services/trust/13/usernamemixed`) — SOAP-based UsernameToken auth | ~6-8h |
 | **v5.5.0** | ADFS login page (`/adfs/ls/`) with browser flow + token audience adjustment | ~4-6h |
-| **v5.6.0** | Autodiscover OAuth2 hint + real Outlook 2024 test + bug fixes | ~2-4h |
+| **v5.6.0** | Autodiscover OAuth2 hint + real desktop client test + bug fixes | ~2-4h |
 
 ---
 
@@ -2172,14 +2172,14 @@ trash can for Trash, …) AND all messages contained in them.
 
 ### Why
 
-Outlook 2024 LTSC enforces Modern Auth (OAuth2/OIDC) and no longer accepts a
+The LTSC 2024 desktop client enforces Modern Auth (OAuth2/OIDC) and no longer accepts a
 Basic-Auth fallback (not even with the `EnableADAL=0` registry key). Live logs
-on the server showed `scheme:"bearer"` on every connection attempt — Outlook
+on the server showed `scheme:"bearer"` on every connection attempt — the desktop client
 sends OAuth2 tokens exclusively, never Basic-Auth credentials.
 
 Until now CoreMail had OAuth2 server endpoints under `/oauth2/*`, but JWT was
 signed with HS256 (HMAC, symmetric) — so the JWKS endpoint could not
-provide a public key → OIDC clients (Outlook, mobile apps with Modern
+provide a public key → OIDC clients (desktop clients, mobile apps with Modern
 Auth) rejected tokens.
 
 ### Changed
@@ -2192,12 +2192,12 @@ Auth) rejected tokens.
   ews-server, backup-service, caldav-server.
 
 - **JWKS endpoint** (`/oauth2/jwks` + new `/.well-known/jwks.json`) now
-  returns the public key as JWK (RFC 7517). Outlook + other clients can
+  returns the public key as JWK (RFC 7517). Desktop and other clients can
   thereby verify JWT signatures themselves.
 
 - **OIDC Discovery** (`/oauth2/.well-known/openid-configuration` + new
   `/.well-known/openid-configuration` at the root) announces RS256 as
-  `id_token_signing_alg_values_supported` and adds Microsoft Graph scopes
+  `id_token_signing_alg_values_supported` and adds Graph-API-style scopes
   (`EWS.AccessAsUser.All`, `Mail.Read/ReadWrite/Send`,
   `Calendars.Read/ReadWrite`, `Contacts.Read/ReadWrite`, `offline_access`).
 
@@ -2221,30 +2221,30 @@ Auth) rejected tokens.
 - **Schema migration**: `prisma db push --accept-data-loss` at first
   container start adds the new fields. No data loss.
 
-### What is still missing for Outlook 2024 LTSC end-to-end
+### What is still missing for the LTSC 2024 desktop client end-to-end
 
-Phase A+B (this version) is the infrastructure. For a working Outlook
-2024 LTSC connection, phases C–F are still missing (in progress, coming in v5.3.0+):
+Phase A+B (this version) is the infrastructure. For a working LTSC 2024
+desktop client connection, phases C–F are still missing (in progress, coming in v5.3.0+):
 
-- Auto-provision the Microsoft Outlook native client ID
+- Auto-provision the well-known desktop client ID
 - Extend Autodiscover XML with an OAuth2 endpoint hint
 - Bearer token audience validation in the EWS/MAPI middleware
-- Browser login flow specifically for Outlook
+- Browser login flow specifically for desktop clients
 
 ---
 
-## [5.2.15] — 2026-05-27 — Outlook Auth: case-insensitive schemes + bare-username fallback
+## [5.2.15] — 2026-05-27 — Desktop client auth: case-insensitive schemes + bare-username fallback
 
 ### Fixed
 
-User observation after v5.2.14: "Password typed correctly in the Outlook client
+User observation after v5.2.14: "Password typed correctly in the desktop mail client
 and the password window keeps popping up again." The live log showed
 `Autodiscover v1: Basic-Auth-Header malformed → 401` — the auth header arrived,
 but was rejected by our parsing logic.
 
 Two root causes:
 
-1. **Case sensitivity of the auth scheme.** Outlook LTSC on current
+1. **Case sensitivity of the auth scheme.** The LTSC desktop client on current
    Win11 patches sends `basic` (lowercase) instead of `Basic` — RFC 7235 §2.1
    explicitly says "case-insensitive", but our code used
    `authHeader.startsWith('Basic ')`, which is strictly case-sensitive. Fix:
@@ -2252,13 +2252,13 @@ Two root causes:
    `Basic`/`basic`/`BASIC`. Applies to Autodiscover V1 + EWS middleware
    (also Bearer/Negotiate/NTLM analogously).
 
-2. **Bare username without @domain.** In NTLM style, Outlook sometimes sends
+2. **Bare username without @domain.** In NTLM style, the desktop client sometimes sends
    only `admin` (without @stefanwuestner.de). Before: DB lookup with `email='admin'`
    → no match → 401. Fix: if the user part contains no `@`, complete it with the
    primary domain (`admin` → `admin@stefanwuestner.de`).
 
 3. **Whitespace tolerance**: `authHeader.slice(6)` assumes that
-   exactly one space sits between scheme and token. Outlook sometimes inserts
+   exactly one space sits between scheme and token. The desktop client sometimes inserts
    several. Fix: `indexOf(' ')` + `.trim()` on the token part.
 
 ### Files
@@ -2268,13 +2268,13 @@ Two root causes:
 
 ---
 
-## [5.2.14] — 2026-05-27 — Outlook auth loop FIX (Autodiscover now validates passwords)
+## [5.2.14] — 2026-05-27 — Desktop client auth loop FIX (Autodiscover now validates passwords)
 
 ### Security
 
 - **Autodiscover V1 accepted ANY arbitrary password as valid.**
   Previous comment in the code: "We do NOT validate the credentials here —
-  that is customary for Exchange." That is WRONG — Exchange Autodiscover
+  that is customary for Autodiscover." That is WRONG — Autodiscover (MS-OXDSCLI)
   does validate credentials and responds with 401 on a wrong password.
   The previous code returned the full XML with all user details
   (DisplayName, LegacyDN, SMTPAddress) for every valid email address —
@@ -2282,16 +2282,16 @@ Two root causes:
 
 ### Fixed
 
-- **Outlook Classic endless auth prompt** (also chased in v5.2.1-v5.2.5,
+- **Desktop client endless auth prompt** (also chased in v5.2.1-v5.2.5,
   now really fixed).  Root cause chain:
 
-  1. Outlook calls Autodiscover V2 (`?Protocol=AutodiscoverV1`) → gets the
+  1. The desktop client calls Autodiscover V2 (`?Protocol=AutodiscoverV1`) → gets the
      V1 URL back
-  2. Outlook calls Autodiscover V1 with Basic Auth → V1 **always returned 200**
-     (even with a wrong password!) → Outlook accepted the config
-  3. Outlook tried EWS/MAPI with the same password → 401 (EWS checks
+  2. The desktop client calls Autodiscover V1 with Basic Auth → V1 **always returned 200**
+     (even with a wrong password!) → the desktop client accepted the config
+  3. The desktop client tried EWS/MAPI with the same password → 401 (EWS checks
      correctly)
-  4. Outlook asks the user for the password again
+  4. The desktop client asks the user for the password again
   5. → back to step 1 → **endless loop**, the user believes their
      password is not being transmitted
 
@@ -2300,7 +2300,7 @@ Two root causes:
   multi-verification as the EWS middleware from v5.2.1).  On a wrong password
   → 401 + multi-scheme `WWW-Authenticate` header.  On a correct password
   → 200 + XML config.
-  Outlook now aborts the Autodiscover loop on a genuinely wrong password
+  The desktop client now aborts the Autodiscover loop on a genuinely wrong password
   and prompts only ONCE per attempt, instead of chasing the token endlessly through
   Autodiscover/EWS.
 
@@ -2415,29 +2415,29 @@ entry of wrong credentials into a half-finished system.
 
 ---
 
-## [5.2.1] — 2026-05-27 — Hotfix: Outlook endless password prompt
+## [5.2.1] — 2026-05-27 — Hotfix: desktop client endless password prompt
 
 ### Fixed
 
 - **EWS/MAPI Basic-Auth middleware** (`packages/ews-server/src/auth/middleware.ts`):
   Previously went through the `/auth/login` endpoint of the auth-service, which with
   active MFA returns `{ mfaRequired: true, challengeToken: ... }`
-  **without** `accessToken`. Outlook cannot answer an MFA challenge with Basic Auth
-  → middleware fell back to 401 → Outlook prompted
+  **without** `accessToken`. The desktop client cannot answer an MFA challenge with Basic Auth
+  → middleware fell back to 401 → the desktop client prompted
   endlessly for the password.
 
   **User symptom**: In the BCP the login works (MFA is solved
-  interactively), but in Outlook the password prompt keeps appearing
+  interactively), but in the desktop client the password prompt keeps appearing
   although the password is correct.
 
   **Fix**: The middleware now verifies directly against `User.passwordHash`
   AND `AppPassword.hash` via `verifyPassword()` from `@coremail/core` —
   same logic as the IMAP/SMTP/POP3 servers since v3.x. With active MFA the
   user must create an **app password** in MWA → Settings → Security
-  and enter it in Outlook (instead of their regular
+  and enter it in the desktop client (instead of their regular
   password). Without MFA the regular password continues to work directly.
 
-- **Username normalization**: Outlook LTSC sometimes sends, NTLM-style,
+- **Username normalization**: The LTSC desktop client sometimes sends, NTLM-style,
   `DOMAIN\user` instead of `user@domain` — we now normalize to the
   last backslash part.
 
@@ -2445,12 +2445,12 @@ entry of wrong credentials into a half-finished system.
   password hash match, app password match, auth header type — so that
   future problems can be diagnosed faster.
 
-### Outlook setup with MFA
+### Desktop client setup with MFA
 
 1. User logs in to the MWA and solves MFA
-2. MWA → Settings → Security → Generate app password → name "Outlook"
-3. In Outlook: password dialog → enter the **app password** instead of the regular password
-4. The Outlook account connects natively as Exchange via MAPI/HTTP
+2. MWA → Settings → Security → Generate app password → name e.g. "Desktop"
+3. In the mail program: password dialog → enter the **app password** instead of the regular password
+4. The account connects natively via MAPI/HTTP
 
 ---
 
@@ -2461,12 +2461,12 @@ entry of wrong credentials into a half-finished system.
 **Final release** of the MAPI/HTTP implementation. Bundles all features
 from the originally planned v5.2 / v5.3 / v5.4 / v5.5 milestones into one
 final release. Marks MAPI/HTTP as **feature-complete** for typical
-Outlook workflows.
+desktop client workflows.
 
 ### Added — Cached Mode (MS-OXCFXICS)
 
 - **`packages/ews-server/src/mapi/rop/sync.ts`** — complete ICS sync
-  implementation for Outlook Cached Mode (default mode since Outlook 2007):
+  implementation for the desktop client's Cached Mode (its default mode since 2007):
 
   - `RopSyncConfigure` — creates a FastTransfer source handle
   - `RopFastTransferSourceGetBuffer` — chunked ICS stream (max 28KB/chunk,
@@ -2498,15 +2498,15 @@ Outlook workflows.
   - BYMONTHDAY, BYMONTH
   - COUNT / UNTIL
 
-- Outlook now shows the correct recurrence pattern in the appointment editor
+- The desktop client now shows the correct recurrence pattern in the appointment editor
   ("weekly on Monday/Wednesday", "monthly on the 15th", etc.).
 
 ### Added — PR_RTF_COMPRESSED Stream
 
 - **`packages/ews-server/src/mapi/rtf-compress.ts`**:
   - `htmlOrTextToRtfCompressed()` — wraps HTML/text in
-    MELA-uncompressed RTF (MS-OXRTFCP). Outlook accepts it without CRC.
-  - `decodeRtfCompressed()` — LZ77 decoder for Outlook→server RTF bodies
+    MELA-uncompressed RTF (MS-OXRTFCP). The desktop client accepts it without CRC.
+  - `decodeRtfCompressed()` — LZ77 decoder for client→server RTF bodies
     (RTF_PREFIX dictionary init, 4096-byte ring, FullString/Sub/Prefix).
 
 - **`handleRopOpenStream`** on `PR_RTF_COMPRESSED` (0x10090102) now
@@ -2526,21 +2526,21 @@ Outlook workflows.
 ### Added — RopOpenEmbeddedMessage
 
 - **`packages/ews-server/src/mapi/rop/v52-handlers.ts`** — forward mail as
-  attachment. Creates a sub-message handle on an attachment, Outlook can
+  attachment. Creates a sub-message handle on an attachment, the desktop client can
   then read the embedded IPM.Note via OpenStream.
 
 ### Added — Search Folders / Rules / Permissions
 
 - **`RopGetSearchCriteria`** + **`RopSetSearchCriteria`** — minimal
-  workflow (no crash on Outlook "saved search").
+  workflow (no crash on the client's "saved search").
 - **`RopGetRulesTable`** + **`RopUpdateRules`** — empty table + SUCCESS.
-  Outlook rules remain client-local (CoreMail MailRules via MWA).
-- **`RopGetPermissionsTable`** + **`RopModifyPermissions`** — the Outlook
+  Rules created in the desktop client remain client-local (CoreMail MailRules via MWA).
+- **`RopGetPermissionsTable`** + **`RopModifyPermissions`** — the desktop client
   "Permissions" dialog no longer crashes (ACL management stays in the BCP).
 
 ### Added — Misc Message ROPs
 
-- **`RopAbortSubmit`**, **`RopReloadCachedInformation`** (Outlook cached
+- **`RopAbortSubmit`**, **`RopReloadCachedInformation`** (cached
   refresh), **`RopGetMessageStatus`** / **`RopSetMessageStatus`** for
   read tracking.
 
@@ -2555,9 +2555,9 @@ Outlook workflows.
 - `GetRulesTable: 0x3F`, `UpdateRules: 0x41`
 - `GetPermissionsTable: 0x3E`, `ModifyPermissions: 0x40`
 
-### Outlook behavior after v5.2.0
+### Desktop client behavior after v5.2.0
 
-- **Cached Mode works** (the `.ost` file is filled initially, Outlook
+- **Cached Mode works** (the `.ost` file is filled initially, the desktop client
   is offline-capable)
 - **Recurring appointments** show the recurrence pattern correctly
 - **Embedded mails** open on double-click
@@ -2590,7 +2590,7 @@ Effort: ~12,000 lines of MAPI code in one contiguous sprint instead of
 Optionally open for v5.3+:
 - Full ICS OPCODE records with real delta sync via change numbers
 - DAV ACL mapping to MAPI permissions (complete)
-- RTF→HTML conversion via LZ77 decoder (Outlook→server path)
+- RTF→HTML conversion via LZ77 decoder (client→server path)
 
 ---
 
@@ -2674,9 +2674,9 @@ implementation instead of the EWS fallback.
   `handleNspiOperation()` from `nspi-handler.ts` instead of returning
   SUCCESS-empty.
 
-### Outlook behavior after v5.1.0
+### Desktop client behavior after v5.1.0
 
-- **Calendar detail view**: Double-clicking an appointment in Outlook
+- **Calendar detail view**: Double-clicking an appointment in the desktop client
   opens the full appointment window with subject, location, start/end,
   all-day flag, BusyStatus display (Free/Busy/Out of Office/Tentative).
 - **Contact detail view**: Contact shows all fields (company, job title,
@@ -2684,7 +2684,7 @@ implementation instead of the EWS fallback.
 - **Task detail view**: Task shows due date, percent progress,
   status (NotStarted/InProgress/Completed).
 - **Note detail view**: Note with color code.
-- **Outlook address book natively populated**: GAL via direct NSPI connection
+- **Client address book natively populated**: GAL via direct NSPI connection
   (no EWS round trips) — faster, less latency, less
   server load for large mailboxes.
 
@@ -2696,8 +2696,8 @@ implementation instead of the EWS fallback.
 
 - **Autodiscover MAPI/HTTP ENABLED BY DEFAULT** (`packages/autodiscover/src/v1.ts`):
   Feature flag `ENABLE_MAPI_HTTP` is now opt-OUT (`!== 'false'`) instead of
-  opt-in. Outlook 2013 SP1+ discovers the `<Protocol Type="mapiHttp">` block
-  automatically and sets itself up natively as an **Exchange account** (instead of
+  opt-in. Desktop clients from 2013 SP1 on discover the `<Protocol Type="mapiHttp">` block
+  automatically and set themselves up natively as a **MAPI account** (instead of
   the IMAP fallback as before). The complete ROP feature set from v4.1–v4.7
   is available.
 
@@ -2715,16 +2715,16 @@ implementation instead of the EWS fallback.
 - Together with the 16 codec tests from v4.0.0 now **35 round-trip tests**
   for the MAPI codec layer.
 
-### Outlook behavior after v5.0.0
+### Desktop client behavior after v5.0.0
 
-User enters mail+password → Autodiscover → Outlook detects MAPI/HTTP →
-account type "Exchange" → full feature set (read/compose/
+User enters mail+password → Autodiscover → the desktop client detects MAPI/HTTP →
+account type MAPI → full feature set (read/compose/
 send mail with attachments, push notifications <1s, server-side search,
 virtual PIM folders for calendar/contacts/tasks/notes).
 
 No more "IMAP fallback" notice needed. Full native MS-OXNSPI (instead of
 the EWS fallback) remains optional for v5.1+ hardening, but is not strictly
-required by Outlook — a SUCCESS-empty NSPI response switches Outlook
+required by the desktop client — a SUCCESS-empty NSPI response switches the desktop client
 to EWS.
 
 ### Roadmap Status
@@ -2760,7 +2760,7 @@ temporarily.
   All NSPI operations (`QueryRows / ResolveNames / GetMatches /
   GetSpecialTable / GetProps / DnToMinId / GetPropList`) now return
   `SUCCESS-empty` (StatusCode=OK, ErrorCode=OK, RowCount=0, HasValue=0)
-  instead of binary `ecNotSupported` (0x80040102). Outlook interprets
+  instead of binary `ecNotSupported` (0x80040102). The desktop client interprets
   SUCCESS-empty as "no matches" and automatically falls back to the
   EWS-based ResolveNames/FindPeople path (functional in CoreMail since
   v3.x). A full MS-OXNSPI implementation remains for v5.x as
@@ -2775,7 +2775,7 @@ temporarily.
 
 - **RopFindRow**: Accepts FindRowFlags + Restriction + Origin +
   Bookmark; v4.7.0 minimally returns "no match" (HasRowData=0) —
-  Outlook typically uses RopRestrict + a subsequent
+  The desktop client typically uses RopRestrict + a subsequent
   RopQueryRows as the search workflow, which works fully.
 
 - **restrictionToPrismaWhere()**: Converts a ParsedRestriction into a
@@ -2796,13 +2796,13 @@ temporarily.
   (FindRowFlags + RestrictionSize + Restriction + Origin + BookmarkSize +
   Bookmark).
 
-### Outlook behavior after v4.7.0
+### Desktop client behavior after v4.7.0
 
-- No more "NSPI error" in the Outlook connection status
+- No more "NSPI error" in the client connection status
 - Recipient autocomplete in the To/CC/BCC field works seamlessly (EWS FindPeople)
 - "Check Names" (Ctrl+K) works (EWS ResolveNames)
 - GAL browse shows users + distribution groups (EWS FindFolder + FindItem)
-- **Server-side search** (Ctrl+E in Outlook) filters inbox/folders directly
+- **Server-side search** (Ctrl+E in the desktop client) filters inbox/folders directly
   via MAPI Restriction → Prisma WHERE — no more client-side scan for
   large mailboxes with >1000 mails.
 
@@ -2813,7 +2813,7 @@ temporarily.
 ### Added
 
 - **containerClassFor(folderName)** (`packages/ews-server/src/mapi/rop/folder.ts`):
-  Maps a folder name to the Outlook MAPI container class (PR_CONTAINER_CLASS_W).
+  Maps a folder name to the MAPI container class (PR_CONTAINER_CLASS_W).
   Values per MS-OXOSFLD §2.2.3: IPF.Note (mail, default), IPF.Appointment,
   IPF.Contact, IPF.Task, IPF.StickyNote, IPF.Journal. Case-insensitive match
   for English + German standard names (Calendar/Kalender, Contacts/Kontakte,
@@ -2822,7 +2822,7 @@ temporarily.
 - **VIRTUAL_FOLDERS constant**: 4 synthetic PIM folders with fixed IDs
   (`virtual-calendar`, `virtual-contacts`, `virtual-tasks`, `virtual-notes`).
   CoreMail stores this data in separate Prisma models (CalendarEvent,
-  Contact, Task, Note) — but Outlook MAPI sees them as mailbox folders.
+  Contact, Task, Note) — but the MAPI client sees them as mailbox folders.
 
 - **GetHierarchyTable extended**: At root level (`parentFolderId === ''`)
   the rowCount is increased by VIRTUAL_FOLDERS.length.
@@ -2856,10 +2856,10 @@ temporarily.
   'IPF.Note' — existing folders named 'Calendar'/'Kontakte' etc.
   are also classified correctly.
 
-### Outlook behavior after v4.6.0
+### Desktop client behavior after v4.6.0
 
-4 additional folders appear in Outlook under the mailbox: "Calendar",
-"Contacts", "Tasks", "Notes" — with the correct icon according to Outlook's
+4 additional folders appear in the desktop client under the mailbox: "Calendar",
+"Contacts", "Tasks", "Notes" — with the correct icon according to the desktop client's
 folder-type detection. The list view shows the respective items (appointments/contacts/
 tasks/notes) with subject and date.
 
@@ -2877,13 +2877,13 @@ from the setup page (Settings → External Clients).
 ### Added
 
 - **RopRegisterNotification** (`packages/ews-server/src/mapi/rop/notification.ts`):
-  Outlook subscribes via ROP to the desired event types (NewMail / MessageDeleted /
+  The desktop client subscribes via ROP to the desired event types (NewMail / MessageDeleted /
   MessageModified / FolderChanged) on a folder or mailbox handle.
   The subscription is dynamically persisted on the handle (subscription field via
   JSON round trip through Redis).
 
 - **NotificationWait real long-poll** (`packages/ews-server/src/mapi/emsmdb-handler.ts`):
-  Until now Outlook polled with long NotificationWait requests that returned after 30s
+  Until now the desktop client polled with long NotificationWait requests that returned after 30s
   with EventPending=false → noticeable delay. Now:
   duplicate()-ed ioredis client (subscribe needs a dedicated connection
   per ioredis requirement), subscribe to `coremail:mapi:notify:<userId>`,
@@ -2906,11 +2906,11 @@ from the setup page (Settings → External Clients).
 - **NotifyEvent TypeScript interface** exported for other modules that
   trigger push events (e.g. future hooks for MessageDeleted / FolderChanged).
 
-### Outlook behavior after v4.5.0
+### Desktop client behavior after v4.5.0
 
-New mail appears in Outlook within <1s (instead of waiting up to 30s
+New mail appears in the desktop client within <1s (instead of waiting up to 30s
 before). Toast notification on new mail works. The folder refresh
-cache is invalidated. Battery drain on mobile Outlook clients significantly
+cache is invalidated. Battery drain on mobile clients significantly
 reduced (no more constant polling).
 
 ---
@@ -2981,12 +2981,12 @@ reduced (no more constant polling).
   PR_ATTACH_SIZE, PR_ATTACH_CONTENT_ID_W, PR_ATTACH_DATA_BIN,
   PR_ATTACHMENT_LINKID.
 
-### Outlook behavior after v4.4.0
+### Desktop client behavior after v4.4.0
 
 Attaching a file to a new mail (drag & drop or "Insert file") works
 end-to-end — stored in MinIO, passed to the outbound queue with
 `minioPath` on send, the worker loads + signs + sends. Received mails
-with attachments: Outlook shows the paperclip icon, attachment list, double-click
+with attachments: the desktop client shows the paperclip icon, attachment list, double-click
 opens the file. Moving mails (drag-and-drop into other folders) +
 multi-delete via the Delete key works. Push notifications on new
 mail: not yet (v4.5.0).
@@ -3020,7 +3020,7 @@ mail: not yet (v4.5.0).
   existing message: update. Response: FolderId(uint64) + MessageId(uint64).
 
 - **RopWriteStream** (`packages/ews-server/src/mapi/rop/stream.ts`):
-  Appends data to the stream buffer (at the current offset). Outlook calls
+  Appends data to the stream buffer (at the current offset). The desktop client calls
   WriteStream repeatedly for long bodies — the buffer is accumulated in the stream handle
   until CommitStream. Supports overwrite-in-place and
   sparse write (padding with null bytes if offset > buffer length).
@@ -3062,12 +3062,12 @@ mail: not yet (v4.5.0).
 - **`bullmq` added to the `@coremail/ews-server` dependencies** —
   for the direct queue connection to `'smtp-outbound'`.
 
-### Outlook behavior after v4.3.0
+### Desktop client behavior after v4.3.0
 
-Compose window in Outlook: create a new mail, type subject + body + recipients,
+Compose window in the desktop client: create a new mail, type subject + body + recipients,
 click "Send" → the mail arrives at the recipient. The Sent folder
-shows the copy. Reply/Forward via the Outlook buttons works the same way
-(Outlook loads the original via v4.2.0 → writes a draft via v4.3.0 → submitted).
+shows the copy. Reply/Forward via the client buttons works the same way
+(the desktop client loads the original via v4.2.0 → writes a draft via v4.3.0 → submitted).
 Attachments: still empty (coming in v4.4.0). Push notification on new
 mail: not yet (coming in v4.5.0).
 
@@ -3098,7 +3098,7 @@ mail: not yet (coming in v4.5.0).
   into the stream object buffer, the response returns StreamSize.
 
 - **RopReadStream**: Chunked read with offset tracking in the session.
-  Max 30 KB per chunk (MAX_STREAM_CHUNK_BYTES) — Outlook expects
+  Max 30 KB per chunk (MAX_STREAM_CHUNK_BYTES) — the desktop client expects
   responses under 32 KB. ReadStream request format: Uint16 ByteCount,
   or 0xBABE marker + Uint32 ExtendedByteCount for large reads.
 
@@ -3123,10 +3123,10 @@ mail: not yet (coming in v4.5.0).
 - **RopId**: `MoveCopyMessages` (0x33) + `DeleteMessages` (0x1E) added
   in `rop-types.ts` (preparation for v4.4.0).
 
-### Outlook behavior after v4.2.0
+### Desktop client behavior after v4.2.0
 
 Profile build (Logon + folder browse from v4.1.0) is unchanged. New:
-Outlook can now open the list of mails in the inbox AND display a
+The desktop client can now open the list of mails in the inbox AND display a
 single mail with subject, sender, body. Writing (Reply/Forward/
 Compose), sending, attachments, notifications: still ecNotSupported, coming
 in v4.3.0 (composing mail) + v4.4.0 (attachments) + v4.5.0 (push).
@@ -3169,7 +3169,7 @@ in v4.3.0 (composing mail) + v4.4.0 (attachments) + v4.5.0 (push).
   ROP stream response.
 
 - **Handlers v4.1.0**:
-  - `rop/logon.ts`: **RopLogon** — Outlook mailbox login, loads the user from
+  - `rop/logon.ts`: **RopLogon** — client mailbox login, loads the user from
     Prisma, builds the folder IDs array (Inbox, Drafts, Sent, Trash, Subtree),
     creates the mailbox handle in the session. Response with MailboxGuid,
     ReplGuid, LogonTime, GwartTime, StoreState.
@@ -3180,7 +3180,7 @@ in v4.3.0 (composing mail) + v4.4.0 (attachments) + v4.5.0 (push).
 
 - **Execute handler refactor** (`packages/ews-server/src/mapi/emsmdb-handler.ts`):
   `handleExecute` now uses `dispatchRopBuffer` instead of returning `ecNotSupported`.
-  Outlook sees genuinely working ROPs.
+  The desktop client sees genuinely working ROPs.
 
 ### Skeleton files for subsequent phases
 
@@ -3193,7 +3193,7 @@ in v4.3.0 (composing mail) + v4.4.0 (attachments) + v4.5.0 (push).
 - `rop/contacts.ts` — v4.7.0 (NSPI + IPM.Contact)
 
 Each skeleton file contains a detailed implementation plan + property
-mapping + Microsoft spec references.
+mapping + Open Specification references.
 
 ### Tests
 
@@ -3201,9 +3201,9 @@ mapping + Microsoft spec references.
   (uint8/16/32/64, ASCII/UTF-16-LE strings, GUIDs, complex Connect request
   sequence, range errors)
 
-### Outlook functionality
+### Desktop client functionality
 
-With v4.1.0, after Connect Outlook can:
+With v4.1.0, after Connect the desktop client can:
 - ✅ Perform RopLogon successfully
 - ✅ Request the folder hierarchy table
 - ✅ See the standard folders (Inbox, Drafts, Sent, Trash)
@@ -3211,7 +3211,7 @@ With v4.1.0, after Connect Outlook can:
 - ❌ Write mails (coming in v4.3.0)
 - ❌ Push notifications (coming in v4.5.0)
 
-The Outlook profile build gets considerably further after Connect than in v4.0.0, but
+The client profile build gets considerably further after Connect than in v4.0.0, but
 the first mail click will return ecNotSupported.
 
 ---
@@ -3219,8 +3219,8 @@ the first mail click will return ecNotSupported.
 ## [4.0.0] — 2026-05-26 — MAPI-over-HTTP foundation + External Clients setup page
 
 **Major version bump**: Start of the MAPI-over-HTTP implementation for native
-Outlook Exchange integration. This foundation lays down the protocol layer, codec,
-session store, architecture plan. Full Outlook functionality comes iteratively
+desktop client integration. This foundation lays down the protocol layer, codec,
+session store, architecture plan. Full desktop client functionality comes iteratively
 in v4.0.x / v4.1.0+ (see `packages/ews-server/src/mapi/ARCHITECTURE.md`).
 
 ### Added
@@ -3247,19 +3247,19 @@ in v4.0.x / v4.1.0+ (see `packages/ews-server/src/mapi/ARCHITECTURE.md`).
   in the Autodiscover response. Default off, because ROP execution is not yet
   functional. Once RopLogon+folder browse are done in v4.1.0: default on.
 
-- **Setup page "External Clients & Outlook" in OWA** (pulled forward from v3.18.40):
+- **Setup page "External Clients" in the MWA** (pulled forward from v3.18.40):
   `packages/web-client/src/pages/SettingsPage.tsx` new section + backend
   endpoint `GET /api/v1/user/client-config`. Shows IMAP/SMTP data, CalDAV
   + CardDAV URLs, app-password notice with MFA, step-by-step for the "Outlook
   CalDav Synchronizer" plugin (free, OSS) — until MAPI/HTTP fully
-  works, the mature solution for calendar + contacts in Outlook.
+  works, the mature solution for calendar + contacts in desktop clients without CalDAV.
 
 ### Roadmap (v4.x — see `ARCHITECTURE.md`)
 
 | Version | Content | Effort |
 |---------|--------|---------|
 | v4.0.0  | Foundation (codec, session, Connect handshake)         | ✅ current |
-| v4.1.0  | RopLogon + folder browse (Outlook can log in + see folders) | ~2 wks |
+| v4.1.0  | RopLogon + folder browse (the desktop client can log in + see folders) | ~2 wks |
 | v4.2.0  | Reading mail (RopGetContentsTable, OpenMessage, Stream)   | ~2 wks |
 | v4.3.0  | Composing + sending mail (CreateMessage, SubmitMessage)  | ~1 wk |
 | v4.4.0  | Attachments + Move/Delete                                | ~1 wk |
@@ -3267,22 +3267,22 @@ in v4.0.x / v4.1.0+ (see `packages/ews-server/src/mapi/ARCHITECTURE.md`).
 | v4.6.0  | Calendar (IPM.Appointment)                              | ~3 wks |
 | v4.7.0  | Contacts (NSPI QueryRows + IPM.Contact)                 | ~2 wks |
 | v4.8.0  | Search (RopFindRow, Restrict)                            | ~2 wks |
-| v5.0.0  | Production hardening + Outlook compat tests             | ~4 wks |
+| v5.0.0  | Production hardening + desktop client compat tests      | ~4 wks |
 
 **Estimated total effort**: 6–9 months for a 2-person team.
 
 ### Migration / Breaking
 
-No breaking changes — all existing functions unchanged. Outlook
+No breaking changes — all existing functions unchanged. The desktop client
 continues to use the IMAP fallback from v3.18.39 until v4.1.0.
 
 ---
 
-## [3.18.40] — 2026-05-26 — External Clients & Outlook setup page in OWA
+## [3.18.40] — 2026-05-26 — External Clients setup page in the MWA
 
 ### Added
 
-- **New OWA settings section "External Clients & Outlook"**
+- **New MWA settings section "External Clients"**
   (`packages/web-client/src/pages/SettingsPage.tsx`, `packages/api-gateway/src/routes/user.ts`):
   Central setup help page for all external clients. Prominently shows:
   - **IMAP/SMTP/POP3 data** with copy buttons (host, port, encryption)
@@ -3290,8 +3290,8 @@ continues to use the IMAP fallback from v3.18.39 until v4.1.0.
   - **CardDAV account URL** + default address book URL
   - **App-password notice** when MFA is active
   - **Step-by-step guide for "Outlook CalDav Synchronizer"**
-    (free OSS plugin) — use calendar + contacts via Outlook
-  - **Notes on alternatives**: OWA in the browser, Apple Calendar/Contacts,
+    (free OSS plugin) — use calendar + contacts in desktop clients without CalDAV
+  - **Notes on alternatives**: the MWA in the browser, Apple Calendar/Contacts,
     Thunderbird + TbSync, eM Client, DAVx⁵ (Android)
 
 - **New backend endpoint** `GET /api/v1/user/client-config`
@@ -3302,69 +3302,69 @@ continues to use the IMAP fallback from v3.18.39 until v4.1.0.
 
 ### Background
 
-Microsoft Outlook Desktop has no native CalDAV/CardDAV support built in.
-A full MAPI-over-HTTP implementation (for native Outlook Exchange integration
+Common Windows desktop mail clients have no native CalDAV/CardDAV support built in.
+A full MAPI-over-HTTP implementation (for native desktop client integration
 with calendar + contacts) is several weeks of work and comes as a separate
 future feature. Until then, the "Outlook CalDav Synchronizer"
 (GitHub: `aluxnimm/outlookcaldavsynchronizer`) is the mature OSS plugin
-path for Outlook users. The new settings page bundles all necessary data
+path for users of such clients. The new settings page bundles all necessary data
 + provides the installation guide directly in the UI.
 
 ---
 
-## [3.18.39] — 2026-05-26 — Outlook: EXCH+EXPR removed from Autodiscover → IMAP fallback
+## [3.18.39] — 2026-05-26 — Autodiscover: EXCH+EXPR removed → IMAP fallback
 
 ### Fixed
 
-- **Outlook LTSC hung for minutes in an RPC/TCP connect loop, then error
+- **The LTSC desktop client hung for minutes in an RPC/TCP connect loop, then error
   "This set of folders cannot be opened — error logging on
-  to Exchange"** (`packages/autodiscover/src/v1.ts`): The user's connection status
+  to the server"** (`packages/autodiscover/src/v1.ts`): The user's connection status
   showed several VIDs with status "connecting" and protocol **RPC/TCP**
   on `mail.<domain>`. Root cause: Our Autodiscover response returned
   `<Protocol Type="EXCH">` and `<Protocol Type="EXPR">` blocks — both
-  signal to Outlook that the server supports **MAPI/RPC** (intra-Exchange RPC
+  signal to the client that the server supports **MAPI/RPC** (direct RPC
   or RPC-over-HTTPS via `rpcproxy.dll`). But we have only implemented **EWS** + stubs
-  of MAPI-over-HTTP. Outlook attempted RPC connects for minutes,
+  of MAPI-over-HTTP. The desktop client attempted RPC connects for minutes,
   which hung.
 
   **Pragmatic fix** until the full MAPI/HTTP implementation:
-  **EXCH and EXPR blocks REMOVED** from the Autodiscover XML. Outlook recognizes:
-  - The server is not an Exchange server for direct MAPI profiles
+  **EXCH and EXPR blocks REMOVED** from the Autodiscover XML. The desktop client recognizes:
+  - The server offers no direct MAPI profiles
   - Automatically falls back to **IMAP account configuration**
   - Mail works immediately via `<Protocol Type="IMAP">` + `<Protocol Type="SMTP">`
   - Calendar + contacts go via CalDAV/CardDAV (Apple Calendar,
-    Thunderbird, eM Client) or directly via OWA in the browser
+    Thunderbird, eM Client) or directly via the MWA in the browser
 
-  Outlook then automatically configures the account as "IMAP" (the user still
+  The desktop client then automatically configures the account as "IMAP" (the user still
   sees the email-address-only setup flow, but the connection becomes
-  IMAP instead of Exchange).
+  IMAP instead of MAPI).
 
 ### Roadmap
 
 A full MAPI-over-HTTP implementation (`EcDoConnectEx`, ROP verbose binary
-protocol, NSPI Bind/QueryRows) for native Outlook Exchange integration is
+protocol, NSPI Bind/QueryRows) for native desktop client integration is
 several weeks of work. Until then, IMAP is the pragmatic path for
-Outlook desktop users.
+desktop client users.
 
 ---
 
-## [3.18.38] — 2026-05-26 — Outlook LTSC "no password prompt" + Autodiscover completion
+## [3.18.38] — 2026-05-26 — Desktop client "no password prompt" + Autodiscover completion
 
 ### Fixed
 
 - **CRITICAL ROOT CAUSE: EWS answered the first request with 200 OK
-  instead of 401 — Outlook never asks for a password** (`packages/ews-server/src/server.ts`):
-  User symptom: Outlook "connected" after Autodiscover without a credential
+  instead of 401 — the desktop client never asks for a password** (`packages/ews-server/src/server.ts`):
+  User symptom: The desktop client "connected" after Autodiscover without a credential
   prompt, but then only showed "Personal Folders" (local PST) instead of the
-  Exchange mailbox, plus the error message "The Microsoft Exchange information service
-  in your profile is missing required information". Root cause:
-  Outlook LTSC first probes `GET /EWS/Exchange.asmx` BEFORE it sends
+  server mailbox, plus an error message that the mail service in the profile was
+  missing required information. Root cause:
+  The LTSC desktop client first probes `GET /EWS/Exchange.asmx` BEFORE it sends
   any `Authorization` header at all. The previous GET handler returned
-  200 + WSDL stub unauthenticated → Outlook assumed no
+  200 + WSDL stub unauthenticated → the desktop client assumed no
   auth was needed, never sent credentials, and the setup landed on the
   local default PST ("Personal Folders"). **Fix**: `ewsAuthMiddleware` now
   also before the GET handler and before the `/mapi/*` router (except
-  `/mapi/healthcheck.htm` — stays anonymous for the Outlook probe). MAPI and
+  `/mapi/healthcheck.htm` — stays anonymous for the client probe). MAPI and
   OAB endpoints now also correctly send `WWW-Authenticate: Basic
   realm="CoreMail EWS"` when the auth header is missing.
 
@@ -3375,55 +3375,54 @@ Outlook desktop users.
   `localhost`, not under service hostnames. Fix: env variable
   `AUTH_SERVICE_URL` with default `http://localhost:3003/auth/login`.
 
-- **Autodiscover v1 XML had Outlook-mandatory fields missing or wrong**
-  (`packages/autodiscover/src/v1.ts`): Research of Microsoft Docs +
-  the Grommunio implementation showed:
-  - `AuthPackage` MUST be `Basic` (capital B) — some Outlook LTSC builds
+- **Autodiscover v1 XML had client-mandatory fields missing or wrong**
+  (`packages/autodiscover/src/v1.ts`): Research of the Open Specifications +
+  an open-source implementation showed:
+  - `AuthPackage` MUST be `Basic` (capital B) — some LTSC desktop client builds
     are case-sensitive. Was `basic` (lowercase b).
-  - `<User><LegacyDN>` mandatory: Outlook uses it as the internal user identity
+  - `<User><LegacyDN>` mandatory: The desktop client uses it as the internal user identity
     (format `/o=CoreMail/ou=Exchange Administrative Group
     (FYDIBOHF23SPDLT)/cn=Recipients/cn=<user-id>`). Was missing completely.
   - `<User><AutoDiscoverSMTPAddress>` added (mandatory for profile binding).
   - `<GroupingInformation>default</GroupingInformation>` in the EXPR block —
-    required since Exchange 2013 SP1 for sharing discovery.
+    required for sharing discovery.
   - `<PublicFolderInformation><SmtpAddress>publicfolder@<root-domain>` as
-    dummy — otherwise Outlook logs "PublicFolder discovery failed" and
+    dummy — otherwise the desktop client logs "PublicFolder discovery failed" and
     classifies the profile as incomplete.
-  - `ServerDN`/`MdbDN` with correct Exchange 2019 topology
+  - `ServerDN`/`MdbDN` with the expected topology DN
     (`Exchange Administrative Group (FYDIBOHF23SPDLT)` instead of just
     `Exchange`).
-  - `<EcpUrl>` added (points to OWA — Outlook uses it for the web-open link).
+  - `<EcpUrl>` added (points to the MWA — the client uses it for the web-open link).
 
 ### Background research
 
-Sources: Microsoft Learn (MS-OXDSCLI, MS-OXCMAPIHTTP, POX Autodiscover),
-msxfaq.de (HTTP 401 Negotiate flow), Grommunio Docs (KB Outlook bugs),
-Mailcow Docs (no EWS, hence no Outlook Exchange support). Comparisons
-with Stalwart + Mailcow (open-source mail servers) confirm: without EWS +
-correct 401 behavior, Outlook cannot build Exchange profiles.
+Sources: the Open Specifications (MS-OXDSCLI, MS-OXCMAPIHTTP, POX Autodiscover),
+public notes on the HTTP 401 Negotiate flow and on known client bugs, and the
+documentation of other open-source mail servers. They confirm: without EWS +
+correct 401 behavior, the desktop client cannot build MAPI profiles.
 
 ---
 
-## [3.18.37] — 2026-05-26 — Outlook LTSC Autodiscover XML extended + audit translations
+## [3.18.37] — 2026-05-26 — Autodiscover XML extended + audit translations
 
 ### Fixed
 
-- **Outlook LTSC (Exchange 2019) could not connect despite correctly
+- **The LTSC desktop client could not connect despite correctly
   delivered Autodiscover** (`packages/autodiscover/src/v1.ts`): The
   XML response had only a minimal `<Protocol><Type>EXCH</Type>...`
   block without `AuthPackage`, `OABUrl`, `ASUrl`, `OOFUrl`, `MdbDN`,
-  `ServerVersion` and without the **EXPR block** (Outlook Anywhere / MAPI-
-  over-HTTP fallback). Outlook 2016+ strictly expects these fields —
+  `ServerVersion` and without the **EXPR block** (RPC over HTTP / MAPI-
+  over-HTTP fallback). Desktop clients from 2016 on strictly expect these fields —
   without them the setup wizard aborts with "Something went wrong".
 
   **Fix**: Autodiscover v1 XML extended with:
-  - `<AuthPackage>basic</AuthPackage>` (Outlook needs an explicit auth type)
-  - `<ServerVersion>73C0834F</ServerVersion>` (Exchange-2019-compatible server version token)
-  - `<MdbDN>` + `<ServerDN>` (Exchange topology identifiers)
+  - `<AuthPackage>basic</AuthPackage>` (the desktop client needs an explicit auth type)
+  - `<ServerVersion>73C0834F</ServerVersion>` (server version token the client expects)
+  - `<MdbDN>` + `<ServerDN>` (topology identifiers)
   - `<ASUrl>`, `<OOFUrl>`, `<OABUrl>` (Availability Service, Out-of-Office, Offline Address Book)
-  - `<EmwsUrl>` (Exchange Management Web Service)
+  - `<EmwsUrl>` (management web service URL)
   - `<OWAUrl AuthenticationMethod="Basic, Fba">`
-  - **Completely new `<Protocol><Type>EXPR</Type>` block** for Outlook Anywhere
+  - **Completely new `<Protocol><Type>EXPR</Type>` block** for RPC over HTTP
     /MAPI-over-HTTP (SSL=on, AuthPackage=basic, ServerExclusiveConnect=on)
   - `<MicrosoftOnline>False</MicrosoftOnline>` (signals an on-premises setup)
 
@@ -3455,12 +3454,12 @@ correct 401 behavior, Outlook cannot build Exchange profiles.
   `autodiscoverBase` as `http://mail.local:8080/...` at first container
   start. Anyone configuring a real domain (e.g. `mail.firma.de`) had to
   change the URLs manually in BCP → Server settings, otherwise
-  Autodiscover gave Outlook unusable URLs. That works for 1 test user
+  Autodiscover gave the desktop client unusable URLs. That works for 1 test user
   manually, but NOT for the 1000+ users with individual domains.
 
   **Fix**: New central helper `lib/server-urls.ts` with:
   - `deriveServerUrls(publicHostname, useHttps, httpPort)` — computes all
-    URLs from the hostname (Autodiscover host per Microsoft spec
+    URLs from the hostname (Autodiscover host per MS-OXDISCO:
     `autodiscover.<root-domain>`).
   - `syncFromPrimaryDomain(domainName)` — sets `publicHostname` to
     `mail.<domain>` if it is still the default, derives all URLs.
@@ -3483,7 +3482,7 @@ correct 401 behavior, Outlook cannot build Exchange profiles.
   - api-gateway startup — as a safety net for existing installations.
 
   A Redis publish on `coremail:settings:reload` informs the autodiscover
-  service immediately, so Outlook never sees outdated URLs.
+  service immediately, so the desktop client never sees outdated URLs.
 
 ### Fixed (additionally)
 
@@ -3526,36 +3525,36 @@ correct 401 behavior, Outlook cannot build Exchange profiles.
 
 ---
 
-## [3.18.35] — 2026-05-26 — Outlook LTSC connection fix (Autodiscover routing + URL auto-sync)
+## [3.18.35] — 2026-05-26 — Desktop client connection fix (Autodiscover routing + URL auto-sync)
 
 ### Fixed
 
-- **CRITICAL: Outlook LTSC "Something went wrong" — Autodiscover endpoint
+- **CRITICAL: LTSC desktop client error "Something went wrong" — Autodiscover endpoint
   returned an Express 404**
   (`packages/api-gateway/src/server.ts`): The API gateway routed
   `/Autodiscover/Autodiscover.xml` and `/autodiscover/autodiscover.json/v1.0/...`
   to the **EWS server** (port 8080), although no Autodiscover routes are
   implemented there at all. The **autodiscover server** on port 8081 has the real
   handlers (`handleAutodiscoverV1` + `handleAutodiscoverV2`), but was never
-  called. Outlook got `Cannot POST /Autodiscover/
+  called. The desktop client got `Cannot POST /Autodiscover/
   Autodiscover.xml` (Express default 404) from the EWS server and therefore could not configure.
   **Fix**: New env variable `AUTODISCOVER_SERVICE_URL` (default
   `http://localhost:8081`). Routes `/Autodiscover` and `/autodiscover` are
   now correctly proxied to the autodiscover server.
 
-- **EWS/OWA/EAS URLs pointed to the internal port :8080** instead of the
+- **EWS/webmail/EAS URLs pointed to the internal port :8080** instead of the
   external HTTPS port (`packages/api-gateway/src/server.ts`,
   `packages/api-gateway/src/routes/admin/servers.ts`): During setup the
   `ewsUrl`/`owaUrl`/`easUrl`/`autodiscoverBase` fields in `ServerSettings`
   were initially filled with `http://mail.local:8080/...` (schema defaults). When
   the admin later changed `publicHostname` (e.g. via BCP → Server
   settings), the derived URLs were NOT migrated along →
-  Autodiscover delivered internal URLs unreachable for Outlook.
+  Autodiscover delivered internal URLs unreachable for the desktop client.
   - **Startup migration** (`syncAutodiscoverUrls()`): At api-gateway start,
     URLs are auto-corrected if `publicHostname != mail.local` but the URLs
     still contain `mail.local` or `:8080`. Computes `ewsUrl`/`owaUrl`/
     `easUrl` from `publicHostname` + `useHttps` + `httpPort` and
-    `autodiscoverBase` from the root domain (Microsoft spec:
+    `autodiscoverBase` from the root domain (MS-OXDISCO:
     `autodiscover.<root-domain>`).
   - **PUT /admin/servers/settings** also repairs stale URLs on save
     automatically when the admin saves the hostname without adjusting URLs.
@@ -3639,7 +3638,7 @@ correct 401 behavior, Outlook cannot build Exchange profiles.
 
 - **Feature "External contacts" (ExternalMailContact) completely removed from the code.**
   External recipients are from now on:
-  - entered directly as an email address in the compose window (Outlook standard),
+  - entered directly as an email address in the compose window,
   - maintained as `EXTERNAL` members of distribution groups — the member type
     `EXTERNAL` in `DistributionGroupMember` remains unchanged.
 
@@ -3679,17 +3678,17 @@ correct 401 behavior, Outlook cannot build Exchange profiles.
 
 ---
 
-## [3.18.32] — 2026-05-26 — TLS proxy: SNI multi-cert support (Outlook Autodiscover fix)
+## [3.18.32] — 2026-05-26 — TLS proxy: SNI multi-cert support (Autodiscover fix)
 
 ### Fixed
 
-- **Outlook Autodiscover reported a "certificate error" despite a correctly issued
+- **Autodiscover clients reported a "certificate error" despite a correctly issued
   `autodiscover.<domain>` certificate** (`packages/api-gateway/src/tls-proxy.ts`):
   The integrated HTTPS proxy (port 443) loaded only the one certificate with
   `isActiveHttps=true` and served ALL incoming TLS connections with it.
-  When Outlook accessed `https://autodiscover.<domain>/Autodiscover/Autodiscover.xml`,
+  When the desktop client accessed `https://autodiscover.<domain>/Autodiscover/Autodiscover.xml`,
   the client saw the `mail.<domain>` certificate → hostname mismatch →
-  `ERR_CERT_COMMON_NAME_INVALID` / Outlook showed a certificate warning.
+  `ERR_CERT_COMMON_NAME_INVALID` / the desktop client showed a certificate warning.
 
   **Fix**: TLS proxy refactored to **SNI multi-cert support**.
   - On reload, ALL certs with `status='ACTIVE'` are loaded, not just the one
@@ -3717,7 +3716,7 @@ Existing setups: On the first reload after deploy the SNI map is built automatic
 from all ACTIVE certs. Existing connections are not interrupted.
 Anyone who has not yet issued the `autodiscover.<domain>` cert: BCP → SSL/TLS →
 request an ACME certificate with domain `autodiscover.<domain>` — after that
-Outlook Autodiscover works immediately, without having to click "Enable HTTPS".
+Autodiscover works immediately, without having to click "Enable HTTPS".
 
 ---
 
@@ -3726,7 +3725,7 @@ Outlook Autodiscover works immediately, without having to click "Enable HTTPS".
 ### Removed
 
 - **Feature "Public Folders" completely removed from the code.**
-  The Exchange-style concept (with ACL `READ`/`WRITE`/`FULL` + mail-enabled variant
+  The concept (with ACL `READ`/`WRITE`/`FULL` + mail-enabled variant
   since v3.18.9) is hardly used by the market today. Modern teams prefer
   **Shared Mailboxes** (`/admin/shared-mailboxes/`) and **distribution groups**
   (`/admin/groups/`) for the typical use cases (team mailbox, distribution list,
@@ -3862,7 +3861,7 @@ Outlook Autodiscover works immediately, without having to click "Enable HTTPS".
 ### Changed
 
 - **Save button in the event dialog now bottom right** (previously header
-  toolbar top left). Standard Outlook/Office pattern. Footer with gray
+  toolbar top left). Common desktop pattern. Footer with gray
   background: delete button left, cancel + save right.
 
 - **Time input instead of dropdown-only**
@@ -3896,7 +3895,7 @@ Outlook Autodiscover works immediately, without having to click "Enable HTTPS".
 
 ---
 
-## [3.18.27] — 2026-05-25 — Outlook-style event dialog (edit/delete/reschedule/notes/time picker)
+## [3.18.27] — 2026-05-25 — Full event dialog (edit/delete/reschedule/notes/time picker)
 
 ### Fixed
 
@@ -3915,12 +3914,12 @@ Outlook Autodiscover works immediately, without having to click "Enable HTTPS".
 
 ### Added
 
-- **`EventEditDialog` component (Outlook-style)**
+- **`EventEditDialog` component**
   (`packages/web-client/src/components/EventEditDialog.tsx`):
   Full modal dialog for create + edit with:
   - **Header toolbar**: Save, Delete (edit only), status refresh, Close
   - **Calendar picker**: color dot + dropdown (disabled in edit mode)
-  - **Title input**: Outlook-style large heading
+  - **Title input**: large heading
   - **Attendee list with live PARTSTAT badges**:
     - Green CheckCircle for ACCEPTED, red XCircle for DECLINED,
       amber HelpCircle for TENTATIVE, gray Clock for NEEDS-ACTION
@@ -3944,7 +3943,7 @@ Outlook Autodiscover works immediately, without having to click "Enable HTTPS".
 - **CalendarPage** — old inline dialog removed (was ~80 lines of JSX).
   Replaced by the unified `EventEditDialog` for create and edit.
   State simplified: `eventDialog: { mode: 'create' | 'edit', ... } | null`.
-- **Toolbar "New event"** now opens the Outlook-style dialog
+- **Toolbar "New event"** now opens the new dialog
   instead of the old mini dialog.
 - **Double-click / single click on event**: opens the edit dialog (a double-
   click is fired by FullCalendar as two eventClicks — both open
@@ -4019,9 +4018,9 @@ Outlook Autodiscover works immediately, without having to click "Enable HTTPS".
 ### Removed / Explicitly Not Supported
 
 - **PST format** is deliberately not supported. Rationale in the frontend
-  banner: PST is a proprietary Microsoft binary format, all available
+  banner: PST is a proprietary binary format, all available
   open-source libs (libpff, node-pst-extractor) are read-only. Instead
-  ZIP with .eml files — Outlook accepts that natively via drag & drop.
+  ZIP with .eml files — common desktop mail programs accept that via drag & drop.
 
 ### Schema
 
@@ -4043,8 +4042,8 @@ Outlook Autodiscover works immediately, without having to click "Enable HTTPS".
   When an event with attendees is created, the system generates an
   iMIP-compliant invitation mail via `ical-generator` with:
   - `multipart/alternative` → text/plain + text/html + `text/calendar; method=REQUEST` (for Gmail)
-  - `application/ics` attachment (for Outlook Win32 RSVP buttons)
-  - Outlook quirks (`X-MICROSOFT-CDO-BUSYSTATUS`, `X-MS-OLK-FORCEINSPECTOROPEN`)
+  - `application/ics` attachment (for the RSVP buttons of Win32 desktop clients)
+  - client-specific properties (`X-MICROSOFT-CDO-BUSYSTATUS`, `X-MS-OLK-FORCEINSPECTOROPEN`)
   - Mandatory properties: UID (with `@hostname` suffix), DTSTAMP, ORGANIZER,
     ATTENDEE with `RSVP=TRUE PARTSTAT=NEEDS-ACTION`, SEQUENCE, STATUS:CONFIRMED
   Sent via the existing BullMQ outbound queue (`smtp-outbound`) via the
@@ -4058,7 +4057,7 @@ Outlook Autodiscover works immediately, without having to click "Enable HTTPS".
 
 - **iMIP CANCEL on event deletion** — On `DELETE /calendar/events/:id`, a
   CANCEL mail (`METHOD:CANCEL`, `STATUS:CANCELLED`,
-  `sequence++`) is sent to all attendees before the delete. Gmail/Outlook show a banner
+  `sequence++`) is sent to all attendees before the delete. Common mail clients show a banner
   "Appointment cancelled" and remove the entry.
 
 - **iTIP REPLY inbound handler** (guest responds)
@@ -4069,7 +4068,7 @@ Outlook Autodiscover works immediately, without having to click "Enable HTTPS".
   UID lookup on `CalendarEvent`, SEQUENCE check (old REPLYs are
   ignored, RFC 5546 §3.4.3), update the attendee entry in the JSON array
   (`partstat=ACCEPTED|DECLINED|TENTATIVE`). The mail is NEVERTHELESS delivered to the
-  inbox (user awareness as in Outlook).
+  inbox (user awareness).
 
 - **Frontend: guest input in the new-appointment dialog**
   (`packages/web-client/src/pages/CalendarPage.tsx`):
@@ -4122,8 +4121,8 @@ Outlook Autodiscover works immediately, without having to click "Enable HTTPS".
 ### Schema
 
 - **`CalendarEvent.sequence Int @default(0)`** — sequence counter for
-  iMIP-compliant event updates (RFC 5546 §3.2). Mail clients (Outlook,
-  Gmail) ignore REPLY mails with a lower sequence than the currently
+  iMIP-compliant event updates (RFC 5546 §3.2). Mail clients
+  ignore REPLY mails with a lower sequence than the currently
   stored event state. Preparation for v3.18.25.
 
 ---
@@ -4218,7 +4217,7 @@ Outlook Autodiscover works immediately, without having to click "Enable HTTPS".
   `packages/web-client/src/pages/CalendarPage.tsx`):
   The dropdown did open with toggle checkboxes, but the state was
   purely local to the toolbar — it was never passed on to CalendarPage.
-  In addition, the old Outlook terms ("Meetings",
+  In addition, the old terms ("Meetings",
   "Categories", "Show as") were meaningless for CoreMail.
   **Fix**: filter set reduced to 5 realistic options that actually map to
   data: Recurring events (rrule), Tasks, Private events
@@ -4558,7 +4557,7 @@ Outlook Autodiscover works immediately, without having to click "Enable HTTPS".
 - **BCP ExternalContactsPage — first name/last name fields removed**
   (`packages/admin-panel/src/pages/ExternalContactsPage.tsx`):
   The separate inputs for first name and last name were redundant — the
-  display name is the only relevant value that is visible everywhere in MWA/GAL/Outlook.
+  display name is the only relevant value that is visible everywhere in MWA/GAL/mail clients.
   The UI now has only one required field "Display name". Backend
   `firstName`/`lastName` remain in the DB with a default `""` fallback
   (no schema break).
@@ -4646,7 +4645,7 @@ Outlook Autodiscover works immediately, without having to click "Enable HTTPS".
 
 ## [3.18.10] — 2026-05-24 — Image privacy banner + queue hardening (DSN, 5xx, dynamic settings)
 
-### Added — Image privacy banner (Outlook/Gmail style)
+### Added — Image privacy banner
 
 - **External images are BLOCKED by default** to protect against tracking pixels
   (`packages/web-client/src/components/MessageReader.tsx`):
@@ -4706,7 +4705,7 @@ Outlook Autodiscover works immediately, without having to click "Enable HTTPS".
 
 - **Fix**: new engine `packages/storage/src/transport-rules.ts` with
   `applyTransportRules(parsed, ctx)` + `applyOutcomeToBuffer(buffer, outcome)`:
-  - 8 conditions × 9 operators combined with AND (Exchange standard)
+  - 8 conditions × 9 operators combined with AND
   - 10 actions: `addHeader`, `removeHeader`, `redirect`, `reject`, `addRecipient`,
     `removeRecipient`, `setSubjectPrefix`, `setSubjectSuffix`, `quarantine`,
     `addDisclaimer`
@@ -4749,7 +4748,7 @@ Outlook Autodiscover works immediately, without having to click "Enable HTTPS".
 
 - **From header override**: with `sendAs`, `From: <shared>` is set;
   with `sendOnBehalfOf`, `From: <shared>` AND additionally `Sender: <user>` —
-  Outlook/Apple Mail then show "User on behalf of Shared".
+  Mail clients then show "User on behalf of Shared".
 
 - **StructuredMessage.sender** added as an optional field for the queue.
 
@@ -4824,7 +4823,7 @@ Outlook Autodiscover works immediately, without having to click "Enable HTTPS".
   `targetType` from `pathParts[0]` (resource), the HTTP status is evaluated as `success`/
   `errorMsg`.
 
-### Added — Schedule send (Outlook style)
+### Added — Schedule send
 
 - **Backend** (`packages/storage/prisma/schema.prisma` + `routes/mail.ts`):
   - New fields: `Message.scheduledAt: DateTime?`, `scheduledStatus: String?`
@@ -4850,21 +4849,21 @@ Outlook Autodiscover works immediately, without having to click "Enable HTTPS".
   - Validation: min. 30s in the future
   - Toast "Sending scheduled for [date/time]" after submit
 - **Frontend MessageReader**:
-  - Schedule banner Outlook style: blue (PENDING "Will be sent on…"), green
+  - Schedule banner: blue (PENDING "Will be sent on…"), green
     (SENT "Scheduled sending completed"), gray (CANCELLED "Scheduled sending
     cancelled")
   - "Cancel scheduling" button when PENDING (deletes the BullMQ job, banner switches)
 - **Frontend MessageList**: `CalendarClock` icon (blue) in the row for
   scheduled mails — tooltip with the concrete time
 
-### Added — Spam UX (Outlook style)
+### Added — Spam UX
 
-### Added — Spam UX (Outlook style)
+### Added — Spam UX
 
 - **Spam score persistence**: new `Message.spamScore: Float?` field in the Prisma schema.
   `storeInboundMessage()` stores the rspamd score at the time of delivery
   (previously transient — only used for folder routing, then discarded).
-- **Spam banner in the MessageReader** (Outlook style):
+- **Spam banner in the MessageReader**:
   - Visible when `spamScore ≥ 3.0` OR the mail is in the Junk folder
   - **Red** (high risk) at `spamScore ≥ 6.0` (rspamd reject threshold)
   - **Amber** at medium risk or in the Junk folder
@@ -4973,7 +4972,7 @@ Outlook Autodiscover works immediately, without having to click "Enable HTTPS".
 
 ### Added
 
-- **MWA signatures fully built out** — Gmail/Outlook level
+- **MWA signatures fully built out** — full-featured editor
   (`packages/web-client/src/components/SignatureSection.tsx` — new separate component):
 
   **Formatting:**
@@ -5015,7 +5014,7 @@ Outlook Autodiscover works immediately, without having to click "Enable HTTPS".
     (TipTap has no FontSize extension of its own)
   - `applyFontSize()` helper works around ChainedCommands type conflicts
   - Inline images embedded as data: URL — no MinIO upload needed,
-    works in all mail clients (Gmail, Outlook, Apple Mail)
+    works in all common mail clients
   - 500 KB limit per image prevents overweight outbound mails
   - Dark-mode-capable toolbar
 
@@ -5058,23 +5057,23 @@ Outlook Autodiscover works immediately, without having to click "Enable HTTPS".
 - **Compose window rolled back to the pre-v3.18.1 variant** —
   the Gmail-style redesign from v3.18.1 (3 sizes, header drag, schedule-send dropdown,
   emoji picker, footer format toolbar) is withdrawn. The old compose variant
-  (Outlook-inspired, formatting toolbar at the top, Send bottom right, attachment+draft
+  (formatting toolbar at the top, Send bottom right, attachment+draft
   bottom left) fits the rest of the CoreMail UI better. `ComposeWindow.tsx` is exactly
   identical to the version from v3.18.0.
 
 ### Changed
 
-- **MWA: "Outlook" mentions removed from user-facing UI texts**:
-  - `RulesSection.tsx`: stop-processing hint without the Outlook comparison
+- **MWA: vendor client mentions removed from user-facing UI texts**:
+  - `RulesSection.tsx`: stop-processing hint without the client comparison
   - `SettingsPage.tsx → View`: "Customize layout and display options for CoreMail"
-    (instead of "— like in Outlook or Thunderbird")
+    (instead of a comparison with two desktop mail programs)
   - `SettingsPage.tsx → App passwords`: "Connect external e-mail clients without your main password"
-    (instead of "For e-mail clients (Outlook, Thunderbird) …")
+    (instead of a list of two desktop mail programs)
 
-  Technically necessary Outlook references remain (Autodiscover setup guide
-  in the BCP, "Outlook Modern Auth" as an OAuth2 client example in the admin panel, historical
-  changelog/compliance entries), because these point to the real Microsoft Outlook client
-  as an external IMAP/EAS consumer.
+  Technically necessary client references remain (Autodiscover setup guide
+  in the BCP, a Modern Auth OAuth2 client example in the admin panel, historical
+  changelog/compliance entries), because these point to a real external
+  IMAP/EAS client.
 
 ### Fixed
 
@@ -5127,12 +5126,12 @@ Outlook Autodiscover works immediately, without having to click "Enable HTTPS".
 
 ---
 
-## [3.18.0] — 2026-05-24 — Feature: Outlook-style inbox rules
+## [3.18.0] — 2026-05-24 — Feature: server-side inbox rules
 
 ### Added
 
-- **Server-side user inbox rules (analogous to Microsoft Exchange)**
-  Complete Outlook rules functionality in Mail Web Access — conditions, actions,
+- **Server-side user inbox rules**
+  Complete rules functionality in Mail Web Access — conditions, actions,
   exceptions and stop-processing manageable directly in the MWA. Rules are
   applied server-side in the SMTP inbound pipeline as soon as a mail arrives —
   regardless of whether the client is open. Also works for IMAP/EWS/EAS access.
@@ -5165,7 +5164,7 @@ Outlook Autodiscover works immediately, without having to click "Enable HTTPS".
     list of all rules with toggle, drag-reorder (dnd-kit), edit, delete
     and "Run now". Empty state with CTA.
   - **RuleEditorModal** (`packages/web-client/src/components/RuleEditorModal.tsx`):
-    Outlook-style 3-step wizard — "When the message arrives and …" /
+    3-step wizard — "When the message arrives and …" /
     "Do the following:" / "Except if …" with folder picker, category picker,
     e-mail input for forward/redirect. `AND`/`OR` choice, stop-processing checkbox.
   - **Context menu "Rules" in MessageList**: right-click on a mail →
@@ -5223,8 +5222,8 @@ Outlook Autodiscover works immediately, without having to click "Enable HTTPS".
 
 - **MWA: reply indicator on answered mails**
   (`web-client/src/components/MessageReader.tsx`, `MessageList.tsx`):
-  Mails that had been replied to received no visual marker (like Outlook's
-  reply arrow). Fix:
+  Mails that had been replied to received no visual marker (reply
+  arrow). Fix:
   - `MessageReader`: the Reply/Reply-all buttons now set the IMAP flag
     `\Answered` via `patchMutation` (`markAnswered()` function).
   - `MessageList`: blue `Reply` icon in the icons column when `flags` contains the
@@ -5240,14 +5239,14 @@ Outlook Autodiscover works immediately, without having to click "Enable HTTPS".
   (`smtp-server/src/core/session.ts`):
 
   **Root cause**: the SMTP server advertised `PIPELINING` (RFC 2920) and external MTAs
-  (Gmail, Postfix, Exchange) used it correctly — they sent `MAIL FROM`, `RCPT TO`
+  (hosted providers, Postfix and others) used it correctly — they sent `MAIL FROM`, `RCPT TO`
   and `DATA` in one go. Since `handleMailFrom()` and `handleRcptTo()` are asynchronous
   handlers (`await onMailFrom()` → DB query, security filter), the
   state (`READY → MAIL → RCPT`) only changed after the `await`. By then the synchronous
   dispatch loop had already processed `RCPT TO` and `DATA` — both saw state `'READY'`
   instead of `'MAIL'`/`'RCPT'` → both were rejected with `503 5.5.1 Bad sequence of commands`.
   The `250 OK` for `MAIL FROM` arrived afterwards, too late and misplaced.
-  External senders (Gmail, Postfix, Exchange) got their mails back as permanently
+  External senders (hosted providers, Postfix and others) got their mails back as permanently
   failed.
 
   **Fix**: command queue (`cmdQueue: Promise<void>`) — all SMTP commands are
@@ -5594,7 +5593,7 @@ Outlook Autodiscover works immediately, without having to click "Enable HTTPS".
 - **🔒 503 5.5.1 Bad sequence of commands — root cause fixed**: the certificate
   for `mail.stefanwuestner.de` was activated ONLY for the HTTPS proxy (MWA/BCP);
   SMTP/IMAP/POP3 continued to use the old self-signed certificate from
-  `ServerSettings.tlsCert/tlsKey`. External MTAs (Google, Outlook) rejected the
+  `ServerSettings.tlsCert/tlsKey`. External MTAs (large hosted providers) rejected the
   STARTTLS handshake → 503.
 
 - **🏗️ `activate-https` now ALWAYS also activates SMTP/IMAP/POP3**: when the
@@ -5665,7 +5664,7 @@ Outlook Autodiscover works immediately, without having to click "Enable HTTPS".
 ### Fixed
 
 - **Docker DNS phantom**: internal DNS results did not match what
-  external MTAs (Gmail, Outlook) actually see. The new multi-resolver
+  external MTAs (large hosted providers) actually see. The new multi-resolver
   check reflects the reality of the public DNS infrastructure.
 
 ---
@@ -5742,17 +5741,17 @@ Outlook Autodiscover works immediately, without having to click "Enable HTTPS".
 
 ---
 
-## [3.17.28] — 2026-05-21 — Fix: self-signed cert with wrong CN (Outlook 503 root cause)
+## [3.17.28] — 2026-05-21 — Fix: self-signed cert with wrong CN (hosted-MTA 503 root cause)
 
 ### Fixed
 
-- **🎯 Outlook 365 503 bounce — root cause found**: the stored self-signed
+- **🎯 Hosted-MTA 503 bounce — root cause found**: the stored self-signed
   certificate had `CN=mail.localhost` instead of `CN=mail.stefanwuestner.de`. At the
   first container start `publicHostname` in the DB was still empty, so the
   cert was generated and stored with the default `mail.localhost`. Later restarts
   reused this cert → eternal CN mismatch.
 
-  The TLS handshake worked (OpenSSL confirms that), but Outlook 365 validates the
+  The TLS handshake worked (OpenSSL confirms that), but a strict hosted MTA validates the
   **CN against the connected hostname** and rejects on mismatch → ECONNRESET
   → NDR with "503 5.5.1 Bad sequence of commands".
 
@@ -5767,7 +5766,7 @@ Outlook Autodiscover works immediately, without having to click "Enable HTTPS".
   cert is corrected automatically.
 
 - **STARTTLS on port 25 re-enabled**: since the cert now has the correct CN,
-  Outlook 365 / strict MTAs also accept the TLS handshake. MX-Tools
+  strict hosted MTAs also accept the TLS handshake. MX-Tools
   shows "Supports TLS" ✅.
 
 ### Removed
@@ -5789,8 +5788,8 @@ The self-signed cert is now **compatible** (correct CN/SAN). But:
 
 ### Fixed
 
-- **Outlook 365 returned 503 again with v3.17.26**: advertising STARTTLS with a
-  self-signed cert had triggered Outlook 365 bounces again. Self-signed +
+- **A strict hosted MTA returned 503 again with v3.17.26**: advertising STARTTLS with a
+  self-signed cert had triggered its bounces again. Self-signed +
   STARTTLS is NOT compatible with strict MTAs — no graceful plain fallback.
   Fix: self-signed → STARTTLS on port 25 OFF again (behavior of v3.17.19).
 
@@ -5830,26 +5829,26 @@ The self-signed cert is now **compatible** (correct CN/SAN). But:
 
 - **MX-Tools warning "SMTP TLS Warning - Does not support TLS"**:
   In v3.17.19 STARTTLS on port 25 was hard-disabled for self-signed certs
-  to avoid Outlook 365 handshake errors. Result: MX-Tools saw no TLS
+  to avoid strict hosted-MTA handshake errors. Result: MX-Tools saw no TLS
   → warning. Even though most MTAs (Gmail, Apple, ProtonMail, AOL …)
   accept opportunistic TLS with self-signed certs.
 
   **Correct trade-off**: opportunistic TLS is **always better** than no TLS:
   - ~95% of MTAs accept self-signed in opportunistic mode
-  - Strict MTAs (Microsoft 365) fall back to plain on a TLS handshake error
+  - Strict hosted MTAs fall back to plain on a TLS handshake error
     (no bounce, just no TLS for that connection)
   - MX-Tools scoring rewards TLS availability
 
   Fix: `advertiseStarttls: true` always (instead of `!_tlsCertSelfSigned`).
   STARTTLS is now advertised in EHLO even with a self-signed cert.
 
-### Permanent solution for Outlook 365 compatibility
+### Permanent solution for strict hosted MTAs
 
-For full TLS validation in strict MTAs (Microsoft 365, some
+For full TLS validation in strict MTAs (large hosted providers, some
 banks), issue a **Let's Encrypt certificate** via BCP → SSL/TLS → Certificates →
 "Request Let's Encrypt" for `mail.{domain}`. Once active:
 - MX-Tools: ✅ full TLS score
-- Outlook 365: ✅ accepts the cert without problems
+- Strict hosted MTAs: ✅ accept the cert without problems
 - The self-signed fallback is no longer used
 
 **Prerequisites for Let's Encrypt**:
@@ -5870,7 +5869,7 @@ banks), issue a **Let's Encrypt certificate** via BCP → SSL/TLS → Certificat
 - **MWA → folder tree right-click → "Assign retention policy"**:
   submenu with all available PERSONAL tags. The currently assigned tag
   gets a ✓ checkmark. At the bottom a "Remove" entry to delete the assignment.
-  Works for system AND custom folders (Exchange behavior).
+  Works for system AND custom folders.
 
 - **🕒 badge** in the folder tree: folders with an active retention policy show
   a small clock icon after the folder name — tooltip with tag name + days.
@@ -6066,13 +6065,13 @@ database for backwards compatibility but are ignored by the server (hard-coded).
 
 ---
 
-## [3.17.19] — 2026-05-21 — Fix: STARTTLS on port 25 with self-signed cert (Outlook 503)
+## [3.17.19] — 2026-05-21 — Fix: STARTTLS on port 25 with self-signed cert (hosted-MTA 503)
 
 ### Fixed
 
-- **Mails from Microsoft Outlook / Exchange are rejected with `503 5.5.1 Bad sequence
+- **Mails from strict hosted MTAs are rejected with `503 5.5.1 Bad sequence
   of commands`**: the SMTP server advertised STARTTLS on port 25 with
-  a self-signed certificate. Strict MTAs like Microsoft Exchange then initiate
+  a self-signed certificate. Strict MTAs then initiate
   the TLS handshake, reject the self-signed cert (ECONNRESET) and
   return a 503 error.
 
@@ -6117,8 +6116,8 @@ database for backwards compatibility but are ignored by the server (hard-coded).
 
 - **The Autodiscover URL used the same hostname as all other paths**:
   with `mail.stefanwuestner.de` as hostname, "Derive URLs" also generated
-  `http://mail.stefanwuestner.de:8080` for Autodiscover. Outlook however, per the
-  **Microsoft Exchange spec**, ALWAYS expects `autodiscover.{primary-domain}` first —
+  `http://mail.stefanwuestner.de:8080` for Autodiscover. Clients however, per the
+  **Autodiscover specification (MS-OXDISCO)**, ALWAYS expect `autodiscover.{primary-domain}` first —
   i.e. `http://autodiscover.stefanwuestner.de:8080`.
 
   Fix in `routes/admin/servers.ts` `/settings/derive` endpoint:
@@ -6127,7 +6126,7 @@ database for backwards compatibility but are ignored by the server (hard-coded).
   - Hostname with 2 labels (e.g. `stefanwuestner.de`) → `autodiscover.stefanwuestner.de`
   - Hostname already starts with `autodiscover.` → unchanged (no double prefix)
 
-  The DNS hint in the BCP (Outlook guide) now uses the same logic:
+  The DNS hint in the BCP (Autodiscover guide) now uses the same logic:
   correctly shows `autodiscover.{root-domain} CNAME {publicHostname}`
 
 ---
@@ -6188,7 +6187,7 @@ database for backwards compatibility but are ignored by the server (hard-coded).
 ### Added
 
 - **Mailbox delegation (delegate access)**: user B can access the mailbox of user A —
-  analogous to the Shared Mailbox logic (Exchange delegate access):
+  analogous to the Shared Mailbox logic (delegate access):
   - New Prisma model `MailboxDelegate` with the `SharedMailboxPermType` enum:
     `FULL_ACCESS` / `READ_ONLY` / `SEND_AS` / `SEND_ON_BEHALF`
   - Admin API `GET/POST/DELETE /api/v1/admin/mailboxes/:id/delegates`
@@ -6269,7 +6268,7 @@ database for backwards compatibility but are ignored by the server (hard-coded).
   Fix: `qc.refetchQueries({ queryKey: ['admin-queue-jobs'] })` and `['admin-queue-stats']`
 
 - **Spam lands in the inbox instead of the Junk folder**: `storeInboundMessage()` looked for the
-  folder `'Junk E-Mail'` (Outlook wording) — the folder is called `'Junk'`. Fallback was INBOX.
+  folder `'Junk E-Mail'` (a foreign folder name) — the folder is called `'Junk'`. Fallback was INBOX.
   Fix: `'Junk'` and `'INBOX'` as the correct folder names
 
 - **MessageTrace: JUNK status was missing** in the status filter and badge display. Added.
@@ -6572,7 +6571,7 @@ database for backwards compatibility but are ignored by the server (hard-coded).
 - **MWA Calendar — tasks as events**  
   – Tasks with a `dueDate` appear in FullCalendar as all-day events (amber `#f59e0b` / gray for completed)  
   – Clicking a task event shows a toast instead of the delete dialog; prefix `📋` / `✓` in the title
-- **MWA Contacts — Outlook-compatible fields**  
+- **MWA Contacts — extended fields**  
   – New fields: `email2`, `mobile`, `department`, `jobTitle`, `notes`  
   – Edit form in sections: "General" (2-column grid), "E-mail & phone" (2-column grid), "Notes" (textarea)  
   – The detail view shows all filled fields with icon + label; e-mails/phone clickable  
@@ -6706,7 +6705,7 @@ database for backwards compatibility but are ignored by the server (hard-coded).
 ### Fixed
 
 - **Critical bugfix** — the "From template" button on the retention policies page failed with `retentionDays must be at least 1`
-- Cause: in the tag-based Exchange 2019 system (DPT/RPT/personal tags) the **policy** itself holds no period — the tags do. The frontend therefore correctly sends `retentionDays: 0` when creating the policy
+- Cause: in the tag-based retention system (DPT/RPT/personal tags) the **policy** itself holds no period — the tags do. The frontend therefore correctly sends `retentionDays: 0` when creating the policy
 - The backend validation in `POST /admin/compliance/retention` and `PUT /admin/compliance/retention/:id` was too strict (`< 1` instead of `< 0`) and blocked this
 - Fix: `0` is now allowed (meaning: the period is controlled by the attached tags); negative values are still rejected
 - All 8 template scenarios (Trash, Junk, Inbox, Sent, Drafts, Compliance 7 years, Default 3 years, 5 years recoverable) can now be created with a click
@@ -6747,7 +6746,7 @@ database for backwards compatibility but are ignored by the server (hard-coded).
 
 ### Changed — page header
 
-- Subtitle rephrased: "Define when e-mails are automatically archived or deleted — via template or your own rule" (previously: a technical description with "Managed Folder Assistant · Recoverable Items")
+- Subtitle rephrased: "Define when e-mails are automatically archived or deleted — via template or your own rule" (previously: a technical description naming the retention worker and Recoverable Items)
 
 ---
 
@@ -6784,7 +6783,7 @@ In `packages/api-gateway/src/routes/user.ts`:
 
 ---
 
-## [3.13.7] — 2026-05-19 — Transport rules from templates (Exchange 2019 templates)
+## [3.13.7] — 2026-05-19 — Transport rules from templates
 
 ### Added
 

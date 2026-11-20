@@ -1,7 +1,7 @@
 /**
- * Admin API — Retention Policies & Tags (Phase 9, Exchange 2019 compliant)
+ * Admin API — Retention Policies & Tags (Phase 9)
  *
- * Tag concept (analogous to Exchange 2019):
+ * Tag concept:
  *   • DPT (Default Policy Tag) — applies to the whole mailbox
  *   • RPT (Retention Policy Tag) — binds to a default folder (Inbox, Sent, …)
  *   • PERSONAL — user-assignable to individual items/folders

@@ -1,4 +1,4 @@
-// Step: MAPI over HTTP (classic Outlook, docs/mapi.md). The MAPI switch is off by
+// Step: MAPI over HTTP (desktop mail clients, docs/mapi.md). The MAPI switch is off by
 // default (Autodiscover announces no mapiHttp block); the admin turns it on for
 // A and Autodiscover announces the mailbox and address book URLs. B sends A a
 // mail (SMTP submission); A connects over MAPI (Connect → Execute Logon → Inbox
@@ -8,7 +8,7 @@
 // mail and ends with an ICS state; after a new mail and a read change the
 // incremental synchronization with that state sends exactly those (a message
 // change + IncrSyncRead), a third one nothing; a hierarchy synchronization lists
-// the default folders under their Outlook names below Top of Information Store.
+// the default folders under their MAPI names below Top of Information Store.
 // The address book (Bind, GetSpecialTable, QueryRows, ResolveNames) lists and
 // resolves B; a NotificationWait wakes within 3 s of a new mail and the next
 // Execute carries RopNotify NewMail. With the switch off again, a running MAPI
@@ -27,10 +27,10 @@ import {
 } from '../../../packages/mapi-server/src/testing/mapi-client.ts';
 
 const SMTP_ADDRESS = 0x39fe001f;
-/** Below Top of Information Store: the default folders under their Outlook names + the Outbox. */
+/** Below Top of Information Store: the default folders under their MAPI names + the Outbox. */
 const OUTLOOK_DEFAULT_FOLDERS = ['Inbox', 'Drafts', 'Sent Items', 'Deleted Items', 'Junk Email', 'Archive', 'Outbox'];
 
-/** Autodiscover v1 (Outlook schema) as classic Outlook asks for it (X-MapiHttpCapability). */
+/** Autodiscover v1 (mail account schema) as a MAPI desktop client asks for it (X-MapiHttpCapability). */
 async function autodiscover(email, password) {
   const body = `<?xml version="1.0" encoding="utf-8"?><Autodiscover xmlns="http://schemas.microsoft.com/exchange/autodiscover/outlook/requestschema/2006"><Request><EMailAddress>${email}</EMailAddress><AcceptableResponseSchema>http://schemas.microsoft.com/exchange/autodiscover/outlook/responseschema/2006a</AcceptableResponseSchema></Request></Autodiscover>`;
   const r = await http('POST', '/autodiscover/autodiscover.xml', {
@@ -240,7 +240,7 @@ export async function run(state) {
 
     await check('mapi: cached mode — hierarchy sync lists the folder tree below Top of Information Store', async () => {
       const tree = decodeHierarchyStream((await icsDownload(client, 3, ICS.SyncHierarchy)).stream);
-      // the default folders carry their Outlook names whatever the folder rows hold (mailbox-view.ts);
+      // the default folders carry their MAPI names whatever the folder rows hold (mailbox-view.ts);
       // other steps may add folders, also below the root (e.g. a backup restored into A)
       const top = tree.filter((f) => f.get(ICS.ParentSourceKey)?.length === 0).map((f) => f.get(TAG.DisplayName));
       const missing = OUTLOOK_DEFAULT_FOLDERS.filter((n) => !top.includes(n));

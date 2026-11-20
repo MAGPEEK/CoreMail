@@ -337,7 +337,7 @@ describe('EHLO / HELO (RFC 5321 §4.1.1.1)', () => {
     ]);
   });
 
-  test('EHLO keyword order follows Exchange 2019 (SIZE … SMTPUTF8)', async (t) => {
+  test('EHLO keyword order (SIZE … SMTPUTF8)', async (t) => {
     const { client } = await connect(t, { config: { tls: testCert() } });
     await client.reply();
 

@@ -895,7 +895,7 @@ export async function icsDownload(client: MapiHttpClient, folder: number | bigin
 }
 
 /**
- * Outlook's cached mode with a draft created offline: a client ID from
+ * Cached mode with a draft created offline: a client ID from
  * RopGetLocalReplicaIds, the upload (ImportMessageChange + SaveChangesMessage
  * returns that ID), OpenMessage by it at once, an edit of the same object, the
  * upload context's state merged into the client's state — then the download

@@ -5,7 +5,7 @@
  * Delivers system notifications (calendar share invitation, mailbox quota
  * warning, …) directly into a mailbox's INBOX through the message store — no
  * SMTP round trip, no DKIM/spam check, works while the MX is under load and
- * while the mailbox is over its receive quota (like Exchange system messages).
+ * while the mailbox is over its receive quota (system messages).
  *
  * Never throws — errors are logged.
  */

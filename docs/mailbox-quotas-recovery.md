@@ -1,18 +1,18 @@
 # Mailbox quotas, Recover deleted items, Out of office (v9.0)
 
-CoreMail follows the Exchange 2019 mailbox model for these three features.
+This page describes the quota levels, recovery of deleted items and out-of-office replies.
 
 ## Quota levels
 
-| Exchange | CoreMail field | Effect |
+| Level | CoreMail field | Effect |
 |---|---|---|
-| IssueWarningQuota | `quotaWarningBytes` (User / SharedMailbox) | warning mail into the mailbox, at most once per 24 h |
-| ProhibitSendQuota | `quotaProhibitSendBytes` | the mailbox can no longer send |
-| ProhibitSendReceiveQuota | `quotaBytes` (the existing mailbox quota; 0 = unlimited) | receiving is refused as well |
+| Warning | `quotaWarningBytes` (User / SharedMailbox) | warning mail into the mailbox, at most once per 24 h |
+| Prohibit send | `quotaProhibitSendBytes` | the mailbox can no longer send |
+| Prohibit send and receive | `quotaBytes` (the existing mailbox quota; 0 = unlimited) | receiving is refused as well |
 
 A level left empty (`null`) uses the server default: a percentage of `quotaBytes`
 (`ServerSettings.quotaWarningPercent`, default 83, and `quotaProhibitSendPercent`,
-default 87, the Exchange ratios 1.9 / 2.0 / 2.3 GB).
+default 87, the ratios 1.9 / 2.0 / 2.3 GB).
 
 Usage = the size of all live messages of the mailbox (deleted items and
 "Recoverable Items" folders are not counted). It is computed once per mailbox
@@ -31,7 +31,7 @@ Enforcement:
   every other local delivery (submission, outbound worker for MWA/JMAP/EAS,
   rule redirects) is not stored and the sender gets an NDR with status 5.2.2.
   `QUOTA_FULL_PERMANENT` selects the reply code at RCPT TO:
-  - unset / `true` (default, like Exchange): `552 5.2.2`
+  - unset / `true` (default): `552 5.2.2`
   - `false`: `452 4.2.2` (the sending MTA retries)
   - a number ≥ 100: `452 4.2.2` while usage is below that percentage of the quota, `552 5.2.2` above
 - **Client writes** (usage ≥ prohibit-send-receive, checked against a fresh
@@ -63,9 +63,9 @@ row, raw message object and attachments stay): IMAP EXPUNGE, JMAP Email/set
 destroy, ActiveSync Delete, POP3 DELE, and — since v9.0 — deleting in the Trash,
 emptying Trash/Junk and `DELETE /mail/messages/:id?hard=true` in the web client.
 Tombstones are recoverable for `DELETED_ITEM_RETENTION_DAYS` (default 30 — the
-window 8.0 documented, and Exchange's maximum; `0` keeps them until purged by
-hand). Items the Managed Folder Assistant moved
-to "Recoverable Items/Deletions" are listed and restorable too; the assistant
+window 8.0 documented; `0` keeps them until purged by
+hand). Items the retention worker moved
+to "Recoverable Items/Deletions" are listed and restorable too; the worker
 removes them after the same `DELETED_ITEM_RETENTION_DAYS`, counted from the move
 (10.2 — before, after 14 days, while the list showed 30).
 

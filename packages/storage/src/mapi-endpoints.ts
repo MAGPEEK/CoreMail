@@ -1,12 +1,12 @@
 /**
- * 9.4: where classic Outlook reaches MAPI over HTTP, and whether CoreMail may
+ * 9.4: where desktop clients reach MAPI over HTTP, and whether CoreMail may
  * announce it. Shared by Autodiscover (the mapiHttp block, MS-OXDSCLI) and the
  * MAPI server (NSPI GetMailboxUrl / GetAddressBookUrl).
  *
  *  - URLs: the origin of the public webmail URL (BCP → Server) when it is
  *    https, else https://<public host name>; an unconfigured host name
  *    (mail.local, localhost …) gives no URLs.
- *  - Trusted HTTPS: Outlook only builds a MAPI profile against a certificate it
+ *  - Trusted HTTPS: desktop clients only build a MAPI profile against a certificate they
  *    trusts, and MAPI sends Basic credentials, so the block is announced only
  *    while the integrated HTTPS proxy serves a CA-issued certificate (Let's
  *    Encrypt production or an uploaded one; valid or expiring) — or the

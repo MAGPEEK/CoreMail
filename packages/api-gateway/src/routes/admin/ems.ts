@@ -1,7 +1,7 @@
 /**
- * Exchange Management Shell (EMS) REST Bridge — Phase 8
+ * Management shell (EMS) REST bridge — Phase 8
  *
- * Implements Exchange Management Shell cmdlets as REST endpoints.
+ * Implements management-shell style cmdlets as REST endpoints.
  *
  * All endpoints mirror EMS cmdlet semantics:
  *   GET    → Get-*       (list / get single)

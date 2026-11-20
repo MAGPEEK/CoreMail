@@ -1107,7 +1107,7 @@ async function loginUser(
   });
   switch (result.status) {
     case 'ok':
-      // v8.1: concurrent sessions per user (Exchange-style per-protocol cap).
+      // v8.1: concurrent sessions per user (per-protocol cap).
       if (maxConnsPerUser() > 0 && imapLiveSessions.count(result.user.id) >= maxConnsPerUser()) {
         log.warn({ email: result.user.email, limit: maxConnsPerUser(), command, ip: session.socket.remoteAddress }, 'IMAP login refused — too many sessions for this user');
         sendNo(session, tag, '[LIMIT] Too many concurrent IMAP sessions for this account');

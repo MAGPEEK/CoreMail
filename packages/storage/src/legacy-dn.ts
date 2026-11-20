@@ -1,5 +1,5 @@
 /**
- * X.500 legacy distinguished names of directory objects, as Outlook expects
+ * X.500 legacy distinguished names of directory objects, as MAPI clients expect
  * them (Autodiscover `<LegacyDN>`, MAPI over HTTP Connect `UserDn` and RopLogon
  * `Essdn`). The last RDN carries the CoreMail id of the user or shared mailbox.
  * Pure module.

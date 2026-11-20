@@ -20,7 +20,7 @@ import { fromFileTime, toFileTime, toLatin1, type PropValue } from '../props/val
 export const AB_TRUE = 0xff;
 export const AB_FALSE = 0x00;
 export const MAX_TAG_ARRAY = 100_000;
-/** Upper bound for name / MID lists in one request (DoS guard; Outlook sends a handful). */
+/** Upper bound for name / MID lists in one request (DoS guard; desktop clients send a handful). */
 export const MAX_REQUEST_ITEMS = 10_000;
 
 // ── STAT ─────────────────────────────────────────────────────────────────────

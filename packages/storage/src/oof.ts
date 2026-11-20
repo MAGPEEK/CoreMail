@@ -4,7 +4,7 @@
  * so that UserSettings.oofPeriodId identifies the current OOF period:
  * a new id whenever OOF is switched on or, while it is on, the texts or the
  * schedule change. The smtp-server auto-reply sends at most ONE reply per
- * sender per period id (Exchange semantics).
+ * sender per period id.
  */
 import { randomUUID } from 'node:crypto';
 import { prisma } from './prisma/index.js';

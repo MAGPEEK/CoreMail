@@ -13,7 +13,7 @@
  *    mail that suppresses OOF (`X-Auto-Response-Suppress: All|OOF`); never
  *    answer mail delivered to Junk; only answer mail that names one of the
  *    recipient's addresses in To/Cc/Bcc/Resent-* (§2 — not Bcc'd copies)
- *  - exactly one reply per sender per OOF period (Exchange semantics, §2 asks
+ *  - exactly one reply per sender per OOF period (§2 asks
  *    for at most one per 7 days — stricter is fine): Redis key with the period
  *    id (UserSettings.oofPeriodId, renewed when OOF is switched on or its
  *    texts/schedule change, see @coremail/storage oof.ts) plus a hash of the

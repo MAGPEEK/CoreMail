@@ -4,7 +4,7 @@
  *
  *  - Signed-in requests (valid Bearer access token) count per USER, anonymous ones per
  *    client IP (IPv6 per /56) — an office behind one address no longer shares a budget.
- *  - Exempt: loopback peers (internal services), MAPI over HTTP (/mapi: classic Outlook is
+ *  - Exempt: loopback peers (internal services), MAPI over HTTP (/mapi: MAPI clients are
  *    chatty and many clients share a NAT address — the MAPI server limits per authenticated
  *    mail account, MAPI_RATE_LIMIT), static assets / SPA pages (GET/HEAD
  *    outside the API and protocol paths) and the live-event stream GET /api/v1/events

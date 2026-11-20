@@ -100,7 +100,7 @@ function CaughtUpIllustration() {
   );
 }
 
-/** Empty folder (OWA: "You're all caught up"). */
+/** Empty folder ("You're all caught up"). */
 export function EmptyInbox() {
   const t = useT();
   return (

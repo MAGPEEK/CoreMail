@@ -6,7 +6,7 @@
  * RopSynchronizationGetTransferState, and the ID mapping ROPs
  * RopLongTermIdFromId / RopIdFromLongTermId (MS-OXCROPS 2.2.3.8 / 2.2.3.9).
  *
- * Flow (classic Outlook in cached mode): Configure on a folder → upload the
+ * Flow (a desktop client in cached mode): Configure on a folder → upload the
  * client's state → GetBuffer until TransferStatus Done → the stream ends with
  * the new state, which the client keeps for the next round.
  */

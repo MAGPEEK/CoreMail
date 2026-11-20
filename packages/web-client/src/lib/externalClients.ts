@@ -16,7 +16,7 @@ export interface ClientProtocols {
 export interface ExternalClientSections {
   /** The e-mail card (IMAP / SMTP / POP3 rows inside follow their own switch). */
   mail: boolean;
-  /** CalDAV + CardDAV cards, the Outlook calendar hint and the CalDav Synchronizer guide. */
+  /** CalDAV + CardDAV cards, the desktop-client calendar hint and the CalDav Synchronizer guide. */
   dav: boolean;
   /** Apple profile variants that have something to set up (same rule as the server). */
   profiles: AppleProfileKind[];

@@ -40,7 +40,7 @@ const SPECIAL_TABLE_UNICODE = 0x00000004;
 const QUERY_COLUMNS_UNICODE = 0x80000000;
 /** Version of the address book hierarchy table (one fixed container). */
 export const HIERARCHY_VERSION = 1;
-/** Rows per QueryRows / SeekEntries answer (Outlook pages with far fewer). */
+/** Rows per QueryRows / SeekEntries answer (desktop clients page with far fewer). */
 export const MAX_ROWS_PER_REQUEST = 1000;
 /**
  * Cells (rows × columns) in one answer: a request may name up to 100 000

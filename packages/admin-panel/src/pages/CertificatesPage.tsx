@@ -598,7 +598,7 @@ function LetsEncryptModal({ onClose, allCerts }: { onClose: () => void; allCerts
             placeholder={"mail.company.com\nautodiscover.company.com"} />
           {sanOptions.length > 0 && (
             <fieldset className="mt-2 space-y-1">
-              <legend className="text-xs text-fg-subtle mb-1">Zusätzliche Namen für Outlook/Thunderbird (Autodiscover/Autoconfig)</legend>
+              <legend className="text-xs text-fg-subtle mb-1">Zusätzliche Namen für die automatische Einrichtung (Autodiscover/Autoconfig)</legend>
               {sanOptions.map(x => (
                 <label key={x.name} className="flex items-start gap-2 text-sm cursor-pointer select-none">
                   <input type="checkbox" className="rounded mt-0.5" checked={!!extraSans[x.name]}

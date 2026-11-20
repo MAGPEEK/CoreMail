@@ -73,7 +73,7 @@ const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, retry: 1 } },
 });
 
-// ── ThemeApplier — reacts to store changes (no OWA sync!) ───────────────────
+// ── ThemeApplier — reacts to store changes (no MWA sync!) ───────────────────
 function ThemeApplier() {
   const { theme } = useThemeStore();
   const branding = useBranding();
