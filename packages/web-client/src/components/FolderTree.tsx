@@ -3,7 +3,7 @@ import { useRovingFocus } from '../hooks/useRovingFocus.js';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Plus, Star, Pencil, FolderPlus, FolderMinus,
-  CheckCheck, Eraser, Tag, PaintBucket, RefreshCw, Clock, Check, RotateCcw, Shield,
+  CheckCheck, Eraser, Tag, PaintBucket, Clock, Check, RotateCcw, Shield,
 } from 'lucide-react';
 import { FolderPermissionsDialog } from './FolderPermissionsDialog.js';
 import { RecoverDeletedItemsDialog } from './RecoverDeletedItems.js';
@@ -359,22 +359,6 @@ export function FolderTree() {
 
   return (
     <aside aria-label="Postfachbereich" className="w-full h-full flex flex-col overflow-hidden">
-      {/* "Neue E-Mail" lives only in the mail command bar (split button) and on `n`/`c` */}
-      <div className="p-3 flex items-center gap-2">
-        <button
-          onClick={() => {
-            void qc.refetchQueries({ queryKey: ['folders'] });
-            void qc.refetchQueries({ queryKey: ['messages'] });
-            toast.success(t('refresh_done'), { duration: 1500 });
-          }}
-          title={t('refresh_folders')}
-          aria-label={t('refresh_folders')}
-          className="shrink-0 p-2 rounded border border-line text-fg-subtle hover:bg-surface-2 active:scale-95 transition-all"
-        >
-          <RefreshCw size={15} />
-        </button>
-      </div>
-
       <nav
         ref={navRef}
         aria-label="Ordner"

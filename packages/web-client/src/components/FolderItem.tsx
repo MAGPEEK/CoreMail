@@ -217,9 +217,9 @@ export function SectionHeader({ label, collapsed, onToggle, action, plain = fals
   plain?: boolean;
 }) {
   return (
-    <div className={`flex items-center gap-1 mt-3 mb-1 px-2 text-xs font-semibold text-fg-subtle ${plain ? '' : 'uppercase tracking-wide'}`}>
-      <button onClick={onToggle} aria-expanded={!collapsed} className="flex items-center gap-1 hover:text-fg-muted flex-1 min-w-0">
-        {collapsed ? <ChevronRight size={12} className="shrink-0" /> : <ChevronDown size={12} className="shrink-0" />}
+    <div className="flex items-center gap-1 mt-3 mb-1 px-2 text-sm font-semibold text-fg">
+      <button onClick={onToggle} aria-expanded={!collapsed} className="flex items-center gap-1.5 py-1 hover:text-fg-muted flex-1 min-w-0 text-left">
+        {collapsed ? <ChevronRight size={14} className="shrink-0" /> : <ChevronDown size={14} className="shrink-0" />}
         <span className="truncate" title={plain ? label : undefined}>{label}</span>
       </button>
       {action}

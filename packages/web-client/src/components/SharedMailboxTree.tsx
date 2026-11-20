@@ -79,7 +79,7 @@ export function SharedMailboxTree() {
 
   return (
     <section aria-labelledby="shared-mailboxes-heading" className="mt-3">
-      <div className="flex items-center gap-1 mb-1 px-2 text-xs font-semibold text-fg-subtle uppercase tracking-wide">
+      <div className="flex items-center gap-1 mb-1 px-2 py-1 text-sm font-semibold text-fg">
         <h2 id="shared-mailboxes-heading" className="flex-1">Freigegebene Postfächer</h2>
         <button
           type="button"
