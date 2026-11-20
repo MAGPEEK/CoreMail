@@ -217,7 +217,17 @@ Every route of `/settings` (except the public `GET /settings/public`),
 `/sso`, `/servers`, `/services`, `/certificates`, `/queues`, `/logs`,
 `/backups` (incl. per-mailbox backups), `/connectors`, `/smtp-config`,
 `/storage`, `GET/PUT /protocol-access`, `/protocol-access/overview`,
-`GET/PUT /webmail-policies`: **org**.
+`GET/PUT /webmail-policies`, `PUT /mcp/settings`: **org**.
+
+### admin MCP interface (10.3, docs/mcp.md)
+
+| Route | Decision |
+|---|---|
+| `GET /mcp/settings` | every admin role, scoped too (switch state, endpoint URL, limits); the IP allowlist and the open-session count only with read access to `servers` (never for a scoped admin) |
+| `PUT /mcp/settings` (switch, IP allowlist) | servers write → **org** |
+| `GET /mcp/tokens` | own tokens only, scoped too; `?all=true` → ORGANIZATION_MANAGEMENT (`FORBIDDEN_ROLE` otherwise) |
+| `POST /mcp/tokens`, `DELETE /mcp/tokens/:id` | every admin role incl. VIEW_ONLY_ORG (own personal credential — `PERSONAL_ADMIN_WRITES` in `routes/admin/index.ts`); `mode: write` only for a role with a write area or a narrow write action (VIEW_ONLY_ORG: read tokens); another admin's token answers 404 unless the caller is ORGANIZATION_MANAGEMENT |
+| `/mcp` (the MCP endpoint itself, not under `/api/v1/admin`) | every tool call runs the admin routes above **as the token's admin**: current role, management scope, redaction and the decisions of this table apply unchanged; read tokens list and call read tools only; `tools/list` hides tools the role can never use |
 
 ## Tests
 

@@ -83,6 +83,10 @@ import { initSetupToken } from './lib/setup-token.js';
 import { livenessHandler } from './lib/liveness.js';
 import { brandingApiRouter, brandingAssetsRouter, brandingAppIconsRouter, brandingFaviconsRouter, webManifestHandler } from './routes/branding.js';
 import { brandedIndexHtml, startBrandingSubscriber } from './lib/branding/state.js';
+import { createMcpRouter } from './lib/mcp/handler.js';
+import { startMcpSettingsSubscriber } from './lib/mcp/settings.js';
+import { mcpLiveConnections } from './lib/mcp/sessions.js';
+import { hashMcpToken, looksLikeMcpToken } from '@coremail/storage/auth';
 
 const log = createLogger('api-gateway');
 installProcessGuards(log);
@@ -145,7 +149,9 @@ app.use(suspiciousInputGuard);
 //    BCP → Settings → Security / API_RATE_LIMIT_* (lib/api-rate-limit.ts).
 app.use(createApiRateLimit({
   config: apiRateLimitConfig,
-  verifyUser: (token) => verifyAccessToken(token)?.sub ?? null,
+  // 10.3: an admin MCP token (cm_mcp_…) is its own bucket (per token, the per-user
+  // limit) — its validity is checked at /mcp, where guesses hit the shared IP lockout.
+  verifyUser: (token) => (looksLikeMcpToken(token) ? `mcp:${hashMcpToken(token).slice(0, 32)}` : verifyAccessToken(token)?.sub ?? null),
   isLoopback,
   onLimited: ({ kind, path }) => log.warn({ kind, path }, 'API rate limit exceeded'),
 }));
@@ -291,6 +297,10 @@ const mfaRateLimit: express.RequestHandler = (req, res, next) =>
 app.use('/auth/mfa',           mfaRateLimit, authServiceProxy);
 app.use('/auth/app-passwords', authServiceProxy);
 app.use('/auth/sessions',      authServiceProxy);
+
+// ── Admin MCP interface (10.3, docs/mcp.md) — before express.json(): own body
+// limit. Off (BCP → Infrastruktur → KI-Schnittstelle) → 404 like an unknown path.
+app.use('/mcp', createMcpRouter());
 // v5.6.0: /oauth2/* proxy removed (OAuth2 server gone).
 // v5.4.0: ADFS emulation removed (was for Modern Auth of LTSC 2024 desktop clients).
 
@@ -491,7 +501,7 @@ if (existsSync(owaDir)) {
   // API/proxy route is an MWA route → return index.html.
   const API_PREFIXES = [
     '/api/', '/auth/', '/.well-known/', '/jmap', '/Autodiscover', '/autodiscover',
-    '/Microsoft-Server-ActiveSync', '/dav', '/bcp', '/branding/', '/mapi',
+    '/Microsoft-Server-ActiveSync', '/dav', '/bcp', '/branding/', '/mapi', '/mcp',
   ];
   app.get('*', (req, res, next) => {
     if (API_PREFIXES.some((p) => req.path === p || req.path.startsWith(p))) {
@@ -527,6 +537,9 @@ async function start() {
   // requireAuth's in-process revocation check immediately.
   // v7.1.0: … and end the user's SSE streams (/api/v1/events) like JMAP Bearer push.
   sseLiveConnections.attachInvalidation();
+  // 10.3: admin MCP sessions end with the owner's "revoke all" / deletion / token revocation
+  mcpLiveConnections.attachInvalidation();
+  startMcpSettingsSubscriber(); // switch / allowlist changes of other gateway instances
   startAuthInvalidationSubscriber();
   // Message store migration: raise Mailbox.highestModSeq / uidNext above legacy
   // Date.now()-sized modSeqs and max(uid)+1 UIDs (idempotent; the first

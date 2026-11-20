@@ -38,6 +38,7 @@ import { adminStorageRouter } from './storage.js';
 import { adminBrandingRouter } from './branding.js';
 import { adminProtocolAccessRouter } from './protocol-access.js';
 import { adminWebmailPoliciesRouter } from './webmail-policies.js';
+import { adminMcpRouter } from './mcp.js';
 
 export const ADMIN_PREFIX = '/api/v1/admin';
 
@@ -79,10 +80,22 @@ export const ADMIN_MOUNTS: ReadonlyArray<readonly [string, Router]> = [
   ['/protocol-access',      adminProtocolAccessRouter],
   // 9.4: webmail policies (same split: server/domain = servers, user = recipients)
   ['/webmail-policies',     adminWebmailPoliciesRouter],
+  // 10.3: admin MCP interface — switch + allowlist (area servers), own tokens (every admin role)
+  ['/mcp',                  adminMcpRouter],
 ];
 
 /** Admin endpoints that are intentionally public (no auth). */
 export const PUBLIC_ADMIN_ROUTES: ReadonlyArray<string> = ['GET /api/v1/admin/settings/public'];
+
+/**
+ * 10.3: mutating admin endpoints every admin role may call — they change only
+ * the caller's own personal credentials (MCP tokens), never organisation data.
+ * VIEW_ONLY_ORG passes them (read tokens only, enforced in the route); USER never.
+ */
+export const PERSONAL_ADMIN_WRITES: ReadonlyArray<string> = [
+  'POST /api/v1/admin/mcp/tokens',
+  'DELETE /api/v1/admin/mcp/tokens/:id',
+];
 
 export function mountAdminRoutes(app: { use: (path: string, router: Router) => unknown }): void {
   for (const [path, router] of ADMIN_MOUNTS) app.use(`${ADMIN_PREFIX}${path}`, router);

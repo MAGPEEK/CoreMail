@@ -39,6 +39,8 @@ export const PATH_AREA: Record<string, AdminArea | null> = {
   'audit-log':        'compliance',
   'message-trace':    'compliance',
   'compliance-info':  null,
+  // 10.3: every admin manages its own MCP tokens there; the switch needs servers write (server-side)
+  'mcp':              null,
   'mfa-required':     null,
   'login':            null,
 };

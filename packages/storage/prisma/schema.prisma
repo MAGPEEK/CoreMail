@@ -156,6 +156,8 @@ model User {
   mailFlowPolicy      MailFlowPolicy?
   // 9.5: management scope of an admin role (none = organisation-wide)
   adminScopes         AdminScope[]
+  // 10.3: personal tokens of the admin MCP interface (/mcp)
+  mcpTokens           McpToken[]
   // 9.5: profile photo — content-addressed object key (profile-photos/<aa>/<sha256>.jpg,
   // a 512×512 JPEG re-encoded by the api-gateway); null = no photo (initials)
   photoKey            String?
@@ -195,6 +197,39 @@ model AdminScope {
   @@unique([userId, domainId])
   @@index([domainId])
   @@map("admin_scopes")
+}
+
+// ─────────────────────────────────────────────
+// Admin MCP interface (10.3)
+// ─────────────────────────────────────────────
+
+// Personal bearer token of an admin for the MCP endpoint (/mcp, docs/mcp.md).
+// Only sha256(token) is stored (`tokenHash`); the token (`cm_mcp_…`) is shown
+// once at creation. `prefix` = the first characters for display. `mode` =
+// "read" | "write" (read tokens only see read tools). `mfaVerified` = the token
+// was created from an MFA-verified session (needed while requireMfaForAdmins is
+// on). Every tool runs as the token's admin with its current role and scope.
+// Revoked (revokedAt) by the owner, by ORGANIZATION_MANAGEMENT, and by every
+// "revoke all sessions" of the owner (role change, deactivation, password
+// reset, sign out everywhere — storage auth/sessions.ts revokeAllSessions).
+model McpToken {
+  id            String    @id @default(cuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name          String
+  tokenHash     String    @unique
+  prefix        String
+  mode          String    @default("read")
+  mfaVerified   Boolean   @default(false)
+  expiresAt     DateTime
+  lastUsedAt    DateTime?
+  lastUsedIp    String?
+  createdAt     DateTime  @default(now())
+  revokedAt     DateTime?
+  revokedReason String?
+
+  @@index([userId])
+  @@map("mcp_tokens")
 }
 
 // ─────────────────────────────────────────────
@@ -1901,6 +1936,12 @@ model ServerSettings {
   // JMAP is refused unless a domain/user switch turns it on; the service answers
   // 404 only while no switch anywhere turns JMAP on.
   jmapEnabled        Boolean @default(true)
+
+  // 10.3: admin MCP interface (/mcp, docs/mcp.md). Default OFF; off → /mcp
+  // answers 404 and open MCP sessions end (CHANNEL_SETTINGS_RELOAD {type:'mcp'}).
+  // mcpAllowedIps: client IPs / CIDR ranges allowed to reach /mcp (empty = all).
+  mcpEnabled         Boolean  @default(false)
+  mcpAllowedIps      String[] @default([])
 
   // ── v9.0: mailbox quota defaults (ratios 1.9 / 2.0 / 2.3 GB) ──
   // Percent of the mailbox quota (= ProhibitSendReceiveQuota) at which the

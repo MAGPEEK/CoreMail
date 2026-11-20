@@ -236,6 +236,34 @@ const MFA_CHECKED = Symbol('adminMfaChecked');
  * v7.0.0: fails CLOSED on database errors (503) instead of letting admins through.
  * Runs at most once per request.
  */
+/**
+ * The forced-2FA rule on its own (10.3: also used by the admin MCP endpoint for
+ * its tokens): null when the admin may go on, else the 403 body. Throws on
+ * database errors (callers fail closed).
+ */
+export async function adminMfaRefusal(
+  userId: string, mfaVerified: boolean | undefined,
+): Promise<{ error: string; code: 'MFA_REQUIRED' | 'MFA_NOT_VERIFIED' } | null> {
+  const settings = await prisma.serverSettings.findUnique({
+    where: { id: 'singleton' },
+    select: { requireMfaForAdmins: true },
+  });
+  if (!settings?.requireMfaForAdmins) return null;
+  const mfa = await prisma.userMfa.findFirst({
+    where: { userId },
+    select: { totpEnabled: true, webAuthnCredentials: true },
+  });
+  const hasWebauthn = Array.isArray(mfa?.webAuthnCredentials)
+    && (mfa.webAuthnCredentials as unknown[]).length > 0;
+  if (!(mfa?.totpEnabled || hasWebauthn)) {
+    return { error: 'MFA is required for admin access', code: 'MFA_REQUIRED' };
+  }
+  if (!mfaVerified) {
+    return { error: 'This session was not verified with MFA — please log in again', code: 'MFA_NOT_VERIFIED' };
+  }
+  return null;
+}
+
 function enforceAdminMfa(req: Request, res: Response, next: NextFunction): void {
   const flagged = req as Request & { [MFA_CHECKED]?: boolean };
   if (flagged[MFA_CHECKED]) { next(); return; }
@@ -243,28 +271,8 @@ function enforceAdminMfa(req: Request, res: Response, next: NextFunction): void 
   const apiUser = req.apiUser!;
   void (async () => {
     try {
-      const settings = await prisma.serverSettings.findUnique({
-        where: { id: 'singleton' },
-        select: { requireMfaForAdmins: true },
-      });
-      if (!settings?.requireMfaForAdmins) { next(); return; }
-      const mfa = await prisma.userMfa.findFirst({
-        where: { userId: apiUser.userId },
-        select: { totpEnabled: true, webAuthnCredentials: true },
-      });
-      const hasWebauthn = Array.isArray(mfa?.webAuthnCredentials)
-        && (mfa.webAuthnCredentials as unknown[]).length > 0;
-      if (!(mfa?.totpEnabled || hasWebauthn)) {
-        res.status(403).json({ error: 'MFA is required for admin access', code: 'MFA_REQUIRED' });
-        return;
-      }
-      if (!apiUser.mfaVerified) {
-        res.status(403).json({
-          error: 'This session was not verified with MFA — please log in again',
-          code: 'MFA_NOT_VERIFIED',
-        });
-        return;
-      }
+      const refusal = await adminMfaRefusal(apiUser.userId, apiUser.mfaVerified);
+      if (refusal) { res.status(403).json(refusal); return; }
       next();
     } catch (err) {
       log.error({ err }, 'MFA enforcement check failed — denying admin access');

@@ -68,7 +68,9 @@ async function isAuditEnabled(): Promise<boolean> {
 // The audit middleware names actions after the path (mailboxes.delete,
 // domains.delete, audit-log.export.csv.get, …) — the plural forms are the ones
 // that actually occur; the singular forms cover explicit audit() calls.
-export const ALWAYS_AUDIT = /^(settings\.|audit\.|audit-log\.|user\.role|mailbox(es)?\.delete|domains?\.delete)/i;
+// 10.3: `mcp.` — every admin MCP tool call and every MCP token / switch change
+// (machine-driven admin access must always stay traceable).
+export const ALWAYS_AUDIT = /^(settings\.|audit\.|audit-log\.|user\.role|mailbox(es)?\.delete|domains?\.delete|mcp\.)/i;
 
 /**
  * Write an audit log entry asynchronously (fire-and-forget).

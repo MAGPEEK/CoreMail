@@ -195,6 +195,8 @@ const MOUNT_AREAS: Record<string, { area: AdminArea | null; get: string; write?:
   '/ems':                  { area: 'recipients',   get: '/mailboxes' },
   '/protocol-access':      { area: 'servers',      get: '/', write: ['PUT', '/'] },
   '/webmail-policies':     { area: 'servers',      get: '/', write: ['PUT', '/'] },
+  // 10.3: settings view + own tokens for every admin role; the switch itself: EXTRA_PROBES
+  '/mcp':                  { area: 'dashboard',    get: '/settings' },
 };
 const EXTRA_PROBES: Array<{ area: AdminArea | null; method: string; path: string }> = [
   { area: 'domains', method: 'GET', path: '/ems/accepted-domains' },
@@ -208,6 +210,8 @@ const EXTRA_PROBES: Array<{ area: AdminArea | null; method: string; path: string
   { area: 'servers',    method: 'PUT', path: '/webmail-policies/domains/c0000000000000000000000x1' },
   { area: 'recipients', method: 'GET', path: '/webmail-policies/users/c0000000000000000000000x1' },
   { area: 'recipients', method: 'PUT', path: '/webmail-policies/users/c0000000000000000000000x1' },
+  // 10.3: the MCP switch + IP allowlist are server configuration
+  { area: 'servers',    method: 'PUT', path: '/mcp/settings' },
 ];
 
 test('every admin mount is in the area table', () => {
