@@ -1,7 +1,7 @@
 name: coremail
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  CoreMail 10.3.0 — Docker Compose, variant MAXIMAL ("full")
+#  CoreMail 10.4.0 — Docker Compose, variant MAXIMAL ("full")
 #
 #  Variants (docs/docker-compose.md has the comparison table):
 #    docker-compose.minimal.yml   MINIMAL   coremail + postgres + redis
@@ -49,7 +49,7 @@ services:
   #  REST API, webmail, admin panel, admin CLI `coremail`)
   # ───────────────────────────────────────────────────────────────────────────
   coremail:
-    image: magpeek/coremail-app:${COREMAIL_VERSION:-10.3.0}
+    image: magpeek/coremail-app:${COREMAIL_VERSION:-10.4.0}
     container_name: coremail
     restart: unless-stopped
     environment:
@@ -232,7 +232,7 @@ services:
   #  ./secrets before everything else; .env values are copied, never replaced.
   # ───────────────────────────────────────────────────────────────────────────
   coremail-init:
-    image: magpeek/coremail-app:${COREMAIL_VERSION:-10.3.0}
+    image: magpeek/coremail-app:${COREMAIL_VERSION:-10.4.0}
     container_name: coremail-init
     restart: "no"
     command: ["coremail-init-secrets"]

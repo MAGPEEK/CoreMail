@@ -5,14 +5,20 @@
  * Per scanner one state:
  *  - `absent`      the scanner is not deployed: switched off EXPLICITLY by the
  *                  environment (RSPAMD_ENABLED=false / CLAMAV_ENABLED=false — minimal
- *                  compose, Helm chart without the scanner). Nothing else makes a
- *                  scanner absent. The pipeline skips it silently — no "unscanned"
- *                  header, no 451 deferral from clamavBlockOnFailure — and the BCP
- *                  hides its settings.
+ *                  compose, Helm chart without the scanner), or — only with the
+ *                  opt-in value `auto` (deploy/docker-compose.yml, where the scanners
+ *                  are a Compose profile) — its host name has not resolved since
+ *                  this process started (reason `host-not-found`, `dns-error` or
+ *                  `timeout`: Docker answers names of the stack's containers itself
+ *                  and hands unknown ones to the host's resolvers). Nothing else
+ *                  makes a scanner absent. The pipeline skips it silently — no
+ *                  "unscanned" header, no 451 deferral from clamavBlockOnFailure — and
+ *                  the BCP hides its settings.
  *  - `unavailable` the scanner does not answer: its host name does not exist in DNS
  *                  (reason `host-not-found` — a stopped container drops out of the
  *                  compose network, a misspelt CLAMAV_HOST / RSPAMD_URL), any other
- *                  DNS failure, or no / a wrong ping reply (container starting,
+ *                  DNS failure (with `auto` both only once the name had resolved
+ *                  before), or no / a wrong ping reply (container starting,
  *                  ClamAV loading signatures, crashed). The configured failure
  *                  policy and the X-CoreMail-Virus-Scan header apply unchanged.
  *  - `available`   the scanner answered its ping.
@@ -21,7 +27,9 @@
  * default 300 s), so a scanner that comes back is picked up without a restart.
  * A failing check never switches scanning off: the env switches are read once
  * when the detector is created, and CapabilityMonitor never moves a scanner into
- * `absent` after the first check.
+ * `absent` after the first check. With `auto` a scanner that was absent at the
+ * first check becomes present as soon as its host name appears (Compose profile
+ * added later); once seen it never becomes absent again in this process.
  *
  * The report never contains host names, URLs or credentials: `reason` is a fixed
  * code and `detail` an error code such as ECONNREFUSED.
@@ -30,7 +38,7 @@ import { promises as dnsPromises } from 'node:dns';
 import { isIP } from 'node:net';
 import { createLogger } from '@coremail/core';
 import type { PipelineConfig } from './pipeline/index.js';
-import { isEnvOff } from './settings.js';
+import { isEnvAuto, isEnvOff } from './settings.js';
 import { CLAMAV_HOST, clamdCommand } from './clamav/index.js';
 import { getRspamdEndpoints } from './rspamd/index.js';
 
@@ -62,6 +70,13 @@ export type ScannerCapabilities = Record<ScannerName, ScannerCapability>;
 export interface ScannerTarget {
   /** Explicitly switched off by the environment. */
   envDisabled: boolean;
+  /**
+   * `auto` (RSPAMD_ENABLED=auto / CLAMAV_ENABLED=auto): a host name that does not
+   * resolve (not found, other DNS error, DNS timeout) means "not deployed" (absent)
+   * instead of unavailable. CapabilityMonitor limits this to the start: a name that
+   * resolved once is never absent again.
+   */
+  unresolvableMeansAbsent?: boolean;
   /** Host name or IP literal of the scanner. */
   host: string;
   /** Resolves when the scanner answers its ping; rejects otherwise. */
@@ -121,9 +136,15 @@ export async function detectScanner(target: ScannerTarget, deps: DetectDeps): Pr
       const code = errorCode(err);
       // A name that does not exist is NOT "not deployed": a stopped container drops out
       // of the compose DNS, and a typo in CLAMAV_HOST must not switch virus scanning off.
-      if (code && NOT_FOUND_CODES.has(code)) return { state: 'unavailable', reason: 'host-not-found', detail: code, checkedAt };
+      // Exception `auto`: Docker's embedded DNS answers a container name of the stack
+      // at once, an unknown name goes to the host's resolvers — NXDOMAIN, SERVFAIL /
+      // EAI_AGAIN or a timeout depending on the host — so every DNS failure counts.
+      const state = target.unresolvableMeansAbsent ? 'absent' : 'unavailable';
+      if (code && NOT_FOUND_CODES.has(code)) {
+        return { state, reason: 'host-not-found', detail: code, checkedAt };
+      }
       return {
-        state: 'unavailable',
+        state,
         reason: isTimeout(err) ? 'timeout' : 'dns-error',
         ...(code ? { detail: code } : {}),
         checkedAt,
@@ -209,9 +230,10 @@ export class CapabilityMonitor {
   }
 
   /**
-   * `absent` is decided by the first check only (the env switches). A later check
-   * reporting `absent` for a scanner that was not absent is kept as `unavailable` —
-   * scanning is never switched off at runtime.
+   * `absent` is decided by the first check only (the env switches, or `auto` with
+   * a host name that does not resolve). A later check reporting `absent` for a
+   * scanner that was not absent is kept as `unavailable` — scanning is never
+   * switched off at runtime. An absent scanner may become present (`auto`).
    */
   private guard(name: ScannerName, cur: ScannerCapability): ScannerCapability {
     if (this.first || cur.state !== 'absent' || this.caps[name].state === 'absent') return cur;
@@ -250,10 +272,13 @@ export function defaultDetector(env: NodeJS.ProcessEnv = process.env, timeoutMs 
   // Read once: the env switches are the only way into `absent` and do not change at runtime.
   const clamavOff = isEnvOff(env['CLAMAV_ENABLED']);
   const rspamdOff = isEnvOff(env['RSPAMD_ENABLED']);
+  const clamavAuto = isEnvAuto(env['CLAMAV_ENABLED']);
+  const rspamdAuto = isEnvAuto(env['RSPAMD_ENABLED']);
   return (name) => {
     if (name === 'clamav') {
       return detectScanner({
         envDisabled: clamavOff,
+        unresolvableMeansAbsent: clamavAuto,
         host: CLAMAV_HOST,
         probe: async (ms) => {
           const reply = await clamdCommand('PING', ms);
@@ -266,6 +291,7 @@ export function defaultDetector(env: NodeJS.ProcessEnv = process.env, timeoutMs 
     try { host = new URL(ep.scan).hostname; } catch { /* endpoints are validated in rspamd/index.ts */ }
     return detectScanner({
       envDisabled: rspamdOff,
+      unresolvableMeansAbsent: rspamdAuto,
       host,
       // /ping needs no authentication on the normal worker and the controller
       probe: async (ms) => {

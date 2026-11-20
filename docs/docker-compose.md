@@ -1,8 +1,15 @@
 # CoreMail — Docker Compose variants and storage
 
+**New installations:** use the standalone file from the release —
+`deploy/docker-compose.yml`, three commands, no repository checkout, optional profiles
+`scanner` / `backup` / `s3` ([deploy.md](deploy.md)). The files described here are the
+advanced variants: for existing installations and for setups that edit the Compose files
+and the configuration (`postgres/`, `rspamd/local.d/`, `pg-backup/`) in a checkout.
+
 CoreMail ships three ready-made Compose stacks in `infra/docker/`. All three run the
 same app image, use the same project name (`coremail`), the same container names and
-the same volume names — you can switch between them without moving data.
+the same volume names — you can switch between them without moving data. The
+standalone `deploy/docker-compose.yml` uses the same names as well.
 
 - [Variants](#variants)
 - [Quick start](#quick-start)

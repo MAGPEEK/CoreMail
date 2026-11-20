@@ -190,6 +190,12 @@ services wait for it with `condition: service_completed_successfully` — the
 generator never runs twice at the same time (the entrypoint of `coremail` runs
 it again afterwards and finds nothing to add).
 
+The standalone file `deploy/docker-compose.yml` ([deploy.md](deploy.md)) runs the
+command `coremail-init` instead: first `coremail-init-secrets`, then
+`coremail-init-config`, which copies the configuration bundled in the image
+(PostgreSQL init scripts, rspamd `local.d`, the pg-backup script) into the
+`coremail-config-*` volumes ([deploy.md → Configuration and overrides](deploy.md#configuration-and-overrides)).
+
 | | |
 |---|---|
 | Secrets directory | `./secrets` next to the Compose file (`infra/docker/secrets/` in the repository); Synology: `/volume1/docker/coremail/secrets`. `COREMAIL_SECRETS_PATH` in `.env` moves it. |

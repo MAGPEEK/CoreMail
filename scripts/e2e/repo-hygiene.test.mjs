@@ -56,6 +56,43 @@ test('release version is consistent: Helm appVersion and compose image tags foll
   assert.match(read('infra/k8s/Chart.yaml'), new RegExp(`^appVersion: "${version.replace(/\./g, '\\.')}"$`, 'm'), 'infra/k8s/Chart.yaml appVersion');
   assert.match(read('infra/docker/docker-compose.yml'), new RegExp(`image: magpeek/coremail-app:\\$\\{COREMAIL_VERSION:-${version.replace(/\./g, '\\.')}\\}`), 'docker-compose.yml default tag');
   assert.match(read('infra/docker/docker-compose.synology.yml'), new RegExp(`image: magpeek/coremail-app:${version.replace(/\./g, '\\.')}\\n`), 'docker-compose.synology.yml tag');
+  // the release asset (scripts/release-assets.sh pins the same default)
+  const images = [...read('deploy/docker-compose.yml').matchAll(/image: magpeek\/coremail-app:(\S+)/g)].map((m) => m[1]);
+  assert.ok(images.length >= 2, 'deploy/docker-compose.yml: coremail-init + coremail images');
+  for (const i of images) assert.equal(i, `\${COREMAIL_VERSION:-${version}}`, 'deploy/docker-compose.yml default tag');
+});
+
+test('standalone deployment (10.4): deploy/docker-compose.yml needs no other repository file', () => {
+  const dc = read('deploy/docker-compose.yml');
+  // relative host paths: only the secrets directory and the read-only compose directory
+  const binds = [...dc.matchAll(/^\s*- (\.[^:\s]*|\$\{[A-Z_]+:-\.[^}]*\}):/gm)].map((m) => m[1]);
+  assert.ok(binds.length > 0);
+  for (const b of binds) assert.ok(b === '${COREMAIL_SECRETS_PATH:-./secrets}' || b === '.', `unexpected bind mount ${b}`);
+  assert.match(dc, /^\s*- \.:\/compose-dir:ro$/m, 'the compose directory is mounted read-only');
+  assert.doesNotMatch(dc, /^\s*(build|env_file|extends):/m, 'no build context, env_file or extends');
+  assert.match(dc, /command: \["coremail-init"\]/);
+  // profiles: default = coremail-init, coremail, postgres, redis
+  const profileOf = (svc) => {
+    const block = dc.slice(dc.indexOf(`\n  ${svc}:\n`) + 1).split(/\n  [a-z][a-z0-9-]*:\n/)[0];
+    return block.match(/^ {4}profiles: \[([^\]]*)\]/m)?.[1] ?? '';
+  };
+  for (const svc of ['coremail-init', 'coremail', 'postgres', 'redis']) assert.equal(profileOf(svc), '', `${svc} has no profile`);
+  assert.equal(profileOf('rspamd'), 'scanner');
+  assert.equal(profileOf('clamav'), 'scanner');
+  assert.equal(profileOf('pg-backup'), 'backup');
+  assert.equal(profileOf('minio'), 's3');
+  // never switch the storage driver of existing data silently; scanners follow the profile
+  assert.match(dc, /OBJECT_STORAGE: \$\{OBJECT_STORAGE:-filesystem\}/);
+  assert.match(dc, /RSPAMD_ENABLED: \$\{RSPAMD_ENABLED:-auto\}/);
+  assert.match(dc, /CLAMAV_ENABLED: \$\{CLAMAV_ENABLED:-auto\}/);
+  // the config volumes come from the image, mounted read-only where the containers expect them
+  assert.match(dc, /- coremail-config-postgres:\/docker-entrypoint-initdb\.d:ro/);
+  assert.match(dc, /- coremail-config-rspamd:\/etc\/rspamd\/local\.d:ro/);
+  assert.match(dc, /- coremail-config-pg-backup:\/pg-backup:ro/);
+  const dockerfile = read('infra/docker/Dockerfile.app');
+  for (const f of ['postgres/01-init.sql', 'postgres/02-app-role.sh', 'rspamd/local.d/', 'pg-backup/pg-backup.sh']) {
+    assert.ok(dockerfile.includes(`/usr/share/coremail/config/${f}`), `image bundles ${f}`);
+  }
 });
 
 test('object storage (8.0): unchanged .env keeps MinIO; new .env uses the filesystem volume', () => {

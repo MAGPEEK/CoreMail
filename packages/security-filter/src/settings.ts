@@ -104,6 +104,15 @@ export function isEnvOff(v: string | undefined): boolean {
   return v !== undefined && /^(false|0|no|off)$/i.test(v.trim());
 }
 
+/**
+ * `auto` (deploy/docker-compose.yml, scanners as a Compose profile): the scanner
+ * counts as deployed only when its host name exists — see capabilities.ts. Not an
+ * off switch: the BCP setting stays in charge.
+ */
+export function isEnvAuto(v: string | undefined): boolean {
+  return v !== undefined && /^auto$/i.test(v.trim());
+}
+
 export function applyScannerEnvOverrides(cfg: PipelineConfig, env: NodeJS.ProcessEnv = process.env): PipelineConfig {
   const off = isEnvOff;
   return {

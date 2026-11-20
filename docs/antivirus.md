@@ -76,11 +76,11 @@ scanner gets one state:
 
 | State | When | Mail | BCP → Protection |
 |---|---|---|---|
-| `absent` (not deployed) | only the explicit environment switch `CLAMAV_ENABLED=false` / `RSPAMD_ENABLED=false` (set by the minimal compose file and by the Helm chart without the bundled scanner) | the scanner is skipped: no `X-CoreMail-Virus-Scan: unscanned` header, no `451` from the failure policy, no rspamd learning calls. One log line at start, not one per message. | the scanner's tab (Rspamd / Antivirus with policy, EICAR test and signature status), its status card and its row in "Aktive Schutzmaßnahmen" are hidden; the overview shows the info line "… ist in dieser Installation nicht bereitgestellt" with a link to this page |
+| `absent` (not deployed) | only the explicit environment switch `CLAMAV_ENABLED=false` / `RSPAMD_ENABLED=false` (set by the minimal compose file and by the Helm chart without the bundled scanner), or `auto` with a host name that has not resolved since start (see below; set by `deploy/docker-compose.yml`) | the scanner is skipped: no `X-CoreMail-Virus-Scan: unscanned` header, no `451` from the failure policy, no rspamd learning calls. One log line at start, not one per message. | the scanner's tab (Rspamd / Antivirus with policy, EICAR test and signature status), its status card and its row in "Aktive Schutzmaßnahmen" are hidden; the overview shows the info line "… ist in dieser Installation nicht bereitgestellt" with a link to this page |
 | `unavailable` | the scanner does not answer its ping (container starting, ClamAV loading its signatures, crashed), the DNS lookup failed, **or** the host name (`CLAMAV_HOST`, the host of `RSPAMD_URL` / `RSPAMD_HOST`) does not exist in DNS — reason `host-not-found` (a stopped container drops out of the compose network, a misspelt host name) | unchanged: the failure policy above applies (`X-CoreMail-Virus-Scan: unscanned` or `451` with "block on failure"; rspamd: delivered without spam check) | settings stay, a warning with the reason is shown; for `host-not-found`: "Host nicht gefunden: CLAMAV_HOST/RSPAMD_URL prüfen oder den Scanner mit CLAMAV_ENABLED=false bzw. RSPAMD_ENABLED=false als nicht bereitgestellt kennzeichnen" |
 | `available` | the scanner answered (`PING` → `PONG`, rspamd `/ping`) | normal scanning | normal |
 
-Only the environment switch makes a scanner `absent`. A host name that does not resolve
+Only the environment switch makes a scanner `absent` (and `auto`, below). A host name that does not resolve
 (`ENOTFOUND`, `ENODATA`, `EAI_NONAME` — a stopped or removed container, a typo in
 `CLAMAV_HOST`) is `unavailable` with reason `host-not-found`, so stopping the ClamAV
 container never switches virus scanning off silently: the failure policy and the
@@ -91,6 +91,18 @@ next check (at the latest after 5 minutes, at once when an admin opens the Prote
 and the last check is older than 30 s) — no restart needed. An installation without ClamAV
 or rspamd must set `CLAMAV_ENABLED=false` / `RSPAMD_ENABLED=false` (the minimal compose
 file and the Helm chart do).
+
+**`auto` (10.4).** The standalone `deploy/docker-compose.yml` runs rspamd and ClamAV as the
+Compose profile `scanner` and sets `CLAMAV_ENABLED=auto` / `RSPAMD_ENABLED=auto`. With
+`auto`, a host name that does not resolve — not found, any other DNS error or a DNS timeout
+(Docker answers the names of the stack's own containers itself and hands unknown ones to the
+host's resolvers, which answer NXDOMAIN, SERVFAIL or nothing, depending on the host) — means
+`absent` as long as the name has not resolved since the security filter started. A scanner
+that appears later (profile added) is picked up by the next check. Once it has resolved, the
+rules above apply unchanged: a later outage, including a vanished host name, is
+`unavailable` with the failure policy. A scanner container that is not running when CoreMail
+starts (crash loop) therefore counts as not deployed until it is back; `docker compose ps`
+shows it. `auto` is not an off switch: the BCP setting stays in charge.
 
 The settings of an absent scanner are still saved when written through the API
 (`PUT /api/v1/admin/security/settings`, `PUT /api/v1/admin/security/clamav`), so they are in

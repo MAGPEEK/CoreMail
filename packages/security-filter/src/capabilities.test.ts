@@ -65,6 +65,49 @@ test('defaultDetector: only CLAMAV_ENABLED / RSPAMD_ENABLED=false make a scanner
   assert.notEqual((await on('clamav')).state, 'absent');
 });
 
+test('auto (deploy/docker-compose.yml profiles): a host name that does not resolve → absent; a resolving one unchanged', async () => {
+  for (const code of ['ENOTFOUND', 'EAI_NONAME', 'ENODATA', 'NXDOMAIN']) {
+    let probed = 0;
+    const cap = await detectScanner(
+      { envDisabled: false, unresolvableMeansAbsent: true, host: 'clamav', probe: async () => { probed++; } },
+      deps(async () => { throw codeErr(code); }),
+    );
+    assert.deepEqual([cap.state, cap.reason, cap.detail], ['absent', 'host-not-found', code]);
+    assert.equal(probed, 0);
+  }
+  // Docker Desktop: an unknown single-label name goes to the host resolver → SERVFAIL / EAI_AGAIN after seconds
+  const again = await detectScanner({ envDisabled: false, unresolvableMeansAbsent: true, host: 'rspamd', probe: okProbe }, deps(async () => { throw codeErr('EAI_AGAIN'); }));
+  assert.deepEqual([again.state, again.reason, again.detail], ['absent', 'dns-error', 'EAI_AGAIN']);
+  const slow = await detectScanner({ envDisabled: false, unresolvableMeansAbsent: true, host: 'rspamd', probe: okProbe }, deps(() => new Promise(() => undefined), 30));
+  assert.deepEqual([slow.state, slow.reason], ['absent', 'timeout']);
+  // once the name resolves, refused connections and good pings behave exactly as without auto
+  const refused = await detectScanner({ envDisabled: false, unresolvableMeansAbsent: true, host: 'clamav', probe: async () => { throw codeErr('ECONNREFUSED'); } }, deps(resolves));
+  assert.deepEqual([refused.state, refused.reason], ['unavailable', 'connect-failed']);
+  const ok = await detectScanner({ envDisabled: false, unresolvableMeansAbsent: true, host: 'clamav', probe: okProbe }, deps(resolves));
+  assert.equal(ok.state, 'available');
+});
+
+test('defaultDetector: CLAMAV_ENABLED / RSPAMD_ENABLED=auto are not off switches', async () => {
+  const { defaultDetector } = await import('./capabilities.js');
+  const { isEnvAuto, isEnvOff } = await import('./settings.js');
+  assert.equal(isEnvAuto(' AUTO '), true);
+  assert.equal(isEnvAuto('false'), false);
+  assert.equal(isEnvOff('auto'), false);
+  // auto never yields disabled-by-config; the BCP switch stays in charge
+  const secOn = {
+    dnsblEnabled: true, geoipMode: 'DISABLED', geoipCountries: [] as unknown,
+    attachmentEnabled: false, attachmentMaxSizeMb: 50, attachmentBlockedExt: [] as unknown,
+    rspamdEnabled: true, rspamdSpamScore: 6, rspamdRejectScore: 15,
+    clamavEnabled: true, clamavAction: 'quarantine', clamavBlockOnFailure: true,
+  };
+  const cfg = buildPipelineConfig(secOn as never, null, { RSPAMD_ENABLED: 'auto', CLAMAV_ENABLED: 'auto' });
+  assert.equal(cfg.rspamdEnabled, true);
+  assert.equal(cfg.clamavEnabled, true);
+  const auto = defaultDetector({ CLAMAV_ENABLED: 'auto', RSPAMD_ENABLED: 'auto' }, 50);
+  assert.notEqual((await auto('clamav')).reason, 'disabled-by-config');
+  assert.notEqual((await auto('rspamd')).reason, 'disabled-by-config');
+});
+
 test('other DNS failures and DNS timeouts are unavailable, never absent', async () => {
   const again = await detectScanner({ envDisabled: false, host: 'rspamd', probe: okProbe }, deps(async () => { throw codeErr('EAI_AGAIN'); }));
   assert.deepEqual([again.state, again.reason, again.detail], ['unavailable', 'dns-error', 'EAI_AGAIN']);
@@ -233,6 +276,22 @@ test('CapabilityMonitor: one log line per scanner at start, then only on state c
   const n = detections;
   await Promise.all([m.refresh(), m.refresh(), m.refresh()]);
   assert.equal(detections, n + 2);
+});
+
+test('CapabilityMonitor + auto: absent at start → present when the host appears → never absent again', async () => {
+  const quiet = { info: () => undefined, warn: () => undefined };
+  let clamav: Cap = cap('absent', 'host-not-found');
+  const m = new CapabilityMonitor(async (name) => (name === 'rspamd' ? cap('available') : clamav), () => 1, quiet);
+  await m.refresh();
+  assert.equal(m.get().clamav.state, 'absent');
+  await m.refresh();
+  assert.equal(m.get().clamav.state, 'absent', 'still not deployed');
+  clamav = cap('unavailable', 'connect-failed');   // profile added: name resolves, clamd still loading
+  await m.refresh();
+  assert.equal(m.get().clamav.state, 'unavailable');
+  clamav = cap('absent', 'host-not-found');         // container stopped later: failure policy, not "absent"
+  await m.refresh();
+  assert.deepEqual([m.get().clamav.state, m.get().clamav.reason], ['unavailable', 'host-not-found']);
 });
 
 test('CapabilityMonitor: never moves into absent at runtime; available → unavailable is a warn line', async () => {

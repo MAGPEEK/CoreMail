@@ -1,0 +1,552 @@
+name: coremail
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  CoreMail 10.4.0 — Docker Compose, standalone deployment file
+#
+#  This one file is all a server needs — no repository checkout, no .env:
+#
+#    mkdir coremail && cd coremail
+#    curl -fsSLO https://github.com/MAGPEEK/CoreMail/releases/latest/download/docker-compose.yml
+#    docker compose up -d
+#
+#  Then open http://<server-ip>:3000/setup — the one-time setup token is in
+#  ./secrets/setup-token. BACK UP ./secrets/ off the server: without PEPPER from
+#  ./secrets/coremail.env no password works anymore. Guide: docs/deploy.md
+#  (https://github.com/MAGPEEK/CoreMail/blob/main/docs/deploy.md).
+#
+#  Default (no profile): coremail-init (one-shot) · coremail · postgres · redis
+#  Optional profiles — add them to every `docker compose` command, or put
+#  COMPOSE_PROFILES=scanner,backup into a .env file next to this file:
+#    --profile scanner   rspamd (spam scoring) + ClamAV (virus scanning)
+#    --profile backup    pg-backup: a daily pg_dump into the volume pg-backups
+#    --profile s3        MinIO (S3-compatible store): target of the built-in backup
+#                        service. Mail stays on the coremail-data volume unless you
+#                        set OBJECT_STORAGE=minio yourself (docs/storage.md).
+#
+#  Secrets: coremail-init writes every key and password into ./secrets/ on the
+#  first start and never overwrites them. A .env next to this file stays
+#  optional and always wins (same variable names as .env.example).
+#  Configuration: the image carries the PostgreSQL init scripts, the rspamd
+#  settings and the pg-backup script; coremail-init copies them into the
+#  coremail-config-* volumes on every start (an update brings new versions).
+#  Files in ./config/rspamd/local.d/ win over the bundled rspamd files.
+#
+#  Update:  docker compose pull && docker compose up -d
+#  Requires Docker Engine 24+ with Compose v2.20+.
+# ═════════════════════════════════════════════════════════════════════════════
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: ${LOG_MAX_SIZE:-10m}
+    max-file: "${LOG_MAX_FILE:-3}"
+
+services:
+
+  # ───────────────────────────────────────────────────────────────────────────
+  #  coremail-init — one-shot, runs before everything else on every `up`:
+  #   1. secrets: creates ./secrets/coremail.env + the password files on the
+  #      first start, later only appends missing keys (never overwrites); a
+  #      value from .env is copied, not generated
+  #   2. configuration: copies the files bundled in the image into the
+  #      coremail-config-* volumes (plus ./config/rspamd/local.d/ overrides)
+  # ───────────────────────────────────────────────────────────────────────────
+  coremail-init:
+    image: magpeek/coremail-app:${COREMAIL_VERSION:-10.4.0}
+    container_name: coremail-init
+    restart: "no"
+    command: ["coremail-init"]
+    environment:
+      # .env values (empty = generate)
+      JWT_SECRET:                 ${JWT_SECRET:-}
+      PEPPER:                     ${PEPPER:-}
+      POSTGRES_PASSWORD:          ${POSTGRES_PASSWORD:-}
+      COREMAIL_DB_USER:           ${COREMAIL_DB_USER:-}
+      COREMAIL_DB_PASSWORD:       ${COREMAIL_DB_PASSWORD:-}
+      REDIS_PASSWORD:             ${REDIS_PASSWORD:-}
+      MINIO_ROOT_PASSWORD:        ${MINIO_ROOT_PASSWORD:-}
+      RSPAMD_CONTROLLER_PASSWORD: ${RSPAMD_CONTROLLER_PASSWORD:-}
+      MFA_ENCRYPTION_KEY:         ${MFA_ENCRYPTION_KEY:-}
+      BACKUP_ENCRYPTION_KEY:      ${BACKUP_ENCRYPTION_KEY:-}
+      AUDIT_EXPORT_SIGNING_KEY:   ${AUDIT_EXPORT_SIGNING_KEY:-}
+      VAPID_PUBLIC_KEY:           ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY:          ${VAPID_PRIVATE_KEY:-}
+      DATABASE_URL:               ${DATABASE_URL:-}
+      REDIS_URL:                  ${REDIS_URL:-}
+      # The directory of this file, mounted read-only below: only
+      # ./config/rspamd/local.d/ is read from it (optional overrides).
+      COREMAIL_CONFIG_OVERRIDE_DIR: /compose-dir/config
+    volumes:
+      - ${COREMAIL_SECRETS_PATH:-./secrets}:/secrets
+      - coremail-config-postgres:/config/postgres
+      - coremail-config-rspamd:/config/rspamd/local.d
+      - coremail-config-pg-backup:/config/pg-backup
+      - .:/compose-dir:ro
+    # No network: the database is not up yet anyway
+    network_mode: none
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    # DAC_OVERRIDE/FOWNER: write into a directory owned by the host user, chmod
+    # 700 of an empty world-writable bind mount (Docker Desktop).
+    # NET_BIND_SERVICE: only because the image's node binary carries it as a
+    # file capability — without it the kernel refuses to execute node.
+    cap_add: [DAC_OVERRIDE, FOWNER, NET_BIND_SERVICE]
+    logging: *logging
+
+  # ───────────────────────────────────────────────────────────────────────────
+  #  coremail — all CoreMail services (SMTP/IMAP/POP3/JMAP/ActiveSync/CalDAV,
+  #  MAPI, REST API, webmail, admin panel "BCP", admin CLI `coremail`)
+  # ───────────────────────────────────────────────────────────────────────────
+  coremail:
+    image: magpeek/coremail-app:${COREMAIL_VERSION:-10.4.0}
+    container_name: coremail
+    restart: unless-stopped
+    environment:
+      # ── Secrets: .env wins; empty = ./secrets/coremail.env (coremail-init) ──
+      JWT_SECRET: ${JWT_SECRET:-}
+      PEPPER:     ${PEPPER:-}
+      # Empty DATABASE_URL / REDIS_URL = built by the entrypoint:
+      # postgresql://<COREMAIL_DB_USER|coremail>:<COREMAIL_DB_PASSWORD|POSTGRES_PASSWORD>@postgres:5432/coremail,
+      # redis://:<REDIS_PASSWORD>@redis:6379
+      DATABASE_URL:         ${DATABASE_URL:-}
+      REDIS_URL:            ${REDIS_URL:-}
+      POSTGRES_PASSWORD:    ${POSTGRES_PASSWORD:-}
+      COREMAIL_DB_USER:     ${COREMAIL_DB_USER:-}
+      COREMAIL_DB_PASSWORD: ${COREMAIL_DB_PASSWORD:-}
+      REDIS_PASSWORD:       ${REDIS_PASSWORD:-}
+      COREMAIL_SECRETS_HOST_PATH: ${COREMAIL_SECRETS_PATH:-./secrets}
+      COREMAIL_PUBLIC_HTTP_PORT:  "3000"   # published HTTP port (setup log hint)
+      # Schema updates that would delete data stop the start (nothing is changed)
+      # until this is "true" for ONE start — a pg_dump goes to /data/backups first.
+      COREMAIL_ALLOW_SCHEMA_DATA_LOSS: ${COREMAIL_ALLOW_SCHEMA_DATA_LOSS:-false}
+      BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
+      RSPAMD_CONTROLLER_PASSWORD: ${RSPAMD_CONTROLLER_PASSWORD:-}
+
+      # ── Object storage (docs/storage.md) ─────────────────────────────────────
+      # filesystem = the coremail-data volume. minio (profile s3) or s3 (external)
+      # only when you set OBJECT_STORAGE yourself — mail already stored elsewhere
+      # must be migrated first (`coremail storage migrate`), never switched blindly.
+      OBJECT_STORAGE: ${OBJECT_STORAGE:-filesystem}
+      STORAGE_PATH:   /data/objects
+      MINIO_ENDPOINT:   ${MINIO_ENDPOINT:-minio}
+      MINIO_PORT:       ${MINIO_PORT:-}
+      MINIO_USE_SSL:    ${MINIO_USE_SSL:-false}
+      MINIO_REGION:     ${MINIO_REGION:-}
+      MINIO_PATH_STYLE: ${MINIO_PATH_STYLE:-}
+      MINIO_CA_FILE:    ${MINIO_CA_FILE:-}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-${MINIO_ROOT_USER:-minioadmin}}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-${MINIO_ROOT_PASSWORD:-}}
+      MINIO_BUCKET_ATTACHMENTS: ${MINIO_BUCKET_ATTACHMENTS:-coremail-attachments}
+
+      # ── Built-in backup service target (bucket coremail-backups) ─────────────
+      # Default = the bundled MinIO of profile s3 (credentials from ./secrets).
+      # External S3: set S3_ENDPOINT / S3_REGION / S3_ACCESS_KEY / S3_SECRET_KEY
+      # in .env. Without either the backup service logs that its target is not
+      # reachable; mail is unaffected (database dumps: profile backup).
+      S3_ENDPOINT:   ${S3_ENDPOINT:-http://minio:9000}
+      S3_REGION:     ${S3_REGION:-}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-${MINIO_ROOT_USER:-minioadmin}}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-${MINIO_ROOT_PASSWORD:-}}
+
+      # ── Spam and virus protection (profile scanner) ──────────────────────────
+      # "auto": a scanner whose container is not part of the stack (profile not
+      # active, host name unknown when CoreMail starts) counts as not deployed —
+      # skipped, its BCP settings hidden. Once it was seen, an outage applies the
+      # configured failure policy instead. "false" = never use it.
+      RSPAMD_ENABLED: ${RSPAMD_ENABLED:-auto}
+      CLAMAV_ENABLED: ${CLAMAV_ENABLED:-auto}
+      RSPAMD_URL:  http://rspamd:11334
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: "3310"
+
+      # ── Operation ────────────────────────────────────────────────────────────
+      NODE_ENV:  production
+      LOG_LEVEL: ${LOG_LEVEL:-info}             # error | warn | info | debug
+      TZ:        ${TZ:-Europe/Berlin}
+      MFA_ENCRYPTION_KEY: ${MFA_ENCRYPTION_KEY:-}
+      WEBAUTHN_RP_ID:  ${WEBAUTHN_RP_ID:-}
+      WEBAUTHN_ORIGIN: ${WEBAUTHN_ORIGIN:-}
+      SECURITY_FILTER_URL: http://localhost:3002   # internal — do not change
+      SMARTHOST_TLS_INSECURE: ${SMARTHOST_TLS_INSECURE:-false}
+      RETENTION_SCHEDULE: ${RETENTION_SCHEDULE:-0 3 * * *}
+      VAPID_PUBLIC_KEY:  ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT:     ${VAPID_SUBJECT:-mailto:admin@example.com}
+      # Initial setup token: ./secrets/setup-token (or set SETUP_TOKEN in .env).
+      # TRUST_PROXY only when port 3000 is reachable exclusively through your own
+      # reverse proxy (e.g. "1" or its CIDR).
+      SETUP_TOKEN: ${SETUP_TOKEN:-}
+      TRUST_PROXY: ${TRUST_PROXY:-}
+      BRANDING_NAME:  ${BRANDING_NAME:-}
+      BRANDING_COLOR: ${BRANDING_COLOR:-}
+
+      # ── Optional tuning — set in .env; empty = built-in default ──────────────
+      # Every variable is described in .env.example; details in docs/mail-security.md,
+      # docs/mailbox-quotas-recovery.md, docs/mail-protocol-limits.md,
+      # docs/api-gateway-security.md and docs/deployment-security.md.
+      # Schema sync (pre-migration pg_dump)
+      COREMAIL_SCHEMA_BACKUP:      ${COREMAIL_SCHEMA_BACKUP:-}
+      COREMAIL_SCHEMA_BACKUP_DIR:  ${COREMAIL_SCHEMA_BACKUP_DIR:-}
+      # Quotas, recoverable items, out-of-office
+      DELETED_ITEM_RETENTION_DAYS: ${DELETED_ITEM_RETENTION_DAYS:-}
+      QUOTA_FULL_PERMANENT:        ${QUOTA_FULL_PERMANENT:-}
+      QUOTA_USAGE_CACHE_SEC:       ${QUOTA_USAGE_CACHE_SEC:-60}   # explicit default: an empty value would mean 0 (no cache)
+      OOF_REPLY_MEMORY_DAYS:       ${OOF_REPLY_MEMORY_DAYS:-}
+      # Inbound filtering
+      LOCAL_SPOOF_ACTION:          ${LOCAL_SPOOF_ACTION:-}
+      LOCAL_SPOOF_ALLOW:           ${LOCAL_SPOOF_ALLOW:-}
+      ARC_TRUSTED_SEALERS:         ${ARC_TRUSTED_SEALERS:-}
+      SECURITY_FILTER_FAIL_OPEN:   ${SECURITY_FILTER_FAIL_OPEN:-}
+      RULE_PATTERN_STEP_BUDGET:    ${RULE_PATTERN_STEP_BUDGET:-}
+      RULE_PATTERN_MESSAGE_STEP_BUDGET: ${RULE_PATTERN_MESSAGE_STEP_BUDGET:-}
+      DELETED_ITEM_PURGE_OBJECTS: ${DELETED_ITEM_PURGE_OBJECTS:-}
+      DRAFT_WRITE_RATE_LIMIT: ${DRAFT_WRITE_RATE_LIMIT:-}
+      DRAFT_WRITE_RATE_WINDOW_SEC: ${DRAFT_WRITE_RATE_WINDOW_SEC:-}
+      # SMTP
+      OUTBOUND_ALLOW_PRIVATE_MX:   ${OUTBOUND_ALLOW_PRIVATE_MX:-}
+      OUTBOUND_DELAY_DSN_HOURS:    ${OUTBOUND_DELAY_DSN_HOURS:-}
+      SMTP_TARPIT_MAX_DELAY_MS:    ${SMTP_TARPIT_MAX_DELAY_MS:-}
+      SMTP_EXT_SMTPUTF8:           ${SMTP_EXT_SMTPUTF8:-}
+      SMTP_EXT_DSN:                ${SMTP_EXT_DSN:-}
+      SMTP_EXT_CHUNKING:           ${SMTP_EXT_CHUNKING:-}
+      # Brute-force exemptions and connection limits
+      MAIL_AUTH_EXEMPT_CIDRS:      ${MAIL_AUTH_EXEMPT_CIDRS:-}
+      MAIL_CONN_EXEMPT_CIDRS:      ${MAIL_CONN_EXEMPT_CIDRS:-}
+      IMAP_MAX_CONNS:              ${IMAP_MAX_CONNS:-}
+      IMAP_MAX_CONNS_PER_IP:       ${IMAP_MAX_CONNS_PER_IP:-}
+      IMAP_MAX_CONNS_PER_USER:     ${IMAP_MAX_CONNS_PER_USER:-}
+      IMAP_SORT_MAX_MESSAGES:      ${IMAP_SORT_MAX_MESSAGES:-}
+      POP3_MAX_CONNS:              ${POP3_MAX_CONNS:-}
+      POP3_MAX_CONNS_PER_IP:       ${POP3_MAX_CONNS_PER_IP:-}
+      JMAP_UPLOAD_QUOTA_MB:        ${JMAP_UPLOAD_QUOTA_MB:-}
+      JMAP_UPLOAD_MAX_BLOBS:       ${JMAP_UPLOAD_MAX_BLOBS:-}
+      AUTOCONFIG_RATE_LIMIT:       ${AUTOCONFIG_RATE_LIMIT:-}
+      # Web / REST API
+      COREMAIL_ALLOWED_ORIGINS:    ${COREMAIL_ALLOWED_ORIGINS:-}
+      AUDIT_EXPORT_SIGNING_KEY:    ${AUDIT_EXPORT_SIGNING_KEY:-}
+      HTTP_REDIRECT_HTTPS:         ${HTTP_REDIRECT_HTTPS:-}
+      HTTPS_PUBLIC_PORT:           ${HTTPS_PUBLIC_PORT:-}
+      MAIL_SEND_MAX_RECIPIENTS:    ${MAIL_SEND_MAX_RECIPIENTS:-}
+      MAIL_SEND_RATE_LIMIT:        ${MAIL_SEND_RATE_LIMIT:-}
+      MAIL_SEND_RATE_WINDOW_SEC:   ${MAIL_SEND_RATE_WINDOW_SEC:-}
+      IMAGE_PROXY_RATE_LIMIT:      ${IMAGE_PROXY_RATE_LIMIT:-}
+      IMAGE_PROXY_RATE_WINDOW_SEC: ${IMAGE_PROXY_RATE_WINDOW_SEC:-}
+      BACKUP_IMPORT_MAX_BYTES:     ${BACKUP_IMPORT_MAX_BYTES:-}
+      OIDC_TRUST_IDP_MFA_FOR_ADMINS: ${OIDC_TRUST_IDP_MFA_FOR_ADMINS:-}
+      SMTP_HOSTNAME:                ${SMTP_HOSTNAME:-}
+      POP3_HOSTNAME:                ${POP3_HOSTNAME:-}
+      REFERENCES_BACKFILL:          ${REFERENCES_BACKFILL:-}
+      REFERENCES_LAZY_BUDGET_MS:    ${REFERENCES_LAZY_BUDGET_MS:-}
+
+    ports:
+      - "25:25"       # SMTP inbound (server → server)
+      - "465:465"     # SMTPS (implicit TLS)
+      - "587:587"     # SMTP submission (mail clients, STARTTLS)
+      - "143:143"     # IMAP (STARTTLS)
+      - "993:993"     # IMAPS
+      - "110:110"     # POP3 (STARTTLS)  — remove if POP3 is not wanted
+      - "995:995"     # POP3S            — same
+      - "80:3000"     # HTTP: Let's Encrypt HTTP-01 + redirect to HTTPS
+      - "443:443"     # HTTPS: integrated TLS proxy (BCP → Certificates)
+      - "3000:3000"   # HTTP without TLS: initial setup; behind your own reverse
+                      # proxy use only this port and remove 80/443 above
+    volumes:
+      # Mail contents (/data/objects) and pre-migration dumps (/data/backups)
+      - coremail-data:/data
+      # Secrets (coremail.env, setup-token) — back this directory up off the server
+      - ${COREMAIL_SECRETS_PATH:-./secrets}:/secrets
+    depends_on:
+      coremail-init: { condition: service_completed_successfully }
+      postgres: { condition: service_healthy }
+      redis:    { condition: service_healthy }
+      # Waited for only when their profile is active
+      minio:    { condition: service_healthy, required: false }
+      rspamd:   { condition: service_started, required: false }
+      clamav:   { condition: service_started, required: false }
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:3000/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    deploy:
+      resources:
+        limits:
+          cpus: '${COREMAIL_CPU_LIMIT:-2}'
+          memory: ${COREMAIL_MEM_LIMIT:-2g}
+    # Hardening (docs/deployment-security.md §5): the entrypoint and supervisord
+    # need these capabilities as root; the services run as user node without any.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID, KILL, NET_BIND_SERVICE]
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: 0
+    logging: *logging
+    networks:
+      coremail: {}
+      # Dedicated network to rspamd with a FIXED app address — the only address
+      # the rspamd controller trusts without a password.
+      rspamd:
+        ipv4_address: ${RSPAMD_NET_PREFIX:-10.253.253}.2
+
+  # ───────────────────────────────────────────────────────────────────────────
+  #  Infrastructure — standard images. Passwords come from .env when set, else
+  #  from the files coremail-init wrote (./secrets mounted read-only at
+  #  /run/coremail). Configuration files come from the coremail-config-* volumes.
+  # ───────────────────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: coremail-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:   coremail
+      POSTGRES_USER: coremail
+      # Read only when the data directory is created — an existing database
+      # keeps its password.
+      POSTGRES_PASSWORD_FILE: /run/coremail/postgres-password
+      # Non-superuser application role, created on a FRESH database only (02-app-role.sh)
+      COREMAIL_DB_USER:     ${COREMAIL_DB_USER:-}
+      COREMAIL_DB_PASSWORD: ${COREMAIL_DB_PASSWORD:-}
+    volumes:
+      # Local disk only — never NFS/SMB (docs/docker-compose.md → Storage)
+      - pgdata:/var/lib/postgresql/data
+      # 01-init.sql + 02-app-role.sh from the image; run on an EMPTY data directory only
+      - coremail-config-postgres:/docker-entrypoint-initdb.d:ro
+      - ${COREMAIL_SECRETS_PATH:-./secrets}:/run/coremail:ro
+    depends_on:
+      coremail-init: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U coremail -d coremail"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+    networks: [coremail]
+
+  redis:
+    image: redis:7-alpine
+    container_name: coremail-redis
+    restart: unless-stopped
+    # No maxmemory/eviction: BullMQ queues must never be evicted.
+    # Password: REDIS_PASSWORD from .env, else ./secrets/redis-password
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        REDIS_PASSWORD="$${REDIS_PASSWORD:-$$(cat /run/coremail/redis-password)}" || exit 1
+        [ -n "$$REDIS_PASSWORD" ] || { echo "redis: no REDIS_PASSWORD and no /run/coremail/redis-password" >&2; exit 1; }
+        exec docker-entrypoint.sh redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    volumes:
+      - redisdata:/data
+      - ${COREMAIL_SECRETS_PATH:-./secrets}:/run/coremail:ro
+    depends_on:
+      coremail-init: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$${REDIS_PASSWORD:-$$(cat /run/coremail/redis-password)}\" redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+    networks: [coremail]
+
+  # ───────────────────────────────────────────────────────────────────────────
+  #  Profile "scanner": rspamd + ClamAV (plan ~1.5 GB RAM more)
+  # ───────────────────────────────────────────────────────────────────────────
+  rspamd:
+    profiles: [scanner]
+    image: rspamd/rspamd:4.0.0
+    container_name: coremail-rspamd
+    restart: unless-stopped
+    # Started as root ONLY to read ./secrets/rspamd-controller-password (0600)
+    # when RSPAMD_CONTROLLER_PASSWORD is empty; rspamd itself runs as _rspamd (11333).
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ -z "$${RSPAMD_CONTROLLER_PASSWORD}" ] && [ -f /run/coremail/rspamd-controller-password ]; then
+          RSPAMD_CONTROLLER_PASSWORD="$$(cat /run/coremail/rspamd-controller-password)" || exit 1
+          export RSPAMD_CONTROLLER_PASSWORD
+        fi
+        exec setpriv --reuid=11333 --regid=11333 --clear-groups /usr/bin/rspamd -f
+    environment:
+      # The controller trusts ONLY the app container's fixed address without a
+      # password; everything else needs RSPAMD_CONTROLLER_PASSWORD.
+      RSPAMD_CONTROLLER_SECURE_IP: ${RSPAMD_NET_PREFIX:-10.253.253}.2
+      RSPAMD_CONTROLLER_PASSWORD:  ${RSPAMD_CONTROLLER_PASSWORD:-}
+    volumes:
+      # local.d from the image (+ ./config/rspamd/local.d/ overrides)
+      - coremail-config-rspamd:/etc/rspamd/local.d:ro
+      - rspamd-data:/var/lib/rspamd
+      - ${COREMAIL_SECRETS_PATH:-./secrets}:/run/coremail:ro
+    depends_on:
+      coremail-init: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD-SHELL", "rspamc symbols /dev/null > /dev/null 2>&1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: ${RSPAMD_MEM_LIMIT:-512m}
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+    # Only on the dedicated network: reachable by the app container alone
+    networks:
+      rspamd:
+        ipv4_address: ${RSPAMD_NET_PREFIX:-10.253.253}.3
+
+  clamav:
+    profiles: [scanner]
+    # Downloads ~300 MB of signatures on first start (a few minutes)
+    image: clamav/clamav:stable
+    container_name: coremail-clamav
+    restart: unless-stopped
+    environment:
+      CLAMAV_NO_FRESHCLAMD: "false"   # daily signature updates
+    volumes:
+      - clamav-data:/var/lib/clamav
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/clamdcheck.sh"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 300s
+    deploy:
+      resources:
+        limits:
+          # clamd holds the signatures (~1 GB) and loads a second copy while reloading
+          memory: ${CLAMAV_MEM_LIMIT:-2560m}
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+    networks: [coremail]
+
+  # ───────────────────────────────────────────────────────────────────────────
+  #  Profile "backup": pg_dump every PG_BACKUP_INTERVAL_HOURS into PG_BACKUP_DIR
+  #  (named volume pg-backups, or a host path such as /srv/coremail/backups).
+  #  Dumps are plaintext (0600) — copy them off the host encrypted.
+  # ───────────────────────────────────────────────────────────────────────────
+  pg-backup:
+    profiles: [backup]
+    image: postgres:16-alpine
+    container_name: coremail-pg-backup
+    restart: unless-stopped
+    # Password: POSTGRES_PASSWORD from .env, else ./secrets/postgres-password
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        PGPASSWORD="$${PGPASSWORD:-$$(cat /run/coremail/postgres-password)}" || exit 1
+        export PGPASSWORD
+        exec sh /pg-backup/pg-backup.sh
+    environment:
+      PGHOST: postgres
+      PGUSER: coremail
+      PGDATABASE: coremail
+      PG_BACKUP_INTERVAL_HOURS: ${PG_BACKUP_INTERVAL_HOURS:-24}
+      PG_BACKUP_KEEP_DAYS: ${PG_BACKUP_KEEP_DAYS:-14}
+      PG_BACKUP_START_DELAY_MIN: ${PG_BACKUP_START_DELAY_MIN:-10}
+      TZ: ${TZ:-Europe/Berlin}
+    volumes:
+      # pg-backup.sh from the image
+      - coremail-config-pg-backup:/pg-backup:ro
+      - ${PG_BACKUP_DIR:-pg-backups}:/backups
+      - ${COREMAIL_SECRETS_PATH:-./secrets}:/run/coremail:ro
+    depends_on:
+      coremail-init: { condition: service_completed_successfully }
+      postgres: { condition: service_healthy }
+    healthcheck:
+      # healthy = a dump younger than two intervals exists
+      test: ["CMD-SHELL", "find /backups -maxdepth 1 -name 'coremail-*.dump' -mmin -$$((PG_BACKUP_INTERVAL_HOURS * 120)) | grep -q ."]
+      interval: 10m
+      timeout: 10s
+      retries: 3
+      start_period: 30m
+    # Root without capabilities: writes only to the root-owned backup directory.
+    # DAC_READ_SEARCH (read-only) lets it read ./secrets/postgres-password.
+    user: "0:0"
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    cap_add: [DAC_READ_SEARCH]
+    security_opt: [no-new-privileges:true]
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+    logging: *logging
+    networks: [coremail]
+
+  # ───────────────────────────────────────────────────────────────────────────
+  #  Profile "s3": MinIO — S3-compatible store for the built-in backup service
+  #  (and for mail contents only if you set OBJECT_STORAGE=minio)
+  # ───────────────────────────────────────────────────────────────────────────
+  minio:
+    profiles: [s3]
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372   # community build of MinIO; pinned by digest
+    container_name: coremail-minio
+    restart: unless-stopped
+    # Password: MINIO_ROOT_PASSWORD from .env, else ./secrets/minio-root-password
+    # (MinIO refuses to start with an empty password — fail closed)
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        MINIO_ROOT_PASSWORD="$${MINIO_ROOT_PASSWORD:-$$(cat /run/coremail/minio-root-password)}" || exit 1
+        export MINIO_ROOT_PASSWORD
+        exec /usr/bin/docker-entrypoint.sh minio server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER:     ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-}
+    volumes:
+      - miniodata:/data
+      - ${COREMAIL_SECRETS_PATH:-./secrets}:/run/coremail:ro
+    depends_on:
+      coremail-init: { condition: service_completed_successfully }
+    ports:
+      - "127.0.0.1:9001:9001"   # console local only (ssh -L 9001:localhost:9001 <server>)
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+    networks: [coremail]
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Data — the same volume names as infra/docker/docker-compose*.yml (project
+#  "coremail"), so an installation can switch files and keep its data.
+#    pgdata         PostgreSQL (back up!)       coremail-data  mail contents + dumps (back up!)
+#    redisdata      sessions, queues            pg-backups     pg_dump files (profile backup)
+#    miniodata      MinIO (profile s3)          rspamd-data    Bayes data (profile scanner)
+#    clamav-data    signatures (re-downloaded)
+#    coremail-config-*  configuration copied from the image on every start (expendable)
+# ─────────────────────────────────────────────────────────────────────────────
+volumes:
+  pgdata:
+  coremail-data:
+  redisdata:
+  miniodata:
+  rspamd-data:
+  clamav-data:
+  pg-backups:
+  coremail-config-postgres:
+  coremail-config-rspamd:
+  coremail-config-pg-backup:
+
+networks:
+  coremail:
+    driver: bridge
+  # app ↔ rspamd only, fixed /29 (set RSPAMD_NET_PREFIX in .env if
+  # 10.253.253.0/29 collides with a network on your host or LAN)
+  rspamd:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${RSPAMD_NET_PREFIX:-10.253.253}.0/29
