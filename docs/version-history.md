@@ -6,6 +6,7 @@ Highlights of each CoreMail release, newest first. Every change is listed in the
 
 ## Recent releases
 
+- **v10.3.0** — An admin MCP interface (off by default, personal read/write tokens with the admin's own rights), a regrouped branding page with one logo upload and a favicon made from it, neutral wording throughout, and a shorter README ([release notes](releases/v10.3.0.md)).
 - **v10.2.0** — A new webmail shell (one simplified toolbar, floating panes, background pictures, favourites, date groups, mail templates), search suggestions from the whole mailbox, growing tables in mail, calendar events drawn by "show as", retention policy fixes and message trace details in the BCP ([release notes](releases/v10.2.0.md))
 - **v10.1.0** — A calmer compose area (raised card, Send as the only accent split button top left, formatting bar at the bottom)
 - **v10.0.0** — **room and equipment resources are removed**; use a shared mailbox or a shared calendar instead. Room data is deleted at start after a mandatory backup — **breaking, read the [upgrade notes](releases/v10.0.0.md) before upgrading**.
@@ -31,6 +32,7 @@ Highlights of each CoreMail release, newest first. Every change is listed in the
 
 | Version | Highlights |
 |---------|-----------|
+| **v10.3.0** | **Admin MCP interface and branding page.** `/mcp` for MCP clients (switch under Infrastruktur, off by default; personal tokens read or read/write, same role and domain scope as the admin panel, every call audited), branding page with one logo upload, favicon generated from the logo and one save bar, legacy TLS card renamed, neutral wording in texts and docs — [release notes](releases/v10.3.0.md) |
 | **v10.2.0** | **New webmail shell.** One simplified toolbar for mail, calendar and contacts, floating panes over optional background pictures, favourites and date groups, mail templates, search suggestions from the whole mailbox (trigram index), table size picker and "+" handles to grow tables, calendar events drawn by "show as" (out of office purple), scheduling assistant removed, retention policy fixes, message trace detail panel (processing steps, MX route, hops) — [release notes](releases/v10.2.0.md) |
 | **v10.1.0** | **New compose area.** Raised card, "Senden" as the only accent split button top left (send later, importance, options), quiet icons, address rows with avatar chips, text limited to 72 characters per line, formatting bar at the bottom (can be hidden, remembered). |
 | **v10.0.0** | **Room and equipment resources removed** (Breaking). Room and equipment mailboxes, their bookings and their own mailboxes are deleted at start after a mandatory pg_dump to `/data/backups` (retired tables only; any other data loss is still refused); mail to former room addresses gets `550 5.1.1`; room attendees are invited like people; `/admin/resources`, EMS `resource-mailboxes` and `/calendar/rooms` answer 404. Use a shared mailbox or a shared calendar instead. Helm chart 3.0.0 (`app.schemaSync.backupClaim` or `skipBackup` for the rollout when rooms exist). |

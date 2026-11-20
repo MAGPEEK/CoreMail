@@ -13,6 +13,31 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [10.3.0] — 2026-11-20 — Admin MCP interface, branding page, neutral wording
+
+### Added
+
+- **Admin MCP interface** (`/mcp`, Model Context Protocol 2025-06-18, Streamable HTTP): administrators manage the server with an MCP client. Off by default — BCP → Infrastruktur → "KI-Schnittstelle (MCP)" (switch, endpoint URL, example client configuration, optional client IP allowlist; off → `404` and every open MCP session ends). Docs: `docs/mcp.md`.
+- **Personal MCP tokens** (`cm_mcp_…`, stored as sha256 only, shown once): `read` or `write`, expiry 1–365 days (default 90); ORGANIZATION_MANAGEMENT sees and revokes all tokens. A token stops working on expiry, revocation and every "revoke all sessions" of its owner (role change, deactivation, deletion, password change, sign out everywhere); live MCP sessions end.
+- **22 tools**: read — server status, domains and DNS check, mailboxes, aliases, protocol access, queue, message trace, certificates, audit log; write — create / update mailbox, aliases, quota, protocol access, create domain, sender lists, retention assignment. Every tool runs the existing admin routes in-process as the token's admin (same role, management scope, redaction and validation as the admin panel); no deletion of mailboxes or domains, no passwords or keys in results.
+- Admin API `GET/PUT /api/v1/admin/mcp/settings`, `GET/POST /api/v1/admin/mcp/tokens`, `DELETE /api/v1/admin/mcp/tokens/:id`; audit entries `mcp.tool.<name>`, `mcp.token.*`, `mcp.settings.update` (always written); limits `MCP_RATE_LIMIT_PER_MINUTE` (60), `MCP_MAX_BODY_KB` (64), `MCP_MAX_RESULT_KB` (256), `MCP_SESSION_IDLE_MINUTES` (30); Origin check (`MCP_ALLOWED_ORIGINS` for extra origins); unknown tokens count against the client IP in the shared login lockout.
+- Favicon from the logo: without an own favicon, a PNG logo becomes a square favicon (`/branding/favicons/<sha256>-64.png`) and an apple-touch icon (`…-180.png`); SVG and WebP logos are used as they are.
+
+### Changed
+
+- BCP → Branding regrouped: Identität (name, one logo upload), Farben, Webmail (default background), Anmeldeseite (background image, welcome text, footer links, "Powered by") and a collapsed "Erweitert" card for an own dark-mode logo and favicon. Image changes are part of the draft and apply with "Speichern"; a sticky action bar at the bottom holds Speichern, Änderungen verwerfen and Auf Standard zurücksetzen; the preview switches between webmail / login page and light / dark.
+- BCP → Protokolle & Dienste: the HTTPS card is titled "Veraltete TLS-Versionen 1.0/1.1" with its switch in the card header.
+- Wording only, no behaviour change: user-visible texts, documentation, the changelog and code comments no longer compare CoreMail with, or present it as modelled on, third-party groupware products. Protocol and specification names and protocol-required paths, headers and namespaces stay. Two accent colour presets are now "Blau" / "Lila" (stored values unchanged). `docs/outlook-caldav.md` is now `docs/desktop-caldav.md`.
+- README rewritten (what, who for, features, quick start minimal / maximal with Docker Compose and `docker run`, screenshots); the version history moved to `docs/version-history.md` / `docs/version-history.de.md`.
+
+### Upgrade notes
+
+- Minor release, no configuration change. Additive schema: table `mcp_tokens`, `ServerSettings.mcpEnabled` (default false), `ServerSettings.mcpAllowedIps` (default empty).
+- MCP sessions live in the gateway process; several replicas behind a load balancer need sticky routing for `/mcp`.
+- Helm chart 3.3.0.
+
+---
+
 ## [10.2.0] — 2026-11-20 — New webmail shell, search suggestions, message trace details
 
 ### Added

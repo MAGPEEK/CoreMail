@@ -7,9 +7,9 @@ description: >-
 type: application
 # Version of the chart itself (SemVer, independent of the app version).
 # 1.0.0: complete rewrite for the single coremail-app image (CoreMail 7.x).
-version: 3.2.0
+version: 3.3.0
 # Default image tag of magpeek/coremail-app.
-appVersion: "10.2.0"
+appVersion: "10.3.0"
 kubeVersion: ">=1.25.0-0"
 keywords:
   - mail
