@@ -14,7 +14,7 @@ export type SlotMinutes = typeof SLOT_MINUTES[number];
 
 /** Everything a command may do; interpreted by the page's dispatcher. */
 export type CalendarAction =
-  | 'new-event' | 'new-meeting' | 'new-allday' | 'new-mail' | 'today'
+  | 'new-event' | 'today'
   | `view:${CalendarViewId}`
   | 'filter' | 'share' | 'print' | 'agenda'
   | `slot:${SlotMinutes}`
@@ -92,12 +92,6 @@ export const CALENDAR_RIBBON: readonly RibbonTabDef[] = [
         id: 'new', label: 'Neues Ereignis', icon: 'Plus', group: 'Neu', action: 'new-event',
         enabled: always,
         tooltip: 'Neues Ereignis im Kalender anlegen',
-        options: () => [
-          { id: 'event', label: 'Ereignis', icon: 'CalendarPlus', action: 'new-event' },
-          { id: 'meeting', label: 'Besprechung', icon: 'Users', action: 'new-meeting' },
-          { id: 'allday', label: 'Ganztägiges Ereignis', icon: 'Sun', action: 'new-allday' },
-          { id: 'mail', label: 'E-Mail', icon: 'Mail', action: 'new-mail', separatorBefore: true },
-        ],
       },
       { id: 'today', label: 'Heute', icon: 'CalendarCheck', group: 'Gehe zu', action: 'today', enabled: always },
       ...VIEW_COMMANDS(),

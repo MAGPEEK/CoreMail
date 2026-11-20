@@ -64,7 +64,6 @@ export function CalendarPage() {
   // 9.4: Settings → Kalender (work week, week start, time grid)
   const calPrefs = usePreferences((s) => s.prefs.calendar);
   const updatePrefs = usePreferences((s) => s.update);
-  const openCompose = useUiStore((s) => s.openCompose);
   const setShortcutHelpOpen = useUiStore((s) => s.setShortcutHelpOpen);
   // 9.4: the grid shows wall-clock times of the chosen zone (Settings → Region)
   const regionalTimeZone = useRegional().timeZone;
@@ -275,10 +274,7 @@ export function CalendarPage() {
     if (parsed.kind === 'view') { changeView(parsed.view); return; }
     if (parsed.kind === 'slot') { updatePrefs({ calendar: { slotMinutes: parsed.minutes } }); return; }
     switch (parsed.action) {
-      // "Besprechung" opened the same form as "Ereignis" before (attendees are part of that form)
-      case 'new-event': case 'new-meeting': setEventDialog({ mode: 'create', defaults: { calendarId: defaultWritableCalId } }); break;
-      case 'new-allday': setEventDialog({ mode: 'create', defaults: { calendarId: defaultWritableCalId, allDay: true } }); break;
-      case 'new-mail': openCompose({ mode: 'new' }); navigate('/mail'); break;
+      case 'new-event': setEventDialog({ mode: 'create', defaults: { calendarId: defaultWritableCalId } }); break;
       case 'today': handleSelectDate(new Date()); break;
       case 'share': shareCalendar(); break;
       case 'print': printCalendar(); break;

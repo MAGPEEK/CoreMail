@@ -14,11 +14,11 @@ test('tabs are Start, Ansicht, Hilfe with German labels', () => {
   assert.deepEqual(CALENDAR_RIBBON.map((t) => t.label), ['Start', 'Ansicht', 'Hilfe']);
 });
 
-test('Start offers the new-event split with all event kinds, then E-Mail', () => {
+test('Start offers a plain Neues Ereignis button without a menu', () => {
   const c = cmd(base, 'start', 'new')!;
+  assert.equal(c.label, 'Neues Ereignis');
   assert.equal(c.action, 'new-event');
-  assert.deepEqual(c.options!.map((o) => [o.label, o.action]), [['Ereignis', 'new-event'], ['Besprechung', 'new-meeting'], ['Ganztägiges Ereignis', 'new-allday'], ['E-Mail', 'new-mail']]);
-  assert.deepEqual(c.options!.filter((o) => o.separatorBefore).map((o) => o.id), ['mail'], 'separator only before E-Mail');
+  assert.equal(c.options, undefined);
 });
 
 test('the pressed view command follows the page view', () => {
