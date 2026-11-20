@@ -5,7 +5,8 @@
  * quoted original, which were flattened before). Pasting an image file inserts
  * it (raster images only, lib/composeRules.ts inlineImageProblem). 9.4 refine:
  * superscript / subscript and the text direction of a block; the placeholder
- * of the empty body is announced through aria-placeholder.
+ * of the empty body is announced through aria-placeholder. 10.2: Enter on the
+ * empty last paragraph of a table's last cell adds a row (compose/tableGrow.ts).
  */
 import { useRef } from 'react';
 import { useEditor } from '@tiptap/react';
@@ -25,6 +26,7 @@ import { TABLE_CELL_STYLE, TABLE_STYLE } from '../lib/composeFormat.js';
 import {
   FontSizeExt, InlineImageExt, QuoteMarkerExt, SignatureBlockExt, SubscriptExt, SuperscriptExt, TextDirectionExt,
 } from '../components/editorExtensions.js';
+import { TableEnterExt } from '../components/compose/tableGrow.js';
 
 /** Editor area classes (24 px sides, 15 px / 1.6, lines at most 72ch, see attributes below): headings, quotes (the quoted original without italics), lists, code, links. */
 export const COMPOSE_EDITOR_CLASS = [
@@ -70,6 +72,8 @@ export function useComposeEditor(o: { label: string; placeholder: string; onPast
       TableRow,
       TableHeader.configure({ HTMLAttributes: { style: TABLE_CELL_STYLE } }),
       TableCell.configure({ HTMLAttributes: { style: TABLE_CELL_STYLE } }),
+      // Tab in the last cell adds a row (Table itself), Enter on its empty last paragraph too
+      TableEnterExt,
       SuperscriptExt,
       SubscriptExt,
       TextDirectionExt,

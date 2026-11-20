@@ -154,10 +154,25 @@ one of their commands is in one of the bars below):
    Hochgestellt, Tiefgestellt, Durchgestrichen · Bild einfügen, Tabelle ›, Trennlinie · Absatzformat ›
    (Normal, Überschrift 1–3, Codeblock), Schriftart ›, Schriftgrad › · Rückgängig, Wiederholen,
    Formatierung löschen.
-   - **Tabelle ›**: Tabelle einfügen (3 × 3, first row a header row); with the cursor in a table also
-     Zeile oberhalb / unterhalb, Spalte links / rechts einfügen, Zeile / Spalte / Tabelle löschen
-     (`tableCommandsFor`). Tables carry inline styles (collapsed 1 px grid, cell padding) so other
-     mail clients show the grid; tables of a quoted original are kept (pre-9.4 they were flattened).
+   - **Tabelle ›**: Tabelle einfügen › opens a **size picker** (10.2, `TableSizePicker.tsx`): an
+     8 × 8 grid, hovering highlights the top-left rectangle and shows "Spalten × Zeilen" below, a click
+     inserts that size (first row a header row). Keyboard: one focus stop (`role="grid"`,
+     `aria-activedescendant` = the corner cell, labelled "Spalten: N, Zeilen: M"), arrows / Home / End /
+     PageUp / PageDown move the corner, Enter or Space inserts, Escape and ← in the first column go back
+     to the menu. With the cursor in a table also Zeile oberhalb / unterhalb, Spalte links / rechts
+     einfügen, Zeile / Spalte / Tabelle löschen (`tableCommandsFor`). Tables carry inline styles
+     (collapsed 1 px grid, cell padding) so other mail clients show the grid; tables of a quoted
+     original are kept (pre-9.4 they were flattened).
+   - **Growing a table** (10.2): round "+" handles (24 × 24 px hit area) centred on the right edge
+     (**Spalte hinzufügen**: a column after the last one) and the bottom edge (**Zeile hinzufügen**: a
+     row after the last one) of the table under the pointer or, while the editor has focus, the table
+     with the cursor; the new cells are empty and the cursor goes into the first new cell. They are a
+     React overlay next to the ProseMirror element (`TableGrowHandles.tsx`), never part of the
+     document, so the draft and the sent mail never contain them; mouse-down keeps the editor's
+     focus; hidden in plain-text format and for tables of a folded quote. Keyboard: Tab in the last
+     cell adds a row, Shift+Tab goes back (Tiptap's Table); Enter on the empty last paragraph of the
+     table's last cell drops that paragraph and adds a row (an empty cell keeps its only paragraph),
+     any other Enter stays a line break in the cell (`TableEnterExt`, `cellEnterAction`).
    - **Schriftart ›**: "Standardschrift" and three submenus — Lateinische Schriften (Arial …
      Verdana), Chinesisch/Japanisch/Koreanisch (Microsoft YaHei … Batang), Weitere Schriften
      (Leelawadee UI, Nirmala UI, Mangal, Nyala, Sylfaen); each name is shown in its own font. Every
@@ -202,6 +217,8 @@ state (`aria-pressed`, checkable menu entries).
 | ↑/↓, Enter/Tab, Esc | Recipient suggestions |
 | Backspace (empty recipient field) | Remove the last recipient |
 | Ctrl+B / I / U, Ctrl+Z / Y | Editor formatting / undo (Tiptap) |
+| Tab / Shift+Tab (in a table) | Next / previous cell; Tab in the last cell adds a row |
+| Enter (empty last paragraph of a table's last cell) | Adds a row, cursor in its first cell |
 
 Focus: opening puts the cursor into An (new mail, forward) or the body (reply); closing returns
 focus to the control that opened the compose, else to the message list.
@@ -225,6 +242,7 @@ Generated MIME (drafts, Sent copies, outgoing mail) uses CRLF line ends.
 | `components/compose/ComposePane.tsx` | The compose area (inline and window) |
 | `components/compose/ComposeCommandRow.tsx` | Header row of the card: Senden (split), icon buttons, "…", status, popout, Verwerfen |
 | `components/compose/ComposeFormatBar.tsx` | Formatting bar at the bottom of the card and its flyout |
+| `components/compose/TableSizePicker.tsx`, `TableGrowHandles.tsx`, `tableGrow.ts` | 10.2 table size picker, "+" handles at the table edge, grow / Enter-in-the-last-cell editor commands |
 | `components/compose/MessageOptionsDialog.tsx`, `AccessibilityDialog.tsx` | Nachrichtenoptionen, accessibility issues |
 | `components/compose/ComposeFields.tsx`, `RecipientField.tsx` | Von / An / Cc / Bcc / Betreff, pills + suggestions |
 | `components/compose/AttachmentChips.tsx`, `SchedulePopover.tsx`, `EmojiPopover.tsx`, `AnchoredPopover.tsx` | Pieces of the compose area |
@@ -245,6 +263,7 @@ Generated MIME (drafts, Sent copies, outgoing mail) uses CRLF line ends.
 | `lib/sensitivity.ts` | Sensitivity levels and the reader badge |
 | `lib/composePopout.ts` | Window URL, the message protocol between window and main window, the presence protocol |
 | `lib/composeFormat.ts` | Colours, paragraph styles, table styles and commands, emoji, date/time insert |
+| `lib/composeTable.ts` | 10.2 size picker maths, handle placement and hit test, edge-cell positions, the Enter-in-the-last-cell decision |
 | `lib/composeFonts.ts` | Font list by script with our CSS stacks, point sizes, defaults of new text |
 | `lib/importance.ts` | Importance levels and the reader badge |
 | `components/editorExtensions.ts` | Tiptap extensions of our own: font size, signature block, quote marker, superscript / subscript, text direction |
@@ -253,7 +272,8 @@ Tests (`node --test`): `lib/composeTabs.test.ts`, `lib/recipients.test.ts`,
 `lib/composeQuote.test.ts`, `lib/composeRules.test.ts`, `lib/composePopout.test.ts` (incl. presence and
 importance), `lib/composeFonts.test.ts`, `lib/mailHtmlCss.test.ts` (tables survive the sanitiser),
 `lib/errorTexts.test.ts`, `lib/composeToolbar.test.ts` (bars, flyout state, font steps, plain-text
-rules, sensitivity), `lib/composeA11y.test.ts`, `lib/nameCheck.test.ts`; server:
+rules, sensitivity), `lib/composeTable.test.ts` (size picker, handles, edge cells, Enter in the last
+cell), `lib/composeA11y.test.ts`, `lib/nameCheck.test.ts`; server:
 `storage/src/importance.test.ts`, `storage/src/sensitivity.test.ts`, `api-gateway/src/routes/drafts.test.ts`
 (importance, sensitivity, delivery receipt, bare envelope, CRLF), `api-gateway/src/routes/mailbox-mgmt.test.ts`
 (Sent copy headers), `smtp-server/src/handlers/delivery-reports.test.ts` (CRLF, importance and

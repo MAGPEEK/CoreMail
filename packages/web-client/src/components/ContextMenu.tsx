@@ -21,11 +21,17 @@ export interface ContextMenuItem {
   /** Tooltip (e.g. why the item is disabled) */
   title?: string;
   /** Full divider row or special render */
-  type?: 'divider' | 'color-grid';
+  type?: 'divider' | 'color-grid' | 'custom';
   /** Only for type='color-grid': colors array + pick handler + optionally the current selection */
   colors?: string[];
   current?: string;
   onPick?: (color: string) => void;
+  /**
+   * Only for type='custom' (10.2, e.g. the table size picker): own content inside the menu.
+   * Its focus target carries `data-menuitem` (autoFocus finds it); keys it does not stop
+   * (Escape, Tab, ArrowLeft) keep the menu's meaning. `close` closes the whole menu.
+   */
+  render?: (close: () => void) => ReactNode;
 }
 
 export interface ContextMenuProps {
@@ -130,6 +136,9 @@ export function ContextMenu({ x, y, items, onClose, autoFocus = false, onBack }:
       {items.map((item, i) => {
         if (item.type === 'divider') {
           return <div key={`d-${i}`} role="separator" className="my-1 border-t border-line" />;
+        }
+        if (item.type === 'custom') {
+          return <div key={`c-${i}`}>{item.render?.(onClose)}</div>;
         }
         if (item.type === 'color-grid' && item.colors) {
           return (
