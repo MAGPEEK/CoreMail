@@ -27,7 +27,7 @@ import { AuthShell } from '../components/AuthShell.js';
 import {
   wizardSteps, commitStep, nextStep, previousStep, isPreCommit, blockReason, tokenNeedsCheck, completeBody,
   defaultHostname, normalizeHost, showTokenFileHint, secretsFilePath, insecureConnection, downloadFilename,
-  SECRETS_DOWNLOAD_PATH, loadResume, saveResume, clearResume,
+  SECRETS_DOWNLOAD_PATH, loadResume, saveResume, clearResume, INITIAL_FORM, isLocalDomain,
   type BlockReason, type SetupStatus, type WizardForm, type WizardStepId,
 } from '../lib/setupWizard.js';
 import { Alert, Field, INPUT_CLASS, PasswordMeter, STEP_LABEL, WizardProgress } from '../components/setup/WizardParts.js';
@@ -47,11 +47,6 @@ const REASON_TEXT: Record<BlockReason, TranslationKey> = {
 const REASON_FIELD: Record<BlockReason, string> = {
   token: 'wiz-token', domain: 'wiz-domain', hostname: 'wiz-hostname', organization: 'wiz-org',
   localPart: 'wiz-local', passwordLength: 'wiz-password', passwordMismatch: 'wiz-confirm', secrets: 'wiz-secrets-ok',
-};
-
-const EMPTY_FORM: WizardForm = {
-  tokenRequired: true, token: '', verifiedToken: null, domain: '', hostname: '', organizationName: '',
-  adminName: '', localPart: 'admin', password: '', confirm: '', secretsConfirmed: false,
 };
 
 const BUTTON_PRIMARY =
@@ -111,8 +106,12 @@ function DomainStep({ form, invalidField, onDomain, onHostname, onChange }: {
   onDomain: (v: string) => void; onHostname: (v: string) => void; onChange: (p: Partial<WizardForm>) => void;
 }) {
   const t = useT();
+  const { productName } = useBranding();
+  const localHost = isLocalDomain(form.hostname);
   return (
     <div className="space-y-4">
+      {/* 10.5: local domain first — the real domain is added later in the BCP */}
+      <Alert tone="info">{fmt(t('wiz_domain_local_first'), { name: productName })}</Alert>
       <p className="text-sm text-fg-muted">{t('wiz_domain_intro')}</p>
       <Field id="wiz-domain" label={t('wiz_domain_label')} hint={t('wiz_domain_hint')}>
         <input
@@ -122,7 +121,7 @@ function DomainStep({ form, invalidField, onDomain, onHostname, onChange }: {
           onChange={(e) => onDomain(e.target.value)} className={INPUT_CLASS}
         />
       </Field>
-      <Field id="wiz-hostname" label={t('wiz_hostname_label')} hint={t('wiz_hostname_hint')}>
+      <Field id="wiz-hostname" label={t('wiz_hostname_label')} hint={t(localHost ? 'wiz_hostname_hint_local' : 'wiz_hostname_hint')}>
         <input
           id="wiz-hostname" type="text" inputMode="url" autoComplete="off" spellCheck={false} required
           value={form.hostname}
@@ -169,6 +168,8 @@ function AdminStep({ form, invalidField, onChange }: {
           </span>
         </div>
       </Field>
+      {/* 10.5: mail from outside cannot reach a .local (private) address */}
+      {isLocalDomain(domain) && <Alert tone="info">{fmt(t('wiz_admin_local_hint'), { domain })}</Alert>}
       <Field id="wiz-password" label={t('wiz_password')} hint={t('wiz_password_hint')}>
         <input
           id="wiz-password" type="password" autoComplete="new-password" required value={form.password}
@@ -333,7 +334,7 @@ export function SetupPage() {
   const [withSecrets, setWithSecrets] = useState(false);
   const [step, setStep] = useState<WizardStepId>('welcome');
   const [committed, setCommitted] = useState(false);
-  const [form, setForm] = useState<WizardForm>(EMPTY_FORM);
+  const [form, setForm] = useState<WizardForm>(INITIAL_FORM);
   const [hostnameEdited, setHostnameEdited] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);

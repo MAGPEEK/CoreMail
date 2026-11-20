@@ -13,6 +13,7 @@
  */
 import { prisma } from '@coremail/storage';
 import { createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
+import { isLocalHostname } from './local-hostname.js';
 
 const log = createLogger('server-urls');
 
@@ -110,7 +111,7 @@ export async function syncServerUrlsFromHostname(): Promise<boolean> {
   log.info({ publicHostname: s.publicHostname, ...derived }, 'Server URLs re-derived from publicHostname');
 
   // Cache invalidation for autodiscover + other services
-  await getRedisClient()
+  await redisClient()
     .publish(CHANNEL_SETTINGS_RELOAD, JSON.stringify({ type: 'urls' }))
     .catch(() => undefined);
 
@@ -118,11 +119,44 @@ export async function syncServerUrlsFromHostname(): Promise<boolean> {
 }
 
 /**
+ * The new `publicHostname` for a (new) primary domain, or null to keep the
+ * current one (pure).
+ *
+ *   - empty / schema default (`mail.local`)            → `mail.<domain>`
+ *   - 10.5: a local / private name (the setup wizard's
+ *     `mail.example.local`, lib/local-hostname.ts) while
+ *     the new primary domain is a public one             → `mail.<domain>`
+ *   - `force`                                           → `mail.<domain>`
+ *   - otherwise (an explicitly configured public name,
+ *     or a local name for another local domain)         → keep
+ */
+export function primaryDomainHostname(current: string | null | undefined, primaryDomain: string, force = false): string | null {
+  const host = (current ?? '').trim().toLowerCase();
+  const domain = primaryDomain.trim().toLowerCase();
+  const isDefault = !host || host === 'mail.local';
+  const localPlaceholder = isLocalHostname(host) && !isLocalHostname(domain);
+  if (!isDefault && !localPlaceholder && !force) return null;
+  const next = `mail.${domain}`;
+  return next === host ? null : next;
+}
+
+/** Redis for the reload notification (test seam: globalThis.__serverUrlsRedis). */
+function redisClient(): Pick<ReturnType<typeof getRedisClient>, 'publish'> {
+  return (globalThis as { __serverUrlsRedis?: Pick<ReturnType<typeof getRedisClient>, 'publish'> }).__serverUrlsRedis ?? getRedisClient();
+}
+
+/**
  * Called when creating / changing the primary domain. Sets `publicHostname`
- * to `mail.<primary-domain>` if it is still empty or the default, and
- * derives all URLs from it. Respects an already explicitly set
- * configuration (no overwrite if the admin has already configured a
- * different hostname).
+ * to `mail.<primary-domain>` if it is still empty or the default — or, 10.5,
+ * the local placeholder of the setup wizard (`mail.example.local`) while the
+ * new primary domain is public — and derives all URLs from it. Respects an
+ * already explicitly set configuration (no overwrite if the admin has
+ * already configured a different public hostname).
+ *
+ * 10.5: replacing a local placeholder also clears "Später" of the dashboard
+ * certificate card (ServerSettings.setupCertificateHintDismissedAt), so the
+ * card offers Let's Encrypt for the new host name even when the "add your
+ * domain" hint was dismissed before.
  *
  * @param primaryDomain the domain that just became primary (e.g. "example.com")
  * @param force         if true, also overwrites an already set publicHostname
@@ -134,16 +168,15 @@ export async function syncFromPrimaryDomain(primaryDomain: string, force = false
   });
   if (!s) return;
 
-  const isDefault = !s.publicHostname || s.publicHostname === 'mail.local' || s.publicHostname === '';
-  if (!isDefault && !force) {
+  const newHostname = primaryDomainHostname(s.publicHostname, primaryDomain, force);
+  if (!newHostname) {
     log.debug({ publicHostname: s.publicHostname, primaryDomain }, 'publicHostname already set — no auto-update');
     // Still sync URLs in case someone changed publicHostname without deriving the URLs
     await syncServerUrlsFromHostname();
     return;
   }
 
-  // Default hostname for the domain is `mail.<domain>` (convention)
-  const newHostname = `mail.${primaryDomain}`;
+  const replacedLocal = isLocalHostname(s.publicHostname) && s.publicHostname !== 'mail.local';
   const derived = deriveServerUrls(newHostname, s.useHttps, s.httpPort);
 
   await prisma.serverSettings.update({
@@ -151,11 +184,12 @@ export async function syncFromPrimaryDomain(primaryDomain: string, force = false
     data: {
       publicHostname: newHostname,
       ...derived,
+      ...(replacedLocal ? { setupCertificateHintDismissedAt: null } : {}),
     },
   });
-  log.info({ newHostname, primaryDomain, derived }, 'publicHostname + URLs derived from first/new primary domain');
+  log.info({ newHostname, previous: s.publicHostname, primaryDomain, derived }, 'publicHostname + URLs derived from first/new primary domain');
 
-  await getRedisClient()
+  await redisClient()
     .publish(CHANNEL_SETTINGS_RELOAD, JSON.stringify({ type: 'hostname' }))
     .catch(() => undefined);
 }

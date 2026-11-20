@@ -5,6 +5,7 @@ import {
   createLogger, hashPassword, getRedisClient, CHANNEL_SETTINGS_RELOAD, HttpError,
 } from '@coremail/core';
 import { createSelfSignedPem, selfSignedHostnameFor } from '../lib/protocol-cert-assign.js';
+import { publishTlsReload } from '../lib/cert-acme.js';
 import { isSetupRequired, verifySetupToken } from '../lib/setup-token.js';
 import { removeSetupTokenFile, secretsStatus } from '../lib/setup-secrets.js';
 import { deriveServerUrls } from '../lib/server-urls.js';
@@ -65,6 +66,11 @@ const HOSTNAME_RE = /^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a
 // `X-Setup-Token`) and succeeds at most once (atomic claim).
 // 10.4: optional `hostname` (public host name, default mail.<domain>),
 // `organizationName` (ServerSettings.orgName) and `displayName` (admin).
+// 10.5: the wizard suggests a local domain (example.local, mail.example.local);
+// private names (.local, .lan, .internal, .home.arpa, .test, .localdomain) pass
+// the same rules as public ones. Nothing here needs public DNS: the domain gets
+// its DKIM key, the host name a self-signed certificate; the real domain is
+// added later in the BCP and made primary (docs/setup-wizard.md).
 const SetupSchema = z.object({
   domain:    z.string().trim().toLowerCase().pipe(
     z.string().min(3).regex(/^[a-z0-9.-]+\.[a-z]{2,}$/, 'Ungültige Domain (z.B. firma.de)')),
@@ -216,6 +222,9 @@ setupRouter.post('/complete', async (req: Request, res: Response) => {
     // instead of mail.localhost — clients at least see the right name). The
     // admin assigns a real (LE/uploaded) cert later in BCP → SSL/TLS; a Let's
     // Encrypt certificate for the public host name takes over automatically.
+    // 10.5: the same for a local host name (mail.example.local): SMTP/IMAP/POP3
+    // use it at once, the HTTPS server serves it for that name (SNI exact
+    // match) after the TLS reload below.
     try {
       const SELF_SIGNED_HOSTNAME = selfSignedHostnameFor(hostname);
 
@@ -252,6 +261,9 @@ setupRouter.post('/complete', async (req: Request, res: Response) => {
 
       // Notify protocol servers to reload TLS
       void getRedisClient().publish(CHANNEL_SETTINGS_RELOAD, '').catch(() => {});
+      // 10.5: and the HTTPS server (tls-proxy.ts) — it still serves what it
+      // loaded at start (e.g. the self-signed default deleted above)
+      void publishTlsReload();
 
       log.info({ hostname: SELF_SIGNED_HOSTNAME }, 'Self-signed certificate created and activated for SMTP/IMAP/POP3');
     } catch (certErr) {

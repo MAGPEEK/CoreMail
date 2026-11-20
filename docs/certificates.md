@@ -83,8 +83,16 @@ shows the card while **no trusted certificate covers the public host name** — 
 certificate the integrated HTTPS server serves for that name (`servedProxyCert`, SNI exact →
 wildcard → default) and `isTrustedHttpsCert` (CA-issued, not staging, currently valid, covers
 the name); shared helper `packages/api-gateway/src/lib/served-https-cert.ts`. It is shown only to
-roles that may manage certificates (area `servers`, write) and only for a real public host name
-(not `mail.local` / loopback names).
+roles that may manage certificates (area `servers`, write) and only for a configured host name
+(not the schema defaults `mail.local` / `mail.localhost` / `localhost`).
+
+10.5: for a **local / private host name** (`mail.example.local` from the setup wizard, `.lan`,
+`.internal`, `.home.arpa`, `.test`, `.localdomain`, `.localhost`, single labels, bare IPs —
+`lib/local-hostname.ts`) the card has no Let's Encrypt button: it is **„Eigene Domain
+hinzufügen“** with three steps (Domain anlegen → als primär festlegen → Zertifikat anfordern) and a
+link to **Domains**. `GET /admin/setup-state` then answers `publicHostname: null` (nothing a public
+CA issues for) and `hostname: "<local name>"`. Making a public domain primary replaces the local
+host name and clears "Später" ([setup-wizard.md](setup-wizard.md#local-domain-first-105)).
 
 - One button, **„Let's-Encrypt-Zertifikat für &lt;host&gt; anfordern“**, runs the order form's
   flow (`packages/admin-panel/src/lib/certificateCard.ts`): `acme-suggestions` (the public host
