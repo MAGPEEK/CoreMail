@@ -6,6 +6,7 @@ Highlights of each CoreMail release, newest first. Every change is listed in the
 
 ## Recent releases
 
+- **v10.4.1** — No init container: the main container prepares secrets and configuration itself; the other containers wait for their files ([release notes](releases/v10.4.1.md)).
 - **v10.4.0** — Setup assistant: three-command deployment from a single Compose file, secrets generated automatically, a guided setup wizard (domain, administrator, backup of secrets, DNS, certificate) and Compose files without required parameters ([release notes](releases/v10.4.0.md)).
 - **v10.3.0** — An admin MCP interface (off by default, personal read/write tokens with the admin's own rights), a regrouped branding page with one logo upload and a favicon made from it, neutral wording throughout, and a shorter README ([release notes](releases/v10.3.0.md)).
 - **v10.2.0** — A new webmail shell (one simplified toolbar, floating panes, background pictures, favourites, date groups, mail templates), search suggestions from the whole mailbox, growing tables in mail, calendar events drawn by "show as", retention policy fixes and message trace details in the BCP ([release notes](releases/v10.2.0.md))
@@ -33,6 +34,7 @@ Highlights of each CoreMail release, newest first. Every change is listed in the
 
 | Version | Highlights |
 |---------|-----------|
+| **v10.4.1** | **No init container.** The coremail container creates ./secrets and the bundled configuration on its first start; PostgreSQL, Redis and optional services wait for their files. Update with --remove-orphans — [release notes](releases/v10.4.1.md) |
 | **v10.4.0** | **Setup assistant.** Three commands to deploy (download one Compose file, `docker compose up -d`), secrets generated into `./secrets`, setup token in a file, guided setup wizard with DNS check and certificate, every Compose variant without , Helm chart generates missing secrets — [release notes](releases/v10.4.0.md) |
 | **v10.3.0** | **Admin MCP interface and branding page.** `/mcp` for MCP clients (switch under Infrastruktur, off by default; personal tokens read or read/write, same role and domain scope as the admin panel, every call audited), branding page with one logo upload, favicon generated from the logo and one save bar, legacy TLS card renamed, neutral wording in texts and docs — [release notes](releases/v10.3.0.md) |
 | **v10.2.0** | **New webmail shell.** One simplified toolbar for mail, calendar and contacts, floating panes over optional background pictures, favourites and date groups, mail templates, search suggestions from the whole mailbox (trigram index), table size picker and "+" handles to grow tables, calendar events drawn by "show as" (out of office purple), scheduling assistant removed, retention policy fixes, message trace detail panel (processing steps, MX route, hops) — [release notes](releases/v10.2.0.md) |

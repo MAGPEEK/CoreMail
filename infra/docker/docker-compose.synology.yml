@@ -1,7 +1,7 @@
 name: coremail
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CoreMail 10.4.0 — Synology NAS / Container Manager
+# CoreMail 10.4.1 — Synology NAS / Container Manager
 #
 # Setup via SSH:
 #   NAS_HOSTNAME=192.168.1.100 bash scripts/synology-setup.sh
@@ -9,7 +9,7 @@ name: coremail
 # Secrets (docs/setup.md "Automatic secrets"): the coremail container writes
 # every secret that .env does not set into /volume1/docker/coremail/secrets/
 # (COREMAIL_SECRETS_PATH) at its start; the other containers wait for their
-# password file — a .env always wins. Updating from 10.4.0:
+# password file — a .env always wins. Updating from 10.4.1:
 # `docker compose up -d --remove-orphans` removes its coremail-init container.
 # Setup token: /volume1/docker/coremail/secrets/setup-token, wizard at
 # http://<nas>:8080/setup. Back up that directory (Hyper Backup).
@@ -32,7 +32,7 @@ services:
   # ── CoreMail main application ───────────────────────────────────────────────
 
   coremail:
-    image: magpeek/coremail-app:10.4.0
+    image: magpeek/coremail-app:10.4.1
     container_name: coremail
     restart: unless-stopped
     environment:

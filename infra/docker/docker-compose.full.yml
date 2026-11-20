@@ -1,7 +1,7 @@
 name: coremail
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  CoreMail 10.4.0 — Docker Compose, variant MAXIMAL ("full")
+#  CoreMail 10.4.1 — Docker Compose, variant MAXIMAL ("full")
 #
 #  Variants (docs/docker-compose.md has the comparison table):
 #    docker-compose.minimal.yml   MINIMAL   coremail + postgres + redis
@@ -33,7 +33,7 @@ name: coremail
 #  database/Redis/MinIO/rspamd passwords, …) into ./secrets/ next to this file
 #  at its start; the other containers wait for their password file — BACK IT UP
 #  off the server. A .env (bash scripts/setup.sh --variant full) stays optional
-#  and always wins. Updating from 10.4.0: `up -d --remove-orphans` removes its
+#  and always wins. Updating from 10.4.1: `up -d --remove-orphans` removes its
 #  coremail-init container. OBJECT_STORAGE defaults to filesystem (minio | s3 in .env).
 #  Profile geoip needs GEOIPUPDATE_ACCOUNT_ID + GEOIPUPDATE_LICENSE_KEY in .env.
 # ═════════════════════════════════════════════════════════════════════════════
@@ -51,7 +51,7 @@ services:
   #  REST API, webmail, admin panel, admin CLI `coremail`)
   # ───────────────────────────────────────────────────────────────────────────
   coremail:
-    image: magpeek/coremail-app:${COREMAIL_VERSION:-10.4.0}
+    image: magpeek/coremail-app:${COREMAIL_VERSION:-10.4.1}
     container_name: coremail
     restart: unless-stopped
     environment:

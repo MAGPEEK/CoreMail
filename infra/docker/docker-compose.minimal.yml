@@ -1,7 +1,7 @@
 name: coremail
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  CoreMail 10.4.0 — Docker Compose, variant MINIMAL
+#  CoreMail 10.4.1 — Docker Compose, variant MINIMAL
 #
 #  Variants (docs/docker-compose.md has the comparison table):
 #    docker-compose.minimal.yml   MINIMAL   ← this file: coremail + postgres + redis
@@ -31,13 +31,13 @@ name: coremail
 #  file (infra/docker/secrets/) at its start — BACK IT UP off the server;
 #  postgres and redis wait for their password file. A .env (bash
 #  scripts/setup.sh --variant minimal) stays optional and always wins.
-#  Updating from 10.4.0: `up -d --remove-orphans` removes its coremail-init container.
+#  Updating from 10.4.1: `up -d --remove-orphans` removes its coremail-init container.
 # ═════════════════════════════════════════════════════════════════════════════
 
 services:
 
   coremail:
-    image: magpeek/coremail-app:${COREMAIL_VERSION:-10.4.0}
+    image: magpeek/coremail-app:${COREMAIL_VERSION:-10.4.1}
     container_name: coremail
     restart: unless-stopped
     environment:

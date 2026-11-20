@@ -5,7 +5,7 @@
 <h1 align="center">CoreMail</h1>
 
 <p align="center">
-  <a href="https://github.com/MAGPEEK/CoreMail/releases"><img src="https://img.shields.io/badge/version-10.4.0-brightgreen.svg" alt="Version 10.4.0"></a>
+  <a href="https://github.com/MAGPEEK/CoreMail/releases"><img src="https://img.shields.io/badge/version-10.4.1-brightgreen.svg" alt="Version 10.4.1"></a>
   <a href="https://hub.docker.com/r/magpeek/coremail-app"><img src="https://img.shields.io/docker/pulls/magpeek/coremail-app.svg" alt="Docker Pulls"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="Lizenz: MIT"></a>
 </p>
@@ -110,7 +110,7 @@ Alles zu dieser Datei — Ports, DNS, Sicherung, eigene Einstellungen, Deinstall
 docker compose pull && docker compose up -d --remove-orphans
 ```
 
-`--remove-orphans` entfernt den gestoppten `coremail-init`-Container, den eine 10.4.0-Installation noch hat (neuere Releases brauchen keinen Init-Container). Die Compose-Datei nennt das Image ihres Releases; für ein neues Release lädst du zuerst die neue Datei ([docs/deploy.md → Update](docs/deploy.md#update)). Mit einer anderen Compose-Variante nimmst du deren Datei (`docker compose -f infra/docker/docker-compose.yml pull && docker compose -f infra/docker/docker-compose.yml up -d --remove-orphans`). Das Datenbankschema wird beim Start aktualisiert.
+`--remove-orphans` entfernt den gestoppten `coremail-init`-Container, den eine 10.4.1-Installation noch hat (neuere Releases brauchen keinen Init-Container). Die Compose-Datei nennt das Image ihres Releases; für ein neues Release lädst du zuerst die neue Datei ([docs/deploy.md → Update](docs/deploy.md#update)). Mit einer anderen Compose-Variante nimmst du deren Datei (`docker compose -f infra/docker/docker-compose.yml pull && docker compose -f infra/docker/docker-compose.yml up -d --remove-orphans`). Das Datenbankschema wird beim Start aktualisiert.
 
 Upgrade von einer älteren Version: lies vorher die [Versionshistorie](docs/version-history.de.md) und die [Release-Notes](docs/releases/).
 

@@ -5,7 +5,7 @@
 <h1 align="center">CoreMail</h1>
 
 <p align="center">
-  <a href="https://github.com/MAGPEEK/CoreMail/releases"><img src="https://img.shields.io/badge/version-10.4.0-brightgreen.svg" alt="Version 10.4.0"></a>
+  <a href="https://github.com/MAGPEEK/CoreMail/releases"><img src="https://img.shields.io/badge/version-10.4.1-brightgreen.svg" alt="Version 10.4.1"></a>
   <a href="https://hub.docker.com/r/magpeek/coremail-app"><img src="https://img.shields.io/docker/pulls/magpeek/coremail-app.svg" alt="Docker pulls"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
 </p>
@@ -110,7 +110,7 @@ Everything about this file — ports, DNS, backups, overrides, uninstall: [docs/
 docker compose pull && docker compose up -d --remove-orphans
 ```
 
-`--remove-orphans` removes the stopped `coremail-init` container a 10.4.0 installation still has (newer releases need no init container). The Compose file names the image of its release; for a new release download the new file first ([docs/deploy.md → Update](docs/deploy.md#update)). With another Compose variant use its file (`docker compose -f infra/docker/docker-compose.yml pull && docker compose -f infra/docker/docker-compose.yml up -d --remove-orphans`). The database schema is updated at start.
+`--remove-orphans` removes the stopped `coremail-init` container a 10.4.1 installation still has (newer releases need no init container). The Compose file names the image of its release; for a new release download the new file first ([docs/deploy.md → Update](docs/deploy.md#update)). With another Compose variant use its file (`docker compose -f infra/docker/docker-compose.yml pull && docker compose -f infra/docker/docker-compose.yml up -d --remove-orphans`). The database schema is updated at start.
 
 Upgrading from an older version: read the [version history](docs/version-history.md) and the [release notes](docs/releases/) first.
 

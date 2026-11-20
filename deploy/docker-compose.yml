@@ -1,7 +1,7 @@
 name: coremail
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  CoreMail 10.4.0 — Docker Compose, standalone deployment file
+#  CoreMail 10.4.1 — Docker Compose, standalone deployment file
 #
 #  This one file is all a server needs — no repository checkout, no .env:
 #
@@ -35,7 +35,7 @@ name: coremail
 #  Files in ./config/rspamd/local.d/ win over the bundled rspamd files.
 #
 #  Update:  docker compose pull && docker compose up -d --remove-orphans
-#  (--remove-orphans removes the coremail-init container of 10.4.0 once)
+#  (--remove-orphans removes the coremail-init container of 10.4.1 once)
 #  Requires Docker Engine 24+ with Compose v2.20+.
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -60,7 +60,7 @@ services:
   #  then waits for PostgreSQL and Redis and starts the services.
   # ───────────────────────────────────────────────────────────────────────────
   coremail:
-    image: magpeek/coremail-app:${COREMAIL_VERSION:-10.4.0}
+    image: magpeek/coremail-app:${COREMAIL_VERSION:-10.4.1}
     container_name: coremail
     restart: unless-stopped
     environment:

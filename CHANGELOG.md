@@ -13,6 +13,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [10.4.1] — 2026-11-20 — No init container: the coremail container prepares the stack
+
+### Changed
+
+- **The one-shot service `coremail-init` is gone from every Compose file** (standalone `deploy/docker-compose.yml`, `infra/docker/docker-compose.yml`, minimal, full, Synology, e2e overlays). The `coremail` container prepares the stack at the start of its entrypoint on every start: it creates or extends `./secrets/` (`.env` values still win, nothing is overwritten) and, in the standalone file, refreshes the bundled configuration volumes with a `.ready` marker.
+- **PostgreSQL, Redis, MinIO, rspamd and pg-backup wait for their files**: a small wrapper waits until the password file (and on an empty PostgreSQL data directory the configuration marker) exists, at most 10 minutes, then runs the image's own entrypoint unchanged. A password set in `.env` needs no file.
+- `coremail` depends on the other services with `service_started` only; its entrypoint waits for PostgreSQL and Redis itself.
+- `coremail-init-secrets` and `coremail-init-config` stay in the image for plain `docker run` setups; `scripts/release-assets.sh` refuses a standalone file with an init service.
+
+### Upgrade notes
+
+- From 10.4.0: download the new Compose file, then `docker compose pull && docker compose up -d --remove-orphans` — `--remove-orphans` removes the old `coremail-init` container once. Secrets and data stay unchanged.
+- When release notes mention a configuration change, run `docker compose restart rspamd pg-backup` after the update (they may start before `coremail` refreshes their configuration).
+
+---
+
 ## [10.4.0] — 2026-11-20 — Setup assistant: automatic secrets, guided setup, three-command deployment
 
 ### Added
