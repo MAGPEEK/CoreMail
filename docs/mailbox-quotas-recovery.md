@@ -65,7 +65,9 @@ emptying Trash/Junk and `DELETE /mail/messages/:id?hard=true` in the web client.
 Tombstones are recoverable for `DELETED_ITEM_RETENTION_DAYS` (default 30 — the
 window 8.0 documented, and Exchange's maximum; `0` keeps them until purged by
 hand). Items the Managed Folder Assistant moved
-to "Recoverable Items/Deletions" are listed and restorable too.
+to "Recoverable Items/Deletions" are listed and restorable too; the assistant
+removes them after the same `DELETED_ITEM_RETENTION_DAYS`, counted from the move
+(10.2 — before, after 14 days, while the list showed 30).
 
 - `GET /api/v1/mail/recoverable[?q=&limit=]`
 - `POST /api/v1/mail/recoverable/restore {ids, folderId?}` — back into the folder
