@@ -13,6 +13,49 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [10.2.0] — 2026-11-20 — Outlook-style webmail shell, search suggestions, message trace details
+
+### Added
+
+- Webmail: floating panes — ribbon, message list, reading pane / compose card, calendar and contacts are rounded cards on a canvas; the folder pane and the calendar list sit on the canvas. Below 768 px the single-pane flow stays full width.
+- Webmail: background pictures (Einstellungen → Darstellung → Hintergrund): none, eight built-in pictures (light and dark variants) or an own upload (JPEG / PNG up to 5 MB, re-encoded by the server, metadata removed). API `GET/PUT/DELETE /api/v1/user/background`, `GET /api/v1/user/background/info`; BCP → Branding "Standard-Hintergrund" (`defaultBackground`).
+- Webmail: one shared ribbon (Start / Ansicht / Hilfe) for mail, calendar and contacts with a collapse chevron (roaming `ribbon.collapsed`); contextual tabs Nachricht / Einfügen / Text formatieren / Optionen while a draft is shown; "Neue E-Mail" split: E-Mail, E-Mail aus Vorlage, Ereignis; "Über CoreMail" in Hilfe.
+- Webmail: message list date groups (Heute, Gestern, Diese Woche, Letzte Woche, Dieser Monat, Älter); folder favourites (roaming `folders.favorites`); the own mailbox section is headed by the user's address.
+- Personal mail templates: REST `GET/POST /api/v1/mail/templates`, `GET/PUT/DELETE /api/v1/mail/templates/:id` (own templates only, at most 200, body up to 256 KB); webmail picker "E-Mail aus Vorlage", "Vorlagen verwalten", compose "Vorlage einfügen …" / "Als Vorlage speichern …", Settings → Vorlagen. New table `mail_templates`.
+- Search suggestions from the whole mailbox while typing: `GET /api/v1/mail/search/suggest?q=` (also for shared / delegated mailboxes, same folder access as their search; 120 requests / 60 s per user) — up to 4 people and 6 messages, never bodies. Both webmail search fields show Personen (search the whole mailbox for `from:<address>`), Nachrichten (open the message) and Letzte Suchen; keyboard operable.
+- Trigram index `messages_search_trgm_idx` (PostgreSQL `pg_trgm`, GIN over subject, sender name and address), maintained by PostgreSQL on every write; it also serves `/mail/search`. schema-sync applies the schema without the index (with a warning and the `CREATE EXTENSION` command) when the database cannot provide the extension.
+- Webmail compose: table size picker (8 × 8 grid) and "+" handles on the right and bottom edge to add a column / row; Enter on the empty last paragraph of the last cell adds a row.
+- BCP "Nachrichtenablaufverfolgung": detail panel with Übersicht, Verarbeitung auf CoreMail (recorded stages: connection, TLS, DNSBL, greylisting, SPF / DKIM / DMARC / ARC, sender lists, attachment filter, ClamAV, rspamd, rules, delivery; outbound: queue, DKIM, MX records as resolved, connected host and IP, remote reply, retries, DSN) and Zustellweg (Received chain of the stored original). Admin API `GET /api/v1/admin/message-trace/:id` (area compliance; out-of-scope ids answer 404, other domains redacted). The trace lives in the existing `SystemLog.metadata` (`trace`), bounded, without message content; security-filter `/check/content` returns an additive `checks` summary.
+
+### Changed
+
+- Webmail calendar: events are drawn by "Anzeigen als" — Gebucht solid, Mit Vorbehalt striped, Frei outlined, Abwesend always purple with a dashed border; the day agenda follows; printing stays black on white.
+- Webmail calendar and contacts re-laid out (navigation row with date picker, collapsible calendar groups, contacts ribbon and sidebar with categories and the global address list). "Neues Ereignis" is a plain button that opens the event form.
+- Webmail: unread messages get an accent bar; compose opens with a short slide; "Design" is now "Darstellung"; folder-pane section headers use the folder font size; "Gelöschte Elemente" in Settings is aligned with the other entries.
+- Webmail: no manual refresh button above the favourites (mail arrives live via realtime push, plus the 15-minute safety refetch).
+
+### Removed
+
+- Webmail: the calendar scheduling assistant ("Terminplanungs-Assistent") and its "Verfügbarkeit prüfen" link. `POST /api/v1/calendar/freebusy` and `/schedule-suggestions` stay.
+- Webmail: the "Klassisch" ribbon layout (only the simplified ribbon exists).
+
+### Fixed
+
+- BCP "Protokolle und Dienste": no "HTTPS ist nicht aktiv" / `mapi-https` warning while the integrated HTTPS server listens and serves a trusted certificate for the public host name without one explicitly marked for HTTPS; the SSL/TLS served-certificate view probes HTTPS in that case too. The HTTP → HTTPS redirect still needs an explicitly marked certificate.
+- Retention (Managed Folder Assistant): soft-deleted items stay recoverable for `DELETED_ITEM_RETENTION_DAYS` (default 30; were removed after 14 days); several policies on one mailbox resolve user → domain → all mailboxes, then the longest period; legacy policies without tags keep their scope; subfolders inherit their parent's tag (a subfolder named "Spam" is no Junk folder); "In Archiv verschieben" keeps archive subfolders; "Nur markieren" no longer rewrites every item each run; personal tags apply without a policy; global / domain policies reach shared mailboxes; permanent deletes go through the message store (quota no longer reduced twice); counters refreshed, failures isolated per mailbox, paging for large folders.
+
+### Security
+
+- Profile photo and background uploads are decoded in worker threads (at most two at a time per process) under a 160 MB decoder cap.
+
+### Upgrade notes
+
+- Minor release, no configuration change. Additive schema (`mail_templates`, `User.backgroundKey` / `backgroundUpdatedAt`, `Branding.defaultBackground`, the trigram index). Building the index blocks writes to `messages` once at start (≈ 11 µs per message).
+- Retention: the first run after the update can remove mail the old run left alone — expired items in shared mailboxes under a global or domain policy, in folders with a personal tag of users without a policy, and in subfolders of default folders with a retention tag. Review the policies before upgrading.
+- Helm chart 3.2.0.
+
+---
+
 ## [10.1.0] — 2026-11-19 — New compose area
 
 ## Changed

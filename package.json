@@ -1,6 +1,6 @@
 {
   "name": "coremail",
-  "version": "10.1.0",
+  "version": "10.2.0",
   "private": true,
   "packageManager": "pnpm@11.28.9",
   "description": "CoreMail — Open-Source Exchange 2019 Alternative",
