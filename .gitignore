@@ -32,3 +32,6 @@ packages/storage/prisma/migrations/*.sql
 # Logs
 *.log
 logs/
+
+# Local assistant notes — never published
+CLAUDE.md
