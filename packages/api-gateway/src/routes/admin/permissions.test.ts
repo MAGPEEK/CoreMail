@@ -187,6 +187,8 @@ const MOUNT_AREAS: Record<string, { area: AdminArea | null; get: string; write?:
   '/organisation':         { area: 'organisation', get: '/gal' },
   '/security':             { area: 'hygiene',      get: '/settings', write: ['PUT', '/settings'] },
   '/security/attacks':     { area: 'hygiene',      get: '/summary' },
+  // 10.5: attack protection (locks, block list / exceptions, settings)
+  '/security/protection':  { area: 'hygiene',      get: '/rules', write: ['PUT', '/settings'] },
   '/smtp-config':          { area: 'servers',      get: '/settings', write: ['PUT', '/settings'] },
   '/ldap':                 { area: 'identity',     get: '/' },
   '/sso':                  { area: 'identity',     get: '/providers' },

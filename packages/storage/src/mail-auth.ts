@@ -22,6 +22,13 @@
  *   MAIL_AUTH_EXEMPT_CIDRS — comma-separated IPs/CIDRs exempt from the per-IP counter
  *     (default: none; loopback is always exempt). Since v8.1 private addresses are
  *     counted like public ones; MAIL_AUTH_LIMIT_PRIVATE_IPS is obsolete and ignored.
+ *     10.5: merged with the exceptions of BCP → Angriffsschutz (ip-access.ts, ALLOW rules).
+ *   MAIL_AUTH_KNOWN_CLIENT_DAYS (30) — 10.5: how long a successful login keeps its
+ *     network (/24, /56) and device "known" for the account; 0 disables the
+ *     known-client exception of the account lock.
+ *
+ * 10.5: every lockout event goes to handleLockoutEvent (attack-protection.ts):
+ * security events for the dashboard, admin notifications, repeat offenders.
  *
  * Test seam: `globalThis.__mailAuthRedis` (like `globalThis.__prisma`) or
  * configureMailAuth({ redis, verifyPassword, ... }).
@@ -35,9 +42,11 @@ import { isWebmailFeatureEnabled } from './webmail-policy.js';
 import { mailPrimaryPasswordBlocked } from './auth/mfa-enforcement.js';
 import {
   createLoginLockout, createMailCredentialVerifier, createExemptIpMatcher,
-  type LoginLockout, type MailAuthContext, type MailAuthDeps, type MailAuthLimits, type MailAuthPrisma,
+  type LockoutProtocol, type LoginLockout, type MailAuthContext, type MailAuthDeps, type MailAuthLimits, type MailAuthPrisma,
   type MailAuthRedis, type MailAuthResult, type MailCredentialVerifier, type MailProtocol,
 } from './mail-auth-core.js';
+import { enableIpAccessRuntime, isAllowListed } from './ip-access.js';
+import { handleLockoutEvent } from './attack-protection.js';
 
 export * from './mail-auth-core.js';
 
@@ -64,7 +73,19 @@ function limitsFromEnv(): Partial<MailAuthLimits> {
   set('accountMaxFailures', 'MAIL_AUTH_ACCOUNT_MAX_FAILURES');
   set('accountWindowSec', 'MAIL_AUTH_ACCOUNT_WINDOW_SEC');
   set('accountLockBaseSec', 'MAIL_AUTH_ACCOUNT_LOCK_SEC');
+  // 10.5: 0 is a valid value here (switches the known-client exception off).
+  const known = process.env['MAIL_AUTH_KNOWN_CLIENT_DAYS'];
+  if (known !== undefined && /^\d+$/.test(known.trim())) out.knownClientTtlSec = parseInt(known, 10) * 86_400;
   return out;
+}
+
+/**
+ * 10.5: the per-IP exemption — loopback + MAIL_AUTH_EXEMPT_CIDRS (env) + the
+ * exceptions of BCP → Angriffsschutz (ALLOW rules, cached per process).
+ */
+function exemptPredicate(envExempt: (ip: string) => boolean): (ip: string) => boolean {
+  enableIpAccessRuntime();
+  return (ip) => envExempt(ip) || isAllowListed(ip);
 }
 
 let dummyHashPromise: Promise<string> | null = null;
@@ -81,6 +102,7 @@ let instance: MailCredentialVerifier | null = null;
 export function configureMailAuth(deps: Partial<MailAuthDeps>): void {
   overrides = { ...deps };
   instance = null;
+  lockoutInstances.clear();
 }
 
 function resolveRedis(): MailAuthRedis | null {
@@ -98,8 +120,9 @@ function getVerifier(): MailCredentialVerifier {
       verifyPassword,
       dummyHash,
       limits: limitsFromEnv(),
-      isExemptIp: exempt.isExempt,
+      isExemptIp: exemptPredicate(exempt.isExempt),
       log,
+      onLockoutEvent: handleLockoutEvent,
       ...overrides,
     });
   }
@@ -161,30 +184,37 @@ export async function mailAuthIpLockedFor(ip: string): Promise<number> {
   }
 }
 
-let lockoutInstance: { lockout: LoginLockout; redis: MailAuthRedis | null } | null = null;
+const lockoutInstances = new Map<LockoutProtocol, { lockout: LoginLockout; redis: MailAuthRedis | null }>();
 
 /**
  * v8.1: the mail-protocol lockout counters for other login front doors (the
  * web/API login in @coremail/storage/auth). Same Redis keys, limits (MAIL_AUTH_*)
  * and IP exemptions as verifyMailCredentials. Test seams: globalThis.__mailAuthRedis,
  * else globalThis.__authRedis (the auth-module fake), else the shared Redis client.
+ * 10.5: `protocol` names the front door in the security events ('web' default,
+ * 'mcp' for the admin MCP interface).
  */
-export function sharedLoginLockout(): LoginLockout {
+export function sharedLoginLockout(protocol: LockoutProtocol = 'web'): LoginLockout {
   const auth = (globalThis as { __authRedis?: unknown }).__authRedis;
   const redis = globalThis.__mailAuthRedis !== undefined
     ? globalThis.__mailAuthRedis
     : auth ? auth as MailAuthRedis : resolveRedis();
-  if (!lockoutInstance || lockoutInstance.redis !== redis) {
+  const cached = lockoutInstances.get(protocol);
+  if (!cached || cached.redis !== redis) {
     const exempt = createExemptIpMatcher(process.env['MAIL_AUTH_EXEMPT_CIDRS']);
-    lockoutInstance = {
+    const instance = {
       redis,
       lockout: createLoginLockout({
         redis,
         limits: { ...limitsFromEnv(), ...(overrides.limits ?? {}) },
-        isExemptIp: overrides.isExemptIp ?? exempt.isExempt,
+        isExemptIp: overrides.isExemptIp ?? exemptPredicate(exempt.isExempt),
         log,
+        onLockoutEvent: overrides.onLockoutEvent ?? handleLockoutEvent,
+        protocol,
       }),
     };
+    lockoutInstances.set(protocol, instance);
+    return instance.lockout;
   }
-  return lockoutInstance.lockout;
+  return cached.lockout;
 }

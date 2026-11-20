@@ -33,6 +33,7 @@ export const PATH_AREA: Record<string, AdminArea | null> = {
   'shared-mailboxes': 'recipients',
   'domains':          'domains',
   'protection':       'hygiene',
+  'attack-protection': 'hygiene', // 10.5: organisation-wide only (UNSCOPED_ONLY_PATHS)
   'quarantine':       'hygiene',
   'transport-rules':  'hygiene',
   'retention':        'compliance',

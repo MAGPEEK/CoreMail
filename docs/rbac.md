@@ -185,6 +185,7 @@ matrix already limits the route to ORGANIZATION_MANAGEMENT (never scoped) ·
 | `POST /quarantine/:id/release`, `DELETE /quarantine/:id` | 404 outside; OUT_OF_SCOPE unless EVERY envelope recipient is in the scope (a release delivers to all) |
 | `DELETE /quarantine` (bulk) | org |
 | `/security/settings`, `/security/status`, `/security/rspamd/*`, `/security/dnsbl*`, `/security/dns-check`, `/security/clamav*`, `/security/capabilities`, `/security/spoofing`, `/security/attacks*`, `/transport-rules*`, `/ems/transport-rules*` | org |
+| `/security/protection/*` (10.5 attack protection: `GET /locks`, `POST /locks/release`, `GET/POST /rules`, `DELETE /rules/:id`, `GET/PUT /settings`) | org (`requireUnscoped`) — client IPs, locks of every domain's accounts and the server-wide block list are not partitionable by domain; reads VIEW_ONLY_ORG, writes HYGIENE_MANAGEMENT; every write audited (`security.lock.release`, `security.ip-rule.create/delete`, `security.protection.settings.update`, always logged); BCP page `/attack-protection` is in `UNSCOPED_ONLY_PATHS` |
 
 ### compliance
 

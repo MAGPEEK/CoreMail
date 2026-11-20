@@ -2,7 +2,7 @@ import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Globe, ListOrdered, ScrollText, Shield, Server, LayoutGrid,
   Mail, Settings2, ShieldCheck, Inbox, Workflow,
-  ShieldAlert, Search,
+  ShieldAlert, ShieldBan, Search,
   ShieldHalf, Archive,
   ClipboardList, Activity, Info, Terminal,
   Fingerprint, ServerCog, HardDriveDownload, Palette, Bot,
@@ -49,6 +49,7 @@ export function Sidebar() {
       groupKey: 'nav_group_protection',
       items: [
         { path: '/protection',       labelKey: 'nav_protection',       icon: Shield },
+        { path: '/attack-protection', labelKey: 'nav_attack_protection', icon: ShieldBan },
         { path: '/quarantine',       labelKey: 'nav_quarantine',       icon: ShieldAlert },
       ],
     },

@@ -11,7 +11,6 @@
 import { createLogger } from '@coremail/core';
 import { verifyMailCredentials } from '@coremail/storage';
 import type { AuthUser, SmtpAuthFailure } from '../core/types.js';
-import { reportAuthFailure } from '../core/ip-limiter.js';
 
 const log = createLogger('smtp:auth');
 
@@ -40,7 +39,7 @@ export async function verifySmtpCredentials(
     case 'mfa_app_password_required':
     case 'invalid':
     default:
-      if (clientIp) reportAuthFailure(clientIp, { reason: result.status });
+      // 10.5: the attack dashboard event is recorded by the shared lockout (all protocols).
       return null;
   }
 }

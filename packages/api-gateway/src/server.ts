@@ -90,6 +90,9 @@ import { createMcpRouter } from './lib/mcp/handler.js';
 import { startMcpSettingsSubscriber } from './lib/mcp/settings.js';
 import { mcpLiveConnections } from './lib/mcp/sessions.js';
 import { hashMcpToken, looksLikeMcpToken } from '@coremail/storage/auth';
+import { startAttackProtection } from '@coremail/storage';
+import { createIpBlocklistGuard, upgradeBlocked } from './lib/ip-blocklist-guard.js';
+import { startAttackProtectionWorker } from './lib/attack-protection-worker.js';
 
 const log = createLogger('api-gateway');
 installProcessGuards(log);
@@ -122,6 +125,10 @@ installAsyncErrorHandling(express);
 
 // 1. Request-ID — before everything else so that logs can be correlated
 app.use(requestId);
+
+// 1b. 10.5: permanent IP block list (BCP → Angriffsschutz) — every HTTP surface
+//     (webmail, BCP, API, ActiveSync, DAV, JMAP, MAPI, Autodiscover, MCP) answers 403.
+app.use(createIpBlocklistGuard());
 
 // 2. Helmet — set security headers on every response
 //    Must come early so that error responses carry the right headers too.
@@ -548,6 +555,9 @@ async function start() {
   mcpLiveConnections.attachInvalidation();
   startMcpSettingsSubscriber(); // switch / allowlist changes of other gateway instances
   startAuthInvalidationSubscriber();
+  // 10.5: block list / exceptions cache + reload subscriber; notice flusher + purge
+  startAttackProtection();
+  startAttackProtectionWorker();
   // Message store migration: raise Mailbox.highestModSeq / uidNext above legacy
   // Date.now()-sized modSeqs and max(uid)+1 UIDs (idempotent; the first
   // allocation per mailbox repeats this check lazily in every service).
@@ -587,6 +597,7 @@ async function start() {
   // v5.7.1: JMAP over WebSocket (RFC 8887) — pass upgrade requests through to the jmap-server
   httpServer.on('upgrade', (req, socket, head) => {
     if (hardening.guard.isRefused(req.socket)) { socket.destroy(); return; }
+    if (upgradeBlocked(req)) { socket.destroy(); return; } // 10.5: block list
     if (req.url?.startsWith('/jmap/ws') && jmapUpgrade) jmapUpgrade(req, socket as never, head);
     else socket.destroy();
   });
@@ -595,7 +606,8 @@ async function start() {
   // has been set in BCP → SSL/TLS → "Als HTTPS aktivieren".
   // Hot-reload on certificate activation via Redis (no restart needed).
   setTlsUpgradeHandler((req, socket, head) => {
-    if (req.url?.startsWith('/jmap/ws') && jmapUpgrade) jmapUpgrade(req, socket as never, head);
+    if (upgradeBlocked(req)) socket.destroy(); // 10.5: block list
+    else if (req.url?.startsWith('/jmap/ws') && jmapUpgrade) jmapUpgrade(req, socket as never, head);
     else socket.destroy();
   });
   void startTlsProxy(app).catch(err =>

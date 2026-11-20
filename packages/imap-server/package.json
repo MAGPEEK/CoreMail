@@ -9,7 +9,7 @@
     "dev": "node --watch dist/server.js",
     "start": "node dist/server.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --import tsx --import ../storage/src/test-support/realtime-off.ts --test src/tls-fallback.test.ts src/server/tokenizer.test.ts src/server/command-reader.test.ts src/commands/search-parser.test.ts src/server/starttls.test.ts src/fetch/fetch.test.ts src/server/live-sessions.test.ts src/server/dos-limits.test.ts src/session/view.test.ts src/commands/sort-thread.test.ts src/commands/acl-rights.test.ts src/server/idle-push.test.ts && node src/run-protocol-tests.mjs"
+    "test": "node --import tsx --import ../storage/src/test-support/realtime-off.ts --test src/tls-fallback.test.ts src/server/tokenizer.test.ts src/server/command-reader.test.ts src/commands/search-parser.test.ts src/server/starttls.test.ts src/fetch/fetch.test.ts src/server/live-sessions.test.ts src/server/dos-limits.test.ts src/session/view.test.ts src/commands/sort-thread.test.ts src/commands/acl-rights.test.ts src/server/idle-push.test.ts src/server/connect-guard.test.ts && node src/run-protocol-tests.mjs"
   },
   "dependencies": {
     "@coremail/auth-ldap": "workspace:*",

@@ -17,8 +17,8 @@
  *    — Protects against SYN flooding of the SMTP stack.
  */
 
-import { getRedisClient, createLogger, CHANNEL_ADMIN_ATTACK } from '@coremail/core';
-import { prisma, mailAuthIpLockedFor, isPrivateOrLoopbackIp, normalizeIp as normalizeIpShared } from '@coremail/storage';
+import { createLogger } from '@coremail/core';
+import { mailAuthIpLockedFor, isPrivateOrLoopbackIp, normalizeIp as normalizeIpShared, recordSecurityEvent } from '@coremail/storage';
 
 const log = createLogger('smtp:ip-limiter');
 
@@ -192,47 +192,20 @@ export async function isAuthBanned(rawIp: string): Promise<boolean> {
   return false;
 }
 
-/**
- * Reports a failed AUTH for the admin attack dashboard. Counting and lockout
- * happen in verifyMailCredentials — this only publishes the event.
- */
-export function reportAuthFailure(rawIp: string, detail: Record<string, unknown>): void {
-  const ip = normalizeIp(rawIp);
-  if (isPrivateIp(ip)) return;
-  void publishAttackEvent(ip, 'AUTH_BRUTE_FORCE', detail);
-}
-
 // ── Attack event publisher ────────────────────────────────────────────────────
 
 /**
- * Publishes an attack event to:
- * 1. Redis CHANNEL_ADMIN_ATTACK (for the SSE live dashboard in the BCP)
- * 2. PostgreSQL AttackEvent table (for historical analysis)
+ * Records an attack event for the BCP dashboard (attack_events + the live
+ * channel). 10.5: through the shared, sampled recorder of @coremail/storage.
+ * Failed AUTH attempts are recorded by the shared lockout itself (every
+ * protocol, verifyMailCredentials) — the former reportAuthFailure() is gone,
+ * the SMTP server only reports its own connection-limit events here.
  */
-async function publishAttackEvent(
-  ip: string,
-  type: string,
-  detail: Record<string, unknown>,
-  target?: string,
-): Promise<void> {
-  try {
-    const event = { ip, type, detail, target: target ?? null, service: 'smtp', timestamp: new Date().toISOString() };
-    const redis = getRedisClient();
-    await redis.publish(CHANNEL_ADMIN_ATTACK, JSON.stringify(event));
-
-    // Persist in DB (fire-and-forget — no await in the critical path)
-    type DbDetail = Exclude<Parameters<typeof prisma.attackEvent.create>[0]['data']['detail'], undefined>;
-    prisma.attackEvent.create({
-      data: { ip, type, ...(target ? { target } : {}), detail: detail as DbDetail, service: 'smtp' },
-    }).catch((err) => {
-      log.error({ err, ip, type }, 'Failed to persist attack event to DB');
-    });
-  } catch (err) {
-    log.error({ err, ip, type }, 'Failed to publish attack event');
-  }
+function publishAttackEvent(ip: string, type: string, detail: Record<string, unknown>): void {
+  recordSecurityEvent({ type, ip, protocol: 'smtp', detail });
 }
 
 /** Publishes a connection rate-limit event (for external callers). */
 export function publishConnectionLimitEvent(ip: string, detail: Record<string, unknown>): void {
-  void publishAttackEvent(ip, 'IP_RATE_LIMIT', detail);
+  publishAttackEvent(normalizeIp(ip), 'IP_RATE_LIMIT', detail);
 }

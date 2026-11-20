@@ -18,6 +18,7 @@ import { useDashboardStore, WIDGET_CATALOG, type WidgetId } from '../store/dashb
 import { useT } from '../i18n/useT.js';
 import { ServedCertWarning } from '../components/ServedCert.js';
 import { CertificateSetupCard } from '../components/CertificateSetupCard.js';
+import { protocolLabel } from '../lib/attackProtection.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface DashboardData {
@@ -52,9 +53,12 @@ interface AttackSummary {
   total1h:     number;
   byType:      { type: string; count: number }[];
   topIps:      { ip: string;   count: number }[];
+  /** 10.5: events per protocol (all login front doors). */
+  byProtocol?: { protocol: string; count: number }[];
   latestEvents: {
     id: string; timestamp: string; type: string;
     ip: string; target: string | null; service: string;
+    protocol?: string | null;
     detail: Record<string, unknown>;
   }[];
   isUnderAttack: boolean;
@@ -446,6 +450,11 @@ function AttackEventsWidget() {
     IP_RATE_LIMIT:    'IP-Rate-Limit',
     OPEN_RELAY:       'Open-Relay',
     SPAM:             'Spam',
+    // 10.5 attack protection (all protocols)
+    AUTH_LOCKOUT:     'Sperre',
+    AUTH_LOCKED:      'Gesperrt abgewiesen',
+    IP_BLOCKLIST:     'Sperrliste',
+    IP_AUTO_BLOCKED:  'Auto-Sperrliste',
   };
 
   if (isLoading || !data) {
@@ -496,6 +505,21 @@ function AttackEventsWidget() {
         </div>
       )}
 
+      {/* 10.5: per protocol */}
+      {(data.byProtocol?.length ?? 0) > 0 && (
+        <div className="mb-4">
+          <p className="text-[11px] font-semibold text-fg-subtle uppercase tracking-wide mb-2">{t('dash_attack_protocols')}</p>
+          <div className="space-y-1.5">
+            {data.byProtocol!.map((b) => (
+              <div key={b.protocol} className="flex items-center justify-between">
+                <span className="text-xs text-fg-muted font-mono">{protocolLabel(b.protocol)}</span>
+                <span className="text-xs font-semibold text-fg tabular-nums">{b.count}×</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Top-IPs */}
       {data.topIps.length > 0 && (
         <div className="mb-4">
@@ -528,7 +552,7 @@ function AttackEventsWidget() {
                 </span>
                 <div className="min-w-0 flex-1">
                   <p className="text-xs font-mono text-fg-muted truncate">{e.ip}</p>
-                  <p className="text-[10px] text-fg-subtle">{e.service} · {timeAgo(e.timestamp)}</p>
+                  <p className="text-[10px] text-fg-subtle">{protocolLabel(e.protocol ?? e.service)} · {timeAgo(e.timestamp)}</p>
                 </div>
               </div>
             ))}

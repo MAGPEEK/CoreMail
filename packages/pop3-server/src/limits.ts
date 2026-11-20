@@ -11,7 +11,7 @@
  */
 import type net from 'node:net';
 import { ConnectionLimiter, envLimit, createLogger } from '@coremail/core';
-import { createExemptIpMatcher } from '@coremail/storage';
+import { createExemptIpMatcher, connectGuard, type ConnectGuard } from '@coremail/storage';
 
 const log = createLogger('pop3-limits');
 
@@ -33,7 +33,16 @@ export const pop3ConnectionLimiter = new ConnectionLimiter({
  * dropped (implicit TLS, before the handshake). The slot is released when the
  * TCP connection closes.
  */
-export function admitConnection(raw: net.Socket, implicitTls: boolean, limiter: ConnectionLimiter = pop3ConnectionLimiter): boolean {
+export function admitConnection(
+  raw: net.Socket, implicitTls: boolean, limiter: ConnectionLimiter = pop3ConnectionLimiter, guard: ConnectGuard = connectGuard,
+): boolean {
+  // 10.5: the permanent block list (BCP → Angriffsschutz) before anything else.
+  if (guard.isBlocked(raw.remoteAddress)) {
+    log.info({ ip: raw.remoteAddress }, 'POP3 connection rejected — IP is on the block list');
+    refuse(raw, implicitTls, POP3_BLOCKED_REPLY);
+    guard.refused(raw.remoteAddress, 'pop3', 'blocked');
+    return false;
+  }
   const result = limiter.acquire(raw.remoteAddress);
   if (!result.ok) {
     log.warn({ ip: raw.remoteAddress, reason: result.reason, limit: result.limit }, 'POP3 connection rejected — connection limit reached');
@@ -43,5 +52,28 @@ export function admitConnection(raw: net.Socket, implicitTls: boolean, limiter: 
     return false;
   }
   raw.once('close', result.release);
+  return true;
+}
+
+/** 10.5: answers of a refused connection on the plaintext listener (995: the socket is dropped). */
+export const POP3_BLOCKED_REPLY = '-ERR [SYS/PERM] access denied\r\n';
+export const POP3_LOCKED_REPLY = '-ERR [SYS/TEMP] too many failed logins from your address, try again later\r\n';
+
+function refuse(raw: net.Socket, implicitTls: boolean, reply: string): void {
+  if (implicitTls) raw.destroy();
+  else raw.end(reply);
+  setTimeout(() => raw.destroy(), 2000).unref();
+}
+
+/**
+ * 10.5: an IP locked by the shared lockout is refused at connect (like SMTP).
+ * Resolves true when the connection was refused; never rejects (fail open).
+ */
+export async function refuseIfLocked(raw: net.Socket, implicitTls: boolean, guard: ConnectGuard = connectGuard): Promise<boolean> {
+  const ttl = await guard.lockedFor(raw.remoteAddress).catch(() => 0);
+  if (ttl <= 0 || raw.destroyed) return false;
+  log.info({ ip: raw.remoteAddress, retryAfterSec: ttl }, 'POP3 connection rejected — IP is auth-locked');
+  refuse(raw, implicitTls, POP3_LOCKED_REPLY);
+  guard.refused(raw.remoteAddress, 'pop3', 'locked', { retryAfterSec: ttl });
   return true;
 }

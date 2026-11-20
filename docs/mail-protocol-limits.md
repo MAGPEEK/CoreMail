@@ -132,3 +132,26 @@ logged. With *block on exceed* the account may not send at all for one hour
 after the first refusal (`retryAfter` = the remaining block time); the block
 ends by itself — reset the password / revoke app passwords and sessions of a
 compromised account in the meantime.
+
+### Attack protection (10.5)
+
+The lockout is administered in BCP → Schutz → **Angriffsschutz** — see
+[attack-protection.md](attack-protection.md) for the full model. In short:
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `MAIL_AUTH_KNOWN_CLIENT_DAYS` | `30` | How long a successful login keeps its client network (IPv4 /24, IPv6 /56) and — for ActiveSync — its DeviceId "known" for the account. A locked **account** still accepts logins from a known network/device (failures keep counting); `0` switches this off. The IP lock is never bypassed. |
+| `SECURITY_EVENTS_PER_IP_PER_MIN` | `10` | Attack dashboard events per client IP and minute (sampling; the counters are not affected). |
+| `SECURITY_EVENTS_PER_MIN` | `300` | Attack dashboard events per process and minute in total. |
+| `ATTACK_EVENT_RETENTION_DAYS` | `90` | Attack events older than this are purged hourly (`0` = keep). |
+
+- **Connect-time refusal:** SMTP (all listeners), IMAP and POP3 refuse IPs that are
+  currently locked by the shared lockout **and** IPs on the permanent block list —
+  on the raw TCP socket, before the greeting and before the TLS handshake on
+  465/993/995 (IMAP `* BYE [UNAVAILABLE]`, POP3 `-ERR [SYS/TEMP]` / `[SYS/PERM]`,
+  SMTP `421 4.7.1` / `554 5.7.1`).
+- **Exceptions** of the BCP list ("nie sperren") are merged with
+  `MAIL_AUTH_EXEMPT_CIDRS`: no per-IP counter, never on the block list.
+- Every failure, lock and refusal of every protocol (SMTP, IMAP, POP3, web/API,
+  ActiveSync, CalDAV/CardDAV, JMAP, MAPI, Autodiscover, MCP) is recorded in the
+  attack dashboard with its protocol.

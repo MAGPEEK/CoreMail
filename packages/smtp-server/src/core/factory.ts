@@ -8,7 +8,7 @@ import { createLogger, tlsServerOptions } from '@coremail/core';
 import { logTlsSocketError } from '@coremail/core/tls-errors';
 import { SmtpSession } from './session.js';
 import type { SmtpSessionConfig } from './types.js';
-import type { TraceStage } from '@coremail/storage';
+import { connectGuard, type ConnectGuard, type TraceStage } from '@coremail/storage';
 import {
   checkAndTrackConnection,
   releaseConnection,
@@ -28,13 +28,25 @@ export interface SmtpServerHandle {
   readonly server: net.Server | tls.Server;
 }
 
-export function createSmtpServer(config: SmtpSessionConfig, implicitTls = false): SmtpServerHandle {
+/** 10.5: the permanent block list (BCP → Angriffsschutz) — checked before anything else. */
+export const SMTP_BLOCKED_REPLY = '554 5.7.1 Access denied — your IP address is blocked\r\n';
+
+export function createSmtpServer(config: SmtpSessionConfig, implicitTls = false, guard: ConnectGuard = connectGuard): SmtpServerHandle {
   function onConnection(socket: net.Socket): void {
     const ip = socket.remoteAddress ?? '0.0.0.0';
 
     socket.once('error', (err) => {
       log.debug({ ip, err }, 'Pre-session socket error');
     });
+
+    // 0a. 10.5: permanent block list (plaintext listeners; 465 is refused on the raw socket below)
+    if (guard.isBlocked(ip)) {
+      if (socket.writable) socket.write(SMTP_BLOCKED_REPLY);
+      socket.end();
+      setTimeout(() => socket.destroy(), 2000).unref();
+      guard.refused(ip, 'smtp', 'blocked', { port: socket.localPort ?? 0 });
+      return;
+    }
 
     // ── IP-Level-Checks (synchron + async) ─────────────────────────────────
     // Submission listeners (requireAuth: 587/465) and private/loopback clients are
@@ -79,6 +91,7 @@ export function createSmtpServer(config: SmtpSessionConfig, implicitTls = false)
             socket.write('421 4.7.1 Your IP is temporarily blocked due to too many failed authentication attempts\r\n');
           }
           socket.end();
+          guard.refused(ip, 'smtp', 'locked', { port: socket.localPort ?? 0 });
           return;
         }
         // 10.2: the connect-stage verdict travels with the session into the message trace.
@@ -113,6 +126,12 @@ export function createSmtpServer(config: SmtpSessionConfig, implicitTls = false)
     }
     // TLS 1.2+ unless this listener allows old clients (TLS 1.0/1.1).
     server = tls.createServer(tlsServerOptions(config.tls, config.allowLegacyTls === true), onConnection);
+    // 10.5: a blocked IP is dropped on the raw TCP socket — before the TLS handshake.
+    server.on('connection', (raw: net.Socket) => {
+      if (!guard.isBlocked(raw.remoteAddress)) return;
+      raw.destroy();
+      guard.refused(raw.remoteAddress, 'smtp', 'blocked', { port: raw.localPort ?? 0 });
+    });
     // 9.3: handshake failures on 465 (e.g. the client rejects the certificate)
     server.on('tlsClientError', (err: Error, s: tls.TLSSocket) => {
       logTlsSocketError(log, err, { service: 'SMTP', ip: s.remoteAddress, port: s.localPort });

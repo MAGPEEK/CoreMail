@@ -219,7 +219,8 @@ export async function login(email: string, password: string, client: ClientInfo)
   }
 
   const tokens = await issueSession(user, { ...client, mfaVerified: false });
-  await lockout.success(normalized);
+  // 10.5: with the client IP the network becomes "known" for the account (known-client exception)
+  await lockout.success(normalized, client.ip);
   log.info({ userId: user.id, source: user.source }, 'Login successful');
   return { kind: 'tokens', tokens, userId: user.id, source: user.source };
 }
@@ -292,7 +293,7 @@ export async function completeMfaLogin(
   if (await webLoginBlocked(user, client.surface)) return { kind: 'protocol_disabled' };
 
   const tokens = await issueSession(user, { ...client, mfaVerified: true });
-  await lockout.success(lockEmail);
+  await lockout.success(lockEmail, client.ip);
   log.info({ userId: user.id }, 'MFA verified — login complete');
   return { kind: 'tokens', tokens, userId: user.id, source: 'mfa' };
 }

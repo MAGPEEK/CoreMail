@@ -5,9 +5,9 @@ import tls from 'node:tls';
 import { createLogger, generateSelfSignedCert, tlsPemToBuffers, applyTlsToListeners, tlsMaterialEquals, installProcessGuards, startAuthInvalidationSubscriber, resolveBindAddress, listenWithRecovery, tlsServerOptions } from '@coremail/core';
 import { getRedisClient, CHANNEL_SERVICE_LISTENERS_RELOAD, CHANNEL_SETTINGS_RELOAD } from '@coremail/core/redis';
 import { logTlsSocketError } from '@coremail/core/tls-errors';
-import { prisma, loadProtocolTls, selfSignedReplacement, selfSignedFallbackHostname, encryptPrivateKey, waitForObjectStorage, startWebmailPolicySubscriber } from '@coremail/storage';
+import { prisma, loadProtocolTls, selfSignedReplacement, selfSignedFallbackHostname, encryptPrivateKey, waitForObjectStorage, startWebmailPolicySubscriber, startAttackProtection } from '@coremail/storage';
 import { POP3Session, setPop3Hostname, pop3LiveSessions, TLS_HANDSHAKE_MS } from './session.js';
-import { admitConnection, invalidExemptEntries } from './limits.js';
+import { admitConnection, invalidExemptEntries, refuseIfLocked } from './limits.js';
 
 const log = createLogger('pop3-server');
 // v6: unhandled rejections are logged instead of killing the listener; uncaught exceptions exit 1 (supervisord restarts)
@@ -173,7 +173,8 @@ function createTrackedPop3Server(cfg: ListenerConfig): TrackedPop3Server {
       { ...tlsServerOptions(_tlsConfig, cfg.allowLegacyTls), handshakeTimeout: TLS_HANDSHAKE_MS },
       onSocket as (s: tls.TLSSocket) => void,
     );
-    server.on('connection', (raw: net.Socket) => { admitConnection(raw, true); });
+    // 10.5: the lock check runs while the handshake proceeds; a locked IP's raw socket is dropped.
+    server.on('connection', (raw: net.Socket) => { if (admitConnection(raw, true)) void refuseIfLocked(raw, true); });
     // 9.3: handshake failures on 995 (e.g. the client rejects the certificate)
     server.on('tlsClientError', (err: Error, s: tls.TLSSocket) => {
       logTlsSocketError(log, err, { service: 'POP3', ip: s.remoteAddress, port: s.localPort });
@@ -182,7 +183,11 @@ function createTrackedPop3Server(cfg: ListenerConfig): TrackedPop3Server {
     if (cfg.ssl) {
       log.warn({ port: cfg.port }, 'POP3 implicit TLS requested but no TLS cert available — falling back to plaintext');
     }
-    server = net.createServer((raw) => { if (admitConnection(raw, false)) onSocket(raw); });
+    server = net.createServer((raw) => {
+      if (!admitConnection(raw, false)) return;
+      // 10.5: greeting only after the lock check (a paused socket buffers early input).
+      void refuseIfLocked(raw, false).then((refused) => { if (!refused && !raw.destroyed) onSocket(raw); });
+    });
   }
 
   return { server, sockets, ssl: cfg.ssl, allowLegacyTls: cfg.allowLegacyTls };
@@ -316,6 +321,7 @@ async function main() {
   pop3LiveSessions.attachInvalidation();
   startAuthInvalidationSubscriber();
   startWebmailPolicySubscriber(); // 9.4: the app-password module switch applies to POP3 logins at once
+  startAttackProtection(); // 10.5: block list / locked IPs refused at connect (BCP → Angriffsschutz)
   // v7.1: never serve mails whose raw objects are missing (OBJECT_STORAGE switched without migration)
   await waitForObjectStorage('pop3-server');
   await refreshHostname();
