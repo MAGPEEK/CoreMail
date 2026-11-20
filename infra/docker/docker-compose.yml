@@ -26,7 +26,7 @@ name: coremail
 #         http://<server-ip>:3000/bcp/     → setup wizard: admin account + domain
 #       The wizard asks for the one-time setup token printed to the log:
 #         docker logs coremail 2>&1 | grep -i "setup token"
-#       Then obtain a certificate (Let's Encrypt) in the BCP under SSL/TLS — from
+#       Then obtain a certificate (Let's Encrypt) in the BCP under Certificates — from
 #       then on https://mail.<domain>/ is reachable. Alternatively via CLI:
 #         docker exec -it coremail coremail cert letsencrypt \
 #           --domains mail.example.de --email admin@example.de --services SMTP,IMAP,POP3
@@ -88,9 +88,9 @@ services:
       # Password header for rspamd controller calls (learn_spam/ham, thresholds).
       RSPAMD_CONTROLLER_PASSWORD: ${RSPAMD_CONTROLLER_PASSWORD:-}
 
-      # ── Object storage (v8.0, docs/storage.md) ───────────────────────────────
+      # ── Object storage (docs/storage.md) ─────────────────────────────────────
       # Mail contents, attachments, quarantine. OBJECT_STORAGE unset = minio
-      # (installations from before 8.0 keep working unchanged); new installations
+      # (installations without that line keep working unchanged); new installations
       # (scripts/setup.sh) use "filesystem" = the coremail-data volume below.
       OBJECT_STORAGE: ${OBJECT_STORAGE:-minio}     # minio | s3 | filesystem
       STORAGE_PATH:   /data/objects                # filesystem driver (volume coremail-data)
@@ -140,18 +140,18 @@ services:
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
       VAPID_SUBJECT:     ${VAPID_SUBJECT:-mailto:admin@example.com}
 
-      # ── Security (v6) ────────────────────────────────────────────────────────
+      # ── Security ─────────────────────────────────────────────────────────────
       # Initial setup needs a one-time token: docker logs coremail | grep -i "setup token"
       # (or set SETUP_TOKEN in .env). TRUST_PROXY: only when port 3000 is reachable
       # exclusively through your own reverse proxy (e.g. "1" or its CIDR) — default
       # off, otherwise clients could spoof their IP via X-Forwarded-For.
       SETUP_TOKEN: ${SETUP_TOKEN:-}
       TRUST_PROXY: ${TRUST_PROXY:-}
-      # Branding defaults (9.3) — BCP → Organisation → Branding wins; docs/branding.md
+      # Branding defaults — BCP → Branding wins; docs/branding.md
       BRANDING_NAME:  ${BRANDING_NAME:-}
       BRANDING_COLOR: ${BRANDING_COLOR:-}
 
-      # ── Optional tuning (9.0) — set in .env; empty = built-in default ────────
+      # ── Optional tuning — set in .env; empty = built-in default ──────────────
       # Every variable is described in .env.example; details in docs/mail-security.md,
       # docs/mailbox-quotas-recovery.md, docs/mail-protocol-limits.md,
       # docs/api-gateway-security.md and docs/deployment-security.md.
@@ -226,11 +226,11 @@ services:
       - "110:110"     # POP3 (STARTTLS)         — can be removed if POP3 is not wanted
       - "995:995"     # POP3S (implicit TLS)    — same
       - "80:3000"     # HTTP: Let's Encrypt challenge (HTTP-01) + redirect to HTTPS
-      - "443:443"     # HTTPS: integrated TLS proxy (certificate in BCP → SSL/TLS)
+      - "443:443"     # HTTPS: integrated TLS proxy (certificate in BCP → Certificates)
       - "3000:3000"   # HTTP without TLS: initial setup; behind your own reverse proxy (Traefik,
                       # Caddy, nginx, Synology) → use only this port, remove 80/443 above
     volumes:
-      # v8.0: persistent app data — /data/objects holds mail contents with
+      # Persistent app data — /data/objects holds mail contents with
       # OBJECT_STORAGE=filesystem (unused but harmless with minio). The container
       # itself stays stateless: recreate it at will, the volume keeps the data.
       - coremail-data:/data
@@ -314,7 +314,7 @@ services:
 
   minio:
     # S3 object storage: backups (bucket coremail-backups) and — with
-    # OBJECT_STORAGE=minio, the default of installations from before 8.0 — mail
+    # OBJECT_STORAGE=minio, the default when OBJECT_STORAGE is unset — mail
     # contents, attachments and quarantine. Filesystem installations that send
     # backups elsewhere (S3_ENDPOINT) or do not need them may remove this service
     # and the depends_on entry above (docs/storage.md).
@@ -384,7 +384,7 @@ services:
 #  Data — back up these volumes (docker run --rm -v coremail_pgdata:/d alpine tar …)
 #    pgdata        PostgreSQL: users, folders, mail metadata, settings
 #    coremail-data mail contents + attachments with OBJECT_STORAGE=filesystem (/data/objects)
-#    miniodata     MinIO: backups; mail contents with OBJECT_STORAGE=minio (pre-8.0 installs)
+#    miniodata     MinIO: backups; mail contents with OBJECT_STORAGE=minio
 #    redisdata   Redis: sessions, queues (expendable)
 #    rspamd-data Bayes training data    clamav-data virus signatures (re-downloaded)
 # ─────────────────────────────────────────────────────────────────────────────

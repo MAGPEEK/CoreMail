@@ -1,7 +1,7 @@
 name: coremail
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CoreMail — Synology NAS / Container Manager
+# CoreMail 10.3.0 — Synology NAS / Container Manager
 #
 # Setup via SSH:
 #   NAS_HOSTNAME=192.168.1.100 bash scripts/synology-setup.sh
@@ -36,8 +36,8 @@ services:
       REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD missing in .env - run scripts/synology-setup.sh}@redis:6379
       COREMAIL_ALLOW_SCHEMA_DATA_LOSS: ${COREMAIL_ALLOW_SCHEMA_DATA_LOSS:-false}
       BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
-      # v8.0 object storage (docs/storage.md): unset = minio (installations from
-      # before 8.0, unchanged); new installations: OBJECT_STORAGE=filesystem in .env
+      # Object storage (docs/storage.md): unset = minio (installations without the
+      # line keep working unchanged); new installations: OBJECT_STORAGE=filesystem in .env
       # → mail contents in /volume1/docker/coremail/data/objects (Hyper Backup).
       OBJECT_STORAGE: ${OBJECT_STORAGE:-minio}
       STORAGE_PATH: /data/objects
@@ -55,17 +55,17 @@ services:
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET missing in .env - run scripts/synology-setup.sh}
       PEPPER: ${PEPPER:?PEPPER missing in .env - run scripts/synology-setup.sh}
 
-      # v6: behind the DSM Application Portal every client arrives from the Docker
+      # Behind the DSM Application Portal every client arrives from the Docker
       # bridge gateway — set TRUST_PROXY (e.g. "uniquelocal") so rate limits and the
       # audit log see the real client IP. Only do this if port 8080 is not reachable
       # by untrusted clients directly. Setup wizard token: docker logs coremail | grep -i "setup token"
       TRUST_PROXY: ${TRUST_PROXY:-}
       SETUP_TOKEN: ${SETUP_TOKEN:-}
-      # Branding defaults (9.3) — BCP → Organisation → Branding wins; docs/branding.md
+      # Branding defaults — BCP → Branding wins; docs/branding.md
       BRANDING_NAME:  ${BRANDING_NAME:-}
       BRANDING_COLOR: ${BRANDING_COLOR:-}
 
-      # ── Optional tuning (9.0) — set in .env; empty = built-in default ────────
+      # ── Optional tuning — set in .env; empty = built-in default ──────────────
       # Every variable is described in .env.example; details in docs/mail-security.md,
       # docs/mailbox-quotas-recovery.md, docs/mail-protocol-limits.md,
       # docs/api-gateway-security.md and docs/deployment-security.md.
@@ -137,7 +137,6 @@ services:
 
       # Service ports
       API_PORT: "3000"
-      SECURITY_FILTER_PORT: "3002"
       AUTH_PORT: "3003"
       BACKUP_PORT: "3004"
       EAS_PORT: "3005"
@@ -165,8 +164,6 @@ services:
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
       VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@coremail.local}
 
-
-
     ports:
       - "8080:3000"   # HTTP (port 8080 outside → 3000 inside, no DSM conflict)
       - "25:25"
@@ -177,7 +174,7 @@ services:
       - "110:110"
       - "995:995"
     volumes:
-      # v8.0: mail contents with OBJECT_STORAGE=filesystem. Only the objects
+      # Mail contents with OBJECT_STORAGE=filesystem. Only the objects
       # directory is mounted — the parent data/ also holds postgres/redis/minio.
       - /volume1/docker/coremail/data/objects:/data/objects
     depends_on:

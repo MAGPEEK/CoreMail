@@ -218,7 +218,9 @@ ClamAV lädt beim ersten Start etwa 300 MB Signaturen; der Virenscan beginnt dan
 docker compose -f infra/docker/docker-compose.minimal.yml pull && docker compose -f infra/docker/docker-compose.minimal.yml up -d
 ```
 
-Mit `docker run` ziehst du das neue Tag, entfernst den Container `coremail` und startest ihn mit demselben Befehl neu. Lies vor einem Major-Upgrade die [Release-Notes](docs/releases/); das Datenbankschema wird beim Start aktualisiert.
+Nimm die Compose-Datei deiner Variante. Mit `docker run` ziehst du das neue Tag, entfernst den Container `coremail` und startest ihn mit demselben Befehl neu. Das Datenbankschema wird beim Start aktualisiert.
+
+Upgrade von einer älteren Version: lies vorher die [Versionshistorie](docs/version-history.de.md) und die [Release-Notes](docs/releases/).
 
 ## Dokumentation
 

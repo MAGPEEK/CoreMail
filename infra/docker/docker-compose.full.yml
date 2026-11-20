@@ -15,9 +15,9 @@ name: coremail
 #  Every service has a healthcheck, restart policy, CPU/memory limits and
 #  reservations (override in .env) and json-file log rotation.
 #
-#  For 50–500 users. Measured idle after start (8.0.0, empty install): coremail
-#  ~630 MB, clamav ~950 MB, rspamd ~230 MB, postgres ~105 MB, minio ~90 MB,
-#  redis ~6 MB → ~2 GB. Under load: coremail 0.8–1.5 GB, clamav up to ~2 GB
+#  For 50–500 users. Idle after start (empty install): coremail ~820 MB,
+#  clamav ~950 MB, rspamd ~230 MB, postgres ~105 MB, minio ~90 MB,
+#  redis ~6 MB → ~2.2 GB. Under load: coremail 0.8–1.5 GB, clamav up to ~2 GB
 #  while it reloads signatures, postgres grows with the mailbox count →
 #  plan 4 GB RAM / 2–4 vCPU (8 GB from ~200 users). Sum of the default limits
 #  without profiles: ~6 GB (limits are ceilings, not reservations).
@@ -62,7 +62,7 @@ services:
 
       # ── Object storage (docs/storage.md) ─────────────────────────────────────
       # Must be set explicitly: filesystem (new installs, volume coremail-data),
-      # minio (pre-8.0 data; start with --profile minio) or s3 (external S3).
+      # minio (mail kept in MinIO; start with --profile minio) or s3 (external S3).
       OBJECT_STORAGE: ${OBJECT_STORAGE:?OBJECT_STORAGE missing in .env  →  filesystem | minio | s3 (docs/docker-compose.md)}
       STORAGE_PATH:   /data/objects
       MINIO_ENDPOINT:   ${MINIO_ENDPOINT:-minio}
@@ -106,7 +106,7 @@ services:
       SETUP_TOKEN: ${SETUP_TOKEN:-}
       TRUST_PROXY: ${TRUST_PROXY:-}
 
-      # ── Optional tuning (9.0) — set in .env; empty = built-in default ────────
+      # ── Optional tuning — set in .env; empty = built-in default ──────────────
       # Every variable is described in .env.example; details in docs/mail-security.md,
       # docs/mailbox-quotas-recovery.md, docs/mail-protocol-limits.md,
       # docs/api-gateway-security.md and docs/deployment-security.md.
@@ -173,7 +173,7 @@ services:
       - "110:110"     # POP3 (STARTTLS)  — remove if POP3 is not wanted
       - "995:995"     # POP3S            — same
       - "80:3000"     # HTTP: Let's Encrypt HTTP-01 + redirect
-      - "443:443"     # HTTPS: integrated TLS proxy (BCP → SSL/TLS)
+      - "443:443"     # HTTPS: integrated TLS proxy (BCP → Certificates)
       - "3000:3000"   # HTTP without TLS: initial setup / behind your own reverse proxy
     volumes:
       # /data/objects mail contents (filesystem driver), /data/backups pre-migration dumps.
@@ -334,7 +334,7 @@ services:
   #  Optional profiles
   # ───────────────────────────────────────────────────────────────────────────
   minio:
-    # --profile minio: mail contents with OBJECT_STORAGE=minio (pre-8.0 data)
+    # --profile minio: mail contents with OBJECT_STORAGE=minio
     # and/or the target of the built-in backup service. Not needed with
     # OBJECT_STORAGE=filesystem + external S3 backups (S3_* in .env).
     profiles: [minio]
