@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  ALWAYS_KEYS, FRESH_ONLY_KEYS, UnsafeSecretsError, atomicWrite, buildDatabaseUrl, decideFresh,
+  ALWAYS_KEYS, FRESH_ONLY_KEYS, PASSWORD_FILES, UnsafeSecretsError, atomicWrite, buildDatabaseUrl, decideFresh,
   exportEnv, formatValue, initSecrets, parseEnvFile, pgEnvFromUrl, vapidKeyPair,
 } from './init-secrets.mjs';
 
@@ -70,13 +70,16 @@ test('fresh start: every key is generated, formats are right, files are 0600', (
   // single-value files for the database containers: no trailing newline
   assert.equal(read(dir, 'postgres-password'), v.get('POSTGRES_PASSWORD'));
   assert.equal(read(dir, 'redis-password'), v.get('REDIS_PASSWORD'));
+  assert.equal(read(dir, 'minio-root-password'), v.get('MINIO_ROOT_PASSWORD'));
+  assert.equal(read(dir, 'rspamd-controller-password'), v.get('RSPAMD_CONTROLLER_PASSWORD'));
   const text = read(dir);
   assert.match(text, /BACK THIS FILE UP/);
   assert.match(text, /Without PEPPER no password works/);
   assert.equal(parseEnvFile(text).generatedMarker, true);
   assert.equal(result.fresh, true);
-  assert.deepEqual(result.writes, ['coremail.env', 'postgres-password', 'redis-password']);
-  if (posixFs) for (const f of ['coremail.env', 'postgres-password', 'redis-password']) assert.equal(mode(join(dir, f)), 0o600, f);
+  const files = ['coremail.env', 'postgres-password', 'redis-password', 'minio-root-password', 'rspamd-controller-password'];
+  assert.deepEqual(result.writes, files);
+  if (posixFs) for (const f of files) assert.equal(mode(join(dir, f)), 0o600, f);
   // no temp files left behind
   assert.deepEqual(readdirSync(dir).filter((f) => f.includes('.tmp-')), []);
   // never prints a value
@@ -88,12 +91,13 @@ test('fresh start: every key is generated, formats are right, files are 0600', (
 test('second run creates nothing and changes nothing', () => {
   const dir = scratch();
   run(dir);
-  const before = { env: read(dir), pg: read(dir, 'postgres-password'), rd: read(dir, 'redis-password') };
+  const snapshot = () => Object.fromEntries(['coremail.env', ...PASSWORD_FILES.map(([f]) => f)].map((f) => [f, read(dir, f)]));
+  const before = snapshot();
   const { result, probes } = run(dir, { db: 'empty' });
   assert.deepEqual(result.writes, []);
   assert.deepEqual(result.generated, []);
   assert.equal(probes.length, 0, 'nothing missing → no database probe');
-  assert.deepEqual({ env: read(dir), pg: read(dir, 'postgres-password'), rd: read(dir, 'redis-password') }, before);
+  assert.deepEqual(snapshot(), before);
 });
 
 test('existing file: append-only, the old text stays byte-identical, values are never overwritten', () => {
@@ -239,6 +243,22 @@ test('atomic write replaces a planted symlink instead of following it', { skip: 
   assert.equal(readFileSync(outside, 'utf8'), 'keep');
   assert.equal(read(dir, 'redis-password'), 'new');
   assert.equal(mode(join(dir, 'redis-password')), 0o600);
+});
+
+test('password files hold the values from the environment (existing .env installation)', () => {
+  const dir = scratch();
+  const env = { JWT_SECRET: 'a'.repeat(64), PEPPER: 'b'.repeat(64), POSTGRES_PASSWORD: 'pg-from-env',
+    REDIS_PASSWORD: 'redis-from-env', MINIO_ROOT_PASSWORD: 'minio-from-env', RSPAMD_CONTROLLER_PASSWORD: 'rspamd-from-env' };
+  const { result } = run(dir, { env });
+  assert.equal(result.fresh, false, 'JWT_SECRET/PEPPER from the environment → existing installation');
+  assert.equal(read(dir, 'postgres-password'), 'pg-from-env');
+  assert.equal(read(dir, 'redis-password'), 'redis-from-env');
+  assert.equal(read(dir, 'minio-root-password'), 'minio-from-env');
+  assert.equal(read(dir, 'rspamd-controller-password'), 'rspamd-from-env');
+  const v = values(dir);
+  for (const [k, val] of Object.entries(env)) assert.equal(v.get(k), val, k);
+  assert.equal(v.get('COREMAIL_DB_PASSWORD'), 'pg-from-env');
+  for (const k of FRESH_ONLY_KEYS) assert.equal(v.has(k), false, `${k} not generated for an existing installation`);
 });
 
 test('a differing password file is reported, never overwritten', () => {

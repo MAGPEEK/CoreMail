@@ -56,7 +56,8 @@ of mailboxes and messages.
 **Same everywhere:** the app container hardening (`no-new-privileges`, `cap_drop: ALL` with
 the few capabilities the entrypoint and supervisord need,
 [deployment-security.md §5](deployment-security.md#5-container-hardening-docker-composeyml)),
-`${VAR:?}` checks for required secrets, healthchecks on the app/postgres/redis, the dedicated
+the one-shot secrets service `coremail-init` (no `.env` needed, [below](#secrets-without-env)),
+healthchecks on the app/postgres/redis, the dedicated
 app ↔ rspamd network `10.253.253.0/29` (standard/full), and the ports (25, 465, 587, 143,
 993, 110, 995, 80→3000, 443, 3000). Minimal and full additionally set `no-new-privileges` on
 the infrastructure containers.
@@ -65,48 +66,57 @@ the infrastructure containers.
 
 ## Quick start
 
-All commands run in the repository root. `scripts/setup.sh` creates `.env` with random
-secrets (never overwrites an existing one) and prints the matching command.
+All commands run in the repository root. No `.env` is needed:
 
 ```bash
 # Minimal
-bash scripts/setup.sh --variant minimal
 docker compose -f infra/docker/docker-compose.minimal.yml up -d
 
-# Standard (default — same as running setup.sh without a flag)
-bash scripts/setup.sh --variant standard
+# Standard
 docker compose -f infra/docker/docker-compose.yml up -d
 
 # Full
-bash scripts/setup.sh --variant full
 docker compose -f infra/docker/docker-compose.full.yml --profile backup up -d
 #   + --profile minio   bundled MinIO (OBJECT_STORAGE=minio, or built-in backups without external S3)
 #   + --profile geoip   GeoLite2 updates (GEOIPUPDATE_ACCOUNT_ID / GEOIPUPDATE_LICENSE_KEY in .env)
 #   or put COMPOSE_PROFILES=backup,minio into .env
 ```
 
-Without `setup.sh`: `cp .env.example .env`, replace the `CHANGE-ME` values
-(`openssl rand -hex 32` for `JWT_SECRET`/`PEPPER`, `openssl rand -hex 20` for passwords),
-keep `OBJECT_STORAGE=filesystem`, and for standard/full add
-`RSPAMD_CONTROLLER_PASSWORD=$(openssl rand -hex 20)` (required by the full variant).
-
 Then, for every variant:
 
 ```bash
-docker logs coremail 2>&1 | grep -i "setup token"     # one-time token for the wizard
-# browser: http://<server-ip>:3000/bcp/  → admin account + first domain
+docker exec coremail cat /secrets/setup-token        # one-time token (also infra/docker/secrets/setup-token)
+# browser: http://<server-ip>:3000/setup  → admin account + first domain
 curl -s http://localhost:3000/healthz                 # {"ok":true,…,"storage":{"driver":"filesystem","status":"ok"}}
 ```
 
-Required `.env` values per variant:
+**Back up `infra/docker/secrets/` off the server** right after the first start.
+
+### Secrets without .env
+
+Every variant starts the one-shot service `coremail-init` first (same image, command
+`coremail-init-secrets`): it writes `./secrets/` next to the Compose file —
+`coremail.env` plus single-value password files for PostgreSQL, Redis, MinIO and rspamd —
+and only appends what is missing on later starts. All other services wait for it
+(`service_completed_successfully`). Details, file list and privileges:
+[setup.md → Docker Compose: coremail-init](setup.md#docker-compose-coremail-init).
+
+A `.env` stays optional and **always wins**: `scripts/setup.sh --variant <v>` still writes one
+with random values (never overwrites an existing one), `cp .env.example .env` works as
+before. `coremail-init` copies the `.env` values into `./secrets/` instead of generating new
+ones, so an existing installation keeps exactly its keys and passwords.
+`COREMAIL_SECRETS_PATH` in `.env` moves the directory.
+
+Optional `.env` values per variant (empty = generated or default):
 
 | Variable | Minimal | Standard | Full |
 |---|---|---|---|
-| `JWT_SECRET`, `PEPPER`, `POSTGRES_PASSWORD`, `REDIS_PASSWORD` | required | required | required |
-| `MINIO_ROOT_PASSWORD` | not used | required | profile `minio` only |
-| `RSPAMD_CONTROLLER_PASSWORD` | not used | recommended | required |
-| `OBJECT_STORAGE` | ignored (always `filesystem`) | optional (unset = `minio`) | required |
-| `BACKUP_ENCRYPTION_KEY`, `COREMAIL_DB_USER`/`_PASSWORD` | recommended (setup.sh) | recommended | recommended |
+| `JWT_SECRET`, `PEPPER`, `POSTGRES_PASSWORD`, `REDIS_PASSWORD` | generated | generated | generated |
+| `MINIO_ROOT_PASSWORD` | not used | generated | generated (profile `minio`) |
+| `RSPAMD_CONTROLLER_PASSWORD` | not used | generated | generated |
+| `OBJECT_STORAGE` | ignored (always `filesystem`) | optional (unset = `minio`) | optional (unset = `filesystem`) |
+| `BACKUP_ENCRYPTION_KEY`, `MFA_ENCRYPTION_KEY` | generated on a fresh install | generated on a fresh install | generated on a fresh install |
+| `COREMAIL_DB_USER`/`_PASSWORD` | optional (setup.sh) | optional | optional |
 
 ---
 
@@ -495,10 +505,12 @@ ClamAV needs a few minutes for its first signature download; mail is accepted me
 The Rspamd and Antivirus tabs in BCP → Protection come back by themselves (the deployment check
 runs every 5 minutes); while ClamAV loads its signatures the Antivirus tab shows a warning.
 
-**Standard → full:** `.env` needs `OBJECT_STORAGE` (setup.sh tells you) and
-`RSPAMD_CONTROLLER_PASSWORD`. If your mail is in MinIO (`OBJECT_STORAGE` unset or `minio`)
-or you use the built-in backups, start with `--profile minio` — the `miniodata` volume is
-reused.
+**Standard → full:** the full file defaults to `OBJECT_STORAGE=filesystem`, the standard file
+to `minio`. If your mail is in MinIO (`OBJECT_STORAGE` unset or `minio`), put
+`OBJECT_STORAGE=minio` into `.env` first (otherwise the startup check blocks with
+`/healthz` 503 `missing-objects` — nothing is lost) and start with `--profile minio` — the
+`miniodata` volume is reused; the same applies when you use the built-in backups. The secrets
+in `./secrets/` are shared by all variants.
 
 **Standard or full → minimal:** the minimal stack only knows the filesystem driver. If mail
 is in MinIO, migrate first on the running stack:

@@ -56,6 +56,10 @@ mkdir -p \
   "${COREMAIL_BASE}/data/redis" \
   "${COREMAIL_BASE}/data/minio" \
   "${COREMAIL_BASE}/data/objects"
+# 10.4: secrets directory of coremail-init (docs/setup.md "Automatic secrets")
+if [ ! -d "${COREMAIL_BASE}/secrets" ]; then
+  mkdir -m 700 "${COREMAIL_BASE}/secrets"
+fi
 echo "      ✓ ${COREMAIL_BASE}/ created"
 ENV_FILE="${COREMAIL_BASE}/.env"
 if [ "${FRESH_INSTALL}" = "1" ] && ! grep -qs '^OBJECT_STORAGE=' "${ENV_FILE}"; then

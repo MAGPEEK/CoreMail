@@ -55,6 +55,7 @@ const express = (await import('express')).default;
 const core = await import('@coremail/core');
 const { setupRouter } = await import('./setup.js');
 const { initSetupToken, hashSetupToken, verifySetupToken } = await import('../lib/setup-token.js');
+const { setupUrlHint } = await import('../lib/setup-secrets.js');
 
 const quietLog = { info: () => undefined, warn: () => undefined };
 let server: Server;
@@ -231,9 +232,33 @@ test('secrets directory: token goes to setup-token (0600), the log names the fil
     if (posixModes) assert.equal(statSync(file).mode & 0o777, 0o600);
     const logged = JSON.stringify(lines);
     assert.ok(!logged.includes(token), 'token not in the log');
-    assert.match(logged, /CoreMail setup: open https:\/\/<host>\/setup — token in \.\/secrets\/setup-token/);
+    // a fresh installation answers on plain HTTP (no certificate yet), port 3000 by default
+    assert.match(logged, /CoreMail setup: open http:\/\/<server>:3000\/setup — token in \.\/secrets\/setup-token/);
     assert.match(logged, /setup token/i, 'still found by grep -i "setup token"');
     assert.deepEqual(readdirSync(s.dir), ['setup-token'], 'no temp file left behind');
+  } finally { s.restore(); }
+});
+
+test('setup URL hint: plain HTTP on the published port, the public host only when configured', async () => {
+  assert.equal(setupUrlHint({}), 'http://<server>:3000/setup');
+  assert.equal(setupUrlHint({ COREMAIL_PUBLIC_HTTP_PORT: '8080' }), 'http://<server>:8080/setup');
+  assert.equal(setupUrlHint({ COREMAIL_PUBLIC_HTTP_PORT: '80' }, 'mail.example.org'), 'http://mail.example.org/setup');
+  for (const bad of ['', 'abc', '0', '70000', '3000; rm']) {
+    assert.equal(setupUrlHint({ COREMAIL_PUBLIC_HTTP_PORT: bad }), 'http://<server>:3000/setup', bad);
+  }
+  // schema default / loopback names and anything that is not a host name → placeholder
+  for (const host of [null, '', 'mail.local', 'localhost', 'MAIL.LOCALHOST', 'a b', 'x/y', '-x.example.org']) {
+    assert.equal(setupUrlHint({}, host), 'http://<server>:3000/setup', String(host));
+  }
+  assert.equal(setupUrlHint({}, 'Mail.Example.org.'), 'http://mail.example.org:3000/setup');
+
+  // the log names the configured public host
+  const s = withSecretsDir();
+  try {
+    settings = { id: 'singleton', publicHostname: 'mail.example.org' };
+    const { lines, log } = capturingLog();
+    await initSetupToken(log, { ...s.env, COREMAIL_PUBLIC_HTTP_PORT: '8080' });
+    assert.match(JSON.stringify(lines), /open http:\/\/mail\.example\.org:8080\/setup — token in/);
   } finally { s.restore(); }
 });
 

@@ -16,6 +16,19 @@ with a PVC) or an external endpoint.
 
 ## Install
 
+Quickest (chart 3.4): no secrets at all — the chart generates every empty
+`secrets.*` value once and keeps it on upgrade
+([Generated secrets](#generated-secrets)):
+
+```bash
+helm install coremail infra/k8s -n coremail --create-namespace \
+  --set mailService.type=NodePort        # on clusters without a load balancer
+# back up the generated Secret right away (the NOTES print the command):
+kubectl -n coremail get secret coremail -o yaml > coremail-secrets.yaml
+```
+
+With your own Secret and an Ingress:
+
 ```bash
 kubectl create namespace coremail
 
@@ -68,6 +81,37 @@ Instead of `existingSecret` you can pass `secrets.jwtSecret`, `secrets.pepper`, 
 as values. **Quote them** (or use `--set-string`): a digits-only value would be
 parsed as a number, and the chart refuses that.
 
+### Generated secrets
+
+Since chart 3.4 every `secrets.*` value is optional when no `existingSecret` is
+set. For each empty value the chart takes, in this order:
+
+1. the value itself (values file, `--set`) — always wins;
+2. the key in the release's existing Secret (`lookup`) — every upgrade keeps it;
+3. a new random value, only when there is nothing to keep:
+   - always: `JWT_SECRET`, `PEPPER` (64 hex), `POSTGRES_PASSWORD`,
+     `REDIS_PASSWORD`, `MINIO_ROOT_PASSWORD` (when MinIO/S3 is used),
+     `RSPAMD_CONTROLLER_PASSWORD` (40 alphanumerics, URL-safe);
+   - first install only: `MFA_ENCRYPTION_KEY`, `BACKUP_ENCRYPTION_KEY` (64 hex). An
+     existing release keeps deriving them from `JWT_SECRET` + `PEPPER` — a new MFA
+     key would make every enrolled TOTP secret unreadable.
+
+Safety rules:
+
+- **Never regenerated on upgrade.** On `helm upgrade`, an empty `JWT_SECRET`,
+  `PEPPER`, `POSTGRES_PASSWORD`, `REDIS_PASSWORD` or `MINIO_ROOT_PASSWORD` that is
+  not in the existing Secret — or a Secret that cannot be read (`--dry-run=client`,
+  missing RBAC for `get secrets`) — fails the render instead of producing a new
+  value. Use `--dry-run=server` for upgrade previews.
+- The generated Secret carries `helm.sh/resource-policy: keep`: `helm uninstall`
+  leaves it (like the PVCs it belongs to), and a reinstall with the same release
+  name reuses it. Delete it by hand together with the PVCs.
+- **GitOps** tools that render with `helm template` (Argo CD, Flux with
+  post-renderers, …) cannot look the Secret up and would generate new values on
+  every sync. Set the values (or `existingSecret`) there.
+- Back the Secret up off the cluster after the first install (the NOTES print
+  `kubectl get secret … -o yaml`). Without `PEPPER` no password works.
+
 ## What gets deployed
 
 | Object | Purpose |
@@ -94,12 +138,12 @@ All values are documented in [`values.yaml`](values.yaml). The important ones:
 | Value | Default | Notes |
 |---|---|---|
 | `secrets.existingSecret` | `""` | Secret with the keys listed in `values.yaml`; otherwise `secrets.*` |
-| `secrets.jwtSecret`, `.pepper` | — | required, ≥ 32 chars. **Never change `PEPPER`** after the first start |
-| `secrets.postgresPassword`, `.redisPassword` | — | required, URL-safe (`[A-Za-z0-9._~-]`) — embedded in `DATABASE_URL`/`REDIS_URL` |
-| `secrets.minioRootUser`, `.minioRootPassword` | `coremail`, — | required when MinIO/S3 is used |
-| `secrets.mfaEncryptionKey` | `""` | 64 hex; strongly recommended (TOTP secrets survive JWT/PEPPER rotation) |
-| `secrets.backupEncryptionKey` | `""` | `BACKUP_ENCRYPTION_KEY`: 64 hex or base64 of 32 bytes; strongly recommended (unset = derived from `JWT_SECRET` + `PEPPER`). **Keep a copy off the cluster** |
-| `secrets.rspamdControllerPassword` | `""` | `RSPAMD_CONTROLLER_PASSWORD`: ≥ 12 chars `[A-Za-z0-9._~+/=-]`; set on the bundled rspamd controller and sent by the app |
+| `secrets.jwtSecret`, `.pepper` | generated | ≥ 32 chars. **Never change `PEPPER`** after the first start ([Generated secrets](#generated-secrets)) |
+| `secrets.postgresPassword`, `.redisPassword` | generated | URL-safe (`[A-Za-z0-9._~-]`) — embedded in `DATABASE_URL`/`REDIS_URL` |
+| `secrets.minioRootUser`, `.minioRootPassword` | `coremail`, generated | used when MinIO/S3 is used |
+| `secrets.mfaEncryptionKey` | generated on install | 64 hex (TOTP secrets survive JWT/PEPPER rotation); an existing release without it keeps deriving it |
+| `secrets.backupEncryptionKey` | generated on install | `BACKUP_ENCRYPTION_KEY`: 64 hex or base64 of 32 bytes (unset = derived from `JWT_SECRET` + `PEPPER`). **Keep a copy off the cluster** |
+| `secrets.rspamdControllerPassword` | generated | `RSPAMD_CONTROLLER_PASSWORD`: ≥ 12 chars `[A-Za-z0-9._~+/=-]`; set on the bundled rspamd controller and sent by the app |
 | `secrets.setupToken` | `""` | ≥ 16 chars; required for `app.replicaCount > 1` |
 | `app.image.tag` / `.digest` | appVersion / `""` | digest pins the image |
 | `app.replicaCount` | `1` | see [Replicas](#replicas) |
@@ -255,8 +299,8 @@ the right owner or use `objectStorage.filesystem.existingClaim`.
   The policies need a CNI that enforces them (Calico, Cilium, kindnet in
   kind ≥ 0.24, …). Kubelet probes come from the node and are not affected.
   `kubectl port-forward` bypasses NetworkPolicies (handy for the setup wizard).
-- **Fail-fast validation** at `helm install/upgrade/template`: missing or too short
-  secrets, non-URL-safe passwords, invalid `MFA_ENCRYPTION_KEY`/`SETUP_TOKEN`/
+- **Fail-fast validation** at `helm install/upgrade/template`: too short
+  secrets, secrets that would be regenerated on upgrade, non-URL-safe passwords, invalid `MFA_ENCRYPTION_KEY`/`SETUP_TOKEN`/
   `BACKUP_ENCRYPTION_KEY`/`RSPAMD_CONTROLLER_PASSWORD`, numeric secrets,
   `ingress.host`, replicas vs. setup token / filesystem storage, removed values
   (`app.mailAuth.limitPrivateIps`).
@@ -314,6 +358,16 @@ is used — then set `SETUP_TOKEN` there). `filesystem` object storage is limite
 to one replica.
 
 ## Upgrading
+
+### Upgrading to chart 3.4
+
+Nothing to do. Values you pass keep winning; an existing release that passes all
+secrets as values or uses `existingSecret` renders exactly as before. New:
+empty values are taken from the release's Secret or generated
+([Generated secrets](#generated-secrets)); `RSPAMD_CONTROLLER_PASSWORD` is
+generated when it was unset (the bundled rspamd and the app get the same value),
+`MFA_ENCRYPTION_KEY` / `BACKUP_ENCRYPTION_KEY` are never added to an existing
+release. The chart's Secret is now kept on `helm uninstall`.
 
 ### Upgrading to chart 3.0 (CoreMail 10.0)
 
@@ -414,8 +468,9 @@ Runs, via Docker only (pinned `alpine/helm:3.16.4` and
 for every `ci/*-values.yaml` (bundled + Ingress/cert-manager; external datastores
 + existing Secret + LB HTTP/HTTPS + S3 with TLS/CA; filesystem storage + NodePort; the kind profile of `scripts/k8s-e2e.sh`),
 kubeconform `-strict` on the rendered manifests (Kubernetes 1.30 schemas,
-override with `KUBE_VERSION`), and a negative test that rendering without the
-required secrets fails. Rendered output: `infra/k8s/.rendered/` (git-ignored).
+override with `KUBE_VERSION`), a test that rendering without secrets generates
+them (64 hex keys, `resource-policy: keep`) and that `--is-upgrade` without a
+readable Secret refuses to generate. Rendered output: `infra/k8s/.rendered/` (git-ignored).
 It also checks statically that every rendered container and pod keeps the
 Pod Security `restricted` fields (`allowPrivilegeEscalation: false`,
 `readOnlyRootFilesystem: true`, `runAsNonRoot: true`, `seccompProfile:

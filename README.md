@@ -62,7 +62,7 @@ It is not built for large providers with thousands of mailboxes on one host.
 
 ## Quick start
 
-You need Docker 24 or newer with Docker Compose 2.20 or newer. All variants use the image `magpeek/coremail-app`. Mail data lives on the volume `coremail-data`, the database on `pgdata` (Compose) or `coremail-pgdata` (`docker run`).
+You need Docker 24 or newer with Docker Compose 2.20 or newer. All variants use the image `magpeek/coremail-app`. Mail data lives on the volume `coremail-data`, the database on `pgdata` (Compose) or `coremail-pgdata` (`docker run`). No configuration file is needed: on the first start CoreMail generates every secret (keys and database passwords) into a `secrets` directory ([docs/setup.md](docs/setup.md#automatic-secrets)).
 
 ### Minimal — Docker Compose
 
@@ -71,65 +71,50 @@ CoreMail, PostgreSQL and Redis ([docker-compose.minimal.yml](infra/docker/docker
 ```bash
 git clone https://github.com/MAGPEEK/CoreMail.git
 cd CoreMail
-bash scripts/setup.sh --variant minimal      # writes .env with random secrets
 docker compose -f infra/docker/docker-compose.minimal.yml up -d
 ```
 
-Without `setup.sh`, create `infra/docker/.env` with the four required values yourself:
+Then open the setup wizard ([First login](#first-login)); the one-time token is in `infra/docker/secrets/setup-token`. **Back up `infra/docker/secrets/` off the server** — without `PEPPER` from `coremail.env` no password works anymore.
 
-```bash
-cat > infra/docker/.env <<EOF
-JWT_SECRET=$(openssl rand -hex 32)
-PEPPER=$(openssl rand -hex 32)
-POSTGRES_PASSWORD=$(openssl rand -hex 20)
-REDIS_PASSWORD=$(openssl rand -hex 20)
-EOF
-```
-
-Keep a copy of this file. `PEPPER` must never change, otherwise no password works anymore.
+A `.env` stays optional and always wins: `bash scripts/setup.sh --variant minimal` writes one with random values, and existing installations keep theirs ([docs/docker-compose.md](docs/docker-compose.md)).
 
 ### Minimal — plain `docker run`
 
-The same stack without Compose and without cloning the repository. The secrets go into `coremail.env`; keep it.
+The same stack without Compose and without cloning the repository. The image generates the secrets into `./secrets` first; keep that directory.
 
 ```bash
-umask 077
-PG_PASS=$(openssl rand -hex 20); REDIS_PASS=$(openssl rand -hex 20)
-cat > coremail.env <<EOF
-JWT_SECRET=$(openssl rand -hex 32)
-PEPPER=$(openssl rand -hex 32)
-DATABASE_URL=postgresql://coremail:$PG_PASS@coremail-postgres:5432/coremail
-REDIS_URL=redis://:$REDIS_PASS@coremail-redis:6379
-OBJECT_STORAGE=filesystem
-RSPAMD_ENABLED=false
-CLAMAV_ENABLED=false
-SECURITY_FILTER_URL=http://localhost:3002
-EOF
+mkdir -m 700 secrets
+docker run --rm -v "$PWD/secrets:/secrets" magpeek/coremail-app:10.4.0 coremail-init-secrets
 
 docker network create coremail
 
 docker run -d --name coremail-postgres --network coremail --restart unless-stopped \
-  -e POSTGRES_DB=coremail -e POSTGRES_USER=coremail -e POSTGRES_PASSWORD="$PG_PASS" \
+  -e POSTGRES_DB=coremail -e POSTGRES_USER=coremail \
+  -e POSTGRES_PASSWORD_FILE=/run/coremail/postgres-password \
+  -v "$PWD/secrets:/run/coremail:ro" \
   -v coremail-pgdata:/var/lib/postgresql/data \
   postgres:16-alpine
 
 docker run -d --name coremail-redis --network coremail --restart unless-stopped \
-  -v coremail-redisdata:/data \
-  redis:7-alpine redis-server --appendonly yes --requirepass "$REDIS_PASS"
+  -v "$PWD/secrets:/run/coremail:ro" -v coremail-redisdata:/data \
+  --entrypoint sh redis:7-alpine \
+  -c 'exec docker-entrypoint.sh redis-server --appendonly yes --requirepass "$(cat /run/coremail/redis-password)"'
 
 docker run -d --name coremail --network coremail --restart unless-stopped \
-  --env-file coremail.env \
+  -e COREMAIL_DB_HOST=coremail-postgres -e COREMAIL_REDIS_HOST=coremail-redis \
+  -e OBJECT_STORAGE=filesystem -e RSPAMD_ENABLED=false -e CLAMAV_ENABLED=false \
+  -e SECURITY_FILTER_URL=http://localhost:3002 \
   -p 25:25 -p 465:465 -p 587:587 -p 143:143 -p 993:993 \
   -p 80:3000 -p 443:443 -p 3000:3000 \
-  -v coremail-data:/data \
+  -v "$PWD/secrets:/secrets" -v coremail-data:/data \
   --security-opt no-new-privileges:true \
   --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
   --cap-add SETUID --cap-add SETGID --cap-add KILL --cap-add NET_BIND_SERVICE \
   --sysctl net.ipv4.ip_unprivileged_port_start=0 \
-  magpeek/coremail-app:10.3.0
+  magpeek/coremail-app:10.4.0
 ```
 
-Add `-p 110:110 -p 995:995` if you want POP3.
+Add `-p 110:110 -p 995:995` if you want POP3. The setup token is in `./secrets/setup-token`.
 
 ### Maximal — Docker Compose
 
@@ -138,53 +123,49 @@ Add `-p 110:110 -p 995:995` if you want POP3.
 ```bash
 git clone https://github.com/MAGPEEK/CoreMail.git
 cd CoreMail
-bash scripts/setup.sh --variant full         # also sets RSPAMD_CONTROLLER_PASSWORD and OBJECT_STORAGE
 docker compose -f infra/docker/docker-compose.full.yml up -d
 # with profiles:
 docker compose -f infra/docker/docker-compose.full.yml --profile minio --profile backup up -d
 ```
 
-Required in `.env` besides the four values above: `RSPAMD_CONTROLLER_PASSWORD` and `OBJECT_STORAGE` (`filesystem`, `minio` or `s3`); with the `minio` profile also `MINIO_ROOT_PASSWORD`. All three variants are compared in [docs/docker-compose.md](docs/docker-compose.md).
+Mail is stored on the `coremail-data` volume (`OBJECT_STORAGE=filesystem`; set `minio` or `s3` in `.env` to change it). The `geoip` profile needs `GEOIPUPDATE_ACCOUNT_ID` and `GEOIPUPDATE_LICENSE_KEY` in `.env`. All three variants are compared in [docs/docker-compose.md](docs/docker-compose.md).
 
 ### Maximal — plain `docker run`
 
 <details>
 <summary>rspamd and ClamAV next to the minimal stack</summary>
 
-Start the minimal `docker run` stack above, but stop before the last command (`coremail`). rspamd trusts only the CoreMail container's address, so both get fixed addresses on a small network of their own. The rspamd configuration comes from the repository (`infra/docker/rspamd/local.d`).
+Start the minimal `docker run` stack above, but stop before the last command (`coremail`). rspamd trusts only the CoreMail container's address, so both get fixed addresses on a small network of their own. The rspamd configuration comes from the repository (`infra/docker/rspamd/local.d`); rspamd reads its controller password from `./secrets` and then runs as its own user.
 
 ```bash
 git clone https://github.com/MAGPEEK/CoreMail.git
-RSPAMD_PASS=$(openssl rand -hex 20)
-grep -v -e '^RSPAMD_ENABLED=' -e '^CLAMAV_ENABLED=' coremail.env > coremail.env.new && mv coremail.env.new coremail.env
-cat >> coremail.env <<EOF
-RSPAMD_URL=http://10.253.253.3:11334
-CLAMAV_HOST=coremail-clamav
-CLAMAV_PORT=3310
-EOF
 
 docker network create --subnet 10.253.253.0/29 coremail-rspamd
 
 docker run -d --name coremail-rspamd --network coremail-rspamd --ip 10.253.253.3 --restart unless-stopped \
-  -e RSPAMD_CONTROLLER_SECURE_IP=10.253.253.2 -e RSPAMD_CONTROLLER_PASSWORD="$RSPAMD_PASS" \
+  -e RSPAMD_CONTROLLER_SECURE_IP=10.253.253.2 \
+  -v "$PWD/secrets:/run/coremail:ro" \
   -v "$PWD/CoreMail/infra/docker/rspamd/local.d:/etc/rspamd/local.d:ro" \
   -v coremail-rspamd-data:/var/lib/rspamd \
-  rspamd/rspamd:4.0.0
+  --user 0:0 --entrypoint sh rspamd/rspamd:4.0.0 \
+  -c 'RSPAMD_CONTROLLER_PASSWORD="$(cat /run/coremail/rspamd-controller-password)" && export RSPAMD_CONTROLLER_PASSWORD && exec setpriv --reuid=11333 --regid=11333 --clear-groups /usr/bin/rspamd -f'
 
 docker run -d --name coremail-clamav --network coremail --restart unless-stopped \
   -v coremail-clamav-data:/var/lib/clamav \
   clamav/clamav:stable
 
 docker create --name coremail --network coremail --restart unless-stopped \
-  --env-file coremail.env \
+  -e COREMAIL_DB_HOST=coremail-postgres -e COREMAIL_REDIS_HOST=coremail-redis \
+  -e OBJECT_STORAGE=filesystem -e SECURITY_FILTER_URL=http://localhost:3002 \
+  -e RSPAMD_URL=http://10.253.253.3:11334 -e CLAMAV_HOST=coremail-clamav -e CLAMAV_PORT=3310 \
   -p 25:25 -p 465:465 -p 587:587 -p 143:143 -p 993:993 \
   -p 80:3000 -p 443:443 -p 3000:3000 \
-  -v coremail-data:/data \
+  -v "$PWD/secrets:/secrets" -v coremail-data:/data \
   --security-opt no-new-privileges:true \
   --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
   --cap-add SETUID --cap-add SETGID --cap-add KILL --cap-add NET_BIND_SERVICE \
   --sysctl net.ipv4.ip_unprivileged_port_start=0 \
-  magpeek/coremail-app:10.3.0
+  magpeek/coremail-app:10.4.0
 docker network connect --ip 10.253.253.2 coremail-rspamd coremail
 docker start coremail
 ```
@@ -196,9 +177,10 @@ ClamAV downloads about 300 MB of signatures on its first start; scanning begins 
 ### First login
 
 1. Wait about a minute until the container is healthy (`docker ps` shows `healthy`).
-2. Read the one-time setup token: `docker logs coremail 2>&1 | grep -i "setup token"`
-3. Open `http://<server-ip>:3000/bcp/`, enter the token, your mail domain, the first admin address and a password.
+2. Read the one-time setup token: `infra/docker/secrets/setup-token` (Compose) or `./secrets/setup-token` (`docker run`) — or `docker exec coremail cat /secrets/setup-token`.
+3. Open `http://<server-ip>:3000/setup`, enter the token, your mail domain, the first admin address and a password.
 4. In the admin panel, issue a Let's Encrypt certificate under **Certificates** and create the mailboxes. The webmail is at `https://<your-host>/`, the admin panel at `https://<your-host>/bcp/`.
+5. Back up the `secrets` directory off the server (password manager, offline copy).
 
 | Port | Use |
 |------|-----|

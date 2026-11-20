@@ -10,8 +10,8 @@
 #   KUBE_VERSION=1.30.0 bash scripts/helm-check.sh
 #
 # For every infra/k8s/ci/*-values.yaml: helm lint --strict, helm template,
-# kubeconform -strict. Additionally checks that rendering WITHOUT the required
-# secrets fails (fail-fast `required` checks). Rendered manifests are kept in
+# kubeconform -strict. Additionally checks that rendering WITHOUT secrets generates
+# them (chart 3.4) and that an upgrade never regenerates them. Rendered manifests are kept in
 # infra/k8s/.rendered/ (git-ignored) for inspection.
 set -euo pipefail
 
@@ -82,12 +82,29 @@ for values in infra/k8s/ci/*-values.yaml; do
   fi
 done
 
-echo "── fail-fast: rendering without secrets must fail ───────"
-if helm template coremail /chart >/dev/null 2>"$OUT/missing-secrets.err"; then
-  echo "ERROR: chart rendered without required secrets"; fail=1
+echo "── chart 3.4: empty secrets are generated on install ────"
+if helm template coremail /chart -n coremail > "$OUT/generated-secrets.yaml" 2>"$OUT/generated-secrets.err"; then
+  for key in JWT_SECRET PEPPER POSTGRES_PASSWORD REDIS_PASSWORD MINIO_ROOT_PASSWORD RSPAMD_CONTROLLER_PASSWORD MFA_ENCRYPTION_KEY BACKUP_ENCRYPTION_KEY; do
+    if ! grep -qE "^  $key: \"[A-Za-z0-9]{40,}\"$" "$OUT/generated-secrets.yaml"; then echo "ERROR: $key not generated"; fail=1; fi
+  done
+  for key in JWT_SECRET PEPPER MFA_ENCRYPTION_KEY BACKUP_ENCRYPTION_KEY; do
+    if ! grep -qE "^  $key: \"[0-9a-f]{64}\"$" "$OUT/generated-secrets.yaml"; then echo "ERROR: $key is not 64 hex characters"; fail=1; fi
+  done
+  if ! grep -q 'helm.sh/resource-policy: keep' "$OUT/generated-secrets.yaml"; then echo "ERROR: generated Secret is not kept on uninstall"; fail=1; fi
+  echo "ok (generated)"
 else
-  grep -o 'secrets\.[a-zA-Z]* is required[^"]*' "$OUT/missing-secrets.err" | head -1 || cat "$OUT/missing-secrets.err"
+  echo "ERROR: chart without secrets did not render:"; cat "$OUT/generated-secrets.err"; fail=1
+fi
+echo "── fail-fast: upgrade without a readable Secret must not regenerate ──"
+if helm template coremail /chart -n coremail --is-upgrade >/dev/null 2>"$OUT/upgrade-secrets.err"; then
+  echo "ERROR: upgrade rendered new secrets although the existing Secret cannot be read"; fail=1
+elif grep -q 'refusing to generate a new value on upgrade' "$OUT/upgrade-secrets.err"; then
   echo "ok (refused)"
+else
+  echo "ERROR: upgrade refused with an unexpected message:"; cat "$OUT/upgrade-secrets.err"; fail=1
+fi
+if ! helm template coremail /chart -n coremail --is-upgrade -f /chart/ci/default-values.yaml >/dev/null 2>"$OUT/upgrade-values.err"; then
+  echo "ERROR: upgrade with explicit secrets refused:"; cat "$OUT/upgrade-values.err"; fail=1
 fi
 
 # Values that must be refused (chart 2.0 removals, malformed secrets)

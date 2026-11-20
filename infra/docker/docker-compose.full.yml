@@ -22,17 +22,18 @@ name: coremail
 #  plan 4 GB RAM / 2–4 vCPU (8 GB from ~200 users). Sum of the default limits
 #  without profiles: ~6 GB (limits are ceilings, not reservations).
 #
-#  Start (in the repo root):
-#    bash scripts/setup.sh --variant full
+#  Start (in the repo root) — no .env needed (docs/setup.md "Automatic secrets"):
 #    docker compose -f infra/docker/docker-compose.full.yml up -d
 #    # with profiles:
 #    docker compose -f infra/docker/docker-compose.full.yml --profile backup --profile minio up -d
 #    # or COMPOSE_PROFILES=backup,minio in .env
+#    → http://<server-ip>:3000/setup, token: docker exec coremail cat /secrets/setup-token
 #
-#  Required in .env: JWT_SECRET, PEPPER, POSTGRES_PASSWORD, REDIS_PASSWORD,
-#  RSPAMD_CONTROLLER_PASSWORD, OBJECT_STORAGE (filesystem | minio | s3).
-#  Profile minio additionally: MINIO_ROOT_PASSWORD. Profile geoip:
-#  GEOIPUPDATE_ACCOUNT_ID + GEOIPUPDATE_LICENSE_KEY.
+#  coremail-init writes every secret (JWT_SECRET, PEPPER, database/Redis/MinIO/
+#  rspamd passwords, …) into ./secrets/ next to this file — BACK IT UP off the
+#  server. A .env (bash scripts/setup.sh --variant full) stays optional and
+#  always wins. OBJECT_STORAGE defaults to filesystem (minio | s3 in .env).
+#  Profile geoip needs GEOIPUPDATE_ACCOUNT_ID + GEOIPUPDATE_LICENSE_KEY in .env.
 # ═════════════════════════════════════════════════════════════════════════════
 
 x-logging: &logging
@@ -52,18 +53,28 @@ services:
     container_name: coremail
     restart: unless-stopped
     environment:
-      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET missing in .env  →  openssl rand -hex 32}
-      PEPPER:     ${PEPPER:?PEPPER missing in .env  →  openssl rand -hex 32}
+      # Secrets: .env wins; empty = ./secrets/coremail.env (coremail-init)
+      JWT_SECRET: ${JWT_SECRET:-}
+      PEPPER:     ${PEPPER:-}
 
-      DATABASE_URL: postgresql://${COREMAIL_DB_USER:-coremail}:${COREMAIL_DB_PASSWORD:-${POSTGRES_PASSWORD:?POSTGRES_PASSWORD missing in .env}}@postgres:5432/coremail
-      REDIS_URL:    redis://:${REDIS_PASSWORD:?REDIS_PASSWORD missing in .env}@redis:6379
+      # Empty DATABASE_URL / REDIS_URL = built by the entrypoint as before 10.4:
+      # postgresql://<COREMAIL_DB_USER|coremail>:<COREMAIL_DB_PASSWORD|POSTGRES_PASSWORD>@postgres:5432/coremail,
+      # redis://:<REDIS_PASSWORD>@redis:6379
+      DATABASE_URL:         ${DATABASE_URL:-}
+      REDIS_URL:            ${REDIS_URL:-}
+      POSTGRES_PASSWORD:    ${POSTGRES_PASSWORD:-}
+      COREMAIL_DB_USER:     ${COREMAIL_DB_USER:-}
+      COREMAIL_DB_PASSWORD: ${COREMAIL_DB_PASSWORD:-}
+      REDIS_PASSWORD:       ${REDIS_PASSWORD:-}
+      COREMAIL_SECRETS_HOST_PATH: ${COREMAIL_SECRETS_PATH:-./secrets}
+      COREMAIL_PUBLIC_HTTP_PORT:  "3000"   # published HTTP port (setup log hint)
       COREMAIL_ALLOW_SCHEMA_DATA_LOSS: ${COREMAIL_ALLOW_SCHEMA_DATA_LOSS:-false}
       BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
 
       # ── Object storage (docs/storage.md) ─────────────────────────────────────
-      # Must be set explicitly: filesystem (new installs, volume coremail-data),
-      # minio (mail kept in MinIO; start with --profile minio) or s3 (external S3).
-      OBJECT_STORAGE: ${OBJECT_STORAGE:?OBJECT_STORAGE missing in .env  →  filesystem | minio | s3 (docs/docker-compose.md)}
+      # filesystem (default: new installs, volume coremail-data), minio (mail kept
+      # in MinIO; start with --profile minio) or s3 (external S3).
+      OBJECT_STORAGE: ${OBJECT_STORAGE:-filesystem}
       STORAGE_PATH:   /data/objects
       MINIO_ENDPOINT:   ${MINIO_ENDPOINT:-minio}
       MINIO_PORT:       ${MINIO_PORT:-}
@@ -180,7 +191,10 @@ services:
       # Bind mount instead, e.g.:  - /srv/coremail/data:/data   (docs/docker-compose.md)
       - coremail-data:/data
       - geoip-data:/usr/share/GeoIP:ro
+      # Secrets (coremail.env, setup-token) — back this directory up off the server
+      - ${COREMAIL_SECRETS_PATH:-./secrets}:/secrets
     depends_on:
+      coremail-init: { condition: service_completed_successfully }
       postgres: { condition: service_healthy }
       redis:    { condition: service_healthy }
       # Only waited for when the profile is active
@@ -213,6 +227,41 @@ services:
       rspamd:
         ipv4_address: ${RSPAMD_NET_PREFIX:-10.253.253}.2
 
+  # ───────────────────────────────────────────────────────────────────────────
+  #  coremail-init — one-shot secrets generator (same image). Creates/extends
+  #  ./secrets before everything else; .env values are copied, never replaced.
+  # ───────────────────────────────────────────────────────────────────────────
+  coremail-init:
+    image: magpeek/coremail-app:${COREMAIL_VERSION:-10.3.0}
+    container_name: coremail-init
+    restart: "no"
+    command: ["coremail-init-secrets"]
+    environment:
+      JWT_SECRET:                 ${JWT_SECRET:-}
+      PEPPER:                     ${PEPPER:-}
+      POSTGRES_PASSWORD:          ${POSTGRES_PASSWORD:-}
+      COREMAIL_DB_USER:           ${COREMAIL_DB_USER:-}
+      COREMAIL_DB_PASSWORD:       ${COREMAIL_DB_PASSWORD:-}
+      REDIS_PASSWORD:             ${REDIS_PASSWORD:-}
+      MINIO_ROOT_PASSWORD:        ${MINIO_ROOT_PASSWORD:-}
+      RSPAMD_CONTROLLER_PASSWORD: ${RSPAMD_CONTROLLER_PASSWORD:-}
+      MFA_ENCRYPTION_KEY:         ${MFA_ENCRYPTION_KEY:-}
+      BACKUP_ENCRYPTION_KEY:      ${BACKUP_ENCRYPTION_KEY:-}
+      AUDIT_EXPORT_SIGNING_KEY:   ${AUDIT_EXPORT_SIGNING_KEY:-}
+      VAPID_PUBLIC_KEY:           ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY:          ${VAPID_PRIVATE_KEY:-}
+      DATABASE_URL:               ${DATABASE_URL:-}
+      REDIS_URL:                  ${REDIS_URL:-}
+    volumes:
+      - ${COREMAIL_SECRETS_PATH:-./secrets}:/secrets
+    network_mode: none     # the database is not up yet anyway
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    # NET_BIND_SERVICE only because the node binary carries it as a file capability
+    cap_add: [DAC_OVERRIDE, FOWNER, NET_BIND_SERVICE]
+    logging: *logging
+
   postgres:
     image: postgres:16-alpine
     container_name: coremail-postgres
@@ -220,7 +269,9 @@ services:
     environment:
       POSTGRES_DB:       coremail
       POSTGRES_USER:     coremail
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # POSTGRES_PASSWORD from .env (copied by coremail-init) or generated; read
+      # only when the data directory is created
+      POSTGRES_PASSWORD_FILE: /run/coremail/postgres-password
       COREMAIL_DB_USER:     ${COREMAIL_DB_USER:-}
       COREMAIL_DB_PASSWORD: ${COREMAIL_DB_PASSWORD:-}
     volumes:
@@ -229,6 +280,9 @@ services:
       - pgdata:/var/lib/postgresql/data
       - ./postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
       - ./postgres/02-app-role.sh:/docker-entrypoint-initdb.d/02-app-role.sh:ro
+      - ${COREMAIL_SECRETS_PATH:-./secrets}:/run/coremail:ro
+    depends_on:
+      coremail-init: { condition: service_completed_successfully }
     shm_size: 256m
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U coremail -d coremail"]
@@ -251,13 +305,22 @@ services:
     container_name: coremail-redis
     restart: unless-stopped
     # No maxmemory/eviction: BullMQ queues must never be evicted.
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    # Password: REDIS_PASSWORD from .env, else ./secrets/redis-password
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        REDIS_PASSWORD="$${REDIS_PASSWORD:-$$(cat /run/coremail/redis-password)}" || exit 1
+        [ -n "$$REDIS_PASSWORD" ] || { echo "redis: no REDIS_PASSWORD and no /run/coremail/redis-password" >&2; exit 1; }
+        exec docker-entrypoint.sh redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"
     environment:
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
     volumes:
       - redisdata:/data
+      - ${COREMAIL_SECRETS_PATH:-./secrets}:/run/coremail:ro
+    depends_on:
+      coremail-init: { condition: service_completed_successfully }
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a $$REDIS_PASSWORD ping | grep -q PONG"]
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$${REDIS_PASSWORD:-$$(cat /run/coremail/redis-password)}\" redis-cli ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -276,14 +339,30 @@ services:
     image: rspamd/rspamd:4.0.0
     container_name: coremail-rspamd
     restart: unless-stopped
+    # Started as root ONLY to read ./secrets/rspamd-controller-password (0600,
+    # root) when RSPAMD_CONTROLLER_PASSWORD is empty; rspamd itself runs as
+    # _rspamd (11333), the image's own user, as before.
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ -z "$${RSPAMD_CONTROLLER_PASSWORD}" ] && [ -f /run/coremail/rspamd-controller-password ]; then
+          RSPAMD_CONTROLLER_PASSWORD="$$(cat /run/coremail/rspamd-controller-password)" || exit 1
+          export RSPAMD_CONTROLLER_PASSWORD
+        fi
+        exec setpriv --reuid=11333 --regid=11333 --clear-groups /usr/bin/rspamd -f
     environment:
       # Only the app container (fixed address) is trusted without a password;
-      # everything else (web UI via ssh tunnel / docker exec) needs the password.
+      # everything else (web UI via ssh tunnel / docker exec) needs the password
+      # (.env or ./secrets/rspamd-controller-password).
       RSPAMD_CONTROLLER_SECURE_IP: ${RSPAMD_NET_PREFIX:-10.253.253}.2
-      RSPAMD_CONTROLLER_PASSWORD:  ${RSPAMD_CONTROLLER_PASSWORD:?RSPAMD_CONTROLLER_PASSWORD missing in .env  →  openssl rand -hex 20}
+      RSPAMD_CONTROLLER_PASSWORD:  ${RSPAMD_CONTROLLER_PASSWORD:-}
     volumes:
       - ./rspamd/local.d:/etc/rspamd/local.d:ro
       - rspamd-data:/var/lib/rspamd
+      - ${COREMAIL_SECRETS_PATH:-./secrets}:/run/coremail:ro
+    depends_on:
+      coremail-init: { condition: service_completed_successfully }
     healthcheck:
       test: ["CMD-SHELL", "rspamc symbols /dev/null > /dev/null 2>&1"]
       interval: 30s
@@ -341,13 +420,22 @@ services:
     image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372
     container_name: coremail-minio
     restart: unless-stopped
-    command: server /data --console-address ":9001"
+    # Password: MINIO_ROOT_PASSWORD from .env, else ./secrets/minio-root-password
+    # (MinIO refuses to start with an empty password — fail closed)
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        MINIO_ROOT_PASSWORD="$${MINIO_ROOT_PASSWORD:-$$(cat /run/coremail/minio-root-password)}" || exit 1
+        export MINIO_ROOT_PASSWORD
+        exec /usr/bin/docker-entrypoint.sh minio server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER:     ${MINIO_ROOT_USER:-minioadmin}
-      # MinIO refuses to start with an empty password (fail closed)
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-}
     volumes:
       - miniodata:/data
+      - ${COREMAIL_SECRETS_PATH:-./secrets}:/run/coremail:ro
+    depends_on:
+      coremail-init: { condition: service_completed_successfully }
     ports:
       - "127.0.0.1:9001:9001"   # console local only (ssh -L 9001:localhost:9001 <server>)
     healthcheck:
@@ -375,12 +463,18 @@ services:
     image: postgres:16-alpine
     container_name: coremail-pg-backup
     restart: unless-stopped
-    entrypoint: ["sh", "/pg-backup.sh"]
+    # Password: POSTGRES_PASSWORD from .env, else ./secrets/postgres-password
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        PGPASSWORD="$${PGPASSWORD:-$$(cat /run/coremail/postgres-password)}" || exit 1
+        export PGPASSWORD
+        exec sh /pg-backup.sh
     environment:
       PGHOST: postgres
       PGUSER: coremail
       PGDATABASE: coremail
-      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-}
       PG_BACKUP_INTERVAL_HOURS: ${PG_BACKUP_INTERVAL_HOURS:-24}
       PG_BACKUP_KEEP_DAYS: ${PG_BACKUP_KEEP_DAYS:-14}
       PG_BACKUP_START_DELAY_MIN: ${PG_BACKUP_START_DELAY_MIN:-10}
@@ -388,7 +482,9 @@ services:
     volumes:
       - ./pg-backup/pg-backup.sh:/pg-backup.sh:ro
       - ${PG_BACKUP_DIR:-pg-backups}:/backups
+      - ${COREMAIL_SECRETS_PATH:-./secrets}:/run/coremail:ro
     depends_on:
+      coremail-init: { condition: service_completed_successfully }
       postgres: { condition: service_healthy }
     healthcheck:
       # healthy = a dump younger than two intervals exists
@@ -397,11 +493,14 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30m
-    # Root without capabilities: writes only to the root-owned backup directory
+    # Root without capabilities: writes only to the root-owned backup directory.
+    # DAC_READ_SEARCH (read-only) lets it read ./secrets/postgres-password when
+    # the secrets directory belongs to the host user.
     user: "0:0"
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]
+    cap_add: [DAC_READ_SEARCH]
     security_opt: [no-new-privileges:true]
     deploy:
       resources:

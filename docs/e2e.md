@@ -16,8 +16,13 @@ mail never reach the internet.
 export E2E_STATE_DIR=/tmp/coremail-e2e        # holds e2e.env, credentials.json, state.json, results
 mkdir -p "$E2E_STATE_DIR"
 node -e "const h=n=>require('crypto').randomBytes(n).toString('hex');require('fs').writeFileSync(process.env.E2E_STATE_DIR+'/e2e.env',
- ['JWT_SECRET='+h(32),'PEPPER='+h(32),'POSTGRES_PASSWORD='+h(20),'REDIS_PASSWORD='+h(20),'MINIO_ROOT_PASSWORD='+h(20)].join('\n')+'\n')"
+ ['JWT_SECRET='+h(32),'PEPPER='+h(32),'POSTGRES_PASSWORD='+h(20),'REDIS_PASSWORD='+h(20),'MINIO_ROOT_PASSWORD='+h(20),
+  'COREMAIL_SECRETS_PATH='+process.env.E2E_STATE_DIR+'/secrets'].join('\n')+'\n')"
 ```
+
+`COREMAIL_SECRETS_PATH` keeps the secrets directory of `coremail-init` (10.4) out of the
+repository (default: `infra/docker/secrets/`, git-ignored); `coremail-init` copies the e2e.env
+values into it. Remove it together with the volumes (`down -v`).
 
 Test passwords are generated on first use into `$E2E_STATE_DIR/credentials.json`.
 Do not put real passwords there.
@@ -235,7 +240,9 @@ following empty `Execute` carries a RopNotify NewMail. Switch off → the runnin
 Connect get 403 and Autodiscover drops the mapiHttp block. A's switch is reset to inherit. The
 compose override sets `MAPI_ALLOW_PLAIN_HTTP=true` (the runner uses plain HTTP) and
 `MAPI_HTTPS_TRUSTED=true` (no CA certificate in the stack). See [mapi.md](mapi.md).
-`setup` reads the one-time setup token from `docker logs coremail-e2e`. Each run prints
+`setup` reads the one-time setup token from `/secrets/setup-token` in `coremail-e2e` (10.4,
+the secrets directory of `coremail-init`) and falls back to `docker logs coremail-e2e`; with the
+file in use it also checks that the log names the file and never contains the token. Each run prints
 `[PASS]/[FAIL]` lines and writes `$E2E_STATE_DIR/results-all.json` (all steps),
 `results-<step>+<step>.json` (a short selection of steps) or `results-<n>-steps-<hash>.json` (a
 long selection — the joined names would exceed the Windows path limit); the exit code is

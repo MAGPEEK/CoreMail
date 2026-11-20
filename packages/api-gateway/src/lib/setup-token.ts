@@ -20,7 +20,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { prisma } from '@coremail/storage';
 import { safeEqual } from '@coremail/core';
-import { removeSetupTokenFile, setupTokenFileBanner, writeSetupTokenFile } from './setup-secrets.js';
+import { removeSetupTokenFile, setupTokenFileBanner, setupUrlHint, writeSetupTokenFile } from './setup-secrets.js';
 
 export function hashSetupToken(token: string): string {
   return createHash('sha256').update(token, 'utf8').digest('hex');
@@ -36,16 +36,18 @@ interface Logger {
   warn(obj: object | string, msg?: string): void;
 }
 
-async function ensureSettingsRow(): Promise<{ setupCompletedAt: Date | null; setupTokenHash: string | null }> {
+interface SettingsRow { setupCompletedAt: Date | null; setupTokenHash: string | null; publicHostname?: string | null }
+
+async function ensureSettingsRow(): Promise<SettingsRow> {
   try {
     return await prisma.serverSettings.upsert({
       where: { id: 'singleton' }, create: { id: 'singleton' }, update: {},
-      select: { setupCompletedAt: true, setupTokenHash: true },
+      select: { setupCompletedAt: true, setupTokenHash: true, publicHostname: true },
     });
   } catch {
     // concurrent create (P2002) — the row exists now
     const s = await prisma.serverSettings.findUnique({
-      where: { id: 'singleton' }, select: { setupCompletedAt: true, setupTokenHash: true },
+      where: { id: 'singleton' }, select: { setupCompletedAt: true, setupTokenHash: true, publicHostname: true },
     });
     return s ?? { setupCompletedAt: null, setupTokenHash: null };
   }
@@ -96,7 +98,7 @@ export async function initSetupToken(log: Logger, env: NodeJS.ProcessEnv = proce
   // 10.4: a mounted secrets directory receives the token — then the log only
   // names the file (logs are often shipped elsewhere; the file is 0600).
   if (await writeSetupTokenFile(token, env)) {
-    log.warn({}, setupTokenFileBanner(env));
+    log.warn({}, setupTokenFileBanner(env, s.publicHostname));
     return token;
   }
   log.warn(
@@ -104,7 +106,7 @@ export async function initSetupToken(log: Logger, env: NodeJS.ProcessEnv = proce
     `\n════════════════════════════════════════════════════════════════════\n` +
     `  CoreMail initial setup is pending.\n` +
     `  One-time setup token:  ${token}\n` +
-    `  Enter it in the setup wizard (http://<server>:3000/bcp/).\n` +
+    `  Enter it in the setup wizard (${setupUrlHint(env, s.publicHostname)}).\n` +
     `  A new token is generated on every restart until setup is done.\n` +
     `════════════════════════════════════════════════════════════════════`,
   );

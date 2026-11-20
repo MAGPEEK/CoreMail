@@ -1,16 +1,14 @@
 # ═════════════════════════════════════════════════════════════════════════════
 #  CoreMail Helm chart — default values
 #
-#  Minimal install (bundled PostgreSQL/Redis/MinIO/rspamd/ClamAV):
-#    helm install coremail infra/k8s -n coremail --create-namespace \
-#      --set secrets.jwtSecret=$(openssl rand -hex 32) \
-#      --set secrets.pepper=$(openssl rand -hex 32) \
-#      --set secrets.mfaEncryptionKey=$(openssl rand -hex 32) \
-#      --set secrets.backupEncryptionKey=$(openssl rand -hex 32) \
-#      --set secrets.rspamdControllerPassword=$(openssl rand -hex 20) \
-#      --set secrets.postgresPassword=$(openssl rand -hex 20) \
-#      --set secrets.redisPassword=$(openssl rand -hex 20) \
-#      --set secrets.minioRootPassword=$(openssl rand -hex 20)
+#  Minimal install (bundled PostgreSQL/Redis/MinIO/rspamd/ClamAV) — chart 3.4:
+#    helm install coremail infra/k8s -n coremail --create-namespace
+#  Every empty secrets.* value is generated ONCE (JWT_SECRET, PEPPER, database/
+#  Redis/MinIO/rspamd passwords; MFA + backup keys on a first install only) and
+#  kept on upgrade. Back up the Secret afterwards (NOTES show the command).
+#  GitOps tools that render with `helm template` (Argo CD, Flux post-render…)
+#  cannot look the Secret up and would generate new values on every sync — set
+#  the values or secrets.existingSecret there.
 #  Better: keep the values in a Secret of your own (secrets.existingSecret).
 #  See infra/k8s/README.md for all options.
 # ═════════════════════════════════════════════════════════════════════════════
@@ -25,23 +23,30 @@ imagePullSecrets: []
 # Either name an existing Secret (recommended: SealedSecrets, External Secrets,
 # SOPS …) or let the chart create one from the values below.
 #
+# Empty values are generated on the first install and then read back from the
+# release's Secret (lookup) on every upgrade — never regenerated. On an upgrade
+# where a value tied to stored data (JWT_SECRET, PEPPER, POSTGRES_PASSWORD,
+# REDIS_PASSWORD, MINIO_ROOT_PASSWORD) is neither set nor in the Secret, the
+# render fails instead. MFA_ENCRYPTION_KEY / BACKUP_ENCRYPTION_KEY are generated
+# only for a first install (an existing release keeps deriving them).
+#
 # Keys of the Secret (existingSecret must provide the required ones):
-#   JWT_SECRET            required  ≥ 32 chars   (openssl rand -hex 32)
+#   JWT_SECRET            required  ≥ 32 chars   (generated: 64 hex)
 #   PEPPER                required  ≥ 32 chars   NEVER change after the first start
-#   POSTGRES_PASSWORD     required  URL-safe     (openssl rand -hex 20)
+#   POSTGRES_PASSWORD     required  URL-safe     (generated: 40 alphanumerics)
 #   REDIS_PASSWORD        required  URL-safe
 #   MINIO_ROOT_USER       required
 #   MINIO_ROOT_PASSWORD   required  ≥ 8 chars
-#   MFA_ENCRYPTION_KEY    optional  64 hex chars (strongly recommended)
+#   MFA_ENCRYPTION_KEY    optional  64 hex chars (strongly recommended; generated on install)
 #   SETUP_TOKEN           optional  ≥ 16 chars   (required for app.replicaCount > 1)
 #   VAPID_PRIVATE_KEY     optional  web push
-#   BACKUP_ENCRYPTION_KEY optional  64 hex chars or base64 of 32 bytes (strongly
-#                                   recommended; unset = derived from JWT_SECRET +
+#   BACKUP_ENCRYPTION_KEY optional  64 hex chars or base64 of 32 bytes (generated on
+#                                   install; unset = derived from JWT_SECRET +
 #                                   PEPPER). Keep a copy OFF the cluster — without
 #                                   it encrypted backups cannot be restored.
 #   RSPAMD_CONTROLLER_PASSWORD optional ≥ 12 chars [A-Za-z0-9._~+/=-]: password
 #                                   of the rspamd controller (bundled rspamd gets
-#                                   it as well; the app sends it)
+#                                   it as well; the app sends it; generated)
 # The passwords are embedded in DATABASE_URL / REDIS_URL — use URL-safe
 # characters only ([A-Za-z0-9._~-]; hex is ideal).
 secrets:

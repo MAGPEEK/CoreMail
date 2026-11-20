@@ -15,6 +15,7 @@ services:
     environment:
       OBJECT_STORAGE: filesystem
     depends_on: !override
+      coremail-init: { condition: service_completed_successfully }
       postgres: { condition: service_healthy }
       redis:    { condition: service_healthy }
       sink:     { condition: service_started }

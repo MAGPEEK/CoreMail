@@ -102,12 +102,30 @@ export async function removeSetupTokenFile(env: Env = process.env): Promise<bool
   }
 }
 
+/** Schema defaults / loopback names — not an address a browser elsewhere can use. */
+const PLACEHOLDER_HOSTS = new Set(['', 'mail.local', 'mail.localhost', 'localhost', 'localhost.localdomain']);
+
+/**
+ * URL of the setup wizard as it answers on a FRESH installation: plain HTTP on
+ * the published HTTP port (the integrated HTTPS proxy starts only once a
+ * certificate exists). Port: COREMAIL_PUBLIC_HTTP_PORT (the Compose files set
+ * the host port they publish; default 3000). Host: the public host name when
+ * one is configured, else the placeholder `<server>`.
+ */
+export function setupUrlHint(env: Env = process.env, publicHostname?: string | null): string {
+  const rawPort = (env['COREMAIL_PUBLIC_HTTP_PORT'] ?? '').trim();
+  const port = /^\d{1,5}$/.test(rawPort) && Number(rawPort) > 0 && Number(rawPort) < 65536 ? String(Number(rawPort)) : '3000';
+  const h = (publicHostname ?? '').trim().toLowerCase().replace(/\.$/, '');
+  const host = !PLACEHOLDER_HOSTS.has(h) && /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/.test(h) ? h : '<server>';
+  return `http://${host}${port === '80' ? '' : `:${port}`}/setup`;
+}
+
 /** Framed log message pointing at the token file (the token itself is not logged). */
-export function setupTokenFileBanner(env: Env = process.env): string {
+export function setupTokenFileBanner(env: Env = process.env, publicHostname?: string | null): string {
   const file = `${secretsHostPath(env)}/${SETUP_TOKEN_FILE}`;
   return (
     `\n════════════════════════════════════════════════════════════════════\n` +
-    `  CoreMail setup: open https://<host>/setup — token in ${file}\n` +
+    `  CoreMail setup: open ${setupUrlHint(env, publicHostname)} — token in ${file}\n` +
     `  (one-time setup token; a new one is written on every restart\n` +
     `  until the setup is done, then the file is deleted)\n` +
     `════════════════════════════════════════════════════════════════════`
