@@ -24,7 +24,7 @@ import { rasterImageType } from '../lib/imageTypes.js';
 const LOOKUP_STALE_MS = 5 * 60_000;
 
 const batcher = new PhotoLookupBatcher(async (addresses) =>
-  (await api.post<{ photos: Record<string, PhotoEntry> }>('/users/photos/lookup', { addresses })).photos);
+  (await api.post<{ photos: Record<string, PhotoEntry> }>('/users/photos/lookup', { addresses })).photos ?? {});
 
 const objectUrls = new PhotoUrlRegistry();
 const watchedClients = new WeakSet<QueryClient>();

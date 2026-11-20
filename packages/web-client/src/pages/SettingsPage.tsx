@@ -2416,7 +2416,7 @@ const NAV: { group: TranslationKey; items: { id: Section; label: TranslationKey;
       { id: 'retention',       label: 'retention_section_title',  icon: Clock      },
       { id: 'storage',         label: 'section_storage',          icon: HardDrive  },
       // 9.4: sub-entry of Speicher
-      { id: 'recover',         label: 'settings_nav_recover',     icon: RotateCcw, indent: true },
+      { id: 'recover',         label: 'settings_nav_recover',     icon: RotateCcw },
     ],
   },
   {
