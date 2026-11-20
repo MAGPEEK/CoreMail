@@ -101,7 +101,7 @@
 | CalDAV (iOS, Android, Thunderbird — REPORT, MKCALENDAR, ETag/If-Match, TZID/RRULE) | ✅ |
 | Kontakte & CardDAV (inkl. REPORT) | ✅ |
 | Aufgaben & Notizen | ✅ |
-| Kalender: Serien-Editor, einzelnen Termin einer Serie ändern/löschen, Terminplanungs-Assistent mit Terminvorschlägen, „Anzeigen als" (frei / mit Vorbehalt / gebucht / abwesend), Erinnerungen (auch per Mail) — [docs/calendar.md](docs/calendar.md) | ✅ |
+| Kalender: Serien-Editor, einzelnen Termin einer Serie ändern/löschen, „Anzeigen als" (frei / mit Vorbehalt / gebucht / abwesend), Erinnerungen (auch per Mail) — [docs/calendar.md](docs/calendar.md) | ✅ |
 | Aufgaben mit vollständigem Aufgabenformular, Nachverfolgungs-Flags für Mails (mit Datum und Erinnerung, auch über ActiveSync), Liste „Gekennzeichnete Elemente und Aufgaben" — [docs/tasks.md](docs/tasks.md) | ✅ |
 | CalDAV-Aufgabenliste (VTODO), in beide Richtungen mit Apple Erinnerungen, Thunderbird und DAVx⁵ synchronisiert — [docs/caldav.md](docs/caldav.md) | ✅ |
 | Kontakte mit mehreren typisierten E-Mail-Adressen, Telefonnummern, Postanschriften, Web- und Chat-Adressen, strukturiertem Namen, Geburtstag / Jahrestag und Kategorien; Kontaktlisten (auch über CardDAV); Kategorien für Notizen — [docs/contacts.md](docs/contacts.md) | ✅ |

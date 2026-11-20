@@ -101,7 +101,7 @@
 | CalDAV (iOS, Android, Thunderbird — REPORT, MKCALENDAR, ETag/If-Match, TZID/RRULE) | ✅ |
 | Contacts & CardDAV (incl. REPORT) | ✅ |
 | Tasks & notes | ✅ |
-| Calendar: recurrence editor, edit/delete a single occurrence of a series, scheduling assistant with suggested times, show-as (free / tentative / busy / away), reminders (also by mail) — [docs/calendar.md](docs/calendar.md) | ✅ |
+| Calendar: recurrence editor, edit/delete a single occurrence of a series, show-as (free / tentative / busy / away), reminders (also by mail) — [docs/calendar.md](docs/calendar.md) | ✅ |
 | Tasks with the full task form, follow-up flags on mail (with dates and reminders, also over ActiveSync), "flagged items and tasks" list — [docs/tasks.md](docs/tasks.md) | ✅ |
 | CalDAV task list (VTODO) synced both ways with Apple Reminders, Thunderbird and DAVx⁵ — [docs/caldav.md](docs/caldav.md) | ✅ |
 | Contacts with several typed e-mail addresses, phone numbers, postal addresses, web and chat addresses, structured name, birthday / anniversary and categories; contact groups ("Kontaktlisten", also over CardDAV); note categories — [docs/contacts.md](docs/contacts.md) | ✅ |
