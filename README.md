@@ -218,7 +218,9 @@ ClamAV downloads about 300 MB of signatures on its first start; scanning begins 
 docker compose -f infra/docker/docker-compose.minimal.yml pull && docker compose -f infra/docker/docker-compose.minimal.yml up -d
 ```
 
-With `docker run`, pull the new tag, remove the `coremail` container and start it again with the same command. Read the [release notes](docs/releases/) before a major upgrade; the database schema is updated at start.
+Use the Compose file of your variant. With `docker run`, pull the new tag, remove the `coremail` container and start it again with the same command. The database schema is updated at start.
+
+Upgrading from an older version: read the [version history](docs/version-history.md) and the [release notes](docs/releases/) first.
 
 ## Documentation
 

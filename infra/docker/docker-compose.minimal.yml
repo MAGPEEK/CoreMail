@@ -10,8 +10,8 @@ name: coremail
 #                                           optional profiles minio / backup / geoip
 #
 #  For 1–50 users on a small VPS: 1–2 vCPU, 2 GB RAM (1 GB only with swap).
-#  Measured (8.0.0, empty install): coremail 650–850 MB (12 Node.js services,
-#  peak right after start), postgres ~110 MB, redis ~10 MB → ~0.8–1 GB in total.
+#  Measured (empty install): coremail ~820 MB settled, ~1 GB peak right after
+#  start (12 Node.js services), postgres ~90 MB, redis ~10 MB → ~0.9–1.1 GB in total.
 #
 #  What is NOT in this stack:
 #    • no rspamd (spam scoring) and no ClamAV (virus scanning). SPF, DKIM, DMARC,
@@ -83,7 +83,7 @@ services:
       SETUP_TOKEN: ${SETUP_TOKEN:-}
       TRUST_PROXY: ${TRUST_PROXY:-}
 
-      # ── Optional tuning (9.0) — set in .env; empty = built-in default ────────
+      # ── Optional tuning — set in .env; empty = built-in default ──────────────
       # Every variable is described in .env.example; details in docs/mail-security.md,
       # docs/mailbox-quotas-recovery.md, docs/mail-protocol-limits.md,
       # docs/api-gateway-security.md and docs/deployment-security.md.
@@ -150,7 +150,7 @@ services:
       - "110:110"     # POP3 (STARTTLS)  — remove if POP3 is not wanted
       - "995:995"     # POP3S            — same
       - "80:3000"     # HTTP: Let's Encrypt HTTP-01 + redirect
-      - "443:443"     # HTTPS: integrated TLS proxy (BCP → SSL/TLS)
+      - "443:443"     # HTTPS: integrated TLS proxy (BCP → Certificates)
       - "3000:3000"   # HTTP without TLS: initial setup / behind your own reverse proxy
     volumes:
       # Mail contents (/data/objects) and pre-migration dumps (/data/backups).
