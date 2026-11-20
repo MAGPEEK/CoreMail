@@ -28,6 +28,7 @@ import { sessionSurfaceOf } from './refresh-cookie.js';
 import type { IncomingHttpHeaders } from 'node:http';
 import { recordLastLogin } from './last-login.js';
 import { revokeMcpTokensOfUser } from './mcp-tokens.js';
+import { IP_VERIFIED_HEADER, normalizeIp } from '../mail-auth-core.js';
 
 const log = createLogger('auth:sessions');
 
@@ -53,12 +54,32 @@ export interface ClientInfo {
    * which keeps the BCP and the admin CLI (`admin`, the default).
    */
   surface?: WebSurface | undefined;
+  /**
+   * 10.5 review: false when `ip` came from a forwarding header nobody verified
+   * (TRUST_PROXY hop count / `true`) — the lockout counts it but never
+   * escalates it or learns it as a known network. Default true.
+   */
+  ipTrusted?: boolean | undefined;
+}
+
+/**
+ * 10.5 review: is `req.ip` trustworthy for escalation? The socket peer itself
+ * always is; a forwarded address only with the gateway's mark
+ * (IP_VERIFIED_HEADER — set by the api-gateway for the socket address or an
+ * address from an explicit TRUST_PROXY allow-list; clients cannot send it).
+ */
+export function requestIpTrusted(req: { ip?: string | undefined; headers: IncomingHttpHeaders; socket?: { remoteAddress?: string | undefined } | undefined }): boolean {
+  const ip = normalizeIp(req.ip);
+  const peer = normalizeIp(req.socket?.remoteAddress);
+  if (!ip || !peer || ip === peer) return true;
+  const mark = req.headers[IP_VERIFIED_HEADER];
+  return (Array.isArray(mark) ? mark[0] : mark) === '1';
 }
 
 /** The ClientInfo of an HTTP login / refresh / SSO request (Express request). */
-export function clientInfoOf(req: { ip?: string | undefined; headers: IncomingHttpHeaders }): ClientInfo {
+export function clientInfoOf(req: { ip?: string | undefined; headers: IncomingHttpHeaders; socket?: { remoteAddress?: string | undefined } | undefined }): ClientInfo {
   const ua = req.headers['user-agent'];
-  return { ip: req.ip ?? 'unknown', userAgent: ua ?? '', surface: sessionSurfaceOf(req.headers) };
+  return { ip: req.ip ?? 'unknown', userAgent: ua ?? '', surface: sessionSurfaceOf(req.headers), ipTrusted: requestIpTrusted(req) };
 }
 
 export function hashRefreshToken(token: string): string {

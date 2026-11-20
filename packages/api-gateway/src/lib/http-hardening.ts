@@ -16,11 +16,24 @@
  *   HTTP_MAX_CONNS_PER_IP              (300)     open connections per client IP (IPv6: per /64); 0 = off
  *   HTTP_CONN_EXEMPT_CIDRS             (empty)   IPs/CIDRs without the per-IP cap (loopback always)
  *   HTTPS_HANDSHAKE_TIMEOUT_MS         (10000)   TLS handshake of the HTTPS proxy
+ *   10.5 review:
+ *   HTTP_MAX_CONNS_PER_V6_56           (600)     open connections per IPv6 /56 (all its /64s together); 0 = off
+ *   HTTP_MAX_CONNS_PER_V6_48           (1200)    open connections per IPv6 /48; 0 = off
+ *   HTTP_CONN_RESERVE_PERCENT          (20)      the last N % of HTTP_MAX_CONNS are kept for light clients:
+ *                                                above (100-N) % a new connection is refused when its
+ *                                                IPv4 address / IPv6 /48 already holds HTTP_CONN_HEAVY_THRESHOLD
+ *                                                connections (heaviest first); 0 = off
+ *   HTTP_CONN_HEAVY_THRESHOLD          (16)      "heavy" in that sense
+ *   HTTP_WRITE_STALL_TIMEOUT_MS        (60000)   a connection whose queued response bytes have not moved
+ *                                                for this long (a client that stopped reading) is closed;
+ *                                                0 = off. Idle connections (SSE between heartbeats, EAS Ping,
+ *                                                MAPI NotificationWait) have nothing queued and are not affected.
  *
  * The per-IP cap is counted on the raw TCP socket, before TLS. On port 3000 a
  * peer that TRUST_PROXY trusts (a reverse proxy — every client shares its
- * address) is not subject to the per-IP cap; the global cap still applies.
- * Loopback (container healthcheck, CLI) is exempt from both caps.
+ * address) is not subject to the per-IP / prefix caps nor the reserve; the
+ * global cap still applies. Loopback (container healthcheck, CLI) is exempt
+ * from all caps. HTTP_CONN_EXEMPT_CIDRS skip the per-IP / prefix caps and the reserve.
  */
 import type http from 'node:http';
 import type https from 'node:https';
@@ -43,6 +56,14 @@ export interface HttpHardeningConfig {
   maxConnectionsPerIp: number;
   exemptCidrs: string;
   tlsHandshakeTimeoutMs: number;
+  /** 10.5 review: IPv6 aggregate caps (0 = off). */
+  maxConnectionsPerV6_56: number;
+  maxConnectionsPerV6_48: number;
+  /** 10.5 review: share of maxConnections kept for light clients (0 = off). */
+  reservePercent: number;
+  heavyThreshold: number;
+  /** 10.5 review: queued response bytes that do not move for this long close the connection (0 = off). */
+  writeStallTimeoutMs: number;
 }
 
 export const HTTP_HARDENING_DEFAULTS: Readonly<HttpHardeningConfig> = Object.freeze({
@@ -55,6 +76,11 @@ export const HTTP_HARDENING_DEFAULTS: Readonly<HttpHardeningConfig> = Object.fre
   maxConnectionsPerIp: 300,
   exemptCidrs: '',
   tlsHandshakeTimeoutMs: 10_000,
+  maxConnectionsPerV6_56: 600,
+  maxConnectionsPerV6_48: 1_200,
+  reservePercent: 20,
+  heavyThreshold: 16,
+  writeStallTimeoutMs: 60_000,
 });
 
 /** Integer env value >= min, otherwise the default (with a warning for a set but invalid value). */
@@ -87,7 +113,20 @@ export function loadHttpHardeningConfig(env: NodeJS.ProcessEnv = process.env): {
     maxConnectionsPerIp: readInt(env, 'HTTP_MAX_CONNS_PER_IP', d.maxConnectionsPerIp, 0, warnings),
     exemptCidrs: (env['HTTP_CONN_EXEMPT_CIDRS'] ?? '').trim(),
     tlsHandshakeTimeoutMs: readInt(env, 'HTTPS_HANDSHAKE_TIMEOUT_MS', d.tlsHandshakeTimeoutMs, 1_000, warnings),
+    maxConnectionsPerV6_56: readInt(env, 'HTTP_MAX_CONNS_PER_V6_56', d.maxConnectionsPerV6_56, 0, warnings),
+    maxConnectionsPerV6_48: readInt(env, 'HTTP_MAX_CONNS_PER_V6_48', d.maxConnectionsPerV6_48, 0, warnings),
+    reservePercent: readInt(env, 'HTTP_CONN_RESERVE_PERCENT', d.reservePercent, 0, warnings),
+    heavyThreshold: readInt(env, 'HTTP_CONN_HEAVY_THRESHOLD', d.heavyThreshold, 1, warnings),
+    writeStallTimeoutMs: readInt(env, 'HTTP_WRITE_STALL_TIMEOUT_MS', d.writeStallTimeoutMs, 0, warnings),
   };
+  if (config.reservePercent > 90) {
+    warnings.push(`HTTP_CONN_RESERVE_PERCENT="${config.reservePercent}" is too high (0–90) — using 90`);
+    config.reservePercent = 90;
+  }
+  if (config.writeStallTimeoutMs > 0 && config.writeStallTimeoutMs < 1_000) {
+    warnings.push(`HTTP_WRITE_STALL_TIMEOUT_MS="${config.writeStallTimeoutMs}" is too short (≥ 1000 or 0) — using 1000`);
+    config.writeStallTimeoutMs = 1_000;
+  }
   return { config: normalizeTimeouts(config, warnings), warnings };
 }
 
@@ -167,10 +206,34 @@ export function connectionKey(rawIp: string | null | undefined): string {
   return parts ? `${parts.slice(0, 4).join(':')}::/64` : ip;
 }
 
+/**
+ * 10.5 review: the IPv6 aggregate a connection also counts under — the /56 or
+ * /48 prefix text; null for IPv4 (and anything that is not IPv6).
+ */
+export function ipv6PrefixKey(rawIp: string | null | undefined, bits: 48 | 56): string | null {
+  const ip = normalizeIp(rawIp);
+  if (isIP(ip) !== 6) return null;
+  const parts = expandIpv6(ip.toLowerCase());
+  if (!parts) return null;
+  if (bits === 48) return `${parts.slice(0, 3).join(':')}::/48`;
+  const fourth = (parseInt(parts[3]!, 16) & 0xff00).toString(16);
+  return `${parts.slice(0, 3).join(':')}:${fourth}::/56`;
+}
+
 export interface GuardOptions {
   maxPerIp: number;
   maxTotal: number;
-  /** IPs without the per-IP cap (they count towards the total). */
+  /** 10.5 review: open connections per IPv6 /56 and /48 (0 / absent = no cap). */
+  maxPerV6_56?: number;
+  maxPerV6_48?: number;
+  /**
+   * 10.5 review: above this many open connections (the reserve of maxTotal) a
+   * new connection is admitted only from a key (IPv4 address, IPv6 /48) that
+   * holds fewer than `heavyThreshold` connections; 0 / absent = off.
+   */
+  softTotal?: number;
+  heavyThreshold?: number;
+  /** IPs without the per-IP / prefix caps and the reserve (they count towards the total). */
   isExempt: (ip: string) => boolean;
   /** IPs that bypass BOTH caps (default: loopback — healthcheck, CLI). */
   bypassAll?: (ip: string) => boolean;
@@ -180,11 +243,18 @@ export interface GuardOptions {
   onRefused?: (info: RefusalInfo) => void;
 }
 
-export interface RefusalInfo { ip: string; key: string; reason: 'per_ip' | 'total'; limit: number; suppressed: number; server: string }
+/**
+ * per_ip = the address / IPv6 /64 cap, per_prefix = an IPv6 /56 or /48 cap,
+ * total = the global cap, reserve = near the global cap a heavy key is refused
+ * to keep headroom for light clients (10.5 review).
+ */
+export type RefusalReason = 'per_ip' | 'per_prefix' | 'total' | 'reserve';
+
+export interface RefusalInfo { ip: string; key: string; reason: RefusalReason; limit: number; suppressed: number; server: string }
 
 export type AdmitResult =
   | { ok: true; release: () => void }
-  | { ok: false; reason: 'per_ip' | 'total'; limit: number };
+  | { ok: false; reason: RefusalReason; limit: number; key?: string };
 
 export type ServerKind = 'http' | 'https';
 
@@ -203,6 +273,8 @@ const REFUSED_HTTP_RESPONSE =
  */
 export class HttpConnectionGuard {
   private readonly perKey = new Map<string, number>();
+  /** 10.5 review: IPv6 /56 and /48 aggregates (keys carry their prefix length). */
+  private readonly perPrefix = new Map<string, number>();
   private open = 0;
   private readonly refused = new WeakSet<net.Socket>();
   private readonly lastLog = new Map<string, { at: number; suppressed: number }>();
@@ -214,6 +286,11 @@ export class HttpConnectionGuard {
     return ip === undefined ? this.open : this.perKey.get(connectionKey(ip)) ?? 0;
   }
 
+  /** 10.5 review: open connections of an IPv6 prefix (`ipv6PrefixKey` text), 0 when unknown. */
+  prefixCount(prefixKey: string): number {
+    return this.perPrefix.get(prefixKey) ?? 0;
+  }
+
   /**
    * Reserves a slot for a connection from `rawIp`. `perIpApplies` is false
    * for a TRUST_PROXY-trusted reverse proxy peer.
@@ -221,16 +298,33 @@ export class HttpConnectionGuard {
   acquire(rawIp: string | null | undefined, perIpApplies = true): AdmitResult {
     const ip = normalizeIp(rawIp);
     const key = connectionKey(ip);
+    const k56 = ipv6PrefixKey(ip, 56);
+    const k48 = ipv6PrefixKey(ip, 48);
     const bypass = !ip || (this.opts.bypassAll ?? isLoopbackIp)(ip);
     if (!bypass) {
       if (this.opts.maxTotal > 0 && this.open >= this.opts.maxTotal) return { ok: false, reason: 'total', limit: this.opts.maxTotal };
       const current = this.perKey.get(key) ?? 0;
-      if (perIpApplies && this.opts.maxPerIp > 0 && current >= this.opts.maxPerIp && !this.opts.isExempt(ip)) {
-        return { ok: false, reason: 'per_ip', limit: this.opts.maxPerIp };
+      if (perIpApplies && !this.opts.isExempt(ip)) {
+        if (this.opts.maxPerIp > 0 && current >= this.opts.maxPerIp) {
+          return { ok: false, reason: 'per_ip', limit: this.opts.maxPerIp };
+        }
+        // 10.5 review: a subscriber owning a /56 or /48 must not get 256 / 65536 per-/64 budgets
+        const max56 = this.opts.maxPerV6_56 ?? 0;
+        if (k56 && max56 > 0 && (this.perPrefix.get(k56) ?? 0) >= max56) return { ok: false, reason: 'per_prefix', limit: max56, key: k56 };
+        const max48 = this.opts.maxPerV6_48 ?? 0;
+        if (k48 && max48 > 0 && (this.perPrefix.get(k48) ?? 0) >= max48) return { ok: false, reason: 'per_prefix', limit: max48, key: k48 };
+        // 10.5 review: near the global cap the heaviest sources are refused first (headroom for light clients)
+        const soft = this.opts.softTotal ?? 0;
+        const heavy = this.opts.heavyThreshold ?? 0;
+        if (soft > 0 && heavy > 0 && this.open >= soft) {
+          const heaviness = k48 ? (this.perPrefix.get(k48) ?? 0) : current;
+          if (heaviness >= heavy) return { ok: false, reason: 'reserve', limit: soft, key: k48 ?? key };
+        }
       }
     }
     this.open++;
     this.perKey.set(key, (this.perKey.get(key) ?? 0) + 1);
+    for (const k of [k56, k48]) if (k) this.perPrefix.set(k, (this.perPrefix.get(k) ?? 0) + 1);
     let released = false;
     return {
       ok: true,
@@ -241,6 +335,12 @@ export class HttpConnectionGuard {
         const n = (this.perKey.get(key) ?? 1) - 1;
         if (n <= 0) this.perKey.delete(key);
         else this.perKey.set(key, n);
+        for (const k of [k56, k48]) {
+          if (!k) continue;
+          const m = (this.perPrefix.get(k) ?? 1) - 1;
+          if (m <= 0) this.perPrefix.delete(k);
+          else this.perPrefix.set(k, m);
+        }
       },
     };
   }
@@ -261,7 +361,7 @@ export class HttpConnectionGuard {
       socket.once('close', result.release);
       return true;
     }
-    this.logRefusal(socket.remoteAddress ?? '', result.reason, result.limit, kind);
+    this.logRefusal(socket.remoteAddress ?? '', result.reason, result.limit, kind, result.key);
     if (kind === 'https') {
       socket.destroy();
     } else {
@@ -273,9 +373,9 @@ export class HttpConnectionGuard {
     return false;
   }
 
-  private logRefusal(rawIp: string, reason: 'per_ip' | 'total', limit: number, kind: ServerKind): void {
+  private logRefusal(rawIp: string, reason: RefusalReason, limit: number, kind: ServerKind, prefixKey?: string): void {
     const ip = normalizeIp(rawIp);
-    const key = connectionKey(ip);
+    const key = prefixKey ?? connectionKey(ip);
     const now = (this.opts.now ?? Date.now)();
     const window = this.opts.logWindowMs ?? 60_000;
     const id = `${reason}|${reason === 'total' ? '*' : key}`;
@@ -289,15 +389,86 @@ export class HttpConnectionGuard {
   }
 }
 
+/** 10.5 review: where the reserve starts (0 = no reserve). */
+export function softTotalOf(cfg: Pick<HttpHardeningConfig, 'maxConnections' | 'reservePercent'>): number {
+  if (cfg.maxConnections <= 0 || cfg.reservePercent <= 0) return 0;
+  return Math.max(1, Math.floor(cfg.maxConnections * (100 - cfg.reservePercent) / 100));
+}
+
 export function createHttpConnectionGuard(cfg: HttpHardeningConfig, extra: Partial<GuardOptions> = {}): { guard: HttpConnectionGuard; invalidExempt: string[] } {
   const exempt = createExemptIpMatcher(cfg.exemptCidrs);
   const guard = new HttpConnectionGuard({
     maxPerIp: cfg.maxConnectionsPerIp,
     maxTotal: cfg.maxConnections,
+    maxPerV6_56: cfg.maxConnectionsPerV6_56,
+    maxPerV6_48: cfg.maxConnectionsPerV6_48,
+    softTotal: softTotalOf(cfg),
+    heavyThreshold: cfg.heavyThreshold,
     isExempt: exempt.isExempt,
     ...extra,
   });
   return { guard, invalidExempt: exempt.invalid };
+}
+
+// ── Write stall (slow readers) ────────────────────────────────────────────────
+
+/** The part of a socket the stall watcher reads. */
+export interface StallSocket {
+  readonly writableLength: number;
+  readonly bytesWritten: number;
+  readonly destroyed: boolean;
+  destroy(): void;
+}
+
+/**
+ * 10.5 review: closes connections whose client stopped reading. A socket is
+ * stalled while it has queued response bytes (writableLength > 0) and none of
+ * them moved on to the kernel since the last sample (bytesWritten −
+ * writableLength unchanged); after `timeoutMs` of that it is destroyed.
+ * Connections with nothing queued — an SSE stream between heartbeats, a silent
+ * EAS Ping or MAPI NotificationWait — are never stalled, and every byte the
+ * client reads restarts the clock (a slow but reading client is kept).
+ */
+export class WriteStallWatcher {
+  private readonly sockets = new Map<StallSocket, { delivered: number; since: number | null }>();
+
+  constructor(
+    private readonly timeoutMs: number,
+    private readonly now: () => number = Date.now,
+    private readonly onStall?: (s: StallSocket) => void,
+  ) {}
+
+  get size(): number { return this.sockets.size; }
+
+  watch(socket: StallSocket & { once(event: 'close', fn: () => void): unknown }): void {
+    if (this.timeoutMs <= 0) return;
+    this.sockets.set(socket, { delivered: -1, since: null });
+    socket.once('close', () => { this.sockets.delete(socket); });
+  }
+
+  /** One sample of every watched socket; returns how many were closed. */
+  sweep(): number {
+    const now = this.now();
+    let closed = 0;
+    for (const [s, st] of this.sockets) {
+      if (s.destroyed) { this.sockets.delete(s); continue; }
+      const pending = s.writableLength;
+      const delivered = s.bytesWritten - pending;
+      if (pending <= 0 || delivered !== st.delivered) {
+        st.delivered = delivered;
+        st.since = pending > 0 ? now : null;
+        continue;
+      }
+      st.since ??= now;
+      if (now - st.since >= this.timeoutMs) {
+        this.sockets.delete(s);
+        closed++;
+        this.onStall?.(s);
+        s.destroy();
+      }
+    }
+    return closed;
+  }
 }
 
 // ── Wiring ────────────────────────────────────────────────────────────────────
@@ -308,20 +479,38 @@ export interface HardenOptions {
   config: HttpHardeningConfig;
   /** Port 3000 only: socket peers TRUST_PROXY trusts are not subject to the per-IP cap. */
   isTrustedProxyPeer?: (ip: string) => boolean;
+  /** 10.5 review: the slow-reader watcher (default: none). */
+  stallWatcher?: WriteStallWatcher | undefined;
 }
 
 /**
  * Applies the timeouts and the connection cap to a server. The admission
  * listener runs BEFORE Node's own connection listener (prepend), i.e. on the
- * raw TCP socket and — for HTTPS — before the TLS handshake.
+ * raw TCP socket and — for HTTPS — before the TLS handshake. 10.5 review: the
+ * socket the HTTP parser writes to (plain: the TCP socket, HTTPS: the TLS
+ * socket) is watched for a write stall.
  */
 export function hardenHttpServer(server: http.Server | https.Server, opts: HardenOptions): void {
   applyServerTimeouts(server, opts.config);
   server.prependListener('connection', (socket: net.Socket) => {
     const peer = normalizeIp(socket.remoteAddress);
     const perIpApplies = !(opts.isTrustedProxyPeer && peer && opts.isTrustedProxyPeer(peer));
-    opts.guard.admit(socket, opts.kind, perIpApplies);
+    const admitted = opts.guard.admit(socket, opts.kind, perIpApplies);
+    if (admitted && opts.kind === 'http') opts.stallWatcher?.watch(socket);
   });
+  if (opts.kind === 'https' && opts.stallWatcher) {
+    const watcher = opts.stallWatcher;
+    server.on('secureConnection', (socket: net.Socket) => watcher.watch(socket));
+  }
+}
+
+/** 10.5 review: a watcher that samples every min(timeout/4, 5 s) (timer unref'd); null when off. */
+export function startWriteStallWatcher(timeoutMs: number, onStall?: (s: StallSocket) => void): WriteStallWatcher | null {
+  if (timeoutMs <= 0) return null;
+  const watcher = new WriteStallWatcher(timeoutMs, Date.now, onStall);
+  const timer = setInterval(() => { watcher.sweep(); }, Math.max(50, Math.min(5_000, Math.floor(timeoutMs / 4))));
+  timer.unref();
+  return watcher;
 }
 
 /** Wraps a request handler so requests on a refused (503) socket are dropped. */
@@ -337,16 +526,26 @@ export function guardedRequestHandler(
 
 // ── Process-wide instance (HTTP server + HTTPS proxy share one guard) ───────
 
-let shared: { config: HttpHardeningConfig; guard: HttpConnectionGuard } | null = null;
+let shared: { config: HttpHardeningConfig; guard: HttpConnectionGuard; stallWatcher: WriteStallWatcher | undefined } | null = null;
 
-/** Configuration + shared guard from the environment (created once, warnings logged once). */
-export function httpHardening(): { config: HttpHardeningConfig; guard: HttpConnectionGuard } {
+/** Configuration + shared guard (+ slow-reader watcher) from the environment (created once, warnings logged once). */
+export function httpHardening(): { config: HttpHardeningConfig; guard: HttpConnectionGuard; stallWatcher: WriteStallWatcher | undefined } {
   if (shared) return shared;
   const { config, warnings } = loadHttpHardeningConfig();
   for (const w of warnings) log.warn(w);
   const { guard, invalidExempt } = createHttpConnectionGuard(config);
   if (invalidExempt.length) log.warn({ invalid: invalidExempt }, 'HTTP_CONN_EXEMPT_CIDRS: invalid entries ignored');
-  log.info({ ...config, exemptCidrs: config.exemptCidrs || undefined }, 'HTTP connection hardening active');
-  shared = { config, guard };
+  let stalls = 0;
+  let lastStallLog = 0;
+  const stallWatcher = startWriteStallWatcher(config.writeStallTimeoutMs, () => {
+    stalls++;
+    const now = Date.now();
+    if (now - lastStallLog < 60_000) return;
+    lastStallLog = now;
+    log.warn({ closed: stalls, timeoutMs: config.writeStallTimeoutMs }, 'HTTP connections closed — the client stopped reading the response (write stall)');
+    stalls = 0;
+  }) ?? undefined;
+  log.info({ ...config, exemptCidrs: config.exemptCidrs || undefined, reserveFrom: softTotalOf(config) || undefined }, 'HTTP connection hardening active');
+  shared = { config, guard, stallWatcher };
   return shared;
 }

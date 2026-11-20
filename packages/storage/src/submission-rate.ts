@@ -1,8 +1,11 @@
 /**
  * Per-user outgoing message rate (10.5) — ONE limiter for every client
  * submission path: SMTP submission (587/465), webmail / REST `/mail/send` and
- * draft send, ActiveSync SendMail / SmartReply / SmartForward, JMAP
- * EmailSubmission/set and MAPI RopSubmitMessage. It stops a compromised account
+ * draft send, ActiveSync SendMail / SmartReply / SmartForward (and the EAS 16
+ * MeetingResponse REPLY), JMAP EmailSubmission/set and MAPI RopSubmitMessage —
+ * 10.5 review: and the mail the server sends for an account: calendar
+ * invitations / updates / cancellations, inbox-rule forwards / redirects,
+ * out-of-office replies and read receipts. It stops a compromised account
  * from spamming: it counts the MESSAGES and the RECIPIENTS a user submits per
  * sliding hour and refuses a submission that would exceed either limit.
  *
@@ -72,8 +75,14 @@ export const SEND_RATE_BOUNDS = {
   recipientsPerHour: [1, 1_000_000],
 } as const;
 
-/** The submission path (audit / attack event detail). */
-export type SendRateProtocol = 'smtp' | 'webmail' | 'activesync' | 'jmap' | 'mapi';
+/**
+ * The submission path (audit / attack event detail). 10.5 review: also the
+ * server-generated mail a user's account causes — calendar invitations /
+ * updates / cancellations (iMIP, `calendar`), inbox-rule forwards and
+ * redirects (`rule`), out-of-office replies (`autoreply`, counted but never
+ * blocking the inbound delivery) and read receipts (`receipt`).
+ */
+export type SendRateProtocol = 'smtp' | 'webmail' | 'activesync' | 'jmap' | 'mapi' | 'calendar' | 'rule' | 'autoreply' | 'receipt';
 
 export interface SendRateRequest {
   /** The authenticated user (never the Shared Mailbox sent as). */
@@ -407,6 +416,8 @@ export function sendRateNotice(hit: SendRateHit, account: string, productName: s
     : `mehr als ${hit.recipientsPerHour} Empfänger pro Stunde`;
   const proto: Record<SendRateProtocol, string> = {
     smtp: 'SMTP (Port 587/465)', webmail: 'Webmail / REST-API', activesync: 'ActiveSync', jmap: 'JMAP', mapi: 'Outlook (MAPI)',
+    calendar: 'Kalender-Einladungen (iMIP)', rule: 'Weiterleitung durch Posteingangsregel',
+    autoreply: 'Abwesenheitsnotiz (automatische Antwort)', receipt: 'Lesebestätigung',
   };
   return {
     subject: `Konto ${account} hat das Sendelimit erreicht — möglicherweise kompromittiert`,

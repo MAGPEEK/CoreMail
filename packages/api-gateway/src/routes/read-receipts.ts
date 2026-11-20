@@ -15,7 +15,7 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
 import {
-  prisma, setFlags, loadRawMessage, receiptAddressOfRaw, buildReadReceipt, checkSendQuota,
+  prisma, setFlags, loadRawMessage, receiptAddressOfRaw, buildReadReceipt, checkSendQuota, consumeSendRate,
 } from '@coremail/storage';
 import { getOutboundJobOptions } from '@coremail/storage/queue-options';
 import { createLogger } from '@coremail/core';
@@ -82,6 +82,14 @@ readReceiptRouter.post('/messages/:id/receipt', requireAuth, async (req: Request
   if (!user) { res.status(404).json({ error: 'Benutzer nicht gefunden' }); return; }
   const quota = await checkSendQuota(user.id);
   if (!quota.allowed) { res.status(403).json({ error: quota.message, code: 'MAILBOX_QUOTA_EXCEEDED' }); return; }
+  // 10.5 review: a read receipt is mail the account sends — it counts against the hourly
+  // send rate (storage submission-rate.ts, shared with /mail/send); over the limit 429.
+  const rate = await consumeSendRate({ userId: user.id, recipients: 1, protocol: 'receipt', ...(req.ip ? { ipAddress: req.ip } : {}) });
+  if (!rate.allowed) {
+    res.setHeader('Retry-After', String(rate.retryAfterSec));
+    res.status(429).json({ error: 'Sendelimit erreicht — die Lesebestätigung wurde nicht gesendet', code: 'SEND_RATE_LIMITED', reason: rate.reason, limit: rate.limit, retryAfter: rate.retryAfterSec });
+    return;
+  }
 
   const settings = await prisma.serverSettings.findUnique({ where: { id: 'singleton' }, select: { publicHostname: true } });
   const receipt = buildReadReceipt({

@@ -55,7 +55,9 @@ logins per client IP and per account in Redis and locks with exponential backoff
 
 Since v9.0 **private addresses are counted like public ones**: behind a reverse
 proxy or the Docker userland proxy every attacker would otherwise appear as an
-exempt private peer. Only loopback is exempt by default.
+exempt private peer. Only loopback is exempt by default. 10.5 review: IPv6
+clients are counted per **/64** (one subscriber owns the whole /64), IPv4
+clients per address.
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
@@ -78,7 +80,7 @@ all paths — `packages/storage/src/submission-rate.ts` (`consumeSendRate` /
 | messages per hour and account | `200` | same (`sendRateMessagesPerHour`, 1–100000) |
 | recipients per hour and account | `1000` | same (`sendRateRecipientsPerHour`, 1–1000000) |
 | block the account for one hour when the limit is exceeded | off | same (`sendRateBlockOnExceed`) |
-| per account | global value | BCP → edit mailbox → Nachrichtenfluss (`MailFlowPolicy.maxMessagesPerHour` / `maxRecipientsPerHour`, user mailboxes only), admin API `PUT /api/v1/admin/mailboxes/:id/mail-flow` |
+| per account | global value | BCP → edit mailbox → Nachrichtenfluss (`MailFlowPolicy.maxMessagesPerHour` / `maxRecipientsPerHour`, user mailboxes only), admin API `PUT /api/v1/admin/mailboxes/:id/mail-flow`. 10.5 review: a **domain-scoped** admin may not set a value above the global one (`400 {code: SEND_RATE_ABOVE_GLOBAL}`); organisation-wide admins may. |
 
 Admin API: `GET/PUT /api/v1/admin/smtp-config/send-rate` (`{enabled, messagesPerHour,
 recipientsPerHour, blockOnExceed}`, partial PUT; area *servers*, organisation-wide like
@@ -114,6 +116,20 @@ log line — the limiter never blocks mail on its own failure.
 | JMAP `EmailSubmission/set` | SetError `rateLimit` (RFC 8620 §5.3, inherited by RFC 8621 §7.5) |
 | MAPI `RopSubmitMessage` | `ecQuotaExceeded` (the submission-quota error of the existing mapping) |
 
+**Mail the server sends for an account (10.5 review)** counts against the same
+budget of the account that causes it (protocol label in the audit / attack event):
+
+| Path | Counted | Over the limit |
+|---|---|---|
+| Calendar invitations, updates, cancellations (REST `POST/PUT/DELETE /api/v1/calendar/events…`, also single occurrences) | the acting user, 1 message with every attendee as a recipient (`calendar`) | `429` + `Retry-After`, `{code: 'SEND_RATE_LIMITED', reason, limit, retryAfter}` **before anything is stored** — the event is not created / changed / deleted; a change that mails nobody is never refused |
+| Read receipts (`POST /api/v1/mail/messages/:id/receipt`) | the user, 1 recipient (`receipt`) | `429` like above, no receipt sent |
+| ActiveSync `MeetingResponse` REPLY (EAS 16 + SendResponse) | the user, 1 recipient (`activesync`) | Status `4` (server error, the device retries later), no REPLY |
+| Inbox-rule forwards / redirects | the rule's owner, 1 recipient each (`rule`) | the forward is skipped; the inbound delivery is never refused and a "forward and delete" rule keeps the local copy (trace `inbox-rules: forwardsSkippedSendRate`) |
+| Out-of-office replies | the user, 1 recipient (`autoreply`) | the reply is skipped (checked before the sender is marked as answered); the inbound delivery is never affected |
+
+Not counted: the admin forwarding of a mailbox (`MailFlowPolicy.forwardTo`, an
+admin setting), transport rules, DSNs / bounces and system notices.
+
 The REST burst limiter in front of the webmail routes (`MAIL_SEND_RATE_LIMIT`,
 30 requests / 60 s, docs/api-gateway-security.md) stays: it counts *requests*
 per minute (including invalid ones); the hourly limiter counts *sent messages*.
@@ -140,9 +156,10 @@ The lockout is administered in BCP → Schutz → **Angriffsschutz** — see
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `MAIL_AUTH_KNOWN_CLIENT_DAYS` | `30` | How long a successful login keeps its client network (IPv4 /24, IPv6 /56) and — for ActiveSync — its DeviceId "known" for the account. A locked **account** still accepts logins from a known network/device (failures keep counting); `0` switches this off. The IP lock is never bypassed. |
+| `MAIL_AUTH_KNOWN_CLIENT_DAYS` | `30` | How long a successful login keeps its client network (IPv4 /24, IPv6 /56) and — for ActiveSync — its DeviceId "known" for the account. A locked **account** still accepts logins from a known network (failures keep counting); `0` switches this off. The IP lock is never bypassed. 10.5 review: a DeviceId alone never grants this (with a DeviceId, network AND device must be known); each known network has its own budget of `MAIL_AUTH_ACCOUNT_MAX_FAILURES` failures per `MAIL_AUTH_ACCOUNT_WINDOW_SEC`, after which it is locked like a stranger; only verified client addresses (socket / explicit `TRUST_PROXY` list) are learned. |
 | `SECURITY_EVENTS_PER_IP_PER_MIN` | `10` | Attack dashboard events per client IP and minute (sampling; the counters are not affected). |
-| `SECURITY_EVENTS_PER_MIN` | `300` | Attack dashboard events per process and minute in total. |
+| `SECURITY_EVENTS_PER_MIN` | `300` | Attack dashboard events per process and minute in total (locks and automatic blocks are never dropped for it — 10.5 review). |
+| `SECURITY_EVENTS_IMPORTANT_PER_MIN` | `3000` (10 × the above) | 10.5 review: ceiling of lock / automatic-block events per process and minute. |
 | `ATTACK_EVENT_RETENTION_DAYS` | `90` | Attack events older than this are purged hourly (`0` = keep). |
 
 - **Connect-time refusal:** SMTP (all listeners), IMAP and POP3 refuse IPs that are
@@ -152,6 +169,11 @@ The lockout is administered in BCP → Schutz → **Angriffsschutz** — see
   SMTP `421 4.7.1` / `554 5.7.1`).
 - **Exceptions** of the BCP list ("nie sperren") are merged with
   `MAIL_AUTH_EXEMPT_CIDRS`: no per-IP counter, never on the block list.
+- 10.5 review: **automatic** block list entries (repeat offenders) never apply
+  to inbound mail on port 25 (only manual ones do), are never created for
+  private / CGNAT / ULA / link-local addresses, `TRUST_PROXY` proxies or IPs
+  with successful logins of ≥ 2 accounts or an admin, and last 1 day → 7 days →
+  `autoBlockDays` (attack-protection.md).
 - Every failure, lock and refusal of every protocol (SMTP, IMAP, POP3, web/API,
   ActiveSync, CalDAV/CardDAV, JMAP, MAPI, Autodiscover, MCP) is recorded in the
   attack dashboard with its protocol.

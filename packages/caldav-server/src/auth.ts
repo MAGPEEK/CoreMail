@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import { verifyAccessToken, createLogger } from '@coremail/core';
-import { prisma, verifyMailCredentials, clientIpFromRequest, isProtocolAllowed, isWebmailFeatureEnabled } from '@coremail/storage';
+import { prisma, verifyMailCredentials, clientIpInfoFromRequest, isProtocolAllowed, isWebmailFeatureEnabled } from '@coremail/storage';
 import { isAccessTokenRevokedShared, mfaEnrolmentRefusal } from '@coremail/storage/auth';
 import { TASK_COLLECTION_ID } from './caldav/tasks.js';
 
@@ -79,8 +79,11 @@ export async function davAuthMiddleware(
     if (colonIdx !== -1) {
       const login = decoded.slice(0, colonIdx);
       const password = decoded.slice(colonIdx + 1);
+      // 10.5 review: the gateway marks a forwarded IP it could verify (IP_VERIFIED_HEADER)
+      const client = clientIpInfoFromRequest(req.socket?.remoteAddress, req.headers);
       const result = await verifyMailCredentials(login, password, {
-        ip: clientIpFromRequest(req.socket?.remoteAddress, req.headers?.['x-forwarded-for']),
+        ip: client.ip,
+        ipTrusted: client.trusted,
         protocol: 'caldav',
       });
       if (result.status === 'ok') {

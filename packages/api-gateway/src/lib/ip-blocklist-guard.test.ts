@@ -79,6 +79,24 @@ test('the default guard uses the shared block list; loopback is never blocked', 
   assert.equal(upgradeBlocked({ url: '/jmap/ws', socket: { remoteAddress: '203.0.113.5' } } as unknown as IncomingMessage), false);
 });
 
+test('10.5 review: WebSocket upgrades derive the client IP with the same trust function as requests', () => {
+  storage.setIpAccessRulesForTests([{ kind: 'BLOCK', cidr: '198.51.100.0/24' }]);
+  const refused: unknown[] = [];
+  const guard = { isBlocked: (ip: string | null | undefined) => storage.ipAccessVerdict(ip) === 'block', refused: (ip: unknown) => { refused.push(ip); } };
+  const viaProxy = (xff: string) => ({
+    url: '/jmap/ws', headers: { 'x-forwarded-for': xff }, socket: { remoteAddress: '172.18.0.5' },
+  }) as unknown as IncomingMessage;
+  const trustProxy = (addr: string) => addr === '172.18.0.5'; // TRUST_PROXY=172.18.0.5
+  const trustNone = () => false;                              // TRUST_PROXY unset
+  // behind the trusted reverse proxy the blocked client is found in X-Forwarded-For
+  assert.equal(upgradeBlocked(viaProxy('198.51.100.9'), guard, trustProxy), true);
+  assert.deepEqual(refused, ['198.51.100.9']);
+  assert.equal(upgradeBlocked(viaProxy('203.0.113.9'), guard, trustProxy), false);
+  // without TRUST_PROXY a forged header is ignored (the socket peer counts) — as for requests
+  assert.equal(upgradeBlocked(viaProxy('198.51.100.9'), guard, trustNone), false);
+  storage.setIpAccessRulesForTests([]);
+});
+
 test('per-protocol counts merge 10.5 rows with older rows (service column)', () => {
   assert.deepEqual(
     mergeProtocolCounts(

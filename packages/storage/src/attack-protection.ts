@@ -8,7 +8,10 @@
  *  - handleLockoutEvent(): the shared lockout's hook (mail-auth.ts) — records
  *    security events (security-events.ts), queues admin notifications and
  *    escalates repeat offenders (an IP locked N times within 7 days → automatic
- *    block list entry, audit `security.ip.autoblock`).
+ *    block list entry, audit `security.ip.autoblock`). 10.5 review: never for a
+ *    shared / legitimately used address (autoBlockExemption), never for an IP
+ *    from an unverified forwarding header, IPv6 per /64, escalating lifetime
+ *    1 d → 7 d → autoBlockDays, and never applied to inbound port 25.
  *  - Notifications: items are queued in Redis (`attackprot:notify:pending`, any
  *    process); the api-gateway flushes them into ONE aggregated mail at most
  *    every 15 minutes (flushAttackNotifications, Redis-locked).
@@ -19,11 +22,10 @@
  *
  * Every hook path never throws — attack protection must not break a login.
  */
-import { isIP } from 'node:net';
 import { createLogger, getRedisClient, peekRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 import { prisma } from './prisma/index.js';
 import {
-  LOCKOUT_KEYS, accountLockId, normalizeIp,
+  LOCKOUT_KEYS, accountLockId, createExemptIpMatcher, ipLockIdOf, isPrivateOrLoopbackIp,
   type LockInfo, type LockoutEvent,
 } from './mail-auth-core.js';
 import { ipAccessVerdict, parseCidr, publishIpAccessReload } from './ip-access.js';
@@ -42,7 +44,10 @@ export interface AttackProtectionSettings {
   autoBlockEnabled: boolean;
   /** IP locks within 7 days that put the IP on the block list. */
   autoBlockThreshold: number;
-  /** Lifetime of an automatic entry in days; 0 = permanent. */
+  /**
+   * Lifetime of an automatic entry in days; 0 = permanent. 10.5 review: the
+   * last step of the escalation (1 d → 7 d → this value) and the cap of every step.
+   */
   autoBlockDays: number;
 }
 
@@ -252,7 +257,7 @@ export function buildAttackNotice(items: AttackNoticeItem[], opts: { host: strin
   if (autos.length) {
     sections.push({
       title: `Automatisch in die Sperrliste aufgenommen (${autos.length})`,
-      lines: autos.slice(0, LIMIT).map((a) => `${a.ip} — ${a.locks} Sperren in 7 Tagen, ${a.days > 0 ? `${a.days} Tage` : 'dauerhaft'} (${fmtTime(a.at)})`),
+      lines: autos.slice(0, LIMIT).map((a) => `${a.ip} — ${a.locks} Sperren in 7 Tagen, ${a.days > 0 ? `${a.days} ${a.days === 1 ? 'Tag' : 'Tage'}` : 'dauerhaft'} (${fmtTime(a.at)})`),
     });
   }
   if (alerts.length) {
@@ -362,6 +367,7 @@ export interface LockoutHandlerDeps {
   settings(): Promise<AttackProtectionSettings>;
   /** The notification queue's Redis; null = no notifications (no Redis). */
   notifyRedis(): NotifyRedis | null;
+  /** `ip` = the IP lock id (IPv4 address, IPv6 /64). */
   autoBlock(ip: string, locks: number, settings: AttackProtectionSettings, protocol: string): Promise<void>;
   now?: () => number;
 }
@@ -397,9 +403,13 @@ export function createLockoutEventHandler(deps: LockoutHandlerDeps): (e: Lockout
             detail: { scope: e.scope, strikes: e.strikes, lockSec: e.lockSec, failures: e.failures, ...(e.scope === 'ip' ? { locksInWindow: e.locksInWindow } : {}) },
           });
           const s = await deps.settings();
-          await queue({ kind: 'lock', scope: e.scope, ip: e.ip, account: e.account, protocol: e.protocol, strikes: e.strikes, lockSec: e.lockSec, at }, s);
-          if (e.scope === 'ip' && e.ip && s.autoBlockEnabled && e.locksInWindow >= s.autoBlockThreshold) {
-            await deps.autoBlock(e.ip, e.locksInWindow, s, e.protocol);
+          // 10.5 review: IP locks are reported (and escalated) under their lock id — IPv6 per /64
+          const lockIp = e.scope === 'ip' ? (e.ipLockId ?? e.ip) : e.ip;
+          await queue({ kind: 'lock', scope: e.scope, ip: lockIp, account: e.account, protocol: e.protocol, strikes: e.strikes, lockSec: e.lockSec, at }, s);
+          // 10.5 review: only an address from the socket or a verified proxy is escalated
+          // (an unverified X-Forwarded-For value could name any victim address)
+          if (e.scope === 'ip' && lockIp && e.ipTrusted !== false && s.autoBlockEnabled && e.locksInWindow >= s.autoBlockThreshold) {
+            await deps.autoBlock(lockIp, e.locksInWindow, s, e.protocol);
           }
           return;
         }
@@ -416,17 +426,118 @@ export function createLockoutEventHandler(deps: LockoutHandlerDeps): (e: Lockout
 }
 
 /**
- * G — repeat offender: puts the IP on the block list as an automatic entry
- * (note AUTO_BLOCK_NOTE, lifetime autoBlockDays, 0 = permanent). A manual or
- * permanent entry is left alone; exempt IPs are never blocked; the list cap
- * applies. Audit `security.ip.autoblock`, security event IP_AUTO_BLOCKED and a
- * notice. Returns true when an entry was written.
+ * 10.5 review: lifetime of an automatic entry by the number of earlier
+ * automatic entries of the same range within AUTO_BLOCK_HISTORY_DAYS — 1 day,
+ * then 7 days, then the configured lifetime (autoBlockDays; 0 = permanent).
+ * Every step is capped by a shorter configured lifetime. Returns days, 0 = permanent.
  */
-export async function addAutoBlock(rawIp: string, locks: number, settings: AttackProtectionSettings, protocol = 'http'): Promise<boolean> {
-  const ip = normalizeIp(rawIp);
+export const AUTO_BLOCK_STEPS_DAYS: readonly number[] = Object.freeze([1, 7]);
+export const AUTO_BLOCK_HISTORY_DAYS = 90;
+
+export function autoBlockLifetimeDays(prior: number, configuredDays: number): number {
+  const step = AUTO_BLOCK_STEPS_DAYS[Math.max(0, Math.floor(prior))];
+  if (step === undefined) return configuredDays;
+  return configuredDays > 0 ? Math.min(step, configuredDays) : step;
+}
+
+/** Why a repeat offender is not put on the block list (10.5 review). */
+export type AutoBlockExemption = 'private' | 'exception' | 'trusted-proxy' | 'legitimate-logins';
+
+/** The Redis surface of the legitimate-login lookup (ioredis compatible). */
+export interface AutoBlockRedis {
+  scan(cursor: string, match: 'MATCH', pattern: string, count: 'COUNT', n: number): Promise<[string, string[]]>;
+  get(key: string): Promise<string | null>;
+}
+
+/**
+ * 10.5 review: the proxies TRUST_PROXY names explicitly (IPs / CIDRs; the
+ * named ranges loopback / linklocal / uniquelocal are private anyway). A hop
+ * count or `true` names no address. Invalid values → nothing.
+ */
+export function trustProxyPeerMatcher(raw: string | undefined): (ip: string) => boolean {
+  const v = (raw ?? '').trim();
+  if (!v || /^(false|no|off|0|true|yes|on|\d+)$/i.test(v)) return () => false;
+  const entries = v.split(',').map((s) => s.trim()).filter((s) => s && !/^(loopback|linklocal|uniquelocal)$/i.test(s));
+  if (entries.length === 0) return () => false;
+  const m = createExemptIpMatcher(entries.join(','));
+  // createExemptIpMatcher always exempts loopback — loopback is private here anyway
+  return (ip) => m.isExempt(ip);
+}
+
+/**
+ * 10.5 review: never auto-block an address many clients share or legitimate
+ * users log in from — private / CGNAT / ULA / link-local / loopback ranges
+ * (Docker userland proxy and bridge gateways, office NAT, a reverse proxy
+ * without TRUST_PROXY), the configured exceptions, the proxies TRUST_PROXY
+ * names, and an IP lock id with successful logins of ≥ 2 accounts or of an
+ * admin within LOGIN_SUCCESS_IP_TTL_SEC. Manual entries are not affected.
+ * `lockId` = IPv4 address or IPv6 /64 (ipLockIdOf). Redis errors → not exempt
+ * for that reason (the other checks still apply).
+ */
+export async function autoBlockExemption(
+  lockId: string,
+  opts: { redis?: AutoBlockRedis | null; trustProxy?: string | undefined } = {},
+): Promise<AutoBlockExemption | null> {
+  const id = ipLockIdOf(lockId);
+  if (!id) return null;
+  const address = id.endsWith('/64') ? id.slice(0, -3) : id;
+  // '::/64' holds ::1 (loopback) — like every private range never auto-blocked
+  if (isPrivateOrLoopbackIp(address) || address === '::') return 'private';
+  if (ipAccessVerdict(address) === 'allow') return 'exception';
+  if (trustProxyPeerMatcher(opts.trustProxy ?? process.env['TRUST_PROXY'])(address)) return 'trusted-proxy';
+  const redis = opts.redis === undefined ? (peekRedisClient() as unknown as AutoBlockRedis | null) : opts.redis;
+  if (redis) {
+    try {
+      const accounts = new Set<string>();
+      const prefix = LOCKOUT_KEYS.ipOk(id, '');
+      let cursor = '0';
+      let rounds = 0;
+      do {
+        const [next, keys] = await redis.scan(cursor, 'MATCH', `${prefix}*`, 'COUNT', 1000);
+        cursor = next;
+        for (const k of keys) {
+          if (!k.startsWith(prefix)) continue;
+          accounts.add(k.slice(prefix.length));
+          if (accounts.size >= 2) return 'legitimate-logins';
+          if ((await redis.get(k)) === 'a') return 'legitimate-logins';
+        }
+      } while (cursor !== '0' && ++rounds < 10_000);
+    } catch (err) {
+      log.warn({ err }, 'legitimate-login lookup of a repeat offender failed — not exempt for that reason');
+    }
+  }
+  return null;
+}
+
+export interface AddAutoBlockOptions {
+  /** Redis of the legitimate-login lookup (default: the process client; null = none). */
+  redis?: AutoBlockRedis | null;
+  /** TRUST_PROXY value (default: the environment). */
+  trustProxy?: string | undefined;
+}
+
+/**
+ * G — repeat offender: puts the IP lock id (IPv4 address, IPv6 /64) on the
+ * block list as an automatic entry (note AUTO_BLOCK_NOTE). 10.5 review: never
+ * for a shared / legitimately used address (autoBlockExemption); escalating
+ * lifetime 1 d → 7 d → autoBlockDays (autoBlockLifetimeDays); automatic entries
+ * apply to client surfaces only, never to inbound port 25 (ip-access.ts). A
+ * manual or permanent entry is left alone; the list cap applies. Audit
+ * `security.ip.autoblock`, security event IP_AUTO_BLOCKED and a notice.
+ * Returns true when an entry was written.
+ */
+export async function addAutoBlock(
+  rawIp: string, locks: number, settings: AttackProtectionSettings, protocol = 'http', opts: AddAutoBlockOptions = {},
+): Promise<boolean> {
+  const ip = ipLockIdOf(rawIp);
   const c = parseCidr(ip);
-  if (!c || ipAccessVerdict(ip) === 'allow') return false;
+  if (!c) return false;
   try {
+    const exempt = await autoBlockExemption(ip, opts);
+    if (exempt) {
+      log.info({ ip: c.cidr, locks, reason: exempt }, 'repeat offender NOT added to the block list — shared or legitimately used address');
+      return false;
+    }
     const existing = await prisma.ipAccessRule.findUnique({ where: { kind_cidr: { kind: 'BLOCK', cidr: c.cidr } } });
     if (existing) return false; // already blocked (manually or automatically)
     const count = await prisma.ipAccessRule.count({ where: { kind: 'BLOCK' } });
@@ -434,24 +545,36 @@ export async function addAutoBlock(rawIp: string, locks: number, settings: Attac
       log.warn({ ip, count }, 'repeat offender not blocked — the block list is full');
       return false;
     }
-    const expiresAt = settings.autoBlockDays > 0 ? new Date(Date.now() + settings.autoBlockDays * 86_400_000) : null;
+    let prior = 0;
+    try {
+      prior = await prisma.auditLog.count({
+        where: {
+          action: 'security.ip.autoblock', targetName: c.cidr,
+          timestamp: { gte: new Date(Date.now() - AUTO_BLOCK_HISTORY_DAYS * 86_400_000) },
+        },
+      });
+    } catch (err) {
+      log.warn({ err }, 'earlier automatic blocks could not be counted — using the first step');
+    }
+    const days = autoBlockLifetimeDays(prior, settings.autoBlockDays);
+    const expiresAt = days > 0 ? new Date(Date.now() + days * 86_400_000) : null;
     await prisma.ipAccessRule.create({
       data: { kind: 'BLOCK', cidr: c.cidr, note: AUTO_BLOCK_NOTE, auto: true, expiresAt, createdBy: null },
     });
     await prisma.auditLog.create({
       data: {
         actorEmail: 'system', action: 'security.ip.autoblock', targetType: 'ip', targetName: c.cidr,
-        changes: { locks, days: settings.autoBlockDays, expiresAt: expiresAt?.toISOString() ?? null },
+        changes: { locks, days, step: prior + 1, expiresAt: expiresAt?.toISOString() ?? null },
         success: true,
       },
     }).catch((err: unknown) => log.warn({ err }, 'audit row of an automatic block not written'));
     await publishIpAccessReload();
-    recordSecurityEvent({ type: 'IP_AUTO_BLOCKED', ip, protocol, important: true, detail: { locks, days: settings.autoBlockDays } });
+    recordSecurityEvent({ type: 'IP_AUTO_BLOCKED', ip, protocol, important: true, detail: { locks, days, step: prior + 1, cidr: c.cidr } });
     if (settings.notifyEnabled) {
       const r = peekRedisClient() as unknown as NotifyRedis | null;
-      if (r) await queueAttackNotice(r, { kind: 'autoblock', ip: c.cidr, locks, days: settings.autoBlockDays, at: new Date().toISOString() });
+      if (r) await queueAttackNotice(r, { kind: 'autoblock', ip: c.cidr, locks, days, at: new Date().toISOString() });
     }
-    log.warn({ ip: c.cidr, locks, days: settings.autoBlockDays }, 'repeat offender added to the block list');
+    log.warn({ ip: c.cidr, locks, days, step: prior + 1 }, 'repeat offender added to the block list');
     return true;
   } catch (err) {
     // P2002: another process added it at the same moment
@@ -549,15 +672,13 @@ export async function listActiveLocks(redis: LockScanRedis, opts: { max?: number
 }
 
 /**
- * Resolves the release id of a lock: scope ip → the normalised IP, scope
- * account → the 32-hex account hash or an e-mail address (hashed). null = invalid.
+ * Resolves the release id of a lock: scope ip → the IP lock id (IPv4 address,
+ * IPv6 /64 — an IPv6 address or its /64 text), scope account → the 32-hex
+ * account hash or an e-mail address (hashed). null = invalid.
  */
 export function lockIdOf(scope: 'ip' | 'account', raw: string): string | null {
   const v = String(raw ?? '').trim();
-  if (scope === 'ip') {
-    const ip = normalizeIp(v);
-    return ip && isIP(ip) !== 0 ? ip : null;
-  }
+  if (scope === 'ip') return ipLockIdOf(v) || null;
   if (/^[0-9a-f]{32}$/.test(v)) return v;
   if (/^[^\s@]+@[^\s@]+$/.test(v) && v.length <= 254) return accountLockId(v.toLowerCase());
   return null;
@@ -589,7 +710,7 @@ export async function releaseLock(
 
 /** Forgets the repeat-offender counter of an IP (an automatic entry was removed by an admin). */
 export async function resetRepeatCounter(redis: Pick<LockScanRedis, 'del'>, ip: string): Promise<void> {
-  const v = normalizeIp(ip);
+  const v = ipLockIdOf(ip);
   if (v) await redis.del(LOCKOUT_KEYS.locks(v));
 }
 

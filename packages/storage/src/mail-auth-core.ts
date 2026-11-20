@@ -44,6 +44,19 @@
  *    repeat-offender escalation (attack-protection.ts).
  *  - `onLockoutEvent` reports failures, locks, refusals and known-client logins
  *    (security events, notifications). Hook errors are ignored.
+ *
+ * 10.5 review (docs/changes/review-fixes-10.5.md):
+ *  - IPv6 is counted per /64 (ipLockIdOf), not per address.
+ *  - Known clients: each (account, known network) has its own failure budget
+ *    (accountMaxFailures per accountWindowSec); when used up the network loses
+ *    the exception until the window ends. A device id (client-chosen) never
+ *    grants it alone — with a device id, network AND device must be known.
+ *  - An IP from an unverified forwarding header (ctx.ipTrusted false) is
+ *    counted, but never learned as known network, never grants the exception
+ *    and its locks are never escalated to the block list.
+ *  - A successful login records its IP lock id (account + admin flag, 30 days):
+ *    the repeat-offender escalation never blocks an address legitimate users share.
+ *  - Accounts in events / lock records are safeAccountLabel()s, never raw input.
  */
 import { createHash } from 'node:crypto';
 import { BlockList, isIP } from 'node:net';
@@ -59,10 +72,19 @@ export interface MailAuthContext {
   protocol: MailProtocol;
   /**
    * 10.5: a stable client device id when the protocol has one (ActiveSync
-   * DeviceId). Remembered per account after a successful login; a known device
-   * may still log in while the account is locked by failures from elsewhere.
+   * DeviceId). Remembered per account after a successful login. 10.5 review:
+   * client-chosen, so it never grants the known-client exception on its own —
+   * with a device id the exception needs the known network AND the known device.
    */
   deviceId?: string | undefined;
+  /**
+   * 10.5 review: false when `ip` came from a forwarding header the gateway
+   * could not verify (TRUST_PROXY hop count / `true`): it is still counted, but
+   * never escalated (no automatic block list entry), never learned as a known
+   * network and never grants the known-client exception. Default true (the
+   * socket peer of SMTP/IMAP/POP3).
+   */
+  ipTrusted?: boolean | undefined;
 }
 
 /** 10.5: login surfaces reported by the lockout (mail protocols + web/API + admin MCP). */
@@ -71,7 +93,8 @@ export type LockoutProtocol = MailProtocol | 'web' | 'mcp';
 /**
  * 10.5: what the shared lockout reports to `onLockoutEvent` (security events,
  * notifications, repeat-offender escalation). `account` is the normalised
- * login (e-mail) as typed — also for unknown accounts.
+ * login (e-mail) — also for unknown accounts; 10.5 review: passed through
+ * safeAccountLabel (a non-address login is a masked placeholder, never raw text).
  */
 export type LockoutEvent =
   | { kind: 'failure'; protocol: LockoutProtocol; ip: string | null; account: string | null; status: string }
@@ -80,9 +103,13 @@ export type LockoutEvent =
       strikes: number; lockSec: number; failures: number;
       /** IP locks only: number of locks of this IP in the 7-day window (incl. this one). */
       locksInWindow: number;
+      /** 10.5 review — IP locks: the lock id (IPv4 address, IPv6 /64, ipLockIdOf); else null. */
+      ipLockId?: string | null | undefined;
+      /** 10.5 review: false = the IP came from an unverified forwarding header — never escalated. */
+      ipTrusted?: boolean | undefined;
     }
   | { kind: 'refused'; scope: 'ip' | 'account'; protocol: LockoutProtocol; ip: string | null; account: string | null; retryAfterSec: number }
-  | { kind: 'known_client'; protocol: LockoutProtocol; ip: string | null; account: string; via: 'network' | 'device' };
+  | { kind: 'known_client'; protocol: LockoutProtocol; ip: string | null; account: string; via: 'network' | 'network+device' };
 
 export type LockoutEventHook = (event: LockoutEvent) => void;
 
@@ -116,6 +143,8 @@ export interface MailAuthRedis {
   ttl(key: string): Promise<number>;
   set(key: string, value: string, mode: 'EX', seconds: number): Promise<unknown>;
   del(...keys: string[]): Promise<unknown>;
+  /** 10.5 review: reads the known-network failure budget (absent → the budget is not enforced). */
+  get?(key: string): Promise<string | null>;
 }
 
 interface UserRow {
@@ -288,6 +317,60 @@ export function formatIpv6Groups(groups: number[]): string {
   return groups.map((g) => g.toString(16)).join(':');
 }
 
+/** 10.5: RFC 5952 text of eight IPv6 groups (longest zero run of ≥ 2 groups → `::`). */
+export function compressIpv6Groups(groups: number[]): string {
+  let bestStart = -1; let bestLen = 0;
+  for (let i = 0; i < 8;) {
+    if (groups[i] !== 0) { i++; continue; }
+    let j = i;
+    while (j < 8 && groups[j] === 0) j++;
+    if (j - i > bestLen && j - i >= 2) { bestStart = i; bestLen = j - i; }
+    i = j;
+  }
+  const hex = groups.map((g) => g.toString(16));
+  if (bestStart === -1) return hex.join(':');
+  return `${hex.slice(0, bestStart).join(':')}::${hex.slice(bestStart + bestLen).join(':')}`;
+}
+
+/**
+ * 10.5 review: the id the per-IP lockout counts under — an IPv4 address as it
+ * is, an IPv6 address as its /64 (`2001:db8:1:2::/64`, the same canonical text
+ * as ip-access parseCidr): one subscriber owns a whole /64, counting per
+ * address would give an attacker 2^64 fresh budgets. A /64 CIDR text maps to
+ * itself. '' for anything that is not an IP address.
+ */
+export function ipLockIdOf(raw: string | null | undefined): string {
+  const text = String(raw ?? '').trim();
+  if (text.endsWith('/64')) {
+    const g = ipv6Groups(text.slice(0, -3));
+    return g ? `${compressIpv6Groups([g[0]!, g[1]!, g[2]!, g[3]!, 0, 0, 0, 0])}/64` : '';
+  }
+  const ip = normalizeIp(text);
+  const family = isIP(ip);
+  if (family === 4) return ip;
+  if (family !== 6) return '';
+  const g = ipv6Groups(ip)!;
+  return `${compressIpv6Groups([g[0]!, g[1]!, g[2]!, g[3]!, 0, 0, 0, 0])}/64`;
+}
+
+/** 10.5 review: a login is shown / stored only when it looks like a mail address (no URLs, quotes, markup …). */
+const DISPLAYABLE_LOGIN = /^[\p{L}\p{N}._%+-]{1,64}@(?:[\p{L}\p{N}](?:[\p{L}\p{N}-]{0,61}[\p{L}\p{N}])?\.)+[\p{L}\p{N}-]{2,63}$/u;
+
+/**
+ * 10.5 review: the account text of lockout events, lock records, security
+ * events and admin notices — attacker-supplied, so only a normalised login
+ * that looks like a mail address is passed on; anything else becomes a masked
+ * placeholder with its length ("(ungültige Eingabe, 23 Zeichen)"). null for
+ * an empty value.
+ */
+export function safeAccountLabel(raw: string | null | undefined): string | null {
+  if (raw === null || raw === undefined) return null;
+  const text = String(raw);
+  if (!text) return null;
+  if (text.length <= 254 && DISPLAYABLE_LOGIN.test(text)) return text;
+  return `(ungültige Eingabe, ${[...text].length} Zeichen)`;
+}
+
 /**
  * 10.5: the client network a login is remembered for (known clients):
  * IPv4 → the /24, IPv6 → the /56 (a typical customer prefix). null for anything
@@ -345,11 +428,37 @@ export function createExemptIpMatcher(raw: string | null | undefined): { isExemp
  * right-most entry is used (the address the nearest proxy saw).
  */
 export function clientIpFromRequest(remoteAddress: string | undefined, forwardedFor: string | string[] | undefined): string {
+  return clientIpInfoFromRequest(remoteAddress, { 'x-forwarded-for': forwardedFor }).ip;
+}
+
+/**
+ * 10.5 review: set ("1") by the api-gateway on a proxied request when the
+ * client IP it forwards in X-Forwarded-For came from the socket or from a
+ * proxy of the explicit TRUST_PROXY allow-list — absent when it came from a
+ * hop count / `TRUST_PROXY=true` (then any client reaching port 3000 directly
+ * could have chosen it). Clients cannot send it (the gateway drops every
+ * X-CoreMail-* header). Escalation (automatic block list entries, known
+ * networks) only acts on verified addresses.
+ */
+export const IP_VERIFIED_HEADER = 'x-coremail-ip-verified';
+
+/**
+ * 10.5 review: the client IP of a proxied HTTP request (see
+ * clientIpFromRequest) and whether it is trustworthy for escalation: the
+ * socket peer itself, or a forwarded address the gateway marked verified.
+ */
+export function clientIpInfoFromRequest(
+  remoteAddress: string | undefined,
+  headers: Record<string, string | string[] | undefined> | undefined,
+): { ip: string; trusted: boolean } {
   const peer = normalizeIp(remoteAddress);
-  if (!peer || !isPrivateOrLoopbackIp(peer)) return peer;
+  if (!peer || !isPrivateOrLoopbackIp(peer)) return { ip: peer, trusted: true };
+  const forwardedFor = headers?.['x-forwarded-for'];
   const header = Array.isArray(forwardedFor) ? forwardedFor.join(',') : (forwardedFor ?? '');
   const hops = header.split(',').map((h) => normalizeIp(h)).filter((h) => isIP(h) !== 0);
-  return hops.length ? hops[hops.length - 1]! : peer;
+  if (!hops.length) return { ip: peer, trusted: true };
+  const flag = headers?.[IP_VERIFIED_HEADER];
+  return { ip: hops[hops.length - 1]!, trusted: (Array.isArray(flag) ? flag[0] : flag) === '1' };
 }
 
 // ─── External verifier registry (LDAP extension point) ──────────────────────
@@ -411,6 +520,7 @@ export function createMemoryAuthRedis(now: () => number = Date.now): MailAuthRed
       for (const k of keys) if (store.delete(k)) n++;
       return n;
     },
+    async get(key) { return live(key)?.value ?? null; },
     keys() { return [...store.keys()].filter((k) => live(k)); },
   };
 }
@@ -441,7 +551,23 @@ export const LOCKOUT_KEYS = {
   /** 10.5: known client network / device of an account (hashed), TTL knownClientTtlSec. */
   knownNet: (acct: string, hash: string) => `mailauth:acct:known:${acct}:n:${hash}`,
   knownDevice: (acct: string, hash: string) => `mailauth:acct:known:${acct}:d:${hash}`,
+  /**
+   * 10.5 review: failures of one (account, known network) in accountWindowSec —
+   * its own budget; at accountMaxFailures the network loses the known-client
+   * exception until the window ends.
+   */
+  knownFail: (acct: string, hash: string) => `mailauth:acct:knownfail:${acct}:${hash}`,
+  /**
+   * 10.5 review: a successful login of `acct` from the IP lock id `ipId`
+   * (value 'a' = an admin account, 'u' = a user), TTL LOGIN_SUCCESS_IP_TTL_SEC —
+   * read by the repeat-offender escalation (never auto-block a shared address
+   * legitimate users log in from).
+   */
+  ipOk: (ipId: string, acct: string) => `mailauth:ip:ok:${ipId}:${acct}`,
 } as const;
+
+/** 10.5 review: how long a successful login keeps its IP "in legitimate use" (no automatic block list entry). */
+export const LOGIN_SUCCESS_IP_TTL_SEC = 30 * 24 * 3600;
 const KEY = LOCKOUT_KEYS;
 
 /** Account id of the lockout keys: sha256 of the normalised e-mail (32 hex chars). */
@@ -468,8 +594,6 @@ export interface LockInfo {
   ip: string | null;
 }
 
-/** Caps attacker-supplied text that ends up in Redis / the database. */
-const cap = (s: string | null | undefined, n = 254): string | null => (s ? String(s).slice(0, n) : null);
 
 export function hasMfa(user: Pick<UserRow, 'mfa'>): boolean {
   const mfa = user.mfa;
@@ -494,8 +618,10 @@ interface FailureContext {
   protocol: LockoutProtocol;
   /** Normalised client IP (null when unknown). */
   ip: string | null;
-  /** Normalised login (e-mail) as typed, also for unknown accounts. */
+  /** 10.5 review: safeAccountLabel of the login — also for unknown accounts, never raw input. */
   account: string | null;
+  /** 10.5 review: false = the IP came from an unverified forwarding header (no escalation, no known networks). */
+  ipTrusted: boolean;
 }
 
 /** Counter primitives keyed by scope + id (shared by the verifier and createLoginLockout). */
@@ -540,7 +666,7 @@ function lockoutCore(deps: LockoutCoreDeps) {
         // hash, the admin view needs the e-mail; IP locks keep the last login tried.
         const info: LockInfo = {
           protocol: ctx.protocol, failures: n, strikes, lockSec, lockedAt: new Date().toISOString(),
-          account: cap(ctx.account), ip: ctx.ip,
+          account: ctx.account, ip: ctx.ip,
         };
         await redis.set(KEY.info(scope, id), JSON.stringify(info), 'EX', lockSec);
         // 10.5: repeat offenders — IP locks counted in a 7-day window (from the first lock).
@@ -553,11 +679,41 @@ function lockoutCore(deps: LockoutCoreDeps) {
         log?.warn({ scope, failures: n, strikes, lockSec, protocol: ctx.protocol }, 'mail-auth: lockout');
         emit({
           kind: 'lock', scope: scope === 'ip' ? 'ip' : 'account', protocol: ctx.protocol, ip: ctx.ip,
-          account: cap(ctx.account), strikes, lockSec, failures: n, locksInWindow,
+          account: ctx.account, strikes, lockSec, failures: n, locksInWindow,
+          ipLockId: scope === 'ip' ? id : null, ipTrusted: ctx.ipTrusted,
         });
       }
     } catch (err) {
       log?.error({ err, scope }, 'mail-auth: Redis error while counting a failure');
+    }
+  }
+
+  /** 10.5 review: hashed id of the client's known-network candidate for an account (null without a trusted IP). */
+  const networkHashOf = (acctId: string, ip: string | null, ipTrusted: boolean): string | null => {
+    if (!ipTrusted) return null;
+    const net = clientNetworkOf(ip);
+    return net ? knownHash(acctId, 'n', net) : null;
+  };
+
+  /**
+   * 10.5 review: a failure from a KNOWN network of the account also counts
+   * against that (account, network) budget — at accountMaxFailures within
+   * accountWindowSec the network loses its known-client exception, so an
+   * attacker sharing the victim's network (office NAT, carrier /24) cannot keep
+   * guessing while the account is locked. Redis errors are ignored.
+   */
+  async function countKnownNetworkFailure(acctId: string, ctx: FailureContext): Promise<void> {
+    const redis = deps.redis;
+    if (!redis || limits.knownClientTtlSec <= 0) return;
+    const netHash = networkHashOf(acctId, ctx.ip, ctx.ipTrusted);
+    if (!netHash) return;
+    try {
+      if ((await redis.ttl(KEY.knownNet(acctId, netHash))) <= 0) return;
+      const key = KEY.knownFail(acctId, netHash);
+      const n = await redis.incr(key);
+      if (n === 1) await redis.expire(key, limits.accountWindowSec);
+    } catch (err) {
+      log?.error({ err }, 'mail-auth: Redis error while counting a known-network failure');
     }
   }
 
@@ -566,39 +722,63 @@ function lockoutCore(deps: LockoutCoreDeps) {
     await Promise.all([
       ipId ? countFailure('ip', ipId, ctx) : Promise.resolve(),
       acctId ? countFailure('acct', acctId, ctx) : Promise.resolve(),
+      acctId ? countKnownNetworkFailure(acctId, ctx) : Promise.resolve(),
     ]);
-    emit({ kind: 'failure', protocol: ctx.protocol, ip: ctx.ip, account: cap(ctx.account), status });
+    emit({ kind: 'failure', protocol: ctx.protocol, ip: ctx.ip, account: ctx.account, status });
   }
 
   /**
    * 10.5: has this account logged in successfully from the client's network
-   * (IPv4 /24, IPv6 /56) or with this device id within knownClientTtlSec?
-   * Redis errors → false (no exception from the lock: fail closed for the
-   * exception, the lock itself already failed open when Redis is down).
+   * (IPv4 /24, IPv6 /56) within knownClientTtlSec? 10.5 review: only for a
+   * trusted IP; with a device id (ActiveSync — client-chosen, never enough on
+   * its own) the device must be known as well; a network whose own failure
+   * budget is used up has no exception. Redis errors → null (no exception from
+   * the lock: fail closed for the exception, the lock itself already failed
+   * open when Redis is down).
    */
-  async function knownClient(acctId: string, ip: string | null, deviceId: string | null | undefined): Promise<'network' | 'device' | null> {
+  async function knownClient(
+    acctId: string, ip: string | null, deviceId: string | null | undefined, ipTrusted: boolean,
+  ): Promise<'network' | 'network+device' | null> {
     const redis = deps.redis;
     if (!redis || limits.knownClientTtlSec <= 0) return null;
+    const netHash = networkHashOf(acctId, ip, ipTrusted);
+    if (!netHash) return null;
     try {
-      const net = clientNetworkOf(ip);
-      if (net && (await redis.ttl(KEY.knownNet(acctId, knownHash(acctId, 'n', net)))) > 0) return 'network';
+      if ((await redis.ttl(KEY.knownNet(acctId, netHash))) <= 0) return null;
       const dev = (deviceId ?? '').trim();
-      if (dev && (await redis.ttl(KEY.knownDevice(acctId, knownHash(acctId, 'd', dev)))) > 0) return 'device';
+      if (dev && (await redis.ttl(KEY.knownDevice(acctId, knownHash(acctId, 'd', dev.slice(0, 256))))) <= 0) return null;
+      // the network's own failure budget (countKnownNetworkFailure)
+      const used = redis.get ? parseInt((await redis.get(KEY.knownFail(acctId, netHash))) ?? '', 10) || 0 : 0;
+      if (used >= limits.accountMaxFailures) {
+        log?.warn({ failures: used }, 'mail-auth: known network used up its failure budget — no exception from the account lock');
+        return null;
+      }
+      return dev ? 'network+device' : 'network';
     } catch (err) {
       log?.error({ err }, 'mail-auth: Redis error while checking a known client');
     }
     return null;
   }
 
-  /** 10.5: remembers the network / device of a successful login (refreshes the TTL). */
-  async function rememberClient(acctId: string, ip: string | null, deviceId: string | null | undefined): Promise<void> {
+  /**
+   * 10.5: remembers the network / device of a successful login (refreshes the
+   * TTL). 10.5 review: only for a trusted IP; the IP lock id is also recorded as
+   * "in legitimate use" (account + admin flag, LOGIN_SUCCESS_IP_TTL_SEC) for the
+   * repeat-offender escalation.
+   */
+  async function rememberClient(
+    acctId: string, ip: string | null, deviceId: string | null | undefined,
+    opts: { ipTrusted: boolean; ipId: string | null; admin: boolean },
+  ): Promise<void> {
     const redis = deps.redis;
-    if (!redis || limits.knownClientTtlSec <= 0) return;
+    if (!redis || !opts.ipTrusted) return;
     try {
+      if (opts.ipId) await redis.set(KEY.ipOk(opts.ipId, acctId), opts.admin ? 'a' : 'u', 'EX', LOGIN_SUCCESS_IP_TTL_SEC);
+      if (limits.knownClientTtlSec <= 0) return;
       const net = clientNetworkOf(ip);
       if (net) await redis.set(KEY.knownNet(acctId, knownHash(acctId, 'n', net)), '1', 'EX', limits.knownClientTtlSec);
       const dev = (deviceId ?? '').trim();
-      if (dev) await redis.set(KEY.knownDevice(acctId, knownHash(acctId, 'd', dev.slice(0, 256))), '1', 'EX', limits.knownClientTtlSec);
+      if (dev && net) await redis.set(KEY.knownDevice(acctId, knownHash(acctId, 'd', dev.slice(0, 256))), '1', 'EX', limits.knownClientTtlSec);
     } catch { /* non-critical */ }
   }
 
@@ -614,17 +794,17 @@ function lockoutCore(deps: LockoutCoreDeps) {
       lockTtl('acct', acctId),
     ]);
     if (ipTtl > 0) {
-      emit({ kind: 'refused', scope: 'ip', protocol: ctx.protocol, ip: ctx.ip, account: cap(ctx.account), retryAfterSec: Math.max(ipTtl, acctTtl) });
+      emit({ kind: 'refused', scope: 'ip', protocol: ctx.protocol, ip: ctx.ip, account: ctx.account, retryAfterSec: Math.max(ipTtl, acctTtl) });
       return { locked: true, scope: 'ip', retryAfterSec: Math.max(ipTtl, acctTtl) };
     }
     if (acctTtl > 0) {
-      const via = await knownClient(acctId, ctx.ip, deviceId);
+      const via = await knownClient(acctId, ctx.ip, deviceId, ctx.ipTrusted);
       if (via && ctx.account) {
         log?.info({ protocol: ctx.protocol, via }, 'mail-auth: account locked — known client may still log in');
         emit({ kind: 'known_client', protocol: ctx.protocol, ip: ctx.ip, account: ctx.account, via });
         return { locked: false };
       }
-      emit({ kind: 'refused', scope: 'account', protocol: ctx.protocol, ip: ctx.ip, account: cap(ctx.account), retryAfterSec: acctTtl });
+      emit({ kind: 'refused', scope: 'account', protocol: ctx.protocol, ip: ctx.ip, account: ctx.account, retryAfterSec: acctTtl });
       return { locked: true, scope: 'account', retryAfterSec: acctTtl };
     }
     return { locked: false };
@@ -655,6 +835,14 @@ export interface LoginLockState {
 export interface LoginClientHints {
   /** Stable device id (ActiveSync DeviceId); web logins have none. */
   deviceId?: string | null | undefined;
+  /**
+   * 10.5 review: false when the IP came from an unverified forwarding header
+   * (TRUST_PROXY hop count / `true`) — counted, never escalated, never learned
+   * as a known network. Default true.
+   */
+  ipTrusted?: boolean | undefined;
+  /** 10.5 review — success(): the account holds an admin role (its IP is never auto-blocked). */
+  admin?: boolean | undefined;
 }
 
 /**
@@ -671,7 +859,7 @@ export interface LoginLockout {
    */
   check(email: string, ip?: string | null, hints?: LoginClientHints): Promise<LoginLockState>;
   /** Counts one failed attempt for the account and the (non-exempt) IP. */
-  fail(email: string, ip?: string | null): Promise<void>;
+  fail(email: string, ip?: string | null, hints?: LoginClientHints): Promise<void>;
   /**
    * Resets the ACCOUNT counter (never the per-IP counter). 10.5: with the client
    * IP (and device) the client is remembered as known for the account.
@@ -683,42 +871,47 @@ export interface LoginLockout {
    */
   ipLockedFor(ip: string | null | undefined): Promise<number>;
   /** 10.3: counts one failed attempt for the (non-exempt) client IP only. */
-  failIp(ip: string | null | undefined): Promise<void>;
+  failIp(ip: string | null | undefined, hints?: LoginClientHints): Promise<void>;
 }
 
 export function createLoginLockout(deps: LoginLockoutDeps): LoginLockout {
   const isExempt = deps.isExemptIp ?? isLoopbackIp;
   const protocol: LockoutProtocol = deps.protocol ?? 'web';
   const core = lockoutCore(deps);
+  // 10.5 review: IPv6 is counted per /64 (ipLockIdOf); the exemption looks at the address
   const ipKey = (raw: string | null | undefined): string | null => {
     const ip = normalizeIp(raw);
-    return ip && isIP(ip) !== 0 && !isExempt(ip) ? ip : null;
+    return ip && isIP(ip) !== 0 && !isExempt(ip) ? ipLockIdOf(ip) || null : null;
   };
-  const ctxOf = (email: string | null, rawIp: string | null | undefined): FailureContext => {
+  const ctxOf = (email: string | null, rawIp: string | null | undefined, hints?: LoginClientHints): FailureContext => {
     const ip = normalizeIp(rawIp);
-    return { protocol, ip: ip && isIP(ip) !== 0 ? ip : null, account: email };
+    return { protocol, ip: ip && isIP(ip) !== 0 ? ip : null, account: safeAccountLabel(email), ipTrusted: hints?.ipTrusted !== false };
   };
   return {
     async check(email, rawIp, hints) {
-      const d = await core.decide(ipKey(rawIp), accountId(email), ctxOf(email, rawIp), hints?.deviceId);
+      const d = await core.decide(ipKey(rawIp), accountId(email), ctxOf(email, rawIp, hints), hints?.deviceId);
       return d.locked ? { locked: true, scope: d.scope, retryAfterSec: d.retryAfterSec } : { locked: false, retryAfterSec: 0 };
     },
-    async fail(email, rawIp) {
-      await core.countLoginFailure(ipKey(rawIp), accountId(email), ctxOf(email, rawIp), 'invalid');
+    async fail(email, rawIp, hints) {
+      await core.countLoginFailure(ipKey(rawIp), accountId(email), ctxOf(email, rawIp, hints), 'invalid');
     },
     async success(email, rawIp, hints) {
       if (!deps.redis) return;
       const acct = accountId(email);
       try { await deps.redis.del(KEY.fail('acct', acct)); } catch { /* non-critical */ }
       const ip = normalizeIp(rawIp);
-      if (ip || hints?.deviceId) await core.rememberClient(acct, ip || null, hints?.deviceId);
+      if (ip && isIP(ip) !== 0) {
+        await core.rememberClient(acct, ip, hints?.deviceId, {
+          ipTrusted: hints?.ipTrusted !== false, ipId: ipKey(ip), admin: hints?.admin === true,
+        });
+      }
     },
     async ipLockedFor(rawIp) {
       const ipId = ipKey(rawIp);
       return ipId ? core.lockTtl('ip', ipId) : 0;
     },
-    async failIp(rawIp) {
-      await core.countLoginFailure(ipKey(rawIp), null, ctxOf(null, rawIp), 'invalid');
+    async failIp(rawIp, hints) {
+      await core.countLoginFailure(ipKey(rawIp), null, ctxOf(null, rawIp, hints), 'invalid');
     },
   };
 }
@@ -756,7 +949,9 @@ export function createMailCredentialVerifier(deps: MailAuthDeps): MailCredential
 
   async function verify(login: string, password: string, ctx: MailAuthContext): Promise<MailAuthResult> {
     const ip = normalizeIp(ctx.ip);
-    const ipId = ip && !isExempt(ip) ? ip : null;
+    // 10.5 review: IPv6 is counted per /64 (ipLockIdOf); the exemption looks at the address
+    const ipId = ip && isIP(ip) !== 0 && !isExempt(ip) ? ipLockIdOf(ip) || null : null;
+    const ipTrusted = ctx.ipTrusted !== false;
     const report = (status: MailAuthResult['status'], email: string, userId?: string) => {
       try {
         deps.onAttempt?.({ protocol: ctx.protocol, ip: ip || null, login: email, status, ...(userId ? { userId } : {}) });
@@ -772,7 +967,11 @@ export function createMailCredentialVerifier(deps: MailAuthDeps): MailCredential
       return { status: 'error', error };
     }
     const acctId = accountId(email ?? `invalid:${String(login ?? '')}`);
-    const failCtx: FailureContext = { protocol: ctx.protocol, ip: ip && isIP(ip) !== 0 ? ip : null, account: email ?? cap(String(login ?? '')) };
+    // 10.5 review: never the raw login text — a non-address login becomes a masked placeholder
+    const failCtx: FailureContext = {
+      protocol: ctx.protocol, ip: ip && isIP(ip) !== 0 ? ip : null,
+      account: safeAccountLabel(email ?? String(login ?? '')), ipTrusted,
+    };
 
     // 1) Lockout check — on every attempt, before any password work.
     //    10.5: an account lock does not apply to a known client of the account.
@@ -836,8 +1035,11 @@ export function createMailCredentialVerifier(deps: MailAuthDeps): MailCredential
       if (deps.redis) {
         try { await deps.redis.del(KEY.fail('acct', acctId)); } catch { /* non-critical */ }
       }
-      // 10.5: remember the client (network / device) for the known-client exception.
-      await core.rememberClient(acctId, failCtx.ip, ctx.deviceId);
+      // 10.5: remember the client (network / device) for the known-client exception;
+      // 10.5 review: and the IP as "in legitimate use" (never auto-blocked) — trusted IPs only.
+      await core.rememberClient(acctId, failCtx.ip, ctx.deviceId, {
+        ipTrusted, ipId, admin: !!user!.role && user!.role !== 'USER',
+      });
       report('ok', user!.email, user!.id);
       return {
         status: 'ok',
@@ -902,7 +1104,8 @@ export function createMailCredentialVerifier(deps: MailAuthDeps): MailCredential
     async ipLockedFor(rawIp: string) {
       const ip = normalizeIp(rawIp);
       if (!ip || isExempt(ip)) return 0;
-      return lockTtl('ip', ip);
+      const id = ipLockIdOf(ip);
+      return id ? lockTtl('ip', id) : 0;
     },
   };
 }

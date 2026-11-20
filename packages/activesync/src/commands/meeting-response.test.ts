@@ -134,6 +134,26 @@ test('EAS 16.0 + SendResponse — accept: event in the default calendar with own
   assert.equal(req['uid'], 50, 'moved via the message store (new UID)');
 });
 
+test('10.5 review: the server REPLY counts against the send rate; over the limit no REPLY, Status 4', async () => {
+  reset(); queued.length = 0;
+  const rates: Array<{ userId: string; recipients: number; protocol: string }> = [];
+  let allowed = true;
+  const limited = {
+    ...deps,
+    consumeRate: async (r: { userId: string; recipients: number; protocol: 'activesync' }) => {
+      rates.push(r);
+      return allowed ? { allowed: true as const } : { allowed: false as const, reason: 'messages' as const, limit: 1, retryAfterSec: 60 };
+    },
+  };
+  const go = async () => kid(decodeWbxml(await handleMeetingResponse(decodeWbxml(clientWbxml(request('1'))), 'u1', limited, '16.0')), 'Result')!;
+  assert.equal(kid(await go(), 'Status')?.text, '1');
+  assert.deepEqual(rates, [{ userId: 'u1', recipients: 1, protocol: 'activesync' }]);
+  assert.equal(queued.length, 1);
+  reset(); allowed = false;
+  assert.equal(kid(await go(), 'Status')?.text, '4');
+  assert.equal(queued.length, 1, 'no second REPLY');
+});
+
 test('internal invitation: the organizer on this server already holds the UID → the invitee still gets its own copy', async () => {
   // e2e regression: CalendarEvent.uid was unique server-wide, so accepting an
   // invitation from a colleague failed with P2002 (Status 4). The schema key is

@@ -17,7 +17,7 @@ import { prisma } from '@coremail/storage/prisma';
 import {
   attendeesWithResponse, buildITipReplyIcs, buildITipReplyMime, calendarObjectForInvitee,
   announceCalendarChange, expunge, findITipRequest, findOwnAttendee, isWebmailFeatureEnabled, loadRawMessage, moveMessages,
-  type ITipPartstat, type RawSourceMessage,
+  consumeSendRate, type ITipPartstat, type RawSourceMessage, type SendRateDecision,
 } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
 import { encodeWbxml, el, getChild, getText, type WbxmlElement } from '../wbxml.js';
@@ -38,11 +38,18 @@ const USER_RESPONSE: Record<string, ITipPartstat> = { '1': 'ACCEPTED', '2': 'TEN
 export interface MeetingResponseDeps {
   loadRaw: (msg: RawSourceMessage) => Promise<Buffer>;
   enqueue: (job: RawOutboundJob) => Promise<unknown>;
+  /**
+   * 10.5 review: the REPLY is mail the account sends — the user's hourly send
+   * rate (storage submission-rate.ts, protocol `activesync`; counts when
+   * allowed). Absent = not limited (test deps).
+   */
+  consumeRate?: (req: { userId: string; recipients: number; protocol: 'activesync' }) => Promise<SendRateDecision>;
 }
 
 const defaultDeps: MeetingResponseDeps = {
   loadRaw: (msg) => loadRawMessage(msg),
   enqueue: enqueueRawOutbound,
+  consumeRate: (req) => consumeSendRate(req),
 };
 
 const kids = (e: WbxmlElement | undefined): WbxmlElement[] =>
@@ -147,6 +154,14 @@ async function respond(req: WbxmlElement, userId: string, deps: MeetingResponseD
     const mime = buildITipReplyMime({
       ics, from: { email: responder, ...(name ? { name } : {}) }, to: ev.organizer, summary: ev.summary, partstat,
     });
+    // 10.5 review: counted against the send rate like SendMail; over the limit no REPLY (Status 4, the device retries later)
+    if (deps.consumeRate) {
+      const rate = await deps.consumeRate({ userId, recipients: 1, protocol: 'activesync' });
+      if (!rate.allowed) {
+        log.warn({ userId, requestId, reason: rate.reason }, 'meeting response REPLY refused — send rate limit');
+        return result(MEETING_STATUS.SERVER_ERROR, calendarId);
+      }
+    }
     try {
       const jobId = `eas-mr-${randomUUID()}`;
       await deps.enqueue({ messageId: jobId, from: responder, to: [ev.organizer], senderUserId: userId, rawMessage: mime.toString('base64') });

@@ -33,13 +33,15 @@ export interface TransportInfo {
   ip: string;
   /** The gateway verified that the client connection was plain HTTP. */
   plainHttp: boolean;
+  /** 10.5 review: false = `ip` came from an unverified forwarding header (counted, never escalated). */
+  ipTrusted?: boolean | undefined;
 }
 
 /** A successful credential check and when it began. */
 export interface CachedAuth { auth: SessionAuth; verifiedAt: number }
 
 export interface AuthDeps {
-  verify(login: string, password: string, ctx: { ip: string; protocol: 'mapi' }): Promise<MailAuthResult>;
+  verify(login: string, password: string, ctx: { ip: string; protocol: 'mapi'; ipTrusted?: boolean | undefined }): Promise<MailAuthResult>;
   /** The `mapi` switch of the account (throws when unreadable). */
   switchAllows(auth: SessionAuth): Promise<boolean>;
   /** A "revoke all" mark of the account newer than `verifiedAt` (ms) exists. */
@@ -94,7 +96,7 @@ export function createAuthenticator(deps: AuthDeps): Authenticator {
     const hit = await cached(creds.login, creds.password);
     if (hit) return switchOutcome(hit.auth, startedAt);
 
-    const r = await deps.verify(creds.login, creds.password, { ip: transport.ip, protocol: 'mapi' });
+    const r = await deps.verify(creds.login, creds.password, { ip: transport.ip, protocol: 'mapi', ipTrusted: transport.ipTrusted !== false });
     switch (r.status) {
       case 'ok': {
         const auth: SessionAuth = {

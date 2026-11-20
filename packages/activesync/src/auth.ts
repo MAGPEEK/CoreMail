@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import { createLogger } from '@coremail/core/logger';
-import { verifyMailCredentials, clientIpFromRequest } from '@coremail/storage';
+import { verifyMailCredentials, clientIpInfoFromRequest } from '@coremail/storage';
 import { sendEasDisabled, type EasCredentialInfo } from './live-sessions.js';
 import { parseRequestLine } from './request.js';
 
@@ -51,11 +51,15 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   const password = credentials.slice(colonIdx + 1);
 
   const authStartedAt = Date.now();
+  // 10.5 review: the gateway marks a forwarded IP it could verify (IP_VERIFIED_HEADER)
+  const client = clientIpInfoFromRequest(req.socket?.remoteAddress, req.headers);
   const result = await verifyMailCredentials(login, password, {
-    ip: clientIpFromRequest(req.socket?.remoteAddress, req.headers['x-forwarded-for']),
+    ip: client.ip,
+    ipTrusted: client.trusted,
     protocol: 'activesync',
     // 10.5: a device that logged in successfully before may still log in while
-    // the account is locked by failures from elsewhere (known-client exception).
+    // the account is locked by failures from elsewhere (known-client exception) —
+    // 10.5 review: only from a known network too (the DeviceId is client-chosen).
     deviceId: easDeviceIdOf(req),
   });
   if (result.status === 'locked') {

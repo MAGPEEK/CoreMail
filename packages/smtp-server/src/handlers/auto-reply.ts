@@ -28,7 +28,7 @@
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { createLogger, getRedisClient } from '@coremail/core';
-import { prisma, buildCrlfMime } from '@coremail/storage';
+import { prisma, buildCrlfMime, consumeSendRate, peekSendRate, type SendRateDecision } from '@coremail/storage';
 
 const log = createLogger('smtp:auto-reply');
 
@@ -228,6 +228,13 @@ export interface AutoReplyDeps {
   hostname(): Promise<string>;
   displayName(userId: string): Promise<string | undefined>;
   enqueue(job: { from: string; to: string; raw: Buffer }): Promise<void>;
+  /**
+   * 10.5 review: the user's hourly send rate (storage submission-rate.ts,
+   * protocol `autoreply`): `commit` false only checks, true counts. Over the
+   * limit the reply is skipped — the inbound delivery is never affected.
+   * Absent = not limited (test deps).
+   */
+  sendRate?(userId: string, commit: boolean): Promise<SendRateDecision>;
 }
 
 export interface AutoReplyContext {
@@ -260,7 +267,11 @@ export async function sendAutoReplyIfNeeded(ctx: AutoReplyContext, deps: AutoRep
     });
     if (!decision.send) return decision.reason;
     const now = ctx.now ?? new Date();
+    // 10.5 review: an auto-reply is mail the account sends — over the user's send rate
+    // it is skipped (checked first so the sender is not marked as answered).
+    if (deps.sendRate && !(await deps.sendRate(ctx.userId, false)).allowed) return 'send rate limit';
     if (!(await deps.acquire(rateLimitKey(ctx.userId, sender, settings), replyMemoryTtlSec(settings, now)))) return 'rate limited';
+    if (deps.sendRate && !(await deps.sendRate(ctx.userId, true)).allowed) return 'send rate limit';
 
     const name = await deps.displayName(ctx.userId);
     const raw = await buildAutoReply({
@@ -301,6 +312,7 @@ const defaultDeps: AutoReplyDeps = {
   acquire: async (key, ttl) => (await getRedisClient().set(key, '1', 'EX', ttl, 'NX')) === 'OK',
   hostname: async () => (await prisma.serverSettings.findUnique({ where: { id: 'singleton' }, select: { publicHostname: true } }))?.publicHostname ?? 'mail.local',
   displayName: async (userId) => (await prisma.user.findUnique({ where: { id: userId }, select: { displayName: true } }))?.displayName || undefined,
+  sendRate: (userId, commit) => (commit ? consumeSendRate : peekSendRate)({ userId, recipients: 1, protocol: 'autoreply' }),
   enqueue: async ({ from, to, raw }) => {
     const domainName = from.slice(from.lastIndexOf('@') + 1).toLowerCase();
     const domain = await prisma.domain.findUnique({ where: { name: domainName }, select: { name: true, dkimSelector: true, dkimPrivateKey: true } });

@@ -19,6 +19,7 @@ import express, { Router, type Request, type Response, type NextFunction } from 
 import { readFileSync } from 'node:fs';
 import { createLogger } from '@coremail/core';
 import { sharedLoginLockout } from '@coremail/storage';
+import { requestIpTrusted } from '@coremail/storage/auth';
 import { createUserRateLimiter, envInt } from '../user-rate-limit.js';
 import { audit } from '../audit.js';
 import { isScoped } from '../admin-scope.js';
@@ -97,7 +98,8 @@ function gate(req: Request, res: Response, next: NextFunction): void {
     const check = await verifyMcpToken(m[1]!, ip);
     if (!check.ok) {
       if (check.reason === 'mfa') { res.status(403).json({ error: check.error, code: check.code }); return; }
-      if (check.reason === 'unknown' || check.reason === 'malformed') await lockout.failIp(ip);
+      // 10.5 review: an unverified forwarded IP is counted, never escalated
+      if (check.reason === 'unknown' || check.reason === 'malformed') await lockout.failIp(ip, { ipTrusted: requestIpTrusted(req) });
       log.info({ ip, reason: check.reason }, 'MCP token refused');
       unauthorized(res, true);
       return;

@@ -11,8 +11,12 @@
  *    (sampled, the lockout counters themselves are not affected);
  *  - per process at most SECURITY_EVENTS_PER_MIN (300) events per minute in
  *    total (distributed attacks from many IPs);
- *  - `important` events (locks, automatic blocks) skip the per-IP budget but
- *    count against the global one;
+ *  - `important` events (locks, automatic blocks) skip the per-IP budget AND
+ *    the global one (10.5 review: a flood of ordinary events must never hide a
+ *    lock); they still count towards the global budget and have their own,
+ *    much higher ceiling (SECURITY_EVENTS_IMPORTANT_PER_MIN, default 10× the
+ *    global value) — locks need ≥ 10 failures each, so this only bounds the
+ *    database in an extreme distributed attack;
  *  - rows older than ATTACK_EVENT_RETENTION_DAYS (90) are purged
  *    (attack-protection.ts, api-gateway worker).
  *
@@ -20,7 +24,7 @@
  */
 import { createLogger, peekRedisClient, CHANNEL_ADMIN_ATTACK } from '@coremail/core';
 import { prisma } from './prisma/index.js';
-import { isLoopbackIp, normalizeIp } from './mail-auth-core.js';
+import { isLoopbackIp, normalizeIp, safeAccountLabel } from './mail-auth-core.js';
 
 const log = createLogger('security-events');
 
@@ -57,6 +61,8 @@ export type SharedSampler = (key: string) => Promise<number>;
 export interface SecurityEventRecorderOptions {
   perIpPerMinute?: number;
   globalPerMinute?: number;
+  /** 10.5 review: ceiling of `important` events per minute (default 10 × globalPerMinute). */
+  importantPerMinute?: number;
   now?: () => number;
   sink: SecurityEventSink;
   /** Cross-process budget (Redis); null = in-process only. */
@@ -77,15 +83,17 @@ function envInt(name: string, fallback: number): number {
 export function createSecurityEventRecorder(opts: SecurityEventRecorderOptions): SecurityEventRecorder {
   const perIp = opts.perIpPerMinute ?? 10;
   const global = opts.globalPerMinute ?? 300;
+  const importantCap = opts.importantPerMinute ?? global * 10;
   const now = opts.now ?? Date.now;
   const perIpCounts = new Map<string, number>();
   let minute = -1;
   let globalCount = 0;
+  let importantCount = 0;
   let written = 0;
   let dropped = 0;
 
   const roll = (m: number): void => {
-    if (m !== minute) { minute = m; perIpCounts.clear(); globalCount = 0; }
+    if (m !== minute) { minute = m; perIpCounts.clear(); globalCount = 0; importantCount = 0; }
   };
 
   return {
@@ -95,8 +103,12 @@ export function createSecurityEventRecorder(opts: SecurityEventRecorderOptions):
         if (ip !== '-' && isLoopbackIp(ip)) return false; // internal hops are no attack
         const m = Math.floor(now() / 60_000);
         roll(m);
-        if (globalCount >= global) { dropped++; return false; }
-        if (!e.important) {
+        if (e.important) {
+          // 10.5 review: the important flag first — locks are never sampled away by a flood
+          if (importantCount >= importantCap) { dropped++; return false; }
+          importantCount++;
+        } else {
+          if (globalCount >= global) { dropped++; return false; }
           const n = (perIpCounts.get(ip) ?? 0) + 1;
           perIpCounts.set(ip, n);
           if (n > perIp) { dropped++; return false; }
@@ -112,7 +124,8 @@ export function createSecurityEventRecorder(opts: SecurityEventRecorderOptions):
           ip,
           protocol: e.protocol,
           service: e.protocol,
-          target: e.target ? String(e.target).slice(0, 254) : null,
+          // 10.5 review: an account label, never raw login text (non-addresses are masked)
+          target: safeAccountLabel(e.target ?? null),
           detail: e.detail ?? {},
           timestamp: new Date(now()).toISOString(),
         };
@@ -165,6 +178,7 @@ function getRecorder(): SecurityEventRecorder {
   recorder ??= createSecurityEventRecorder({
     perIpPerMinute: envInt('SECURITY_EVENTS_PER_IP_PER_MIN', 10),
     globalPerMinute: envInt('SECURITY_EVENTS_PER_MIN', 300),
+    importantPerMinute: envInt('SECURITY_EVENTS_IMPORTANT_PER_MIN', envInt('SECURITY_EVENTS_PER_MIN', 300) * 10),
     // Test seam: globalThis.__securityEventSink (checked per write).
     sink: { write: (row) => (globalThis.__securityEventSink ?? defaultSink).write(row) },
     shared: () => (globalThis.__securityEventSink ? null : redisSampler()),

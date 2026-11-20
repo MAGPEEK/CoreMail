@@ -38,8 +38,11 @@ const notified: Row[] = [];
 let seq = 0;
 // 9.4: alice's stored preferences (default reminder)
 let alicePrefs: Row = {};
+// 10.5 review: alice's per-mailbox send rate (MailFlowPolicy); null = the global defaults
+let ratePolicy: Row | null = null;
 (globalThis as Record<string, unknown>)['__prisma'] = {
   $on: () => undefined,
+  mailFlowPolicy: { findUnique: async () => ratePolicy },
   $transaction: async (fn: (tx: unknown) => unknown) => fn((globalThis as Record<string, unknown>)['__prisma']),
   ...noProtocolPolicies(),
   calendar: {
@@ -481,4 +484,40 @@ test('10.0: rooms are gone — a `rooms` field is ignored and the room routes an
     headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10_000),
   });
   assert.equal(rooms.status, 404);
+});
+
+test('10.5 review: invitations, updates and cancellations count every attendee against the send rate — over it 429, nothing changes', async () => {
+  const storage = await import('@coremail/storage');
+  storage.resetSendRateState();
+  storage.setSendRateHooks({ onLimitHit: async () => undefined });
+  ratePolicy = { maxMessagesPerHour: null, maxRecipientsPerHour: 150 };
+  const people = (n: number, p: string) => Array.from({ length: n }, (_, i) => ({ email: `${p}${i}@ext.test` }));
+  const slot = { dtStart: '2026-12-09T09:00:00.000Z', dtEnd: '2026-12-09T10:00:00.000Z' };
+  try {
+    const first = await call('POST', '/events', { calendarId: 'cal1', summary: 'All hands', ...slot, attendees: people(100, 'a'), reminderMinutes: null });
+    assert.equal(first.status, 201);
+    const stored = events.length;
+    // 100 more recipients within the hour: over 150 → refused before anything is stored
+    const second = await call('POST', '/events', { calendarId: 'cal1', summary: 'Spam', ...slot, attendees: people(100, 'b'), reminderMinutes: null });
+    assert.equal(second.status, 429);
+    assert.equal(second.json.code, 'SEND_RATE_LIMITED');
+    assert.equal(second.json.reason, 'recipients');
+    assert.equal(second.json.limit, 150);
+    assert.ok(second.json.retryAfter >= 1);
+    assert.equal(events.length, stored, 'no event stored');
+    // an update that would mail the 100 attendees again is refused; the event keeps its time
+    const moved = await call('PUT', `/events/${String(first.json.id)}`, { dtStart: '2026-12-09T11:00:00.000Z', dtEnd: '2026-12-09T12:00:00.000Z' });
+    assert.equal(moved.status, 429);
+    const row = events.find((e) => e['id'] === first.json.id)!;
+    assert.equal((row['dtStart'] as Date).toISOString(), slot.dtStart);
+    // … so is deleting it (100 cancellations)
+    assert.equal((await call('DELETE', `/events/${String(first.json.id)}`)).status, 429);
+    assert.ok(events.some((e) => e['id'] === first.json.id), 'still there');
+    // a meeting without attendees mails nobody and is never refused
+    assert.equal((await call('POST', '/events', { calendarId: 'cal1', summary: 'Focus', ...slot, reminderMinutes: null })).status, 201);
+  } finally {
+    ratePolicy = null;
+    storage.setSendRateHooks(null);
+    storage.resetSendRateState();
+  }
 });

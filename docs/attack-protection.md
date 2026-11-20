@@ -23,14 +23,25 @@ MCP interface. A success resets the **account** counter only. Without Redis the
 lockout fails open (mail keeps working).
 
 Redis keys (`LOCKOUT_KEYS`): `mailauth:{ip|acct}:{fail|lock|strikes}:<id>`; an
-account id is `sha256(normalised e-mail)[:32]`. New in 10.5:
+account id is `sha256(normalised e-mail)[:32]`. The IP id (`ipLockIdOf`) is the
+IPv4 address, or the **IPv6 /64** (`2001:db8:1:2::/64`) — one subscriber owns a
+whole /64, counting per address would give an attacker 2^64 fresh budgets
+(10.5 review). New in 10.5:
 
 | Key | TTL | Content |
 |---|---|---|
-| `mailauth:{ip\|acct}:info:<id>` | = the lock | JSON: protocol, failures, strikes, lock duration, time, the e-mail (accounts: the hash → e-mail mapping for the admin view; IPs: the last login tried), the IP |
+| `mailauth:{ip\|acct}:info:<id>` | = the lock | JSON: protocol, failures, strikes, lock duration, time, the account label (accounts: the hash → e-mail mapping for the admin view; IPs: the last login tried), the IP |
 | `mailauth:ip:locks:<ip>` | 7 days from the first lock | number of IP locks in the window (repeat offenders) |
 | `mailauth:acct:known:<acct>:n:<hash>` | `MAIL_AUTH_KNOWN_CLIENT_DAYS` | a known client network of the account |
 | `mailauth:acct:known:<acct>:d:<hash>` | `MAIL_AUTH_KNOWN_CLIENT_DAYS` | a known device id of the account |
+| `mailauth:acct:knownfail:<acct>:<hash>` | `MAIL_AUTH_ACCOUNT_WINDOW_SEC` | 10.5 review: failures from that known network (its own budget) |
+| `mailauth:ip:ok:<ip>:<acct>` | 30 days | 10.5 review: a successful login of the account from that IP id (`a` = admin, `u` = user) — read by the repeat-offender escalation |
+
+**Account labels** (10.5 review): the account text in lock records, security
+events (`attack_events.target`) and admin notices is the normalised login only
+when it looks like a mail address; anything else (URLs, markup, quotes, control
+characters …) becomes `(ungültige Eingabe, N Zeichen)` — raw login text is never
+stored or mailed (`safeAccountLabel`).
 
 ## Known clients — no lockout of victims by strangers
 
@@ -44,21 +55,45 @@ keep the owner working:
    refreshed by every further success. The web login remembers the network on a
    completed login (password, or password + MFA) — not after the password step of
    an MFA login.
-2. While the **account** is locked, a login from a known network or with a known
-   device id is checked normally (password / app password / MFA rules unchanged).
-   Every other client gets `locked` before any password work, as before.
+2. While the **account** is locked, a login from a known network is checked
+   normally (password / app password / MFA rules unchanged). Every other client
+   gets `locked` before any password work, as before. 10.5 review: a device id is
+   client-chosen and **never grants the exception on its own** — when the front
+   door presents one (ActiveSync), the network AND the device must be known.
 3. Failed attempts of a known client still count — per IP and per account (a
    typo from the office extends the account lock; it does not hurt the office).
+   10.5 review: they also count against the **own budget of that (account, known
+   network)** — `MAIL_AUTH_ACCOUNT_MAX_FAILURES` (10) per
+   `MAIL_AUTH_ACCOUNT_WINDOW_SEC` (15 min). When it is used up, the network loses
+   the exception until the window ends, so an attacker sharing the victim's
+   network (office NAT, a carrier /24) cannot keep guessing while the account is
+   locked.
 4. The **IP lock is never bypassed**: a known network whose IP is locked stays
    locked.
-5. A successful login through a known device from a new network makes that
-   network known as well.
+5. 10.5 review: only an address from the socket or a verified proxy (see
+   "Forwarded addresses" below) is learned as a known network or grants the
+   exception — an unverified X-Forwarded-For value never does.
 6. `MAIL_AUTH_KNOWN_CLIENT_DAYS=0` disables the exception (pre-10.5 behaviour).
 
-Limits: an attacker inside the owner's /24 (or using a leaked DeviceId) is
-treated as known — such attempts are still bounded by the per-IP lock (50 per
-15 minutes). Device ids are not secret; they only ever widen access for a client
-that also presents the right password.
+Limits: an attacker inside the owner's /24 is treated as known for at most 10
+failures per 15 minutes per account (and the per-IP lock, 50 per 15 minutes,
+still applies). A phone that roams to a network it never logged in from is
+locked like everybody else while the account is locked.
+
+## Forwarded addresses (TRUST_PROXY) — 10.5 review
+
+The api-gateway derives the client IP with `TRUST_PROXY` (`req.ip`; the internal
+services read the address the gateway puts into X-Forwarded-For). The address is
+**verified** when it is the socket peer, or when it came from a proxy of an
+**explicit allow-list** (`TRUST_PROXY=172.18.0.5`, a CIDR, `loopback` …); the
+gateway marks it with `X-CoreMail-Ip-Verified: 1` (clients cannot send it — every
+`X-CoreMail-*` header of a client is dropped). With a hop count (`TRUST_PROXY=1`)
+or `true` any client that reaches port 3000 directly can choose the address:
+such an address is still counted and locked, but it is **never escalated** (no
+automatic block list entry), **never learned** as a known network and never
+grants the known-client exception. SMTP, IMAP and POP3 always use the socket
+peer. The api-gateway logs a warning at start when `TRUST_PROXY` is a hop count
+or `true`, or covers the Docker bridge gateway (`docs/api-gateway-security.md`).
 
 ## Permanent block list and exceptions
 
@@ -72,7 +107,11 @@ BLOCK / ALLOW, normalised `cidr` (host bits cleared, IPv6 compressed), `note`,
   api-gateway with `403 {code: IP_BLOCKED}` (webmail, BCP, REST, `/auth`,
   ActiveSync, DAV, JMAP incl. the WebSocket upgrade, MAPI, Autodiscover, MCP —
   the HTTP middleware runs right after the request id; the client IP is `req.ip`,
-  i.e. `TRUST_PROXY` aware).
+  i.e. `TRUST_PROXY` aware; 10.5 review: WebSocket upgrades derive it with the
+  same trust function). 10.5 review: **automatic** entries (repeat offenders) are
+  not applied to inbound mail on **port 25** — other servers delivering mail
+  never get a permanent 554 because a shared address tripped the login lockout;
+  manual entries apply there as before.
 - **ALLOW** ("Ausnahmen — nie sperren") — no per-IP failure counter (merged with
   `MAIL_AUTH_EXEMPT_CIDRS`), therefore never IP-locked, and exempt from the block
   list (an exception wins over a block entry). Account counters still apply.
@@ -94,14 +133,38 @@ entries are ignored at once and purged hourly.
 
 ## Repeat offenders
 
-An IP locked `autoBlockThreshold` (3) times within 7 days (counted from its first
-lock in the window) is added to the block list automatically: note
-`automatisch: wiederholte Sperre`, lifetime `autoBlockDays` (30; 0 = permanent),
-`createdBy` empty. Exceptions are never escalated; an existing entry (manual or
-automatic) is left alone; a full list is respected. Every automatic entry writes
-the audit row `security.ip.autoblock` (actor `system`), the attack event
-`IP_AUTO_BLOCKED` and a notice item. Removing an automatic entry in the BCP also
-resets the IP's repeat counter. Switchable on the page.
+An IP (IPv6: its /64) locked `autoBlockThreshold` (3) times within 7 days
+(counted from its first lock in the window) is added to the block list
+automatically: note `automatisch: wiederholte Sperre`, `createdBy` empty. An
+existing entry (manual or automatic) is left alone; a full list is respected.
+Every automatic entry writes the audit row `security.ip.autoblock` (actor
+`system`, `changes.step` / `days`), the attack event `IP_AUTO_BLOCKED` and a
+notice item. Removing an automatic entry in the BCP also resets the IP's repeat
+counter. Switchable on the page.
+
+10.5 review — an automatic entry can hit addresses many clients share (the
+Docker userland proxy's bridge gateway for IPv6 clients, a reverse proxy without
+`TRUST_PROXY`, an office NAT, carrier-grade NAT). Therefore:
+
+- **Never auto-blocked** (`autoBlockExemption`): private (RFC 1918), CGNAT
+  `100.64.0.0/10`, ULA `fc00::/7`, link-local, loopback — this covers the Docker
+  bridge networks and gateways (`172.17.0.0/16`, `172.16.0.0/12`); custom Docker
+  address pools outside these ranges belong into the exceptions — the
+  exceptions and `MAIL_AUTH_EXEMPT_CIDRS`, the proxies `TRUST_PROXY` names
+  explicitly, and an IP id with successful logins of **≥ 2 accounts or of any
+  admin** within 30 days (`mailauth:ip:ok:*`). The lock itself still applies to
+  all of them; only the escalation is skipped (log line "repeat offender NOT
+  added to the block list").
+- **Only verified addresses** are escalated (socket peer or an explicit
+  `TRUST_PROXY` list — see "Forwarded addresses").
+- **Escalating lifetime**: the first automatic entry of a range lasts **1 day**,
+  the second (within 90 days, counted from the audit log) **7 days**, every
+  further one `autoBlockDays` (30; 0 = permanent). A shorter `autoBlockDays`
+  caps every step.
+- **Client surfaces only**: automatic entries are not applied to inbound port 25
+  (see above).
+
+Manual entries keep their behaviour.
 
 ## Attack dashboard (all protocols)
 
@@ -115,7 +178,9 @@ blocks (`IP_AUTO_BLOCKED`) and the SMTP connection limiter (`IP_RATE_LIMIT`).
 Bounded: at most `SECURITY_EVENTS_PER_IP_PER_MIN` (10) events per client IP and
 minute (in the process and across processes via Redis `secevt:<ip>:<minute>`),
 at most `SECURITY_EVENTS_PER_MIN` (300) per process and minute; locks and
-automatic blocks skip the per-IP budget. Loopback is not recorded. Rows older
+automatic blocks ("important") skip the per-IP budget and — 10.5 review — the
+global one too (a flood of failures must never hide a lock); they have their own
+ceiling `SECURITY_EVENTS_IMPORTANT_PER_MIN` (10 × the global value). Loopback is not recorded. Rows older
 than `ATTACK_EVENT_RETENTION_DAYS` (90) are purged hourly. The dashboard widget
 and the page show the counts per protocol of the last 24 hours
 (`GET /admin/security/attacks/summary` → `byProtocol`).
@@ -146,7 +211,7 @@ see [rbac.md](rbac.md).
 | Method + path (`/api/v1/admin/security/protection`) | Purpose | Audit |
 |---|---|---|
 | `GET /locks` | locked IPs and accounts (scope, id, e-mail, protocol, failures, strikes, remaining time, locks in 7 days); 503 without Redis | — |
-| `POST /locks/release` `{scope: ip\|account, id, resetStrikes?}` | deletes lock + failure counter + info (+ backoff level and repeat counter with `resetStrikes`); `id` = IP, account hash or e-mail | `security.lock.release` |
+| `POST /locks/release` `{scope: ip\|account, id, resetStrikes?}` | deletes lock + failure counter + info (+ backoff level and repeat counter with `resetStrikes`); `id` = IP (an IPv6 address or its `/64`), account hash or e-mail | `security.lock.release` |
 | `GET /rules` | block list + exceptions, the caller's IP, the env exemptions | — |
 | `POST /rules` `{kind, cidr, note?, expiresInDays?, confirmOwnIp?}` | add an entry (validation above) | `security.ip-rule.create` |
 | `DELETE /rules/:id` | remove an entry | `security.ip-rule.delete` |
@@ -164,4 +229,6 @@ passwords from network B (another host, a VPN, or a second Docker network whose
 peer address is in a different /24), then log in from A again — it succeeds
 while B still gets `locked`. Loopback cannot stand in for B: it is exempt from
 the per-IP counter but not from the account lock, so it behaves like any other
-unknown network unless it logged in successfully before.
+unknown network unless it logged in successfully before. Ten more failures from
+A within 15 minutes use up A's own budget — A is then locked too until the
+window ends.

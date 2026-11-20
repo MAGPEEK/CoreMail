@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import { createLogger, PROTO_VERIFIED_HEADER } from '@coremail/core';
 import {
-  prisma, verifyMailCredentials, clientIpFromRequest, effectiveProtocolAccess, legacyDnFor, mapiEndpointsFor, mapiHttpsTrusted,
+  prisma, verifyMailCredentials, clientIpInfoFromRequest, effectiveProtocolAccess, legacyDnFor, mapiEndpointsFor, mapiHttpsTrusted,
   type MailAuthUser, type MapiEndpoints, type ProtocolAccess,
 } from '@coremail/storage';
 import { getServerConfig, ServerConfigUnavailableError, type ServerConfig } from './settings.js';
@@ -376,8 +376,10 @@ export async function handleAutodiscoverV1(req: Request, res: Response): Promise
     return;
   }
 
-  const clientIp = clientIpFromRequest(req.socket?.remoteAddress, req.headers['x-forwarded-for']);
-  const auth = await verifyMailCredentials(login, password, { ip: clientIp, protocol: 'autodiscover' });
+  // 10.5 review: the gateway marks a forwarded IP it could verify (IP_VERIFIED_HEADER)
+  const client = clientIpInfoFromRequest(req.socket?.remoteAddress, req.headers);
+  const clientIp = client.ip;
+  const auth = await verifyMailCredentials(login, password, { ip: clientIp, ipTrusted: client.trusted, protocol: 'autodiscover' });
   if (auth.status === 'locked') {
     res.set('Retry-After', String(auth.retryAfterSec));
     res.status(429).send('Too Many Requests');

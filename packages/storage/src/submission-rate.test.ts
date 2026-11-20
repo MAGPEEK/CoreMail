@@ -231,3 +231,21 @@ test('report: audit entry, attack event and a German notice to the admin address
   assert.match(n.bodyText, /198\.51\.100\.7/);
   assert.match(n.bodyText, /JMAP/);
 });
+
+test('10.5 review: server-generated mail paths are named in the notice (calendar, rule, auto-reply, receipt)', () => {
+  const base = { userId: 'u1', reason: 'recipients' as const, limit: 10, messagesPerHour: 3, recipientsPerHour: 10, blocked: false };
+  const texts = (['calendar', 'rule', 'autoreply', 'receipt'] as const)
+    .map((protocol) => sendRateNotice({ ...base, protocol }, 'bob@corp.test', 'CoreMail', new Date(T0)).bodyText);
+  assert.match(texts[0]!, /Kalender-Einladungen \(iMIP\)/);
+  assert.match(texts[1]!, /Posteingangsregel/);
+  assert.match(texts[2]!, /Abwesenheitsnotiz/);
+  assert.match(texts[3]!, /Lesebestätigung/);
+});
+
+test('10.5 review: calendar invitations share the hourly budget of /mail/send (every attendee is a recipient)', async () => {
+  // fixture: 10 recipients per hour — 4 attendees, then a 4-recipient mail, then 4 more attendees
+  assert.equal((await consumeSendRate({ userId: 'u-cal', recipients: 4, protocol: 'calendar' }, T0 + 1000)).allowed, true);
+  assert.equal((await consumeSendRate({ userId: 'u-cal', recipients: 4, protocol: 'webmail' }, T0 + 2000)).allowed, true);
+  const r = await consumeSendRate({ userId: 'u-cal', recipients: 4, protocol: 'calendar' }, T0 + 3000);
+  assert.ok(!r.allowed && r.reason === 'recipients', JSON.stringify(r));
+});

@@ -13,7 +13,8 @@ import assert from 'node:assert/strict';
 
 import {
   createMailCredentialVerifier, createLoginLockout, createMemoryAuthRedis, clientNetworkOf, ipv6Groups,
-  accountLockId, LOCKOUT_KEYS, REPEAT_LOCK_WINDOW_SEC,
+  accountLockId, LOCKOUT_KEYS, REPEAT_LOCK_WINDOW_SEC, LOGIN_SUCCESS_IP_TTL_SEC, ipLockIdOf, safeAccountLabel,
+  clientIpInfoFromRequest,
   type LockoutEvent, type MailAuthDeps, type MailAuthPrisma, type MailAuthRedis,
 } from './mail-auth-core.js';
 
@@ -100,16 +101,59 @@ describe('E — no lockout of victims by strangers', () => {
     assert.ok(r.status === 'locked' && r.scope === 'ip', JSON.stringify(r));
   });
 
-  test('a known ActiveSync device may log in from a new network while the account is locked', async () => {
+  test('10.5 review: a (client-chosen) ActiveSync DeviceId alone never grants the exception', async () => {
     const { verifier } = fixture();
     assert.equal((await verifier.verify('alice@example.test', 'secret', eas('203.0.113.5', 'DEV-PHONE-1'))).status, 'ok');
     await lockAccountFromStrangers(verifier);
-    assert.equal((await verifier.verify('alice@example.test', 'secret', eas('192.0.2.200', 'DEV-PHONE-1'))).status, 'ok');
-    // an unknown device id from another unknown network: refused
-    const r = await verifier.verify('alice@example.test', 'secret', eas('198.18.0.5', 'DEV-OTHER'));
-    assert.equal(r.status, 'locked');
-    // (the successful device login made its new network known as well)
-    assert.equal((await verifier.verify('alice@example.test', 'secret', eas('192.0.2.201', 'DEV-OTHER'))).status, 'ok');
+    // the known device id from an unknown network: refused (an attacker can send any DeviceId)
+    const r = await verifier.verify('alice@example.test', 'secret', eas('192.0.2.200', 'DEV-PHONE-1'));
+    assert.ok(r.status === 'locked' && r.scope === 'account', JSON.stringify(r));
+    // known network + known device: allowed
+    assert.equal((await verifier.verify('alice@example.test', 'secret', eas('203.0.113.77', 'DEV-PHONE-1'))).status, 'ok');
+    // known network + a device id the account never used: refused (with a device id both must be known)
+    assert.equal((await verifier.verify('alice@example.test', 'secret', eas('203.0.113.78', 'DEV-OTHER'))).status, 'locked');
+  });
+
+  test('10.5 review: each (account, known network) has its own failure budget that suspends the exception', async () => {
+    const { verifier, redis } = fixture({ limits: { ipMaxFailures: 50, accountMaxFailures: 3, accountLockBaseSec: 30 } });
+    assert.equal((await verifier.verify('alice@example.test', 'secret', imap('203.0.113.5'))).status, 'ok');
+    await lockAccountFromStrangers(verifier);
+    // an attacker in the victim's /24 keeps guessing: allowed to try (exception) …
+    for (let i = 0; i < 3; i++) {
+      assert.equal((await verifier.verify('alice@example.test', `guess${i}`, imap(`203.0.113.${100 + i}`))).status, 'invalid');
+    }
+    // … until the network's own budget (accountMaxFailures) is used up: now refused like a stranger
+    const r = await verifier.verify('alice@example.test', 'secret', imap('203.0.113.5'));
+    assert.ok(r.status === 'locked' && r.scope === 'account', JSON.stringify(r));
+    assert.ok(redis.keys().some((k) => k.startsWith(`mailauth:acct:knownfail:${accountLockId('alice@example.test')}:`)));
+  });
+
+  test('10.5 review: the known-network budget expires with the account window', async () => {
+    let now = 7_000_000;
+    const { verifier } = fixture({ limits: { ipMaxFailures: 50, accountMaxFailures: 3, accountLockBaseSec: 30, accountLockMaxSec: 10 * 86_400, accountWindowSec: 600 } }, () => now);
+    assert.equal((await verifier.verify('alice@example.test', 'secret', imap('203.0.113.5'))).status, 'ok');
+    await lockAccountFromStrangers(verifier);
+    for (let i = 0; i < 3; i++) await verifier.verify('alice@example.test', 'x', imap('203.0.113.5'));
+    assert.equal((await verifier.verify('alice@example.test', 'secret', imap('203.0.113.5'))).status, 'locked');
+    now += 601_000; // budget window over; lock the account again from strangers
+    await lockAccountFromStrangers(verifier);
+    assert.equal((await verifier.verify('alice@example.test', 'secret', imap('203.0.113.5'))).status, 'ok');
+  });
+
+  test('10.5 review: an unverified forwarded IP is never learned, never exempt, its locks are never escalated', async () => {
+    const { verifier, redis, events } = fixture();
+    const fwd = (ip: string) => ({ ip, protocol: 'jmap' as const, ipTrusted: false });
+    // a success through an unverified header does not make the network known
+    assert.equal((await verifier.verify('alice@example.test', 'secret', fwd('203.0.113.5'))).status, 'ok');
+    assert.ok(!redis.keys().some((k) => k.includes(':known:') || k.startsWith('mailauth:ip:ok:')));
+    // and a known network claimed through an unverified header grants nothing
+    assert.equal((await verifier.verify('alice@example.test', 'secret', imap('203.0.113.5'))).status, 'ok');
+    await lockAccountFromStrangers(verifier);
+    assert.equal((await verifier.verify('alice@example.test', 'secret', fwd('203.0.113.6'))).status, 'locked');
+    // still counted per IP; the lock event says "not trusted"
+    for (let i = 0; i < 5; i++) await verifier.verify(`u${i}@example.test`, 'x', fwd('192.0.2.44'));
+    const lock = events.find((e) => e.kind === 'lock' && e.scope === 'ip');
+    assert.ok(lock && lock.kind === 'lock' && lock.ipTrusted === false && lock.ipLockId === '192.0.2.44');
   });
 
   test('known clients are bound to the account (no cross-account reuse)', async () => {
@@ -186,6 +230,59 @@ describe('lock records, events and the repeat-offender counter', () => {
     assert.ok(windowTtl > 0 && windowTtl <= REPEAT_LOCK_WINDOW_SEC);
   });
 
+  test('10.5 review: IPv6 failures are counted per /64 — a fresh address in the same /64 is still locked', async () => {
+    const { verifier, events } = fixture();
+    for (let i = 0; i < 5; i++) await verifier.verify(`u${i}@example.test`, 'x', imap(`2001:db8:1:2::${(i + 1).toString(16)}`));
+    const lock = events.find((e) => e.kind === 'lock' && e.scope === 'ip');
+    assert.ok(lock && lock.kind === 'lock' && lock.ipLockId === '2001:db8:1:2::/64', JSON.stringify(lock));
+    const r = await verifier.verify('alice@example.test', 'secret', imap('2001:db8:1:2:ffff:ffff:ffff:ffff'));
+    assert.ok(r.status === 'locked' && r.scope === 'ip', JSON.stringify(r));
+    assert.ok((await verifier.ipLockedFor('2001:db8:1:2:aaaa::1')) > 0);
+    // the neighbouring /64 is a different subscriber
+    assert.equal((await verifier.verify('alice@example.test', 'secret', imap('2001:db8:1:3::1'))).status, 'ok');
+  });
+
+  test('10.5 review: lock ids, account labels', () => {
+    assert.equal(ipLockIdOf('198.51.100.7'), '198.51.100.7');
+    assert.equal(ipLockIdOf('::ffff:198.51.100.7'), '198.51.100.7');
+    assert.equal(ipLockIdOf('2001:db8:0:0:1::9'), '2001:db8::/64');
+    assert.equal(ipLockIdOf('2001:db8:1:2::/64'), '2001:db8:1:2::/64');
+    assert.equal(ipLockIdOf('2001:db8:1:2:3::/64'), '2001:db8:1:2::/64');
+    assert.equal(ipLockIdOf('nope'), '');
+    assert.equal(safeAccountLabel('alice@example.test'), 'alice@example.test');
+    assert.equal(safeAccountLabel('jörg@müller.example'), 'jörg@müller.example');
+    assert.equal(safeAccountLabel('https://evil.example/?a=@b.example'), '(ungültige Eingabe, 34 Zeichen)');
+    assert.equal(safeAccountLabel('x\u0000y'), '(ungültige Eingabe, 3 Zeichen)');
+    assert.equal(safeAccountLabel(''), null);
+    assert.equal(safeAccountLabel(null), null);
+  });
+
+  test('10.5 review: raw login text never reaches events or lock records', async () => {
+    const { verifier, events, redis } = fixture({ limits: { ipMaxFailures: 50, accountMaxFailures: 2, accountLockBaseSec: 30 } });
+    const evil = 'Visit http://phish.example now';
+    for (let i = 0; i < 2; i++) await verifier.verify(evil, 'x', imap('198.51.100.9'));
+    assert.ok(events.length > 0);
+    for (const e of events) {
+      assert.ok(e.account === null || !e.account.includes('phish'), JSON.stringify(e));
+    }
+    const lock = events.find((e) => e.kind === 'lock');
+    assert.ok(lock && lock.account === `(ungültige Eingabe, ${evil.length} Zeichen)`);
+    const infoKey = redis.keys().find((k) => k.startsWith('mailauth:acct:info:'));
+    assert.ok(infoKey && !(await redis.get!(infoKey))!.includes('phish'));
+  });
+
+  test('10.5 review: a successful login records its IP (account + admin flag) for the escalation', async () => {
+    const { verifier, redis } = fixture();
+    assert.equal((await verifier.verify('alice@example.test', 'secret', imap('203.0.113.5'))).status, 'ok');
+    const key = LOCKOUT_KEYS.ipOk('203.0.113.5', accountLockId('alice@example.test'));
+    assert.equal(await redis.get!(key), 'u');
+    const ttl = await redis.ttl(key);
+    assert.ok(ttl > LOGIN_SUCCESS_IP_TTL_SEC - 5 && ttl <= LOGIN_SUCCESS_IP_TTL_SEC);
+    const web = createLoginLockout({ redis });
+    await web.success('boss@example.test', '2001:db8:5:6::7', { admin: true });
+    assert.equal(await redis.get!(LOCKOUT_KEYS.ipOk('2001:db8:5:6::/64', accountLockId('boss@example.test'))), 'a');
+  });
+
   test('a throwing event hook never breaks a login', async () => {
     const { verifier } = fixture({ onLockoutEvent: () => { throw new Error('boom'); } });
     assert.equal((await verifier.verify('alice@example.test', 'wrong', imap('203.0.113.5'))).status, 'invalid');
@@ -223,6 +320,32 @@ describe('exemptions and fail-open', () => {
     const { verifier } = fixture({ redis: broken });
     assert.equal((await verifier.verify('alice@example.test', 'secret', imap('203.0.113.5'))).status, 'ok');
     assert.equal((await verifier.verify('alice@example.test', 'x', imap('203.0.113.5'))).status, 'invalid');
+  });
+});
+
+describe('10.5 review: client IP trust of proxied requests', () => {
+  test('clientIpInfoFromRequest: socket peer trusted; forwarded IP trusted only with the gateway mark', () => {
+    assert.deepEqual(clientIpInfoFromRequest('198.51.100.1', { 'x-forwarded-for': '203.0.113.9' }), { ip: '198.51.100.1', trusted: true });
+    assert.deepEqual(clientIpInfoFromRequest('127.0.0.1', {}), { ip: '127.0.0.1', trusted: true });
+    assert.deepEqual(clientIpInfoFromRequest('127.0.0.1', { 'x-forwarded-for': '203.0.113.9' }), { ip: '203.0.113.9', trusted: false });
+    assert.deepEqual(
+      clientIpInfoFromRequest('::ffff:127.0.0.1', { 'x-forwarded-for': '203.0.113.9', 'x-coremail-ip-verified': '1' }),
+      { ip: '203.0.113.9', trusted: true },
+    );
+  });
+
+  test('web: an unverified forwarded IP is counted but not learned and not exempt', async () => {
+    const redis = createMemoryAuthRedis();
+    const events: LockoutEvent[] = [];
+    const lockout = createLoginLockout({ redis, limits: { accountMaxFailures: 3, ipMaxFailures: 2 }, onLockoutEvent: (e) => events.push(e) });
+    await lockout.success('alice@example.test', '203.0.113.5', { ipTrusted: false });
+    assert.ok(!redis.keys().some((k) => k.includes(':known:') || k.startsWith('mailauth:ip:ok:')));
+    await lockout.success('alice@example.test', '203.0.113.5');
+    for (let i = 0; i < 3; i++) await lockout.fail('alice@example.test', `198.51.100.${i}`);
+    assert.equal((await lockout.check('alice@example.test', '203.0.113.200', { ipTrusted: false })).locked, true);
+    assert.equal((await lockout.check('alice@example.test', '203.0.113.200')).locked, false);
+    for (let i = 0; i < 2; i++) await lockout.fail(`x${i}@example.test`, '192.0.2.5', { ipTrusted: false });
+    assert.ok(events.some((e) => e.kind === 'lock' && e.scope === 'ip' && e.ipTrusted === false));
   });
 });
 
