@@ -15,7 +15,7 @@ test('a sub-entry is indented; active and inactive entries keep the same left bo
   assert.ok(settingsNavIconSize(true) < settingsNavIconSize(false));
 });
 
-test('"Gelöschte Elemente" is the indented entry right below "Speicher" with its own short label', () => {
+test('"Gelöschte Elemente" sits right below "Speicher" aligned like the other entries, with its own short label', () => {
   const src = readFileSync(new URL('../pages/SettingsPage.tsx', import.meta.url), 'utf8');
   const storage = src.indexOf("{ id: 'storage',");
   const recover = src.indexOf("{ id: 'recover',");
@@ -24,7 +24,7 @@ test('"Gelöschte Elemente" is the indented entry right below "Speicher" with it
   assert.equal(between.length, 1, 'nothing between Speicher and Gelöschte Elemente');
   const line = src.slice(recover, src.indexOf('\n', recover));
   assert.match(line, /label: 'settings_nav_recover'/);
-  assert.match(line, /indent: true/);
+  assert.doesNotMatch(line, /indent: true/);
   assert.deepEqual(
     [translations.de.settings_nav_recover, translations.en.settings_nav_recover, translations.es.settings_nav_recover, translations.it.settings_nav_recover],
     ['Gelöschte Elemente', 'Deleted items', 'Elementos eliminados', 'Elementi eliminati'],
