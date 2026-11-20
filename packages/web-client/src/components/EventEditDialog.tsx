@@ -1,18 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Save, Trash2, X, Users, Clock, MapPin, Eye, AlignLeft, Bell, CalendarClock,
+  Save, Trash2, X, Users, Clock, MapPin, Eye, AlignLeft, Bell,
   CheckCircle2, XCircle, HelpCircle, Calendar as CalendarIcon, Loader2, RefreshCw,
 } from 'lucide-react';
 import { Modal } from './Modal.js';
 import toast from 'react-hot-toast';
 import { api } from '../api/client.js';
 import type { Calendar, CalendarEvent, EventAttendee, ShowAs } from '../api/types.js';
-import { currentPreferences, usePreferences, useRegional } from '../store/preferences.js';
+import { currentPreferences, useRegional } from '../store/preferences.js';
 import { instantToWallClock, wallClockToInstant } from '../lib/zonedTime.js';
-import { useOwnEmail } from '../hooks/useOwnEmail.js';
 import { RecurrenceField } from './calendar/RecurrenceField.js';
-import { SchedulingAssistant } from './calendar/SchedulingAssistant.js';
 import { Avatar } from './Avatar.js';
 import { usePhotoForAddress } from '../hooks/useUserPhoto.js';
 
@@ -21,9 +19,8 @@ import { usePhotoForAddress } from '../hooks/useUserPhoto.js';
  *
  *  - Title, attendees (live PARTSTAT badge), date + time, location, notes,
  *    classification (private), "Anzeigen als", reminder (+ per e-mail), recurrence
- *  - 9.4: tab "Terminplanungs-Assistent" — attendees' free/busy for the day and
- *    suggested times; adding attendees turns the appointment into a meeting
- *    (invitations are sent by the server)
+ *  - Adding attendees turns the appointment into a meeting (invitations are
+ *    sent by the server)
  *  - 9.4: `occurrence` edits one occurrence of a series (only its own fields);
  *    delete removes only that occurrence
  *  - Edit mode loads GET /calendar/events/:id (with canWrite flag)
@@ -149,8 +146,6 @@ export function EventEditDialog({
   const isEdit = eventId !== null;
   const isOccurrence = isEdit && !!occurrence;
   const timeZone = useRegional().timeZone;
-  const calPrefs = usePreferences((s) => s.prefs.calendar);
-  const ownEmail = useOwnEmail();
   const occurrenceQuery = occurrence ? `?occurrence=${encodeURIComponent(occurrence)}` : '';
 
   // Edit mode: load event detail
@@ -162,7 +157,6 @@ export function EventEditDialog({
   });
 
   // Form-State
-  const [tab, setTab]                 = useState<'details' | 'scheduling'>('details');
   const [summary, setSummary]         = useState('');
   const [calendarId, setCalendarId]   = useState(defaultWritableCalendarId);
   const [startDate, setStartDate]     = useState('');
@@ -337,9 +331,6 @@ export function EventEditDialog({
   // All-day: plain dates, end EXCLUSIVE (last shown day + 1) — no UTC round-trip.
   const dtStart = allDay ? startDate : partsToIso(startDate, startTime, timeZone);
   const dtEnd   = allDay ? addDays(endDate < startDate ? startDate : endDate, 1) : partsToIso(endDate, endTime, timeZone);
-  // instants of the slot for the scheduling assistant
-  const slotStart = allDay ? wallClockToInstant(startDate, '00:00', timeZone) : dtStart;
-  const slotEnd = allDay ? wallClockToInstant(dtEnd, '00:00', timeZone) : dtEnd;
 
   const handleSave = () => {
     const common = { summary: summary.trim(), dtStart, dtEnd, allDay, description, location, classification, showAs };
@@ -360,16 +351,6 @@ export function EventEditDialog({
     else createMut.mutate(body);
   };
 
-  // Pick a suggested time in the scheduling assistant
-  const pickSlot = (startIso: string, endIso: string) => {
-    const s = instantToWallClock(startIso, timeZone);
-    const e = instantToWallClock(endIso, timeZone);
-    setAllDay(false);
-    setStartDate(s.date); setStartTime(s.time);
-    setEndDate(e.date); setEndTime(e.time);
-    setTab('details');
-  };
-
   // v3.18.28 FIX: useMemo MUST be called before every `return` — otherwise
   // the hook order changes between renders → React crash → white
   // page. Hence all hooks moved to the top and the loading `return` AFTER the hooks.
@@ -388,8 +369,6 @@ export function EventEditDialog({
       </div>
     );
   }
-
-  const tabCls = (on: boolean) => `px-3 py-2 text-sm border-b-2 -mb-px ${on ? 'border-accent-fg text-accent-fg font-medium' : 'border-transparent text-fg-muted hover:text-fg'}`;
 
   return (
     <Modal
@@ -422,33 +401,8 @@ export function EventEditDialog({
           </div>
         </div>
 
-        {/* 9.4: tabs — details / scheduling assistant (not for a single occurrence) */}
-        {!isOccurrence && (
-          <div role="tablist" aria-label="Ansicht" className="px-5 border-b border-line flex gap-1">
-            <button role="tab" type="button" aria-selected={tab === 'details'} onClick={() => setTab('details')} className={tabCls(tab === 'details')}>Termin</button>
-            <button role="tab" type="button" aria-selected={tab === 'scheduling'} onClick={() => setTab('scheduling')} className={tabCls(tab === 'scheduling')}>
-              <span className="inline-flex items-center gap-1.5"><CalendarClock size={14} aria-hidden="true" />Terminplanungs-Assistent</span>
-            </button>
-          </div>
-        )}
-
         {/* Body — scrollable */}
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
-          {tab === 'scheduling' && !isOccurrence && (
-            <SchedulingAssistant
-              organizerEmail={existing?.organizer || ownEmail}
-              attendees={attendees}
-              startIso={slotStart}
-              endIso={slotEnd}
-              date={startDate}
-              timeZone={timeZone}
-              workStart={calPrefs.workStart}
-              workEnd={calPrefs.workEnd}
-              onPick={pickSlot}
-            />
-          )}
-
-          {tab === 'details' && <>
           {isOccurrence && (
             <p className="text-xs text-info-fg bg-info-bg rounded px-3 py-2">
               Änderungen gelten nur für dieses Ereignis. Wiederholung, Teilnehmer und Erinnerung gehören zur Serie.
@@ -535,7 +489,6 @@ export function EventEditDialog({
                     {' '}{attendees.filter((a) => a.partstat === 'DECLINED').length} abgesagt ·
                     {' '}{attendees.filter((a) => a.partstat === 'TENTATIVE').length} vielleicht ·
                     {' '}{attendees.filter((a) => !a.partstat || a.partstat === 'NEEDS-ACTION').length} ausstehend
-                    {!readOnly && <> · <button type="button" onClick={() => setTab('scheduling')} className="text-accent-fg hover:underline">Verfügbarkeit prüfen</button></>}
                   </p>
                 )}
               </div>
@@ -697,7 +650,6 @@ export function EventEditDialog({
               {(existing.sequence ?? 0) > 0 && <span>· {existing.sequence}× geändert</span>}
             </div>
           )}
-          </>}
         </div>
 
         {/* v3.18.28: Footer with Save bottom-right + Delete left + Cancel */}

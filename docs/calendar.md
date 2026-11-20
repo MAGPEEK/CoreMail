@@ -61,14 +61,13 @@ subject, confidential ones are left out; an occurrence counts with the stricter 
 its series and its own override (a private occurrence of a public series is masked — in the event
 list too). Addresses are looked up only among the caller, the address-list users of the caller's
 domain (not hidden from the address list) and users who shared a calendar with the caller;
-anything else is `found: false` (no directory enumeration). The scheduling assistant uses the
+anything else is `found: false` (no directory enumeration). Meeting-time suggestions use the
 same lookup.
 
-### Scheduling assistant
+### Meeting-time suggestions
 
-The event form has a second tab *Terminplanungs-Assistent*: one free/busy row per attendee for
-the chosen day (working hours from Settings → Kalender, widened to the selected time), the
-selected time as an overlay, and suggested times for the next seven days.
+The webmail no longer has a scheduling assistant (removed after 10.1: the event form shows only
+the details form). The REST endpoints below stay for other clients.
 
 `POST /api/v1/calendar/schedule-suggestions`
 `{ attendees, start, end, durationMinutes, workingHoursOnly? }` (window ≤ 31 days)
@@ -124,6 +123,6 @@ shared) are shown on top of each other; the sidebar hides single calendars.
 
 Tests: `core/src/calendar/exceptions.test.ts`, `free-busy.test.ts`,
 `api-gateway/src/routes/calendar.test.ts`, `lib/organizer-copy.test.ts`,
-`web-client/src/lib/recurrence.test.ts`, `scheduling.test.ts`; e2e `scripts/e2e/steps/dav.mjs`
-(series exception via CalDAV ⇄ REST), `rest.mjs` (scheduling assistant; `/calendar/rooms` is gone)
+`web-client/src/lib/recurrence.test.ts`; e2e `scripts/e2e/steps/dav.mjs`
+(series exception via CalDAV ⇄ REST), `rest.mjs` (meeting-time suggestions; `/calendar/rooms` is gone)
 and `smtp.mjs` (a room address is an unknown recipient).

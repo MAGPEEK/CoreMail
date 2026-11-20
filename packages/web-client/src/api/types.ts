@@ -219,21 +219,6 @@ export interface EventAttendee {
   rsvp?: boolean;
 }
 
-/** 9.4: POST /calendar/freebusy */
-export interface FreeBusyUser {
-  email: string;
-  displayName: string | null;
-  found: boolean;
-  visible: boolean;
-  busy: Array<{ start: string; end: string; type: 'tentative' | 'busy' | 'oof'; subject?: string }>;
-}
-
-/** 9.4: POST /calendar/schedule-suggestions */
-export interface ScheduleSuggestions {
-  suggestions: Array<{ start: string; end: string; conflicts: number; tentative: number }>;
-  unknown: string[];
-}
-
 export interface Contact {
   id: string;
   displayName: string;
