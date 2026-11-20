@@ -19,6 +19,7 @@
  *   GET    /folders/:folderId/messages?limit&offset                   read
  *   GET|PUT /folders/:folderId/permissions                            w3: folder owner right
  *   GET    /search?q&folderId&limit&offset                            readable folders
+ *   GET    /search/suggest?q                                          readable folders (10.2)
  *   GET    /messages/:messageId[?markRead=false]  (marks \Seen only with the edit right)
  *   GET    /messages/:messageId/raw
  *   PATCH  /messages/:messageId  {read?, flagged?, flags?, folderId?} edit / move
@@ -74,7 +75,9 @@ import {
   parseSearchQuery, buildSearchConditions, resolveFolderScope, searchChips, hasCriteria,
   MAX_QUERY_LENGTH, type FolderRef,
 } from '../lib/search-query.js';
-import { MESSAGE_SUMMARY_SELECT, SYSTEM_FOLDER_NAMES, parsePaging } from './mail.js';
+import { MESSAGE_SUMMARY_SELECT, SYSTEM_FOLDER_NAMES, parsePaging, suggestRateLimiter } from './mail.js';
+import { EMPTY_SUGGESTIONS, loadSuggestions, normalizeSuggestQuery, type SuggestDb } from '../lib/search-suggest.js';
+import { isWebmailFeatureEnabled } from '@coremail/storage';
 
 const log = createLogger('api:foreign-mailbox');
 
@@ -498,6 +501,22 @@ export function createForeignMailboxRouter(kind: Kind): RouterType {
       prisma.message.count({ where: where as any }),
     ]);
     res.json({ messages: messages.map((m) => ({ ...m, categories: [] })), total, limit, offset, chips });
+  });
+
+  // 10.2: suggestions while typing (lib/search-suggest.ts) — exactly the folders
+  // /search covers (canReadFolder), never more; the people group adds the caller's
+  // OWN contacts (their data, contacts module on), never the mailbox owner's.
+  r.get('/search/suggest', auth, suggestRateLimiter.middleware, async (req: Request, res: Response) => {
+    const f = await resolve(kind, req, res, 'read');
+    if (!f) return;
+    const q = normalizeSuggestQuery(req.query['q']);
+    if (!q) { res.json(EMPTY_SUGGESTIONS); return; }
+    const folders = (await prisma.folder.findMany({
+      where: { mailboxId: f.entry.mailboxId },
+      select: { id: true, name: true, displayName: true },
+    }) as FolderRef[]).filter((x) => canReadFolder(accessOf(f, x.id)));
+    const ownContacts = await isWebmailFeatureEnabled(protocolSubject(req.apiUser!), 'contacts');
+    res.json(await loadSuggestions(prisma as unknown as SuggestDb, { q, folders, contactsOwnerId: ownContacts ? f.userId : null }));
   });
 
   // ── Single messages ───────────────────────────────────────────────────────

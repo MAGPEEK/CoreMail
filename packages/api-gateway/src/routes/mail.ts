@@ -36,6 +36,8 @@ import {
   parseSearchQuery, buildSearchConditions, resolveFolderScope, searchChips, hasCriteria,
   MAX_QUERY_LENGTH, type FolderRef,
 } from '../lib/search-query.js';
+import { EMPTY_SUGGESTIONS, loadSuggestions, normalizeSuggestQuery, type SuggestDb } from '../lib/search-suggest.js';
+import { isWebmailFeatureEnabled } from '@coremail/storage';
 
 export const replyLookup = prismaReplyLookup(
   prisma as unknown as Parameters<typeof prismaReplyLookup>[0],
@@ -101,6 +103,15 @@ export const sendRateLimiter = createUserRateLimiter({
   scope: 'mail-send',
   limit: envInt('MAIL_SEND_RATE_LIMIT', 30),
   windowSec: Math.max(1, envInt('MAIL_SEND_RATE_WINDOW_SEC', 60)),
+});
+
+// 10.2: per-user limit of the search suggestions (one request per pause while
+// typing; default 120 / 60 s — below the global per-user API limit of 3000 / 15 min,
+// lib/api-rate-limit.ts; 0 disables). Shared by the own and the foreign mailboxes.
+export const suggestRateLimiter = createUserRateLimiter({
+  scope: 'mail-suggest',
+  limit: envInt('MAIL_SUGGEST_RATE_LIMIT', 120),
+  windowSec: Math.max(1, envInt('MAIL_SUGGEST_RATE_WINDOW_SEC', 60)),
 });
 
 // ── BullMQ outbound queue (same as smtp-server) ───────────────────────────────
@@ -1482,6 +1493,24 @@ mailRouter.get('/search', async (req: Request, res: Response) => {
   }));
 
   res.json({ messages: flat, total, limit, offset, chips });
+});
+
+// GET /api/v1/mail/search/suggest?q= — 10.2: suggestions while typing (people +
+// messages of the whole own mailbox, lib/search-suggest.ts). Same folder scope as
+// /search (every folder), subject/sender only, bounded queries on the trigram index.
+mailRouter.get('/search/suggest', suggestRateLimiter.middleware, async (req: Request, res: Response) => {
+  const q = normalizeSuggestQuery(req.query['q']);
+  if (!q) { res.json(EMPTY_SUGGESTIONS); return; }
+  const userId = req.apiUser!.userId;
+  const mailbox = await prisma.mailbox.findFirst({ where: { userId }, select: { id: true } });
+  if (!mailbox) { res.json(EMPTY_SUGGESTIONS); return; }
+  const folders = await prisma.folder.findMany({
+    where: { mailboxId: mailbox.id },
+    select: { id: true, name: true, displayName: true },
+  }) as FolderRef[];
+  // 9.4: own contacts only while the contacts module is on (as the compose autocomplete)
+  const ownContacts = await isWebmailFeatureEnabled(protocolSubject(req.apiUser!), 'contacts');
+  res.json(await loadSuggestions(prisma as unknown as SuggestDb, { q, folders, contactsOwnerId: ownContacts ? userId : null }));
 });
 
 // GET /api/v1/mail/delegated-mailboxes

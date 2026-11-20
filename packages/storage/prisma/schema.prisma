@@ -1,13 +1,21 @@
 generator client {
   provider        = "prisma-client-js"
-  previewFeatures = ["fullTextSearch"]
+  // 10.2: postgresqlExtensions — the pg_trgm extension below is part of the schema
+  previewFeatures = ["fullTextSearch", "postgresqlExtensions"]
   // Explicitly OpenSSL 3 target only — omit "native" because auto-detection fails on Alpine
   binaryTargets   = ["linux-musl-openssl-3.0.x"]
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  // 10.2: pg_trgm (trigram GIN index of the mail search, Message @@index
+  // messages_search_trgm_idx; docs/search.md). The lines carrying the optional tag
+  // of schema-sync (infra/docker/schema-sync-classify.mjs) are left out when the
+  // database cannot provide the extension (role without CREATE on the database) —
+  // the search then works without the index. Prisma never drops extensions that
+  // are not listed here.
+  extensions = [pg_trgm] // schema-sync:optional pg_trgm
 }
 
 // ─────────────────────────────────────────────
@@ -592,6 +600,10 @@ model Message {
   @@index([softDeletedAt])
   @@index([threadId])
   @@index([flagStatus])
+  // 10.2: trigram GIN index for the substring search (ILIKE '%…%') of the search
+  // suggestions and /mail/search (subject, sender name, sender address). Maintained
+  // by PostgreSQL on every insert/update — no application-side indexing. docs/search.md
+  @@index([subject(ops: raw("gin_trgm_ops")), fromName(ops: raw("gin_trgm_ops")), fromAddr(ops: raw("gin_trgm_ops"))], type: Gin, map: "messages_search_trgm_idx") // schema-sync:optional pg_trgm
   @@map("messages")
 }
 

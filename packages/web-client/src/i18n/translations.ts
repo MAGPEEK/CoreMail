@@ -422,6 +422,28 @@ const templateUiEn: Record<keyof typeof templateUiDe, string> = {
   settings_templates_open:           'Manage templates …',
 };
 
+// ── 10.2: search suggestions (message list + header search field) ─────────────
+// Spanish and Italian fall back to the English texts of this block.
+const searchUiDe = {
+  search_suggest_label:              'Suchvorschläge',
+  search_suggest_recent:             'Letzte Suchen',
+  search_suggest_people:             'Personen',
+  search_suggest_messages:           'Nachrichten',
+  search_suggest_remove_recent:      '„{term}“ aus den letzten Suchen entfernen',
+  search_suggest_no_subject:         '(kein Betreff)',
+  search_suggest_yesterday:          'Gestern',
+} as const;
+
+const searchUiEn: Record<keyof typeof searchUiDe, string> = {
+  search_suggest_label:              'Search suggestions',
+  search_suggest_recent:             'Recent searches',
+  search_suggest_people:             'People',
+  search_suggest_messages:           'Messages',
+  search_suggest_remove_recent:      'Remove “{term}” from recent searches',
+  search_suggest_no_subject:         '(no subject)',
+  search_suggest_yesterday:          'Yesterday',
+};
+
 // ── Compose (9.4: inline compose, ribbon, tab strip, own window) ─────────────
 // Spanish and Italian fall back to the English texts of this block.
 const composeUiDe = {
@@ -867,6 +889,7 @@ const de = {
   ...followUpUiDe,
   ...layoutUiDe,
   ...templateUiDe,
+  ...searchUiDe,
   // General
   language:                'Sprache',
   language_de:             'Deutsch',
@@ -1259,6 +1282,7 @@ const en: Record<TranslationKey, string> = {
   ...followUpUiEn,
   ...layoutUiEn,
   ...templateUiEn,
+  ...searchUiEn,
   language:                'Language',
   language_de:             'German',
   language_en:             'English',
@@ -1637,6 +1661,7 @@ const es: Record<TranslationKey, string> = {
   ...followUpUiEn,
   ...layoutUiEn,
   ...templateUiEn,
+  ...searchUiEn,
   language:                'Idioma',
   language_de:             'Alemán',
   language_en:             'Inglés',
@@ -2014,6 +2039,7 @@ const it: Record<TranslationKey, string> = {
   ...followUpUiEn,
   ...layoutUiEn,
   ...templateUiEn,
+  ...searchUiEn,
   language:                'Lingua',
   language_de:             'Tedesco',
   language_en:             'Inglese',

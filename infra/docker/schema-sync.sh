@@ -33,6 +33,15 @@
 #         and only after it succeeded the push runs with --accept-data-loss.
 #   3. Changes Prisma cannot execute at all (e.g. a new required column without
 #      default on a non-empty table) always stop the start.
+#   4. 10.2: OPTIONAL EXTENSIONS (OPTIONAL_EXTENSIONS in schema-sync-classify.mjs —
+#      pg_trgm, the trigram index of the mail search). A new extension + index is
+#      no data loss and normally just applied. When the push fails because the
+#      database cannot provide the extension (the least-privilege app role has no
+#      CREATE on the database, the server lacks the module, …), the schema is
+#      pushed once more WITHOUT the lines tagged "schema-sync:optional <name>"
+#      (a temporary copy; nothing else differs) and a warning explains how to
+#      create the extension. The search works without the index; the next start
+#      tries the full schema again.
 #
 # pg_dump in the image is PostgreSQL 16. A newer server (17+) cannot be dumped
 # with it — schema-sync detects that and asks for an external dump +
@@ -46,8 +55,9 @@
 #   COREMAIL_SCHEMA_BACKUP_DIR         dump directory (default /data/backups — volume coremail-data)
 #   COREMAIL_SCHEMA_BACKUP             skip = no dump (you made your own backup); default: required
 #   COREMAIL_SCHEMA_CLASSIFIER         path of schema-sync-classify.mjs (default: image location)
-#   COREMAIL_PRISMA_SCHEMA_FILE        target schema read by the classifier (default prisma/schema.prisma
-#                                      in the storage package)
+#   COREMAIL_PRISMA_SCHEMA_FILE        target schema read by the classifier and copied without the
+#                                      optional-extension lines (default prisma/schema.prisma in the
+#                                      storage package)
 # ─────────────────────────────────────────────────────────────────────────────
 set -u
 
@@ -69,7 +79,11 @@ cd "${STORAGE_DIR}" || { log "ERROR: ${STORAGE_DIR} not found"; exit 1; }
 
 OUT="$(mktemp 2>/dev/null || echo /tmp/coremail-schema-sync.$$)"
 CLS="${OUT}.cls"
-trap 'rm -f "${OUT}" "${CLS}"' EXIT
+# 10.2: the schema without an optional extension (see 4. above); empty = prisma/schema.prisma
+DEGRADED="${OUT}.schema.prisma"
+SCHEMA_FILE=""
+SCHEMA_SRC="${COREMAIL_PRISMA_SCHEMA_FILE:-prisma/schema.prisma}"
+trap 'rm -f "${OUT}" "${CLS}" "${DEGRADED}" "${DEGRADED}.err"' EXIT
 TAB="$(printf '\t')"
 
 # libpq rejects Prisma-only URL parameters (?schema=, ?connection_limit=, …);
@@ -92,7 +106,11 @@ DB_URL="$(libpq_url)"
 
 prisma_push() {
   # stdout+stderr into $OUT and the log
-  node "${PRISMA_CLI}" db push --skip-generate "$@" >"${OUT}" 2>&1
+  if [ -n "${SCHEMA_FILE}" ]; then
+    node "${PRISMA_CLI}" db push --skip-generate --schema "${SCHEMA_FILE}" "$@" >"${OUT}" 2>&1
+  else
+    node "${PRISMA_CLI}" db push --skip-generate "$@" >"${OUT}" 2>&1
+  fi
   rc=$?
   cat "${OUT}"
   return ${rc}
@@ -287,6 +305,33 @@ retire_cleanup() {
   done < "${CLS}"
 }
 
+# 10.2: "<extension><TAB><what needs it>" when the failed push could not get an
+# optional extension (OPTIONAL_EXTENSIONS in the classifier), else empty.
+optional_failure() {
+  [ -f "${CLASSIFIER}" ] || return 0
+  node "${CLASSIFIER}" --optional-failure < "${OUT}" 2>/dev/null || true
+}
+
+# degrade <extension> <what> — continue with the schema copy without the lines that
+# need the extension. Refuses (exit 1) when the copy cannot be made.
+degrade() {
+  if ! node "${CLASSIFIER}" --strip-optional "$1" "${SCHEMA_SRC}" > "${DEGRADED}" 2> "${DEGRADED}.err"; then
+    log "ERROR: the database cannot provide the PostgreSQL extension $1, and the schema without it"
+    log "       could not be prepared: $(cat "${DEGRADED}.err" 2>/dev/null). Schema NOT changed."
+    exit 1
+  fi
+  log "════════════════════════════════════════════════════════════════════"
+  log "WARNING: the database cannot provide the PostgreSQL extension $1"
+  log "(see the Prisma output above). The schema is applied WITHOUT $2."
+  log "Nothing else differs and no data is affected — the mail search works,"
+  log "but without its index (slower on large mailboxes). To enable it, create"
+  log "the extension once as a PostgreSQL superuser in this database, e.g.:"
+  log "  docker exec coremail-postgres psql -U coremail -d coremail -c 'CREATE EXTENSION IF NOT EXISTS $1;'"
+  log "and restart CoreMail (docs/search.md)."
+  log "════════════════════════════════════════════════════════════════════"
+  SCHEMA_FILE="${DEGRADED}"
+}
+
 refuse_duplicates() {
   log "════════════════════════════════════════════════════════════════════"
   log "ERROR: the schema update adds UNIQUE constraints, but the table holds"
@@ -309,6 +354,15 @@ while true; do
     log "ERROR: Prisma reports schema changes that cannot be executed on the existing data"
     log "       (see above). Manual migration needed — the database was NOT changed."
     exit 1
+  fi
+
+  # 10.2: an optional extension the database cannot provide → once without it
+  if [ -z "${SCHEMA_FILE}" ]; then
+    optional="$(optional_failure)"
+    if [ -n "${optional}" ]; then
+      degrade "$(printf '%s' "${optional}" | cut -f1)" "$(printf '%s' "${optional}" | cut -f2)"
+      continue
+    fi
   fi
 
   if grep -qiE "data loss|accept-data-loss" "${OUT}"; then

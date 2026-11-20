@@ -52,6 +52,20 @@
 // "safe" = only new unique constraints; "retire" = retired tables (and maybe new
 // unique constraints); "none" = no warning bullet recognised (schema-sync treats
 // it as unsafe).
+//
+// OPTIONAL EXTENSIONS (10.2): a new extension + index (pg_trgm and the trigram GIN
+// index of the mail search) produce NO data-loss warning — `prisma db push` applies
+// them on its own (Prisma never drops extensions the schema does not list). It can
+// fail when the database cannot provide the extension (the least-privilege app role
+// has no CREATE on the database, the server lacks the contrib module, the extension
+// lives in a schema outside the search path). Then:
+//   node schema-sync-classify.mjs --optional-failure < prisma-output.txt
+//     → "<extension><TAB><what needs it>" (nothing when no optional extension failed)
+//   node schema-sync-classify.mjs --strip-optional <extension> <schema file>
+//     → the schema without the lines tagged `// schema-sync:optional <extension>`
+// and schema-sync pushes that copy (the search works without its index; the next
+// start tries the full schema again). Only the `extensions = [<extension>]` line and
+// `@@index(…)` lines may carry the tag — anything else is refused (fail-closed).
 // No dependencies; Node 18+. Tests: node --test infra/docker/schema-sync-classify.test.mjs
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
@@ -249,10 +263,81 @@ export function format(result) {
   return `${[`verdict\t${result.verdict}`, ...result.items.map(formatItem)].join('\n')}\n`;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// ── Optional extensions (10.2) ───────────────────────────────────────────────
+
+/**
+ * Extensions the schema can do without, with the Prisma / PostgreSQL errors that
+ * mean "this database cannot provide it". Only ever list an extension whose
+ * tagged lines are indexes (performance only, no data).
+ */
+export const OPTIONAL_EXTENSIONS = Object.freeze({
+  pg_trgm: Object.freeze({
+    what: 'the trigram index of the mail search (messages_search_trgm_idx)',
+    errors: Object.freeze([
+      /permission denied to create extension "pg_trgm"/i,
+      /extension "pg_trgm" is not available/i,
+      /could not open extension control file "[^"]*pg_trgm\.control"/i,
+      /operator class "gin_trgm_ops" does not exist/i,
+    ]),
+  }),
+});
+
+const OPTIONAL_TAG = /\/\/\s*schema-sync:optional\s+([A-Za-z0-9_]+)\s*$/;
+
+/** The optional extension a failed push could not get: { name, what } or null. */
+export function optionalExtensionFailure(output) {
+  const text = String(output);
+  for (const [name, ext] of Object.entries(OPTIONAL_EXTENSIONS)) {
+    if (ext.errors.some((re) => re.test(text))) return { name, what: ext.what };
+  }
+  return null;
+}
+
+/**
+ * The schema without the lines tagged `// schema-sync:optional <name>`. Throws
+ * (fail-closed) for an unknown extension, when nothing is tagged, or when a
+ * tagged line is anything but `extensions = [<name>]` or an `@@index(…)`.
+ */
+export function stripOptional(schemaText, name) {
+  if (!Object.hasOwn(OPTIONAL_EXTENSIONS, name)) throw new Error(`${name} is not an optional extension`);
+  const lines = String(schemaText).split('\n');
+  const kept = [];
+  let removed = 0;
+  for (const line of lines) {
+    const tag = OPTIONAL_TAG.exec(line.replace(/\r$/, ''));
+    if (!tag || tag[1] !== name) { kept.push(line); continue; }
+    const code = stripComment(line).trim();
+    const extensionsLine = new RegExp(`^extensions\\s*=\\s*\\[\\s*${name}\\s*\\]$`).test(code);
+    if (!extensionsLine && !/^@@index\(/.test(code)) {
+      throw new Error(`only "extensions = [${name}]" and @@index lines may be tagged optional, not: ${code}`);
+    }
+    removed++;
+  }
+  if (removed === 0) throw new Error(`no line is tagged "schema-sync:optional ${name}"`);
+  return { text: kept.join('\n'), removed };
+}
+
+async function readStdin() {
   const chunks = [];
   for await (const c of process.stdin) chunks.push(c);
-  const schema = process.argv[2] || schemaFromUrl(process.env.DATABASE_URL);
-  const optional = loadOptionalColumns(process.env.COREMAIL_PRISMA_SCHEMA_FILE || 'prisma/schema.prisma');
-  process.stdout.write(format(classify(Buffer.concat(chunks).toString('utf8'), schema, optional)));
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const mode = process.argv[2];
+  if (mode === '--optional-failure') {
+    const hit = optionalExtensionFailure(await readStdin());
+    if (hit) process.stdout.write(`${hit.name}\t${hit.what}\n`);
+  } else if (mode === '--strip-optional') {
+    try {
+      process.stdout.write(stripOptional(readFileSync(process.argv[4] ?? '', 'utf8'), process.argv[3] ?? '').text);
+    } catch (err) {
+      process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+      process.exit(1);
+    }
+  } else {
+    const schema = mode || schemaFromUrl(process.env.DATABASE_URL);
+    const optional = loadOptionalColumns(process.env.COREMAIL_PRISMA_SCHEMA_FILE || 'prisma/schema.prisma');
+    process.stdout.write(format(classify(await readStdin(), schema, optional)));
+  }
 }

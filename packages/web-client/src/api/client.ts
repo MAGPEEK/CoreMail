@@ -229,7 +229,8 @@ async function request<T>(path: string, init: RequestInit = {}, skipContentType 
 }
 
 export const api = {
-  get:      <T>(path: string)                   => request<T>(path),
+  /** 10.2: `signal` lets TanStack Query abort a stale request (search suggestions). */
+  get:      <T>(path: string, init: { signal?: AbortSignal } = {}) => request<T>(path, init),
   post:     <T>(path: string, body: unknown)    => request<T>(path, { method: 'POST',  body: JSON.stringify(body) }),
   postForm: <T>(path: string, form: FormData, init: RequestInit = {}) => request<T>(path, { ...init, method: 'POST', body: form }, true),
   put:      <T>(path: string, body: unknown)    => request<T>(path, { method: 'PUT',   body: JSON.stringify(body) }),

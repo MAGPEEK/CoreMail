@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import {
   classify, classifyWarning, format, guardSql, loadOptionalColumns, optionalColumnsWithoutDefault, parseWarnings, schemaFromUrl,
   RETIRED_TABLES, RETIREMENT_CLEANUP, roomMailboxCleanupSql,
+  OPTIONAL_EXTENSIONS, optionalExtensionFailure, stripOptional,
 } from './schema-sync-classify.mjs';
 
 // 9.5.x → 10.0.0: the room/equipment tables hold rows and are dropped.
@@ -321,4 +322,84 @@ test('CLI output: a cleanup line follows the resource_mailboxes retired line', (
   assert.deepEqual(cleanup.slice(0, 3), ['cleanup', 'resource_mailboxes', 'mailboxes of the former room/equipment mailboxes']);
   assert.equal(cleanup[3], roomMailboxCleanupSql('public'));
   assert.equal(lines.filter((l) => l.startsWith('cleanup\t')).length, 1);
+});
+
+// ── 10.2: optional extension pg_trgm (trigram index of the mail search) ──────
+// Captured from `prisma db push` (Prisma 5.22.0, postgres:16-alpine) on a 10.1
+// database: with pg_trgm present (01-init.sql) the change is applied without any
+// warning; as the least-privilege app role (02-app-role.sh) on a database WITHOUT
+// pg_trgm it fails before anything is changed.
+const PUSH_10_2_OK = `Prisma schema loaded from prisma/schema.prisma
+Datasource "db": PostgreSQL database "coremail", schema "public" at "postgres:5432"
+
+Your database is now in sync with your Prisma schema. Done in 145ms
+`;
+const PUSH_10_2_NO_CREATE = `Prisma schema loaded from prisma/schema.prisma
+Datasource "db": PostgreSQL database "coremail", schema "public" at "postgres:5432"
+Error: ERROR: permission denied to create extension "pg_trgm"
+HINT: Must have CREATE privilege on current database to create this extension.
+   0: sql_schema_connector::apply_migration::migration_step
+           with step=CreateExtension(CreateExtension { id: ExtensionId(0) })
+             at schema-engine/connectors/sql-schema-connector/src/apply_migration.rs:21
+   1: sql_schema_connector::apply_migration::apply_migration
+             at schema-engine/connectors/sql-schema-connector/src/apply_migration.rs:10
+   2: schema_core::state::SchemaPush
+             at schema-engine/core/src/state.rs:504
+`;
+
+test('10.1 → 10.2: the new extension + trigram index raise no data-loss warning (nothing to classify)', () => {
+  assert.deepEqual(classify(PUSH_10_2_OK), { verdict: 'none', items: [] });
+  assert.equal(optionalExtensionFailure(PUSH_10_2_OK), null);
+});
+
+test('optional extension failures are recognised; other errors are not', () => {
+  assert.deepEqual(optionalExtensionFailure(PUSH_10_2_NO_CREATE), { name: 'pg_trgm', what: OPTIONAL_EXTENSIONS.pg_trgm.what });
+  for (const text of [
+    'Error: ERROR: extension "pg_trgm" is not available',
+    'ERROR: could not open extension control file "/usr/local/share/postgresql/extension/pg_trgm.control": No such file or directory',
+    'Error: ERROR: operator class "gin_trgm_ops" does not exist for access method "gin"',
+  ]) assert.equal(optionalExtensionFailure(text)?.name, 'pg_trgm', text);
+  for (const text of [
+    "Error: P1001: Can't reach database server at `postgres:5432`",
+    'Error: ERROR: permission denied for table messages',
+    'Error: ERROR: permission denied to create extension "pgcrypto"',
+    UPGRADE_9_5, DROPS, UNEXECUTABLE,
+  ]) assert.equal(optionalExtensionFailure(text), null, text);
+});
+
+test('the real schema tags exactly the pg_trgm extension and its index as optional', () => {
+  const tagged = TARGET_SCHEMA.replace(/\r/g, '').split('\n').filter((l) => /schema-sync:optional/.test(l)).map((l) => l.trim());
+  assert.equal(tagged.length, 2, tagged.join('\n'));
+  assert.match(tagged[0], /^extensions\s*=\s*\[pg_trgm\]/);
+  assert.match(tagged[1], /^@@index\(\[subject\(ops: raw\("gin_trgm_ops"\)\), fromName\(ops: raw\("gin_trgm_ops"\)\), fromAddr\(ops: raw\("gin_trgm_ops"\)\)\], type: Gin, map: "messages_search_trgm_idx"\)/);
+  const { text, removed } = stripOptional(TARGET_SCHEMA, 'pg_trgm');
+  assert.equal(removed, 2);
+  const code = text.split(/\r?\n/).map((l) => l.replace(/\/\/.*$/, '')).join('\n'); // comments may still name it
+  assert.doesNotMatch(code, /pg_trgm|gin_trgm_ops|messages_search_trgm_idx/);
+  // nothing but the two tagged lines differs
+  assert.deepEqual(text.split('\n'), TARGET_SCHEMA.split('\n').filter((l) => !/schema-sync:optional pg_trgm/.test(l)));
+});
+
+test('stripOptional refuses anything but the extension line and @@index lines (fail-closed)', () => {
+  const field = 'model M {\n  id String @id\n  extra String // schema-sync:optional pg_trgm\n}\n';
+  assert.throws(() => stripOptional(field, 'pg_trgm'), /may be tagged optional/);
+  const twoExtensions = 'datasource db {\n  extensions = [pg_trgm, citext] // schema-sync:optional pg_trgm\n}\n';
+  assert.throws(() => stripOptional(twoExtensions, 'pg_trgm'), /may be tagged optional/);
+  assert.throws(() => stripOptional('model M {\n  id String @id\n}\n', 'pg_trgm'), /no line is tagged/);
+  assert.throws(() => stripOptional(TARGET_SCHEMA, 'citext'), /not an optional extension/);
+  assert.throws(() => stripOptional(TARGET_SCHEMA, '__proto__'), /not an optional extension/);
+  // another extension's tag is left alone
+  const other = 'model M {\n  @@index([a]) // schema-sync:optional citext\n  @@index([b]) // schema-sync:optional pg_trgm\n}\n';
+  assert.equal(stripOptional(other, 'pg_trgm').text, 'model M {\n  @@index([a]) // schema-sync:optional citext\n}\n');
+});
+
+test('CLI: --optional-failure and --strip-optional (read by schema-sync.sh)', () => {
+  const script = fileURLToPath(new URL('./schema-sync-classify.mjs', import.meta.url));
+  const schemaFile = fileURLToPath(new URL('../../packages/storage/prisma/schema.prisma', import.meta.url));
+  assert.equal(execFileSync(process.execPath, [script, '--optional-failure'], { input: PUSH_10_2_NO_CREATE, encoding: 'utf8' }),
+    `pg_trgm\t${OPTIONAL_EXTENSIONS.pg_trgm.what}\n`);
+  assert.equal(execFileSync(process.execPath, [script, '--optional-failure'], { input: UPGRADE_9_5, encoding: 'utf8' }), '');
+  assert.equal(execFileSync(process.execPath, [script, '--strip-optional', 'pg_trgm', schemaFile], { encoding: 'utf8' }),
+    stripOptional(TARGET_SCHEMA, 'pg_trgm').text);
+  assert.throws(() => execFileSync(process.execPath, [script, '--strip-optional', 'citext', schemaFile], { encoding: 'utf8', stdio: 'pipe' }));
 });
