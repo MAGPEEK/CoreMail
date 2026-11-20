@@ -80,6 +80,9 @@ export function setTestEnv(): void {
       async expire() { return 1; },
     };
   }
+  // 10.5: the send rate limiter (storage submission-rate.ts) counts in process
+  // memory (tests that need a shared counter install their own).
+  if (g['__sendRateRedis'] === undefined) g['__sendRateRedis'] = null;
   // server.ts installs the same BigInt serializer (Prisma quota fields)
   (BigInt.prototype as unknown as { toJSON: () => number }).toJSON = function (this: bigint) { return Number(this); };
   closeSharedRedisAfterTests();

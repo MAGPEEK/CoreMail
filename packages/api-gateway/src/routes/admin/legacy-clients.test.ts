@@ -242,3 +242,24 @@ test('device relay API: read-only roles cannot change it', async () => {
   assert.equal((await call('PUT', '/api/v1/admin/smtp-config/device-relay', 'VIEW_ONLY_ORG', relay())).status, 403);
   assert.equal((await call('GET', '/api/v1/admin/smtp-config/device-relay', 'VIEW_ONLY_ORG')).status, 200);
 });
+
+test('10.5 send limit API: defaults 200 / 1000 / on / no block; partial PUT, bounds, audit, RBAC', async () => {
+  const initial = await call('GET', '/api/v1/admin/smtp-config/send-rate', 'VIEW_ONLY_ORG');
+  assert.equal(initial.status, 200);
+  assert.deepEqual(initial.json, { enabled: true, messagesPerHour: 200, recipientsPerHour: 1000, blockOnExceed: false });
+
+  const saved = await call('PUT', '/api/v1/admin/smtp-config/send-rate', 'SERVER_MANAGEMENT', { messagesPerHour: 50, blockOnExceed: true });
+  assert.equal(saved.status, 200);
+  assert.deepEqual(saved.json, { enabled: true, messagesPerHour: 50, recipientsPerHour: 1000, blockOnExceed: true }, 'absent fields keep their value');
+  assert.equal(settings['sendRateMessagesPerHour'], 50);
+  await flush();
+  const a = lastAudit('settings.send-rate.updated');
+  assert.ok(a, 'audited under settings.* (always audited)');
+  assert.deepEqual((a!['changes'] as Row)['after'], saved.json);
+
+  for (const bad of [{ messagesPerHour: 0 }, { recipientsPerHour: 1_000_001 }, { messagesPerHour: 1.5 }, { unknown: true }]) {
+    assert.equal((await call('PUT', '/api/v1/admin/smtp-config/send-rate', 'SERVER_MANAGEMENT', bad)).status, 400, JSON.stringify(bad));
+  }
+  assert.equal((await call('PUT', '/api/v1/admin/smtp-config/send-rate', 'VIEW_ONLY_ORG', { enabled: false })).status, 403);
+  assert.equal(settings['sendRateLimitEnabled'], undefined, 'read-only role changed nothing');
+});

@@ -5,4 +5,7 @@
  * the test process alive.
  */
 (globalThis as { __realtimeRedis?: unknown }).__realtimeRedis ??= null;
+// 10.5: the send rate limiter (submission-rate.ts) counts in process memory —
+// no test opens a Redis connection through it.
+(globalThis as { __sendRateRedis?: unknown }).__sendRateRedis ??= null;
 export {};

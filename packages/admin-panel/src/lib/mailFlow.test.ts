@@ -40,11 +40,22 @@ test('form → body: user mailboxes carry send limits, shared ones do not; inval
     ok: true,
     patch: {
       hiddenFromGal: false, forwardTo: 'boss@partner.example', forwardKeepCopy: true, acceptFrom: ['partner.example'], rejectFrom: [],
-      maxReceiveSizeMb: null, maxSendSizeMb: 10, maxRecipients: 50,
+      maxReceiveSizeMb: null, maxSendSizeMb: 10, maxRecipients: 50, maxMessagesPerHour: null, maxRecipientsPerHour: null,
     },
   });
   const shared = patchFromForm(formFromView({ ...view, maxSendSizeMb: undefined }), 'shared');
   assert.equal(shared.ok && 'maxSendSizeMb' in shared.patch, false);
+  assert.equal(shared.ok && 'maxMessagesPerHour' in shared.patch, false, '10.5: no send rate for shared mailboxes');
   assert.deepEqual(patchFromForm({ ...formFromView(view), forwardTo: 'nope' }, 'user'), { ok: false, field: 'forwardTo' });
   assert.deepEqual(patchFromForm({ ...formFromView(view), maxRecipients: '-1' }, 'user'), { ok: false, field: 'maxRecipients' });
+});
+
+test('10.5: hourly send rate per mailbox — view → form → body, empty = global, invalid named', () => {
+  const f = formFromView({ ...view, maxMessagesPerHour: 50, maxRecipientsPerHour: null });
+  assert.equal(f.maxMessagesPerHour, '50');
+  assert.equal(f.maxRecipientsPerHour, '');
+  const body = patchFromForm({ ...f, maxRecipientsPerHour: '400' }, 'user');
+  assert.equal(body.ok && body.patch['maxMessagesPerHour'], 50);
+  assert.equal(body.ok && body.patch['maxRecipientsPerHour'], 400);
+  assert.deepEqual(patchFromForm({ ...f, maxMessagesPerHour: 'x' }, 'user'), { ok: false, field: 'maxMessagesPerHour' });
 });

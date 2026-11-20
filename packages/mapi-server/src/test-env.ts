@@ -16,3 +16,5 @@ const noDatabase = new Proxy({}, {
   })),
 });
 (globalThis as unknown as { __prisma: unknown }).__prisma ??= noDatabase;
+// 10.5: the send rate limiter (storage submission-rate.ts) counts in process — no Redis connection.
+(globalThis as { __sendRateRedis?: unknown }).__sendRateRedis ??= null;

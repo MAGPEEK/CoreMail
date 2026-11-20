@@ -1,7 +1,7 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
 import nodemailer from 'nodemailer';
-import { prisma, clearMessageSizeLimitCache } from '@coremail/storage';
+import { prisma, clearMessageSizeLimitCache, sendRateSettingsFrom, SEND_RATE_BOUNDS } from '@coremail/storage';
 import { getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 import { requireArea } from '../../middleware/auth.js';
 import { smarthostTestOptions } from '../../lib/smarthost-test.js';
@@ -78,6 +78,65 @@ adminSmtpConfigRouter.put('/device-relay', async (req: Request, res: Response) =
   // The SMTP server drops its cached policy on this signal.
   await getRedisClient().publish(CHANNEL_SETTINGS_RELOAD, JSON.stringify({ kind: 'device-relay' })).catch(() => undefined);
   res.json(await deviceRelayView());
+});
+
+// ── Send rate limit (Sendelimit, 10.5) ───────────────────────────────────────
+// Per-user outgoing messages / recipients per hour for every submission path
+// (storage submission-rate.ts); stored in ServerSettings.sendRate*.
+
+export interface SendRateView { enabled: boolean; messagesPerHour: number; recipientsPerHour: number; blockOnExceed: boolean }
+
+async function sendRateView(): Promise<SendRateView> {
+  const row = await prisma.serverSettings.findUnique({
+    where: { id: 'singleton' },
+    select: { sendRateLimitEnabled: true, sendRateMessagesPerHour: true, sendRateRecipientsPerHour: true, sendRateBlockOnExceed: true },
+  });
+  return sendRateSettingsFrom(row);
+}
+
+// GET /admin/smtp-config/send-rate
+adminSmtpConfigRouter.get('/send-rate', async (_req: Request, res: Response) => {
+  res.json(await sendRateView());
+});
+
+export const SendRateSchema = z.object({
+  enabled:           z.boolean(),
+  messagesPerHour:   z.number().int().min(SEND_RATE_BOUNDS.messagesPerHour[0]).max(SEND_RATE_BOUNDS.messagesPerHour[1]),
+  recipientsPerHour: z.number().int().min(SEND_RATE_BOUNDS.recipientsPerHour[0]).max(SEND_RATE_BOUNDS.recipientsPerHour[1]),
+  blockOnExceed:     z.boolean(),
+}).partial().strict();
+
+// PUT /admin/smtp-config/send-rate — partial update (absent fields keep their value)
+adminSmtpConfigRouter.put('/send-rate', async (req: Request, res: Response) => {
+  const parsed = SendRateSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Ungültige Eingabe', details: parsed.error.issues });
+    return;
+  }
+  const d = parsed.data;
+  const data = {
+    ...(d.enabled !== undefined ? { sendRateLimitEnabled: d.enabled } : {}),
+    ...(d.messagesPerHour !== undefined ? { sendRateMessagesPerHour: d.messagesPerHour } : {}),
+    ...(d.recipientsPerHour !== undefined ? { sendRateRecipientsPerHour: d.recipientsPerHour } : {}),
+    ...(d.blockOnExceed !== undefined ? { sendRateBlockOnExceed: d.blockOnExceed } : {}),
+  };
+  const before = await sendRateView();
+  await prisma.serverSettings.upsert({ where: { id: 'singleton' }, update: data, create: { id: 'singleton', ...data } });
+  const after = await sendRateView();
+  audit({
+    ...(req.apiUser ? { actorId: req.apiUser.userId, actorEmail: req.apiUser.email } : {}),
+    action: 'settings.send-rate.updated',
+    targetType: 'ServerSettings',
+    targetId: 'singleton',
+    targetName: 'Sendelimit',
+    changes: { before, after },
+    ...auditContext(req),
+  });
+  // This process at once, the other services on the reload signal (their
+  // submission-limit caches drop the send rate settings with them; else ≤ 60 s).
+  clearMessageSizeLimitCache();
+  await getRedisClient().publish(CHANNEL_SETTINGS_RELOAD, JSON.stringify({ kind: 'send-rate' })).catch(() => undefined);
+  res.json(after);
 });
 
 async function getOrCreate() {

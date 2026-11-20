@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Terminal, Package, MessageSquare, Clock,
   Network, Plus, Trash2, CheckCircle, Info, SendHorizonal,
-  Loader2, XCircle, Globe, Copy, Check, RefreshCw, AlertCircle, Printer,
+  Loader2, XCircle, Globe, Copy, Check, RefreshCw, AlertCircle, Printer, Gauge,
 } from 'lucide-react';
 import { api } from '../api/client.js';
 import toast from 'react-hot-toast';
@@ -13,6 +13,7 @@ import { errorMessage } from '../lib/errors.js';
 import { smtpGreetingPreview } from '../lib/smtpBanner.js';
 import { WriteGuard } from '../components/Can.js';
 import { DeviceRelaySection } from '../components/DeviceRelaySection.js';
+import { SendRateSection } from '../components/SendRateSection.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -58,12 +59,14 @@ interface SmtpSettings {
 
 // ── Sub-Navigation ────────────────────────────────────────────────────────────
 
-type Section = 'esmtp' | 'delivery' | 'banner' | 'greylisting' | 'connection' | 'outgoing' | 'devicerelay' | 'dns';
+type Section = 'esmtp' | 'delivery' | 'banner' | 'greylisting' | 'connection' | 'outgoing' | 'sendrate' | 'devicerelay' | 'dns';
 
 const SUB_NAV: { id: Section; label: string; icon: React.ElementType }[] = [
   { id: 'esmtp',       label: 'ESMTP-Befehle',    icon: Terminal },
   { id: 'delivery',    label: 'Lokale Zustellung', icon: Package },
   { id: 'outgoing',    label: 'Ausgehende Mail',   icon: SendHorizonal },
+  // 10.5: per-account hourly send limit (own settings + API, SendRateSection)
+  { id: 'sendrate',    label: 'Sendelimit',        icon: Gauge },
   { id: 'banner',      label: 'SMTP-Banner',       icon: MessageSquare },
   { id: 'greylisting', label: 'Greylisting',       icon: Clock },
   { id: 'connection',  label: 'Verbindung',        icon: Network },
@@ -1376,8 +1379,10 @@ export function SmtpConfigPage() {
         {section === 'dns' && <DnsSection />}
         {/* Geräte-Relay has its own settings row and API */}
         {section === 'devicerelay' && <DeviceRelaySection />}
+        {/* Sendelimit: ServerSettings fields with their own API */}
+        {section === 'sendrate' && <SendRateSection />}
 
-        {section !== 'dns' && section !== 'devicerelay' && (
+        {section !== 'dns' && section !== 'devicerelay' && section !== 'sendrate' && (
           !settings ? (
             <div className="text-sm text-fg-subtle">Lade SMTP-Einstellungen…</div>
           ) : (

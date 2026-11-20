@@ -11,6 +11,12 @@ export const EAS_SEND_STATUS = {
   SUCCESS:           '1',
   INVALID_MIME:      '107',
   SERVER_ERROR:      '110',
+  /**
+   * [MS-ASCMD] 2.2.2 common status 111 ServerErrorRetryLater (transient server
+   * error, the client retries later) — 10.5: the sender's hourly send rate
+   * (storage submission-rate.ts) is reached. 12.1 has no body: HTTP 503.
+   */
+  SERVER_ERROR_RETRY_LATER: '111',
   /** [MS-ASCMD] common status 113 MailboxQuotaExceeded (v8.1: ProhibitSendQuota). */
   MAILBOX_QUOTA_EXCEEDED: '113',
   MESSAGE_PREVIOUSLY_SENT: '118',

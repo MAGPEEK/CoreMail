@@ -76,6 +76,7 @@ defaults). Logic in `packages/storage/src/mail-flow.ts`.
 | `acceptFrom`, `rejectFrom` | addresses (`a@b.example`) or domains (`b.example`, also its subdomains); empty = no restriction |
 | `maxReceiveSizeMb` | largest message delivered to the mailbox |
 | `maxSendSizeMb`, `maxRecipients` | user mailboxes only: largest message / most recipients the user may send |
+| `maxMessagesPerHour`, `maxRecipientsPerHour` | 10.5, user mailboxes only: hourly send rate of the account across every submission path (replaces the global BCP → SMTP & Routing → Sendelimit values; docs/mail-protocol-limits.md) |
 
 ### Enforcement
 

@@ -1,4 +1,4 @@
-# Mail protocol limits (IMAP, POP3, shared login lockout)
+# Mail protocol limits (IMAP, POP3, shared login lockout, send rate)
 
 Resource limits and brute-force protection of the TCP mail protocols (v9.0).
 All values are environment variables of the `coremail` app container; a limit of
@@ -63,3 +63,72 @@ exempt private peer. Only loopback is exempt by default.
 
 `MAIL_AUTH_LIMIT_PRIVATE_IPS` (pre-9.0) is obsolete and ignored — counting private
 addresses is now the default.
+
+## Outgoing send rate per account (all submission paths, 10.5)
+
+A compromised account must not be able to spam: every client submission path
+counts the **messages** and the **recipients** an account sends per sliding
+hour and refuses a submission that would exceed either limit. One limiter for
+all paths — `packages/storage/src/submission-rate.ts` (`consumeSendRate` /
+`peekSendRate`).
+
+| Setting | Default | Where |
+|---|---|---|
+| on / off | on | BCP → SMTP & Routing → Sendelimit (`ServerSettings.sendRateLimitEnabled`) |
+| messages per hour and account | `200` | same (`sendRateMessagesPerHour`, 1–100000) |
+| recipients per hour and account | `1000` | same (`sendRateRecipientsPerHour`, 1–1000000) |
+| block the account for one hour when the limit is exceeded | off | same (`sendRateBlockOnExceed`) |
+| per account | global value | BCP → edit mailbox → Nachrichtenfluss (`MailFlowPolicy.maxMessagesPerHour` / `maxRecipientsPerHour`, user mailboxes only), admin API `PUT /api/v1/admin/mailboxes/:id/mail-flow` |
+
+Admin API: `GET/PUT /api/v1/admin/smtp-config/send-rate` (`{enabled, messagesPerHour,
+recipientsPerHour, blockOnExceed}`, partial PUT; area *servers*, organisation-wide like
+every `/smtp-config` route; audited as `settings.send-rate.updated`). Services read the
+settings with a 60 s cache; a save clears it at once in every service that listens on
+`CHANNEL_SETTINGS_RELOAD` for the submission limits (REST, JMAP, ActiveSync), otherwise
+after at most 60 s (SMTP, MAPI).
+
+**Counting.** Key = the authenticated account; mail sent as / on behalf of a
+Shared Mailbox counts against the user who sends it. A message counts once with
+its envelope recipients (de-duplicated where the path does so), right before it
+is accepted / queued and after every other check — a message refused for another
+reason (size, sender, quota) is not counted, nor is a refused one. Sliding-window
+counter: two fixed hour windows in Redis (`sendrate:<userId>:<window>`), the
+previous one weighted by the part still inside the last hour; check and increment
+are one Lua script (no race between processes). A single message with more
+recipients than the hourly recipient limit is never accepted — keep the hourly
+recipient limit at or above the per-message recipient limit (BCP SMTP *max. recipients*).
+
+**Redis down.** Not ready, slower than 500 ms or failing → the same counter in
+the process memory, one warning per minute. Each process then counts on its own
+(fail-open across processes until Redis is back, never "unlimited" in one
+process). An unexpected limiter error lets the submission through with an error
+log line — the limiter never blocks mail on its own failure.
+
+**Answers per protocol** (all temporary — the client keeps the message):
+
+| Path | Answer |
+|---|---|
+| SMTP submission 587/465 | `451 4.7.1 Sending rate limit exceeded (max N messages\|recipients per hour), try again in S seconds` at the end of DATA; once the account is at its message limit (or blocked) already at `MAIL FROM` (no data transfer). Blocked: `451 4.7.1 Sending temporarily suspended for this account …` |
+| Webmail / REST (`POST /mail/send`, `POST /mail/drafts/:id/send`, undo hold) | `429` + `Retry-After`, body `{code: 'SEND_RATE_LIMITED', reason, limit, retryAfter}`; a draft stays in Drafts |
+| ActiveSync SendMail / SmartReply / SmartForward | 14.x: Status `111` ServerErrorRetryLater ([MS-ASCMD] common status); 12.1: HTTP `503`. The ClientId / Message-ID retry key is released, so the device's retry is sent later; a retry of an already sent message is not counted |
+| JMAP `EmailSubmission/set` | SetError `rateLimit` (RFC 8620 §5.3, inherited by RFC 8621 §7.5) |
+| MAPI `RopSubmitMessage` | `ecQuotaExceeded` (the submission-quota error of the existing mapping) |
+
+The REST burst limiter in front of the webmail routes (`MAIL_SEND_RATE_LIMIT`,
+30 requests / 60 s, docs/api-gateway-security.md) stays: it counts *requests*
+per minute (including invalid ones); the hourly limiter counts *sent messages*.
+They do not count the same thing twice.
+
+**When an account hits the limit** (first refusal per account and hour, claimed
+across processes): audit entry `mail.send.rate-limited` (actor = the account,
+protocol, reason, limits, client IP where known; respects the global audit
+switch), an `AttackEvent` row of type `SEND_RATE_LIMIT` (service = protocol;
+published live on the BCP dashboard channel), and a notice into the inbox of the
+organisation's administrator address (BCP → Einstellungen → Organisation
+`adminEmail`, when it is a local user, Shared Mailbox or alias; otherwise every
+active ORGANIZATION_MANAGEMENT admin): *„Konto X hat das Sendelimit erreicht —
+möglicherweise kompromittiert"*. Further refusals within the hour are only
+logged. With *block on exceed* the account may not send at all for one hour
+after the first refusal (`retryAfter` = the remaining block time); the block
+ends by itself — reset the password / revoke app passwords and sessions of a
+compromised account in the meantime.

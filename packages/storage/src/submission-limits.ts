@@ -19,6 +19,7 @@
  */
 import { prisma } from './prisma/index.js';
 import { checkSendLimitsPure, effectiveSendLimits, loadMailFlowPolicy, type SendLimits, type SendLimitVerdict } from './mail-flow.js';
+import { clearSendRateSettingsCache } from './submission-rate.js';
 
 /** Global limits of a submitted message. */
 export interface SubmissionLimits {
@@ -63,9 +64,14 @@ export function submissionLimitsFrom(
 
 let cache: { limits: SubmissionLimits; expires: number } | null = null;
 
-/** Forget the cached limits (tests; settings saves and CHANNEL_SETTINGS_RELOAD). */
+/**
+ * Forget the cached limits (tests; settings saves and CHANNEL_SETTINGS_RELOAD).
+ * 10.5: also the cached send rate settings (submission-rate.ts), so every
+ * service that reloads the submission limits reloads the rate limit with them.
+ */
 export function clearSubmissionLimitsCache(): void {
   cache = null;
+  clearSendRateSettingsCache();
 }
 
 /** Same cache as {@link clearSubmissionLimitsCache} (name kept for the size-only callers). */

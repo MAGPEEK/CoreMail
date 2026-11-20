@@ -52,7 +52,7 @@ import { recordDraftSuperseded, recordDraftSent, clearDraftState, lookupDraftSta
 import { maxMessageBytes, maxRecipients, recipientAddress, MAX_SEND_FILES } from '../lib/send-limits.js';
 import { resolveReplyHeaders, parseClientReferences } from '../lib/reply-headers.js';
 import {
-  performSend, resolveSender, buildRawMime, sendRateLimiter, sendUploadMiddleware, getOutboundQueue,
+  performSend, resolveSender, buildRawMime, sendRateLimiter, sendUploadMiddleware, getOutboundQueue, writeSendResult,
   replyLookup, MAX_SEND_HOLD_MS,
 } from './mail.js';
 
@@ -554,6 +554,7 @@ draftsRouter.post('/:id/send', sendRateLimiter.middleware, async (req: Request, 
       importance: f.importance,
       sensitivity: f.sensitivity,
       messageId: f.messageId,
+      clientIp: req.ip,
       // 8.1: inline images keep their Content-ID (cid without angle brackets)
       attachments: draft.attachments.map((a) => ({
         filename: a.filename, contentType: a.mimeType, size: a.size, storagePath: a.storagePath,
@@ -594,7 +595,7 @@ draftsRouter.post('/:id/send', sendRateLimiter.middleware, async (req: Request, 
   if (out.status !== 200) {
     // A queued mail keeps its claim (never re-sendable); anything else releases it
     if (out.body['queued'] !== true) await releaseDraft(draft);
-    res.status(out.status).json(out.body);
+    writeSendResult(res, out);
     return;
   }
   res.json({ ...out.body, id: draft.id, ...(sent ? { sentFolderId: sent.id } : {}) });

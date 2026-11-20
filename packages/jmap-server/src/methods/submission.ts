@@ -5,7 +5,10 @@
  */
 import { randomUUID } from 'node:crypto';
 import { Queue } from 'bullmq';
-import { checkSendQuota, checkSubmissionLimits, listAllowedSenderAddresses, prisma, type SendLimitVerdict } from '@coremail/storage';
+import {
+  checkSendQuota, checkSubmissionLimits, consumeSendRate, listAllowedSenderAddresses, prisma,
+  type SendLimitVerdict, type SendRateDecision,
+} from '@coremail/storage';
 import { getOutboundJobOptions } from '@coremail/storage/queue-options';
 import { createBullMqConnection, getRedisClient, createLogger } from '@coremail/core';
 import { registerMethod } from '../dispatcher.js';
@@ -152,6 +155,10 @@ async function parseCreate(obj: JsonObject, account: AccountContext, ctx: Method
   // recipients (storage checkSubmissionLimits; RFC 8621 §7.5 tooLarge / tooManyRecipients).
   const limitError = sendLimitSetError(await checkSubmissionLimits(ctx.user.userId, raw.length, rcpt.length));
   if (limitError) throw limitError;
+  // 10.5: hourly send rate of the submitting user (shared with every submission
+  // path; counted here, after every other check) → RFC 8620 §5.3 SetError rateLimit.
+  const rateError = sendRateSetError(await consumeSendRate({ userId: ctx.user.userId, recipients: rcpt.length, protocol: 'jmap' }));
+  if (rateError) throw rateError;
 
   const sendAt = releaseTime(mailFromParams, new Date());
   const threadId = msg.threadId ?? msg.id;
@@ -179,6 +186,18 @@ export function sendLimitSetError(verdict: SendLimitVerdict): SetError | null {
   return verdict.kind === 'size'
     ? { ...setError('tooLarge', `message exceeds the sender's size limit of ${verdict.limit} octets`), maxSize: verdict.limit } as SetError
     : { ...setError('tooManyRecipients', `at most ${verdict.limit} recipients`), maxRecipients: verdict.limit } as SetError;
+}
+
+/**
+ * Pure (10.5): the SetError of a refused send rate, or null — RFC 8620 §5.3
+ * `rateLimit` ("a server-defined rate limit has been reached. It may work if
+ * tried again later"), which EmailSubmission/set (RFC 8621 §7.5) inherits.
+ */
+export function sendRateSetError(decision: SendRateDecision): SetError | null {
+  if (decision.allowed) return null;
+  return setError('rateLimit', decision.reason === 'blocked'
+    ? `sending is suspended for this account; retry in ${decision.retryAfterSec} s`
+    : `at most ${decision.limit} ${decision.reason} per hour; retry in ${decision.retryAfterSec} s`);
 }
 
 /** SMTP extension parameters accepted on MAIL FROM (advertised in submissionExtensions). */

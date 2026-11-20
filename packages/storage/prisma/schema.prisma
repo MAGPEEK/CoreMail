@@ -358,6 +358,11 @@ model MailFlowPolicy {
   maxSendSizeMb    Int?
   maxReceiveSizeMb Int?
   maxRecipients    Int?
+  // 10.5: per-user outgoing rate (storage submission-rate.ts): messages /
+  // recipients per sliding hour; null = the global ServerSettings value.
+  // User mailboxes only (send as a Shared Mailbox counts against the user).
+  maxMessagesPerHour   Int?
+  maxRecipientsPerHour Int?
   updatedAt        DateTime       @updatedAt
 
   @@map("mail_flow_policies")
@@ -1927,6 +1932,15 @@ model ServerSettings {
   apiRateLimitWindowMin      Int     @default(15)
   apiRateLimitPerIp          Int     @default(500)
   apiRateLimitPerUser        Int     @default(3000)
+  // 10.5: per-user outgoing message rate for EVERY submission path (SMTP 587/465,
+  // webmail/REST, ActiveSync, JMAP, MAPI; storage submission-rate.ts): messages
+  // and recipients per sliding hour. A MailFlowPolicy value replaces the numbers
+  // per mailbox. sendRateBlockOnExceed: an account that reaches the limit may
+  // not send at all for one hour (default off).
+  sendRateLimitEnabled       Boolean @default(true)
+  sendRateMessagesPerHour    Int     @default(200)
+  sendRateRecipientsPerHour  Int     @default(1000)
+  sendRateBlockOnExceed      Boolean @default(false)
 
   // ── Protocols ────────────────────────────────────────────────────────────
   // v5.7.1: JMAP (RFC 8620/8621 + extensions) on /jmap/* and

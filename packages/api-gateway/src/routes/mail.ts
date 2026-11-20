@@ -9,7 +9,7 @@ import {
   prisma, parseRawMessage, uploadBuffer, outboundAttachKey,
   createMessage, moveMessages, setFlags, touchMessages, expunge, nextModSeq,
   loadRawMessage, storeRawMessage, truncateBodyColumn, getObjectStream, getObjectStore, downloadBuffer,
-  checkSendQuota, reservedFolderPrefix, reservedFolderNameError, submissionLimitsForUser,
+  checkSendQuota, reservedFolderPrefix, reservedFolderNameError, submissionLimitsForUser, consumeSendRate,
   importanceMailOption, normalizeImportance, type Importance,
   normalizeSensitivity, sensitivityHeaders, type Sensitivity,
 } from '@coremail/storage';
@@ -941,8 +941,9 @@ mailRouter.post(
       to, cc, bcc, subject, bodyHtml, bodyText, inReplyTo, referencesRaw, scheduledAt,
       sendAs: sendAsAddress, sendOnBehalfOf, requestReceipt, requestDeliveryReceipt, importance, sensitivity,
       attachments: files.map((f) => ({ filename: f.originalname, contentType: f.mimetype, size: f.size, buffer: f.buffer })),
+      clientIp: req.ip,
     });
-    res.status(out.status).json(out.body);
+    writeSendResult(res, out);
   },
 );
 
@@ -1013,9 +1014,20 @@ export interface SendRequest {
    * job was enqueued (drafts: the draft itself becomes the Sent copy).
    */
   afterEnqueue?: (info: EnqueuedSend) => Promise<void>;
+  /** 10.5: client IP (req.ip) for the send rate report (audit / attack event). */
+  clientIp?: string | undefined;
 }
 
 export interface SendResult { status: number; body: Record<string, unknown> }
+
+/**
+ * 10.5: writes a send result; a refused send rate (429) carries Retry-After
+ * (RFC 6585 §4) from `body.retryAfter`.
+ */
+export function writeSendResult(res: Response, out: SendResult): void {
+  if (out.status === 429 && typeof out.body['retryAfter'] === 'number') res.setHeader('Retry-After', String(out.body['retryAfter']));
+  res.status(out.status).json(out.body);
+}
 
 export const MAX_SEND_HOLD_MS = 30_000;
 
@@ -1201,6 +1213,25 @@ export async function performSend(userId: string, input: SendRequest): Promise<S
     if (estimatedSendSize(bodyHtml, bodyText, files) > limits.maxBytes) {
       return fail(413, { error: 'Die Nachricht überschreitet die Größenbeschränkung des Postfachs', maxBytes: limits.maxBytes });
     }
+    // 9.4: the envelope carries bare addresses (a picked contact is "Name <a@b>";
+    // as RCPT TO it was neither recognised as local nor a valid path)
+    const smtpRecipients = envelopeRecipients([to, cc, bcc]);
+    // 10.5: hourly send rate of the user (messages + recipients, shared with SMTP,
+    // ActiveSync, JMAP and MAPI; storage submission-rate.ts) — counted here, after
+    // every other check, once per message (draft send and undo hold included).
+    // The burst limiter in front of the routes (MAIL_SEND_RATE_LIMIT) counts requests.
+    const rate = await consumeSendRate({
+      userId: user.id, recipients: smtpRecipients.length, protocol: 'webmail',
+      ...(input.clientIp ? { ipAddress: input.clientIp } : {}),
+    });
+    if (!rate.allowed) {
+      return fail(429, {
+        error: rate.reason === 'blocked'
+          ? 'Der Versand ist für dieses Konto vorübergehend gesperrt'
+          : `Sendelimit erreicht: höchstens ${rate.limit} ${rate.reason === 'messages' ? 'Nachrichten' : 'Empfänger'} pro Stunde`,
+        code: 'SEND_RATE_LIMITED', reason: rate.reason, limit: rate.limit, retryAfter: rate.retryAfterSec,
+      });
+    }
     const jobId       = crypto.randomUUID();
     const msgId       = input.messageId || `<${crypto.randomUUID()}@${user.domain.name}>`;
     const sendDate    = new Date();
@@ -1235,9 +1266,7 @@ export async function performSend(userId: string, input: SendRequest): Promise<S
     // ── BullMQ job: structured message (v3.17.30+) ───────────────────────────
     // No more rawMessage (base64 blob) — the worker builds the RFC 5322 buffer
     // itself. DKIM signing happens via the nodemailer transport option.
-    // 9.4: the envelope carries bare addresses (a picked contact is "Name <a@b>";
-    // as RCPT TO it was neither recognised as local nor a valid path)
-    const smtpRecipients = envelopeRecipients([to, cc, bcc]);
+    // (smtpRecipients: the bare envelope addresses, computed above)
 
     // BullMQ job: with scheduledAt enqueue with `delay` — the worker starts
     // sending only at the scheduled time. delay is measured internally in ms.

@@ -7,7 +7,8 @@
  *   PUT /api/v1/admin/shared-mailboxes/:id/mail-flow
  *
  * PUT takes any subset of the fields (absent = unchanged) and answers with the
- * stored policy. Send limits (maxSendSizeMb, maxRecipients) exist for user
+ * stored policy. Send limits (maxSendSizeMb, maxRecipients, 10.5: the hourly
+ * send rate maxMessagesPerHour / maxRecipientsPerHour) exist for user
  * mailboxes only — mail to a Shared Mailbox is sent by users under their own
  * limits. Every change is audited as `mailbox.mailflow.update` with the diff.
  */
@@ -15,7 +16,7 @@ import type { Request, Response } from 'express';
 import { z } from 'zod';
 import {
   prisma, loadMailFlowPolicy, saveMailFlowPolicy, parseSenderList, isMailAddress,
-  MAX_FLOW_SIZE_MB, MAX_FLOW_RECIPIENTS, MAX_SENDER_LIST_ENTRIES,
+  MAX_FLOW_SIZE_MB, MAX_FLOW_RECIPIENTS, MAX_SENDER_LIST_ENTRIES, MAX_FLOW_MESSAGES_PER_HOUR, MAX_FLOW_RECIPIENTS_PER_HOUR,
   type MailFlowOwner, type MailFlowSettings,
 } from '@coremail/storage';
 import { audit, auditContext } from './audit.js';
@@ -38,6 +39,9 @@ const BaseSchema = z.object({
 const UserSchema = BaseSchema.extend({
   maxSendSizeMb: sizeMb.optional(),
   maxRecipients: z.number().int().min(1).max(MAX_FLOW_RECIPIENTS).nullable().optional(),
+  // 10.5: hourly send rate of this user (storage submission-rate.ts); null = global
+  maxMessagesPerHour: z.number().int().min(1).max(MAX_FLOW_MESSAGES_PER_HOUR).nullable().optional(),
+  maxRecipientsPerHour: z.number().int().min(1).max(MAX_FLOW_RECIPIENTS_PER_HOUR).nullable().optional(),
 }).strict();
 
 export type MailFlowPatch = Partial<MailFlowSettings>;
@@ -73,6 +77,8 @@ export function parseMailFlowPatch(
   if (d.maxReceiveSizeMb !== undefined) patch.maxReceiveSizeMb = d.maxReceiveSizeMb;
   if (d.maxSendSizeMb !== undefined) patch.maxSendSizeMb = d.maxSendSizeMb;
   if (d.maxRecipients !== undefined) patch.maxRecipients = d.maxRecipients;
+  if (d.maxMessagesPerHour !== undefined) patch.maxMessagesPerHour = d.maxMessagesPerHour;
+  if (d.maxRecipientsPerHour !== undefined) patch.maxRecipientsPerHour = d.maxRecipientsPerHour;
   return { ok: true, patch };
 }
 
@@ -99,7 +105,7 @@ async function loadTarget(kind: MailFlowKind, id: string): Promise<Target | null
 /** Pure: the API view of a policy (send limits only for user mailboxes). */
 export function mailFlowView(policy: MailFlowSettings, kind: MailFlowKind): Partial<MailFlowSettings> {
   if (kind === 'user') return policy;
-  const { maxSendSizeMb: _s, maxRecipients: _r, ...rest } = policy;
+  const { maxSendSizeMb: _s, maxRecipients: _r, maxMessagesPerHour: _m, maxRecipientsPerHour: _h, ...rest } = policy;
   return rest;
 }
 

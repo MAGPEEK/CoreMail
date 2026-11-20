@@ -544,6 +544,17 @@ test('SubmitMessage (MS-OXOMSG): ecTooManyRecips, ecMaxSubmissionExceeded from t
   assert.equal(responseHead(r).returnValue, Ec.AccessDenied, 'folder associated information is never sent');
 });
 
+test('10.5: SubmitMessage over the hourly send rate → ecQuotaExceeded, nothing sent', async () => {
+  const h = new Harness();
+  await h.logon();
+  h.store.rateLimited = true;
+  await outboxMessage(h);
+  const r = await h.run(rop.modifyRecipients(2, [{ rowId: 0, type: 1, email: 'a@example.test', name: 'A' }]), rop.submitMessage(2));
+  ok(r, RopId.ModifyRecipients);
+  assert.equal(responseHead(r).returnValue, Ec.QuotaExceeded);
+  assert.equal(h.store.sent.length, 0);
+});
+
 test('store properties: PidTagMaximumSubmitMessageSize follows the server limit (in KB)', async () => {
   const h = new Harness();
   h.store.limits = { maxMessageBytes: 10 * 1024 * 1024, maxRecipients: 100 };
