@@ -186,6 +186,24 @@
   .coremail-printing .fc-event {
     border: 1px solid #888 !important;
   }
+  /* Show-as looks print black on white; out-of-office keeps its dashed border,
+     tentative its thicker left edge. */
+  .coremail-printing .fc-event.cm-show-tentative,
+  .coremail-printing .fc-event.cm-show-free,
+  .coremail-printing .fc-event.cm-show-oof {
+    background: white !important;
+  }
+  .coremail-printing .fc-event.cm-show-tentative .fc-event-main,
+  .coremail-printing .fc-event.cm-show-free .fc-event-main,
+  .coremail-printing .fc-event.cm-show-oof .fc-event-main {
+    color: black !important;
+  }
+  .coremail-printing .fc-event.cm-show-oof {
+    border-style: dashed !important;
+  }
+  .coremail-printing .fc-event.cm-show-tentative {
+    border-left-width: 3px !important;
+  }
 }
 
 
@@ -251,6 +269,30 @@
 .fc .fc-list, .fc .fc-list-table td { background: rgb(var(--surface)); }
 .fc .fc-list-day-cushion { background: rgb(var(--surface-2)); }
 .fc .fc-list-empty { background: rgb(var(--surface-2)); color: rgb(var(--fg-subtle)); }
+
+/* "Anzeigen als" (show-as) looks of block events — lib/calendarShowAs.ts sets the
+   colours inline and --cm-cal (calendar colour) on the element. Dot events (month
+   view) keep their dot in the event's border colour. */
+:root { --cm-oof-edge: #3d1554; }
+:root.dark { --cm-oof-edge: #d9bdeb; }
+.fc .fc-v-event.cm-show-tentative,
+.fc .fc-h-event.cm-show-tentative {
+  /* stripes at 45°, 6px period, over the inline 20% tint; semi-opaque so the text stays readable */
+  background-image: repeating-linear-gradient(45deg,
+    color-mix(in srgb, var(--cm-cal) 45%, transparent) 0 3px, transparent 3px 6px);
+  border-left-width: 3px;
+}
+.fc .fc-v-event.cm-show-free,
+.fc .fc-h-event.cm-show-free {
+  border-width: 1px;
+  border-style: solid;
+  border-left-width: 3px;
+}
+.fc .fc-v-event.cm-show-oof,
+.fc .fc-h-event.cm-show-oof {
+  border-width: 2px;
+  border-style: dashed;
+}
 
 /* Tiptap / ProseMirror editor (compose, signature) */
 .ProseMirror { color: rgb(var(--fg)); caret-color: rgb(var(--fg)); }

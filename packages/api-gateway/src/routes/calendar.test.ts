@@ -300,6 +300,8 @@ test('9.4: PUT/DELETE ?occurrence= change or remove one instance; the series sta
     ['2026-08-05T07:00:00.000Z', 'Daily'],
     ['2026-08-07T07:00:00.000Z', 'Daily'],
   ]);
+  // The list carries showAs per occurrence (webmail renders it), overrides included
+  assert.deepEqual(daily.map((e) => e.showAs), ['BUSY', 'TENTATIVE', 'BUSY', 'BUSY']);
   const one = await call('GET', `/events/${id}?occurrence=2026-08-04T07:00:00.000Z`);
   assert.equal(one.status, 200);
   assert.equal(one.json.summary, 'Daily (später)');

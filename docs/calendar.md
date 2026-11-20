@@ -109,6 +109,14 @@ Tag, Arbeitswoche (work days of Settings → Kalender), Woche and Monat; *Heute*
 *Tagesagenda* opens a side panel with the events of the selected day. Several calendars (own and
 shared) are shown on top of each other; the sidebar hides single calendars.
 
+Events are drawn by their *Anzeigen als* value (Outlook style, `lib/calendarShowAs.ts` + the
+`.cm-show-*` rules in `index.css`): **Beschäftigt** (and no value) is a solid block in the calendar
+colour; **Mit Vorbehalt** has diagonal stripes of the calendar colour over a light tint of it and a
+solid left edge; **Frei** is the page surface with a border and left edge in the calendar colour;
+**Abwesend** is always purple (independent of the calendar colour) with a dashed border. The colour
+bar of the Tagesagenda follows the same rule; tasks shown in the calendar are not affected. Printed,
+these events come out black on white (Abwesend keeps the dashed border).
+
 ## API summary
 
 | Route | Purpose |
