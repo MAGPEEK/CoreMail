@@ -292,3 +292,76 @@ It then sets the following from trusted values:
 - `X-Forwarded-For`: the client IP, per `TRUST_PROXY`
 - `X-Forwarded-Proto`: from the TLS socket, or from a trusted proxy
 - `X-Forwarded-Host`: the `Host` header, or a forwarded host from a trusted proxy
+
+## Connection limits and timeouts (10.5)
+
+Port 3000 and the integrated HTTPS proxy (`HTTPS_PORT`, default 443) defend
+against slow and connection-exhaustion attacks: slowloris (headers that never
+finish), slow POST (a body that trickles in), idle keep-alive floods and TLS
+connections that never complete the handshake. Implementation:
+`packages/api-gateway/src/lib/http-hardening.ts`. All values are environment
+variables of the `coremail` container; restart the container after a change.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `HTTP_HEADERS_TIMEOUT_MS` | `20000` | The complete request headers must arrive within this time (Node `headersTimeout`, min. 1000). Also applies to a connection that sends nothing at all. Answered with `408` and closed. Always kept above `HTTP_KEEPALIVE_TIMEOUT_MS`. |
+| `HTTP_REQUEST_TIMEOUT_MS` | `300000` (5 min) | The complete request (headers + body) must arrive within this time (Node `requestTimeout`; `0` = off; never below the headers timeout). Bounds only the **upload**, see below. |
+| `HTTP_KEEPALIVE_TIMEOUT_MS` | `5000` | An idle keep-alive connection between two requests is closed after this time. |
+| `HTTP_MAX_REQUESTS_PER_SOCKET` | `0` | Requests per keep-alive connection (`0` = unlimited). |
+| `HTTP_CONNECTIONS_CHECK_INTERVAL_MS` | `5000` | How often the header/request deadlines are checked (a slow client is cut between the timeout and timeout + interval). |
+| `HTTP_MAX_CONNS` | `4000` | Open connections of the gateway in total, HTTP and HTTPS together (`0` = off). |
+| `HTTP_MAX_CONNS_PER_IP` | `300` | Open connections per client IP; IPv6 clients are counted per /64 prefix (`0` = off). |
+| `HTTP_CONN_EXEMPT_CIDRS` | *(empty)* | Comma-separated IPs/CIDRs without the per-IP cap (the total still applies). Invalid entries are ignored and logged. |
+| `HTTPS_HANDSHAKE_TIMEOUT_MS` | `10000` | TLS handshake of the HTTPS proxy (min. 1000); a client that connects and never sends a ClientHello is dropped after this time. |
+
+Invalid values fall back to the default (logged at start); the effective values
+are logged once as `HTTP connection hardening active`. The bundled Compose files
+pass only the variables listed in the `coremail` service's `environment:`
+block; to change one of these, add it there (e.g.
+`HTTP_MAX_CONNS_PER_IP: ${HTTP_MAX_CONNS_PER_IP:-}`).
+
+**Long-lived requests are not affected.** `requestTimeout` and
+`headersTimeout` bound only *receiving* a request. Once the request is complete,
+the response may take as long as it needs: SSE (`/api/v1/events`, heartbeat
+every 25 s), ActiveSync `Ping` (up to 59 minutes without a byte), MAPI
+`NotificationWait`, JMAP EventSource and CalDAV reports keep working. WebSocket
+upgrades (JMAP `/jmap/ws`) leave the HTTP parser after the `101`, so no HTTP
+timeout applies to them. There is deliberately no socket inactivity timeout
+(`server.timeout` stays `0`): a silent Ping must not be cut.
+
+**Uploads.** The request timeout is a ceiling for the slowest legitimate upload.
+The largest bodies are a backup import (`BACKUP_IMPORT_MAX_BYTES`, 500 MiB), an
+ActiveSync `SendMail` with attachments and a webmail send. 5 minutes is Node's
+own default, so 10.5 does not shorten it; a 500 MiB import then needs about
+14 Mbit/s upstream. Raise `HTTP_REQUEST_TIMEOUT_MS` for larger imports over slow
+links. The time a slow-POST client can hold a slot is bounded by this value, the
+number of slots by the caps below.
+
+**Connection caps.** A connection is counted on the raw TCP socket, for HTTPS
+before the TLS handshake. Over the per-IP or the total cap, port 3000 answers a
+minimal `503 Service Unavailable` (`Retry-After: 10`, `Connection: close`; the
+request never reaches the application), the HTTPS proxy drops the TCP
+connection before the handshake. Refusals are logged as `HTTP connection
+refused — connection limit reached` at most once per minute per client key and
+reason (with the number of suppressed refusals). Loopback (container
+healthcheck, in-container CLI) bypasses both caps.
+
+**Sizing (defaults).** Every ActiveSync phone keeps one Ping open, every browser
+one SSE stream plus up to six short keep-alive connections while loading. 500
+users with two devices and a browser each need about 1500–2500 concurrent
+connections, hence `HTTP_MAX_CONNS=4000`. `HTTP_MAX_CONNS_PER_IP=300` leaves room
+for an office of about 50 users behind one NAT address; list larger offices in
+`HTTP_CONN_EXEMPT_CIDRS` (e.g. `HTTP_CONN_EXEMPT_CIDRS=203.0.113.10,198.51.100.0/28`).
+
+**Behind a reverse proxy (`TRUST_PROXY`).** On port 3000 the socket peer of
+every request is then the proxy, so the per-IP cap would count all clients as
+one. A peer that `TRUST_PROXY` trusts is therefore **not** subject to the per-IP
+cap on port 3000 (the total cap still applies); enforce per-client connection
+limits on the proxy itself (e.g. nginx `limit_conn`, Traefik `inFlightReq`).
+With `TRUST_PROXY=true` or a hop count every peer is trusted, i.e. the per-IP
+cap on port 3000 is off; prefer a list of proxy addresses
+(`TRUST_PROXY=10.0.0.5`). The HTTPS proxy never trusts forwarding headers, so
+its per-IP cap always applies. If Docker's userland proxy hides client
+addresses (all clients appear as the bridge gateway, e.g. `172.18.0.1`, typical
+for IPv6 clients into an IPv4-only container), list that address in
+`HTTP_CONN_EXEMPT_CIDRS`.
