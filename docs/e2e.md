@@ -20,9 +20,10 @@ node -e "const h=n=>require('crypto').randomBytes(n).toString('hex');require('fs
   'COREMAIL_SECRETS_PATH='+process.env.E2E_STATE_DIR+'/secrets'].join('\n')+'\n')"
 ```
 
-`COREMAIL_SECRETS_PATH` keeps the secrets directory of `coremail-init` (10.4) out of the
-repository (default: `infra/docker/secrets/`, git-ignored); `coremail-init` copies the e2e.env
-values into it. Remove it together with the volumes (`down -v`).
+`COREMAIL_SECRETS_PATH` keeps the secrets directory (written by the `coremail-e2e` container
+at its start) out of the repository (default: `infra/docker/secrets/`, git-ignored); the
+container copies the e2e.env values into it. There is no init container to wait for: the
+stack is ready when `coremail-e2e` is healthy. Remove it together with the volumes (`down -v`).
 
 Test passwords are generated on first use into `$E2E_STATE_DIR/credentials.json`.
 Do not put real passwords there.
@@ -240,8 +241,8 @@ following empty `Execute` carries a RopNotify NewMail. Switch off → the runnin
 Connect get 403 and Autodiscover drops the mapiHttp block. A's switch is reset to inherit. The
 compose override sets `MAPI_ALLOW_PLAIN_HTTP=true` (the runner uses plain HTTP) and
 `MAPI_HTTPS_TRUSTED=true` (no CA certificate in the stack). See [mapi.md](mapi.md).
-`setup` reads the one-time setup token from `/secrets/setup-token` in `coremail-e2e` (10.4,
-the secrets directory of `coremail-init`) and falls back to `docker logs coremail-e2e`; with the
+`setup` reads the one-time setup token from `/secrets/setup-token` in `coremail-e2e` (the
+secrets directory the container writes at its start) and falls back to `docker logs coremail-e2e`; with the
 file in use it also checks that the log names the file and never contains the token. Each run prints
 `[PASS]/[FAIL]` lines and writes `$E2E_STATE_DIR/results-all.json` (all steps),
 `results-<step>+<step>.json` (a short selection of steps) or `results-<n>-steps-<hash>.json` (a

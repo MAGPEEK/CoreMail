@@ -11,7 +11,7 @@
 #    outbound mail (auto-replies, DSNs, relay) never leaves the test network.
 #  • Own container names; use a dedicated project name (-p coremail-e2e) so
 #    `down -v` only removes the e2e volumes.
-#  • Secrets: coremail-init writes ./secrets (infra/docker/secrets, git-ignored)
+#  • Secrets: the coremail container writes ./secrets (infra/docker/secrets, git-ignored)
 #    unless e2e.env sets COREMAIL_SECRETS_PATH (docs/e2e.md: $E2E_STATE_DIR/secrets).
 #    The setup step reads the token from /secrets/setup-token.
 # ═════════════════════════════════════════════════════════════════════════════
@@ -37,20 +37,14 @@ services:
       - "127.0.0.1:18080:3000"
       - "127.0.0.1:18443:443"
     depends_on: !override
-      coremail-init: { condition: service_completed_successfully }
-      postgres: { condition: service_healthy }
-      redis:    { condition: service_healthy }
-      minio:    { condition: service_healthy }
+      postgres: { condition: service_started }
+      redis:    { condition: service_started }
+      minio:    { condition: service_started }
       sink:     { condition: service_started }
     # Own rspamd subnet so a production stack on the same host does not collide
     networks:
       rspamd:
         ipv4_address: ${E2E_RSPAMD_NET_PREFIX:-10.253.254}.2
-
-  coremail-init:
-    image: ${E2E_IMAGE:-coremail-app:e2e}
-    container_name: coremail-e2e-init
-    restart: "no"
 
   postgres:
     container_name: coremail-e2e-postgres

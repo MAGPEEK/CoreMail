@@ -23,12 +23,12 @@ coremail_app_user="${COREMAIL_DB_USER:-}"
 coremail_app_password="${COREMAIL_DB_PASSWORD:-}"
 
 if [ -z "${coremail_app_user}" ] || [ "${coremail_app_user}" = "${POSTGRES_USER}" ]; then
-  echo "[coremail-init] COREMAIL_DB_USER not set — the app connects as ${POSTGRES_USER}"
+  echo "[coremail-db-init] COREMAIL_DB_USER not set — the app connects as ${POSTGRES_USER}"
 elif [ -z "${coremail_app_password}" ]; then
-  echo "[coremail-init] ERROR: COREMAIL_DB_USER is set but COREMAIL_DB_PASSWORD is empty" >&2
+  echo "[coremail-db-init] ERROR: COREMAIL_DB_USER is set but COREMAIL_DB_PASSWORD is empty" >&2
   coremail_init_failed=1
 else
-  echo "[coremail-init] creating application role ${coremail_app_user} (no superuser, owns schema public)"
+  echo "[coremail-db-init] creating application role ${coremail_app_user} (no superuser, owns schema public)"
   psql -v ON_ERROR_STOP=1 --username "${POSTGRES_USER}" --dbname "${POSTGRES_DB}" \
     -v app_user="${coremail_app_user}" -v app_password="${coremail_app_password}" -v db_name="${POSTGRES_DB}" <<'EOSQL' || coremail_init_failed=1
 CREATE ROLE :"app_user" LOGIN PASSWORD :'app_password'

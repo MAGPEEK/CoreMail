@@ -1,13 +1,35 @@
 #!/bin/sh
 # CoreMail App Container — Entrypoint
-# 0. Secrets: create/extend /secrets/coremail.env (when /secrets is mounted) and
-#    load it — a non-empty variable from the environment always wins
-# 1. Wait for PostgreSQL (unlimited, with progress log every 10 s)
+# The coremail container prepares what the other containers of a Compose stack
+# need — there is no separate init container. They wait for the files written
+# here (password files, config .ready markers), never the other way round.
+# 0a. Configuration: copy the configuration bundled in the image into the
+#     mounted config volumes (when /config is mounted), then a .ready marker each
+# 0. Secrets: create/extend /secrets/coremail.env and the password files (when
+#    /secrets is mounted) and load it — a non-empty variable from the
+#    environment always wins
+# 1. Wait for PostgreSQL (unlimited, with progress log every 10 s) and Redis
 # 2. Synchronize Prisma schema (db push) with retry logic
 # 3. Start supervisord
 set -e
 
 log() { echo "[entrypoint] $*"; }
+
+# ── 0a. Configuration volumes (docs/deploy.md "Configuration and overrides") ─
+# deploy/docker-compose.yml mounts the coremail-config-* volumes below /config
+# (PostgreSQL init scripts, rspamd local.d, the pg-backup script). PostgreSQL,
+# rspamd and pg-backup mount them read-only and wait for the .ready marker that
+# coremail-init-config writes after the files. Without /config (the repository
+# Compose files bind-mount their configuration) nothing happens.
+CONFIG_DIR="${COREMAIL_CONFIG_DIR:-/config}"
+INIT_CONFIG="${COREMAIL_INIT_CONFIG:-/usr/local/bin/coremail-init-config}"
+if [ -d "${CONFIG_DIR}" ]; then
+  log "Configuration volumes at ${CONFIG_DIR} — installing the bundled configuration"
+  COREMAIL_CONFIG_DIR="${CONFIG_DIR}" "${INIT_CONFIG}" || {
+    log "ERROR: could not write the configuration volumes (see above) — not starting"
+    exit 1
+  }
+fi
 
 # ── 0. Secrets (10.4, docs/setup.md "Automatic secrets") ─────────────────────
 # With a mounted secrets directory (COREMAIL_SECRETS_DIR, default /secrets) the
@@ -19,8 +41,19 @@ SECRETS_DIR="${COREMAIL_SECRETS_DIR:-/secrets}"
 INIT_SECRETS="${COREMAIL_INIT_SECRETS:-/usr/local/bin/coremail-init-secrets}"
 if [ -d "${SECRETS_DIR}" ] || [ -L "${SECRETS_DIR}" ]; then
   log "Secrets directory ${SECRETS_DIR} found — creating missing secrets"
+  # The database decides "fresh installation" for keys that are still missing.
+  # Without a coremail.env the bundled PostgreSQL is itself waiting for the
+  # password file this step writes, so waiting for the database here would only
+  # delay the start (and change nothing: it has no CoreMail schema yet).
+  if [ -n "${COREMAIL_SECRETS_DB_WAIT:-}" ]; then
+    SECRETS_DB_WAIT="${COREMAIL_SECRETS_DB_WAIT}"
+  elif [ -e "${SECRETS_DIR}/coremail.env" ]; then
+    SECRETS_DB_WAIT=30
+  else
+    SECRETS_DB_WAIT=0
+  fi
   rc=0
-  "${INIT_SECRETS}" --dir "${SECRETS_DIR}" --db-wait "${COREMAIL_SECRETS_DB_WAIT:-30}" || rc=$?
+  "${INIT_SECRETS}" --dir "${SECRETS_DIR}" --db-wait "${SECRETS_DB_WAIT}" || rc=$?
   if [ "${rc}" -eq 2 ]; then
     log "ERROR: ${SECRETS_DIR} is unsafe (see above) — not starting"
     exit 1
@@ -84,6 +117,26 @@ until nc -z "${DB_HOST}" "${DB_PORT}" 2>/dev/null; do
   fi
 done
 log "PostgreSQL TCP reachable after ${WAITED}s"
+
+# Redis starts in parallel (it waits for its password file, written above).
+# Bounded: the services reconnect on their own, so after 120 s we go on.
+REDIS_HOST=$(echo "${REDIS_URL:-}" | sed -n 's|^rediss\{0,1\}://\([^@/]*@\)\{0,1\}\([^:/?]*\).*|\2|p')
+REDIS_PORT=$(echo "${REDIS_URL:-}" | sed -n 's|^rediss\{0,1\}://\([^@/]*@\)\{0,1\}[^:/?]*:\([0-9][0-9]*\).*|\2|p')
+REDIS_PORT="${REDIS_PORT:-6379}"
+if [ -n "${REDIS_HOST}" ]; then
+  WAITED=0
+  until nc -z "${REDIS_HOST}" "${REDIS_PORT}" 2>/dev/null; do
+    if [ "${WAITED}" -ge 120 ]; then
+      log "WARNING: Redis at ${REDIS_HOST}:${REDIS_PORT} not reachable after ${WAITED}s — starting anyway (the services retry)"
+      break
+    fi
+    sleep 2
+    WAITED=$((WAITED + 2))
+    if [ $((WAITED % 10)) -eq 0 ]; then
+      log "Still waiting for Redis at ${REDIS_HOST}:${REDIS_PORT}... (${WAITED}s elapsed)"
+    fi
+  done
+fi
 
 # ── 2. Create / update Prisma schema ─────────────────────────────────────────
 # Important: nc -z only checks TCP connectivity.

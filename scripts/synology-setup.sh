@@ -56,7 +56,7 @@ mkdir -p \
   "${COREMAIL_BASE}/data/redis" \
   "${COREMAIL_BASE}/data/minio" \
   "${COREMAIL_BASE}/data/objects"
-# 10.4: secrets directory of coremail-init (docs/setup.md "Automatic secrets")
+# 10.4: secrets directory, written by the coremail container (docs/setup.md "Automatic secrets")
 if [ ! -d "${COREMAIL_BASE}/secrets" ]; then
   mkdir -m 700 "${COREMAIL_BASE}/secrets"
 fi

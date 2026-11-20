@@ -239,8 +239,9 @@ COPY scripts/decrypt-backup.mjs /usr/local/lib/coremail/decrypt-backup.mjs
 # into a mounted directory, never into the container layer (docs/setup.md).
 COPY infra/docker/init-secrets.mjs /usr/local/lib/coremail/init-secrets.mjs
 # 10.4: configuration the infrastructure containers need, so deploy/docker-compose.yml
-# works without a repository checkout. The coremail-init service copies it into
-# the config volumes on every start (coremail-init-config, docs/deploy.md).
+# works without a repository checkout. The entrypoint of the coremail container
+# copies it into the mounted config volumes on every start (coremail-init-config,
+# docs/deploy.md); coremail-init = secrets + config for `docker run` setups.
 COPY infra/docker/init-config.mjs /usr/local/lib/coremail/init-config.mjs
 COPY infra/docker/coremail-init.sh /usr/local/bin/coremail-init
 COPY infra/docker/postgres/init.sql /usr/share/coremail/config/postgres/01-init.sql

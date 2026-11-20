@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // ─────────────────────────────────────────────────────────────────────────────
 // CoreMail — bundled configuration installer (installed as
-// /usr/local/bin/coremail-init-config, run by the coremail-init service of
-// deploy/docker-compose.yml through /usr/local/bin/coremail-init)
+// /usr/local/bin/coremail-init-config; the entrypoint of the coremail container
+// runs it on every start when /config is mounted — deploy/docker-compose.yml)
 //
 //   coremail-init-config [--bundled <dir>] [--config <dir>] [--override <dir>]
 //
@@ -29,8 +29,11 @@
 // one on the next run.
 //
 // Targets are written only when <config> exists (it is a volume mount); a
-// missing subdirectory is created. Files are written atomically (temp file +
-// fsync + rename), 0644 (0755 when the bundled file is executable), and
+// missing subdirectory is created. After its files every target directory gets
+// the ready marker ".ready" (atomic, content = sha256 of the installed files):
+// the containers that mount the volume wait for it before they start (the
+// marker of an unchanged configuration is left alone). Files are written
+// atomically (temp file + fsync + rename), 0644 (0755 when the bundled file is executable), and
 // unchanged files are left alone. Symlinks are never followed: a symlink in
 // the override directory is skipped, one in a target directory is replaced.
 // Postgres runs its init scripts only on an EMPTY data directory, so an
@@ -42,10 +45,13 @@ import {
   closeSync, fchmodSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync,
   renameSync, unlinkSync, writeSync,
 } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const MANIFEST = '.coremail-config-files';
+/** Written last into every target directory — the consuming containers wait for it. */
+export const READY_MARKER = '.ready';
 /** Relative directories (below <config>) a user override may extend. */
 export const OVERRIDABLE_DIRS = ['rspamd/local.d'];
 /** Safe file names: no path separators, no leading dot, no control characters. */
@@ -153,6 +159,12 @@ export function syncConfig({ bundledDir, configDir, overrideDir, log = () => und
       } catch { /* already gone */ }
     }
     writeIfChanged(join(dest, MANIFEST), Buffer.from([...want.keys()].sort().join('\n') + '\n'), 0o644);
+    // Ready marker last: the directory is complete.
+    const digest = createHash('sha256');
+    for (const name of [...want.keys()].sort()) {
+      digest.update(`${name}\0`).update(readFileSync(join(dest, name))).update('\0');
+    }
+    writeIfChanged(join(dest, READY_MARKER), Buffer.from(`sha256:${digest.digest('hex')}\n`), 0o644);
     summary.push({ dir: rel, written, unchanged, removed, overrides });
     log(`${rel}: ${want.size} file(s) — ${written} written, ${unchanged} unchanged, ${removed} removed`
       + (overrides ? `, ${overrides} from the override directory` : ''));

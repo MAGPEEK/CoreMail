@@ -15,9 +15,8 @@ services:
     environment:
       OBJECT_STORAGE: filesystem
     depends_on: !override
-      coremail-init: { condition: service_completed_successfully }
-      postgres: { condition: service_healthy }
-      redis:    { condition: service_healthy }
+      postgres: { condition: service_started }
+      redis:    { condition: service_started }
       sink:     { condition: service_started }
 
   # Not started in this mode (profile never activated).

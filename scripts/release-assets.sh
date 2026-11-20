@@ -79,6 +79,13 @@ if grep -nE '^\s*-\s*\./' "${ASSET}" | grep -vE '\./secrets|\./config' >/dev/nul
   grep -nE '^\s*-\s*\./' "${ASSET}" >&2
   exit 1
 fi
+# No init service: the coremail container prepares secrets + configuration and
+# the other containers wait for its files — a one-shot dependency or coremail
+# waiting for them to be healthy would deadlock.
+if grep -nE '^  coremail-init:|service_completed_successfully' "${ASSET}" >&2; then
+  echo "the standalone file must not have an init service (the coremail container prepares the stack)" >&2
+  exit 1
+fi
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
   for profiles in "" "--profile scanner" "--profile backup" "--profile s3" "--profile scanner --profile backup --profile s3"; do
     # shellcheck disable=SC2086

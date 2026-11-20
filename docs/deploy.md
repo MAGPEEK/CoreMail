@@ -60,19 +60,24 @@ Behind your own reverse proxy (Traefik, Caddy, nginx) keep only `3000:3000`, rem
 
 ## First start
 
-`docker compose up -d` starts, in this order:
+`docker compose up -d` starts all containers at once; the **coremail** container prepares
+everything the others need, and they wait for it:
 
-1. **`coremail-init`** (one-shot, no network, read-only root file system) —
+1. **coremail**, first thing on every start —
+   - copies the configuration bundled in the image into the `coremail-config-*` volumes and
+     marks each volume ready ([below](#configuration-and-overrides));
    - writes every secret into `./secrets/` next to the Compose file: `coremail.env`
      (`JWT_SECRET`, `PEPPER`, database/Redis/MinIO/rspamd passwords, encryption keys) and the
      single-value password files the other containers read. Existing values are never
-     overwritten; later runs only add missing keys ([setup.md → Automatic secrets](setup.md#automatic-secrets)).
-   - copies the configuration bundled in the image into the `coremail-config-*` volumes
-     ([below](#configuration-and-overrides)).
-2. **postgres** and **redis** (and the profile services), each with its password from `./secrets/`.
-   PostgreSQL runs the bundled init scripts on its first start (empty data directory only).
-3. **coremail** — creates the database schema (about 60–90 s on the first start) and starts
-   all services. `docker compose ps` shows `healthy` when it is ready.
+     overwritten; later starts only add missing keys ([setup.md → Automatic secrets](setup.md#automatic-secrets)).
+2. **postgres** and **redis** (and the profile services) wait until their password file (and
+   configuration) is there — a few seconds on a first start, a log line every 10 s, at most
+   10 minutes — then start as usual. PostgreSQL runs the bundled init scripts on its first
+   start (empty data directory only). A password set in `.env` needs no file.
+3. **coremail** waits for PostgreSQL and Redis, creates the database schema and starts all
+   services (`healthy` in `docker compose ps` about 30 s after `up` on a first start).
+
+Details and the exact wait conditions: [setup.md → Docker Compose: start order](setup.md#docker-compose-start-order).
 
 No `.env` is needed. A `.env` next to the Compose file stays optional and always wins: the
 variable names are those of [`.env.example`](../.env.example) (for example `TZ`, `LOG_LEVEL`,
@@ -166,17 +171,22 @@ The image carries the configuration of the other containers under
 | `rspamd/local.d/actions.conf`, `worker-controller.inc` | `coremail-config-rspamd` | rspamd `/etc/rspamd/local.d` |
 | `pg-backup/pg-backup.sh` | `coremail-config-pg-backup` | pg-backup `/pg-backup` |
 
-`coremail-init` copies them on **every** start (`coremail-init-config`), so an image update
-brings new versions; a file a newer image no longer carries is removed (only files the tool
-wrote itself — a hidden `.coremail-config-files` list per volume). PostgreSQL runs its init
-scripts only on an empty data directory; an existing database is never touched by them.
-The `coremail-config-*` volumes hold nothing else and can be deleted at any time.
+The `coremail` container copies them on **every** start (`coremail-init-config`, the volumes
+are mounted read-write into it below `/config`), so an image update brings new versions; a
+file a newer image no longer carries is removed (only files the tool wrote itself — a hidden
+`.coremail-config-files` list per volume). After the files it writes a ready marker `.ready`
+per volume: rspamd and pg-backup wait for it, PostgreSQL only on an empty data directory.
+PostgreSQL runs its init scripts only on an empty data directory; an existing database is
+never touched by them. rspamd and pg-backup read their files when they start — after an
+update whose release notes mention a change of their configuration, run
+`docker compose restart rspamd pg-backup` once. The `coremail-config-*` volumes hold nothing
+else and can be deleted at any time (stop the stack first; the next start recreates them).
 
 **rspamd overrides:** files in `./config/rspamd/local.d/` next to the Compose file win over
 the bundled file of the same name; other names are added (any rspamd `local.d` snippet, for
-example `multimap.conf`). `coremail-init` only reads that directory (the Compose directory is
-mounted read-only into it); symbolic links and files over 1 MB are skipped. Apply a change
-with `docker compose up -d && docker compose restart rspamd`. Removing an override file
+example `multimap.conf`). The `coremail` container only reads that directory (the Compose
+directory is mounted read-only into it at `/compose-dir`); symbolic links and files over 1 MB
+are skipped. Apply a change with `docker compose restart coremail && docker compose restart rspamd`. Removing an override file
 restores the bundled one on the next `up`. Keep `worker-controller.inc` as bundled unless you
 know the rspamd controller: it restricts password-less access to the CoreMail container.
 
@@ -200,7 +210,7 @@ and [backup.md](backup.md).
 ## Update
 
 ```bash
-docker compose pull && docker compose up -d
+docker compose pull && docker compose up -d --remove-orphans
 ```
 
 The file names the image of its release (`magpeek/coremail-app:<version>`), so `pull` fetches
@@ -210,12 +220,17 @@ one, keep your `.env`):
 ```bash
 cp docker-compose.yml docker-compose.yml.bak
 curl -fsSLO https://github.com/MAGPEEK/CoreMail/releases/latest/download/docker-compose.yml
-docker compose pull && docker compose up -d
+docker compose pull && docker compose up -d --remove-orphans
 ```
 
+**Coming from 10.4.0:** that release had a one-shot service `coremail-init`; its stopped
+container is left over. `--remove-orphans` removes it once (without the flag Compose only
+warns about an orphan container — nothing breaks). The secrets in `./secrets/` stay exactly
+as they are.
+
 `COREMAIL_VERSION=<version>` in `.env` pins a different image tag (for example to go back to the
-previous release). `coremail-init` refreshes the configuration volumes, `./secrets/` stays as
-it is, the database schema is updated at start. Read the
+previous release). The `coremail` container refreshes the configuration volumes at its start,
+`./secrets/` stays as it is, the database schema is updated at start. Read the
 [version history](version-history.md) and the [release notes](releases/) before a major update.
 
 ## Uninstall
@@ -247,8 +262,11 @@ the same volume names as this file. Moving an existing installation to the stand
 
 ### `docker run`
 
-The default stack without Compose. The image generates the secrets into `./secrets` and
-writes the bundled configuration into named volumes first; keep the `secrets` directory.
+The default stack without Compose. Plain `docker run` has no wait wrappers, so the two
+standalone commands of the image write the secrets into `./secrets` and the bundled
+configuration into named volumes **before** PostgreSQL and Redis start; keep the `secrets`
+directory. The `coremail` container mounts the same directories and refreshes both on
+every later start, as in Compose.
 
 ```bash
 mkdir -m 700 secrets
@@ -278,6 +296,7 @@ docker run -d --name coremail --network coremail --restart unless-stopped \
   -p 25:25 -p 465:465 -p 587:587 -p 143:143 -p 993:993 \
   -p 80:3000 -p 443:443 -p 3000:3000 \
   -v "$PWD/secrets:/secrets" -v coremail-data:/data \
+  -v coremail-config-postgres:/config/postgres -v coremail-config-rspamd:/config/rspamd/local.d \
   --security-opt no-new-privileges:true \
   --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
   --cap-add SETUID --cap-add SETGID --cap-add KILL --cap-add NET_BIND_SERVICE \
@@ -286,8 +305,8 @@ docker run -d --name coremail --network coremail --restart unless-stopped \
 ```
 
 Add `-p 110:110 -p 995:995` if you want POP3. The setup token is in `./secrets/setup-token`.
-Update: pull the new tag, run the two init commands with it, remove the `coremail` container
-and start it again with the same command.
+Update: pull the new tag, remove the `coremail` container and start it again with the same
+command (new tag) — it refreshes the configuration volumes and adds missing secrets itself.
 
 <details>
 <summary>rspamd and ClamAV next to it</summary>
@@ -319,6 +338,7 @@ docker create --name coremail --network coremail --restart unless-stopped \
   -p 25:25 -p 465:465 -p 587:587 -p 143:143 -p 993:993 \
   -p 80:3000 -p 443:443 -p 3000:3000 \
   -v "$PWD/secrets:/secrets" -v coremail-data:/data \
+  -v coremail-config-postgres:/config/postgres -v coremail-config-rspamd:/config/rspamd/local.d \
   --security-opt no-new-privileges:true \
   --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
   --cap-add SETUID --cap-add SETGID --cap-add KILL --cap-add NET_BIND_SERVICE \
