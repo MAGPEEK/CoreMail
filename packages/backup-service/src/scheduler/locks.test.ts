@@ -38,7 +38,7 @@ class FakeRedis implements LockRedis {
 }
 
 const deferred = () => { let resolve!: () => void; const p = new Promise<void>((r) => { resolve = r; }); return { p, resolve }; };
-const fakeResult = { runId: 'r', policiesProcessed: 0, mailboxesScanned: 0, itemsScanned: 0, itemsArchived: 0, itemsSoftDeleted: 0, itemsHardDeleted: 0, throttled: false, errors: [] };
+const fakeResult = { runId: 'r', policiesProcessed: 0, mailboxesScanned: 0, itemsScanned: 0, itemsArchived: 0, itemsSoftDeleted: 0, itemsHardDeleted: 0, itemsMarked: 0, throttled: false, errors: [] };
 
 test('fireSlot rounds to the nearest minute (tolerates clock skew between instances)', () => {
   assert.equal(fireSlot(10 * 60_000 - 20_000), 10);

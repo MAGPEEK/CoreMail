@@ -8,7 +8,7 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsx watch src/server.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --import tsx --import ../storage/src/test-support/realtime-off.ts --test src/retention/expiry.test.ts src/http-utils.test.ts src/export/mbox.test.ts src/scheduler/locks.test.ts src/crypto/backup-crypto.test.ts src/crypto/encrypt-stream.test.ts src/scheduler/schedule-input.test.ts src/restore/readers.test.ts src/restore/source.test.ts src/restore/restore-roundtrip.test.ts src/scheduler/automation.test.ts src/scheduler/system-backup-limits.test.ts src/restore/restore-review.test.ts src/restore/internal-date.test.ts",
+    "test": "node --import tsx --import ../storage/src/test-support/realtime-off.ts --test src/retention/expiry.test.ts src/retention/worker.test.ts src/http-utils.test.ts src/export/mbox.test.ts src/scheduler/locks.test.ts src/crypto/backup-crypto.test.ts src/crypto/encrypt-stream.test.ts src/scheduler/schedule-input.test.ts src/restore/readers.test.ts src/restore/source.test.ts src/restore/restore-roundtrip.test.ts src/scheduler/automation.test.ts src/scheduler/system-backup-limits.test.ts src/restore/restore-review.test.ts src/restore/internal-date.test.ts",
     "start": "node dist/server.js"
   },
   "dependencies": {
