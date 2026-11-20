@@ -395,13 +395,19 @@ function HttpsTlsCard({ https }: { https: HttpsState }) {
       <div className="flex items-center gap-3 mb-3">
         <div className="p-2 bg-info-bg rounded-lg"><Globe size={18} className="text-info-fg" aria-hidden="true" /></div>
         <div>
-          <h3 className="text-sm font-semibold text-fg">{httpsName(https.port)}</h3>
+          <h3 className="text-sm font-semibold text-fg">Veraltete TLS-Versionen 1.0/1.1</h3>
           <p className="text-xs text-fg-subtle">
-            Webmail, BCP, ActiveSync, JMAP, CalDAV/CardDAV, MAPI, Autodiscover — {certText}.{' '}
+            {httpsName(https.port)}: Webmail, BCP, ActiveSync, JMAP, CalDAV/CardDAV, MAPI, Autodiscover — {certText}.{' '}
             <Link to="/certificates" className="text-accent-fg hover:underline">SSL/TLS öffnen</Link>
           </p>
         </div>
-        {on && <span className="ml-auto"><LegacyTlsBadge /></span>}
+        <div className="ml-auto flex items-center gap-3 shrink-0">
+          {on && <LegacyTlsBadge />}
+          <Can area="servers" access="write">
+            <Toggle active={on} label={LEGACY_TLS_LABEL} disabled={!data || mut.isPending}
+              onToggle={() => mut.mutate(!on)} />
+          </Can>
+        </div>
       </div>
       <p role="status" className={`mb-2 flex items-start gap-1.5 text-xs font-medium ${https.active ? 'text-success-fg' : 'text-warning-fg'}`}>
         {https.active
@@ -409,13 +415,6 @@ function HttpsTlsCard({ https }: { https: HttpsState }) {
           : <AlertTriangle size={13} className="mt-0.5 shrink-0" aria-hidden="true" />}
         <span>{httpsStatusText(https.active, on)}</span>
       </p>
-      <div className="flex items-center justify-between py-1">
-        <span className="text-xs font-medium text-fg-muted">{LEGACY_TLS_LABEL}</span>
-        <Can area="servers" access="write">
-          <Toggle active={on} label={LEGACY_TLS_LABEL} disabled={!data || mut.isPending}
-            onToggle={() => mut.mutate(!on)} />
-        </Can>
-      </div>
       {on ? <LegacyTlsWarning /> : <LegacyTlsHint />}
     </section>
   );
