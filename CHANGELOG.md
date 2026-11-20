@@ -13,6 +13,29 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [10.5.0] — 2026-11-20 — Attack protection, send limits, MFA enforcement, local first domain
+
+### Added
+
+- **Attack protection page** (BCP → Schutz → Angriffsschutz): currently locked IPs and accounts with "Entsperren", a permanent IP block list and an exceptions list applied to every protocol at connect (SMTP 587/465, IMAP, POP3 on the raw socket, every HTTP surface incl. WebSocket upgrades), automatic blocking of repeat offenders (escalating 1 d → 7 d → configured days; never private/CGNAT/ULA/proxy addresses, exceptions, or addresses shared by several accounts or an admin; never on inbound port 25), admin notification mail (aggregated, at most every 15 minutes, only normalised addresses). Security events from every protocol reach the attack dashboard (per-protocol counts); locks and auto-blocks are never sampled away. Docs: `docs/attack-protection.md`.
+- **Known clients**: when foreign addresses lock an account, the owner keeps access from networks/devices with a successful login in the last 30 days, each with its own failure budget; IPv6 counted per /64.
+- **Per-account send limit** for every submission path (SMTP 587/465, webmail/REST, ActiveSync, JMAP, MAPI, calendar invitations, read receipts, rule forwards and auto-replies): default 200 messages and 1000 recipients per hour, per-mailbox override (domain admins cannot exceed the global value), admin notification, optional temporary send block. Temporary answers per protocol (`451 4.7.1`, 429, EAS 111, JMAP `rateLimit`, MAPI `ecQuotaExceeded`).
+- **MFA enforcement**: new installations require MFA for administrators; optional "MFA für alle Benutzer erzwingen" with a grace period (default 7 days), mandatory enrolment page, optional block of primary passwords on mail protocols; MCP tokens follow the rule.
+
+### Changed
+
+- **HTTP hardening**: header timeout 20 s, keep-alive 5 s, TLS handshake 10 s, write-stall timeout 60 s, per-IP connection cap 300 (IPv6 also per /56 and /48), global cap 4000 with the heaviest sources refused first near the cap; long-lived streams (SSE, ActiveSync Ping, long-polls, WebSocket) unaffected. Env-configurable (`HTTP_*`), docs/api-gateway-security.md.
+- **Client IP trust**: only socket addresses or an explicit `TRUST_PROXY` address list feed auto-blocks and known networks; startup warning for hop counts, `true`, or a trust range covering the Docker gateway.
+- **Setup wizard starts with a local domain**: suggested `example.local` / `mail.example.local` with a self-signed certificate (served on HTTPS at once); the dashboard card offers "Eigene Domain hinzufügen" for local host names and Let's Encrypt once a public domain is primary (make-primary replaces a local host name).
+
+### Upgrade notes
+
+- Minor release; existing installations keep their MFA settings. Additive schema (`ip_access_rules`, `attack_protection_settings`, `attack_events.protocol`, send-rate and MFA-policy columns).
+- Behind a reverse proxy set `TRUST_PROXY` to the proxy's address (not a hop count) so auto-blocking and known networks use real client addresses. If all clients appear with one Docker gateway address, add it to the exceptions.
+- Helm chart 3.5.0.
+
+---
+
 ## [10.4.2] — 2026-11-20 — Slimmer setup wizard, one-click certificate, restart button
 
 ### Added

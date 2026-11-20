@@ -6,6 +6,7 @@ Highlights of each CoreMail release, newest first. Every change is listed in the
 
 ## Recent releases
 
+- **v10.5.0** — Attack protection (lock list with unlock, block list for all services, repeat-offender blocking, notifications), per-account send limits, hardened web server, MFA enforcement and a local first domain in the setup wizard ([release notes](releases/v10.5.0.md)).
 - **v10.4.2** — Setup wizard in five steps with a secrets download, a one-click certificate card on the dashboard and a restart button in the admin panel ([release notes](releases/v10.4.2.md)).
 - **v10.4.1** — No init container: the main container prepares secrets and configuration itself; the other containers wait for their files ([release notes](releases/v10.4.1.md)).
 - **v10.4.0** — Setup assistant: three-command deployment from a single Compose file, secrets generated automatically, a guided setup wizard (domain, administrator, backup of secrets, DNS, certificate) and Compose files without required parameters ([release notes](releases/v10.4.0.md)).
@@ -35,6 +36,7 @@ Highlights of each CoreMail release, newest first. Every change is listed in the
 
 | Version | Highlights |
 |---------|-----------|
+| **v10.5.0** | **Attack protection.** Locked IPs/accounts with unlock, block and exception lists for all services, escalating auto-block, admin notifications, all protocols in the attack dashboard, send limit per account, HTTP timeouts and connection caps, MFA enforcement, setup wizard starts with example.local — [release notes](releases/v10.5.0.md) |
 | **v10.4.2** | **Slimmer setup wizard and restart button.** Secrets download instead of shell commands, DNS and certificate steps moved to the admin panel, one-click Let's Encrypt card on the dashboard, "CoreMail neu starten" under Server & Health — [release notes](releases/v10.4.2.md) |
 | **v10.4.1** | **No init container.** The coremail container creates ./secrets and the bundled configuration on its first start; PostgreSQL, Redis and optional services wait for their files. Update with --remove-orphans — [release notes](releases/v10.4.1.md) |
 | **v10.4.0** | **Setup assistant.** Three commands to deploy (download one Compose file, `docker compose up -d`), secrets generated into `./secrets`, setup token in a file, guided setup wizard with DNS check and certificate, every Compose variant without , Helm chart generates missing secrets — [release notes](releases/v10.4.0.md) |
