@@ -2,6 +2,7 @@ import { X } from 'lucide-react';
 import type { Calendar, CalendarEvent } from '../../api/types.js';
 import { instantToWallClock, localDay } from '../../lib/zonedTime.js';
 import { PANE_CARD_CLASS } from '../../lib/paneLayout.js';
+import { showAsBarStyle } from '../../lib/calendarShowAs.js';
 
 /**
  * 9.4: day agenda side panel of the calendar — the events of the selected day
@@ -48,7 +49,7 @@ export function DayAgenda({ date, events, calendars, timeZone, onOpen, onClose }
           return (
             <li key={ev.instanceId ?? ev.id}>
               <button type="button" onClick={() => onOpen(ev)} className="w-full text-left flex gap-2 px-2 py-1.5 rounded hover:bg-surface-2">
-                <span className="w-1 self-stretch rounded-full shrink-0" style={{ backgroundColor: cal?.color ?? '#0078D4' }} />
+                <span className="w-1 self-stretch rounded-full shrink-0" style={showAsBarStyle(ev.showAs, cal?.color)} />
                 <span className="min-w-0">
                   <span className="block text-xs text-fg-subtle">{time}{ev.showAs && SHOW_AS_LABEL[ev.showAs] ? ` · ${SHOW_AS_LABEL[ev.showAs]}` : ''}</span>
                   <span className="block text-sm text-fg truncate">{ev.summary}</span>

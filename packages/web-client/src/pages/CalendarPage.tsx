@@ -36,6 +36,7 @@ import { ShareCalendarDialog } from '../components/ShareCalendarDialog.js';
 import { EventEditDialog } from '../components/EventEditDialog.js';
 import toast from 'react-hot-toast';
 import { readableTextOn } from '../lib/readableText.js';
+import { applyShowAsVars, showAsLook } from '../lib/calendarShowAs.js';
 import { PageShell } from '../components/PageShell.js';
 import { usePreferences, useRegional } from '../store/preferences.js';
 import { calendarTimeZone, eventFetchRange, localDay } from '../lib/zonedTime.js';
@@ -225,6 +226,7 @@ export function CalendarPage() {
         // All-day values are dates with an exclusive end — pass YYYY-MM-DD, never a
         // UTC instant, otherwise FullCalendar shifts them by the browser offset.
         const allDay = ev.allDay === true;
+        const look = showAsLook(ev.showAs, cal?.color);
         return {
           id: ev.id,
           // Instances of a series share the series id (a click opens the master)
@@ -233,15 +235,17 @@ export function CalendarPage() {
           start: allDay ? ev.dtStart.slice(0, 10) : ev.dtStart,
           end: allDay ? ev.dtEnd.slice(0, 10) : ev.dtEnd,
           allDay,
-          backgroundColor: cal?.color ?? '#0078D4',
-          // Calendar colours are user data: black or white text, whichever reaches 4.5:1
-          textColor: readableTextOn(cal?.color ?? '#0078D4'),
-          borderColor: 'transparent',
+          // "Anzeigen als": BUSY solid (black/white text, >= 4.5:1), TENTATIVE striped,
+          // FREE outlined, OOF purple — lib/calendarShowAs.ts + .cm-show-* in index.css
+          backgroundColor: look.backgroundColor,
+          textColor: look.textColor,
+          borderColor: look.borderColor,
+          classNames: look.classNames,
           // READ shares: per-event editable=false (prevents drag/resize)
           editable: !isReadOnly,
           startEditable: !isReadOnly,
           durationEditable: !isReadOnly,
-          extendedProps: { calendarId: ev.calendarId, isReadOnly, recurrenceId: ev.recurrenceId ?? null },
+          extendedProps: { calendarId: ev.calendarId, isReadOnly, recurrenceId: ev.recurrenceId ?? null, showAsVars: look.cssVars },
         };
       }),
     ...taskEvents,
@@ -361,6 +365,7 @@ export function CalendarPage() {
           select={handleDateSelect}
           datesSet={handleDatesSet}
           eventClick={handleEventClick}
+          eventDidMount={(info) => applyShowAsVars(info.el, info.event.extendedProps['showAsVars'])}
           height="100%"
         />
         </div>
