@@ -13,6 +13,32 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [10.4.0] — 2026-11-20 — Setup assistant: automatic secrets, guided setup, three-command deployment
+
+### Added
+
+- **Three-command deployment without a repository checkout.** The standalone Compose file `deploy/docker-compose.yml` is published with every release as the asset `docker-compose.yml`: `mkdir coremail && cd coremail`, `curl -fsSLO https://github.com/MAGPEEK/CoreMail/releases/latest/download/docker-compose.yml`, `docker compose up -d` — then the setup wizard at `http://<server>:3000/setup`. Default stack: coremail-init, coremail, PostgreSQL, Redis; profiles `scanner` (rspamd + ClamAV), `backup` (pg_dump sidecar), `s3` (MinIO). Guide: `docs/deploy.md`. `scripts/release-assets.sh` uploads the file with the release version pinned.
+- **Automatic secrets.** With `./secrets` mounted the image generates `coremail.env` (JWT_SECRET, PEPPER, database, Redis, MinIO and rspamd passwords; on fresh installations also separate MFA, backup, audit-signing and Web Push keys) plus single-value files for PostgreSQL and Redis. Existing values always win and are copied, nothing is ever overwritten; existing installations keep deriving the optional keys. `coremail-init-secrets` can also run on its own.
+- **Setup token in a file.** `./secrets/setup-token` while setup is pending (deleted afterwards); the log shows a framed hint with the URL that answers, not the token.
+- **Bundled configuration.** PostgreSQL init scripts, rspamd `local.d` and the pg-backup script ship in the image and are copied into config volumes on every start; `./config/rspamd/local.d/` overrides per file.
+- `RSPAMD_ENABLED` / `CLAMAV_ENABLED=auto`: a scanner that is not deployed counts as absent; once seen, an outage follows the failure policy.
+
+### Changed
+
+- **Setup wizard rebuilt** (`/setup`): token check on the first page, domain + host name + organisation, administrator (two-factor sign-in offered), mandatory "back up ./secrets" step when secrets were generated, DNS records with live check, certificate (Let's Encrypt when A and MX resolve, reverse proxy, or later with a dashboard hint), summary with links. New `POST /api/v1/setup/verify-token`; `POST /api/v1/setup/complete` accepts `hostname`, `organizationName`, `displayName`; `GET /api/v1/setup/status` returns `secretsFile` / `secretsGenerated`.
+- **Every Compose variant starts without a `.env`.** New one-shot service `coremail-init` (no network, read-only, minimal capabilities) runs first; all `${VAR:?}` checks became `${VAR:-}` passthroughs, so a `.env` still wins. PostgreSQL, Redis, MinIO, rspamd and pg-backup read their passwords from `.env` or `./secrets`. In the full file `OBJECT_STORAGE` defaults to `filesystem`.
+- **Helm chart 3.4.0:** empty `secrets.*` values are generated once and reused on upgrade; an upgrade that cannot find a data-bound key fails instead of generating a new one; the Secret is kept on uninstall.
+- README quick start reduced to the three commands; other variants, `docker run` and Helm are linked.
+
+### Upgrade notes
+
+- Minor release. Existing installations need no change: their `.env` values win and are copied into `./secrets/coremail.env`; no new MFA, backup or Web Push keys are generated for them.
+- If `.env` had no rspamd controller password, one is generated. A `DATABASE_URL` / `REDIS_URL` left in `.env` now takes effect. Switching from the standard to the full file with mail stored in MinIO needs `OBJECT_STORAGE=minio` in `.env` (otherwise the start is blocked, no data is lost).
+- Back up `./secrets/` together with the volumes — without `PEPPER` no password works.
+- Additive schema (two optional `ServerSettings` columns for the wizard's certificate choice and hint).
+
+---
+
 ## [10.3.0] — 2026-11-20 — Admin MCP interface, branding page, neutral wording
 
 ### Added
