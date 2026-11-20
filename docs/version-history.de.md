@@ -6,6 +6,7 @@ Die Höhepunkte jeder CoreMail-Version, neueste zuerst. Jede Änderung steht im 
 
 ## Letzte Versionen
 
+- **v10.4.2** — Einrichtungs-Assistent in fünf Schritten mit Secrets-Download, Zertifikat per Klick im Dashboard und ein Neustart-Knopf im Admin-Panel ([Release-Notes](releases/v10.4.2.md)).
 - **v10.4.1** — Kein Init-Container mehr: Der Hauptcontainer erzeugt Secrets und Konfiguration selbst, die anderen Container warten auf ihre Dateien ([Release-Notes](releases/v10.4.1.md)).
 - **v10.4.0** — Einrichtungs-Assistent: Bereitstellung mit drei Befehlen aus einer einzigen Compose-Datei, automatisch erzeugte Secrets, ein geführter Einrichtungs-Assistent (Domain, Admin, Secrets sichern, DNS, Zertifikat) und Compose-Dateien ohne Pflicht-Parameter ([Release-Notes](releases/v10.4.0.md)).
 - **v10.3.0** — Eine MCP-Schnittstelle für Admins (ab Werk aus, persönliche Tokens zum Lesen oder Ändern mit den Rechten des Admins), eine neu geordnete Branding-Seite mit nur einem Logo und daraus erzeugtem Favicon, neutrale Wortwahl überall und eine kürzere README ([Release-Notes](releases/v10.3.0.md)).
@@ -34,6 +35,7 @@ Die Höhepunkte jeder CoreMail-Version, neueste zuerst. Jede Änderung steht im 
 
 | Version | Highlights |
 |---------|-----------|
+| **v10.4.2** | **Schlankerer Assistent und Neustart-Knopf.** Secrets-Download statt Befehlen, DNS- und Zertifikatsschritt ins Admin-Panel verlegt, Let's-Encrypt-Karte im Dashboard, "CoreMail neu starten" unter Server & Health — [Release-Notes](releases/v10.4.2.md) |
 | **v10.4.1** | **Kein Init-Container mehr.** Der coremail-Container erzeugt ./secrets und die mitgelieferte Konfiguration beim ersten Start; PostgreSQL, Redis und optionale Dienste warten auf ihre Dateien. Update mit --remove-orphans — [Release-Notes](releases/v10.4.1.md) |
 | **v10.4.0** | **Einrichtungs-Assistent.** Drei Befehle zum Bereitstellen (eine Compose-Datei laden, `docker compose up -d`), Secrets automatisch in `./secrets`, Setup-Token in einer Datei, geführter Assistent mit DNS-Prüfung und Zertifikat, alle Compose-Varianten ohne `.env`, Helm-Chart erzeugt fehlende Secrets — [Release-Notes](releases/v10.4.0.md) |
 | **v10.3.0** | **MCP-Schnittstelle für Admins und Branding-Seite.** `/mcp` für MCP-Clients (Schalter unter Infrastruktur, ab Werk aus; persönliche Tokens zum Lesen oder Ändern, dieselbe Rolle und Domain-Beschränkung wie im Admin-Panel, jeder Aufruf im Audit-Log), Branding-Seite mit nur einem Logo, daraus erzeugtem Favicon und einer Speicherleiste, Karte für veraltete TLS-Versionen umbenannt, neutrale Wortwahl in Texten und Doku — [Release-Notes](releases/v10.3.0.md) |

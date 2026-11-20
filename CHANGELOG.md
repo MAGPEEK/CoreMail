@@ -13,6 +13,28 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [10.4.2] — 2026-11-20 — Slimmer setup wizard, one-click certificate, restart button
+
+### Added
+
+- **Secrets download in the setup wizard.** The "Secrets sichern" step offers a "Secrets herunterladen" button instead of shell commands: `GET /api/v1/setup/secrets-download` (admin session with ORGANIZATION_MANAGEMENT, only until the wizard finishes and at most 24 h after the setup, then 404; `no-store`, attachment, audit `setup.secrets.download` without content, 10 per hour). Over plain HTTP the wizard shows a one-line warning. `POST /api/v1/setup/finish` closes the window; `/setup/status` reports `secureConnection`.
+- **Dashboard card "Zertifikat einrichten"**: while no trusted certificate covers the public host name, one button runs the Let's Encrypt preflight and order (SMTP/IMAP/POP3 assigned automatically) and assigns the new certificate to HTTPS. Errors link to Zertifikate; "Später" hides the card. Servers write access only.
+- **Restart button** (BCP → Server & Health → "CoreMail neu starten"): typed confirmation, `POST /api/v1/admin/servers/restart` (servers write, organisation-wide admins only, admin MFA, audit `server.restart` written before the restart, at most one per 2 minutes). The coremail container stops gracefully and Docker's restart policy (`unless-stopped`) or Kubernetes starts it again; PostgreSQL, Redis and scanners keep running. The request is handed to a root listener through a per-boot secret file (never through log output); the BCP shows progress and reloads when CoreMail is back.
+
+### Changed
+
+- Setup wizard steps: Token → Domain und Hostname → Admin-Konto → Secrets sichern (only when generated) → Fertig. The summary links to Domains and Zertifikate.
+
+### Removed
+
+- The DNS and certificate (Let's Encrypt) steps of the setup wizard and the wizard-only certificate choice / dashboard hint (the new certificate card replaces it). Schema columns stay (additive policy); new optional column `ServerSettings.setupWizardFinishedAt`.
+
+### Upgrade notes
+
+- Patch-level for existing installations: download the current Compose file, then `docker compose pull && docker compose up -d`. No configuration change.
+
+---
+
 ## [10.4.1] — 2026-11-20 — No init container: the coremail container prepares the stack
 
 ### Changed

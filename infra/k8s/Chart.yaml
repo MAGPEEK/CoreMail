@@ -9,7 +9,7 @@ type: application
 # 1.0.0: complete rewrite for the single coremail-app image (CoreMail 7.x).
 version: 3.4.0
 # Default image tag of magpeek/coremail-app.
-appVersion: "10.4.1"
+appVersion: "10.4.2"
 kubeVersion: ">=1.25.0-0"
 keywords:
   - mail
