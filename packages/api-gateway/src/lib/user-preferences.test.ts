@@ -120,12 +120,19 @@ test('10.1 appearance.background: null = organisation default; none / custom / k
   assert.equal(readPreferences({ appearance: { background: 'builtin:forest' } }).appearance.background, 'builtin:forest');
 });
 
-test('10.1 ribbon: collapsed boolean + simplified / classic layout', () => {
-  assert.deepEqual(DEFAULT_PREFERENCES.ribbon, { collapsed: false, layout: 'simplified' });
-  assert.equal(PreferencesPatchSchema.safeParse({ ribbon: { collapsed: true, layout: 'classic' } }).success, true);
-  assert.equal(PreferencesPatchSchema.safeParse({ ribbon: { layout: 'full' } }).success, false);
+test('10.1 ribbon: collapsed boolean only (the layout choice was removed in 10.2)', () => {
+  assert.deepEqual(DEFAULT_PREFERENCES.ribbon, { collapsed: false });
+  assert.equal(PreferencesPatchSchema.safeParse({ ribbon: { collapsed: true } }).success, true);
+  assert.equal(PreferencesPatchSchema.safeParse({ ribbon: { layout: 'classic' } }).success, false);
   assert.equal(PreferencesPatchSchema.safeParse({ ribbon: { collapsed: 'yes' } }).success, false);
   assert.equal(PreferencesPatchSchema.safeParse({ ribbon: { zoom: 1 } }).success, false);
+});
+
+test('10.2 ribbon: an old stored layout value is ignored on read and dropped on the next write', () => {
+  const read = readPreferences({ ribbon: { collapsed: true, layout: 'classic' } });
+  assert.deepEqual(read.ribbon, { collapsed: true });
+  const next = applyPreferencesPatch(read, { ribbon: { collapsed: false } });
+  assert.deepEqual(next.ribbon, { collapsed: false });
 });
 
 test('10.1 folders.favorites: default folders by default; ids or default-folder names, unique, bounded', () => {

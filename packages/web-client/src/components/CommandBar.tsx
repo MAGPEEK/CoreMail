@@ -1,5 +1,5 @@
 /**
- * Shared command bar (mail, reading pane, calendar ribbon).
+ * Shared command bar (mail, reading pane, calendar, contacts, compose ribbon).
  *
  * - role="toolbar" with roving focus (WAI-ARIA APG): one tab stop, ←/→ move between
  *   the controls, Home/End jump; disabled commands stay focusable (aria-disabled)
@@ -16,7 +16,6 @@ import { ChevronDown, MoreHorizontal } from 'lucide-react';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu.js';
 import { computeOverflow, nextRovingIndex, type CommandPlacement } from '../lib/toolbarNav.js';
 import { fmt, useT } from '../i18n/useT.js';
-import { useLanguageStore } from '../store/language.js';
 
 export interface CommandItem {
   id: string;
@@ -39,24 +38,21 @@ export interface CommandItem {
   tone?: 'primary' | 'danger';
   /** 10.1: a primary command that is ready (Senden with a valid recipient) gets a soft ring. */
   highlight?: boolean;
-  /** Inline bars: the icon alone (the label is the accessible name and the tooltip; a dropdown shows no extra arrow). */
+  /** The icon alone (the label is the accessible name and the tooltip; a dropdown shows no extra arrow). */
   iconOnly?: boolean;
 }
 
 export interface CommandGroup {
   id: string;
-  /** Caption under the group (ribbon) */
+  /** Accessible name of the group */
   title?: string;
   items: CommandItem[];
 }
-
-export type CommandBarVariant = 'ribbon' | 'inline';
 
 interface Props {
   /** Accessible name of the toolbar */
   label: string;
   groups: CommandGroup[];
-  variant?: CommandBarVariant;
   /** Content after the toolbar, outside the roving focus (e.g. the selection counter). */
   end?: ReactNode;
   className?: string;
@@ -80,28 +76,19 @@ function toneClass(item: CommandItem): string {
   return 'text-fg-muted hover:bg-surface-2 hover:text-fg aria-disabled:hover:bg-transparent aria-disabled:hover:text-fg-muted';
 }
 
-const SHAPE: Record<CommandBarVariant, { main: string; arrow: string; group: string; more: string }> = {
-  ribbon: {
-    main: 'flex flex-col items-center justify-between w-[84px] h-[78px] px-1 py-1.5 rounded',
-    arrow: 'flex items-end justify-center w-5 h-[78px] pb-2 rounded',
-    group: 'flex flex-col items-center px-3 py-1',
-    more: 'flex flex-col items-center justify-center w-[52px] h-[78px] rounded',
-  },
-  inline: {
-    main: 'inline-flex items-center gap-1.5 h-8 px-2.5 rounded text-sm whitespace-nowrap',
-    arrow: 'inline-flex items-center justify-center h-8 w-6 rounded',
-    group: 'flex items-center gap-0.5 px-1',
-    more: 'inline-flex items-center justify-center h-8 w-8 rounded',
-  },
+const SHAPE = {
+  main: 'inline-flex items-center gap-1.5 h-8 px-2.5 rounded text-sm whitespace-nowrap',
+  arrow: 'inline-flex items-center justify-center h-8 w-6 rounded',
+  group: 'flex items-center gap-0.5 px-1',
+  more: 'inline-flex items-center justify-center h-8 w-8 rounded',
 };
 
-/** Icon-only buttons of inline bars: the icon centred, at least 32 px wide (WCAG 2.2 target size). */
+/** Icon-only buttons: the icon centred, at least 32 px wide (WCAG 2.2 target size). */
 const ICON_ONLY = 'min-w-8 justify-center';
 
 // ── Pieces (module level: never define components inside components) ─────────
 interface ButtonProps {
   item: CommandItem;
-  variant: CommandBarVariant;
   /** Copy in the invisible measuring row: no handlers, no tab stop */
   measure?: boolean;
   tabStop?: string;
@@ -110,20 +97,7 @@ interface ButtonProps {
   onOpenMenu?: (key: string, el: HTMLElement, items: ContextMenuItem[]) => void;
 }
 
-function Label({ item, variant, arrow, iconOnly }: { item: CommandItem; variant: CommandBarVariant; arrow: boolean; iconOnly: boolean }) {
-  const lang = useLanguageStore((s) => s.lang);
-  if (variant === 'ribbon') {
-    return (
-      <>
-        <span className="h-6 flex items-center justify-center gap-0.5 mt-0.5" aria-hidden="true">
-          {item.icon}
-          {arrow && <ChevronDown size={10} className="opacity-60 shrink-0" />}
-        </span>
-        {/* 10.1: long German words (Ansichtseinstellungen) hyphenate / wrap instead of being cut off */}
-        <span lang={lang} className="text-[11px] leading-tight text-center w-full line-clamp-3 hyphens-auto [overflow-wrap:break-word]">{item.label}</span>
-      </>
-    );
-  }
+function Label({ item, arrow, iconOnly }: { item: CommandItem; arrow: boolean; iconOnly: boolean }) {
   return (
     <>
       {item.icon && <span className="inline-flex shrink-0" aria-hidden="true">{item.icon}</span>}
@@ -133,16 +107,15 @@ function Label({ item, variant, arrow, iconOnly }: { item: CommandItem; variant:
   );
 }
 
-function CommandButton({ item, variant, measure = false, tabStop, openKey, descId, onOpenMenu }: ButtonProps) {
+function CommandButton({ item, measure = false, tabStop, openKey, descId, onOpenMenu }: ButtonProps) {
   const t = useT();
   const split = !!(item.onClick && item.menu);
   const dropdownOnly = !item.onClick && !!item.menu;
-  const shape = SHAPE[variant];
   const common = `transition-all duration-150 active:scale-95 ${DISABLED} ${toneClass(item)}`;
   const disabledProps = item.disabled
     ? { 'aria-disabled': true as const, ...(descId ? { 'aria-describedby': descId } : {}) }
     : {};
-  const iconOnly = !!(item.iconOnly && item.icon) && variant === 'inline';
+  const iconOnly = !!(item.iconOnly && item.icon);
   const title = item.tooltip && item.tooltip !== item.label ? item.tooltip : (iconOnly ? item.label : undefined);
   const menuKey = split ? `${item.id}:menu` : item.id;
 
@@ -173,9 +146,9 @@ function CommandButton({ item, variant, measure = false, tabStop, openKey, descI
         // Alt+↓ opens the dropdown of a split button / dropdown (the main action stays on Enter / Space)
         if (e.altKey && e.key === 'ArrowDown') { e.preventDefault(); openMenu(e.currentTarget); }
       }}
-      className={`${shape.main} ${iconOnly ? ICON_ONLY : ''} ${common} ${split ? 'rounded-r-none' : ''}`}
+      className={`${SHAPE.main} ${iconOnly ? ICON_ONLY : ''} ${common} ${split ? 'rounded-r-none' : ''}`}
     >
-      <Label item={item} variant={variant} arrow={dropdownOnly && !iconOnly} iconOnly={iconOnly} />
+      <Label item={item} arrow={dropdownOnly && !iconOnly} iconOnly={iconOnly} />
     </button>
   );
   if (!split) return main;
@@ -190,7 +163,7 @@ function CommandButton({ item, variant, measure = false, tabStop, openKey, descI
         aria-haspopup="menu"
         aria-expanded={openKey === menuKey}
         onClick={measure ? undefined : (e) => openMenu(e.currentTarget)}
-        className={`${shape.arrow} ${common} rounded-l-none border-l ${item.tone === 'primary' ? 'border-white/30' : 'border-line'}`}
+        className={`${SHAPE.arrow} ${common} rounded-l-none border-l ${item.tone === 'primary' ? 'border-white/30' : 'border-line'}`}
       >
         <ChevronDown size={12} aria-hidden="true" />
       </button>
@@ -198,8 +171,7 @@ function CommandButton({ item, variant, measure = false, tabStop, openKey, descI
   );
 }
 
-function MoreButton({ variant, measure = false, tabStop, open, onOpen }: {
-  variant: CommandBarVariant;
+function MoreButton({ measure = false, tabStop, open, onOpen }: {
   measure?: boolean;
   tabStop?: string;
   open?: boolean;
@@ -215,27 +187,19 @@ function MoreButton({ variant, measure = false, tabStop, open, onOpen }: {
       aria-haspopup="menu"
       aria-expanded={!!open}
       onClick={measure ? undefined : (e) => onOpen?.(e.currentTarget)}
-      className={`${SHAPE[variant].more} text-fg-muted hover:bg-surface-2 hover:text-fg transition-all duration-150 active:scale-95`}
+      className={`${SHAPE.more} text-fg-muted hover:bg-surface-2 hover:text-fg transition-all duration-150 active:scale-95`}
     >
-      <MoreHorizontal size={variant === 'ribbon' ? 20 : 16} aria-hidden="true" />
+      <MoreHorizontal size={16} aria-hidden="true" />
     </button>
   );
 }
 
-function GroupBox({ group, variant, first, dividers, children }: {
-  group: CommandGroup; variant: CommandBarVariant; first: boolean; dividers: boolean; children: ReactNode;
+function GroupBox({ group, first, dividers, children }: {
+  group: CommandGroup; first: boolean; dividers: boolean; children: ReactNode;
 }) {
   const border = first || !dividers ? '' : 'border-l border-line';
-  if (variant === 'ribbon') {
-    return (
-      <div role="group" aria-label={group.title ?? group.id} className={`${SHAPE.ribbon.group} ${border}`} data-measure-group={group.id}>
-        <div className="flex items-stretch gap-1 mb-1">{children}</div>
-        {group.title && <div className="text-[10px] text-fg-subtle uppercase tracking-wide" aria-hidden="true">{group.title}</div>}
-      </div>
-    );
-  }
   return (
-    <div role="group" {...(group.title ? { 'aria-label': group.title } : {})} className={`${SHAPE.inline.group} ${border}`} data-measure-group={group.id}>
+    <div role="group" {...(group.title ? { 'aria-label': group.title } : {})} className={`${SHAPE.group} ${border}`} data-measure-group={group.id}>
       {children}
     </div>
   );
@@ -278,13 +242,13 @@ export function commandFromMenuItem(id: string, item: ContextMenuItem): CommandI
   };
 }
 
-function layoutSignature(groups: CommandGroup[], variant: CommandBarVariant): string {
-  return variant + groups.map((g) => `${g.id}:${g.title ?? ''}[${g.items.map((i) =>
+function layoutSignature(groups: CommandGroup[]): string {
+  return groups.map((g) => `${g.id}:${g.title ?? ''}[${g.items.map((i) =>
     `${i.id}|${i.label}|${i.placement ?? 'auto'}|${i.menu ? 'm' : ''}${i.onClick ? 'c' : ''}`).join(',')}]`).join('');
 }
 
 // ── Command bar ───────────────────────────────────────────────────────────────
-export function CommandBar({ label, groups, variant = 'inline', end, className = '', dividers = true }: Props) {
+export function CommandBar({ label, groups, end, className = '', dividers = true }: Props) {
   const baseId = useId();
   const toolbarRef = useRef<HTMLDivElement>(null);
   const measureRef = useRef<HTMLDivElement>(null);
@@ -296,7 +260,7 @@ export function CommandBar({ label, groups, variant = 'inline', end, className =
   const lastClosed = useRef<{ trigger: HTMLElement; at: number } | null>(null);
 
   const all = groups.flatMap((g) => g.items);
-  const signature = layoutSignature(groups, variant);
+  const signature = layoutSignature(groups);
 
   // Widths of every command (+ its group's padding/caption) from the measuring copy
   useLayoutEffect(() => {
@@ -384,7 +348,7 @@ export function CommandBar({ label, groups, variant = 'inline', end, className =
         aria-orientation="horizontal"
         onKeyDown={onKeyDown}
         onFocus={(e) => { const key = (e.target as HTMLElement).dataset.rovingStop; if (key) setActiveKey(key); }}
-        className={`flex flex-1 min-w-0 overflow-hidden ${variant === 'ribbon' ? 'items-stretch' : 'items-center'}`}
+        className="flex flex-1 min-w-0 overflow-hidden items-center"
       >
         {groups.map((g) => {
           const items = g.items.filter((i) => visible.has(i.id));
@@ -392,12 +356,12 @@ export function CommandBar({ label, groups, variant = 'inline', end, className =
           const isFirst = firstGroup;
           firstGroup = false;
           return (
-            <GroupBox key={g.id} group={g} variant={variant} first={isFirst} dividers={dividers}>
+            <GroupBox key={g.id} group={g} first={isFirst} dividers={dividers}>
               {items.map((item) => (
                 <CommandButton
                   key={item.id}
                   item={item}
-                  variant={variant}
+                 
                   {...(tabStop ? { tabStop } : {})}
                   openKey={menu?.key ?? null}
                   descId={descId(item)}
@@ -409,7 +373,7 @@ export function CommandBar({ label, groups, variant = 'inline', end, className =
         })}
         {overflowGroups.length > 0 && (
           <div className={`flex items-center ${firstGroup || !dividers ? '' : 'border-l border-line'} px-1`}>
-            <MoreButton variant={variant} {...(tabStop ? { tabStop } : {})} open={menu?.key === MORE_KEY} onOpen={openOverflow} />
+            <MoreButton {...(tabStop ? { tabStop } : {})} open={menu?.key === MORE_KEY} onOpen={openOverflow} />
           </div>
         )}
         {/* Reasons of disabled commands (aria-describedby) */}
@@ -425,17 +389,17 @@ export function CommandBar({ label, groups, variant = 'inline', end, className =
           const items = g.items.filter((i) => i.placement !== 'overflow');
           if (items.length === 0) return null;
           return (
-            <GroupBox key={g.id} group={g} variant={variant} first={gi === 0} dividers={dividers}>
+            <GroupBox key={g.id} group={g} first={gi === 0} dividers={dividers}>
               {items.map((item) => (
                 <span key={item.id} data-measure-item={item.id} className="inline-flex shrink-0">
-                  <CommandButton item={item} variant={variant} measure />
+                  <CommandButton item={item} measure />
                 </span>
               ))}
             </GroupBox>
           );
         })}
         <span data-measure-more className={`inline-flex px-1 ${dividers ? 'border-l border-line' : ''}`}>
-          <MoreButton variant={variant} measure />
+          <MoreButton measure />
         </span>
       </div>
 

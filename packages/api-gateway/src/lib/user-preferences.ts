@@ -108,7 +108,6 @@ const FIELDS = {
   },
   ribbon: {
     collapsed: z.boolean(),
-    layout: z.enum(['simplified', 'classic']),
   },
   folders: {
     favorites: z.array(z.string().regex(FOLDER_REF)).max(MAX_FAVORITE_FOLDERS)
@@ -145,7 +144,7 @@ export const DEFAULT_PREFERENCES: UserPreferences = Object.freeze({
   },
   signatures: { defaults: {} },
   appearance: { background: null },
-  ribbon: { collapsed: false, layout: 'simplified' },
+  ribbon: { collapsed: false },
   folders: { favorites: ['INBOX', 'Sent', 'Drafts', 'Trash'] },
 }) as UserPreferences;
 

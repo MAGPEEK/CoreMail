@@ -19,7 +19,7 @@ and how each setting takes effect.
 | Out of office, rules, categories, inactivity timeout, hidden shared mailboxes | unchanged (own columns / tables) | server / webmail |
 | Profile photo (9.5) | `User.photoKey` + object store `profile-photos/` | webmail avatars of the organisation (see [Profile photo](#profile-photo)) |
 | Background (10.1): none / built-in / own picture | `preferences.appearance.background`; the picture in `User.backgroundKey` + object store `backgrounds/` | webmail canvas behind the panes (see [Background](#background)) |
-| Ribbon (10.1): collapsed, simplified / classic | `preferences.ribbon` | webmail mail, calendar and contacts views (one shared ribbon) |
+| Ribbon (10.1): collapsed (10.2: only the simplified ribbon exists; the former `layout` field was removed) | `preferences.ribbon` | webmail mail, calendar and contacts views (one shared ribbon) |
 | Favourite folders (10.1) | `preferences.folders.favorites` | webmail folder pane ("Favoriten") |
 | Panel widths, collapsed folder sections, expanded shared mailboxes | browser only | webmail (they depend on the screen) |
 
