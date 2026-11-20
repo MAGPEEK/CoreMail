@@ -24,6 +24,8 @@ import {
   ALIGNMENTS, FORMAT_BAR, TEXT_DIRECTIONS, formatFlyout, stepFontSize, tableCommandsFor,
   type Alignment, type FlyoutEntry, type FlyoutEntryId, type FlyoutState, type FormatBarId, type TextDirection,
 } from '../../lib/composeToolbar.js';
+import { insertTableOptions, type GridSize } from '../../lib/composeTable.js';
+import { TableSizePicker } from './TableSizePicker.js';
 import { useT } from '../../i18n/useT.js';
 import type { TranslationKey } from '../../i18n/translations.js';
 
@@ -76,7 +78,7 @@ function applyStyle(e: Editor, id: ParagraphStyleId): void {
   else chain.setHeading({ level: Number(id.slice(1)) as 1 | 2 | 3 }).run();
 }
 
-/** Runs a table command; true when the editor could (cursor in a table, or insert). */
+/** Runs a table command; true when the editor could (cursor in a table, or insert — the size picker inserts other sizes). */
 function tableCommand(e: Editor, id: TableCommandId, dryRun: boolean): boolean {
   const chain = dryRun ? e.can().chain() : e.chain().focus();
   switch (id) {
@@ -89,6 +91,11 @@ function tableCommand(e: Editor, id: TableCommandId, dryRun: boolean): boolean {
     case 'deleteCol': return chain.deleteColumn().run();
     case 'deleteTable': return chain.deleteTable().run();
   }
+}
+
+/** 10.2: inserts the size picked in the size picker (header row as the fixed insert had it). */
+function insertTableOfSize(e: Editor, size: GridSize): void {
+  e.chain().focus().insertTable(insertTableOptions(size)).run();
 }
 
 function setDirection(e: Editor, dir: TextDirection): void {
@@ -171,7 +178,10 @@ function flyoutItem(entry: FlyoutEntry, e: Editor, s: FlyoutState, t: T, p: Prop
         {
           label: t(`compose_table_${id}` as TranslationKey),
           ...(tableCommand(e, id, true) ? {} : { disabled: true }),
-          onClick: () => { tableCommand(e, id, false); },
+          // 10.2: "Tabelle einfügen" opens the size picker
+          ...(id === 'insert'
+            ? { children: [{ type: 'custom' as const, render: (close: () => void) => <TableSizePicker onClose={close} onPick={(size) => insertTableOfSize(e, size)} /> }] }
+            : { onClick: () => { tableCommand(e, id, false); } }),
         },
       ]),
     },

@@ -31,6 +31,7 @@ import { attachmentsAfterSave, finishRuntime, type ComposePayload } from './comp
 import { hasLiveOpener, postToOpenerAndWait, trackPopout } from './popoutChannel.js';
 import { hasQuotedOriginal } from '../editorExtensions.js';
 import { COMPOSE_EDITOR_CLASS, QUOTE_FOLDED_CLASS, useComposeEditor } from '../../hooks/useComposeEditor.js';
+import { TableGrowHandles } from './TableGrowHandles.js';
 import { useComposeSender } from '../../hooks/useComposeSender.js';
 import { useComposeOriginal, useForwardAttachments } from '../../hooks/useComposeOriginal.js';
 import { useComposeSignature } from '../../hooks/useComposeSignature.js';
@@ -787,6 +788,8 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
               </p>
             )}
             <EditorContent editor={editor} className={`${COMPOSE_EDITOR_CLASS} ${quoteFolded ? QUOTE_FOLDED_CLASS : ''}`} />
+            {/* 10.2: "+" handles at the table edge — an overlay, never part of the mail */}
+            <TableGrowHandles editor={editor} enabled={!plainText} />
           </div>
           {quoteShown && (
             <div className="px-6 pb-4">
