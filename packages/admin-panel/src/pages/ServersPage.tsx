@@ -5,6 +5,7 @@ import { api } from '../api/client.js';
 import { errorMessage } from '../lib/errors.js';
 import { mergeDerivedUrls, publicOrigin } from '../lib/serverSettings.js';
 import { WriteGuard } from '../components/Can.js';
+import { ServerRestartCard } from '../components/ServerRestartCard.js';
 
 interface ServerSettings {
   publicHostname:   string;
@@ -353,6 +354,10 @@ export function ServersPage() {
               </div>
             </>
           )}
+          {/* 10.4.2: restart the coremail container (independent of the health query) */}
+          <div className="max-w-3xl">
+            <ServerRestartCard publicHostname={settings?.publicHostname ?? null} />
+          </div>
         </div>
       )}
     </div>

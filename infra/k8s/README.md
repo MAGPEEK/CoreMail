@@ -357,6 +357,15 @@ refuses `replicaCount > 1` without `secrets.setupToken` unless `existingSecret`
 is used — then set `SETUP_TOKEN` there). `filesystem` object storage is limited
 to one replica.
 
+### Restart from the BCP
+
+BCP → Server → Health & Status → "CoreMail neu starten" (CoreMail 10.4.2) stops supervisord
+in the `coremail` container of the pod that serves the request; the container exits and the
+kubelet starts it again (`restartPolicy: Always`, the pod's restart count goes up, the pod and
+its volumes stay). The bundled PostgreSQL / Redis / scanner pods are not touched. With more
+than one replica only the pod that answered the request restarts. Details:
+[docs/deploy.md → Restarting CoreMail from the BCP](../../docs/deploy.md#restarting-coremail-from-the-bcp).
+
 ## Upgrading
 
 ### Upgrading to chart 3.4

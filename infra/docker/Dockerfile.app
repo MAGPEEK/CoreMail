@@ -242,13 +242,17 @@ COPY infra/docker/init-secrets.mjs /usr/local/lib/coremail/init-secrets.mjs
 # copies it into the mounted config volumes on every start (init-config.mjs, an
 # internal library like init-secrets.mjs; docs/deploy.md).
 COPY infra/docker/init-config.mjs /usr/local/lib/coremail/init-config.mjs
+# 10.4.2: supervisord event listener behind the BCP "restart CoreMail" button (runs
+# as root; owned by root, read-only for everyone else — supervisord-app.conf).
+COPY infra/docker/restart-watch.py /usr/local/lib/coremail/restart-watch.py
 COPY infra/docker/postgres/init.sql /usr/share/coremail/config/postgres/01-init.sql
 COPY infra/docker/postgres/02-app-role.sh /usr/share/coremail/config/postgres/02-app-role.sh
 COPY infra/docker/rspamd/local.d/ /usr/share/coremail/config/rspamd/local.d/
 COPY infra/docker/pg-backup/pg-backup.sh /usr/share/coremail/config/pg-backup/pg-backup.sh
 # Strip CR in case the build context comes from a Windows checkout with CRLF line
 # endings — a "#!/bin/sh\r" shebang makes tini fail with "No such file or directory".
-RUN sed -i 's/\r$//' /entrypoint.sh /etc/supervisord.conf /usr/local/bin/coremail-schema-sync /usr/local/lib/coremail/schema-sync-classify.mjs /usr/local/lib/coremail/decrypt-backup.mjs /usr/local/lib/coremail/init-secrets.mjs /usr/local/lib/coremail/init-config.mjs \
+RUN sed -i 's/\r$//' /entrypoint.sh /etc/supervisord.conf /usr/local/bin/coremail-schema-sync /usr/local/lib/coremail/schema-sync-classify.mjs /usr/local/lib/coremail/decrypt-backup.mjs /usr/local/lib/coremail/init-secrets.mjs /usr/local/lib/coremail/init-config.mjs /usr/local/lib/coremail/restart-watch.py \
+ && chown root:root /usr/local/lib/coremail/restart-watch.py && chmod 644 /usr/local/lib/coremail/restart-watch.py \
  && find /usr/share/coremail/config -type f -exec sed -i 's/\r$//' {} + \
  && find /usr/share/coremail/config -type d -exec chmod 755 {} + \
  && find /usr/share/coremail/config -type f -exec chmod 644 {} + \

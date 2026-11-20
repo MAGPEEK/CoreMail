@@ -225,6 +225,11 @@ Outside `/api/v1/admin`: the setup wizard's `GET /api/v1/setup/secrets-download`
 `POST /api/v1/setup/finish` (10.4.2, docs/setup-wizard.md) — `requireRole()`, i.e.
 ORGANIZATION_MANAGEMENT only and never for a scoped admin: **org**.
 
+| Route | Decision |
+|---|---|
+| `GET /servers/restart` (10.4.2: can this gateway restart its container?) | servers read → **org** |
+| `POST /servers/restart` (10.4.2: restart the coremail container, docs/deploy.md) | servers write (ORGANIZATION_MANAGEMENT, SERVER_MANAGEMENT) + `requireUnscoped` → **org** (a scoped admin gets `403` — area guard, plus `requireUnscoped` as a second check — even if a scope row were attached to a SERVER_MANAGEMENT account); admin MFA as for every admin route; audit `server.restart` (always written, `ALWAYS_AUDIT`) before the shutdown; one per 2 minutes server-wide |
+
 ### admin MCP interface (10.3, docs/mcp.md)
 
 | Route | Decision |
