@@ -190,6 +190,40 @@ are skipped. Apply a change with `docker compose restart coremail && docker comp
 restores the bundled one on the next `up`. Keep `worker-controller.inc` as bundled unless you
 know the rspamd controller: it restricts password-less access to the CoreMail container.
 
+## Restarting CoreMail from the BCP
+
+BCP → **Server → Health & Status → CoreMail neu starten** restarts the `coremail` container
+(10.4.2): every CoreMail service stops gracefully, the container exits and its **restart
+policy** starts it again. Webmail, BCP and the mail protocols are unavailable for about
+20–30 seconds (the start runs the usual entrypoint steps, including the schema sync).
+PostgreSQL, Redis, rspamd, ClamAV and the other containers are not touched — there is no
+Docker socket in the container and no control of other containers.
+
+- **Who:** ORGANIZATION_MANAGEMENT and SERVER_MANAGEMENT (area `servers`, write), organisation-wide
+  only; an MFA-verified session when "MFA for admins" is on. The confirmation dialog needs the
+  word `NEUSTART` (English UI: `RESTART`) or the public host name. API:
+  `POST /api/v1/admin/servers/restart` → `202 { restarting: true, expectedDowntimeSeconds }`;
+  one restart per 2 minutes server-wide (`429` + `Retry-After` otherwise). The audit entry
+  `server.restart` is written before anything stops — if it cannot be written, nothing
+  restarts (`503`).
+- **After confirming** the BCP shows an overlay that polls `GET /healthz` every 2 seconds and
+  reloads the page once CoreMail answers again; the session survives (the refresh cookie and
+  the session live in PostgreSQL). After 3 minutes without an answer it points to
+  `docker compose ps` / `docker compose logs coremail`.
+- **Restart policy required:** every bundled Compose file (`deploy/docker-compose.yml`,
+  `infra/docker/docker-compose*.yml` except the e2e file) sets `restart: unless-stopped` on
+  `coremail`, and the [`docker run`](#docker-run) commands below use
+  `--restart unless-stopped`. **Without a restart policy the container stays stopped** — start
+  it again with `docker start coremail`. On Kubernetes the kubelet restarts the exited container
+  (`restartPolicy: Always`, the restart count of the pod goes up).
+- **How it works:** the api-gateway (user `node`) cannot signal supervisord (root). It writes a
+  supervisor capture-mode token to its stdout; the root event listener `restart-watch`
+  (`/usr/local/lib/coremail/restart-watch.py`, `[eventlistener:restart-watch]` in
+  `supervisord-app.conf`) accepts exactly that token and only from the program `api-gateway`,
+  then sends SIGTERM to supervisord. supervisord stops all programs and exits with status 0,
+  tini exits, Docker restarts the container. A gateway started outside the container (development)
+  answers `409 RESTART_UNAVAILABLE`.
+
 ## Backup
 
 Back up three things:

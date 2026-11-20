@@ -5,6 +5,8 @@
  * PUT  /api/v1/admin/servers/settings  — save settings
  * POST /api/v1/admin/servers/settings/derive — derive URLs automatically from hostname
  * GET  /api/v1/admin/servers/health  — reachability of the services + PostgreSQL/Redis/storage
+ * GET  /api/v1/admin/servers/restart — can this gateway restart the container? (10.4.2)
+ * POST /api/v1/admin/servers/restart — restart the coremail container (10.4.2, lib/server-restart.ts)
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
@@ -14,6 +16,13 @@ import { createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail
 import { deriveServerUrls } from '../../lib/server-urls.js';
 import { publicServerSettings } from '../../lib/secrets.js';
 import { collectHealth, tcpProbe } from '../../lib/service-health.js';
+import { requireUnscoped } from '../../middleware/admin-scope.js';
+import { auditNow, auditContext, type AuditEntry } from '../../lib/audit.js';
+import {
+  createRestartCooldown, restartAvailability, writeRestartToken,
+  EXPECTED_DOWNTIME_SECONDS, RESTART_COOLDOWN_SECONDS, RESTART_DELAY_MS,
+  type CooldownClaim, type RestartAvailability,
+} from '../../lib/server-restart.js';
 
 const log = createLogger('admin:servers');
 export const adminServersRouter: RouterType = Router();
@@ -202,4 +211,97 @@ adminServersRouter.get('/health', async (_req: Request, res: Response) => {
     },
   });
   res.set('Cache-Control', 'no-store').json(report);
+});
+
+// ── Container restart (10.4.2) ───────────────────────────────────────────────
+// Area servers (write: ORGANIZATION_MANAGEMENT, SERVER_MANAGEMENT; the router
+// guard also enforces admin MFA) + requireUnscoped: a domain-scoped admin never
+// restarts the server. Mechanism and order: lib/server-restart.ts.
+
+export interface ServerRestartDeps {
+  availability: () => RestartAvailability;
+  claim: () => Promise<CooldownClaim>;
+  release: () => Promise<void>;
+  writeAudit: (entry: AuditEntry) => Promise<void>;
+  trigger: () => void;
+  delayMs: number;
+  schedule: (fn: () => void, ms: number) => void;
+}
+
+const restartCooldown = createRestartCooldown();
+const defaultRestartDeps: ServerRestartDeps = {
+  availability: () => restartAvailability(),
+  claim: () => restartCooldown.claim(),
+  release: () => restartCooldown.release(),
+  writeAudit: auditNow,
+  trigger: () => {
+    log.warn('Container restart: handing the restart token to supervisord');
+    writeRestartToken();
+    // Still alive long after the token → the listener did not act (logged for the operator).
+    setTimeout(() => log.error('Container restart was requested 60 s ago but this process is still running — is the supervisord event listener "restart-watch" running?'), 60_000).unref();
+  },
+  delayMs: RESTART_DELAY_MS,
+  schedule: (fn, ms) => { setTimeout(fn, ms); },
+};
+let restartDeps: ServerRestartDeps = defaultRestartDeps;
+
+/** Test seam: replaces parts of the restart dependencies (no argument = defaults). */
+export function setServerRestartDeps(deps?: Partial<ServerRestartDeps>): void {
+  restartDeps = deps ? { ...defaultRestartDeps, ...deps } : defaultRestartDeps;
+}
+
+// GET /api/v1/admin/servers/restart — read access suffices (the card is shown read-only)
+adminServersRouter.get('/restart', (_req: Request, res: Response) => {
+  const a = restartDeps.availability();
+  res.set('Cache-Control', 'no-store').json({
+    ...a,
+    expectedDowntimeSeconds: EXPECTED_DOWNTIME_SECONDS,
+    cooldownSeconds: RESTART_COOLDOWN_SECONDS,
+  });
+});
+
+// POST /api/v1/admin/servers/restart
+adminServersRouter.post('/restart', requireUnscoped, async (req: Request, res: Response) => {
+  const deps = restartDeps;
+  const a = deps.availability();
+  if (!a.available) {
+    res.status(409).json({ error: 'This gateway does not run inside the CoreMail container — restart it with your container tooling', code: 'RESTART_UNAVAILABLE' });
+    return;
+  }
+  const slot = await deps.claim();
+  if (!slot.ok) {
+    res.setHeader('Retry-After', String(slot.retryAfterSec));
+    res.status(429).json({ error: 'A restart was requested recently — please wait', code: 'RATE_LIMITED', retryAfter: slot.retryAfterSec });
+    return;
+  }
+  const user = req.apiUser!;
+  try {
+    // Written BEFORE anything stops — no audit row, no restart.
+    await deps.writeAudit({
+      actorId: user.userId,
+      actorEmail: user.email,
+      action: 'server.restart',
+      targetType: 'server',
+      targetName: 'coremail container',
+      changes: { expectedDowntimeSeconds: EXPECTED_DOWNTIME_SECONDS },
+      ...auditContext(req),
+    });
+  } catch (err) {
+    log.error({ err }, 'Container restart refused: the audit entry could not be written');
+    await deps.release();
+    res.status(503).json({ error: 'The restart could not be recorded in the audit log — nothing was restarted', code: 'AUDIT_UNAVAILABLE' });
+    return;
+  }
+  log.warn({ actor: user.email }, 'Container restart requested');
+
+  // Trigger only after the 202 has left (finish), or when the client went away.
+  let scheduled = false;
+  const go = () => {
+    if (scheduled) return;
+    scheduled = true;
+    deps.schedule(() => deps.trigger(), deps.delayMs);
+  };
+  res.once('finish', go);
+  res.once('close', go);
+  res.status(202).json({ restarting: true, expectedDowntimeSeconds: EXPECTED_DOWNTIME_SECONDS });
 });

@@ -221,6 +221,11 @@ Every route of `/settings` (except the public `GET /settings/public`),
 certificate choice and the dashboard hint; area servers — read for the hint, write for the
 choice and "dismiss"): **org**.
 
+| Route | Decision |
+|---|---|
+| `GET /servers/restart` (10.4.2: can this gateway restart its container?) | servers read → **org** |
+| `POST /servers/restart` (10.4.2: restart the coremail container, docs/deploy.md) | servers write (ORGANIZATION_MANAGEMENT, SERVER_MANAGEMENT) + `requireUnscoped` → **org** (a scoped admin gets `403` — area guard, plus `requireUnscoped` as a second check — even if a scope row were attached to a SERVER_MANAGEMENT account); admin MFA as for every admin route; audit `server.restart` (always written, `ALWAYS_AUDIT`) before the shutdown; one per 2 minutes server-wide |
+
 ### admin MCP interface (10.3, docs/mcp.md)
 
 | Route | Decision |

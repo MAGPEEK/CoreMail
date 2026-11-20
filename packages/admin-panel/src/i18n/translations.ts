@@ -1382,6 +1382,28 @@ const de = {
   mt_auth_title: 'Authentifizierung laut Kopfzeilen',
   mt_auth_by: 'geprüft von',
   mt_arc_seals: 'ARC-Siegel',
+
+  // ── Server → Health & Status: container restart (10.4.2) ─────────────────
+  srv_restart_title: 'CoreMail neu starten',
+  srv_restart_desc: 'Alle CoreMail-Dienste werden beendet; Docker startet den Container automatisch neu. Webmail, BCP und Mail-Protokolle sind etwa 20–30 Sekunden nicht erreichbar. PostgreSQL, Redis und Scanner laufen weiter.',
+  srv_restart_policy_note: 'Ohne Neustart-Richtlinie bleibt der Container gestoppt. Die mitgelieferten Compose-Dateien (restart: unless-stopped) und das Helm-Chart starten ihn automatisch neu; bei docker run ist --restart unless-stopped nötig.',
+  srv_restart_button: 'Neu starten …',
+  srv_restart_unavailable: 'Nicht verfügbar: Diese Instanz läuft nicht im CoreMail-Container. Starten Sie sie mit Ihren eigenen Werkzeugen neu.',
+  srv_restart_confirm_title: 'CoreMail wirklich neu starten?',
+  srv_restart_confirm_hint: 'Geben Sie zum Bestätigen {word} oder den Hostnamen {host} ein.',
+  srv_restart_confirm_hint_word: 'Geben Sie zum Bestätigen {word} ein.',
+  srv_restart_confirm_word: 'NEUSTART',
+  srv_restart_confirm_label: 'Bestätigung',
+  srv_restart_confirm_action: 'Jetzt neu starten',
+  srv_restart_rate_limited: 'Ein Neustart wurde gerade erst angefordert. Bitte warten Sie zwei Minuten, bevor Sie es erneut versuchen.',
+  srv_restart_failed: 'Neustart fehlgeschlagen',
+  srv_restart_overlay_title: 'CoreMail wird neu gestartet …',
+  srv_restart_overlay_stopping: 'Die Dienste werden beendet …',
+  srv_restart_overlay_starting: 'Der Container startet. Die Seite lädt automatisch neu, sobald CoreMail wieder antwortet.',
+  srv_restart_overlay_done: 'CoreMail ist wieder erreichbar — die Seite wird neu geladen …',
+  srv_restart_overlay_elapsed: 'Vergangene Zeit: {s} s',
+  srv_restart_timeout: 'CoreMail antwortet nach 3 Minuten noch nicht. Prüfen Sie den Container auf dem Server mit „docker compose ps“ und „docker compose logs coremail“.',
+  srv_restart_reload: 'Seite neu laden',
 } as const;
 
 type DE = typeof de;
@@ -2767,6 +2789,28 @@ const en: { [K in keyof DE]: string } = {
   mt_auth_title: 'Authentication per headers',
   mt_auth_by: 'checked by',
   mt_arc_seals: 'ARC seals',
+
+  // ── Server → Health & Status: container restart (10.4.2) ─────────────────
+  srv_restart_title: 'Restart CoreMail',
+  srv_restart_desc: 'All CoreMail services are stopped; Docker starts the container again automatically. Webmail, BCP and the mail protocols are unavailable for about 20–30 seconds. PostgreSQL, Redis and the scanners keep running.',
+  srv_restart_policy_note: 'Without a restart policy the container stays stopped. The bundled Compose files (restart: unless-stopped) and the Helm chart start it again automatically; docker run needs --restart unless-stopped.',
+  srv_restart_button: 'Restart …',
+  srv_restart_unavailable: 'Not available: this instance does not run inside the CoreMail container. Restart it with your own tooling.',
+  srv_restart_confirm_title: 'Really restart CoreMail?',
+  srv_restart_confirm_hint: 'To confirm, type {word} or the host name {host}.',
+  srv_restart_confirm_hint_word: 'To confirm, type {word}.',
+  srv_restart_confirm_word: 'RESTART',
+  srv_restart_confirm_label: 'Confirmation',
+  srv_restart_confirm_action: 'Restart now',
+  srv_restart_rate_limited: 'A restart was requested just now. Please wait two minutes before trying again.',
+  srv_restart_failed: 'Restart failed',
+  srv_restart_overlay_title: 'CoreMail is restarting …',
+  srv_restart_overlay_stopping: 'Stopping the services …',
+  srv_restart_overlay_starting: 'The container is starting. The page reloads automatically as soon as CoreMail answers again.',
+  srv_restart_overlay_done: 'CoreMail is back — reloading the page …',
+  srv_restart_overlay_elapsed: 'Elapsed: {s} s',
+  srv_restart_timeout: 'CoreMail has not answered after 3 minutes. Check the container on the server with “docker compose ps” and “docker compose logs coremail”.',
+  srv_restart_reload: 'Reload page',
 };
 
 export type TranslationKey = keyof DE;

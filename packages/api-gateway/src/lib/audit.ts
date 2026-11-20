@@ -70,7 +70,8 @@ async function isAuditEnabled(): Promise<boolean> {
 // that actually occur; the singular forms cover explicit audit() calls.
 // 10.3: `mcp.` — every admin MCP tool call and every MCP token / switch change
 // (machine-driven admin access must always stay traceable).
-export const ALWAYS_AUDIT = /^(settings\.|audit\.|audit-log\.|user\.role|mailbox(es)?\.delete|domains?\.delete|mcp\.)/i;
+// 10.4.2: `server.restart` — a restart of the whole container from the BCP.
+export const ALWAYS_AUDIT = /^(settings\.|audit\.|audit-log\.|user\.role|mailbox(es)?\.delete|domains?\.delete|mcp\.|server\.restart)/i;
 
 /**
  * Write an audit log entry asynchronously (fire-and-forget).
@@ -81,31 +82,37 @@ export const ALWAYS_AUDIT = /^(settings\.|audit\.|audit-log\.|user\.role|mailbox
  * regardless of the toggle.
  */
 export function audit(entry: AuditEntry): void {
-  void (async () => {
-    const isCritical = ALWAYS_AUDIT.test(entry.action);
-    if (!isCritical) {
-      const enabled = await isAuditEnabled();
-      if (!enabled) return;
-    }
+  void auditNow(entry).catch((err: unknown) => log.error({ err, action: entry.action }, 'Audit log write failed'));
+}
 
-    prisma.auditLog
-      .create({
-        data: {
-          ...(entry.actorId !== undefined ? { actorId: entry.actorId } : {}),
-          ...(entry.actorEmail !== undefined ? { actorEmail: entry.actorEmail } : {}),
-          action: entry.action,
-          ...(entry.targetType !== undefined ? { targetType: entry.targetType } : {}),
-          ...(entry.targetId !== undefined ? { targetId: entry.targetId } : {}),
-          ...(entry.targetName !== undefined ? { targetName: entry.targetName } : {}),
-          ...(entry.ipAddress !== undefined ? { ipAddress: entry.ipAddress } : {}),
-          ...(entry.userAgent !== undefined ? { userAgent: entry.userAgent } : {}),
-          ...(entry.changes !== undefined ? { changes: entry.changes as unknown as Record<string, string> } : {}),
-          success: entry.success ?? true,
-          ...(entry.errorMsg !== undefined ? { errorMsg: entry.errorMsg } : {}),
-        },
-      })
-      .catch((err) => log.error({ err, action: entry.action }, 'Audit log write failed'));
-  })();
+/**
+ * 10.4.2: the awaitable form of audit() — resolves once the row is in the
+ * database (or skipped: toggle off and the action is not critical) and
+ * REJECTS when the write fails. For actions that must not go ahead without
+ * their audit row (server restart).
+ */
+export async function auditNow(entry: AuditEntry): Promise<void> {
+  const isCritical = ALWAYS_AUDIT.test(entry.action);
+  if (!isCritical) {
+    const enabled = await isAuditEnabled();
+    if (!enabled) return;
+  }
+
+  await prisma.auditLog.create({
+    data: {
+      ...(entry.actorId !== undefined ? { actorId: entry.actorId } : {}),
+      ...(entry.actorEmail !== undefined ? { actorEmail: entry.actorEmail } : {}),
+      action: entry.action,
+      ...(entry.targetType !== undefined ? { targetType: entry.targetType } : {}),
+      ...(entry.targetId !== undefined ? { targetId: entry.targetId } : {}),
+      ...(entry.targetName !== undefined ? { targetName: entry.targetName } : {}),
+      ...(entry.ipAddress !== undefined ? { ipAddress: entry.ipAddress } : {}),
+      ...(entry.userAgent !== undefined ? { userAgent: entry.userAgent } : {}),
+      ...(entry.changes !== undefined ? { changes: entry.changes as unknown as Record<string, string> } : {}),
+      success: entry.success ?? true,
+      ...(entry.errorMsg !== undefined ? { errorMsg: entry.errorMsg } : {}),
+    },
+  });
 }
 
 /**
