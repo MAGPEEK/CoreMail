@@ -90,6 +90,27 @@ unset SECRETS_ENV SECRETS_LINE SECRETS_KEY
 if [ "${COREMAIL_SECRETS_FILE_IN_USE:-false}" = "true" ]; then
   log "Secrets loaded from ${SECRETS_DIR}/coremail.env (environment values take precedence)"
 fi
+# 10.4.2: the setup wizard offers the generated secrets file as a download
+# (GET /api/v1/setup/secrets-download, admin session, only while the wizard
+# runs and at most 24 h after the setup). coremail.env stays root-only: user
+# node gets a byte-identical copy in the container's /tmp (never on the host
+# mount), and the api-gateway deletes it as soon as the download window is
+# closed (also at every start once it is). Node processes hold these values
+# in their environment anyway.
+SECRETS_DOWNLOAD_DIR="/tmp/coremail-setup-secrets"
+rm -rf "${SECRETS_DOWNLOAD_DIR}" 2>/dev/null || true
+unset COREMAIL_SECRETS_DOWNLOAD_FILE
+if [ "${COREMAIL_SECRETS_GENERATED:-false}" = "true" ] \
+   && [ -f "${SECRETS_DIR}/coremail.env" ] && [ ! -L "${SECRETS_DIR}/coremail.env" ]; then
+  if ( umask 077 && mkdir "${SECRETS_DOWNLOAD_DIR}" \
+       && cp "${SECRETS_DIR}/coremail.env" "${SECRETS_DOWNLOAD_DIR}/coremail.env" ) 2>/dev/null; then
+    if [ "$(id -u)" = "0" ] && id node >/dev/null 2>&1; then
+      chown -R node:node "${SECRETS_DOWNLOAD_DIR}" 2>/dev/null || rm -rf "${SECRETS_DOWNLOAD_DIR}"
+    fi
+    [ -f "${SECRETS_DOWNLOAD_DIR}/coremail.env" ] \
+      && export COREMAIL_SECRETS_DOWNLOAD_FILE="${SECRETS_DOWNLOAD_DIR}/coremail.env"
+  fi
+fi
 MISSING=""
 [ -n "${JWT_SECRET:-}" ] || MISSING="${MISSING} JWT_SECRET"
 [ -n "${PEPPER:-}" ] || MISSING="${MISSING} PEPPER"

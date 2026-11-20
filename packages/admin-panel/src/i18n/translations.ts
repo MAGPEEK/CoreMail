@@ -505,11 +505,21 @@ const de = {
 
   // ── Dashboard (DashboardPage) ─────────────────────────────────────────────
   dash_title:               'Systemübersicht',
-  // 10.4: reminder after the setup wizard's certificate step was postponed
-  dash_setup_cert_title:    'Zertifikat noch einrichten',
-  dash_setup_cert_text:     'Bei der Ersteinrichtung wurde das TLS-Zertifikat auf später verschoben. Bis ein vertrauenswürdiges Zertifikat aktiv ist, sehen Browser und Mail-Clients ein selbstsigniertes Zertifikat.',
-  dash_setup_cert_action:   'SSL/TLS öffnen',
-  dash_setup_cert_dismiss:  'Hinweis ausblenden',
+  // 10.4.2: dashboard card "Zertifikat einrichten" (components/CertificateSetupCard.tsx)
+  dash_setup_cert_title:            'Zertifikat einrichten',
+  dash_setup_cert_text:             'Für {host} ist noch kein vertrauenswürdiges Zertifikat aktiv. Bis dahin sehen Browser und Mail-Clients ein selbstsigniertes Zertifikat.',
+  dash_setup_cert_request:          'Let\'s-Encrypt-Zertifikat für {host} anfordern',
+  dash_setup_cert_later:            'Später',
+  dash_setup_cert_phase_preflight:  'Voraussetzungen werden geprüft (bis zu 90 Sekunden)…',
+  dash_setup_cert_phase_ordering:   'Zertifikat wird bestellt…',
+  dash_setup_cert_phase_waiting:    'Let’s Encrypt prüft die Domain…',
+  dash_setup_cert_phase_activating: 'Zertifikat wird für HTTPS aktiviert…',
+  dash_setup_cert_done:             'Zertifikat ausgestellt und für HTTPS, SMTP, IMAP und POP3 aktiv.',
+  dash_setup_cert_preflight_failed: 'Die Prüfung der Voraussetzungen hat Probleme gefunden:',
+  dash_setup_cert_failed:           'Das Zertifikat konnte nicht ausgestellt werden.',
+  dash_setup_cert_timeout:          'Die Ausstellung dauert länger als erwartet. Den Stand siehst du unter Zertifikate.',
+  dash_setup_cert_details:          'Zu den Zertifikaten',
+  dash_setup_cert_retry:            'Erneut versuchen',
   dash_last_update:         'Letzte Aktualisierung:',
   dash_auto_refresh:        'Auto-Refresh alle 30s',
   dash_refresh:             'Aktualisieren',
@@ -1890,11 +1900,21 @@ const en: { [K in keyof DE]: string } = {
 
   // ── Dashboard (DashboardPage) ─────────────────────────────────────────────
   dash_title:               'System Overview',
-  // 10.4: reminder after the setup wizard's certificate step was postponed
-  dash_setup_cert_title:    'Certificate still to be set up',
-  dash_setup_cert_text:     'The TLS certificate was postponed during the initial setup. Until a trusted certificate is active, browsers and mail clients see a self-signed certificate.',
-  dash_setup_cert_action:   'Open SSL/TLS',
-  dash_setup_cert_dismiss:  'Dismiss',
+  // 10.4.2: dashboard card "Zertifikat einrichten" (components/CertificateSetupCard.tsx)
+  dash_setup_cert_title:            'Set up a certificate',
+  dash_setup_cert_text:             'No trusted certificate is active for {host} yet. Until then, browsers and mail clients see a self-signed certificate.',
+  dash_setup_cert_request:          'Request a Let\'s Encrypt certificate for {host}',
+  dash_setup_cert_later:            'Later',
+  dash_setup_cert_phase_preflight:  'Checking the prerequisites (up to 90 seconds)…',
+  dash_setup_cert_phase_ordering:   'Ordering the certificate…',
+  dash_setup_cert_phase_waiting:    'Let’s Encrypt is validating the domain…',
+  dash_setup_cert_phase_activating: 'Activating the certificate for HTTPS…',
+  dash_setup_cert_done:             'Certificate issued and active for HTTPS, SMTP, IMAP and POP3.',
+  dash_setup_cert_preflight_failed: 'The prerequisite check found problems:',
+  dash_setup_cert_failed:           'The certificate could not be issued.',
+  dash_setup_cert_timeout:          'Issuance is taking longer than expected. Check its state under Certificates.',
+  dash_setup_cert_details:          'Open certificates',
+  dash_setup_cert_retry:            'Try again',
   dash_last_update:         'Last update:',
   dash_auto_refresh:        'Auto-refresh every 30 s',
   dash_refresh:             'Refresh',

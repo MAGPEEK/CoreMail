@@ -19,11 +19,14 @@ export const setupRouter: RouterType = Router();
 // 10.4: secretsFile = host-relative hint of the secrets file the container
 // loaded (null without one), secretsGenerated = CoreMail generated it. Never a
 // secret value.
-setupRouter.get('/status', async (_req: Request, res: Response) => {
+// 10.4.2: secureConnection = this request arrived over HTTPS (TLS socket, or
+// X-Forwarded-Proto from a TRUST_PROXY-trusted proxy — req.secure); the wizard
+// warns next to the secrets download when it is false.
+setupRouter.get('/status', async (req: Request, res: Response) => {
   try {
     const setupRequired = await isSetupRequired();
     // v6: the wizard must ask for the one-time setup token (api-gateway log / SETUP_TOKEN)
-    res.json({ setupRequired, setupTokenRequired: setupRequired, ...secretsStatus() });
+    res.json({ setupRequired, setupTokenRequired: setupRequired, ...secretsStatus(), secureConnection: req.secure });
   } catch (err) {
     log.error({ err }, 'setup status check failed');
     res.status(500).json({ error: 'Internal server error' });

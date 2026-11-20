@@ -76,6 +76,33 @@ When a Let's Encrypt certificate whose domains include the public host name is i
 mail protocols still use the self-signed default, it is assigned to SMTP/IMAP/POP3
 automatically — and activated for the HTTPS proxy when no trusted HTTPS certificate is active.
 
+## Dashboard card „Zertifikat einrichten“
+
+10.4.2 (replaces the setup wizard's certificate step and its "later" hint). The BCP dashboard
+shows the card while **no trusted certificate covers the public host name** — "trusted" is the
+certificate the integrated HTTPS server serves for that name (`servedProxyCert`, SNI exact →
+wildcard → default) and `isTrustedHttpsCert` (CA-issued, not staging, currently valid, covers
+the name); shared helper `packages/api-gateway/src/lib/served-https-cert.ts`. It is shown only to
+roles that may manage certificates (area `servers`, write) and only for a real public host name
+(not `mail.local` / loopback names).
+
+- One button, **„Let's-Encrypt-Zertifikat für &lt;host&gt; anfordern“**, runs the order form's
+  flow (`packages/admin-panel/src/lib/certificateCard.ts`): `acme-suggestions` (the public host
+  name plus `autodiscover.` / `autoconfig.` of the primary domain only when their DNS points
+  here) → `preflight` → `letsencrypt` with the mail services (the issuance assigns
+  SMTP/IMAP/POP3 as above) → polls the certificate → on success
+  `POST /admin/certificates/:id/activate-https` (the same as the lock action on the SSL/TLS
+  page), so HTTPS serves it as well. Progress is shown per phase.
+- Problems of the preflight, a failed issuance (the CA's message) or a timeout are shown in the
+  card with a link to **Zertifikate**; nothing is assigned to HTTPS unless the certificate was
+  issued.
+- **„Später“** hides the card for every admin (`POST /api/v1/admin/setup-state/certificate-hint/dismiss`,
+  stored in `ServerSettings.setupCertificateHintDismissedAt`). Without dismissal it disappears by
+  itself once a trusted certificate covers the host name.
+- API: `GET /api/v1/admin/setup-state` → `{ certificateCard, publicHostname, acmeEmail }`
+  (`acmeEmail` = `ServerSettings.adminEmail`, else the viewer's own address — the ACME account
+  contact). Area `servers`; read-only roles always get `certificateCard: false`.
+
 ## What the ports really serve
 
 `GET /api/v1/admin/certificates/served` connects to every active SMTP/IMAP/POP3 listener on the

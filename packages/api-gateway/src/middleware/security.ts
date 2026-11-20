@@ -243,6 +243,20 @@ export const setupRateLimit = rateLimit({
 });
 
 /**
+ * 10.4.2: the setup wizard's follow-up routes after the commit
+ * (GET /api/v1/setup/secrets-download, POST /api/v1/setup/finish) — every
+ * request counts, 10 per hour and client IP. They are mounted before the
+ * setup router, so they never use up the budget of /verify-token + /complete.
+ */
+export const setupFollowUpRateLimit = rateLimit({
+  windowMs: 60 * 60 * 1_000,
+  max: 10,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'Too many setup attempts.' },
+});
+
+/**
  * Admin mutations (POST/PUT/PATCH/DELETE on /api/v1/admin) —
  * 200 mutating requests per 15 minutes per IP.
  */

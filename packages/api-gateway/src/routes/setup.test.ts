@@ -88,7 +88,7 @@ test('a token is generated at start and stored only as a hash', async () => {
   assert.equal(settings['setupTokenHash'], hashSetupToken(token!));
   assert.ok(!JSON.stringify(settings).includes(token!));
   const status = await (await fetch(`${base}/api/v1/setup/status`)).json() as Row;
-  assert.deepEqual(status, { setupRequired: true, setupTokenRequired: true, secretsFile: null, secretsGenerated: false });
+  assert.deepEqual(status, { setupRequired: true, setupTokenRequired: true, secretsFile: null, secretsGenerated: false, secureConnection: false });
 });
 
 test('setup without / with a wrong token is rejected', async () => {
@@ -137,6 +137,8 @@ test('legacy installation (users, no flag) is backfilled as completed', async ()
   users = [{ id: 'old', email: 'x@y.z' }];
   assert.equal(await initSetupToken(quietLog), null);
   assert.ok(settings['setupCompletedAt'] instanceof Date);
+  // 10.4.2: no wizard ran — the secrets download never opens
+  assert.equal(settings['setupWizardFinishedAt'], settings['setupCompletedAt']);
 });
 
 test('SETUP_TOKEN env replaces the generated token', async () => {
@@ -300,6 +302,22 @@ test('secrets directory: stale token files are removed (setup completed, legacy 
   } finally { s.restore(); }
 });
 
+test('10.4.2: the staged secrets copy is removed at start once the download window is closed', async () => {
+  const staged = join(scratchRoot, 'staged-coremail.env');
+  const env = { COREMAIL_SECRETS_DIR: join(scratchRoot, 'absent'), COREMAIL_SECRETS_DOWNLOAD_FILE: staged };
+  writeFileSync(staged, 'X=1');
+  settings = { id: 'singleton', setupCompletedAt: new Date(Date.now() - 60_000), setupTokenHash: null };
+  await initSetupToken(quietLog, env);
+  assert.equal(existsSync(staged), true, 'window open: kept');
+  settings = { id: 'singleton', setupCompletedAt: new Date(Date.now() - 60_000), setupWizardFinishedAt: new Date(), setupTokenHash: null };
+  await initSetupToken(quietLog, env);
+  assert.equal(existsSync(staged), false, 'wizard finished: removed');
+  writeFileSync(staged, 'X=1');
+  settings = { id: 'singleton', setupCompletedAt: new Date(Date.now() - 25 * 3600_000), setupTokenHash: null };
+  await initSetupToken(quietLog, env);
+  assert.equal(existsSync(staged), false, 'older than 24 h: removed');
+});
+
 test('without a secrets directory the token is logged as before', async () => {
   const { lines, log } = capturingLog();
   const token = (await initSetupToken(log))!;
@@ -313,7 +331,8 @@ test('status: secretsFile / secretsGenerated follow the entrypoint markers, neve
     process.env['COREMAIL_SECRETS_FILE_IN_USE'] = 'true';
     process.env['COREMAIL_SECRETS_GENERATED'] = 'true';
     let st = await get();
-    assert.deepEqual(Object.keys(st).sort(), ['secretsFile', 'secretsGenerated', 'setupRequired', 'setupTokenRequired']);
+    assert.deepEqual(Object.keys(st).sort(), ['secretsFile', 'secretsGenerated', 'secureConnection', 'setupRequired', 'setupTokenRequired']);
+    assert.equal(st['secureConnection'], false, 'plain HTTP');
     assert.equal(st['secretsFile'], './secrets/coremail.env');
     assert.equal(st['secretsGenerated'], true);
 

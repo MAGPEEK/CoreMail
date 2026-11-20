@@ -2,9 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   wizardSteps, commitStep, nextStep, previousStep, stepPosition, showTokenFileHint, secretsFilePath,
-  backupCommands, isValidDomain, isValidHostname, defaultHostname, isValidLocalPart, passwordScore,
-  blockReason, tokenNeedsCheck, completeBody, requiredDnsOk, letsEncryptAllowed, acmeDomains,
-  phaseForCertStatus, parseResume, DEFAULT_SECRETS_FILE, type WizardForm,
+  isValidDomain, isValidHostname, defaultHostname, isValidLocalPart, passwordScore,
+  blockReason, tokenNeedsCheck, completeBody, parseResume, insecureConnection, downloadFilename,
+  defaultSecretsFilename, DEFAULT_SECRETS_FILE, type WizardForm,
 } from './setupWizard.ts';
 
 const form = (over: Partial<WizardForm> = {}): WizardForm => ({
@@ -14,27 +14,29 @@ const form = (over: Partial<WizardForm> = {}): WizardForm => ({
   ...over,
 });
 
-test('steps: the secrets step shows only when the secrets were generated', () => {
-  assert.deepEqual(wizardSteps({ secretsGenerated: true }), ['welcome', 'domain', 'admin', 'secrets', 'dns', 'certificate', 'done']);
-  assert.deepEqual(wizardSteps({ secretsGenerated: false }), ['welcome', 'domain', 'admin', 'dns', 'certificate', 'done']);
+test('steps: no DNS / certificate step; the secrets step shows only when the secrets were generated', () => {
+  assert.deepEqual(wizardSteps({ secretsGenerated: true }), ['welcome', 'domain', 'admin', 'secrets', 'done']);
+  assert.deepEqual(wizardSteps({ secretsGenerated: false }), ['welcome', 'domain', 'admin', 'done']);
 });
 
-test('commit happens when leaving the last pre-commit step', () => {
-  assert.equal(commitStep(wizardSteps({ secretsGenerated: true })), 'secrets');
+test('commit happens when leaving the admin step (the download needs the admin session)', () => {
+  assert.equal(commitStep(wizardSteps({ secretsGenerated: true })), 'admin');
   assert.equal(commitStep(wizardSteps({ secretsGenerated: false })), 'admin');
 });
 
-test('navigation: next / back, closed pre-commit steps after the commit, position', () => {
+test('navigation: next / back, closed pre-commit steps after the commit, no way back from done, position', () => {
   const s = wizardSteps({ secretsGenerated: true });
   assert.equal(nextStep(s, 'welcome'), 'domain');
-  assert.equal(nextStep(s, 'secrets'), 'dns');
+  assert.equal(nextStep(s, 'admin'), 'secrets');
+  assert.equal(nextStep(s, 'secrets'), 'done');
   assert.equal(nextStep(s, 'done'), null);
+  assert.equal(nextStep(wizardSteps({ secretsGenerated: false }), 'admin'), 'done');
   assert.equal(previousStep(s, 'welcome', false), null);
   assert.equal(previousStep(s, 'admin', false), 'domain');
-  assert.equal(previousStep(s, 'dns', true), null, 'no way back into the spent setup forms');
-  assert.equal(previousStep(s, 'certificate', true), 'dns');
-  assert.deepEqual(stepPosition(s, 'welcome'), { index: 1, total: 7 });
-  assert.deepEqual(stepPosition(wizardSteps({ secretsGenerated: false }), 'done'), { index: 6, total: 6 });
+  assert.equal(previousStep(s, 'secrets', true), null, 'no way back into the spent setup forms');
+  assert.equal(previousStep(s, 'done', true), null, 'the download is closed once the summary is reached');
+  assert.deepEqual(stepPosition(s, 'welcome'), { index: 1, total: 5 });
+  assert.deepEqual(stepPosition(wizardSteps({ secretsGenerated: false }), 'done'), { index: 4, total: 4 });
 });
 
 test('token file hint only with a reported secrets file; tolerant of older servers', () => {
@@ -46,13 +48,22 @@ test('token file hint only with a reported secrets file; tolerant of older serve
   assert.equal(secretsFilePath({}), DEFAULT_SECRETS_FILE);
 });
 
-test('backup commands name the file and its directory, quote odd paths, carry no secret', () => {
-  assert.deepEqual(backupCommands('./secrets/coremail.env', '/sicherer/ort/'), {
-    copy: 'cp ./secrets/coremail.env /sicherer/ort/',
-    archive: 'tar czf coremail-secrets-$(date +%F).tar.gz ./secrets',
-  });
-  assert.equal(backupCommands("/my dir/it's.env", '/b/').copy, `cp '/my dir/it'\\''s.env' /b/`);
-  assert.equal(backupCommands('coremail.env', '/b/').archive, 'tar czf coremail-secrets-$(date +%F).tar.gz .');
+test('unencrypted connection: the server answer wins, else the page protocol', () => {
+  assert.equal(insecureConnection(false, 'https:'), true);
+  assert.equal(insecureConnection(true, 'http:'), false, 'TLS ends at a trusted proxy');
+  assert.equal(insecureConnection(undefined, 'http:'), true);
+  assert.equal(insecureConnection(undefined, 'https:'), false);
+});
+
+test('download file name: from Content-Disposition, else coremail-secrets-<host>-<date>.env, never a path', () => {
+  const now = new Date('2026-11-20T12:00:00Z');
+  assert.equal(defaultSecretsFilename('Mail.Example.com', now), 'coremail-secrets-mail.example.com-2026-11-20.env');
+  assert.equal(downloadFilename('attachment; filename="coremail-secrets-mail.example.com-2026-11-19.env"', 'x.y', now),
+    'coremail-secrets-mail.example.com-2026-11-19.env');
+  assert.equal(downloadFilename(null, 'mail.example.com', now), 'coremail-secrets-mail.example.com-2026-11-20.env');
+  assert.equal(downloadFilename('attachment; filename="../../etc/passwd"', 'mail.example.com', now),
+    'coremail-secrets-mail.example.com-2026-11-20.env');
+  assert.equal(defaultSecretsFilename('', now), 'coremail-secrets-server-2026-11-20.env');
 });
 
 test('input checks', () => {
@@ -95,8 +106,8 @@ test('"Weiter" gating per step', () => {
   assert.equal(blockReason('admin', form({ confirm: 'other-password' })), 'passwordMismatch');
   assert.equal(blockReason('admin', form()), null);
   assert.equal(blockReason('secrets', form()), 'secrets', 'only after the checkbox');
-  assert.equal(blockReason('secrets', form({ secretsConfirmed: true })), null);
-  assert.equal(blockReason('dns', form()), null);
+  assert.equal(blockReason('secrets', form({ secretsConfirmed: true })), null, 'the checkbox alone is enough, no download needed');
+  assert.equal(blockReason('done', form()), null);
 });
 
 test('token is checked again only when it changed', () => {
@@ -117,38 +128,12 @@ test('complete body: normalised names, address in the domain, optional fields on
   assert.equal('setupToken' in b, false);
 });
 
-test('DNS gating: required records and the Let\'s Encrypt offer', () => {
-  const rec = (ok: boolean) => ({ type: 'X', name: '@', expected: '', ok, found: null });
-  const all = { a: rec(true), mx: rec(true), spf: rec(true), dkim: rec(true), dmarc: rec(false), ptr: rec(false) };
-  assert.equal(requiredDnsOk(all), true, 'recommended records do not block');
-  assert.equal(requiredDnsOk({ ...all, dkim: rec(false) }), false);
-  assert.equal(requiredDnsOk(null), false);
-  assert.equal(letsEncryptAllowed({ ...all, spf: rec(false), dkim: rec(false) }), true, 'A + MX are enough');
-  assert.equal(letsEncryptAllowed({ ...all, a: rec(false) }), false);
-  assert.equal(letsEncryptAllowed({ ...all, mx: rec(false) }), false);
-  assert.equal(letsEncryptAllowed(undefined), false);
-});
-
-test('ACME order names: host name first, suggestions only when they resolve here', () => {
-  assert.deepEqual(acmeDomains('Mail.example.com', [
-    { name: 'autodiscover.example.com', resolvesHere: true },
-    { name: 'autoconfig.example.com', resolvesHere: false },
-    { name: 'mail.example.com', resolvesHere: true },
-  ]), ['mail.example.com', 'autodiscover.example.com']);
-});
-
-test('certificate status → issuance phase', () => {
-  assert.equal(phaseForCertStatus('PENDING'), 'waiting');
-  assert.equal(phaseForCertStatus('RENEWING'), 'waiting');
-  assert.equal(phaseForCertStatus('ACTIVE'), 'done');
-  assert.equal(phaseForCertStatus('ERROR'), 'failed');
-});
-
-test('resume marker: post-commit steps only, malformed input ignored', () => {
-  assert.deepEqual(parseResume(JSON.stringify({ step: 'certificate', domain: 'example.com', hostname: 'mail.example.com', email: 'a@example.com', certificateChoice: 'proxy' })),
-    { step: 'certificate', domain: 'example.com', hostname: 'mail.example.com', email: 'a@example.com', certificateChoice: 'proxy' });
+test('resume marker: post-commit steps only, older DNS / certificate markers resume at the summary, malformed input ignored', () => {
+  assert.deepEqual(parseResume(JSON.stringify({ step: 'secrets', domain: 'example.com', hostname: 'mail.example.com', email: 'a@example.com', withSecrets: true })),
+    { step: 'secrets', domain: 'example.com', hostname: 'mail.example.com', email: 'a@example.com', withSecrets: true });
+  assert.equal(parseResume(JSON.stringify({ step: 'dns', domain: 'example.com' }))?.step, 'done');
+  assert.equal(parseResume(JSON.stringify({ step: 'certificate', certificateChoice: 'later' }))?.step, 'done');
   assert.equal(parseResume(JSON.stringify({ step: 'admin' })), null, 'pre-commit steps never resume');
   assert.equal(parseResume('{'), null);
   assert.equal(parseResume(null), null);
-  assert.equal(parseResume(JSON.stringify({ step: 'dns', certificateChoice: 'x' }))?.certificateChoice, undefined);
 });

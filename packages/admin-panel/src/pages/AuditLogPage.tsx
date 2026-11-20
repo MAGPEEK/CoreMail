@@ -209,6 +209,8 @@ const ACTION_MAP: Record<string, ActionMeta> = {
   // v3.18.34: Audit-Log (sensitive GETs)
   'audit-log.export.csv.get':     { label: 'Audit-Log exportiert (CSV)',     tone: 'read' },
   'audit-log.export.json.get':    { label: 'Audit-Log exportiert (JSON)',    tone: 'read' },
+  // 10.4.2: setup wizard — secrets file downloaded (always audited)
+  'setup.secrets.download':       { label: 'Secrets-Datei heruntergeladen (Ersteinrichtung)', tone: 'read' },
   'audit-log.export.pdf.get':     { label: 'Audit-Log exportiert (PDF)',     tone: 'read' },
   'audit-log.verify-export.post': { label: 'Export-Signatur geprüft',        tone: 'read' },
   'message-trace.export.get':     { label: 'Nachrichtenverfolgung exportiert', tone: 'read' },

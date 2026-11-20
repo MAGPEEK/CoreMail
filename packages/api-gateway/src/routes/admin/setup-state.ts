@@ -1,68 +1,67 @@
 /**
- * Admin API: follow-up state of the setup wizard (10.4, docs/setup-wizard.md).
+ * Admin API: BCP dashboard card "Zertifikat einrichten" (10.4.2,
+ * docs/setup-wizard.md, docs/certificates.md).
  *
- *   GET  /api/v1/admin/setup-state                         { certificateChoice, certificateHint }
- *   PUT  /api/v1/admin/setup-state/certificate-choice      { choice: letsencrypt | proxy | later }
- *   POST /api/v1/admin/setup-state/certificate-hint/dismiss hides the dashboard hint
+ *   GET  /api/v1/admin/setup-state                          { certificateCard, publicHostname }
+ *   POST /api/v1/admin/setup-state/certificate-hint/dismiss  "Später" — hides the card for everyone
  *
- * Area `servers` (read: GET; write: PUT/POST), organisation-wide only (scope
- * decision in docs/rbac.md). The wizard calls the PUT after setup/complete with
- * the admin session it signs in with; the BCP dashboard reads the hint.
- * Mutations are audited by the admin audit middleware.
+ * Area `servers` (read: GET; write: POST), organisation-wide only (scope
+ * decision in docs/rbac.md). The card shows while no trusted certificate
+ * covers the public host name (the certificate the HTTPS server serves for it,
+ * lib/served-https-cert.ts) and only to roles that may manage certificates —
+ * read-only roles always get `certificateCard: false`. The card itself runs the
+ * certificates page's ACME flow (/admin/certificates/*). Mutations are audited
+ * by the admin audit middleware.
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
-import { z } from 'zod';
 import { prisma } from '@coremail/storage';
 import { requireArea } from '../../middleware/auth.js';
-import { CERTIFICATE_CHOICES, certificateHintVisible } from '../../lib/setup-state.js';
+import { canAccess } from '../../lib/rbac.js';
+import { certificateCardVisible, isIssuableHostname } from '../../lib/setup-state.js';
+import { loadServedHttpsCert } from '../../lib/served-https-cert.js';
 
 export const adminSetupStateRouter: RouterType = Router();
 adminSetupStateRouter.use(requireArea('servers'));
 
-async function hasTrustedCertificate(): Promise<boolean> {
-  const n = await prisma.certificate.count({
-    where: { type: { not: 'SELF_SIGNED' }, acmeStaging: false, status: { in: ['ACTIVE', 'EXPIRING', 'RENEWING'] } },
-  });
-  return n > 0;
+interface SetupState {
+  certificateCard: boolean;
+  publicHostname: string | null;
+  /** Contact address for the ACME account: ServerSettings.adminEmail, else the viewer's own address. */
+  acmeEmail: string | null;
 }
 
-async function currentState(): Promise<{ certificateChoice: string | null; certificateHint: boolean }> {
+async function currentState(req: Request): Promise<SetupState> {
   const s = await prisma.serverSettings.findUnique({
     where: { id: 'singleton' },
-    select: { setupCertificateChoice: true, setupCertificateHintDismissedAt: true },
+    select: { publicHostname: true, setupCertificateHintDismissedAt: true, adminEmail: true },
   });
-  const choice = s?.setupCertificateChoice ?? null;
-  // Only look at the certificates when the hint could show at all.
-  const hint = choice === 'later' && !s?.setupCertificateHintDismissedAt
-    ? certificateHintVisible(choice, null, await hasTrustedCertificate())
-    : false;
-  return { certificateChoice: choice, certificateHint: hint };
+  const host = (s?.publicHostname ?? '').trim().toLowerCase();
+  const publicHostname = isIssuableHostname(host) ? host : null;
+  const acmeEmail = (s?.adminEmail ?? '').trim() || req.apiUser?.email || null;
+  const base = {
+    publicHostname,
+    servedTrusted: false,
+    dismissedAt: s?.setupCertificateHintDismissedAt ?? null,
+    canManageCertificates: canAccess(req.apiUser?.role, 'servers', 'POST'),
+  };
+  // Only look at the certificates when the card could show at all.
+  if (!certificateCardVisible(base)) return { certificateCard: false, publicHostname, acmeEmail };
+  const served = await loadServedHttpsCert();
+  return {
+    certificateCard: certificateCardVisible({ ...base, servedTrusted: served.cert?.trusted === true }),
+    publicHostname,
+    acmeEmail,
+  };
 }
 
-adminSetupStateRouter.get('/', async (_req: Request, res: Response) => {
-  res.json(await currentState());
+adminSetupStateRouter.get('/', async (req: Request, res: Response) => {
+  res.json(await currentState(req));
 });
 
-const ChoiceBody = z.object({ choice: z.enum(CERTIFICATE_CHOICES) }).strict();
-
-adminSetupStateRouter.put('/certificate-choice', async (req: Request, res: Response) => {
-  const parsed = ChoiceBody.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Invalid input' });
-    return;
-  }
-  // A new choice shows the hint again when it is "later" (idempotent otherwise).
-  await prisma.serverSettings.update({
-    where: { id: 'singleton' },
-    data: { setupCertificateChoice: parsed.data.choice, setupCertificateHintDismissedAt: null },
-  });
-  res.json(await currentState());
-});
-
-adminSetupStateRouter.post('/certificate-hint/dismiss', async (_req: Request, res: Response) => {
+adminSetupStateRouter.post('/certificate-hint/dismiss', async (req: Request, res: Response) => {
   await prisma.serverSettings.update({
     where: { id: 'singleton' },
     data: { setupCertificateHintDismissedAt: new Date() },
   });
-  res.json(await currentState());
+  res.json(await currentState(req));
 });

@@ -1966,12 +1966,19 @@ model ServerSettings {
   // api-gateway log at first start (or SETUP_TOKEN env); cleared on completion.
   setupCompletedAt DateTime?
   setupTokenHash   String?
+  // 10.4.2: set when the setup wizard reached its summary (POST /setup/finish);
+  // closes the secrets download (GET /setup/secrets-download, open only while
+  // this is null and at most 24 h after setupCompletedAt). Backfilled
+  // installations get it together with setupCompletedAt.
+  setupWizardFinishedAt DateTime?
 
-  // 10.4: certificate step of the setup wizard: "letsencrypt" | "proxy" (TLS ends
-  // at a reverse proxy) | "later"; null = never asked (installations before 10.4).
-  // "later" shows a hint on the BCP dashboard until a trusted certificate exists
-  // or an admin dismisses it (setupCertificateHintDismissedAt).
+  // 10.4: certificate step of the setup wizard ("letsencrypt" | "proxy" | "later").
+  // UNUSED since 10.4.2 (the wizard has no certificate step any more); kept
+  // because schema changes stay additive.
   setupCertificateChoice          String?
+  // 10.4.2: "Später" on the BCP dashboard card "Zertifikat einrichten" (shown
+  // while no trusted certificate covers the public host name). Before 10.4.2 it
+  // hid the wizard's "certificate later" hint — same meaning, so it is reused.
   setupCertificateHintDismissedAt DateTime?
 
   // v5.6.0: jwtPrivateKey/jwtPublicKey/jwtKeyId/jwtKeyCreated removed

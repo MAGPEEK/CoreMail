@@ -16,11 +16,17 @@
  *    /secrets) the generated token is ALSO written to <dir>/setup-token (0600)
  *    and the log only names that file. The file is deleted when the setup is
  *    completed (or found completed at start). Token checks are unchanged.
+ *  - 10.4.2: once the wizard's secrets download window is closed (wizard
+ *    finished or setup completed more than 24 h ago) the copy staged for it is
+ *    deleted at start (lib/setup-secrets.ts removeStagedSecretsCopy).
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { prisma } from '@coremail/storage';
 import { safeEqual } from '@coremail/core';
-import { removeSetupTokenFile, setupTokenFileBanner, setupUrlHint, writeSetupTokenFile } from './setup-secrets.js';
+import {
+  removeSetupTokenFile, removeStagedSecretsCopy, secretsDownloadWindowOpen, setupTokenFileBanner, setupUrlHint,
+  writeSetupTokenFile,
+} from './setup-secrets.js';
 
 export function hashSetupToken(token: string): string {
   return createHash('sha256').update(token, 'utf8').digest('hex');
@@ -36,19 +42,24 @@ interface Logger {
   warn(obj: object | string, msg?: string): void;
 }
 
-interface SettingsRow { setupCompletedAt: Date | null; setupTokenHash: string | null; publicHostname?: string | null }
+interface SettingsRow {
+  setupCompletedAt: Date | null;
+  setupTokenHash: string | null;
+  setupWizardFinishedAt?: Date | null;
+  publicHostname?: string | null;
+}
+
+const SETTINGS_SELECT = { setupCompletedAt: true, setupTokenHash: true, setupWizardFinishedAt: true, publicHostname: true } as const;
 
 async function ensureSettingsRow(): Promise<SettingsRow> {
   try {
     return await prisma.serverSettings.upsert({
       where: { id: 'singleton' }, create: { id: 'singleton' }, update: {},
-      select: { setupCompletedAt: true, setupTokenHash: true, publicHostname: true },
+      select: SETTINGS_SELECT,
     });
   } catch {
     // concurrent create (P2002) — the row exists now
-    const s = await prisma.serverSettings.findUnique({
-      where: { id: 'singleton' }, select: { setupCompletedAt: true, setupTokenHash: true, publicHostname: true },
-    });
+    const s = await prisma.serverSettings.findUnique({ where: { id: 'singleton' }, select: SETTINGS_SELECT });
     return s ?? { setupCompletedAt: null, setupTokenHash: null };
   }
 }
@@ -71,15 +82,19 @@ export async function initSetupToken(log: Logger, env: NodeJS.ProcessEnv = proce
       await prisma.serverSettings.update({ where: { id: 'singleton' }, data: { setupTokenHash: null } });
     }
     await removeSetupTokenFile(env); // stale file of an earlier start
+    if (!secretsDownloadWindowOpen(s)) await removeStagedSecretsCopy(env);
     return null;
   }
   const users = await prisma.user.count();
   if (users > 0) {
-    // Installation from before v6 — mark setup as completed for good.
+    // Installation from before v6 — mark setup as completed for good. No
+    // wizard ran, so its secrets download never opens (10.4.2).
+    const now = new Date();
     await prisma.serverSettings.update({
-      where: { id: 'singleton' }, data: { setupCompletedAt: new Date(), setupTokenHash: null },
+      where: { id: 'singleton' }, data: { setupCompletedAt: now, setupWizardFinishedAt: now, setupTokenHash: null },
     });
     await removeSetupTokenFile(env);
+    await removeStagedSecretsCopy(env);
     log.info({}, 'Setup flag backfilled (users already exist)');
     return null;
   }

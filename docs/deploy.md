@@ -92,11 +92,17 @@ docker compose logs -f coremail   # first start: schema, then "CoreMail setup: o
 
 1. Read the token: `cat ./secrets/setup-token` (the files belong to root:
    `sudo cat ./secrets/setup-token` when needed, or `docker exec coremail cat /secrets/setup-token`).
-2. Open `http://<server-ip>:3000/setup` and enter the token, your mail domain, the first admin
-   address and its password. The token is deleted once the setup is complete.
-3. Sign in to the admin panel `http://<server-ip>:3000/bcp/`, issue a Let's Encrypt certificate
-   under **Certificates** (DNS must point at the server first) and create the mailboxes. From
-   then on the webmail is at `https://<your-host>/`, the admin panel at `https://<your-host>/bcp/`.
+2. Open `http://<server-ip>:3000/setup` and enter the token, your mail domain and host name, the
+   first admin address and its password. The token is deleted once the setup is complete.
+3. **Secrets sichern**: download the secrets file with **Secrets herunterladen**
+   (`coremail-secrets-<host>-<date>.env`, possible only while the wizard runs and at most 24 h
+   after the setup) and keep it off the server. Over plain HTTP the wizard warns to download it
+   only on a local network; you can also copy `./secrets/coremail.env` yourself.
+4. The wizard has no DNS or certificate step: sign in to the admin panel
+   `http://<server-ip>:3000/bcp/`, enter the DNS records shown under **Domains**, then request
+   the Let's Encrypt certificate with the dashboard card **Zertifikat einrichten** (or under
+   **Certificates**; DNS must point at the server first) and create the mailboxes. From then on
+   the webmail is at `https://<your-host>/`, the admin panel at `https://<your-host>/bcp/`.
 
 Details of every step: [setup-wizard.md](setup-wizard.md).
 
@@ -195,9 +201,9 @@ know the rspamd controller: it restricts password-less access to the CoreMail co
 Back up three things:
 
 1. **`./secrets/`** — right after the first start, off the server (password manager, offline
-   copy). Without `PEPPER` no password works; without `JWT_SECRET` + `PEPPER` enrolled
-   two-factor logins and encrypted backups cannot be read. The files belong to root:
-   `sudo tar czf coremail-secrets.tar.gz secrets`.
+   copy). The setup wizard offers `coremail.env` as a download. Without `PEPPER` no password
+   works; without `JWT_SECRET` + `PEPPER` enrolled two-factor logins and encrypted backups cannot
+   be read. The files belong to root: `sudo tar czf coremail-secrets.tar.gz secrets`.
 2. **The database** (`pgdata`): profile `backup`, or by hand
    `docker exec coremail-postgres pg_dump -U coremail -Fc coremail > coremail-$(date +%F).dump`.
 3. **The mail contents** (`coremail-data`, plus `miniodata` with `OBJECT_STORAGE=minio`):

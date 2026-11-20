@@ -5,7 +5,8 @@
  *  - The container entrypoint creates/loads <dir>/coremail.env
  *    (infra/docker/init-secrets.mjs) and exports two markers this module reads:
  *    COREMAIL_SECRETS_FILE_IN_USE and COREMAIL_SECRETS_GENERATED. The file
- *    itself belongs to root and is never read here.
+ *    itself belongs to root; the setup wizard's download (10.4.2) reads the
+ *    copy the entrypoint stages for it (see "Secrets download" below).
  *  - While the initial setup is pending, the one-time setup token is written
  *    to <dir>/setup-token (0600, atomic) — the log then names the file instead
  *    of printing the token. The file is deleted when the setup completes.
@@ -17,7 +18,7 @@
 import { randomBytes } from 'node:crypto';
 import { promises as fs, constants } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
-import { join } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 
 export const SETUP_TOKEN_FILE = 'setup-token';
 export const SECRETS_FILE = 'coremail.env';
@@ -100,6 +101,90 @@ export async function removeSetupTokenFile(env: Env = process.env): Promise<bool
   } catch {
     return false;
   }
+}
+
+// ── Secrets download of the setup wizard (10.4.2) ────────────────────────────
+//
+// GET /api/v1/setup/secrets-download hands the admin the secrets file while
+// the wizard runs. The file in <dir> belongs to root (0600) and is never made
+// readable for user node: the entrypoint stages a byte-identical copy owned by
+// node in the container's /tmp and names it in COREMAIL_SECRETS_DOWNLOAD_FILE
+// (only when the secrets were generated). The api-gateway deletes that copy as
+// soon as the download window is closed. Without the variable (development,
+// tests, a container running as the file's owner) <dir>/coremail.env is read
+// directly — and never deleted.
+
+/** The download is possible at most this long after the setup was completed. */
+export const SECRETS_DOWNLOAD_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/** Largest file served (the generator writes a few hundred bytes). */
+const MAX_DOWNLOAD_BYTES = 64 * 1024;
+
+export interface SetupWindowState {
+  setupCompletedAt?: Date | null;
+  setupWizardFinishedAt?: Date | null;
+}
+
+/**
+ * Open only after the setup was completed, while the wizard has not reached
+ * its summary, and at most 24 h after the completion.
+ */
+export function secretsDownloadWindowOpen(s: SetupWindowState | null | undefined, now: Date = new Date()): boolean {
+  const done = s?.setupCompletedAt;
+  if (!(done instanceof Date) || Number.isNaN(done.getTime())) return false;
+  if (s?.setupWizardFinishedAt) return false;
+  const age = now.getTime() - done.getTime();
+  return age >= 0 && age <= SECRETS_DOWNLOAD_WINDOW_MS;
+}
+
+/** The staged copy named by the entrypoint, or null (then the real file is read). */
+function stagedCopyPath(env: Env): string | null {
+  const p = (env['COREMAIL_SECRETS_DOWNLOAD_FILE'] ?? '').trim();
+  if (!p || !isAbsolute(p)) return null;
+  // never treat the real secrets file as a disposable copy
+  if (resolve(p) === resolve(secretsDir(env), SECRETS_FILE)) return null;
+  return p;
+}
+
+/** The file the download serves. */
+export function secretsDownloadPath(env: Env = process.env): string {
+  return stagedCopyPath(env) ?? join(secretsDir(env), SECRETS_FILE);
+}
+
+/**
+ * Reads the file for the download: no symlink, a regular file with one link,
+ * at most 64 KiB. null when it is absent or unreadable (the route answers 404).
+ */
+export async function readSecretsForDownload(env: Env = process.env): Promise<Buffer | null> {
+  let handle: FileHandle | null = null;
+  try {
+    handle = await fs.open(secretsDownloadPath(env), constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    const st = await handle.stat();
+    if (!st.isFile() || st.nlink > 1 || st.size > MAX_DOWNLOAD_BYTES) return null;
+    return await handle.readFile();
+  } catch {
+    return null;
+  } finally {
+    if (handle) await handle.close().catch(() => undefined);
+  }
+}
+
+/** Deletes the staged copy (never the real secrets file). Returns true when a file was removed. */
+export async function removeStagedSecretsCopy(env: Env = process.env): Promise<boolean> {
+  const p = stagedCopyPath(env);
+  if (!p) return false;
+  try {
+    await fs.unlink(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** `coremail-secrets-<host>-<YYYY-MM-DD>.env` (host reduced to safe characters). */
+export function secretsDownloadFilename(host: string | null | undefined, now: Date = new Date()): string {
+  const h = (host ?? '').trim().toLowerCase().replace(/[^a-z0-9.-]+/g, '-').replace(/^[.-]+|[.-]+$/g, '').slice(0, 100);
+  return `coremail-secrets-${h || 'server'}-${now.toISOString().slice(0, 10)}.env`;
 }
 
 /** Schema defaults / loopback names — not an address a browser elsewhere can use. */

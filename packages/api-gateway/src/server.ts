@@ -64,6 +64,7 @@ import { reconcileProtocolCertStateLocked } from './lib/protocol-cert-assign.js'
 import { pushRouter } from './routes/push.js';
 import { smimeRouter } from './routes/smime.js';
 import { setupRouter } from './routes/setup.js';
+import { setupFollowUpRouter } from './routes/setup-followup.js';
 import { authRouter } from './routes/auth.js';
 import { ssoRouter } from './routes/sso.js';
 import { startLdapSyncScheduler } from '@coremail/auth-ldap';
@@ -396,6 +397,9 @@ app.post('/api/v1/events/ticket', requireAuth, eventTicketHandler);
 app.get('/api/v1/events', requireSseAuth, sseHandler);
 
 // ── Feature Routes ────────────────────────────────────────────────────────────
+// 10.4.2: secrets download + finish marker (admin session, own rate limit) —
+// before the setup router so they never count against /verify-token + /complete.
+app.use('/api/v1/setup', setupFollowUpRouter);
 app.use('/api/v1/setup', setupRateLimit, setupRouter);
 
 app.use('/api/v1/mail/recoverable', recoverableRouter); // v8.1 Recover deleted items
