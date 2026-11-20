@@ -89,8 +89,8 @@ Alles zu dieser Datei — Ports, DNS, Sicherung, eigene Einstellungen, Deinstall
 1. Warte etwa eine Minute, bis der Container gesund ist (`docker compose ps` zeigt `healthy`).
 2. Lies das einmalige Setup-Token aus: `./secrets/setup-token` — oder `docker exec coremail cat /secrets/setup-token`.
 3. Öffne `http://<server-ip>:3000/setup` und gib das Token, deine Mail-Domain, die erste Admin-Adresse und ein Passwort ein.
-4. Stelle im Admin-Panel unter **Zertifikate** ein Let's-Encrypt-Zertifikat aus und lege die Postfächer an. Das Webmail erreichst du unter `https://<dein-host>/`, das Admin-Panel unter `https://<dein-host>/bcp/`.
-5. Sichere das Verzeichnis `secrets` außerhalb des Servers (Passwortmanager, Offline-Kopie).
+4. Trage im Admin-Panel die DNS-Einträge aus **Domains** ein, fordere das Let's-Encrypt-Zertifikat über die Dashboard-Karte **Zertifikat einrichten** (oder unter **Zertifikate**) an und lege die Postfächer an. Das Webmail erreichst du unter `https://<dein-host>/`, das Admin-Panel unter `https://<dein-host>/bcp/`.
+5. Sichere das Verzeichnis `secrets` außerhalb des Servers (Passwortmanager, Offline-Kopie) — der Einrichtungsassistent bietet `coremail.env` zum Download an.
 
 | Port | Zweck |
 |------|-------|

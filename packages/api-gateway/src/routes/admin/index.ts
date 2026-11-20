@@ -83,7 +83,7 @@ export const ADMIN_MOUNTS: ReadonlyArray<readonly [string, Router]> = [
   ['/webmail-policies',     adminWebmailPoliciesRouter],
   // 10.3: admin MCP interface — switch + allowlist (area servers), own tokens (every admin role)
   ['/mcp',                  adminMcpRouter],
-  // 10.4: setup wizard follow-up (certificate choice + dashboard hint, area servers)
+  // 10.4.2: BCP dashboard card "Zertifikat einrichten" (area servers)
   ['/setup-state',          adminSetupStateRouter],
 ];
 

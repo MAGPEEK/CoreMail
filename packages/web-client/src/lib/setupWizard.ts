@@ -1,15 +1,17 @@
 /**
  * Pure logic of the first-run setup wizard (10.4, pages/SetupPage.tsx,
  * docs/setup-wizard.md): which steps show, when "Weiter" is allowed, input
- * checks, the DNS / certificate gating and the resume marker.
+ * checks, the secrets download and the resume marker.
  *
- * Order: welcome (token) → domain → admin → [secrets] → ⟨POST /setup/complete
- * + sign-in⟩ → dns → certificate → done. The domain (and its DKIM key) exists
- * only after /setup/complete, so the DNS step shows the real records. Steps
- * before the commit can not be revisited once setup is complete.
+ * Order (10.4.2): welcome (token) → domain → admin → ⟨POST /setup/complete +
+ * sign-in⟩ → [secrets — download, only when generated] → done. The secrets
+ * download needs the admin session, so the commit happens when leaving the
+ * admin step. Steps before the commit can not be revisited once setup is
+ * complete; reaching "done" closes the download (POST /setup/finish), so there
+ * is no way back from it either. DNS and the certificate are set up in the BCP.
  */
 
-export type WizardStepId = 'welcome' | 'domain' | 'admin' | 'secrets' | 'dns' | 'certificate' | 'done';
+export type WizardStepId = 'welcome' | 'domain' | 'admin' | 'secrets' | 'done';
 
 /** What GET /api/v1/setup/status answers (fields of newer servers optional). */
 export interface SetupStatus {
@@ -19,6 +21,8 @@ export interface SetupStatus {
   secretsFile?: string | null;
   /** True when the installation generated the secrets (they must be backed up). */
   secretsGenerated?: boolean;
+  /** 10.4.2: the request reached the server over HTTPS (req.secure). */
+  secureConnection?: boolean;
 }
 
 export interface WizardOptions {
@@ -27,11 +31,11 @@ export interface WizardOptions {
 }
 
 export function wizardSteps(opts: WizardOptions): WizardStepId[] {
-  return ['welcome', 'domain', 'admin', ...(opts.secretsGenerated ? ['secrets' as const] : []), 'dns', 'certificate', 'done'];
+  return ['welcome', 'domain', 'admin', ...(opts.secretsGenerated ? ['secrets' as const] : []), 'done'];
 }
 
 /** Steps that run before POST /setup/complete. */
-export const PRE_COMMIT_STEPS: readonly WizardStepId[] = ['welcome', 'domain', 'admin', 'secrets'];
+export const PRE_COMMIT_STEPS: readonly WizardStepId[] = ['welcome', 'domain', 'admin'];
 
 export function isPreCommit(step: WizardStepId): boolean {
   return PRE_COMMIT_STEPS.includes(step);
@@ -50,11 +54,12 @@ export function nextStep(steps: readonly WizardStepId[], current: WizardStepId):
 
 /**
  * The step "Zurück" leads to, or null when there is none. After the commit the
- * steps before it are closed (the installation exists; the token is spent).
+ * steps before it are closed (the installation exists; the token is spent);
+ * "done" has closed the secrets download, so it has no way back.
  */
 export function previousStep(steps: readonly WizardStepId[], current: WizardStepId, committed: boolean): WizardStepId | null {
   const i = steps.indexOf(current);
-  if (i <= 0) return null;
+  if (i <= 0 || current === 'done') return null;
   const prev = steps[i - 1]!;
   if (committed && isPreCommit(prev)) return null;
   return prev;
@@ -72,24 +77,35 @@ export function showTokenFileHint(status: Pick<SetupStatus, 'secretsFile'> | nul
 
 export const DEFAULT_SECRETS_FILE = './secrets/coremail.env';
 
-/** The secrets file to show in the backup step. */
+/** The secrets file named in the backup step's hint. */
 export function secretsFilePath(status: Pick<SetupStatus, 'secretsFile'> | null | undefined): string {
   return showTokenFileHint(status) ? status!.secretsFile!.trim() : DEFAULT_SECRETS_FILE;
 }
 
-/** Quote a path for a POSIX shell when it contains anything but safe characters. */
-function shellPath(p: string): string {
-  return /^[\w./~-]+$/.test(p) ? p : `'${p.replace(/'/g, `'\\''`)}'`;
+// ── Secrets download (GET /api/v1/setup/secrets-download) ─────────────────────
+
+export const SECRETS_DOWNLOAD_PATH = '/api/v1/setup/secrets-download';
+
+/**
+ * The connection is unencrypted: the server's answer (status.secureConnection)
+ * wins; servers before 10.4.2 do not send it — then the page's own protocol.
+ */
+export function insecureConnection(secureConnection: boolean | undefined, pageProtocol: string): boolean {
+  if (typeof secureConnection === 'boolean') return !secureConnection;
+  return pageProtocol !== 'https:';
 }
 
-/** Copyable backup commands for the secrets file (never contains secret values). */
-export function backupCommands(file: string, target: string): { copy: string; archive: string } {
-  const slash = file.lastIndexOf('/');
-  const dir = slash > 0 ? file.slice(0, slash) : '.';
-  return {
-    copy: `cp ${shellPath(file)} ${shellPath(target)}`,
-    archive: `tar czf coremail-secrets-$(date +%F).tar.gz ${shellPath(dir)}`,
-  };
+/** `coremail-secrets-<host>-<YYYY-MM-DD>.env` — the same rule as the server. */
+export function defaultSecretsFilename(host: string, now: Date = new Date()): string {
+  const h = host.trim().toLowerCase().replace(/[^a-z0-9.-]+/g, '-').replace(/^[.-]+|[.-]+$/g, '').slice(0, 100);
+  return `coremail-secrets-${h || 'server'}-${now.toISOString().slice(0, 10)}.env`;
+}
+
+/** File name from Content-Disposition (`filename="…"`), else the default; never a path. */
+export function downloadFilename(contentDisposition: string | null | undefined, host: string, now: Date = new Date()): string {
+  const m = /filename="([^"\\/]+)"/i.exec(contentDisposition ?? '');
+  const name = m?.[1]?.trim();
+  return name && /^[\w.-]+$/.test(name) ? name : defaultSecretsFilename(host, now);
 }
 
 // ── Input checks ──────────────────────────────────────────────────────────────
@@ -158,9 +174,10 @@ export type BlockReason =
   | 'token' | 'domain' | 'hostname' | 'organization' | 'localPart' | 'passwordLength' | 'passwordMismatch' | 'secrets';
 
 /**
- * Why "Weiter" is not allowed on a pre-commit step (null = allowed). The
- * welcome step is passed by verifying the token, which the page does on
- * "Weiter" — here it only needs a non-empty token.
+ * Why "Weiter" is not allowed on a step (null = allowed). The welcome step is
+ * passed by verifying the token, which the page does on "Weiter" — here it only
+ * needs a non-empty token. The secrets step needs the checkbox (a download is
+ * not required: some admins copy the file on the server themselves).
  */
 export function blockReason(step: WizardStepId, f: WizardForm): BlockReason | null {
   switch (step) {
@@ -202,76 +219,38 @@ export function completeBody(f: WizardForm): Record<string, string> {
   };
 }
 
-// ── DNS + certificate ─────────────────────────────────────────────────────────
-
-export interface DnsRecordResult {
-  type: string;
-  name: string;
-  expected: string;
-  ok: boolean;
-  found: string | null;
-  warning?: string;
-  error?: string;
-}
-
-/** The records the wizard shows: required first, then recommended. */
-export const REQUIRED_DNS_KEYS = ['a', 'mx', 'spf', 'dkim'] as const;
-export const RECOMMENDED_DNS_KEYS = ['dmarc', 'ptr'] as const;
-
-export function requiredDnsOk(records: Partial<Record<string, DnsRecordResult>> | null | undefined): boolean {
-  return !!records && REQUIRED_DNS_KEYS.every((k) => records[k]?.ok === true);
-}
-
-/** Let's Encrypt is offered only when the host's A record and the MX check pass. */
-export function letsEncryptAllowed(records: Partial<Record<string, DnsRecordResult>> | null | undefined): boolean {
-  return !!records && records['a']?.ok === true && records['mx']?.ok === true;
-}
-
-export type CertificateChoice = 'letsencrypt' | 'proxy' | 'later';
-
-/** Names of a Let's Encrypt order: the host name plus suggested names that resolve here. */
-export function acmeDomains(hostname: string, sans: ReadonlyArray<{ name: string; resolvesHere: boolean }>): string[] {
-  const host = normalizeHost(hostname);
-  return [host, ...sans.filter((s) => s.resolvesHere).map((s) => normalizeHost(s.name))]
-    .filter((d, i, a) => d !== '' && a.indexOf(d) === i);
-}
-
-export type IssuancePhase = 'idle' | 'preflight' | 'ordering' | 'waiting' | 'done' | 'failed';
-
-/** Certificate status from GET /admin/certificates/:id → issuance phase. */
-export function phaseForCertStatus(status: string): IssuancePhase {
-  if (status === 'ACTIVE' || status === 'EXPIRING') return 'done';
-  if (status === 'ERROR' || status === 'EXPIRED') return 'failed';
-  return 'waiting';
-}
-
 // ── Resume after a reload (post-commit steps only) ────────────────────────────
 
 export const RESUME_KEY = 'coremail:setup-wizard';
 
 export interface ResumeState {
-  step: 'dns' | 'certificate' | 'done';
+  step: 'secrets' | 'done';
   domain: string;
   hostname: string;
   email: string;
   /** The secrets step was part of this run (keeps "Schritt x von n" stable). */
   withSecrets?: boolean;
-  certificateChoice?: CertificateChoice;
+  /** The secrets checkbox was ticked (kept across a reload of the secrets step). */
+  secretsConfirmed?: boolean;
 }
 
-/** Parses the sessionStorage marker; null when absent or malformed. Holds no secrets. */
+/**
+ * Parses the sessionStorage marker; null when absent or malformed. Holds no
+ * secrets. A marker of 10.4.0/10.4.1 (steps "dns" / "certificate") resumes at
+ * the summary — those steps no longer exist.
+ */
 export function parseResume(raw: string | null | undefined): ResumeState | null {
   if (!raw) return null;
   try {
     const v = JSON.parse(raw) as Record<string, unknown>;
-    const step = v['step'];
-    if (step !== 'dns' && step !== 'certificate' && step !== 'done') return null;
+    const legacy = v['step'] === 'dns' || v['step'] === 'certificate';
+    const step = legacy ? 'done' : v['step'];
+    if (step !== 'secrets' && step !== 'done') return null;
     const str = (k: string) => (typeof v[k] === 'string' ? v[k] as string : '');
-    const choice = v['certificateChoice'];
     return {
       step, domain: str('domain'), hostname: str('hostname'), email: str('email'),
       ...(v['withSecrets'] === true ? { withSecrets: true } : {}),
-      ...(choice === 'letsencrypt' || choice === 'proxy' || choice === 'later' ? { certificateChoice: choice } : {}),
+      ...(v['secretsConfirmed'] === true ? { secretsConfirmed: true } : {}),
     };
   } catch {
     return null;

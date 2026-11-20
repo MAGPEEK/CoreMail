@@ -70,7 +70,8 @@ async function isAuditEnabled(): Promise<boolean> {
 // that actually occur; the singular forms cover explicit audit() calls.
 // 10.3: `mcp.` — every admin MCP tool call and every MCP token / switch change
 // (machine-driven admin access must always stay traceable).
-export const ALWAYS_AUDIT = /^(settings\.|audit\.|audit-log\.|user\.role|mailbox(es)?\.delete|domains?\.delete|mcp\.)/i;
+// 10.4.2: `setup.secrets.` — the setup wizard's download of the secrets file.
+export const ALWAYS_AUDIT = /^(settings\.|audit\.|audit-log\.|user\.role|mailbox(es)?\.delete|domains?\.delete|mcp\.|setup\.secrets\.)/i;
 
 /**
  * Write an audit log entry asynchronously (fire-and-forget).

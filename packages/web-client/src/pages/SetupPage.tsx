@@ -4,34 +4,32 @@
  *   welcome (setup token, checked with POST /setup/verify-token)
  *   → domain + host name + organisation
  *   → admin account (MFA only offered)
- *   → [back up secrets — only when the installation generated them]
  *   ⟨POST /setup/complete, then sign-in with the new admin (normal /auth/login)⟩
- *   → DNS (BCP domain DNS check with the admin session)
- *   → certificate (Let's Encrypt / reverse proxy / later)
- *   → done (summary + links)
+ *   → [back up secrets — download, only when the installation generated them]
+ *   → done (summary + links; POST /setup/finish closes the secrets download)
  *
- * Step logic lives in lib/setupWizard.ts. After the commit the steps before it
- * are closed; a reload resumes at the post-commit step from a per-tab marker
- * (sessionStorage, no secrets) as long as the admin session is valid.
+ * 10.4.2: no DNS and no certificate step any more — both are set up in the BCP
+ * (Domains, Zertifikate). Step logic lives in lib/setupWizard.ts. After the
+ * commit the steps before it are closed; a reload resumes at the post-commit
+ * step from a per-tab marker (sessionStorage, no secrets) as long as the admin
+ * session is valid.
  */
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import { Mail, ExternalLink, ShieldCheck, Server, MonitorSmartphone } from 'lucide-react';
+import { Fragment, useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { Mail, ExternalLink, ShieldCheck, Server, MonitorSmartphone, Download, AlertTriangle, Loader2 } from 'lucide-react';
 import { useBranding } from '../hooks/useBranding.js';
 import { useT, fmt } from '../i18n/useT.js';
 import type { TranslationKey } from '../i18n/translations.js';
-import { api, ensureSession, login } from '../api/client.js';
+import { api, apiFetch, ensureSession, login, saveBlob } from '../api/client.js';
 import { useAuthStore } from '../store/auth.js';
 import type { UserProfile } from '../api/types.js';
 import { AuthShell } from '../components/AuthShell.js';
 import {
   wizardSteps, commitStep, nextStep, previousStep, isPreCommit, blockReason, tokenNeedsCheck, completeBody,
-  defaultHostname, normalizeHost, showTokenFileHint, secretsFilePath, backupCommands, requiredDnsOk,
-  letsEncryptAllowed, loadResume, saveResume, clearResume,
-  type BlockReason, type CertificateChoice, type SetupStatus, type WizardForm, type WizardStepId,
+  defaultHostname, normalizeHost, showTokenFileHint, secretsFilePath, insecureConnection, downloadFilename,
+  SECRETS_DOWNLOAD_PATH, loadResume, saveResume, clearResume,
+  type BlockReason, type SetupStatus, type WizardForm, type WizardStepId,
 } from '../lib/setupWizard.js';
-import { Alert, CopyValue, Field, INPUT_CLASS, PasswordMeter, STEP_LABEL, WizardProgress } from '../components/setup/WizardParts.js';
-import { DnsStep, type DnsReport } from '../components/setup/DnsStep.js';
-import { CertificateStep } from '../components/setup/CertificateStep.js';
+import { Alert, Field, INPUT_CLASS, PasswordMeter, STEP_LABEL, WizardProgress } from '../components/setup/WizardParts.js';
 
 const REASON_TEXT: Record<BlockReason, TranslationKey> = {
   token: 'wiz_err_token',
@@ -64,11 +62,14 @@ interface Summary {
   domain: string;
   hostname: string;
   email: string;
-  dnsOk: boolean | null;
-  certificate: CertificateChoice | null;
-  certificateIssued: boolean;
   sessionMissing: boolean;
 }
+
+type DownloadState =
+  | { kind: 'idle' }
+  | { kind: 'busy' }
+  | { kind: 'done'; filename: string }
+  | { kind: 'error'; reason: 'gone' | 'failed' | 'session' };
 
 // ── Step bodies (module level) ────────────────────────────────────────────────
 
@@ -194,24 +195,50 @@ function AdminStep({ form, invalidField, onChange }: {
   );
 }
 
-function SecretsStep({ form, status, invalid, onChange }: {
-  form: WizardForm; status: SetupStatus | null; invalid: boolean; onChange: (p: Partial<WizardForm>) => void;
+const DOWNLOAD_ERROR: Record<'gone' | 'failed' | 'session', TranslationKey> = {
+  gone: 'wiz_secrets_download_gone',
+  failed: 'wiz_secrets_download_failed',
+  session: 'wiz_secrets_download_session',
+};
+
+function SecretsStep({ form, status, insecure, sessionMissing, download, invalid, onDownload, onChange }: {
+  form: WizardForm; status: SetupStatus | null; insecure: boolean; sessionMissing: boolean; download: DownloadState;
+  invalid: boolean; onDownload: () => void; onChange: (p: Partial<WizardForm>) => void;
 }) {
   const t = useT();
-  const file = secretsFilePath(status);
-  const cmds = backupCommands(file, t('wiz_secrets_target'));
   return (
     <div className="space-y-4">
       <p className="text-sm text-fg-muted">{t('wiz_secrets_intro')}</p>
-      <CopyValue value={file} label={t('wiz_step_secrets')} />
       <Alert tone="warning">{t('wiz_secrets_warning')}</Alert>
-      <div className="space-y-2">
-        <p className="text-sm text-fg-muted">{t('wiz_secrets_copy_label')}</p>
-        <CopyValue value={cmds.copy} label="cp" />
-        <p className="text-sm text-fg-muted">{t('wiz_secrets_archive_label')}</p>
-        <CopyValue value={cmds.archive} label="tar" />
-      </div>
-      <p className="text-xs text-fg-subtle">{t('wiz_secrets_offsite')} {t('wiz_secrets_no_values')}</p>
+      {!sessionMissing && (
+        <div className="space-y-1.5">
+          <button
+            type="button" onClick={onDownload} disabled={download.kind === 'busy'}
+            className={`${BUTTON_SECONDARY} inline-flex items-center gap-2 disabled:opacity-60`}
+          >
+            {download.kind === 'busy'
+              ? <Loader2 size={16} className="animate-spin" aria-hidden="true" />
+              : <Download size={16} aria-hidden="true" />}
+            {t('wiz_secrets_download')}
+          </button>
+          {insecure && (
+            <p className="flex items-start gap-1.5 text-xs text-warning-fg">
+              <AlertTriangle size={14} className="shrink-0 mt-px" aria-hidden="true" />{t('wiz_secrets_insecure')}
+            </p>
+          )}
+          <div aria-live="polite">
+            {download.kind === 'done' && (
+              <p className="text-xs text-success-fg">{fmt(t('wiz_secrets_downloaded'), { file: download.filename })}</p>
+            )}
+          </div>
+          {download.kind === 'error' && <Alert tone="danger">{t(DOWNLOAD_ERROR[download.reason])}</Alert>}
+        </div>
+      )}
+      {sessionMissing && <Alert tone="info">{t('wiz_secrets_download_session')}</Alert>}
+      <p className="text-xs text-fg-subtle">{t('wiz_secrets_offsite')}</p>
+      <p className="text-xs text-fg-subtle">
+        {fmt(t('wiz_secrets_location'), { file: secretsFilePath(status) })}
+      </p>
       <label htmlFor="wiz-secrets-ok" className="flex items-start gap-2 text-sm text-fg cursor-pointer">
         <input
           id="wiz-secrets-ok" type="checkbox" checked={form.secretsConfirmed} aria-invalid={invalid}
@@ -224,21 +251,23 @@ function SecretsStep({ form, status, invalid, onChange }: {
   );
 }
 
+/** Renders `{key}` placeholders of a translated sentence as the given nodes. */
+function withLinks(text: string, links: Record<string, ReactNode>): ReactNode[] {
+  return text.split(/(\{\w+\})/).map((part, i) => {
+    const m = /^\{(\w+)\}$/.exec(part);
+    return <Fragment key={i}>{m && m[1]! in links ? links[m[1]!] : part}</Fragment>;
+  });
+}
+
 function DoneStep({ summary }: { summary: Summary }) {
   const t = useT();
-  const dns = summary.dnsOk === null ? t('wiz_summary_dns_unknown') : summary.dnsOk ? t('wiz_summary_dns_ok') : t('wiz_summary_dns_open');
-  const cert = summary.certificate === 'letsencrypt'
-    ? (summary.certificateIssued ? t('wiz_summary_cert_le') : t('wiz_summary_cert_le_pending'))
-    : summary.certificate === 'proxy' ? t('wiz_summary_cert_proxy')
-      : summary.certificate === 'later' ? t('wiz_summary_cert_later') : t('wiz_summary_cert_none');
   const rows: Array<[string, string]> = [
     [t('wiz_summary_domain'), summary.domain],
     [t('wiz_summary_hostname'), summary.hostname],
     [t('wiz_summary_admin'), summary.email],
-    [t('wiz_summary_dns'), dns],
-    [t('wiz_summary_cert'), cert],
   ];
   const linkCls = 'flex items-center gap-2 rounded-lg border border-line px-3 py-2.5 text-sm text-fg hover:bg-surface-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-fg';
+  const inlineLink = 'underline underline-offset-2 text-accent-fg hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-fg rounded';
   const leave = () => clearResume();
   return (
     <div className="space-y-5">
@@ -252,6 +281,12 @@ function DoneStep({ summary }: { summary: Summary }) {
           </div>
         ))}
       </dl>
+      <p className="text-sm text-fg-muted">
+        {withLinks(t('wiz_done_bcp_dns_cert'), {
+          domains: <a href="/bcp/domains" target="_blank" rel="noopener" className={inlineLink}>{t('wiz_done_bcp_domains')}<span className="sr-only"> {t('wiz_new_tab')}</span></a>,
+          certificates: <a href="/bcp/certificates" target="_blank" rel="noopener" className={inlineLink}>{t('wiz_done_bcp_certificates')}<span className="sr-only"> {t('wiz_new_tab')}</span></a>,
+        })}
+      </p>
       <div>
         <h3 className="text-sm font-semibold text-fg mb-2">{t('wiz_next_steps')}</h3>
         <ul className="grid gap-2 sm:grid-cols-2">
@@ -301,14 +336,11 @@ export function SetupPage() {
   const [error, setError] = useState<string | null>(null);
   const [invalidField, setInvalidField] = useState<string | null>(null);
   const [alreadyDone, setAlreadyDone] = useState(false);
-  const [dnsReport, setDnsReport] = useState<DnsReport | null>(null);
-  const [dnsLoading, setDnsLoading] = useState(false);
-  const [dnsError, setDnsError] = useState<string | null>(null);
-  const [summary, setSummary] = useState<Summary>({
-    domain: '', hostname: '', email: '', dnsOk: null, certificate: null, certificateIssued: false, sessionMissing: false,
-  });
+  const [download, setDownload] = useState<DownloadState>({ kind: 'idle' });
+  const [summary, setSummary] = useState<Summary>({ domain: '', hostname: '', email: '', sessionMissing: false });
   const headingRef = useRef<HTMLHeadingElement | null>(null);
   const firstRender = useRef(true);
+  const finishSent = useRef(false);
 
   const steps = wizardSteps({ secretsGenerated: withSecrets });
 
@@ -327,13 +359,12 @@ export function SetupPage() {
           await ensureSession();
           if (cancelled) return;
           if (useAuthStore.getState().accessToken) {
+            setStatus(s);
             setWithSecrets(resume.withSecrets === true);
             setCommitted(true);
-            setSummary((p) => ({
-              ...p, domain: resume.domain, hostname: resume.hostname, email: resume.email,
-              certificate: resume.certificateChoice ?? null,
-            }));
-            setStep(resume.step);
+            setSummary((p) => ({ ...p, domain: resume.domain, hostname: resume.hostname, email: resume.email }));
+            if (resume.secretsConfirmed) setForm((f) => ({ ...f, secretsConfirmed: true }));
+            setStep(resume.step === 'secrets' && resume.withSecrets !== true ? 'done' : resume.step);
             setReady(true);
             return;
           }
@@ -360,13 +391,20 @@ export function SetupPage() {
 
   // Keep the resume marker current after the commit.
   useEffect(() => {
-    if (!committed || step === 'welcome' || isPreCommit(step)) return;
+    if (!committed || isPreCommit(step)) return;
     saveResume({
-      step: step as 'dns' | 'certificate' | 'done',
+      step: step as 'secrets' | 'done',
       domain: summary.domain, hostname: summary.hostname, email: summary.email, withSecrets,
-      ...(summary.certificate ? { certificateChoice: summary.certificate } : {}),
+      ...(form.secretsConfirmed ? { secretsConfirmed: true } : {}),
     });
-  }, [committed, step, summary, withSecrets]);
+  }, [committed, step, summary, withSecrets, form.secretsConfirmed]);
+
+  // Reaching the summary closes the secrets download on the server (once).
+  useEffect(() => {
+    if (step !== 'done' || !committed || summary.sessionMissing || finishSent.current) return;
+    finishSent.current = true;
+    void apiFetch('/api/v1/setup/finish', { method: 'POST', body: '{}' }, 'application/json').catch(() => undefined);
+  }, [step, committed, summary.sessionMissing]);
 
   const patch = useCallback((p: Partial<WizardForm>) => {
     setForm((f) => ({ ...f, ...p }));
@@ -385,27 +423,22 @@ export function SetupPage() {
     patch({ hostname: v });
   }, [patch]);
 
-  // ── DNS check (admin session) ───────────────────────────────────────────────
-  const checkDns = useCallback(async () => {
-    setDnsLoading(true);
-    setDnsError(null);
+  // ── Secrets download (admin session) ────────────────────────────────────────
+  const downloadSecrets = useCallback(async () => {
+    setDownload({ kind: 'busy' });
     try {
-      const list = await api.get<{ domains: Array<{ id: string; name: string; primary?: boolean }> }>('/admin/domains?limit=50');
-      const d = list.domains.find((x) => x.name === summary.domain) ?? list.domains.find((x) => x.primary) ?? list.domains[0];
-      if (!d) throw new Error('Domain not found');
-      const report = await api.get<DnsReport>(`/admin/domains/${encodeURIComponent(d.id)}/dns-check`);
-      setDnsReport(report);
-      setSummary((p) => ({ ...p, dnsOk: requiredDnsOk(report.records) }));
-    } catch (err) {
-      setDnsError(err instanceof Error ? err.message : t('wiz_err_network'));
-    } finally {
-      setDnsLoading(false);
+      const res = await apiFetch(SECRETS_DOWNLOAD_PATH);
+      if (!res.ok) {
+        setDownload({ kind: 'error', reason: res.status === 404 ? 'gone' : res.status === 401 || res.status === 403 ? 'session' : 'failed' });
+        return;
+      }
+      const filename = downloadFilename(res.headers.get('Content-Disposition'), summary.hostname);
+      saveBlob(await res.blob(), filename);
+      setDownload({ kind: 'done', filename });
+    } catch {
+      setDownload({ kind: 'error', reason: 'failed' });
     }
-  }, [summary.domain, t]);
-
-  useEffect(() => {
-    if ((step === 'dns' || step === 'certificate') && committed && !dnsReport && !dnsLoading && !dnsError && !summary.sessionMissing) void checkDns();
-  }, [step, committed, dnsReport, dnsLoading, dnsError, summary.sessionMissing, checkDns]);
+  }, [summary.hostname]);
 
   // ── Navigation ──────────────────────────────────────────────────────────────
   const go = (s: WizardStepId | null) => {
@@ -452,12 +485,8 @@ export function SetupPage() {
       return;
     }
     const email = body['email'] ?? '';
-    const base: Summary = {
-      domain: data.domain ?? body['domain'] ?? '', hostname: data.hostname ?? body['hostname'] ?? '', email,
-      dnsOk: null, certificate: null, certificateIssued: false, sessionMissing: false,
-    };
     // Sign in with the new admin account (same path as the login page): the
-    // DNS and certificate steps use the admin API with this session.
+    // secrets download and the finish marker use this session.
     let signedIn = false;
     try {
       const r = await login(email, form.password);
@@ -467,18 +496,20 @@ export function SetupPage() {
         setProfile(profile.id, profile.email, profile.displayName, profile.role);
         signedIn = true;
       }
-    } catch { /* setup is done; the remaining steps need the BCP */ }
+    } catch { /* setup is done; the summary points to the sign-in page */ }
     // the password and the token are not kept after the commit
     setForm((f) => ({ ...f, password: '', confirm: '', token: '', verifiedToken: null }));
     setCommitted(true);
-    setSummary({ ...base, sessionMissing: !signedIn });
-    setStep(signedIn ? 'dns' : 'done');
+    setSummary({
+      domain: data.domain ?? body['domain'] ?? '', hostname: data.hostname ?? body['hostname'] ?? '', email,
+      sessionMissing: !signedIn,
+    });
+    go(nextStep(steps, step));
   };
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    // the certificate and the done step act through their own buttons
-    if (busy || step === 'certificate' || step === 'done') return;
+    if (busy || step === 'done') return;
     const reason = blockReason(step, form);
     if (reason) {
       setError(t(REASON_TEXT[reason]));
@@ -498,11 +529,6 @@ export function SetupPage() {
     }
   };
 
-  const onCertificateFinished = (choice: CertificateChoice, issued: boolean) => {
-    setSummary((p) => ({ ...p, certificate: choice, certificateIssued: issued }));
-    go('done');
-  };
-
   if (!ready) {
     return (
       <AuthShell>
@@ -514,7 +540,8 @@ export function SetupPage() {
   const back = previousStep(steps, step, committed);
   const isCommitStep = !committed && step === commitStep(steps);
   const title = step === 'welcome' ? fmt(t('wiz_welcome_title'), { name: productName }) : t(STEP_LABEL[step]);
-  const hasFormFooter = step !== 'certificate' && step !== 'done';
+  const hasFormFooter = step !== 'done';
+  const insecure = insecureConnection(status?.secureConnection, window.location.protocol);
 
   return (
     <AuthShell>
@@ -547,17 +574,10 @@ export function SetupPage() {
             <DomainStep form={form} invalidField={invalidField} onDomain={onDomain} onHostname={onHostname} onChange={patch} />
           )}
           {step === 'admin' && <AdminStep form={form} invalidField={invalidField} onChange={patch} />}
-          {step === 'secrets' && <SecretsStep form={form} status={status} invalid={invalidField === 'wiz-secrets-ok'} onChange={patch} />}
-          {step === 'dns' && (
-            <DnsStep
-              domain={summary.domain} hostname={summary.hostname} report={dnsReport}
-              loading={dnsLoading} error={dnsError} onRecheck={() => void checkDns()}
-            />
-          )}
-          {step === 'certificate' && (
-            <CertificateStep
-              hostname={summary.hostname} email={summary.email}
-              leAllowed={letsEncryptAllowed(dnsReport?.records)} onFinished={onCertificateFinished}
+          {step === 'secrets' && (
+            <SecretsStep
+              form={form} status={status} insecure={insecure} sessionMissing={summary.sessionMissing} download={download}
+              invalid={invalidField === 'wiz-secrets-ok'} onDownload={() => void downloadSecrets()} onChange={patch}
             />
           )}
           {step === 'done' && <DoneStep summary={summary} />}
@@ -577,9 +597,7 @@ export function SetupPage() {
                 <button type="submit" disabled={busy || alreadyDone} className={BUTTON_PRIMARY}>
                   {busy
                     ? (step === 'welcome' ? t('wiz_token_checking') : isCommitStep ? t('wiz_committing') : t('wiz_next'))
-                    : isCommitStep ? t('wiz_commit')
-                      : step === 'dns' && !requiredDnsOk(dnsReport?.records) ? t('wiz_later')
-                        : t('wiz_next')}
+                    : isCommitStep ? t('wiz_commit') : t('wiz_next')}
                 </button>
               )}
             </div>

@@ -28,7 +28,7 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { z } from 'zod';
 import { createLogger } from '@coremail/core';
 import {
-  prisma, decryptPrivateKey, readProtocolLevel, readProtocolOverrides, updateProtocolSettings, ACCESS_PROTOCOLS, PROTOCOL_SETTINGS,
+  prisma, readProtocolLevel, readProtocolOverrides, updateProtocolSettings, ACCESS_PROTOCOLS, PROTOCOL_SETTINGS,
   SERVER_PROTOCOL_SETTINGS, type ProtocolLevelView, type ProtocolScope, type ProtocolSettings,
 } from '@coremail/storage';
 import { requireArea } from '../../middleware/auth.js';
@@ -36,9 +36,9 @@ import { canAccess, canManageAccount } from '../../lib/rbac.js';
 import { requireInScope } from '../../middleware/admin-scope.js';
 import { audit, auditContext } from '../../lib/audit.js';
 import {
-  buildProtocolOverview, isTrustedHttpsCert, redactOverrideNames, submissionPorts, type HttpsState, type ProtocolOverview,
+  buildProtocolOverview, redactOverrideNames, submissionPorts, type HttpsState, type ProtocolOverview,
 } from '../../lib/protocol-overview.js';
-import { servedProxyCert } from '../../lib/cert-lifecycle.js';
+import { loadServedHttpsCert } from '../../lib/served-https-cert.js';
 import { httpsServerState } from '../../tls-proxy.js';
 
 const log = createLogger('admin:protocol-access');
@@ -126,45 +126,16 @@ adminProtocolAccessRouter.put('/', serversArea, async (req: Request, res: Respon
 // ── Combined overview (w2b) ───────────────────────────────────────────────────
 
 /**
- * A row whose private key cannot be decrypted is not served by the HTTPS proxy
- * (tls-proxy.ts logs it on every reload); here it only drops out of the selection.
- */
-function withReadableKey<T extends { keyPem: string | null }>(row: T): T {
-  if (!row.keyPem) return row;
-  try {
-    decryptPrivateKey(row.keyPem);
-    return row;
-  } catch {
-    return { ...row, keyPem: null };
-  }
-}
-
-/**
  * The integrated HTTPS server: `active` = the proxy listens (httpsServerState —
  * also without a certificate marked isActiveHttps; the redirect keeps its own
  * opt-in state); certificate and trust from the certificate the proxy serves
- * for the public host name (SNI: exact → wildcard → default,
- * lib/cert-lifecycle.ts servedProxyCert) — not only the one marked isActiveHttps.
+ * for the public host name (lib/served-https-cert.ts: SNI exact → wildcard →
+ * default) — not only the one marked isActiveHttps.
  */
 async function loadHttpsState(): Promise<HttpsState> {
   const state = httpsServerState();
-  const [settings, rows] = await Promise.all([
-    prisma.serverSettings.findUnique({ where: { id: 'singleton' }, select: { publicHostname: true } }),
-    prisma.certificate.findMany({
-      where: { certPem: { not: null }, keyPem: { not: null } },
-      select: {
-        id: true, name: true, type: true, status: true, acmeStaging: true, isActiveHttps: true, createdAt: true,
-        certPem: true, keyPem: true, chainPem: true, domains: true,
-      },
-    }),
-  ]);
-  const hostname = (settings?.publicHostname ?? '').trim().toLowerCase() || 'localhost';
-  const cert = servedProxyCert(rows.map(withReadableKey), hostname);
-  return {
-    active: state.listening,
-    port: state.port,
-    cert: cert ? { id: cert.id, name: cert.name, trusted: isTrustedHttpsCert(cert, hostname) } : null,
-  };
+  const { cert } = await loadServedHttpsCert();
+  return { active: state.listening, port: state.port, cert };
 }
 
 /** Reads ports, switches and the HTTPS state and builds the combined model (lib/protocol-overview.ts). */

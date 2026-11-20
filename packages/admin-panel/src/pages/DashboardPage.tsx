@@ -17,7 +17,7 @@ import { openReconnectingEventSource, eventStreamUrl } from '../lib/reconnecting
 import { useDashboardStore, WIDGET_CATALOG, type WidgetId } from '../store/dashboard.js';
 import { useT } from '../i18n/useT.js';
 import { ServedCertWarning } from '../components/ServedCert.js';
-import { SetupCertificateHint } from '../components/SetupCertificateHint.js';
+import { CertificateSetupCard } from '../components/CertificateSetupCard.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface DashboardData {
@@ -644,8 +644,8 @@ export function DashboardPage() {
       {/* 9.3: a mail port serves a self-signed / name-mismatched certificate */}
       <ServedCertWarning linkToCertificates />
 
-      {/* 10.4: the setup wizard's certificate step was postponed (dismissible) */}
-      <SetupCertificateHint />
+      {/* 10.4.2: no trusted certificate for the public host name yet — one-click Let's Encrypt (dismissible) */}
+      <CertificateSetupCard />
 
       {/* ── KPI cards (row 1) — order according to user `order` ────────────── */}
       {anyKpi && (() => {

@@ -307,7 +307,8 @@ anything in it:
 
 ```json
 { "setupRequired": true, "setupTokenRequired": true,
-  "secretsFile": "./secrets/coremail.env", "secretsGenerated": true }
+  "secretsFile": "./secrets/coremail.env", "secretsGenerated": true,
+  "secureConnection": false }
 ```
 
 - `secretsFile` — host path hint of the secrets file when the container loaded
@@ -317,6 +318,9 @@ anything in it:
 - `secretsGenerated` — `true` when CoreMail generated (some of) the values in
   that file, `false` for a file written entirely by hand or taken from the
   environment.
+- `secureConnection` (10.4.2) — the request arrived over HTTPS (`req.secure`:
+  TLS socket, or `X-Forwarded-Proto` from a `TRUST_PROXY`-trusted proxy). The
+  wizard warns next to the secrets download when it is `false`.
 
 ### Safety rules
 
@@ -344,7 +348,10 @@ anything in it:
 the server** (password manager, offline copy) right after the first start. Without `PEPPER` no password works; without
 `JWT_SECRET` + `PEPPER` (or `MFA_ENCRYPTION_KEY` / `BACKUP_ENCRYPTION_KEY`)
 enrolled two-factor logins, stored certificate keys and encrypted backups cannot
-be read. The files belong to root, so on the host:
+be read. The setup wizard offers `coremail.env` as a download (step „Secrets sichern“,
+only while the wizard runs and at most 24 h after the setup — see
+[setup-wizard.md](setup-wizard.md#secrets-download)). The files belong to root, so
+to copy them on the host:
 
 ```bash
 sudo cp ./secrets/coremail.env /path/to/safe/place/
@@ -368,7 +375,11 @@ rotation).
 | `COREMAIL_REDIS_HOST` / `COREMAIL_REDIS_PORT` | `redis` / `6379` | parts of a built `REDIS_URL` |
 
 Set by the entrypoint for the services (not meant to be set by hand):
-`COREMAIL_SECRETS_FILE_IN_USE`, `COREMAIL_SECRETS_GENERATED`.
+`COREMAIL_SECRETS_FILE_IN_USE`, `COREMAIL_SECRETS_GENERATED`, and (10.4.2, only when
+the secrets were generated) `COREMAIL_SECRETS_DOWNLOAD_FILE` — the node-owned copy
+`/tmp/coremail-setup-secrets/coremail.env` inside the container that the setup
+wizard's download serves; the api-gateway deletes it once the download window is
+closed. `coremail.env` itself stays root-only.
 
 The Helm chart does not use this mechanism. Since chart 3.4 it generates empty
 `secrets.*` values itself — once, kept on upgrade through `lookup`, never
