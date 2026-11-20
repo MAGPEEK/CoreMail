@@ -202,8 +202,15 @@ let queueFails = false;
   getJob: async (id: string) => jobs.get(id),
 };
 const counters = new Map<string, number>();
+// The burst limiter's keys end in the wall-clock window number
+// (`ratelimit:<scope>:<user>:<window>`, 60 s windows). The fake counts per
+// scope + user only: a minute boundary during a test must not reset the count
+// (the limiter captures Date.now at import, so the clock cannot be held instead).
 (globalThis as Record<string, unknown>)['__rateLimitRedis'] = {
-  incr: async (k: string) => { const n = (counters.get(k) ?? 0) + 1; counters.set(k, n); return n; },
+  incr: async (key: string) => {
+    const k = key.replace(/:\d+$/, '');
+    const n = (counters.get(k) ?? 0) + 1; counters.set(k, n); return n;
+  },
   expire: async () => 1,
 };
 const draftState = new Map<string, string>();
@@ -494,11 +501,14 @@ test('undo hold: delayed job + PENDING Sent copy; unsend moves it back to Drafts
 });
 
 test('send-from-draft shares the per-user send rate limit with /send', async () => {
+  // The fake counter store ignores the window number (see __rateLimitRedis
+  // above), so the 41st request is refused even across a minute boundary.
   const d = await call('POST', '/drafts', { user: 'u2', body: { to: ['a@x.test'], subject: 'rl' } });
   const id = String(d.json['id']);
   for (let i = 0; i < 40; i++) await call('POST', '/send', { user: 'u2', body: { to: [], subject: 's' } });
   const limited = await call('POST', `/drafts/${id}/send`, { user: 'u2', body: {} });
   assert.equal(limited.status, 429);
+  assert.equal(limited.json['code'], 'RATE_LIMITED', 'refused by the burst limiter shared with /send');
   assert.equal(messages.get(id)!['folderId'], 'd2');
 });
 

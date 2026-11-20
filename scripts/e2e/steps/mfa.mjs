@@ -2,7 +2,7 @@
 // password; an app password works on IMAP/SMTP/POP3/JMAP/CalDAV/ActiveSync.
 import {
   check, assert, creds, setCred, http, basic, totp, nextTotpWindow, imapCmd, PORTS, LineClient, popCmd,
-  smtpOpen, smtpStartTls, smtpAuthPlain, smtpSend, buildMime,
+  smtpOpen, smtpStartTls, smtpAuthPlain, smtpSend, buildMime, rememberTotpSecret,
 } from '../lib.mjs';
 import { imapLogin } from './imap.mjs';
 import { popLogin } from './pop3.mjs';
@@ -46,6 +46,7 @@ export async function run(state) {
       assert(s.status === 200 && s.json?.secret, `${s.status} ${s.text.slice(0, 200)}`);
       secret = s.json.secret;
       state.totpSecretA = secret; // test-only secret, kept in the state dir outside the repo
+      rememberTotpSecret(A, secret); // lets lib.mjs session() log A in again with the second factor
       // Prime the jmap-server Basic-auth cache with the primary password right
       // before MFA is switched on (v7.1.0: the cache must not outlive the change).
       const primed = await http('GET', '/jmap/session', { headers: { Authorization: basic(A, c.userA) } });

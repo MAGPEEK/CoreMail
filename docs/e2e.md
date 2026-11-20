@@ -28,6 +28,16 @@ stack is ready when `coremail-e2e` is healthy. Remove it together with the volum
 Test passwords are generated on first use into `$E2E_STATE_DIR/credentials.json`.
 Do not put real passwords there.
 
+Admin MFA (10.5): a fresh installation requires MFA for admin roles
+(`requireMfaForAdmins`, set by the setup wizard). The `setup` step checks that a
+password-only admin session gets 403 `MFA_REQUIRED`; from then on `session()` in
+`scripts/e2e/lib.mjs` enrols TOTP for every admin-role account on its first login
+(`/auth/mfa/totp/setup` + `/confirm`, secret in `credentials.json` `totp`) and logs it in
+with the second factor, so all admin API and admin CLI calls (`COREMAIL_TOKEN`) use
+MFA-verified sessions. Mail-protocol logins of such accounts use an app password
+(`mailPassword()`, `credentials.json` `appPw`). Each TOTP code is used once per 30-s step,
+so a re-login of an admin may wait for the next step.
+
 ## 2. Build and start
 
 ```bash

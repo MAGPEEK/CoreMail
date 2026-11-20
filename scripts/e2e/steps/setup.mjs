@@ -1,7 +1,7 @@
 // Step 1: setup wizard via API (setup token from /secrets/setup-token, else the
 // container log), smarthost → sink.
 import { execFileSync } from 'node:child_process';
-import { check, assert, http, creds, DOMAIN, CONTAINER, session, dockerExec } from '../lib.mjs';
+import { check, assert, http, creds, DOMAIN, CONTAINER, session, dockerExec, totpSecretOf } from '../lib.mjs';
 
 export async function run(state) {
   const c = creds();
@@ -66,7 +66,24 @@ export async function run(state) {
     return `${r.status}, status.setupRequired=false`;
   });
 
-  const tok = await session(state, 'admin', state.adminEmail, c.admin);
+  // 10.5: a fresh installation requires MFA for admins (requireMfaForAdmins).
+  await check('setup: fresh installation requires MFA for admins (password-only session → 403 MFA_REQUIRED)', async () => {
+    if (totpSecretOf(state.adminEmail)) return 'admin enrolled in an earlier run — skipped';
+    const l = await http('POST', '/auth/login', { body: { email: state.adminEmail, password: c.admin } });
+    assert(l.status === 200 && l.json?.accessToken, `login ${l.status} ${l.text.slice(0, 200)}`);
+    const r = await http('GET', '/api/v1/admin/domains', { token: l.json.accessToken });
+    assert(r.status === 403 && r.json?.code === 'MFA_REQUIRED', `admin API without MFA → ${r.status} ${r.text.slice(0, 200)}`);
+    return '403 MFA_REQUIRED';
+  });
+  // The admin enrols TOTP and logs in with the second factor (lib.mjs session()).
+  let tok;
+  await check('setup: admin enrols TOTP → MFA-verified admin session reaches the admin API', async () => {
+    tok = await session(state, 'admin', state.adminEmail, c.admin);
+    const r = await http('GET', '/api/v1/admin/domains', { token: tok });
+    assert(r.status === 200, `admin API with MFA → ${r.status} ${r.text.slice(0, 200)}`);
+    return 'TOTP enrolled, 200';
+  });
+  tok ??= await session(state, 'admin', state.adminEmail, c.admin);
   const doms = await http('GET', '/api/v1/admin/domains', { token: tok });
   state.domainId = doms.json?.domains?.find((d) => d.name === DOMAIN)?.id;
 
