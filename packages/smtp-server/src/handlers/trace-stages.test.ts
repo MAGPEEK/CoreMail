@@ -185,12 +185,14 @@ test('the nodemailer connection logger records the peer and a STARTTLS upgrade o
 });
 
 test('queue attempt trace: queued stage, DKIM, MX + remote, DSN; remembered on the thrown error', async () => {
+  // enqueued just now: older than OUTBOUND_DELAY_DSN_HOURS would add a delay-DSN stage (wall-clock dependent)
+  const now = Date.now();
   const job = {
-    id: 'job-1', attemptsMade: 1, opts: { attempts: 5 }, timestamp: AT.getTime(),
+    id: 'job-1', attemptsMade: 1, opts: { attempts: 5 }, timestamp: now,
     data: { messageId: 'trk-1', from: 'a@corp.test', to: ['u@ext.test'] },
     updateData: async () => undefined,
   };
-  assert.deepEqual([queuedStage(job).stage, queuedStage(job).detail?.['attempt'], queuedStage(job).at], ['queued', 2, AT.toISOString()]);
+  assert.deepEqual([queuedStage(job).stage, queuedStage(job).detail?.['attempt'], queuedStage(job).at], ['queued', 2, new Date(now).toISOString()]);
   assert.deepEqual(outboundTraceFields(job, '<m@corp.test>'), { jobId: 'job-1', attempt: '2', headerMessageId: '<m@corp.test>' });
   const trace = createTraceRecorder([queuedStage(job)]);
   const deps = {
