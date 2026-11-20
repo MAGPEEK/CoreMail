@@ -5,20 +5,22 @@
  *   POST /api/v1/setup/finish            the wizard reached its summary
  *
  * Both need the admin session the wizard signs in with after
- * POST /setup/complete: ORGANIZATION_MANAGEMENT, organisation-wide (requireRole
- * — current role from the DB, admin MFA rule). The download is open only while
+ * POST /setup/complete: ORGANIZATION_MANAGEMENT, organisation-wide
+ * (requireRoleInSetupWindow — current role from the DB). The download is open only while
  * the wizard has not finished and at most 24 h after the setup was completed
  * (lib/setup-secrets.ts secretsDownloadWindowOpen); outside that window, and
  * when there is no file, it answers 404 like an unknown route. Every download
  * (and every refused attempt of a signed-in admin) is audited as
  * `setup.secrets.download` — never with the file content. Mounted before the
  * setup router with its own rate limit (middleware/security.ts
- * setupFollowUpRateLimit).
+ * setupFollowUpRateLimit). 10.5: the admin-MFA rule does not apply to these two
+ * routes (requireRoleInSetupWindow) — fresh installations start with
+ * requireMfaForAdmins on and the wizard's session has no second factor yet.
  */
 import { Router, type Router as RouterType, type Request, type Response, type RequestHandler } from 'express';
 import { prisma } from '@coremail/storage';
 import { createLogger } from '@coremail/core';
-import { requireRole } from '../middleware/auth.js';
+import { requireRoleInSetupWindow } from '../middleware/auth.js';
 import { setupFollowUpRateLimit } from '../middleware/security.js';
 import { audit, auditContext } from '../lib/audit.js';
 import {
@@ -56,7 +58,7 @@ export function createSetupFollowUpRouter(opts: SetupFollowUpOptions = {}): Rout
     res.status(404).json(NOT_FOUND);
   };
 
-  router.get('/secrets-download', limit, requireRole(), async (req: Request, res: Response) => {
+  router.get('/secrets-download', limit, requireRoleInSetupWindow(), async (req: Request, res: Response) => {
     const s = await prisma.serverSettings.findUnique({
       where: { id: 'singleton' },
       select: { setupCompletedAt: true, setupWizardFinishedAt: true, publicHostname: true },
@@ -90,7 +92,7 @@ export function createSetupFollowUpRouter(opts: SetupFollowUpOptions = {}): Rout
     res.status(200).end(content);
   });
 
-  router.post('/finish', limit, requireRole(), async (req: Request, res: Response) => {
+  router.post('/finish', limit, requireRoleInSetupWindow(), async (req: Request, res: Response) => {
     const r = await prisma.serverSettings.updateMany({
       where: { id: 'singleton', setupCompletedAt: { not: null }, setupWizardFinishedAt: null },
       data: { setupWizardFinishedAt: now() },

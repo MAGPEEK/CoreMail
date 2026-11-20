@@ -142,6 +142,11 @@ setupRouter.post('/complete', async (req: Request, res: Response) => {
       // unusable schema defaults `mail.local:8080` and Autodiscover
       // hands clients wrong URLs.
       // 10.4: the wizard may choose another host name (default mail.<domain>).
+      // 10.5: a fresh installation starts with MFA mandatory for admins
+      // (requireMfaForAdmins). Only here: existing installations never pass
+      // through /setup/complete and keep their stored value (schema default
+      // false — no silent lock-out on upgrade). The first admin enrols a second
+      // factor in the webmail after the wizard; the BCP shows the MFA page until then.
       const newHostname = hostname;
       const derivedUrls = deriveServerUrls(newHostname, true, 443);
       await tx.serverSettings.upsert({
@@ -153,6 +158,7 @@ setupRouter.post('/complete', async (req: Request, res: Response) => {
           httpPort: 443,
           ...derivedUrls,
           ...(orgName ? { orgName } : {}),
+          requireMfaForAdmins: true, // 10.5: fresh installations only (see comment above)
         },
         update: {
           publicHostname: newHostname,
@@ -160,6 +166,7 @@ setupRouter.post('/complete', async (req: Request, res: Response) => {
           httpPort: 443,
           ...derivedUrls,
           ...(orgName ? { orgName } : {}),
+          requireMfaForAdmins: true, // 10.5: fresh installations only (see comment above)
         },
       });
 

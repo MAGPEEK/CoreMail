@@ -151,6 +151,22 @@ test('authentication: anonymous 401, other roles 403 (download and finish)', asy
   assert.equal(settings['setupWizardFinishedAt'], null, 'nothing written');
 });
 
+test('10.5: with requireMfaForAdmins on (fresh installations) the wizard session without MFA still downloads and finishes', async () => {
+  settings = { ...settings, requireMfaForAdmins: true };
+  const noMfa = core.signAccessToken({
+    sub: 'actor-ORGANIZATION_MANAGEMENT', email: 'actor-ORGANIZATION_MANAGEMENT@ex.com', role: 'ORGANIZATION_MANAGEMENT' as never,
+    domainId: 'd1', sessionId: 's-wizard', mfaVerified: false,
+  });
+  const r = await fetch(`${base}/api/v1/setup/secrets-download`, { headers: { authorization: `Bearer ${noMfa}` } });
+  assert.equal(r.status, 200, await r.clone().text());
+  assert.equal(await r.text(), CONTENT);
+  const f = await fetch(`${base}/api/v1/setup/finish`, { method: 'POST', headers: { authorization: `Bearer ${noMfa}` } });
+  assert.equal(f.status, 204);
+  assert.ok(settings['setupWizardFinishedAt'] instanceof Date);
+  const after = await fetch(`${base}/api/v1/setup/secrets-download`, { headers: { authorization: `Bearer ${noMfa}` } });
+  assert.equal(after.status, 404, 'closed again after the wizard finished');
+});
+
 test('download inside the window: the file, attachment headers, audit without content, nothing in the log', async () => {
   const r = await download('ORGANIZATION_MANAGEMENT');
   assert.equal(r.status, 200);

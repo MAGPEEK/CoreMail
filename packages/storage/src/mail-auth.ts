@@ -11,6 +11,10 @@
  * password never gets that answer — it is `invalid` as before. An app password
  * of an account whose webmail module "App-Passwörter" is off (webmail-policy.ts)
  * is `invalid` too, indistinguishable from a wrong one.
+ * 10.5: with "MFA für alle Benutzer erzwingen" and its sub-option
+ * `mfaEnforcementBlocksPrimaryPassword`, the primary password of an account
+ * without MFA is `mfa_app_password_required` after the grace period
+ * (auth/mfa-enforcement.ts); app passwords keep working.
  *
  * Environment (optional):
  *   MAIL_AUTH_IP_MAX_FAILURES (50)   MAIL_AUTH_IP_WINDOW_SEC (900)   MAIL_AUTH_IP_LOCK_SEC (900)
@@ -28,6 +32,7 @@ import { prisma } from './prisma/index.js';
 import { recordLastLogin } from './auth/last-login.js';
 import { isProtocolAllowed, type AccessProtocol } from './protocol-access.js';
 import { isWebmailFeatureEnabled } from './webmail-policy.js';
+import { mailPrimaryPasswordBlocked } from './auth/mfa-enforcement.js';
 import {
   createLoginLockout, createMailCredentialVerifier, createExemptIpMatcher,
   type LoginLockout, type MailAuthContext, type MailAuthDeps, type MailAuthLimits, type MailAuthPrisma,
@@ -123,6 +128,14 @@ export async function verifyMailCredentials(
     if (result.method === 'app_password' && !(await isWebmailFeatureEnabled(subject, 'appPasswords'))) {
       log.warn({ userId: result.user.id, protocol: ctx.protocol, ip: ctx.ip }, 'mail-auth: app passwords are switched off for this account');
       return { status: 'invalid' };
+    }
+    // 10.5: "MFA für alle Benutzer erzwingen" with the sub-option "primary
+    // password blocked on mail protocols": after the grace period an account
+    // without MFA needs an app password, like an account with MFA. App
+    // passwords keep working; with the sub-option off nothing changes.
+    if (result.method !== 'app_password' && (await mailPrimaryPasswordBlocked(result.user.id))) {
+      log.warn({ userId: result.user.id, protocol: ctx.protocol, ip: ctx.ip }, 'mail-auth: primary password blocked by the MFA enforcement');
+      return { status: 'mfa_app_password_required' };
     }
     // 9.4: only after the credentials were verified (a wrong password stays `invalid`).
     const protocol = MAIL_PROTOCOL_ACCESS[ctx.protocol];

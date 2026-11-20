@@ -2,6 +2,7 @@ import { useEffect, useSyncExternalStore } from 'react';
 import toast from 'react-hot-toast';
 import { ApiError, apiErrorFromBody } from '../lib/errors.js';
 import { refreshFailureVerdict, refreshBackoffMs, shouldRefreshOn401 } from '../lib/authRetry.js';
+import { MFA_PAGE_PATH, mfaRedirectFor } from '../lib/mfaRedirect.js';
 import { accessForPath, areaForPath } from '../lib/adminAreas.js';
 import { blocksWrite, pageAccessFor } from '../lib/permissions.js';
 import { useAccessStore } from '../store/access.js';
@@ -282,14 +283,16 @@ async function request<T>(path: string, init: RequestInit = {}, contentType: str
     const body = await res.json().catch(() => ({ error: res.statusText })) as { error?: string; code?: string };
     const code = body.code ?? body.error;
     // v3.18.19 D5: Forced 2FA — 403 MFA_REQUIRED → MFA setup page
-    if (res.status === 403 && code === 'MFA_REQUIRED') {
-      if (!window.location.pathname.startsWith('/bcp/mfa-required')) {
-        window.location.href = '/bcp/mfa-required';
+    // 10.5: same page for MFA_ENROLMENT_REQUIRED (lib/mfaRedirect.ts)
+    const mfa = mfaRedirectFor(res.status, code);
+    if (mfa === 'mfa-page') {
+      if (!window.location.pathname.startsWith(MFA_PAGE_PATH)) {
+        window.location.href = MFA_PAGE_PATH;
       }
       throw new Error('MFA_REQUIRED');
     }
     // Session without verified second factor → sign in again with MFA
-    if (res.status === 403 && code === 'MFA_NOT_VERIFIED') redirectToLogin('mfa');
+    if (mfa === 'login-mfa') redirectToLogin('mfa');
     throw apiErrorFromBody(body, res.status);
   }
 

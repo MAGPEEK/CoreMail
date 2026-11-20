@@ -289,6 +289,67 @@ people who have access to the same mailbox:
 
 The pre-9.4 form `/mail?mailbox=shared:<id>` is still understood and rewritten.
 
+## MFA enforcement (10.5)
+
+Two server-wide switches in BCP → Einstellungen → Sicherheit (organisation area: only
+ORGANIZATION_MANAGEMENT may change them; every change is audited as
+`settings.mfa-policy.update` with a from/to diff, also with the audit log switched off):
+
+| Field (`ServerSettings`) | Default | Meaning |
+|---|---|---|
+| `requireMfaForAdmins` | `false`; `true` for fresh installations (setup wizard, docs/setup-wizard.md) | Admin API only with an enrolled second factor (`403 MFA_REQUIRED`) and an MFA-verified session (`403 MFA_NOT_VERIFIED`). Existing installations keep their stored value on upgrade. |
+| `requireMfaForAllUsers` | `false` | "MFA für alle Benutzer erzwingen" — below. |
+| `mfaEnforcementGraceDays` | `7` | Grace period in days (0–90, 0 = at once). |
+| `mfaEnforcementBlocksPrimaryPassword` | `false` | Sub-option: after the grace period the primary password no longer works on mail protocols for accounts without MFA. |
+| `mfaEnforcementSince` | – | Written when `requireMfaForAllUsers` is switched on (activation time). |
+
+Per user: `User.mfaGraceStartedAt` (additive column).
+
+### "MFA für alle Benutzer erzwingen"
+
+Rules (storage `src/auth/mfa-enforcement.ts`):
+
+- **Satisfied** by an enrolled second factor (TOTP or a security key) or by a session that was
+  established with MFA. SSO: a session the IdP's MFA (`amr`) made MFA-verified counts — with
+  the existing trust rules (docs/sso-ldap.md: always for plain users unless the provider demands
+  CoreMail MFA; for admin roles under `requireMfaForAdmins` only with
+  `OIDC_TRUST_IDP_MFA_FOR_ADMINS=true`).
+- **Grace period per user**: it starts at the account's first check after the switch was turned
+  on (first web request, the status call after the sign-in, or a mail-protocol login) and lasts
+  `mfaEnforcementGraceDays`. A stored start from before `mfaEnforcementSince` is stale: switching
+  the enforcement off and on again gives everybody a new grace period. Changing the number of
+  days applies to running grace periods.
+- **During the grace period** everything works; the webmail shows a banner with the days left
+  and a link to Einstellungen → Sicherheit.
+- **After the grace period** a web/API session of such an account may only enrol: every API call
+  answers `403 { code: "MFA_ENROLMENT_REQUIRED", deadline }` except `GET
+  /api/v1/user/mfa-enforcement` and `GET /api/v1/user/profile` (the webmail sign-in loads it);
+  `/auth/mfa/*` (enrolment), `/auth/sessions` and `/auth/logout` stay reachable, revoking an app
+  password too, listing / creating app passwords does not. Bearer tokens on JMAP and
+  CalDAV/CardDAV are refused as well (JMAP `401`, DAV `403`). The password sign-in itself keeps
+  working (otherwise nobody could enrol). The webmail shows the mandatory page `/mfa-enrolment`
+  (TOTP and security-key setup of Einstellungen → Sicherheit, sign-out; "Weiter zum Webmail" once
+  a factor is set up — the backup codes stay visible until then). The BCP shows its MFA page.
+- Enrolling publishes `mfa-change` (auth invalidation bus): the cached state is dropped at once in
+  every service; otherwise the per-process caches (policy 15 s, per user 15 s) expire.
+- A missing or unreadable state is a temporary failure (`503`), never "allowed".
+- **SSO-only accounts** (OIDC, no password) cannot confirm an enrolment (re-authentication needs
+  the password or an MFA code): the enrolment page tells them to sign in through the provider
+  with MFA (`canEnrol: false` in the status) or to contact the administrator.
+
+`GET /api/v1/user/mfa-enforcement` → `{ state: "off" | "satisfied" | "grace" | "required",
+deadline?, canEnrol }` (`Cache-Control: no-store`).
+
+**Mail protocols.** Accounts with MFA need app passwords on IMAP, POP3, SMTP, ActiveSync, JMAP,
+CalDAV/CardDAV and MAPI anyway (unchanged). Accounts **without** MFA keep their primary password
+on mail protocols until they enrol — unless the sub-option `mfaEnforcementBlocksPrimaryPassword`
+is on: then, after the account's grace period, the primary (or directory) password is answered
+like the MFA case (`mfa_app_password_required` — each protocol's "app password required"
+refusal; a wrong password stays `invalid`). App
+passwords keep working in every case — the enforcement never breaks an existing app password.
+A mail-protocol login also starts the account's grace period, but such users never see the
+webmail banner: announce the change.
+
 ## Not covered
 
 - Sorting by sender, subject or size uses the folder index and sorts the folder's rows in the

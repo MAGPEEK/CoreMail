@@ -24,7 +24,8 @@ export const appPasswordRouter: RouterType = Router();
  * passwords keep working on the enabled protocols). Unreadable policy → 503.
  */
 async function requireAppPasswordUser(req: Request, res: Response): Promise<string | null> {
-  const userId = await requireBearerUser(req, res);
+  // 10.5: not while the account must enrol a second factor (revoking stays possible)
+  const userId = await requireBearerUser(req, res, { mfaEnrolmentGate: true });
   if (!userId) return null;
   try {
     if (await isWebmailFeatureEnabled(userId, 'appPasswords')) return userId;

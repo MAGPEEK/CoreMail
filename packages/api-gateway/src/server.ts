@@ -45,6 +45,7 @@ import { tasksRouter } from './routes/tasks.js';
 import { notesRouter } from './routes/notes.js';
 import { userRouter } from './routes/user.js';
 import { userSettingsRouter } from './routes/user-settings.js';
+import { mfaEnforcementRouter } from './routes/mfa-enforcement.js';
 import { userPolicyRouter } from './routes/user-policy.js';
 import { ownPhotoRouter, usersPhotoRouter } from './routes/profile-photo.js';
 import { userBackgroundRouter } from './routes/user-background.js';
@@ -425,6 +426,7 @@ app.use('/api/v1/notes',          notesRouter);
 app.use('/api/v1/user/photo',     ownPhotoRouter);     // 9.5: own profile photo (PUT/DELETE)
 app.use('/api/v1/user/background', userBackgroundRouter); // 10.1: own webmail background (GET/PUT/DELETE, own only)
 app.use('/api/v1/users',          usersPhotoRouter);   // 9.5: photos of the organisation (lookup, GET /:id/photo)
+app.use('/api/v1/user/mfa-enforcement', mfaEnforcementRouter); // 10.5: MFA enforcement state (allowed while enrolment is required)
 app.use('/api/v1/user',           userSettingsRouter); // 9.4: preferences, sessions, signatures
 app.use('/api/v1/user',           userPolicyRouter);   // 9.4: webmail features + trusted image senders
 app.use('/api/v1/user',           userRouter);

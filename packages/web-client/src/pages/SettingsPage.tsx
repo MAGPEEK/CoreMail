@@ -905,7 +905,12 @@ interface ReauthRequest {
   run: (currentPassword: string) => Promise<void>;
 }
 
-function SecuritySection() {
+/**
+ * Settings → Sicherheit. 10.5: `enrolmentOnly` = the mandatory enrolment page
+ * (pages/MfaEnrolmentPage.tsx): only the TOTP and security-key cards — the
+ * other panels call APIs that answer MFA_ENROLMENT_REQUIRED until a factor is set up.
+ */
+export function SecuritySection({ enrolmentOnly = false }: { enrolmentOnly?: boolean } = {}) {
   const qc = useQueryClient();
   const email = useAuthStore((s) => s.email);
   const [totpStep, setTotpStep] = useState<TotpStep>('idle');
@@ -934,7 +939,10 @@ function SecuritySection() {
     enabled: !email,
   });
 
-  const invalidateStatus = () => void qc.invalidateQueries({ queryKey: ['mfa-status'] });
+  const invalidateStatus = () => {
+    void qc.invalidateQueries({ queryKey: ['mfa-status'] });
+    void qc.invalidateQueries({ queryKey: ['mfa-enforcement'] }); // 10.5: grace banner of the app frame
+  };
 
   const startTotpSetup = () => setReauth({
     title: '2FA einrichten',
@@ -1065,12 +1073,15 @@ function SecuritySection() {
 
   return (
     <div className="space-y-5 max-w-lg">
+      {!enrolmentOnly && (
       <div>
         <h2 className="text-lg font-semibold text-fg">Sicherheit</h2>
         <p className="text-sm text-fg-subtle mt-0.5">App-Passwörter und Zwei-Faktor-Authentifizierung</p>
       </div>
+      )}
 
       {/* App passwords (link stays) */}
+      {!enrolmentOnly && (
       <div className="bg-surface-2 border border-line rounded-lg p-4">
         <div className="flex items-center gap-2 mb-2">
           <Key size={15} className="text-fg-subtle" />
@@ -1082,6 +1093,7 @@ function SecuritySection() {
           App-Passwörter verwalten
         </Link>
       </div>
+      )}
 
       {/* ── 2FA card ── */}
       <div className="bg-surface-2 border border-line rounded-lg p-4 space-y-4">
@@ -1298,6 +1310,8 @@ function SecuritySection() {
       </div>
 
       {/* 9.4: sessions, mobile devices, S/MIME */}
+      {!enrolmentOnly && (
+      <>
       <div className="space-y-8 border-t border-line pt-6">
         <SessionsPanel />
         <DevicesPanel />
@@ -1305,6 +1319,8 @@ function SecuritySection() {
       </div>
       {/* 9.4: who accessed my mailbox (delegates) */}
       <MailboxAccessLog />
+      </>
+      )}
 
       {reauth && (
         <PasswordPromptDialog

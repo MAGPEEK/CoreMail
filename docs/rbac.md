@@ -221,9 +221,18 @@ Every route of `/settings` (except the public `GET /settings/public`),
 "Zertifikat einrichten"; area servers — read for the state, which read-only roles always get
 without the card, write for "Später"): **org**.
 
+10.5: the MFA policy is part of `PUT /settings/security` (`requireMfaForAdmins`,
+`requireMfaForAllUsers`, `mfaEnforcementGraceDays`, `mfaEnforcementBlocksPrimaryPassword`):
+organisation write, i.e. ORGANIZATION_MANAGEMENT only (SERVER_MANAGEMENT / VIEW_ONLY_ORG read
+it); every change is audited as `settings.mfa-policy.update` with a from/to diff
+(docs/user-settings.md, "MFA enforcement").
+
 Outside `/api/v1/admin`: the setup wizard's `GET /api/v1/setup/secrets-download` and
-`POST /api/v1/setup/finish` (10.4.2, docs/setup-wizard.md) — `requireRole()`, i.e.
-ORGANIZATION_MANAGEMENT only and never for a scoped admin: **org**.
+`POST /api/v1/setup/finish` (10.4.2, docs/setup-wizard.md) — `requireRoleInSetupWindow()`, i.e.
+ORGANIZATION_MANAGEMENT only and never for a scoped admin: **org**. 10.5: this is
+`requireRole()` without the admin-MFA rule — fresh installations start with
+`requireMfaForAdmins` on and the wizard's session has no second factor yet; both routes only
+work inside the setup window.
 
 | Route | Decision |
 |---|---|

@@ -96,6 +96,31 @@ test('TOTP setup / disable / backup codes / WebAuthn registration require re-aut
   assert.equal(db.userMfa.rows[0]!['totpEnabled'], false);
 });
 
+test('10.5: enrolment required — /auth/mfa and /auth/sessions stay reachable, app passwords only after enrolment (revoke always)', async () => {
+  await db.serverSettings.update({ where: { id: 'singleton' }, data: { requireMfaForAllUsers: true, mfaEnforcementGraceDays: 0 } });
+  sauth.invalidateMfaEnforcementCache();
+  try {
+    const { id, token } = await userWithSession();
+    await db.appPassword.create({ data: { id: 'ap-old', userId: id, name: 'old phone', hash: 'x' } });
+    const list = await call('GET', '/auth/app-passwords', undefined, token);
+    assert.equal(list.status, 403);
+    assert.equal(list.body['code'], 'MFA_ENROLMENT_REQUIRED');
+    assert.equal((await call('POST', '/auth/app-passwords', { name: 'x', currentPassword: PW }, token)).body['code'], 'MFA_ENROLMENT_REQUIRED');
+    assert.equal((await call('GET', '/auth/sessions', undefined, token)).status, 200, 'sessions list reachable');
+    assert.equal((await call('DELETE', '/auth/app-passwords/ap-old', undefined, token)).status, 200, 'revoking stays possible');
+
+    // enrolment through /auth/mfa works while blocked
+    assert.equal((await call('GET', '/auth/mfa/status', undefined, token)).status, 200);
+    const setup = await call('POST', '/auth/mfa/totp/setup', { currentPassword: PW }, token);
+    assert.equal(setup.status, 200);
+    assert.equal((await call('POST', '/auth/mfa/totp/confirm', { code: sauth.totpCode(String(setup.body['secret'])) }, token)).status, 200);
+    // confirming publishes mfa-change → the cached state is dropped; app passwords work now
+    assert.equal((await call('GET', '/auth/app-passwords', undefined, token)).status, 200);
+  } finally {
+    sauth.invalidateMfaEnforcementCache();
+  }
+});
+
 test('TOTP setup publishes no mfa-change event; the confirmation does (8.0.0)', async () => {
   const { id, token } = await userWithSession('carol@example.com');
   const events: string[] = [];

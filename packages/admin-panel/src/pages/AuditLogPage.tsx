@@ -145,6 +145,8 @@ const ACTION_MAP: Record<string, ActionMeta> = {
   'settings.maintenance.put':     { label: 'Wartungsmodus geändert',         tone: 'update' },
   'audit.enabled':                { label: 'Audit-Log AKTIVIERT',            tone: 'critical' },
   'audit.disabled':               { label: 'Audit-Log DEAKTIVIERT',          tone: 'critical' },
+  // 10.5: MFA for admins / for all users, grace period, primary-password block
+  'settings.mfa-policy.update':   { label: 'MFA-Richtlinie geändert',        tone: 'critical' },
   // Old clients: TLS 1.0/1.1 per listener / HTTPS, device relay
   'settings.legacy-tls.enabled':  { label: 'TLS 1.0/1.1 für ältere Clients ERLAUBT', tone: 'critical' },
   'settings.legacy-tls.disabled': { label: 'TLS 1.0/1.1 für ältere Clients gesperrt', tone: 'update' },

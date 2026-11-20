@@ -89,6 +89,12 @@ unverified and the admin API answers `MFA_REQUIRED` / `MFA_NOT_VERIFIED`. Set
 `OIDC_TRUST_IDP_MFA_FOR_ADMINS=true` (default `false`) to trust `amr` for admins
 again — only effective for providers with `requireMfa` off.
 
+"MFA für alle Benutzer erzwingen" (10.5, docs/user-settings.md) uses the same trust: an SSO
+session that is MFA verified by the rules above satisfies the enforcement; otherwise the account
+needs CoreMail MFA. SSO-only accounts (no CoreMail password) cannot confirm a CoreMail enrolment,
+so for them the IdP's MFA (`amr`) is the way to satisfy the rule — the webmail's enrolment page
+says so.
+
 SSO accounts have no CoreMail password; mail clients use app passwords. Creating
 an app password (v9.0) needs re-authentication — SSO users confirm with a
 CoreMail TOTP or backup code (`mfaCode`).

@@ -155,6 +155,8 @@ export class CoreMailClient {
       let msg = obj.error ?? (typeof data === 'string' && data ? data : `HTTP ${resp.status}`);
       if (resp.status === 401) msg = `${msg} — session expired or invalid (\`coremail login\`)`;
       if (resp.status === 403 && obj.code === 'MFA_REQUIRED') msg = 'Admin access requires MFA — enable it in the MWA or disable requireMfaForAdmins';
+      // 10.5: "MFA für alle Benutzer erzwingen", grace period over
+      if (resp.status === 403 && obj.code === 'MFA_ENROLMENT_REQUIRED') msg = 'MFA is mandatory for this account — set it up in the MWA (Settings → Security), then log in again';
       if (obj.details) msg += `\n${JSON.stringify(obj.details, null, 2)}`;
       throw new ApiError(resp.status, msg, data);
     }

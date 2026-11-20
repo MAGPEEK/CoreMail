@@ -23,6 +23,10 @@ interface GlobalSettings {
   minPasswordLength:           number;
   inactivityTimeoutMinutes:    number;
   requireMfaForAdmins:         boolean;
+  // 10.5: "MFA für alle Benutzer erzwingen" (optional in older servers' answers)
+  requireMfaForAllUsers?:               boolean;
+  mfaEnforcementGraceDays?:             number;
+  mfaEnforcementBlocksPrimaryPassword?: boolean;
   selfServicePasswordReset:    boolean;
   auditLogEnabled:             boolean;
   apiRateLimitEnabled:         boolean;
@@ -155,6 +159,9 @@ export function SettingsPage() {
     minPasswordLength: 8,
     inactivityTimeoutMinutes: 30,
     requireMfaForAdmins: false,
+    requireMfaForAllUsers: false,
+    mfaEnforcementGraceDays: 7,
+    mfaEnforcementBlocksPrimaryPassword: false,
     selfServicePasswordReset: true,
     auditLogEnabled: true,
     ...API_RATE_LIMIT_FORM_DEFAULTS,
@@ -178,6 +185,9 @@ export function SettingsPage() {
     setSec({ minPasswordLength: cfg.minPasswordLength,
              inactivityTimeoutMinutes: cfg.inactivityTimeoutMinutes,
              requireMfaForAdmins: cfg.requireMfaForAdmins,
+             requireMfaForAllUsers: cfg.requireMfaForAllUsers ?? false,
+             mfaEnforcementGraceDays: cfg.mfaEnforcementGraceDays ?? 7,
+             mfaEnforcementBlocksPrimaryPassword: cfg.mfaEnforcementBlocksPrimaryPassword ?? false,
              selfServicePasswordReset: cfg.selfServicePasswordReset ?? true,
              auditLogEnabled: cfg.auditLogEnabled ?? true,
              ...rateLimitForm(cfg),
@@ -325,6 +335,31 @@ export function SettingsPage() {
             <div className="flex items-center gap-2 mt-2 text-xs text-warning-fg bg-warning-bg border border-warning-line rounded px-3 py-2">
               <AlertTriangle size={12} />
               {t('settings_sec_mfa_warn')}
+            </div>
+          )}
+        </FieldGroup>
+
+        {/* 10.5: MFA für alle Benutzer erzwingen (grace period, mail-protocol sub-option) */}
+        <FieldGroup label={t('settings_sec_mfa_all')} hint={t('settings_sec_mfa_all_hint')}>
+          <Toggle value={sec.requireMfaForAllUsers} onChange={(v) => updSec('requireMfaForAllUsers', v)}
+            label={sec.requireMfaForAllUsers ? t('settings_sec_mfa_all_on') : t('status_disabled')} />
+          {sec.requireMfaForAllUsers && (
+            <div className="space-y-3 mt-2">
+              <div>
+                <p className="text-sm text-fg-muted mb-1">{t('settings_sec_mfa_all_grace')}</p>
+                <NumberInput value={sec.mfaEnforcementGraceDays} onChange={(v) => updSec('mfaEnforcementGraceDays', Math.min(90, Math.max(0, v)))}
+                  min={0} max={90} unit={t('unit_days')} label={t('settings_sec_mfa_all_grace')} />
+                <p className="text-xs text-fg-subtle mt-1">{t('settings_sec_mfa_all_grace_hint')}</p>
+              </div>
+              <div>
+                <Toggle value={sec.mfaEnforcementBlocksPrimaryPassword} onChange={(v) => updSec('mfaEnforcementBlocksPrimaryPassword', v)}
+                  label={t('settings_sec_mfa_all_block_pw')} />
+                <p className="text-xs text-fg-subtle mt-1">{t('settings_sec_mfa_all_block_pw_hint')}</p>
+              </div>
+              <div className="flex items-center gap-2 text-xs text-warning-fg bg-warning-bg border border-warning-line rounded px-3 py-2">
+                <AlertTriangle size={12} className="shrink-0" />
+                {t('settings_sec_mfa_all_warn')}
+              </div>
             </div>
           )}
         </FieldGroup>
