@@ -62,122 +62,32 @@ It is not built for large providers with thousands of mailboxes on one host.
 
 ## Quick start
 
-You need Docker 24 or newer with Docker Compose 2.20 or newer. All variants use the image `magpeek/coremail-app`. Mail data lives on the volume `coremail-data`, the database on `pgdata` (Compose) or `coremail-pgdata` (`docker run`). No configuration file is needed: on the first start CoreMail generates every secret (keys and database passwords) into a `secrets` directory ([docs/setup.md](docs/setup.md#automatic-secrets)).
-
-### Minimal — Docker Compose
-
-CoreMail, PostgreSQL and Redis ([docker-compose.minimal.yml](infra/docker/docker-compose.minimal.yml)). No spam or virus scanner; SPF, DKIM, DMARC, DNSBL and greylisting still run. Good for up to about 50 users on 2 GB RAM.
+You need a Linux server with Docker 24 or newer and Docker Compose 2.20 or newer. No repository checkout and no configuration file: one Compose file from the release, and CoreMail generates every secret (keys and database passwords) on the first start.
 
 ```bash
-git clone https://github.com/MAGPEEK/CoreMail.git
-cd CoreMail
-docker compose -f infra/docker/docker-compose.minimal.yml up -d
+mkdir coremail && cd coremail
+curl -fsSLO https://github.com/MAGPEEK/CoreMail/releases/latest/download/docker-compose.yml
+docker compose up -d
 ```
 
-Then open the setup wizard ([First login](#first-login)); the one-time token is in `infra/docker/secrets/setup-token`. **Back up `infra/docker/secrets/` off the server** — without `PEPPER` from `coremail.env` no password works anymore.
+Then open `http://<server-ip>:3000/setup`; the one-time setup token is in `./secrets/setup-token` ([First login](#first-login)). **Back up `./secrets/` off the server** — without `PEPPER` from `coremail.env` no password works anymore.
 
-A `.env` stays optional and always wins: `bash scripts/setup.sh --variant minimal` writes one with random values, and existing installations keep theirs ([docs/docker-compose.md](docs/docker-compose.md)).
+The default stack is CoreMail, PostgreSQL and Redis — good for up to about 50 users on 2 GB RAM. SPF, DKIM, DMARC, DNSBL and greylisting always run. Optional services are Compose profiles (`docker compose --profile scanner up -d`, or `COMPOSE_PROFILES=scanner,backup` in a `.env` next to the file):
 
-### Minimal — plain `docker run`
+| Profile | Adds |
+|---------|------|
+| `scanner` | rspamd (spam scoring) and ClamAV (virus scanning), about 1.5 GB RAM more — picked up automatically |
+| `backup` | a daily `pg_dump` of the database into the volume `pg-backups` |
+| `s3` | MinIO as the target of the built-in backup service (mail stays on the `coremail-data` volume) |
 
-The same stack without Compose and without cloning the repository. The image generates the secrets into `./secrets` first; keep that directory.
+Everything about this file — ports, DNS, backups, overrides, uninstall: [docs/deploy.md](docs/deploy.md).
 
-```bash
-mkdir -m 700 secrets
-docker run --rm -v "$PWD/secrets:/secrets" magpeek/coremail-app:10.4.0 coremail-init-secrets
-
-docker network create coremail
-
-docker run -d --name coremail-postgres --network coremail --restart unless-stopped \
-  -e POSTGRES_DB=coremail -e POSTGRES_USER=coremail \
-  -e POSTGRES_PASSWORD_FILE=/run/coremail/postgres-password \
-  -v "$PWD/secrets:/run/coremail:ro" \
-  -v coremail-pgdata:/var/lib/postgresql/data \
-  postgres:16-alpine
-
-docker run -d --name coremail-redis --network coremail --restart unless-stopped \
-  -v "$PWD/secrets:/run/coremail:ro" -v coremail-redisdata:/data \
-  --entrypoint sh redis:7-alpine \
-  -c 'exec docker-entrypoint.sh redis-server --appendonly yes --requirepass "$(cat /run/coremail/redis-password)"'
-
-docker run -d --name coremail --network coremail --restart unless-stopped \
-  -e COREMAIL_DB_HOST=coremail-postgres -e COREMAIL_REDIS_HOST=coremail-redis \
-  -e OBJECT_STORAGE=filesystem -e RSPAMD_ENABLED=false -e CLAMAV_ENABLED=false \
-  -e SECURITY_FILTER_URL=http://localhost:3002 \
-  -p 25:25 -p 465:465 -p 587:587 -p 143:143 -p 993:993 \
-  -p 80:3000 -p 443:443 -p 3000:3000 \
-  -v "$PWD/secrets:/secrets" -v coremail-data:/data \
-  --security-opt no-new-privileges:true \
-  --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
-  --cap-add SETUID --cap-add SETGID --cap-add KILL --cap-add NET_BIND_SERVICE \
-  --sysctl net.ipv4.ip_unprivileged_port_start=0 \
-  magpeek/coremail-app:10.4.0
-```
-
-Add `-p 110:110 -p 995:995` if you want POP3. The setup token is in `./secrets/setup-token`.
-
-### Maximal — Docker Compose
-
-[docker-compose.full.yml](infra/docker/docker-compose.full.yml) adds rspamd (spam scoring, Bayes learning) and ClamAV (virus scanning), resource limits and log rotation for every container, and optional profiles: `minio` (bundled S3 storage, also the default backup target), `backup` (daily `pg_dump`) and `geoip` (country filter database). Plan 4 GB RAM; ClamAV alone needs about 1 GB.
-
-```bash
-git clone https://github.com/MAGPEEK/CoreMail.git
-cd CoreMail
-docker compose -f infra/docker/docker-compose.full.yml up -d
-# with profiles:
-docker compose -f infra/docker/docker-compose.full.yml --profile minio --profile backup up -d
-```
-
-Mail is stored on the `coremail-data` volume (`OBJECT_STORAGE=filesystem`; set `minio` or `s3` in `.env` to change it). The `geoip` profile needs `GEOIPUPDATE_ACCOUNT_ID` and `GEOIPUPDATE_LICENSE_KEY` in `.env`. All three variants are compared in [docs/docker-compose.md](docs/docker-compose.md).
-
-### Maximal — plain `docker run`
-
-<details>
-<summary>rspamd and ClamAV next to the minimal stack</summary>
-
-Start the minimal `docker run` stack above, but stop before the last command (`coremail`). rspamd trusts only the CoreMail container's address, so both get fixed addresses on a small network of their own. The rspamd configuration comes from the repository (`infra/docker/rspamd/local.d`); rspamd reads its controller password from `./secrets` and then runs as its own user.
-
-```bash
-git clone https://github.com/MAGPEEK/CoreMail.git
-
-docker network create --subnet 10.253.253.0/29 coremail-rspamd
-
-docker run -d --name coremail-rspamd --network coremail-rspamd --ip 10.253.253.3 --restart unless-stopped \
-  -e RSPAMD_CONTROLLER_SECURE_IP=10.253.253.2 \
-  -v "$PWD/secrets:/run/coremail:ro" \
-  -v "$PWD/CoreMail/infra/docker/rspamd/local.d:/etc/rspamd/local.d:ro" \
-  -v coremail-rspamd-data:/var/lib/rspamd \
-  --user 0:0 --entrypoint sh rspamd/rspamd:4.0.0 \
-  -c 'RSPAMD_CONTROLLER_PASSWORD="$(cat /run/coremail/rspamd-controller-password)" && export RSPAMD_CONTROLLER_PASSWORD && exec setpriv --reuid=11333 --regid=11333 --clear-groups /usr/bin/rspamd -f'
-
-docker run -d --name coremail-clamav --network coremail --restart unless-stopped \
-  -v coremail-clamav-data:/var/lib/clamav \
-  clamav/clamav:stable
-
-docker create --name coremail --network coremail --restart unless-stopped \
-  -e COREMAIL_DB_HOST=coremail-postgres -e COREMAIL_REDIS_HOST=coremail-redis \
-  -e OBJECT_STORAGE=filesystem -e SECURITY_FILTER_URL=http://localhost:3002 \
-  -e RSPAMD_URL=http://10.253.253.3:11334 -e CLAMAV_HOST=coremail-clamav -e CLAMAV_PORT=3310 \
-  -p 25:25 -p 465:465 -p 587:587 -p 143:143 -p 993:993 \
-  -p 80:3000 -p 443:443 -p 3000:3000 \
-  -v "$PWD/secrets:/secrets" -v coremail-data:/data \
-  --security-opt no-new-privileges:true \
-  --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
-  --cap-add SETUID --cap-add SETGID --cap-add KILL --cap-add NET_BIND_SERVICE \
-  --sysctl net.ipv4.ip_unprivileged_port_start=0 \
-  magpeek/coremail-app:10.4.0
-docker network connect --ip 10.253.253.2 coremail-rspamd coremail
-docker start coremail
-```
-
-ClamAV downloads about 300 MB of signatures on its first start; scanning begins once that is done. For MinIO, the `pg_dump` sidecar and GeoIP, see the profiles in [docker-compose.full.yml](infra/docker/docker-compose.full.yml).
-
-</details>
+**Advanced:** [other Compose variants](docs/docker-compose.md) (repository checkout, existing installations) · [plain `docker run`](docs/deploy.md#docker-run) · [Synology](docs/deployment-docker.md#synology-nas) · [Kubernetes Helm chart](infra/k8s/README.md)
 
 ### First login
 
-1. Wait about a minute until the container is healthy (`docker ps` shows `healthy`).
-2. Read the one-time setup token: `infra/docker/secrets/setup-token` (Compose) or `./secrets/setup-token` (`docker run`) — or `docker exec coremail cat /secrets/setup-token`.
+1. Wait about a minute until the container is healthy (`docker compose ps` shows `healthy`).
+2. Read the one-time setup token: `./secrets/setup-token` — or `docker exec coremail cat /secrets/setup-token`.
 3. Open `http://<server-ip>:3000/setup`, enter the token, your mail domain, the first admin address and a password.
 4. In the admin panel, issue a Let's Encrypt certificate under **Certificates** and create the mailboxes. The webmail is at `https://<your-host>/`, the admin panel at `https://<your-host>/bcp/`.
 5. Back up the `secrets` directory off the server (password manager, offline copy).
@@ -197,15 +107,16 @@ ClamAV downloads about 300 MB of signatures on its first start; scanning begins 
 ## Update
 
 ```bash
-docker compose -f infra/docker/docker-compose.minimal.yml pull && docker compose -f infra/docker/docker-compose.minimal.yml up -d
+docker compose pull && docker compose up -d
 ```
 
-Use the Compose file of your variant. With `docker run`, pull the new tag, remove the `coremail` container and start it again with the same command. The database schema is updated at start.
+The Compose file names the image of its release; for a new release download the new file first ([docs/deploy.md → Update](docs/deploy.md#update)). With another Compose variant use its file (`docker compose -f infra/docker/docker-compose.yml pull && docker compose -f infra/docker/docker-compose.yml up -d`). The database schema is updated at start.
 
 Upgrading from an older version: read the [version history](docs/version-history.md) and the [release notes](docs/releases/) first.
 
 ## Documentation
 
+- [Deployment with one Compose file](docs/deploy.md): profiles, overrides, backup, update
 - [Docker Compose variants, storage and backups](docs/docker-compose.md)
 - [Docker operation](docs/deployment-docker.md) and [security hardening](docs/deployment-security.md)
 - [Client setup](docs/clients.md): desktop clients ([MAPI over HTTP](docs/mapi.md)), phones ([ActiveSync](docs/activesync.md)), Thunderbird and Apple

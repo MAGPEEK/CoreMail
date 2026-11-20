@@ -4,3 +4,5 @@
 *.sh                    text eol=lf
 Dockerfile*             text eol=lf
 infra/docker/**         text eol=lf
+# The release asset (scripts/release-assets.sh): its sh -c blocks must not carry CR
+deploy/**               text eol=lf

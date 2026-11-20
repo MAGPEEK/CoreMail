@@ -1,7 +1,7 @@
 name: coremail
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  CoreMail 10.3.0 — Docker Compose, variant MINIMAL
+#  CoreMail 10.4.0 — Docker Compose, variant MINIMAL
 #
 #  Variants (docs/docker-compose.md has the comparison table):
 #    docker-compose.minimal.yml   MINIMAL   ← this file: coremail + postgres + redis
@@ -35,7 +35,7 @@ name: coremail
 services:
 
   coremail:
-    image: magpeek/coremail-app:${COREMAIL_VERSION:-10.3.0}
+    image: magpeek/coremail-app:${COREMAIL_VERSION:-10.4.0}
     container_name: coremail
     restart: unless-stopped
     environment:
@@ -197,7 +197,7 @@ services:
   # One-shot secrets generator (same image): creates/extends ./secrets before
   # everything else; .env values are copied, never replaced (docs/setup.md).
   coremail-init:
-    image: magpeek/coremail-app:${COREMAIL_VERSION:-10.3.0}
+    image: magpeek/coremail-app:${COREMAIL_VERSION:-10.4.0}
     container_name: coremail-init
     restart: "no"
     command: ["coremail-init-secrets"]

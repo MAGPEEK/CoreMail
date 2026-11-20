@@ -238,12 +238,26 @@ COPY scripts/decrypt-backup.mjs /usr/local/lib/coremail/decrypt-backup.mjs
 # The image deliberately has NO /secrets directory: secrets are generated only
 # into a mounted directory, never into the container layer (docs/setup.md).
 COPY infra/docker/init-secrets.mjs /usr/local/lib/coremail/init-secrets.mjs
+# 10.4: configuration the infrastructure containers need, so deploy/docker-compose.yml
+# works without a repository checkout. The coremail-init service copies it into
+# the config volumes on every start (coremail-init-config, docs/deploy.md).
+COPY infra/docker/init-config.mjs /usr/local/lib/coremail/init-config.mjs
+COPY infra/docker/coremail-init.sh /usr/local/bin/coremail-init
+COPY infra/docker/postgres/init.sql /usr/share/coremail/config/postgres/01-init.sql
+COPY infra/docker/postgres/02-app-role.sh /usr/share/coremail/config/postgres/02-app-role.sh
+COPY infra/docker/rspamd/local.d/ /usr/share/coremail/config/rspamd/local.d/
+COPY infra/docker/pg-backup/pg-backup.sh /usr/share/coremail/config/pg-backup/pg-backup.sh
 # Strip CR in case the build context comes from a Windows checkout with CRLF line
 # endings — a "#!/bin/sh\r" shebang makes tini fail with "No such file or directory".
-RUN sed -i 's/\r$//' /entrypoint.sh /etc/supervisord.conf /usr/local/bin/coremail-schema-sync /usr/local/lib/coremail/schema-sync-classify.mjs /usr/local/lib/coremail/decrypt-backup.mjs /usr/local/lib/coremail/init-secrets.mjs \
- && chmod +x /entrypoint.sh /usr/local/bin/coremail-schema-sync /usr/local/lib/coremail/decrypt-backup.mjs /usr/local/lib/coremail/init-secrets.mjs \
+RUN sed -i 's/\r$//' /entrypoint.sh /etc/supervisord.conf /usr/local/bin/coremail-schema-sync /usr/local/lib/coremail/schema-sync-classify.mjs /usr/local/lib/coremail/decrypt-backup.mjs /usr/local/lib/coremail/init-secrets.mjs /usr/local/lib/coremail/init-config.mjs /usr/local/bin/coremail-init \
+ && find /usr/share/coremail/config -type f -exec sed -i 's/\r$//' {} + \
+ && find /usr/share/coremail/config -type d -exec chmod 755 {} + \
+ && find /usr/share/coremail/config -type f -exec chmod 644 {} + \
+ && chmod 755 /usr/share/coremail/config/postgres/02-app-role.sh \
+ && chmod +x /entrypoint.sh /usr/local/bin/coremail-schema-sync /usr/local/lib/coremail/decrypt-backup.mjs /usr/local/lib/coremail/init-secrets.mjs /usr/local/lib/coremail/init-config.mjs /usr/local/bin/coremail-init \
  && ln -sf /usr/local/lib/coremail/decrypt-backup.mjs /usr/local/bin/coremail-decrypt-backup \
- && ln -sf /usr/local/lib/coremail/init-secrets.mjs /usr/local/bin/coremail-init-secrets
+ && ln -sf /usr/local/lib/coremail/init-secrets.mjs /usr/local/bin/coremail-init-secrets \
+ && ln -sf /usr/local/lib/coremail/init-config.mjs /usr/local/bin/coremail-init-config
 
 # ── Directories + permissions ─────────────────────────────────────────────────
 # All runtime directories belong to the node user (uid 1000, gid 1000).

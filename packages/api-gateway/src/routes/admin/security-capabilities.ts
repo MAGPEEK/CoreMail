@@ -11,7 +11,7 @@
  *           timeout | bad-response | ok | not-checked
  *   detail  error code only (ECONNREFUSED, HTTP_503, …)
  *
- * The BCP hides the settings of an `absent` scanner (env switch only) and warns for an
+ * The BCP hides the settings of an `absent` scanner (env switch, or `auto`) and warns for an
  * `unavailable` one. Settings writes for an absent scanner are still accepted
  * (PUT /admin/security/settings, /admin/security/clamav) so the configuration
  * is in place when the container is added later. The reply is rebuilt from

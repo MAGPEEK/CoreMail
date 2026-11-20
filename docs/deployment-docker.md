@@ -85,6 +85,10 @@ The `api-gateway` handles all HTTP routing without nginx:
 
 ## Quick start
 
+Without a checkout (recommended for new installations, 10.4): one Compose file from the
+release and `docker compose up -d` — see [deploy.md](deploy.md). The steps below use the
+Compose files of a repository checkout ([docker-compose.md](docker-compose.md)).
+
 ### 1. Clone the repository
 
 ```bash
