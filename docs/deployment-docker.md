@@ -98,9 +98,9 @@ cd CoreMail
 
 ### 2. Configuration (optional)
 
-Nothing is required: without a `.env` the one-shot service `coremail-init` generates
-`JWT_SECRET`, `PEPPER` and every database password into `infra/docker/secrets/` on the first
-start ([setup.md → Automatic secrets](setup.md#automatic-secrets)). **Back that directory up
+Nothing is required: without a `.env` the `coremail` container generates `JWT_SECRET`,
+`PEPPER` and every database password into `infra/docker/secrets/` on its first start (the
+other containers wait for their password file) ([setup.md → Automatic secrets](setup.md#automatic-secrets)). **Back that directory up
 off the server.**
 
 To choose values yourself (they always win and are copied into `./secrets/`):
@@ -226,8 +226,8 @@ curl -X POST http://<server>:3000/api/v1/setup/complete \
 ## Configuration reference (.env)
 
 Since 10.4 the `.env` file is optional: every Compose variant starts without it and the
-one-shot service `coremail-init` generates the secrets into `./secrets/` next to the Compose
-file ([setup.md](setup.md#docker-compose-coremail-init)). A value set in `.env` always wins and
+`coremail` container generates the secrets into `./secrets/` next to the Compose file
+([setup.md](setup.md#docker-compose-start-order)). A value set in `.env` always wins and
 is copied into `./secrets/`. Leave a secret empty to have it generated. The available
 variables (placeholders shown — never use them as they are):
 
@@ -416,8 +416,9 @@ docker compose -f infra/docker/docker-compose.yml start
 # 1. Pull new images
 docker compose -f infra/docker/docker-compose.yml pull
 
-# 2. Restart the stack (downtime < 30 seconds, Prisma migration runs automatically)
-docker compose -f infra/docker/docker-compose.yml up -d
+# 2. Restart the stack (downtime < 30 seconds, Prisma migration runs automatically;
+#    --remove-orphans removes the coremail-init container a 10.4.0 installation still has)
+docker compose -f infra/docker/docker-compose.yml up -d --remove-orphans
 
 # 3. Check status
 docker compose -f infra/docker/docker-compose.yml ps

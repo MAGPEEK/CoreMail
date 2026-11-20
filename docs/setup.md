@@ -14,7 +14,7 @@ time. The browser part of the first setup is described in
   - [Which value wins](#which-value-wins)
   - [Fresh or existing installation](#fresh-or-existing-installation)
   - [Database and Redis connection](#database-and-redis-connection)
-  - [Docker Compose: coremail-init](#docker-compose-coremail-init)
+  - [Docker Compose: start order](#docker-compose-start-order)
   - [Running the generator by hand](#running-the-generator-by-hand)
   - [Setup token](#setup-token)
   - [Safety rules](#safety-rules)
@@ -33,10 +33,10 @@ docker compose -f infra/docker/docker-compose.yml up -d
 # secrets: infra/docker/secrets/ (./secrets next to the Compose file)
 ```
 
-The Compose files run the generator once in the one-shot service
-`coremail-init` before anything else starts
-([Docker Compose: coremail-init](#docker-compose-coremail-init)). Outside
-Compose, mount an empty directory at `/secrets`:
+In the Compose files the `coremail` container runs the generator at its start,
+before anything else; the other containers wait for the files it writes
+([Docker Compose: start order](#docker-compose-start-order)). Outside Compose,
+mount an empty directory at `/secrets`:
 
 ```bash
 mkdir -m 700 secrets
@@ -153,8 +153,11 @@ The rule:
 The database is only queried when a fresh-only key is missing from both the
 file and the environment. The query uses `psql` with the password in the
 environment (`PGPASSWORD`), never on the command line. In the entrypoint the
-generator waits up to `COREMAIL_SECRETS_DB_WAIT` seconds (default 30) for the
-database; the standalone command does not wait.
+generator waits up to `COREMAIL_SECRETS_DB_WAIT` seconds for the database —
+default 30 when a `coremail.env` exists already, 0 on a first start without
+one (the bundled PostgreSQL is then itself waiting for the password file this
+step writes, and a database without the CoreMail schema changes nothing). The
+standalone command does not wait.
 
 ### Database and Redis connection
 
@@ -181,33 +184,59 @@ For the **bundled MinIO** the entrypoint also fills `MINIO_SECRET_KEY` /
 `MINIO_ROOT_USER` (default user `minioadmin`) — only when they are empty. An
 external S3 keeps its own keys.
 
-### Docker Compose: coremail-init
+### Docker Compose: start order
 
-All four Compose files (`docker-compose.yml`, `.minimal.yml`, `.full.yml`,
-`.synology.yml`) contain the one-shot service `coremail-init`: the same image
-as `coremail`, command `coremail-init-secrets`, `restart: "no"`. The other
-services wait for it with `condition: service_completed_successfully` — the
-generator never runs twice at the same time (the entrypoint of `coremail` runs
-it again afterwards and finds nothing to add).
+There is no separate init container (10.4.0 had the one-shot service
+`coremail-init`; updating from it: `docker compose up -d --remove-orphans`
+removes its stopped container once). The `coremail` container prepares the
+stack at the start of its entrypoint, on every start:
 
-The standalone file `deploy/docker-compose.yml` ([deploy.md](deploy.md)) runs the
-command `coremail-init` instead: first `coremail-init-secrets`, then
-`coremail-init-config`, which copies the configuration bundled in the image
-(PostgreSQL init scripts, rspamd `local.d`, the pg-backup script) into the
-`coremail-config-*` volumes ([deploy.md → Configuration and overrides](deploy.md#configuration-and-overrides)).
+1. **Configuration** (only `deploy/docker-compose.yml`, which mounts the
+   `coremail-config-*` volumes below `/config`): `coremail-init-config` copies
+   the configuration bundled in the image (PostgreSQL init scripts, rspamd
+   `local.d`, the pg-backup script) into the volumes and then writes a ready
+   marker `.ready` into each ([deploy.md → Configuration and overrides](deploy.md#configuration-and-overrides)).
+   The repository Compose files bind-mount that configuration from the checkout
+   instead; their `coremail` container has no `/config` and skips the step.
+2. **Secrets**: `coremail-init-secrets` creates or extends `coremail.env` and the
+   single-value password files (written atomically — a file that exists is complete).
+3. It then waits for PostgreSQL (TCP, then the schema sync retries) and for Redis
+   (at most 120 s), and starts the services.
 
-| | |
-|---|---|
-| Secrets directory | `./secrets` next to the Compose file (`infra/docker/secrets/` in the repository); Synology: `/volume1/docker/coremail/secrets`. `COREMAIL_SECRETS_PATH` in `.env` moves it. |
-| Environment | the `.env` values of all secret keys plus `DATABASE_URL` / `REDIS_URL` (`${VAR:-}`) — a value from `.env` is **copied** into the file, never replaced by a new one |
-| Privileges | no network (`network_mode: none`), read-only root file system, `no-new-privileges`, `cap_drop: [ALL]` plus `DAC_OVERRIDE`, `FOWNER` (write into a directory owned by the host user, tighten an empty Docker Desktop mount) and `NET_BIND_SERVICE` (only because the image's node binary carries it as a file capability — the kernel refuses to execute it otherwise) |
+The other containers do not depend on `coremail`. Each starts with a small
+`sh -c` wrapper that waits until what it needs exists — at most 10 minutes, a
+log line every 10 s (`redis: waiting for the coremail container to write
+/run/coremail/redis-password (10s)`); after 10 minutes it exits with an error and
+`restart: unless-stopped` starts it again. Then it runs the image's own
+entrypoint with the same arguments and user switch as before. A password set in
+`.env` needs no file — that container does not wait for it.
 
-Without network the database cannot be reached, so the
-[fresh-installation rule](#fresh-or-existing-installation) for a first start is
-"no earlier `coremail.env` and no `JWT_SECRET`/`PEPPER` in `.env`". A `.env`
-installation is therefore always treated as existing: `MFA_ENCRYPTION_KEY`,
-`BACKUP_ENCRYPTION_KEY`, `AUDIT_EXPORT_SIGNING_KEY` and the VAPID pair are not
-generated for it.
+| Container | Waits for |
+|-----------|-----------|
+| `postgres` | `postgres-password` (unless `.env` sets `POSTGRES_PASSWORD`); in `deploy/docker-compose.yml` on an **empty** data directory (no `PG_VERSION`) also the init scripts' `.ready` marker — an existing database starts without them |
+| `redis` | `redis-password` (unless `REDIS_PASSWORD`) |
+| `minio` | `minio-root-password` (unless `MINIO_ROOT_PASSWORD`) |
+| `rspamd` | `rspamd-controller-password` (unless `RSPAMD_CONTROLLER_PASSWORD`); in `deploy/docker-compose.yml` also the `local.d` `.ready` marker |
+| `pg-backup` | `postgres-password` (unless `POSTGRES_PASSWORD`); in `deploy/docker-compose.yml` also the `.ready` marker of its script; and `postgres` healthy |
+| `clamav` | nothing |
+
+`coremail` itself lists `postgres`, `redis` (and `minio`, `rspamd`, `clamav`
+where the file has them) with `condition: service_started` only, so
+`docker compose up -d coremail` still starts them first. Waiting for them to be
+*healthy* would deadlock: they wait for files `coremail` writes.
+
+The generator runs only in the `coremail` container, so it never runs twice at
+the same time. Its environment holds the `.env` values of all secret keys plus
+`DATABASE_URL` / `REDIS_URL` (`${VAR:-}`) — a value from `.env` is **copied**
+into the file, never replaced by a new one.
+
+On a first start the database cannot answer yet (PostgreSQL waits for the
+password file), so the [fresh-installation rule](#fresh-or-existing-installation)
+is "no earlier `coremail.env` and no `JWT_SECRET`/`PEPPER` in `.env`". A
+`.env` installation that moves to the secrets directory is treated as
+existing — its PostgreSQL usually answers already (it needs no file) and has
+users: `MFA_ENCRYPTION_KEY`, `BACKUP_ENCRYPTION_KEY`, `AUDIT_EXPORT_SIGNING_KEY`
+and the VAPID pair are not generated for it.
 
 How the other containers get their password — the `.env` value when set,
 otherwise the single-value file (secrets directory mounted read-only at
@@ -215,7 +244,7 @@ otherwise the single-value file (secrets directory mounted read-only at
 
 | Service | Mechanism |
 |---------|-----------|
-| `postgres` | `POSTGRES_PASSWORD_FILE=/run/coremail/postgres-password`. The file always holds `POSTGRES_PASSWORD` from `.env` when `.env` has it. PostgreSQL reads it only when its data directory is created; an existing database keeps its password. |
+| `postgres` | `sh -c` wrapper: `POSTGRES_PASSWORD` from `.env` (then `POSTGRES_PASSWORD_FILE` is unset — the image refuses both), else `POSTGRES_PASSWORD_FILE=/run/coremail/postgres-password`; then the image entrypoint. PostgreSQL reads the password only when its data directory is created; an existing database keeps its password. |
 | `redis` | `sh -c` wrapper: `REDIS_PASSWORD` or `redis-password`, then the image entrypoint (still switches to user `redis`); healthcheck with `REDISCLI_AUTH` |
 | `minio` | `sh -c` wrapper: `MINIO_ROOT_PASSWORD` or `minio-root-password`, then the image entrypoint |
 | `rspamd` | started as root only to read `rspamd-controller-password` when `RSPAMD_CONTROLLER_PASSWORD` is empty, then `setpriv` to `_rspamd` (11333), the image's own user |
@@ -224,9 +253,9 @@ otherwise the single-value file (secrets directory mounted read-only at
 
 ### Running the generator by hand
 
-The generator is part of the image and can create the directory content before
-anything else starts — for example before the PostgreSQL container needs
-`postgres-password`:
+The generator is part of the image and can also run on its own — for example
+in a `docker run` setup, to create `postgres-password` before the PostgreSQL
+container starts ([deploy.md → docker run](deploy.md#docker-run)):
 
 ```bash
 mkdir -m 700 secrets
@@ -341,7 +370,7 @@ rotation).
 | `COREMAIL_SECRETS_HOST_PATH` | `./secrets` | how the directory is named in messages and in `/api/v1/setup/status` (the Compose files pass `COREMAIL_SECRETS_PATH`) |
 | `COREMAIL_PUBLIC_HTTP_PORT` | `3000` | published HTTP port named in the setup URL of the log |
 | `COREMAIL_SECRETS_PATH` | `./secrets` (Synology: `/volume1/docker/coremail/secrets`) | Compose only (`.env`): host directory of the secrets |
-| `COREMAIL_SECRETS_DB_WAIT` | `30` | seconds the entrypoint waits for the database before applying the "unreachable" rule |
+| `COREMAIL_SECRETS_DB_WAIT` | `30` (`0` while there is no `coremail.env`) | seconds the entrypoint waits for the database before applying the "unreachable" rule |
 | `COREMAIL_DB_HOST` / `COREMAIL_DB_PORT` / `COREMAIL_DB_NAME` | `postgres` / `5432` / `coremail` | parts of a built `DATABASE_URL` |
 | `COREMAIL_DB_USER` | `coremail` | database role of a built `DATABASE_URL` |
 | `COREMAIL_REDIS_HOST` / `COREMAIL_REDIS_PORT` | `redis` / `6379` | parts of a built `REDIS_URL` |

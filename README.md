@@ -107,10 +107,10 @@ Everything about this file — ports, DNS, backups, overrides, uninstall: [docs/
 ## Update
 
 ```bash
-docker compose pull && docker compose up -d
+docker compose pull && docker compose up -d --remove-orphans
 ```
 
-The Compose file names the image of its release; for a new release download the new file first ([docs/deploy.md → Update](docs/deploy.md#update)). With another Compose variant use its file (`docker compose -f infra/docker/docker-compose.yml pull && docker compose -f infra/docker/docker-compose.yml up -d`). The database schema is updated at start.
+`--remove-orphans` removes the stopped `coremail-init` container a 10.4.0 installation still has (newer releases need no init container). The Compose file names the image of its release; for a new release download the new file first ([docs/deploy.md → Update](docs/deploy.md#update)). With another Compose variant use its file (`docker compose -f infra/docker/docker-compose.yml pull && docker compose -f infra/docker/docker-compose.yml up -d --remove-orphans`). The database schema is updated at start.
 
 Upgrading from an older version: read the [version history](docs/version-history.md) and the [release notes](docs/releases/) first.
 

@@ -10,7 +10,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { MANIFEST, MAX_OVERRIDE_BYTES, collectBundled, syncConfig } from './init-config.mjs';
+import { MANIFEST, MAX_OVERRIDE_BYTES, READY_MARKER, collectBundled, syncConfig } from './init-config.mjs';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 const posixFs = process.platform !== 'win32';
@@ -69,6 +69,23 @@ test('first run copies every bundled file; second run changes nothing', () => {
   const second = syncConfig(s);
   assert.equal(second.reduce((n, x) => n + x.written, 0), 0);
   assert.equal(second.reduce((n, x) => n + x.unchanged, 0), 5);
+});
+
+test('ready marker: written after the files of every directory, unchanged config leaves it alone, a change updates it', () => {
+  const s = setup();
+  syncConfig(s);
+  const marker = (rel) => readFileSync(join(s.configDir, ...rel.split('/'), READY_MARKER), 'utf8');
+  for (const rel of ['postgres', 'rspamd/local.d', 'pg-backup']) assert.match(marker(rel), /^sha256:[0-9a-f]{64}\n$/);
+  const before = marker('rspamd/local.d');
+  const mtime = statSync(join(s.configDir, 'rspamd', 'local.d', READY_MARKER)).mtimeMs;
+  syncConfig(s);
+  assert.equal(marker('rspamd/local.d'), before);
+  assert.equal(statSync(join(s.configDir, 'rspamd', 'local.d', READY_MARKER)).mtimeMs, mtime, 'not rewritten');
+  writeFileSync(join(s.bundledDir, 'rspamd', 'local.d', 'actions.conf'), 'reject = 30;\n');
+  syncConfig(s);
+  assert.notEqual(marker('rspamd/local.d'), before);
+  // the marker is never an init script / config file itself (dot name, not in the manifest)
+  assert.doesNotMatch(readFileSync(join(s.configDir, 'postgres', MANIFEST), 'utf8'), /ready/);
 });
 
 test('an image update overwrites bundled files and removes the ones it no longer carries — nothing else', () => {

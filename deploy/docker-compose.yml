@@ -14,7 +14,7 @@ name: coremail
 #  ./secrets/coremail.env no password works anymore. Guide: docs/deploy.md
 #  (https://github.com/MAGPEEK/CoreMail/blob/main/docs/deploy.md).
 #
-#  Default (no profile): coremail-init (one-shot) · coremail · postgres · redis
+#  Default (no profile): coremail · postgres · redis
 #  Optional profiles — add them to every `docker compose` command, or put
 #  COMPOSE_PROFILES=scanner,backup into a .env file next to this file:
 #    --profile scanner   rspamd (spam scoring) + ClamAV (virus scanning)
@@ -23,15 +23,19 @@ name: coremail
 #                        service. Mail stays on the coremail-data volume unless you
 #                        set OBJECT_STORAGE=minio yourself (docs/storage.md).
 #
-#  Secrets: coremail-init writes every key and password into ./secrets/ on the
-#  first start and never overwrites them. A .env next to this file stays
-#  optional and always wins (same variable names as .env.example).
-#  Configuration: the image carries the PostgreSQL init scripts, the rspamd
-#  settings and the pg-backup script; coremail-init copies them into the
-#  coremail-config-* volumes on every start (an update brings new versions).
+#  Start order: the coremail container prepares everything at its start —
+#  every key and password into ./secrets/ (first start; never overwritten
+#  later) and the configuration of the other containers (PostgreSQL init
+#  scripts, rspamd settings, pg-backup script) into the coremail-config-*
+#  volumes (every start, so an update brings new versions). The other
+#  containers wait for those files (at most 10 min, logged every 10 s), then
+#  start as usual; coremail itself waits for the database.
+#  A .env next to this file stays optional and always wins (same variable names
+#  as .env.example); a password set there needs no file.
 #  Files in ./config/rspamd/local.d/ win over the bundled rspamd files.
 #
-#  Update:  docker compose pull && docker compose up -d
+#  Update:  docker compose pull && docker compose up -d --remove-orphans
+#  (--remove-orphans removes the coremail-init container of 10.4.0 once)
 #  Requires Docker Engine 24+ with Compose v2.20+.
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -44,66 +48,23 @@ x-logging: &logging
 services:
 
   # ───────────────────────────────────────────────────────────────────────────
-  #  coremail-init — one-shot, runs before everything else on every `up`:
-  #   1. secrets: creates ./secrets/coremail.env + the password files on the
+  #  coremail — all CoreMail services (SMTP/IMAP/POP3/JMAP/ActiveSync/CalDAV,
+  #  MAPI, REST API, webmail, admin panel "BCP", admin CLI `coremail`).
+  #  Its entrypoint first prepares the stack, on every start:
+  #   1. configuration: copies the files bundled in the image into the
+  #      coremail-config-* volumes (plus ./config/rspamd/local.d/ overrides),
+  #      then a .ready marker per volume
+  #   2. secrets: creates ./secrets/coremail.env + the password files on the
   #      first start, later only appends missing keys (never overwrites); a
   #      value from .env is copied, not generated
-  #   2. configuration: copies the files bundled in the image into the
-  #      coremail-config-* volumes (plus ./config/rspamd/local.d/ overrides)
-  # ───────────────────────────────────────────────────────────────────────────
-  coremail-init:
-    image: magpeek/coremail-app:${COREMAIL_VERSION:-10.4.0}
-    container_name: coremail-init
-    restart: "no"
-    command: ["coremail-init"]
-    environment:
-      # .env values (empty = generate)
-      JWT_SECRET:                 ${JWT_SECRET:-}
-      PEPPER:                     ${PEPPER:-}
-      POSTGRES_PASSWORD:          ${POSTGRES_PASSWORD:-}
-      COREMAIL_DB_USER:           ${COREMAIL_DB_USER:-}
-      COREMAIL_DB_PASSWORD:       ${COREMAIL_DB_PASSWORD:-}
-      REDIS_PASSWORD:             ${REDIS_PASSWORD:-}
-      MINIO_ROOT_PASSWORD:        ${MINIO_ROOT_PASSWORD:-}
-      RSPAMD_CONTROLLER_PASSWORD: ${RSPAMD_CONTROLLER_PASSWORD:-}
-      MFA_ENCRYPTION_KEY:         ${MFA_ENCRYPTION_KEY:-}
-      BACKUP_ENCRYPTION_KEY:      ${BACKUP_ENCRYPTION_KEY:-}
-      AUDIT_EXPORT_SIGNING_KEY:   ${AUDIT_EXPORT_SIGNING_KEY:-}
-      VAPID_PUBLIC_KEY:           ${VAPID_PUBLIC_KEY:-}
-      VAPID_PRIVATE_KEY:          ${VAPID_PRIVATE_KEY:-}
-      DATABASE_URL:               ${DATABASE_URL:-}
-      REDIS_URL:                  ${REDIS_URL:-}
-      # The directory of this file, mounted read-only below: only
-      # ./config/rspamd/local.d/ is read from it (optional overrides).
-      COREMAIL_CONFIG_OVERRIDE_DIR: /compose-dir/config
-    volumes:
-      - ${COREMAIL_SECRETS_PATH:-./secrets}:/secrets
-      - coremail-config-postgres:/config/postgres
-      - coremail-config-rspamd:/config/rspamd/local.d
-      - coremail-config-pg-backup:/config/pg-backup
-      - .:/compose-dir:ro
-    # No network: the database is not up yet anyway
-    network_mode: none
-    read_only: true
-    security_opt: [no-new-privileges:true]
-    cap_drop: [ALL]
-    # DAC_OVERRIDE/FOWNER: write into a directory owned by the host user, chmod
-    # 700 of an empty world-writable bind mount (Docker Desktop).
-    # NET_BIND_SERVICE: only because the image's node binary carries it as a
-    # file capability — without it the kernel refuses to execute node.
-    cap_add: [DAC_OVERRIDE, FOWNER, NET_BIND_SERVICE]
-    logging: *logging
-
-  # ───────────────────────────────────────────────────────────────────────────
-  #  coremail — all CoreMail services (SMTP/IMAP/POP3/JMAP/ActiveSync/CalDAV,
-  #  MAPI, REST API, webmail, admin panel "BCP", admin CLI `coremail`)
+  #  then waits for PostgreSQL and Redis and starts the services.
   # ───────────────────────────────────────────────────────────────────────────
   coremail:
     image: magpeek/coremail-app:${COREMAIL_VERSION:-10.4.0}
     container_name: coremail
     restart: unless-stopped
     environment:
-      # ── Secrets: .env wins; empty = ./secrets/coremail.env (coremail-init) ──
+      # ── Secrets: .env wins; empty = ./secrets/coremail.env (generated) ──────
       JWT_SECRET: ${JWT_SECRET:-}
       PEPPER:     ${PEPPER:-}
       # Empty DATABASE_URL / REDIS_URL = built by the entrypoint:
@@ -115,7 +76,11 @@ services:
       COREMAIL_DB_USER:     ${COREMAIL_DB_USER:-}
       COREMAIL_DB_PASSWORD: ${COREMAIL_DB_PASSWORD:-}
       REDIS_PASSWORD:       ${REDIS_PASSWORD:-}
+      MINIO_ROOT_PASSWORD:  ${MINIO_ROOT_PASSWORD:-}
       COREMAIL_SECRETS_HOST_PATH: ${COREMAIL_SECRETS_PATH:-./secrets}
+      # The directory of this file, mounted read-only below: only
+      # ./config/rspamd/local.d/ is read from it (optional rspamd overrides).
+      COREMAIL_CONFIG_OVERRIDE_DIR: /compose-dir/config
       COREMAIL_PUBLIC_HTTP_PORT:  "3000"   # published HTTP port (setup log hint)
       # Schema updates that would delete data stop the start (nothing is changed)
       # until this is "true" for ONE start — a pg_dump goes to /data/backups first.
@@ -256,12 +221,20 @@ services:
       - coremail-data:/data
       # Secrets (coremail.env, setup-token) — back this directory up off the server
       - ${COREMAIL_SECRETS_PATH:-./secrets}:/secrets
+      # Configuration of the other containers, written here on every start
+      # (they mount the same volumes read-only)
+      - coremail-config-postgres:/config/postgres
+      - coremail-config-rspamd:/config/rspamd/local.d
+      - coremail-config-pg-backup:/config/pg-backup
+      - .:/compose-dir:ro
+    # service_started only: the other containers wait for files this container
+    # writes, so waiting for them to be healthy here would deadlock. coremail
+    # waits for PostgreSQL and Redis itself.
     depends_on:
-      coremail-init: { condition: service_completed_successfully }
-      postgres: { condition: service_healthy }
-      redis:    { condition: service_healthy }
-      # Waited for only when their profile is active
-      minio:    { condition: service_healthy, required: false }
+      postgres: { condition: service_started }
+      redis:    { condition: service_started }
+      # Started first only when their profile is active
+      minio:    { condition: service_started, required: false }
       rspamd:   { condition: service_started, required: false }
       clamav:   { condition: service_started, required: false }
     healthcheck:
@@ -293,18 +266,40 @@ services:
 
   # ───────────────────────────────────────────────────────────────────────────
   #  Infrastructure — standard images. Passwords come from .env when set, else
-  #  from the files coremail-init wrote (./secrets mounted read-only at
-  #  /run/coremail). Configuration files come from the coremail-config-* volumes.
+  #  from the files the coremail container writes (./secrets mounted read-only
+  #  at /run/coremail). Configuration files come from the coremail-config-*
+  #  volumes. Each container first waits (at most 10 min, a log line every
+  #  10 s) until the coremail container has written what it needs, then runs
+  #  the image's own entrypoint unchanged.
   # ───────────────────────────────────────────────────────────────────────────
   postgres:
     image: postgres:16-alpine
     container_name: coremail-postgres
     restart: unless-stopped
+    # Waits for the password file (unless .env sets POSTGRES_PASSWORD) and, on
+    # an EMPTY data directory, for the init scripts (their .ready marker) —
+    # an existing database starts without them.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        missing() {
+          [ -n "$${POSTGRES_PASSWORD}" ] || [ -s /run/coremail/postgres-password ] || echo /run/coremail/postgres-password
+          [ -s "$${PGDATA}/PG_VERSION" ] || [ -f /docker-entrypoint-initdb.d/.ready ] || echo /docker-entrypoint-initdb.d/.ready
+        }
+        w=0
+        while m=$$(missing); [ -n "$$m" ]; do
+          if [ "$$w" -ge 600 ]; then echo "postgres: still missing after $${w}s:" $$m "— is the coremail container running?" >&2; exit 1; fi
+          if [ $$((w % 10)) -eq 0 ]; then echo "postgres: waiting for the coremail container to write:" $$m "($${w}s)"; fi
+          sleep 2; w=$$((w + 2))
+        done
+        [ -z "$${POSTGRES_PASSWORD}" ] || unset POSTGRES_PASSWORD_FILE
+        exec docker-entrypoint.sh postgres
     environment:
       POSTGRES_DB:   coremail
       POSTGRES_USER: coremail
       # Read only when the data directory is created — an existing database
-      # keeps its password.
+      # keeps its password. POSTGRES_PASSWORD from .env wins over the file.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
       POSTGRES_PASSWORD_FILE: /run/coremail/postgres-password
       # Non-superuser application role, created on a FRESH database only (02-app-role.sh)
       COREMAIL_DB_USER:     ${COREMAIL_DB_USER:-}
@@ -315,8 +310,6 @@ services:
       # 01-init.sql + 02-app-role.sh from the image; run on an EMPTY data directory only
       - coremail-config-postgres:/docker-entrypoint-initdb.d:ro
       - ${COREMAIL_SECRETS_PATH:-./secrets}:/run/coremail:ro
-    depends_on:
-      coremail-init: { condition: service_completed_successfully }
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U coremail -d coremail"]
       interval: 10s
@@ -331,10 +324,16 @@ services:
     container_name: coremail-redis
     restart: unless-stopped
     # No maxmemory/eviction: BullMQ queues must never be evicted.
-    # Password: REDIS_PASSWORD from .env, else ./secrets/redis-password
+    # Password: REDIS_PASSWORD from .env, else ./secrets/redis-password (waits for it)
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
+        w=0
+        until [ -n "$${REDIS_PASSWORD}" ] || [ -s /run/coremail/redis-password ]; do
+          if [ "$$w" -ge 600 ]; then echo "redis: /run/coremail/redis-password still missing after $${w}s — is the coremail container running?" >&2; exit 1; fi
+          if [ $$((w % 10)) -eq 0 ]; then echo "redis: waiting for the coremail container to write /run/coremail/redis-password ($${w}s)"; fi
+          sleep 2; w=$$((w + 2))
+        done
         REDIS_PASSWORD="$${REDIS_PASSWORD:-$$(cat /run/coremail/redis-password)}" || exit 1
         [ -n "$$REDIS_PASSWORD" ] || { echo "redis: no REDIS_PASSWORD and no /run/coremail/redis-password" >&2; exit 1; }
         exec docker-entrypoint.sh redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"
@@ -343,8 +342,6 @@ services:
     volumes:
       - redisdata:/data
       - ${COREMAIL_SECRETS_PATH:-./secrets}:/run/coremail:ro
-    depends_on:
-      coremail-init: { condition: service_completed_successfully }
     healthcheck:
       test: ["CMD-SHELL", "REDISCLI_AUTH=\"$${REDIS_PASSWORD:-$$(cat /run/coremail/redis-password)}\" redis-cli ping | grep -q PONG"]
       interval: 10s
@@ -364,10 +361,21 @@ services:
     restart: unless-stopped
     # Started as root ONLY to read ./secrets/rspamd-controller-password (0600)
     # when RSPAMD_CONTROLLER_PASSWORD is empty; rspamd itself runs as _rspamd (11333).
+    # Waits for local.d (its .ready marker) and the controller password file.
     user: "0:0"
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
+        missing() {
+          [ -f /etc/rspamd/local.d/.ready ] || echo /etc/rspamd/local.d/.ready
+          [ -n "$${RSPAMD_CONTROLLER_PASSWORD}" ] || [ -s /run/coremail/rspamd-controller-password ] || echo /run/coremail/rspamd-controller-password
+        }
+        w=0
+        while m=$$(missing); [ -n "$$m" ]; do
+          if [ "$$w" -ge 600 ]; then echo "rspamd: still missing after $${w}s:" $$m "— is the coremail container running?" >&2; exit 1; fi
+          if [ $$((w % 10)) -eq 0 ]; then echo "rspamd: waiting for the coremail container to write:" $$m "($${w}s)"; fi
+          sleep 2; w=$$((w + 2))
+        done
         if [ -z "$${RSPAMD_CONTROLLER_PASSWORD}" ] && [ -f /run/coremail/rspamd-controller-password ]; then
           RSPAMD_CONTROLLER_PASSWORD="$$(cat /run/coremail/rspamd-controller-password)" || exit 1
           export RSPAMD_CONTROLLER_PASSWORD
@@ -383,8 +391,6 @@ services:
       - coremail-config-rspamd:/etc/rspamd/local.d:ro
       - rspamd-data:/var/lib/rspamd
       - ${COREMAIL_SECRETS_PATH:-./secrets}:/run/coremail:ro
-    depends_on:
-      coremail-init: { condition: service_completed_successfully }
     healthcheck:
       test: ["CMD-SHELL", "rspamc symbols /dev/null > /dev/null 2>&1"]
       interval: 30s
@@ -437,10 +443,21 @@ services:
     image: postgres:16-alpine
     container_name: coremail-pg-backup
     restart: unless-stopped
-    # Password: POSTGRES_PASSWORD from .env, else ./secrets/postgres-password
+    # Password: POSTGRES_PASSWORD from .env, else ./secrets/postgres-password.
+    # Waits for pg-backup.sh (its .ready marker) and the password file.
     entrypoint: ["sh", "-c"]
     command:
       - |
+        missing() {
+          [ -f /pg-backup/.ready ] || echo /pg-backup/.ready
+          [ -n "$${PGPASSWORD}" ] || [ -s /run/coremail/postgres-password ] || echo /run/coremail/postgres-password
+        }
+        w=0
+        while m=$$(missing); [ -n "$$m" ]; do
+          if [ "$$w" -ge 600 ]; then echo "pg-backup: still missing after $${w}s:" $$m "— is the coremail container running?" >&2; exit 1; fi
+          if [ $$((w % 10)) -eq 0 ]; then echo "pg-backup: waiting for the coremail container to write:" $$m "($${w}s)"; fi
+          sleep 2; w=$$((w + 2))
+        done
         PGPASSWORD="$${PGPASSWORD:-$$(cat /run/coremail/postgres-password)}" || exit 1
         export PGPASSWORD
         exec sh /pg-backup/pg-backup.sh
@@ -448,6 +465,7 @@ services:
       PGHOST: postgres
       PGUSER: coremail
       PGDATABASE: coremail
+      PGPASSWORD: ${POSTGRES_PASSWORD:-}
       PG_BACKUP_INTERVAL_HOURS: ${PG_BACKUP_INTERVAL_HOURS:-24}
       PG_BACKUP_KEEP_DAYS: ${PG_BACKUP_KEEP_DAYS:-14}
       PG_BACKUP_START_DELAY_MIN: ${PG_BACKUP_START_DELAY_MIN:-10}
@@ -458,7 +476,6 @@ services:
       - ${PG_BACKUP_DIR:-pg-backups}:/backups
       - ${COREMAIL_SECRETS_PATH:-./secrets}:/run/coremail:ro
     depends_on:
-      coremail-init: { condition: service_completed_successfully }
       postgres: { condition: service_healthy }
     healthcheck:
       # healthy = a dump younger than two intervals exists
@@ -492,10 +509,16 @@ services:
     container_name: coremail-minio
     restart: unless-stopped
     # Password: MINIO_ROOT_PASSWORD from .env, else ./secrets/minio-root-password
-    # (MinIO refuses to start with an empty password — fail closed)
+    # (MinIO refuses to start with an empty password — fail closed); waits for the file
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
+        w=0
+        until [ -n "$${MINIO_ROOT_PASSWORD}" ] || [ -s /run/coremail/minio-root-password ]; do
+          if [ "$$w" -ge 600 ]; then echo "minio: /run/coremail/minio-root-password still missing after $${w}s — is the coremail container running?" >&2; exit 1; fi
+          if [ $$((w % 10)) -eq 0 ]; then echo "minio: waiting for the coremail container to write /run/coremail/minio-root-password ($${w}s)"; fi
+          sleep 2; w=$$((w + 2))
+        done
         MINIO_ROOT_PASSWORD="$${MINIO_ROOT_PASSWORD:-$$(cat /run/coremail/minio-root-password)}" || exit 1
         export MINIO_ROOT_PASSWORD
         exec /usr/bin/docker-entrypoint.sh minio server /data --console-address ":9001"
@@ -505,8 +528,6 @@ services:
     volumes:
       - miniodata:/data
       - ${COREMAIL_SECRETS_PATH:-./secrets}:/run/coremail:ro
-    depends_on:
-      coremail-init: { condition: service_completed_successfully }
     ports:
       - "127.0.0.1:9001:9001"   # console local only (ssh -L 9001:localhost:9001 <server>)
     healthcheck:
