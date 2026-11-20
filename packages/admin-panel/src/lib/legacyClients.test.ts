@@ -20,7 +20,7 @@ test('label and warning name the versions and what stays blocked', () => {
 test('9.5.1: the legacy switch reads as an optional extra, not as the HTTPS switch', () => {
   assert.match(LEGACY_TLS_LABEL, /^Zusätzlich .*\(optional\)$/);
   assert.match(LEGACY_TLS_WARNING, /^Optionaler Kompatibilitätsmodus aktiv:/);
-  assert.match(LEGACY_TLS_HINT, /Moderne Clients und Outlook brauchen das nicht/);
+  assert.match(LEGACY_TLS_HINT, /Moderne Clients brauchen das nicht/);
 });
 
 test('9.5.1: HTTPS status line — active with TLS 1.2/1.3 and no further switch needed, or how to activate', () => {

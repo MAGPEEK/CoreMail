@@ -497,7 +497,7 @@ if (existsSync(owaDir)) {
     }
     return sendBrandedIndex(res, owaIndex);
   });
-  log.info({ dir: owaDir }, 'Serving OWA static files (root)');
+  log.info({ dir: owaDir }, 'Serving webmail static files (root)');
 } else {
   // No OWA bundle mounted — root redirects to /bcp or plain info
   app.get('/', (_req, res) => res.redirect(302, '/bcp/'));
@@ -588,7 +588,7 @@ async function start() {
   // start (in addition to the synchronous updates on domain-create /
   // make-primary / settings-PUT).
   void syncServerUrlsFromHostname().catch(err =>
-    log.warn({ err }, 'Server-URL sync failed — check Outlook Autodiscover'),
+    log.warn({ err }, 'Server-URL sync failed — check Autodiscover'),
   );
 
   // ── Clean up stale PENDING/RENEWING certificates ──────────────────────────

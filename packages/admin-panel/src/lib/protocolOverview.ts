@@ -114,7 +114,7 @@ export function warningText(w: OverviewWarning, https: HttpsState): string {
     case 'port-open-access-off':
       return `${name}: Port offen (${(w.ports ?? []).join(', ')}), Anmeldung für alle gesperrt — der Zugriff ist serverweit aus und für keine Domain und kein Postfach an.`;
     case 'mapi-https':
-      return `MAPI über HTTP ist eingeschaltet, aber ${httpsName(https.port)} ist nicht aktiv oder hat kein vertrauenswürdiges Zertifikat — Outlook verbindet sich nur über HTTPS (es sei denn, ein vorgeschalteter Reverse Proxy stellt HTTPS bereit).`;
+      return `MAPI über HTTP ist eingeschaltet, aber ${httpsName(https.port)} ist nicht aktiv oder hat kein vertrauenswürdiges Zertifikat — MAPI-Clients verbinden sich nur über HTTPS (es sei denn, ein vorgeschalteter Reverse Proxy stellt HTTPS bereit).`;
   }
 }
 

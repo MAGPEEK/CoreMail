@@ -2139,7 +2139,7 @@ function AutoSetupCard({ email, requiresAppPassword, profiles }: {
         <Smartphone size={16} className="text-accent-fg" /> Automatische Einrichtung
       </h3>
       <p className="text-xs text-fg-subtle mb-4">
-        Thunderbird, K-9 Mail / FairEmail, Outlook und eM Client richten das Konto nach Eingabe von
+        Thunderbird, K-9 Mail / FairEmail, eM Client und Desktop-Mailprogramme mit Autodiscover richten das Konto nach Eingabe von
         E-Mail-Adresse und Passwort selbst ein (Autoconfig / Autodiscover). Für iPhone, iPad und Mac
         gibt es ein Konfigurationsprofil mit E-Mail, Kalender und Kontakten.
       </p>
@@ -2206,7 +2206,7 @@ function ExternalClientsSection() {
           Externe Clients
         </h2>
         <p className="text-sm text-fg-subtle mt-1">
-          Setup-Daten für E-Mail-Programme (Outlook, Apple Mail, Thunderbird), Kalender-Apps und mobile Geräte.
+          Setup-Daten für E-Mail-Programme, Kalender-Apps und mobile Geräte.
         </p>
       </header>
 
@@ -2216,18 +2216,18 @@ function ExternalClientsSection() {
         </p>
       )}
 
-      {/* Outlook notice banner (calendar / contacts) */}
+      {/* Desktop client notice banner (calendar / contacts) */}
       {sections.dav && <div className="mb-6 bg-warning-bg border border-warning-line rounded-lg p-4">
         <div className="flex items-start gap-3">
           <Info size={18} className="text-warning-fg shrink-0 mt-0.5" />
           <div className="flex-1">
             <h3 className="text-sm font-semibold text-warning-fg mb-1">
-              Outlook Desktop &amp; Kalender / Kontakte
+              Desktop-Mailprogramme &amp; Kalender / Kontakte
             </h3>
             <p className="text-xs text-warning-fg leading-relaxed">
-              Outlook Desktop konfiguriert E-Mail über <strong>IMAP/SMTP</strong> (siehe unten) — funktioniert
-              automatisch via Autodiscover. Für <strong>Kalender und Kontakte</strong> hat Microsoft keinen
-              nativen CalDAV/CardDAV-Support eingebaut. Drei Wege:
+              Desktop-Mailprogramme richten E-Mail über <strong>IMAP/SMTP</strong> ein (siehe unten) — funktioniert
+              automatisch via Autodiscover. Für <strong>Kalender und Kontakte</strong> haben manche Desktop-Mailprogramme
+              keinen eingebauten CalDAV/CardDAV-Support. Drei Wege:
             </p>
             <ol className="list-decimal ml-5 mt-2 text-xs text-warning-fg space-y-1">
               <li>
@@ -2237,7 +2237,7 @@ function ExternalClientsSection() {
                 </a>{' '}— Schritt-für-Schritt-Anleitung unten.
               </li>
               <li>
-                <strong>OWA im Browser</strong> nutzen — Kalender + Kontakte funktionieren vollständig im
+                <strong>Webmail im Browser</strong> nutzen — Kalender + Kontakte funktionieren vollständig im
                 {productName}-Webclient (oben rechts „Kalender"/„Kontakte"-Tab).
               </li>
               <li>
@@ -2276,7 +2276,7 @@ function ExternalClientsSection() {
           <MailIcon size={16} className="text-accent-fg" /> E-Mail (IMAP / SMTP)
         </h3>
         <p className="text-xs text-fg-subtle mb-4">
-          Für Outlook, Apple Mail, Thunderbird, K-9 Mail (Android) — wird via Autodiscover automatisch erkannt.
+          Für Desktop-Mailprogramme, Apple Mail, Thunderbird, K-9 Mail (Android) — wird via Autodiscover automatisch erkannt.
         </p>
         <div className="grid md:grid-cols-2 gap-6">
           {cfg.mail.imap && <div>
@@ -2316,7 +2316,7 @@ function ExternalClientsSection() {
           <CalendarDays size={16} className="text-accent-fg" /> Kalender (CalDAV)
         </h3>
         <p className="text-xs text-fg-subtle mb-4">
-          Für Apple Kalender, Thunderbird Lightning, eM Client, DAVx⁵ (Android), Outlook + CalDav-Synchronizer-Plugin.
+          Für Apple Kalender, Thunderbird Lightning, eM Client, DAVx⁵ (Android), Desktop-Mailprogramme mit Sync-Plugin (CalDav Synchronizer).
         </p>
         <CopyRow label="Account-URL" value={caldav.accountUrl} />
         <CopyRow label="Benutzername" value={cfg.user.email} />
@@ -2341,7 +2341,7 @@ function ExternalClientsSection() {
           <BookUser size={16} className="text-accent-fg" /> Kontakte (CardDAV)
         </h3>
         <p className="text-xs text-fg-subtle mb-4">
-          Für Apple Kontakte, Thunderbird CardBook, eM Client, DAVx⁵, Outlook + CalDav-Synchronizer-Plugin.
+          Für Apple Kontakte, Thunderbird CardBook, eM Client, DAVx⁵, Desktop-Mailprogramme mit Sync-Plugin (CalDav Synchronizer).
         </p>
         <CopyRow label="Account-URL" value={carddav.accountUrl} />
         <CopyRow label="Adressbuch-URL" value={carddav.defaultUrl} />
@@ -2352,7 +2352,7 @@ function ExternalClientsSection() {
       {/* Outlook CalDav Synchronizer guide */}
       {caldav && carddav && <div className="bg-surface border border-line rounded-lg p-5">
         <h3 className="text-base font-semibold text-fg flex items-center gap-2 mb-3">
-          <ExternalLink size={16} className="text-accent-fg" /> Outlook CalDav Synchronizer einrichten
+          <ExternalLink size={16} className="text-accent-fg" /> Sync-Plugin CalDav Synchronizer einrichten
         </h3>
         <ol className="list-decimal ml-5 text-sm text-fg-muted space-y-3">
           <li>

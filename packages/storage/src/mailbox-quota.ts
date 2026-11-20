@@ -141,7 +141,7 @@ export async function loadQuotaDefaults(now = Date.now()): Promise<QuotaDefaults
     });
     if (s) value = { warningPercent: s.quotaWarningPercent, prohibitSendPercent: s.quotaProhibitSendPercent };
   } catch (err) {
-    log.warn({ err }, 'quota defaults unavailable — using Exchange defaults');
+    log.warn({ err }, 'quota defaults unavailable — using built-in defaults');
   }
   defaultsCache = { value, at: now };
   return value;

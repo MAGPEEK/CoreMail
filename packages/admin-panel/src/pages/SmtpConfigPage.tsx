@@ -1197,7 +1197,7 @@ function DnsSection() {
     {
       key:         'autodiscover',
       label:       'Autodiscover — Client-Konfiguration',
-      description: 'Ermöglicht Outlook und iOS Mail die automatische Server-Konfiguration per E-Mail-Adresse',
+      description: 'Ermöglicht Desktop-Mailprogrammen und iOS Mail die automatische Server-Konfiguration per E-Mail-Adresse',
       fallback:    emptyRecord('CNAME', `autodiscover.${selectedDomain?.name ?? '…'}`, dnsCheck?.hostname ?? '…'),
     },
   ];

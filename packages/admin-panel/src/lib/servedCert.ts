@@ -65,7 +65,7 @@ export function portLabel(p: Pick<ServedPort, 'protocol' | 'port' | 'mode'>): st
 
 export function problemText(problem: ServedProblem, hostname: string): string {
   switch (problem) {
-    case 'self-signed':       return 'selbstsigniert — Outlook/iPhone vertrauen diesem Zertifikat nicht';
+    case 'self-signed':       return 'selbstsigniert — Desktop-Mailprogramme und iPhone vertrauen diesem Zertifikat nicht';
     case 'hostname-mismatch': return `passt nicht zu ${hostname}`;
     case 'expired':           return 'abgelaufen';
     default:                  return 'OK';
