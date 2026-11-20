@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  comboKey, hasOperatorSyntax, keepActive, personSearch, suggestGroups, suggestTerm,
+  comboKey, hasOperatorSyntax, keepActive, personSearch, searchForPick, suggestGroups, suggestTerm,
   type SuggestItem, type SuggestResponse,
 } from './searchSuggest.ts';
 
@@ -70,6 +70,15 @@ test('keyboard: Delete removes a highlighted recent search only', () => {
   assert.equal(comboKey('Delete', state(true, 2, 0, ['person', 'message'])), null);
   assert.equal(comboKey('Delete', state(true, 2, -1, ['recent', 'recent'])), null);
   assert.equal(comboKey('Delete', state(false, 2, 0, ['recent'])), null);
+});
+
+test('a picked person searches from:<address> in the whole mailbox; a recent search keeps the scope', () => {
+  const { flat } = suggestGroups('anna', DATA, []);
+  assert.deepEqual(searchForPick(flat[0]!), { term: 'from:Anna@Kunde.de', scope: 'all' });
+  assert.deepEqual(searchForPick(flat[1]!), { term: 'from:anna.w@partner.de', scope: 'all' });
+  assert.equal(searchForPick(flat[2]!), null, 'a message opens, it runs no search');
+  const recent = suggestGroups('', undefined, ['from:x@y.de is:unread']).flat[0]!;
+  assert.deepEqual(searchForPick(recent), { term: 'from:x@y.de is:unread', scope: null });
 });
 
 test('the highlight follows its entry when the list changes', () => {

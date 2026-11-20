@@ -55,6 +55,7 @@ export function TopBar({ onSearch }: Props) {
   const combo = useSearchCombobox({
     text: search,
     listId: GLOBAL_SEARCH_SUGGESTIONS_ID,
+    // /mail?q= always searches the whole mailbox ("Alle"), a picked person included
     onSearch: (term) => { setSearch(term); onSearch(term); },
     onOpenedMessage: () => setSearch(''),
   });

@@ -342,7 +342,8 @@ export function MessageList({ folderId }: Props) {
   const combo = useSearchCombobox({
     text: searchText,
     listId: LIST_SEARCH_SUGGESTIONS_ID,
-    onSearch: setSearchText,
+    // a picked person searches the whole mailbox — the scope switch shows "Alle"
+    onSearch: (term, scope) => { if (scope) setSearchScope(scope); setSearchText(term); },
     onOpenedMessage: () => setSearchText(''),
   });
   const [rawModal, setRawModal] = useState<{ text: string; subject: string; msgId: string } | null>(null);

@@ -14,8 +14,8 @@ import { useActiveMailbox } from './useActiveMailbox.js';
 import { useOwnProfile } from './useUserPhoto.js';
 import { mailPath } from '../lib/mailLinks.js';
 import {
-  SUGGEST_DEBOUNCE_MS, comboKey, keepActive, personSearch, suggestGroups, suggestTerm,
-  type MessageSuggestion, type SuggestGroup, type SuggestItem, type SuggestResponse,
+  SUGGEST_DEBOUNCE_MS, comboKey, keepActive, searchForPick, suggestGroups, suggestTerm,
+  type MessageSuggestion, type SearchScope, type SuggestGroup, type SuggestItem, type SuggestResponse,
 } from '../lib/searchSuggest.js';
 import {
   addRecentSearch, browserStorage, loadRecentSearches, removeRecentSearch, saveRecentSearches,
@@ -42,8 +42,11 @@ export interface SearchComboOptions {
   text: string;
   /** DOM id of the listbox (option ids derive from it). */
   listId: string;
-  /** Runs a search for exactly this term (a picked person or recent search). */
-  onSearch: (term: string) => void;
+  /**
+   * Runs a search for exactly this term (a picked person or recent search). `scope`
+   * 'all' = search the whole mailbox (a picked person); null = keep the scope.
+   */
+  onSearch: (term: string, scope: SearchScope | null) => void;
   /** After a picked message was opened (its deep link) — e.g. clear the field. */
   onOpenedMessage?: (message: MessageSuggestion) => void;
 }
@@ -106,14 +109,11 @@ export function useSearchCombobox({ text, listId, onSearch, onOpenedMessage }: S
 
   const select = (item: SuggestItem) => {
     close();
-    if (item.kind === 'recent') {
-      remember(item.term);
-      onSearch(item.term);
-    } else if (item.kind === 'person') {
-      const s = personSearch(item.person.address);
-      remember(s);
-      onSearch(s);
-    } else {
+    const search = searchForPick(item);
+    if (search) {
+      remember(search.term);
+      onSearch(search.term, search.scope);
+    } else if (item.kind === 'message') {
       navigate(mailPath(mailbox.ref, item.message.folderId, item.message.id));
       onOpenedMessage?.(item.message);
     }

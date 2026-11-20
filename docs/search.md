@@ -167,7 +167,9 @@ The search field of the message list and the header search share one combobox
 - 2+ characters without operator syntax: after 150 ms the server suggestions for
   the mailbox shown in the mail view (TanStack Query; a newer term aborts the stale
   request, the previous suggestions stay visible while the next load).
-  **Personen** (avatar, name, address) → runs the search `from:<address>`;
+  **Personen** (avatar, name, address) → runs the search `from:<address>` over the
+  whole mailbox (the message list's scope switch changes to "Alle"; the header search
+  always searches the whole mailbox);
   **Nachrichten** (subject, sender, folder, short date) → opens the message through
   its deep link (`lib/mailLinks.ts`).
 - Field focused and empty: **Letzte Suchen** — the last 5 search terms of the user in

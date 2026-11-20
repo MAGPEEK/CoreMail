@@ -52,6 +52,20 @@ export function personSearch(address: string): string {
   return `from:${address}`;
 }
 
+/** Scope of the message list search: the open folder or the whole mailbox ("Alle"). */
+export type SearchScope = 'folder' | 'all';
+
+/**
+ * The search a picked person or recent search runs, and the scope it needs:
+ * a person comes from the whole mailbox, so `from:<address>` searches "Alle";
+ * a recent search keeps the scope (null).
+ */
+export function searchForPick(item: SuggestItem): { term: string; scope: SearchScope | null } | null {
+  if (item.kind === 'person') return { term: personSearch(item.person.address), scope: 'all' };
+  if (item.kind === 'recent') return { term: item.term, scope: null };
+  return null;
+}
+
 /**
  * The groups of the dropdown (empty groups left out) for the field text, the
  * server answer (possibly the previous one while the next loads) and the recent
