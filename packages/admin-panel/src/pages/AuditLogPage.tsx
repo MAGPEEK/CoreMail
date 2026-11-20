@@ -532,7 +532,7 @@ export function AuditLogPage() {
           </button>
           <button onClick={() => void handleExport('json')} disabled={exporting !== null}
             className="flex items-center gap-1.5 px-3 py-2 text-sm text-fg-muted border border-line-strong rounded hover:bg-surface-2 disabled:cursor-wait"
-            title="JSON — signiert mit HMAC-SHA256, für SIEM-Integration (Splunk, Azure Sentinel, ELK)">
+            title="JSON — signiert mit HMAC-SHA256, für SIEM-Integration (z. B. Splunk, ELK)">
             <Code2 size={14} /> JSON
           </button>
         </div>

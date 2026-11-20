@@ -1107,7 +1107,7 @@ function SecuritySection() {
         {!mfaStatus?.totpEnabled && totpStep === 'idle' && (
           <>
             <p className="text-xs text-fg-subtle">
-              Schützen Sie Ihr Konto mit einer Authenticator-App (z.B. Google Authenticator, Authy, Microsoft Authenticator).
+              Schützen Sie Ihr Konto mit einer Authenticator-App (z.B. eine TOTP-App wie Aegis, FreeOTP oder Authy).
             </p>
             <button
               onClick={startTotpSetup}

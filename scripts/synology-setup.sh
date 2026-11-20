@@ -227,7 +227,7 @@ echo "  ┌───────────────────────
 echo "  │  Access                                                  │"
 echo "  ├──────────────────────────────────────────────────────────┤"
 echo "  │  MWA Webmail:  http://${NAS_HOSTNAME}:8080/owa/           │"
-echo "  │  BCP Admin:    http://${NAS_HOSTNAME}:8080/ecp/           │"
+echo "  │  BCP Admin:    http://${NAS_HOSTNAME}:8080/bcp/           │"
 echo "  │  MinIO:        http://${NAS_HOSTNAME}:9001                │"
 echo "  └──────────────────────────────────────────────────────────┘"
 echo ""

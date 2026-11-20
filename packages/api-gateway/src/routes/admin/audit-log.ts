@@ -440,7 +440,7 @@ adminAuditLogRouter.get('/export.csv', async (req: Request, res: Response) => {
 });
 
 // ─── GET /api/v1/admin/audit-log/export.json ────────────────────────────────
-// For SIEM integration (Splunk, Azure Sentinel, ELK). Structured + signed.
+// For SIEM integration (e.g. Splunk, ELK). Structured + signed.
 
 adminAuditLogRouter.get('/export.json', async (req: Request, res: Response) => {
   const filters = requestFilters(req, res);
