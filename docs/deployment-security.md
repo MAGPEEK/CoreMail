@@ -158,6 +158,13 @@ Kubernetes: the chart's bundled PostgreSQL is unchanged (the app uses
 `postgresql.auth.username`); with an external database create a non-superuser
 owner yourself.
 
+Extensions: the app role cannot create extensions (no `CREATE` on the database).
+`01-init.sql` creates `pg_trgm`, `unaccent` and `pgcrypto` as the superuser on a new
+volume. A database without `pg_trgm` (10.2: trigram index of the mail search) starts
+without that index and schema-sync logs how to add it once as the superuser:
+`docker exec coremail-postgres psql -U coremail -d coremail -c 'CREATE EXTENSION IF NOT EXISTS pg_trgm;'`
+([search.md](search.md#migration-and-schema-sync)).
+
 ---
 
 ## 4. Encrypted backups

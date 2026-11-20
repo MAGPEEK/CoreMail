@@ -38,11 +38,11 @@ import { useFollowUp } from '../hooks/useFollowUp.js';
 import { conversationKey, orderForDisplay, sortParams } from '../lib/conversationOrder.js';
 import { listTarget, tabStopIndex } from '../lib/rovingFocus.js';
 import { usePhotoForAddress } from '../hooks/useUserPhoto.js';
+import { useSearchCombobox } from '../hooks/useSearchSuggest.js';
+import { SearchSuggestList } from './SearchSuggestList.js';
 
-/** True when the query uses search operators / quotes / negation (typeahead stays for plain words). */
-function hasOperatorSyntax(q: string): boolean {
-  return /(^|\s)-\S|"|\b[a-z_]+:/i.test(q);
-}
+/** DOM id of the suggestion listbox of the list's search field (10.2). */
+const LIST_SEARCH_SUGGESTIONS_ID = 'msglist-search-suggestions';
 
 interface Props {
   folderId: string;
@@ -338,7 +338,13 @@ export function MessageList({ folderId }: Props) {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [searchText, setSearchText] = useState('');
   const [searchScope, setSearchScope] = useState<'folder' | 'all'>('folder');
-  const [showSuggestions, setShowSuggestions] = useState(false);
+  // 10.2: suggestions from the whole mailbox (server), recent searches when empty
+  const combo = useSearchCombobox({
+    text: searchText,
+    listId: LIST_SEARCH_SUGGESTIONS_ID,
+    onSearch: setSearchText,
+    onOpenedMessage: () => setSearchText(''),
+  });
   const [rawModal, setRawModal] = useState<{ text: string; subject: string; msgId: string } | null>(null);
   const [ruleEditor, setRuleEditor] = useState<{ open: boolean; preset?: RulePreset }>({ open: false });
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -419,15 +425,6 @@ export function MessageList({ folderId }: Props) {
     if (filter === 'attachments')  return list.filter((m) => m.attachments.length > 0);
     return list;
   }, [searching, searchMessages, listMessages, filter, groupByConversation, conversationOrder]);
-
-  // Typeahead: quick local hints from the already loaded folder page
-  const suggestions = useMemo(() => {
-    if (searchText.length < 2) return [];
-    const q = searchText.toLowerCase();
-    return listMessages
-      .filter((m) => m.subject.toLowerCase().includes(q) || m.fromAddr.toLowerCase().includes(q))
-      .slice(0, 5);
-  }, [searchText, listMessages]);
 
   // Infinite scroll: load the next page when the sentinel at the end becomes visible
   useEffect(() => {
@@ -852,11 +849,16 @@ export function MessageList({ folderId }: Props) {
           <input
             ref={searchInputRef}
             type="search"
+            autoComplete="off"
+            {...combo.inputAria}
             value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
-            onFocus={() => setShowSuggestions(true)}
-            onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
-            onKeyDown={(e) => { if (e.key === 'Escape' && searchText) { e.preventDefault(); setSearchText(''); } }}
+            onChange={(e) => { setSearchText(e.target.value); combo.onTextChange(); }}
+            onFocus={combo.onFocus}
+            onBlur={combo.onBlur}
+            onKeyDown={(e) => {
+              if (combo.onKeyDown(e)) return;
+              if (e.key === 'Escape' && searchText) { e.preventDefault(); setSearchText(''); }
+            }}
             aria-label={t('search_placeholder')}
             aria-keyshortcuts="/"
             className="w-full pl-7 pr-3 py-1 text-xs rounded border border-line-strong bg-surface outline-none focus:border-accent-fg [&::-webkit-search-cancel-button]:hidden"
@@ -867,18 +869,10 @@ export function MessageList({ folderId }: Props) {
               <X size={12} />
             </button>
           )}
-          {/* Typeahead suggestions (plain words only — operators go to the server) */}
-          {showSuggestions && suggestions.length > 0 && !hasOperatorSyntax(searchText) && (
-            <div className="absolute top-full left-0 right-0 mt-1 bg-surface border border-line rounded-lg shadow-lg z-50 max-h-40 overflow-y-auto">
-              {suggestions.map((m) => (
-                <button key={m.id}
-                  onMouseDown={() => { setSelectedMessage(m.id); setSearchText(''); setShowSuggestions(false); }}
-                  className="w-full text-left px-3 py-2 text-xs hover:bg-surface-2 border-b border-line last:border-0">
-                  <p className="font-medium text-fg truncate">{m.subject || '(kein Betreff)'}</p>
-                  <p className="text-fg-subtle truncate">{m.fromAddr}</p>
-                </button>
-              ))}
-            </div>
+          {/* 10.2: suggestions (plain words only — operators run the full search) */}
+          {combo.shown && (
+            <SearchSuggestList id={LIST_SEARCH_SUGGESTIONS_ID} groups={combo.groups} flat={combo.flat} active={combo.active}
+              optionId={combo.optionId} onSelect={combo.select} onRemoveRecent={combo.removeRecent} />
           )}
         </div>
         {/* Scope toggle */}

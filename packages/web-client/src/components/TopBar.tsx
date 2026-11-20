@@ -13,6 +13,11 @@ import { GLOBAL_SEARCH_INPUT_ID } from '../hooks/useGlobalShortcuts.js';
 import { BrandLogo } from './BrandLogo.js';
 import { useBranding } from '../hooks/useBranding.js';
 import { useOwnPhoto, useOwnProfile } from '../hooks/useUserPhoto.js';
+import { useSearchCombobox } from '../hooks/useSearchSuggest.js';
+import { SearchSuggestList } from './SearchSuggestList.js';
+
+/** DOM id of the suggestion listbox of the header search (10.2). */
+const GLOBAL_SEARCH_SUGGESTIONS_ID = 'global-search-suggestions';
 
 interface Props {
   onSearch: (q: string) => void;
@@ -46,6 +51,14 @@ export function TopBar({ onSearch }: Props) {
     onSearch(search);
   };
 
+  // 10.2: suggestions from the mailbox shown in the mail view, recent searches when empty
+  const combo = useSearchCombobox({
+    text: search,
+    listId: GLOBAL_SEARCH_SUGGESTIONS_ID,
+    onSearch: (term) => { setSearch(term); onSearch(term); },
+    onOpenedMessage: () => setSearch(''),
+  });
+
   const insertOperator = (token: string) => insertSearchToken(search, token, setSearch, () => inputRef.current);
 
   return (
@@ -69,10 +82,19 @@ export function TopBar({ onSearch }: Props) {
             aria-label="Suchen"
             aria-keyshortcuts="/"
             placeholder="Suchen..."
+            autoComplete="off"
+            {...combo.inputAria}
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => { setSearch(e.target.value); combo.onTextChange(); }}
+            onFocus={combo.onFocus}
+            onBlur={combo.onBlur}
+            onKeyDown={combo.onKeyDown}
             className="w-full bg-header-overlay/20 text-header-fg placeholder-header-fg border border-header-fg/40 rounded px-3 py-1 pl-8 text-sm outline-none transition-all duration-150 focus:bg-surface focus:text-fg focus:placeholder-fg-subtle focus:shadow-md focus:border-header-fg"
           />
+          {combo.shown && (
+            <SearchSuggestList id={GLOBAL_SEARCH_SUGGESTIONS_ID} groups={combo.groups} flat={combo.flat} active={combo.active}
+              optionId={combo.optionId} onSelect={combo.select} onRemoveRecent={combo.removeRecent} />
+          )}
         </div>
         <SearchOperatorsHelp onInsert={insertOperator} tone="header" />
       </form>

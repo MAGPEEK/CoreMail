@@ -39,6 +39,13 @@ export function installFakePrisma(models: ModelOverrides = {}): { models: ModelO
         };
       }
       if (prop === 'then') return undefined;
+      // 10.2: tagged-template raw queries — override via models.$raw.queryRaw(strings, ...values)
+      if (prop === '$queryRaw') {
+        return async (...a: unknown[]) => {
+          const o = state.models['$raw']?.['queryRaw'];
+          return o ? o(...a) : [];
+        };
+      }
       return modelProxy(String(prop));
     },
   });

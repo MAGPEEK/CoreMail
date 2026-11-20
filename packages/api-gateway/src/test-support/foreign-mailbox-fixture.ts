@@ -50,6 +50,8 @@ export const summarySelects: Row[] = [];
 export const auditRows: Row[] = [];
 /** Arguments of every prisma.message.findFirst call (include / where checks). */
 export const messageFindFirstArgs: Row[] = [];
+/** 10.2: arguments of every $queryRaw call (strings, ...values). */
+export const rawQueries: unknown[][] = [];
 /** Owner of a user mailbox (own-mailbox routes match folder.mailbox.userId). */
 const mailboxOwner: Record<string, string> = { 'mb-alice': 'alice', 'mb-erin': 'erin', 'mb-gina': 'gina' };
 /** w3: FolderPermission rows ({folderId, mailboxId, granteeKey, granteeId, rights, applyToSubfolders}). */
@@ -97,6 +99,7 @@ export function seed(): void {
   auditRows.length = 0;
   folderPerms.length = 0;
   messageFindFirstArgs.length = 0;
+  rawQueries.length = 0;
 }
 
 /** Test helpers: add a folder / message row to the fake DB. */
@@ -310,6 +313,10 @@ installFakePrisma({
       settings.set(id, row);
       return row;
     },
+  },
+  // 10.2: tagged-template raw queries (search suggestions) are recorded, no rows
+  $raw: {
+    queryRaw: (...a) => { rawQueries.push(a); return []; },
   },
 });
 

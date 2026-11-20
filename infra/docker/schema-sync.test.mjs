@@ -35,7 +35,7 @@ Error: Use the --accept-data-loss flag to ignore the data loss warnings like pri
 `;
 
 /** A scratch dir with stub tools; every call is appended to calls.log. */
-function harness({ prismaOut = ROOM_WARNINGS, psqlFails = false, withPsql = true } = {}) {
+function harness({ prismaOut = ROOM_WARNINGS, psqlFails = false, withPsql = true, prismaJs = null } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'cm-schema-sync-'));
   const bin = join(dir, 'bin');
   const prismaDir = join(dir, 'storage', 'node_modules', 'prisma', 'build');
@@ -47,9 +47,11 @@ function harness({ prismaOut = ROOM_WARNINGS, psqlFails = false, withPsql = true
     "const fs = require('node:fs');",
     'const args = process.argv.slice(2);',
     `fs.appendFileSync(${JSON.stringify(log)}, 'prisma ' + args.join(' ') + '\\n');`,
-    "if (args.includes('--accept-data-loss')) { console.log('applied'); process.exit(0); }",
-    `process.stdout.write(fs.readFileSync(${JSON.stringify(posix(join(dir, 'prisma-out.txt')))}, 'utf8'));`,
-    'process.exit(1);',
+    ...(prismaJs ?? [
+      "if (args.includes('--accept-data-loss')) { console.log('applied'); process.exit(0); }",
+      `process.stdout.write(fs.readFileSync(${JSON.stringify(posix(join(dir, 'prisma-out.txt')))}, 'utf8'));`,
+      'process.exit(1);',
+    ]),
   ].join('\n'));
   writeFileSync(join(dir, 'storage', 'package.json'), '{"type":"commonjs"}');
   const stub = (name, body) => {
@@ -151,4 +153,51 @@ test('an unrelated data loss next to the room tables: refused without opt-in; wi
     assert.equal(allowed.code, 0, allowed.out);
     assert.deepEqual(allowed.calls.slice(1), ['prisma db push --skip-generate', 'pg_dump', 'psql cleanup', 'prisma db push --skip-generate --accept-data-loss']);
   } finally { h.cleanup(); }
+});
+
+// ── 10.2: optional extension pg_trgm ─────────────────────────────────────────
+// The stub fails like `prisma db push` as the least-privilege app role on a database
+// without pg_trgm while the pushed schema still needs it; a schema without the
+// extension (the degraded copy) is applied. The copy is saved for the assertions.
+const NO_CREATE = 'Error: ERROR: permission denied to create extension "pg_trgm"\nHINT: Must have CREATE privilege on current database to create this extension.\n';
+function trgmStub(dir, failure = NO_CREATE) {
+  const copy = posix(join(dir, 'pushed-schema.prisma'));
+  return [
+    'const at = args.indexOf(\'--schema\');',
+    `const schema = fs.readFileSync(at >= 0 ? args[at + 1] : ${JSON.stringify(SCHEMA)}, 'utf8');`,
+    `if (at >= 0) fs.writeFileSync(${JSON.stringify(copy)}, schema);`,
+    `if (/gin_trgm_ops|extensions\\s*=\\s*\\[pg_trgm\\]/.test(schema)) { process.stdout.write(${JSON.stringify(failure)}); process.exit(1); }`,
+    "console.log('Your database is now in sync with your Prisma schema.');",
+  ];
+}
+
+test('pg_trgm unavailable: the schema is applied once more without the tagged lines, with a warning', { skip: !hasSh && 'no sh' }, () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cm-schema-sync-trgm-'));
+  const h = harness({ prismaJs: trgmStub(dir) });
+  try {
+    const r = h.run();
+    assert.equal(r.code, 0, r.out);
+    assert.equal(r.calls.length, 2, r.calls.join('\n'));
+    assert.equal(r.calls[0], 'prisma db push --skip-generate');
+    assert.match(r.calls[1], /^prisma db push --skip-generate --schema \S+\.schema\.prisma$/);
+    assert.match(r.out, /WARNING: the database cannot provide the PostgreSQL extension pg_trgm/);
+    assert.match(r.out, /WITHOUT the trigram index of the mail search \(messages_search_trgm_idx\)/);
+    assert.match(r.out, /CREATE EXTENSION IF NOT EXISTS pg_trgm;/);
+    assert.ok(!r.calls.some((c) => c.includes('--accept-data-loss') || c === 'pg_dump'), 'no dump, no data-loss push');
+    const pushed = readFileSync(join(dir, 'pushed-schema.prisma'), 'utf8');
+    const full = readFileSync(SCHEMA, 'utf8');
+    assert.deepEqual(pushed.split('\n'), full.split('\n').filter((l) => !/schema-sync:optional pg_trgm/.test(l)), 'only the tagged lines are left out');
+    assert.equal(h.dumps().length, 0);
+  } finally { h.cleanup(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('another failure is not mistaken for a missing optional extension (no degraded push)', { skip: !hasSh && 'no sh' }, () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cm-schema-sync-trgm-'));
+  const h = harness({ prismaJs: trgmStub(dir, 'Error: ERROR: permission denied for table messages\n') });
+  try {
+    const r = h.run();
+    assert.notEqual(r.code, 0);
+    assert.deepEqual(r.calls, ['prisma db push --skip-generate']);
+    assert.doesNotMatch(r.out, /cannot provide the PostgreSQL extension/);
+  } finally { h.cleanup(); rmSync(dir, { recursive: true, force: true }); }
 });
