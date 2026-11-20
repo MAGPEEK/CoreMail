@@ -1,4 +1,4 @@
-// Tests for init-secrets.mjs (coremail-init-secrets) and the secrets step of
+// Tests for init-secrets.mjs (the secrets generator) and the secrets step of
 // entrypoint-app.sh (no database, no container):
 //   node --test infra/docker/init-secrets.test.mjs
 // File-mode and symlink cases are skipped on Windows; the entrypoint case needs
@@ -76,6 +76,7 @@ test('fresh start: every key is generated, formats are right, files are 0600', (
   assert.match(text, /BACK THIS FILE UP/);
   assert.match(text, /Without PEPPER no password works/);
   assert.equal(parseEnvFile(text).generatedMarker, true);
+  assert.match(text, /^# secrets \S+ - generated: JWT_SECRET PEPPER /m);
   assert.equal(result.fresh, true);
   const files = ['coremail.env', 'postgres-password', 'redis-password', 'minio-root-password', 'rspamd-controller-password'];
   assert.deepEqual(result.writes, files);
@@ -280,6 +281,13 @@ test('parseEnvFile / formatValue', () => {
   assert.equal(formatValue('a b$c#'), "'a b$c#'");
   assert.equal(formatValue("it's\n"), null);
   assert.equal(parseEnvFile(`K=${formatValue('a b$c#')}`).values.get('K'), 'a b$c#');
+  // generated-keys marker: the current one and the one files from 10.4.0/10.4.1 carry
+  // (the generator's former command name), so their setup token hint stays right
+  const legacyName = ['coremail', 'init', 'secrets'].join('-');
+  assert.equal(parseEnvFile('# secrets 2026-11-20T09:00:00Z - generated: JWT_SECRET\nJWT_SECRET=x\n').generatedMarker, true);
+  assert.equal(parseEnvFile(`# ${legacyName} 2026-11-20T09:00:00Z - generated: JWT_SECRET\nJWT_SECRET=x\n`).generatedMarker, true);
+  assert.equal(parseEnvFile('# secrets 2026-11-20T09:00:00Z - taken from the environment: JWT_SECRET\n').generatedMarker, false);
+  assert.equal(parseEnvFile('JWT_SECRET=x\n').generatedMarker, false);
 });
 
 test('decideFresh rule table', () => {

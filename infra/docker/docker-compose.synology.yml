@@ -9,8 +9,8 @@ name: coremail
 # Secrets (docs/setup.md "Automatic secrets"): the coremail container writes
 # every secret that .env does not set into /volume1/docker/coremail/secrets/
 # (COREMAIL_SECRETS_PATH) at its start; the other containers wait for their
-# password file — a .env always wins. Updating from 10.4.1:
-# `docker compose up -d --remove-orphans` removes its coremail-init container.
+# password file — a .env always wins. Updating from 10.4.0:
+# `docker compose up -d --remove-orphans` removes its stopped init container once.
 # Setup token: /volume1/docker/coremail/secrets/setup-token, wizard at
 # http://<nas>:8080/setup. Back up that directory (Hyper Backup).
 #

@@ -109,9 +109,8 @@ There is no init container: PostgreSQL, Redis, MinIO, rspamd and pg-backup wait 
 `coremail` lists them with `condition: service_started` only and waits for the database
 itself. Details and the wait conditions:
 [setup.md → Docker Compose: start order](setup.md#docker-compose-start-order).
-Updating from 10.4.0 (which had a one-shot `coremail-init` service):
-`docker compose -f infra/docker/docker-compose.yml up -d --remove-orphans` removes its
-stopped container once.
+Updating from 10.4.0: `docker compose -f infra/docker/docker-compose.yml up -d --remove-orphans`
+removes its stopped init container once.
 
 A `.env` stays optional and **always wins**: `scripts/setup.sh --variant <v>` still writes one
 with random values (never overwrites an existing one), `cp .env.example .env` works as

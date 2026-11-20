@@ -113,7 +113,7 @@ test('no init container: the coremail container prepares the stack, the others w
   };
   for (const f of files) {
     const dc = read(f).replace(/\r\n/g, '\n');
-    assert.doesNotMatch(dc, /^ {2}coremail-init:$/m, `${f}: no coremail-init service`);
+    assert.doesNotMatch(dc, /^ {2}[a-z0-9-]+-init:$/m, `${f}: no init service`);
     assert.doesNotMatch(dc, /service_completed_successfully/, `${f}: nothing waits for a one-shot service`);
     // waiting for "healthy" would deadlock: postgres/redis/minio wait for files coremail writes
     const deps = serviceBlock(dc, 'coremail').match(/ {4}depends_on:[^\n]*\n((?: {6}.*\n)*)/)?.[1] ?? '';
@@ -133,12 +133,46 @@ test('no init container: the coremail container prepares the stack, the others w
     assert.match(serviceBlock(dc, 'postgres'), /POSTGRES_PASSWORD: \$\{POSTGRES_PASSWORD:-\}/, `${f}: .env password needs no file`);
     assert.match(serviceBlock(dc, 'postgres'), /unset POSTGRES_PASSWORD_FILE/, `${f}: POSTGRES_PASSWORD and _FILE are exclusive`);
   }
-  // the entrypoint does both steps itself; the standalone commands stay
+  // the entrypoint does both steps itself, calling the internal libraries by path
   const ep = read('infra/docker/entrypoint-app.sh');
-  assert.ok(ep.indexOf('coremail-init-config') < ep.indexOf('# ── 1. Wait for PostgreSQL'), 'config before waiting for the database');
-  assert.ok(ep.indexOf('coremail-init-secrets') < ep.indexOf('# ── 1. Wait for PostgreSQL'), 'secrets before waiting for the database');
+  const waitDb = ep.indexOf('# ── 1. Wait for PostgreSQL');
+  assert.ok(ep.indexOf('/usr/local/lib/coremail/init-config.mjs') > 0, 'entrypoint runs init-config.mjs');
+  assert.ok(ep.indexOf('/usr/local/lib/coremail/init-config.mjs') < waitDb, 'config before waiting for the database');
+  assert.ok(ep.indexOf('/usr/local/lib/coremail/init-secrets.mjs') > 0, 'entrypoint runs init-secrets.mjs');
+  assert.ok(ep.indexOf('/usr/local/lib/coremail/init-secrets.mjs') < waitDb, 'secrets before waiting for the database');
   const dockerfile = read('infra/docker/Dockerfile.app');
-  for (const cmd of ['coremail-init-secrets', 'coremail-init-config']) assert.match(dockerfile, new RegExp(`/usr/local/bin/${cmd}\\b`));
+  for (const f of ['init-secrets.mjs', 'init-config.mjs']) {
+    assert.match(dockerfile, new RegExp(`COPY infra/docker/${f} /usr/local/lib/coremail/${f}\n`), `image carries ${f}`);
+  }
+});
+
+test('no init commands: no Compose file, Dockerfile or doc mentions the removed coremail-init commands', async () => {
+  // 10.4.1: the one-shot init service and the standalone commands (coremail-init,
+  // -secrets, -config) are gone; only the release history may still name them.
+  const { readdirSync } = await import('node:fs');
+  const { spawnSync } = await import('node:child_process');
+  let files;
+  const git = spawnSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' });
+  if (git.status === 0 && git.stdout) {
+    files = git.stdout.split('\0').filter(Boolean);
+  } else {
+    files = [];
+    const walk = (rel) => {
+      for (const e of readdirSync(join(root, rel), { withFileTypes: true })) {
+        if (['node_modules', 'dist', '.git', '.claude'].includes(e.name)) continue;
+        const p = rel ? `${rel}/${e.name}` : e.name;
+        if (e.isDirectory()) walk(p); else files.push(p);
+      }
+    };
+    walk('');
+  }
+  const inScope = (f) => /(^|\/)docker-compose[^/]*\.ya?ml$/.test(f) || /(^|\/)Dockerfile[^/]*$/.test(f) || /\.md$/.test(f);
+  const history = (f) => f === 'CHANGELOG.md' || f.startsWith('docs/releases/') || /^docs\/version-history[^/]*\.md$/.test(f);
+  const checked = files.filter((f) => inScope(f) && !history(f));
+  assert.ok(checked.includes('deploy/docker-compose.yml') && checked.includes('infra/docker/Dockerfile.app') && checked.includes('docs/deploy.md'),
+    'the scan covers the deployment files');
+  const offenders = checked.filter((f) => /coremail-init/.test(read(f))).sort();
+  assert.deepEqual(offenders, []);
 });
 
 test('object storage (8.0): unchanged .env keeps MinIO; new .env uses the filesystem volume', () => {

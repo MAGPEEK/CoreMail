@@ -15,7 +15,7 @@ time. The browser part of the first setup is described in
   - [Fresh or existing installation](#fresh-or-existing-installation)
   - [Database and Redis connection](#database-and-redis-connection)
   - [Docker Compose: start order](#docker-compose-start-order)
-  - [Running the generator by hand](#running-the-generator-by-hand)
+  - [Without Compose (`docker run`)](#without-compose-docker-run)
   - [Setup token](#setup-token)
   - [Safety rules](#safety-rules)
   - [Backing up the secrets](#backing-up-the-secrets)
@@ -43,11 +43,11 @@ mkdir -m 700 secrets
 # docker run … -v ./secrets:/secrets …
 ```
 
-On the first start the entrypoint runs `coremail-init-secrets`, which writes
-`/secrets/coremail.env` with random values. On every later start it only
-**appends keys that are missing** — a value in that file is never changed. The
-entrypoint then loads the file, so the services see the values as ordinary
-environment variables.
+On the first start the entrypoint runs the secrets generator (an internal
+part of the image), which writes `/secrets/coremail.env` with random values.
+On every later start it only **appends keys that are missing** — a value in
+that file is never changed. The entrypoint then loads the file, so the
+services see the values as ordinary environment variables.
 
 Without a `/secrets` mount nothing changes: the container takes its secrets
 from the environment (`.env`, Compose, Kubernetes) exactly as before. The image
@@ -100,16 +100,16 @@ passwords are also taken from `DATABASE_URL` / `REDIS_URL` when those are set
 `COREMAIL_DB_PASSWORD`). The generator prints only key names, never values:
 
 ```
-[init-secrets] /secrets/coremail.env: created
-[init-secrets]   generated: JWT_SECRET, PEPPER, POSTGRES_PASSWORD, REDIS_PASSWORD, …
-[init-secrets]   copy of POSTGRES_PASSWORD: COREMAIL_DB_PASSWORD
-[init-secrets]   fresh installation: database unreachable, no previous coremail.env and no JWT_SECRET/PEPPER in the environment
-[init-secrets] /secrets/postgres-password: created
-[init-secrets] /secrets/redis-password: created
+[secrets] /secrets/coremail.env: created
+[secrets]   generated: JWT_SECRET, PEPPER, POSTGRES_PASSWORD, REDIS_PASSWORD, …
+[secrets]   copy of POSTGRES_PASSWORD: COREMAIL_DB_PASSWORD
+[secrets]   fresh installation: database unreachable, no previous coremail.env and no JWT_SECRET/PEPPER in the environment
+[secrets] /secrets/postgres-password: created
+[secrets] /secrets/redis-password: created
 ```
 
 Each block of appended keys is preceded by a comment such as
-`# coremail-init-secrets 2026-11-20T09:00:00Z - generated: JWT_SECRET PEPPER …`.
+`# secrets 2026-11-20T09:00:00Z - generated: JWT_SECRET PEPPER …`.
 
 ### Which value wins
 
@@ -156,8 +156,7 @@ environment (`PGPASSWORD`), never on the command line. In the entrypoint the
 generator waits up to `COREMAIL_SECRETS_DB_WAIT` seconds for the database —
 default 30 when a `coremail.env` exists already, 0 on a first start without
 one (the bundled PostgreSQL is then itself waiting for the password file this
-step writes, and a database without the CoreMail schema changes nothing). The
-standalone command does not wait.
+step writes, and a database without the CoreMail schema changes nothing).
 
 ### Database and Redis connection
 
@@ -186,19 +185,19 @@ external S3 keeps its own keys.
 
 ### Docker Compose: start order
 
-There is no separate init container (10.4.0 had the one-shot service
-`coremail-init`; updating from it: `docker compose up -d --remove-orphans`
-removes its stopped container once). The `coremail` container prepares the
+There is no separate init container (10.4.0 had a one-shot init service;
+updating from 10.4.0: `docker compose up -d --remove-orphans` removes its
+stopped init container once). The `coremail` container prepares the
 stack at the start of its entrypoint, on every start:
 
 1. **Configuration** (only `deploy/docker-compose.yml`, which mounts the
-   `coremail-config-*` volumes below `/config`): `coremail-init-config` copies
-   the configuration bundled in the image (PostgreSQL init scripts, rspamd
+   `coremail-config-*` volumes below `/config`): it copies the
+   configuration bundled in the image (PostgreSQL init scripts, rspamd
    `local.d`, the pg-backup script) into the volumes and then writes a ready
    marker `.ready` into each ([deploy.md → Configuration and overrides](deploy.md#configuration-and-overrides)).
    The repository Compose files bind-mount that configuration from the checkout
    instead; their `coremail` container has no `/config` and skips the step.
-2. **Secrets**: `coremail-init-secrets` creates or extends `coremail.env` and the
+2. **Secrets**: the generator creates or extends `coremail.env` and the
    single-value password files (written atomically — a file that exists is complete).
 3. It then waits for PostgreSQL (TCP, then the schema sync retries) and for Redis
    (at most 120 s), and starts the services.
@@ -251,27 +250,20 @@ otherwise the single-value file (secrets directory mounted read-only at
 | `pg-backup` (full, profile `backup`) | `sh -c` wrapper: `POSTGRES_PASSWORD` or `postgres-password`; read-only capability `DAC_READ_SEARCH` |
 | `coremail` | mounts the directory at `/secrets`; the entrypoint loads `coremail.env` ([Which value wins](#which-value-wins)) and builds `DATABASE_URL` / `REDIS_URL` when `.env` has none |
 
-### Running the generator by hand
+### Without Compose (`docker run`)
 
-The generator is part of the image and can also run on its own — for example
-in a `docker run` setup, to create `postgres-password` before the PostgreSQL
-container starts ([deploy.md → docker run](deploy.md#docker-run)):
+The generator has no command of its own: it runs only in the entrypoint of the
+`coremail` container. Outside Compose, start the `coremail` container first with
+the secrets directory mounted at `/secrets`; it writes `coremail.env` and the
+password files, and PostgreSQL and Redis wait in a small `sh -c` loop until
+their file exists ([deploy.md → docker run](deploy.md#docker-run)). An unsafe
+secrets directory stops the start with an error in the log
+([Safety rules](#safety-rules)); a read-only one is used as it is.
 
-```bash
-mkdir -m 700 secrets
-docker run --rm -v ./secrets:/secrets magpeek/coremail-app coremail-init-secrets
-docker run --rm -v ./secrets:/secrets magpeek/coremail-app coremail-init-secrets   # second run: nothing to add
-```
-
-Options: `--dir <dir>` (default `$COREMAIL_SECRETS_DIR` or `/secrets`),
-`--db-wait <seconds>` (default 0), `--help`. Exit codes: `0` done, `1` error
-(for example a read-only directory), `2` refused because the directory or a
-file is unsafe.
-
-Without a database (as above) the rule in
+On that first start the database cannot answer yet, so the rule in
 [Fresh or existing installation](#fresh-or-existing-installation) decides via
 "no earlier `coremail.env`, no `JWT_SECRET`/`PEPPER` in the environment" — a
-first run into an empty directory is a fresh installation.
+first start with an empty directory is a fresh installation.
 
 ### Setup token
 

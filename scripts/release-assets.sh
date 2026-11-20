@@ -82,7 +82,7 @@ fi
 # No init service: the coremail container prepares secrets + configuration and
 # the other containers wait for its files — a one-shot dependency or coremail
 # waiting for them to be healthy would deadlock.
-if grep -nE '^  coremail-init:|service_completed_successfully' "${ASSET}" >&2; then
+if grep -nE '^  [a-z0-9-]+-init:|service_completed_successfully' "${ASSET}" >&2; then
   echo "the standalone file must not have an init service (the coremail container prepares the stack)" >&2
   exit 1
 fi

@@ -171,8 +171,8 @@ The image carries the configuration of the other containers under
 | `rspamd/local.d/actions.conf`, `worker-controller.inc` | `coremail-config-rspamd` | rspamd `/etc/rspamd/local.d` |
 | `pg-backup/pg-backup.sh` | `coremail-config-pg-backup` | pg-backup `/pg-backup` |
 
-The `coremail` container copies them on **every** start (`coremail-init-config`, the volumes
-are mounted read-write into it below `/config`), so an image update brings new versions; a
+The `coremail` container copies them on **every** start (the volumes are mounted read-write
+into it below `/config`), so an image update brings new versions; a
 file a newer image no longer carries is removed (only files the tool wrote itself — a hidden
 `.coremail-config-files` list per volume). After the files it writes a ready marker `.ready`
 per volume: rspamd and pg-backup wait for it, PostgreSQL only on an empty data directory.
@@ -223,8 +223,8 @@ curl -fsSLO https://github.com/MAGPEEK/CoreMail/releases/latest/download/docker-
 docker compose pull && docker compose up -d --remove-orphans
 ```
 
-**Coming from 10.4.0:** that release had a one-shot service `coremail-init`; its stopped
-container is left over. `--remove-orphans` removes it once (without the flag Compose only
+**Updating from 10.4.0:** that release had a one-shot init service; its stopped container
+is left over. `--remove-orphans` removes it once (without the flag Compose only
 warns about an orphan container — nothing breaks). The secrets in `./secrets/` stay exactly
 as they are.
 
@@ -262,32 +262,16 @@ the same volume names as this file. Moving an existing installation to the stand
 
 ### `docker run`
 
-The default stack without Compose. Plain `docker run` has no wait wrappers, so the two
-standalone commands of the image write the secrets into `./secrets` and the bundled
-configuration into named volumes **before** PostgreSQL and Redis start; keep the `secrets`
-directory. The `coremail` container mounts the same directories and refreshes both on
-every later start, as in Compose.
+The default stack without Compose, in the same order as Compose: the `coremail` container
+starts first. At its start it writes the secrets into `./secrets` and the bundled
+configuration into the `coremail-config-*` volumes, then waits for the database (it
+refreshes both on every later start). PostgreSQL and Redis wait in a small `sh -c` loop
+until the files they need exist, then run their image's own entrypoint. Keep the `secrets`
+directory.
 
 ```bash
 mkdir -m 700 secrets
-docker run --rm -v "$PWD/secrets:/secrets" magpeek/coremail-app:10.4.0 coremail-init-secrets
-docker run --rm -v coremail-config-postgres:/config/postgres -v coremail-config-rspamd:/config/rspamd/local.d \
-  magpeek/coremail-app:10.4.0 coremail-init-config
-
 docker network create coremail
-
-docker run -d --name coremail-postgres --network coremail --restart unless-stopped \
-  -e POSTGRES_DB=coremail -e POSTGRES_USER=coremail \
-  -e POSTGRES_PASSWORD_FILE=/run/coremail/postgres-password \
-  -v "$PWD/secrets:/run/coremail:ro" \
-  -v coremail-config-postgres:/docker-entrypoint-initdb.d:ro \
-  -v coremail-pgdata:/var/lib/postgresql/data \
-  postgres:16-alpine
-
-docker run -d --name coremail-redis --network coremail --restart unless-stopped \
-  -v "$PWD/secrets:/run/coremail:ro" -v coremail-redisdata:/data \
-  --entrypoint sh redis:7-alpine \
-  -c 'exec docker-entrypoint.sh redis-server --appendonly yes --requirepass "$(cat /run/coremail/redis-password)"'
 
 docker run -d --name coremail --network coremail --restart unless-stopped \
   -e COREMAIL_DB_HOST=coremail-postgres -e COREMAIL_REDIS_HOST=coremail-redis \
@@ -301,9 +285,26 @@ docker run -d --name coremail --network coremail --restart unless-stopped \
   --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
   --cap-add SETUID --cap-add SETGID --cap-add KILL --cap-add NET_BIND_SERVICE \
   --sysctl net.ipv4.ip_unprivileged_port_start=0 \
-  magpeek/coremail-app:10.4.0
+  magpeek/coremail-app:10.4.1
+
+docker run -d --name coremail-postgres --network coremail --restart unless-stopped \
+  -e POSTGRES_DB=coremail -e POSTGRES_USER=coremail \
+  -e POSTGRES_PASSWORD_FILE=/run/coremail/postgres-password \
+  -v "$PWD/secrets:/run/coremail:ro" \
+  -v coremail-config-postgres:/docker-entrypoint-initdb.d:ro \
+  -v coremail-pgdata:/var/lib/postgresql/data \
+  --entrypoint sh postgres:16-alpine \
+  -c 'until [ -s /run/coremail/postgres-password ] && [ -f /docker-entrypoint-initdb.d/.ready ]; do sleep 2; done
+      exec docker-entrypoint.sh postgres'
+
+docker run -d --name coremail-redis --network coremail --restart unless-stopped \
+  -v "$PWD/secrets:/run/coremail:ro" -v coremail-redisdata:/data \
+  --entrypoint sh redis:7-alpine \
+  -c 'until [ -s /run/coremail/redis-password ]; do sleep 2; done
+      exec docker-entrypoint.sh redis-server --appendonly yes --requirepass "$(cat /run/coremail/redis-password)"'
 ```
 
+`docker logs -f coremail` shows the start (the services come up once PostgreSQL answers).
 Add `-p 110:110 -p 995:995` if you want POP3. The setup token is in `./secrets/setup-token`.
 Update: pull the new tag, remove the `coremail` container and start it again with the same
 command (new tag) — it refreshes the configuration volumes and adds missing secrets itself.
@@ -311,25 +312,15 @@ command (new tag) — it refreshes the configuration volumes and adds missing se
 <details>
 <summary>rspamd and ClamAV next to it</summary>
 
-Run the commands above, but stop before the last one (`coremail`). rspamd trusts only the
-CoreMail container's address, so both get fixed addresses on a small network of their own.
-rspamd reads its configuration from the `coremail-config-rspamd` volume and its controller
-password from `./secrets`, then runs as its own user.
+rspamd trusts only the CoreMail container's address, so both get fixed addresses on a small
+network of their own. Replace the `coremail` command above with the three commands below
+(`docker create` → attach the second network → `docker start`), then run the PostgreSQL and
+Redis commands above and the two scanner containers. rspamd waits for its configuration
+(`coremail-config-rspamd` volume) and its controller password (`./secrets`), then runs as
+its own user.
 
 ```bash
 docker network create --subnet 10.253.253.0/29 coremail-rspamd
-
-docker run -d --name coremail-rspamd --network coremail-rspamd --ip 10.253.253.3 --restart unless-stopped \
-  -e RSPAMD_CONTROLLER_SECURE_IP=10.253.253.2 \
-  -v "$PWD/secrets:/run/coremail:ro" \
-  -v coremail-config-rspamd:/etc/rspamd/local.d:ro \
-  -v coremail-rspamd-data:/var/lib/rspamd \
-  --user 0:0 --entrypoint sh rspamd/rspamd:4.0.0 \
-  -c 'RSPAMD_CONTROLLER_PASSWORD="$(cat /run/coremail/rspamd-controller-password)" && export RSPAMD_CONTROLLER_PASSWORD && exec setpriv --reuid=11333 --regid=11333 --clear-groups /usr/bin/rspamd -f'
-
-docker run -d --name coremail-clamav --network coremail --restart unless-stopped \
-  -v coremail-clamav-data:/var/lib/clamav \
-  clamav/clamav:stable
 
 docker create --name coremail --network coremail --restart unless-stopped \
   -e COREMAIL_DB_HOST=coremail-postgres -e COREMAIL_REDIS_HOST=coremail-redis \
@@ -343,9 +334,24 @@ docker create --name coremail --network coremail --restart unless-stopped \
   --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
   --cap-add SETUID --cap-add SETGID --cap-add KILL --cap-add NET_BIND_SERVICE \
   --sysctl net.ipv4.ip_unprivileged_port_start=0 \
-  magpeek/coremail-app:10.4.0
+  magpeek/coremail-app:10.4.1
 docker network connect --ip 10.253.253.2 coremail-rspamd coremail
 docker start coremail
+
+# … the PostgreSQL and Redis commands above, then:
+docker run -d --name coremail-rspamd --network coremail-rspamd --ip 10.253.253.3 --restart unless-stopped \
+  -e RSPAMD_CONTROLLER_SECURE_IP=10.253.253.2 \
+  -v "$PWD/secrets:/run/coremail:ro" \
+  -v coremail-config-rspamd:/etc/rspamd/local.d:ro \
+  -v coremail-rspamd-data:/var/lib/rspamd \
+  --user 0:0 --entrypoint sh rspamd/rspamd:4.0.0 \
+  -c 'until [ -s /run/coremail/rspamd-controller-password ] && [ -f /etc/rspamd/local.d/.ready ]; do sleep 2; done
+      RSPAMD_CONTROLLER_PASSWORD="$(cat /run/coremail/rspamd-controller-password)" && export RSPAMD_CONTROLLER_PASSWORD
+      exec setpriv --reuid=11333 --regid=11333 --clear-groups /usr/bin/rspamd -f'
+
+docker run -d --name coremail-clamav --network coremail --restart unless-stopped \
+  -v coremail-clamav-data:/var/lib/clamav \
+  clamav/clamav:stable
 ```
 
 ClamAV downloads about 300 MB of signatures on its first start; scanning begins once that is

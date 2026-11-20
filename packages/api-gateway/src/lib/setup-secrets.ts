@@ -3,7 +3,7 @@
  * "Automatic secrets").
  *
  *  - The container entrypoint creates/loads <dir>/coremail.env
- *    (coremail-init-secrets) and exports two markers this module reads:
+ *    (infra/docker/init-secrets.mjs) and exports two markers this module reads:
  *    COREMAIL_SECRETS_FILE_IN_USE and COREMAIL_SECRETS_GENERATED. The file
  *    itself belongs to root and is never read here.
  *  - While the initial setup is pending, the one-time setup token is written

@@ -417,7 +417,7 @@ docker compose -f infra/docker/docker-compose.yml start
 docker compose -f infra/docker/docker-compose.yml pull
 
 # 2. Restart the stack (downtime < 30 seconds, Prisma migration runs automatically;
-#    --remove-orphans removes the coremail-init container a 10.4.0 installation still has)
+#    updating from 10.4.0: --remove-orphans removes its stopped init container once)
 docker compose -f infra/docker/docker-compose.yml up -d --remove-orphans
 
 # 3. Check status

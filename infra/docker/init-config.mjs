@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 // ─────────────────────────────────────────────────────────────────────────────
-// CoreMail — bundled configuration installer (installed as
-// /usr/local/bin/coremail-init-config; the entrypoint of the coremail container
-// runs it on every start when /config is mounted — deploy/docker-compose.yml)
+// CoreMail — bundled configuration installer (in the image:
+// /usr/local/lib/coremail/init-config.mjs). Internal: the entrypoint of the
+// coremail container runs it on every start when /config is mounted
+// (deploy/docker-compose.yml); there is no command for it on PATH.
 //
-//   coremail-init-config [--bundled <dir>] [--config <dir>] [--override <dir>]
+//   init-config.mjs [--bundled <dir>] [--config <dir>] [--override <dir>]
 //
 // The app image carries the configuration files the infrastructure containers
 // need (10.4), so a deployment needs no repository checkout:
@@ -174,7 +175,8 @@ export function syncConfig({ bundledDir, configDir, overrideDir, log = () => und
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
 
-const USAGE = `usage: coremail-init-config [--bundled <dir>] [--config <dir>] [--override <dir>]
+const USAGE = `usage: init-config.mjs [--bundled <dir>] [--config <dir>] [--override <dir>]
+(internal: run by the entrypoint of the coremail container)
 
 Copies the configuration bundled in the image (/usr/share/coremail/config) into
 <config> (default $COREMAIL_CONFIG_DIR or /config). Files in
@@ -201,12 +203,12 @@ function parseArgs(argv, env) {
 }
 
 export function main(argv = process.argv.slice(2), env = process.env) {
-  const err = (m) => process.stderr.write(`[init-config] ${m}\n`);
+  const err = (m) => process.stderr.write(`[config] ${m}\n`);
   let opts;
   try { opts = parseArgs(argv, env); } catch (e) { err(e.message); process.stderr.write(`${USAGE}\n`); return 1; }
   if (opts.help) { process.stdout.write(`${USAGE}\n`); return 0; }
   try {
-    syncConfig({ ...opts, log: (m) => process.stdout.write(`[init-config] ${m}\n`) });
+    syncConfig({ ...opts, log: (m) => process.stdout.write(`[config] ${m}\n`) });
     return 0;
   } catch (e) {
     err(`ERROR: ${e.message}`);

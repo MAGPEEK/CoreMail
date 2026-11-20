@@ -33,8 +33,8 @@ name: coremail
 #  database/Redis/MinIO/rspamd passwords, …) into ./secrets/ next to this file
 #  at its start; the other containers wait for their password file — BACK IT UP
 #  off the server. A .env (bash scripts/setup.sh --variant full) stays optional
-#  and always wins. Updating from 10.4.1: `up -d --remove-orphans` removes its
-#  coremail-init container. OBJECT_STORAGE defaults to filesystem (minio | s3 in .env).
+#  and always wins. Updating from 10.4.0: `up -d --remove-orphans` removes its
+#  stopped init container once. OBJECT_STORAGE defaults to filesystem (minio | s3 in .env).
 #  Profile geoip needs GEOIPUPDATE_ACCOUNT_ID + GEOIPUPDATE_LICENSE_KEY in .env.
 # ═════════════════════════════════════════════════════════════════════════════
 

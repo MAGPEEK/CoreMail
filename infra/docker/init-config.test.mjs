@@ -1,4 +1,4 @@
-// Tests for init-config.mjs (coremail-init-config), no container:
+// Tests for init-config.mjs (the configuration step of the entrypoint), no container:
 //   node --test infra/docker/init-config.test.mjs
 // Mode and symlink cases are skipped on Windows.
 import { after, test } from 'node:test';
@@ -176,7 +176,7 @@ test('CLI: env defaults and exit codes', () => {
     encoding: 'utf8',
   });
   assert.equal(ok.status, 0, ok.stderr);
-  assert.match(ok.stdout, /\[init-config\] postgres: 2 file\(s\)/);
+  assert.match(ok.stdout, /\[config\] postgres: 2 file\(s\)/);
   assert.equal(spawnSync(process.execPath, [script, '--bogus'], { encoding: 'utf8' }).status, 1);
 });
 
@@ -184,7 +184,11 @@ test('the repository files the image bundles exist (Dockerfile.app COPY sources)
   const dockerfile = readFileSync(join(here, 'Dockerfile.app'), 'utf8');
   for (const src of ['infra/docker/postgres/init.sql', 'infra/docker/postgres/02-app-role.sh',
     'infra/docker/rspamd/local.d/', 'infra/docker/pg-backup/pg-backup.sh', 'infra/docker/init-config.mjs',
-    'infra/docker/coremail-init.sh']) {
+    'infra/docker/init-secrets.mjs']) {
     assert.ok(dockerfile.includes(`COPY ${src}`), `Dockerfile.app copies ${src}`);
   }
+  // internal libraries: the entrypoint calls them by their path below /usr/local/lib/coremail
+  const ep = readFileSync(join(here, 'entrypoint-app.sh'), 'utf8');
+  assert.match(ep, /^INIT_CONFIG=\/usr\/local\/lib\/coremail\/init-config\.mjs$/m);
+  assert.match(ep, /^INIT_SECRETS="\$\{COREMAIL_INIT_SECRETS:-\/usr\/local\/lib\/coremail\/init-secrets\.mjs\}"$/m);
 });

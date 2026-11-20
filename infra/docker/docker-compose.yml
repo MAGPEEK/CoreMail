@@ -45,7 +45,7 @@ name: coremail
 #    3000 HTTP without TLS — for initial setup and behind your own reverse proxy
 #
 #  Containers: coremail (all services) · postgres · redis · minio · rspamd · clamav
-#  (updating from 10.4.1: `up -d --remove-orphans` removes its coremail-init container)
+#  (updating from 10.4.0: `up -d --remove-orphans` removes its stopped init container once)
 #  All data lives in named Docker volumes (see below) → backup = back up the volumes
 #  (database dump first, then the volumes — docs/storage.md) and ./secrets/.
 # ═════════════════════════════════════════════════════════════════════════════

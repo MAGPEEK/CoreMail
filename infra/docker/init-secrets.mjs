@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 // ─────────────────────────────────────────────────────────────────────────────
-// CoreMail — secrets generator (installed as /usr/local/bin/coremail-init-secrets)
+// CoreMail — secrets generator (in the image: /usr/local/lib/coremail/init-secrets.mjs).
+// Internal: run only by entrypoint-app.sh at every start of the coremail
+// container, there is no command for it on PATH.
 //
-//   coremail-init-secrets [--dir <dir>] [--db-wait <seconds>]
-//   docker run --rm -v ./secrets:/secrets magpeek/coremail-app coremail-init-secrets
+//   init-secrets.mjs [--dir <dir>] [--db-wait <seconds>]
 //
 // Creates <dir>/coremail.env (default dir: $COREMAIL_SECRETS_DIR or /secrets)
 // with random secrets. An existing file is never rewritten: only keys that are
@@ -30,7 +31,7 @@
 // "Fresh installation":
 //   1. The database answers (DATABASE_URL, or built from the passwords):
 //      fresh ⇔ the users table is empty AND the setup was never completed.
-//   2. The database is unreachable or has no schema yet (the init step may run
+//   2. The database is unreachable or has no schema yet (the generator runs
 //      before PostgreSQL is up): fresh ⇔ there was no coremail.env before this
 //      run AND the environment has neither JWT_SECRET nor PEPPER.
 //
@@ -42,7 +43,7 @@
 // nothing can have been planted.
 //
 // Internal mode for entrypoint-app.sh:
-//   coremail-init-secrets --export-env
+//   init-secrets.mjs --export-env
 // prints KEY=value lines for the entrypoint to export: the secrets file's values
 // for keys the environment does not set (a non-empty environment value wins),
 // DATABASE_URL / REDIS_URL built from the passwords when unset, and the markers
@@ -93,7 +94,9 @@ export const LOADABLE_KEYS = new Set([...ALWAYS_KEYS, ...FRESH_ONLY_KEYS, 'COREM
 
 const KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const SAFE_VALUE_RE = /^[A-Za-z0-9._~+/=:@%,-]*$/;
-const MARKER_GENERATED_RE = /^# coremail-init-secrets \S+ - generated:/m;
+// Comment written before generated keys. Also matches the marker of files
+// written by 10.4.0/10.4.1 (the generator's former command name before "secrets").
+const MARKER_GENERATED_RE = /^# (?:[a-z-]+-)?secrets \S+ - generated:/m;
 const O_NOFOLLOW = constants.O_NOFOLLOW ?? 0;
 
 /** Exit code 2: the directory or a file is unsafe — never continue. */
@@ -164,7 +167,7 @@ export function formatValue(v) {
 
 export const FILE_HEADER = [
   '# ─────────────────────────────────────────────────────────────────────────',
-  '# CoreMail secrets — created by coremail-init-secrets (docs/setup.md).',
+  '# CoreMail secrets — created by the coremail container (docs/setup.md).',
   '#',
   '# BACK THIS FILE UP — off this server (password manager, offline copy).',
   '# Without PEPPER no password works. Without JWT_SECRET + PEPPER (or',
@@ -494,9 +497,9 @@ export function initSecrets({ dir, env = process.env, probe, now = new Date(), d
     let text = fileExisted ? existing : FILE_HEADER;
     if (text.length > 0 && !text.endsWith('\n')) text += '\n';
     if (fileExisted) text += '\n';
-    if (generated.length) text += `# coremail-init-secrets ${stamp} - generated: ${generated.join(' ')}\n`;
-    if (adopted.length) text += `# coremail-init-secrets ${stamp} - taken from the environment: ${adopted.join(' ')}\n`;
-    if (copied.length) text += `# coremail-init-secrets ${stamp} - copy of POSTGRES_PASSWORD: ${copied.join(' ')}\n`;
+    if (generated.length) text += `# secrets ${stamp} - generated: ${generated.join(' ')}\n`;
+    if (adopted.length) text += `# secrets ${stamp} - taken from the environment: ${adopted.join(' ')}\n`;
+    if (copied.length) text += `# secrets ${stamp} - copy of POSTGRES_PASSWORD: ${copied.join(' ')}\n`;
     for (const [k, v] of added) text += `${k}=${formatValue(v)}\n`;
     atomicWrite(dir, SECRETS_FILE, text);
     writes.push(SECRETS_FILE);
@@ -590,16 +593,15 @@ export function exportEnv({ dir, env = process.env } = {}) {
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
 
-const USAGE = `usage: coremail-init-secrets [--dir <dir>] [--db-wait <seconds>]
-       coremail-init-secrets --export-env [--dir <dir>]   (internal: entrypoint)
+const USAGE = `usage: init-secrets.mjs [--dir <dir>] [--db-wait <seconds>]
+       init-secrets.mjs --export-env [--dir <dir>]
+(internal: run by the entrypoint of the coremail container)
 
 Creates <dir>/${SECRETS_FILE} (default dir: $COREMAIL_SECRETS_DIR or /secrets) with
 random secrets, appends missing keys to an existing file and writes the
 single-value files <dir>/${POSTGRES_PASSWORD_FILE}, <dir>/${REDIS_PASSWORD_FILE},
 <dir>/${MINIO_PASSWORD_FILE} and <dir>/${RSPAMD_PASSWORD_FILE}. Never overwrites a
 value; prints key names only.
-
-  docker run --rm -v ./secrets:/secrets magpeek/coremail-app coremail-init-secrets
 
 Back up ${SECRETS_FILE} off the server: without PEPPER no password works.
 Details: docs/setup.md ("Automatic secrets").`;
@@ -621,7 +623,7 @@ function parseArgs(argv) {
 }
 
 export function main(argv = process.argv.slice(2)) {
-  const err = (m) => process.stderr.write(`[init-secrets] ${m}\n`);
+  const err = (m) => process.stderr.write(`[secrets] ${m}\n`);
   let opts;
   try { opts = parseArgs(argv); } catch (e) { err(e.message); process.stderr.write(`${USAGE}\n`); return 1; }
   if (opts.help) { process.stdout.write(`${USAGE}\n`); return 0; }
@@ -633,7 +635,7 @@ export function main(argv = process.argv.slice(2)) {
       process.stdout.write(vars.map(([k, v]) => `${k}=${v}\n`).join(''));
       return 0;
     }
-    initSecrets({ dir: opts.dir, dbWait: opts.dbWait, log: (m) => process.stdout.write(`[init-secrets] ${m}\n`) });
+    initSecrets({ dir: opts.dir, dbWait: opts.dbWait, log: (m) => process.stdout.write(`[secrets] ${m}\n`) });
     return 0;
   } catch (e) {
     err(`ERROR: ${e.message}`);

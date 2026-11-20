@@ -20,7 +20,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - **The one-shot service `coremail-init` is gone from every Compose file** (standalone `deploy/docker-compose.yml`, `infra/docker/docker-compose.yml`, minimal, full, Synology, e2e overlays). The `coremail` container prepares the stack at the start of its entrypoint on every start: it creates or extends `./secrets/` (`.env` values still win, nothing is overwritten) and, in the standalone file, refreshes the bundled configuration volumes with a `.ready` marker.
 - **PostgreSQL, Redis, MinIO, rspamd and pg-backup wait for their files**: a small wrapper waits until the password file (and on an empty PostgreSQL data directory the configuration marker) exists, at most 10 minutes, then runs the image's own entrypoint unchanged. A password set in `.env` needs no file.
 - `coremail` depends on the other services with `service_started` only; its entrypoint waits for PostgreSQL and Redis itself.
-- `coremail-init-secrets` and `coremail-init-config` stay in the image for plain `docker run` setups; `scripts/release-assets.sh` refuses a standalone file with an init service.
+- `scripts/release-assets.sh` refuses a standalone file with an init service.
+
+### Removed
+
+- **The standalone commands `coremail-init`, `coremail-init-secrets` and `coremail-init-config` are gone from the image.** The secrets generator and the configuration installer are internal libraries (`/usr/local/lib/coremail/init-secrets.mjs`, `init-config.mjs`) that only the entrypoint of the `coremail` container runs; their log lines start with `[secrets]` / `[config]`, and keys appended to `coremail.env` are preceded by `# secrets <time> - …` (older comment lines stay and are still recognised). A plain `docker run` setup starts the `coremail` container first, PostgreSQL and Redis wait for their password file (docs/deploy.md → `docker run`).
 
 ### Upgrade notes
 

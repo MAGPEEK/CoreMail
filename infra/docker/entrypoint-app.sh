@@ -19,10 +19,10 @@ log() { echo "[entrypoint] $*"; }
 # deploy/docker-compose.yml mounts the coremail-config-* volumes below /config
 # (PostgreSQL init scripts, rspamd local.d, the pg-backup script). PostgreSQL,
 # rspamd and pg-backup mount them read-only and wait for the .ready marker that
-# coremail-init-config writes after the files. Without /config (the repository
+# init-config.mjs writes after the files. Without /config (the repository
 # Compose files bind-mount their configuration) nothing happens.
 CONFIG_DIR="${COREMAIL_CONFIG_DIR:-/config}"
-INIT_CONFIG="${COREMAIL_INIT_CONFIG:-/usr/local/bin/coremail-init-config}"
+INIT_CONFIG=/usr/local/lib/coremail/init-config.mjs
 if [ -d "${CONFIG_DIR}" ]; then
   log "Configuration volumes at ${CONFIG_DIR} — installing the bundled configuration"
   COREMAIL_CONFIG_DIR="${CONFIG_DIR}" "${INIT_CONFIG}" || {
@@ -33,12 +33,13 @@ fi
 
 # ── 0. Secrets (10.4, docs/setup.md "Automatic secrets") ─────────────────────
 # With a mounted secrets directory (COREMAIL_SECRETS_DIR, default /secrets) the
-# image generates every secret itself: coremail-init-secrets creates
+# image generates every secret itself: init-secrets.mjs creates
 # coremail.env on the first start and only appends missing keys later (never
 # overwrites). The directory is never created here — secrets in the container
 # layer would be lost with the container.
 SECRETS_DIR="${COREMAIL_SECRETS_DIR:-/secrets}"
-INIT_SECRETS="${COREMAIL_INIT_SECRETS:-/usr/local/bin/coremail-init-secrets}"
+# COREMAIL_INIT_SECRETS: replaces the generator in infra/docker/init-secrets.test.mjs only.
+INIT_SECRETS="${COREMAIL_INIT_SECRETS:-/usr/local/lib/coremail/init-secrets.mjs}"
 if [ -d "${SECRETS_DIR}" ] || [ -L "${SECRETS_DIR}" ]; then
   log "Secrets directory ${SECRETS_DIR} found — creating missing secrets"
   # The database decides "fresh installation" for keys that are still missing.

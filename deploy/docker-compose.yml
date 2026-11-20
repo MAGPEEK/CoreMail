@@ -35,7 +35,7 @@ name: coremail
 #  Files in ./config/rspamd/local.d/ win over the bundled rspamd files.
 #
 #  Update:  docker compose pull && docker compose up -d --remove-orphans
-#  (--remove-orphans removes the coremail-init container of 10.4.1 once)
+#  (updating from 10.4.0: --remove-orphans removes its stopped init container once)
 #  Requires Docker Engine 24+ with Compose v2.20+.
 # ═════════════════════════════════════════════════════════════════════════════
 
