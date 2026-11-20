@@ -5,7 +5,7 @@ import {
   ShieldAlert, Search,
   ShieldHalf, Archive,
   ClipboardList, Activity, Info, Terminal,
-  Fingerprint, ServerCog, HardDriveDownload, Palette,
+  Fingerprint, ServerCog, HardDriveDownload, Palette, Bot,
 } from 'lucide-react';
 import { useT } from '../i18n/useT.js';
 import { usePermissions } from '../hooks/usePermissions.js';
@@ -61,6 +61,7 @@ export function Sidebar() {
         { path: '/certificates',     labelKey: 'nav_certificates',     icon: ShieldCheck },
         { path: '/sso',              labelKey: 'nav_sso',              icon: Fingerprint },
         { path: '/ldap',             labelKey: 'nav_ldap',             icon: ServerCog },
+        { path: '/mcp',              labelKey: 'nav_mcp',              icon: Bot },
       ],
     },
     {

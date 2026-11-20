@@ -226,8 +226,17 @@ test('revokeAllSessions: keeps the excepted session, marks older access tokens r
   const b = await loginTokens();
   await db.appPassword.create({ data: { userId: uid, name: 'phone', hash: 'h' } });
   const keep = core.verifyAccessToken(a.accessToken)!.sessionId;
+  // 10.3: an active and an already revoked MCP token of the user, one of another user
+  const t1 = auth.generateMcpToken();
+  await db.mcpToken.create({ data: { userId: uid, name: 'cli', tokenHash: t1.tokenHash, prefix: t1.prefix, expiresAt: new Date(Date.now() + 1e9) } });
+  await db.mcpToken.create({ data: { userId: uid, name: 'old', tokenHash: 'x', prefix: 'p', expiresAt: new Date(Date.now() + 1e9), revokedAt: new Date(0), revokedReason: 'owner' } });
+  await db.mcpToken.create({ data: { userId: 'someone-else', name: 'other', tokenHash: 'y', prefix: 'p', expiresAt: new Date(Date.now() + 1e9) } });
   const res = await auth.revokeAllSessions(uid, { exceptSessionId: keep, reason: 'test' });
-  assert.deepEqual(res, { sessions: 1, appPasswords: 0 });
+  assert.deepEqual(res, { sessions: 1, appPasswords: 0, mcpTokens: 1 });
+  const tokens = db.mcpToken.rows;
+  assert.equal(tokens.find((t) => t['name'] === 'cli')!['revokedReason'], 'test');
+  assert.equal(tokens.find((t) => t['name'] === 'old')!['revokedReason'], 'owner', 'an older revocation is kept');
+  assert.equal(tokens.find((t) => t['name'] === 'other')!['revokedAt'], null, 'other users keep their tokens');
   assert.equal(db.session.rows[0]!['id'], keep);
   const pb = core.verifyAccessToken(b.accessToken)!;
   assert.equal(auth.isAccessTokenRevoked(uid, (pb.iat ?? 0) - 1, pb.sessionId), true);

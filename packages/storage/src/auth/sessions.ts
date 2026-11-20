@@ -27,6 +27,7 @@ import { webLoginBlocked, type WebSurface } from './web-access.js';
 import { sessionSurfaceOf } from './refresh-cookie.js';
 import type { IncomingHttpHeaders } from 'node:http';
 import { recordLastLogin } from './last-login.js';
+import { revokeMcpTokensOfUser } from './mcp-tokens.js';
 
 const log = createLogger('auth:sessions');
 
@@ -372,13 +373,17 @@ export interface RevokeAllOptions {
   reason: string;
 }
 
-export async function revokeAllSessions(userId: string, opts: RevokeAllOptions): Promise<{ sessions: number; appPasswords: number }> {
+export async function revokeAllSessions(userId: string, opts: RevokeAllOptions): Promise<{ sessions: number; appPasswords: number; mcpTokens: number }> {
   const where = opts.exceptSessionId ? { userId, NOT: { id: opts.exceptSessionId } } : { userId };
   const ids = (await prisma.session.findMany({ where, select: { id: true } })).map((s) => s.id);
   const sessions = (await prisma.session.deleteMany({ where })).count;
   const appPasswords = opts.appPasswords
     ? (await prisma.appPassword.deleteMany({ where: { userId } })).count
     : 0;
+  // 10.3: the user's admin MCP tokens end with every "revoke all" (role change,
+  // deactivation, deletion, password reset / change, sign out everywhere).
+  // Never throws; the api-gateway also rejects tokens older than the mark below.
+  const mcpTokens = await revokeMcpTokensOfUser(userId, opts.reason);
 
   await storeSessionRevocations(ids);
   const now = Date.now();
@@ -401,7 +406,7 @@ export async function revokeAllSessions(userId: string, opts: RevokeAllOptions):
     // v7.1.0: live mail connections authenticated with an app password end too.
     ...(opts.appPasswords ? { appPasswordsRevoked: true } : {}),
   });
-  log.info({ userId, sessions, appPasswords, reason: opts.reason }, 'All sessions revoked');
-  return { sessions, appPasswords };
+  log.info({ userId, sessions, appPasswords, mcpTokens, reason: opts.reason }, 'All sessions revoked');
+  return { sessions, appPasswords, mcpTokens };
 }
 

@@ -427,6 +427,13 @@ export interface LoginLockout {
   fail(email: string, ip?: string | null): Promise<void>;
   /** Resets the ACCOUNT counter (never the per-IP counter). */
   success(email: string): Promise<void>;
+  /**
+   * 10.3: remaining lock time (s) of a client IP alone, 0 when not locked —
+   * for front doors without an account name (admin MCP bearer tokens).
+   */
+  ipLockedFor(ip: string | null | undefined): Promise<number>;
+  /** 10.3: counts one failed attempt for the (non-exempt) client IP only. */
+  failIp(ip: string | null | undefined): Promise<void>;
 }
 
 export function createLoginLockout(deps: LoginLockoutDeps): LoginLockout {
@@ -455,6 +462,14 @@ export function createLoginLockout(deps: LoginLockoutDeps): LoginLockout {
     async success(email) {
       if (!deps.redis) return;
       try { await deps.redis.del(KEY.fail('acct', accountId(email))); } catch { /* non-critical */ }
+    },
+    async ipLockedFor(rawIp) {
+      const ipId = ipKey(rawIp);
+      return ipId ? lockTtl('ip', ipId) : 0;
+    },
+    async failIp(rawIp) {
+      const ipId = ipKey(rawIp);
+      if (ipId) await countFailure('ip', ipId);
     },
   };
 }

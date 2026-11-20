@@ -71,7 +71,7 @@ const appPasswordDeletes: Row[] = [];
 
 const express = (await import('express')).default;
 const core = await import('@coremail/core');
-const { ADMIN_MOUNTS, ADMIN_PREFIX, PUBLIC_ADMIN_ROUTES, mountAdminRoutes } = await import('./index.js');
+const { ADMIN_MOUNTS, ADMIN_PREFIX, PUBLIC_ADMIN_ROUTES, PERSONAL_ADMIN_WRITES, mountAdminRoutes } = await import('./index.js');
 const rbac = await import('../../lib/rbac.js');
 const { userRouter } = await import('../user.js');
 
@@ -176,9 +176,14 @@ test('a USER token gets 403 (and no token 401) on every /api/v1/admin/* route', 
 });
 
 test('VIEW_ONLY_ORG is rejected on every mutating admin route', async () => {
+  // 10.3: own MCP tokens are personal credentials of every admin role (VIEW_ONLY_ORG:
+  // read tokens only — routes/mcp.test.ts); listed explicitly, nothing else is exempt.
+  const personal = new Set(PERSONAL_ADMIN_WRITES.map((r) => r.replace(/:(\w+)\??/g, 'c0000000000000000000000x1')));
+  assert.equal(personal.size, 2);
   const failures: string[] = [];
   for (const r of enumerateRoutes()) {
     if (r.method === 'GET' || r.method === 'HEAD') continue;
+    if (personal.has(`${r.method} ${r.path}`)) continue;
     const res = await call(r.method, r.path, 'VIEW_ONLY_ORG');
     if (res.status !== 403) failures.push(`${r.method} ${r.path} → ${res.status}`);
   }

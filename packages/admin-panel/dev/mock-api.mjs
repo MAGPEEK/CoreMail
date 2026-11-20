@@ -53,7 +53,15 @@ const jwt = () => {
 
 /** MOCK_NO_GRANTS=1 answers the folder overview without any grant (empty state of the folder list). */
 const grants = process.env['MOCK_NO_GRANTS'] !== '1';
-const state = { users: structuredClone(USERS), shared: structuredClone(SHARED), domain: structuredClone(DOMAIN) };
+const state = {
+  users: structuredClone(USERS), shared: structuredClone(SHARED), domain: structuredClone(DOMAIN),
+  mcp: { enabled: false, allowedIps: [] },
+  mcpTokens: [{
+    id: 't0', userId: 'me', name: 'Notebook', prefix: 'cm_mcp_Ab12Cd', mode: 'read', mfaVerified: true,
+    expiresAt: '2027-02-01T00:00:00Z', lastUsedAt: '2026-11-19T09:12:00Z', lastUsedIp: '192.0.2.10',
+    createdAt: '2026-11-01T00:00:00Z', revokedAt: null, revokedReason: null, status: 'active', owner: 'admin@example.test',
+  }],
+};
 
 function route(method, url, body) {
   const path = url.split('?')[0];
@@ -84,6 +92,31 @@ function route(method, url, body) {
   if (/\/mail-flow$/.test(path)) return method === 'PUT' ? { ...mailFlow(), ...body } : mailFlow();
   if (path.startsWith('/admin/protocol-access/')) return protocolView(path.includes('/users/') ? 'user' : 'domain', 'x');
   if (path.startsWith('/admin/webmail-policies/')) return policyView(path.includes('/users/') ? 'user' : 'domain', 'x');
+  // 10.3: MCP interface page
+  if (path === '/admin/mcp/settings') {
+    if (method === 'PUT') Object.assign(state.mcp, body);
+    return {
+      enabled: state.mcp.enabled, endpointUrl: 'https://mail.example.test/mcp', allowedIps: state.mcp.allowedIps, openSessions: 0,
+      canManage: true, canSeeAllTokens: true, canCreateWriteTokens: true,
+      limits: { tokenDefaultDays: 90, tokenMaxDays: 365, tokensPerAdmin: 20, toolCallsPerMinute: 60 },
+    };
+  }
+  if (path === '/admin/mcp/tokens' && method === 'POST') {
+    const id = `t${state.mcpTokens.length + 1}`;
+    const token = `cm_mcp_${'x'.repeat(43)}`;
+    const now = new Date().toISOString();
+    const row = { id, userId: 'me', name: body.name, prefix: token.slice(0, 13), mode: body.mode, mfaVerified: true,
+      expiresAt: new Date(Date.now() + body.expiresInDays * 86_400_000).toISOString(), lastUsedAt: null, lastUsedIp: null,
+      createdAt: now, revokedAt: null, revokedReason: null, status: 'active', owner: 'admin@example.test' };
+    state.mcpTokens.push(row);
+    return { ...row, token };
+  }
+  if (path === '/admin/mcp/tokens') return { tokens: state.mcpTokens };
+  if ((m = path.match(/^\/admin\/mcp\/tokens\/([^/]+)$/)) && method === 'DELETE') {
+    const t = state.mcpTokens.find((x) => x.id === m[1]);
+    if (t) Object.assign(t, { status: 'revoked', revokedAt: new Date().toISOString() });
+    return { ok: true, revoked: true };
+  }
   return {};
 }
 

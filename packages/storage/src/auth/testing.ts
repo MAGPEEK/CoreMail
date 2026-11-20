@@ -200,6 +200,7 @@ export interface FakePrisma {
   trustedImageSender: FakeTable;
   contact: FakeTable;
   adminScope: FakeTable;
+  mcpToken: FakeTable;
   [k: string]: unknown;
 }
 
@@ -298,6 +299,10 @@ export function createFakePrisma(): FakePrisma {
   p.contact = new FakeTable(() => ({ email2: null }));
   // 9.5: admin management scopes (api-gateway admin guards read them for every non-org admin)
   p.adminScope = new FakeTable(() => ({ grantedBy: null, createdAt: new Date() }), ['id'], { domain: () => p.domain });
+  // 10.3: admin MCP tokens (revokeAllSessions revokes them)
+  p.mcpToken = new FakeTable(() => ({
+    mode: 'read', mfaVerified: false, lastUsedAt: null, lastUsedIp: null, createdAt: new Date(), revokedAt: null, revokedReason: null,
+  }), ['id', 'tokenHash'], { user: () => p.user });
   return p;
 }
 
