@@ -39,7 +39,7 @@ import {
   buildProtocolOverview, isTrustedHttpsCert, redactOverrideNames, submissionPorts, type HttpsState, type ProtocolOverview,
 } from '../../lib/protocol-overview.js';
 import { servedProxyCert } from '../../lib/cert-lifecycle.js';
-import { httpsRedirectState } from '../../tls-proxy.js';
+import { httpsServerState } from '../../tls-proxy.js';
 
 const log = createLogger('admin:protocol-access');
 export const adminProtocolAccessRouter: RouterType = Router();
@@ -140,13 +140,14 @@ function withReadableKey<T extends { keyPem: string | null }>(row: T): T {
 }
 
 /**
- * The integrated HTTPS server: listening state from the proxy; certificate and
- * trust from the certificate the proxy serves for the public host name (SNI:
- * exact → wildcard → default, lib/cert-lifecycle.ts servedProxyCert) — not
- * only the one marked isActiveHttps.
+ * The integrated HTTPS server: `active` = the proxy listens (httpsServerState —
+ * also without a certificate marked isActiveHttps; the redirect keeps its own
+ * opt-in state); certificate and trust from the certificate the proxy serves
+ * for the public host name (SNI: exact → wildcard → default,
+ * lib/cert-lifecycle.ts servedProxyCert) — not only the one marked isActiveHttps.
  */
 async function loadHttpsState(): Promise<HttpsState> {
-  const state = httpsRedirectState();
+  const state = httpsServerState();
   const [settings, rows] = await Promise.all([
     prisma.serverSettings.findUnique({ where: { id: 'singleton' }, select: { publicHostname: true } }),
     prisma.certificate.findMany({
@@ -160,7 +161,7 @@ async function loadHttpsState(): Promise<HttpsState> {
   const hostname = (settings?.publicHostname ?? '').trim().toLowerCase() || 'localhost';
   const cert = servedProxyCert(rows.map(withReadableKey), hostname);
   return {
-    active: state.active,
+    active: state.listening,
     port: state.port,
     cert: cert ? { id: cert.id, name: cert.name, trusted: isTrustedHttpsCert(cert, hostname) } : null,
   };

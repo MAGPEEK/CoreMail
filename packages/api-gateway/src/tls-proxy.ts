@@ -175,7 +175,7 @@ function sniCallback(
   else cb(new Error('No matching certificate'));
 }
 
-/** true while the HTTPS server listens with a certificate marked isActiveHttps. */
+/** true while the HTTPS server listens with a certificate marked isActiveHttps (redirect only; see httpsServerState). */
 let httpsActive = false;
 
 /** Does one of the loaded certificates cover `host` (exact or one-level wildcard)? */
@@ -183,9 +183,28 @@ function coversHost(host: string): boolean {
   return matchSni(sniPlan, host) !== null;
 }
 
-/** State for the HTTP → HTTPS redirect (lib/https-redirect.ts). */
+/**
+ * State for the HTTP → HTTPS redirect (lib/https-redirect.ts): `active` only
+ * while a certificate is explicitly marked isActiveHttps — the redirect stays
+ * opt-in, a listening server alone does not start redirecting.
+ */
 export function httpsRedirectState(): { active: boolean; port: number; covers: (host: string) => boolean } {
   return { active: httpsActive && activeServer !== null, port: PORT, covers: coversHost };
+}
+
+/** Whether the integrated HTTPS server listens, and on which port. */
+export interface HttpsServerState { listening: boolean; port: number }
+
+/**
+ * Whether the integrated HTTPS server actually listens (any loaded certificate,
+ * with or without isActiveHttps — the proxy then serves by SNI / newest ACTIVE).
+ * Used for the BCP state (protocol overview, served-certificate probe), not for
+ * the redirect. Test seam: globalThis.__httpsServerState.
+ */
+export function httpsServerState(): HttpsServerState {
+  const seam = (globalThis as { __httpsServerState?: HttpsServerState }).__httpsServerState;
+  if (seam) return seam;
+  return { listening: activeServer !== null, port: PORT };
 }
 
 // ── Server lifecycle ──────────────────────────────────────────────────────────

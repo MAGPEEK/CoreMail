@@ -240,7 +240,7 @@ export const DEFAULT_PROBE_TARGETS: ProbeTarget[] = [
 
 /**
  * The integrated HTTPS server as a probe target, or null while it does not
- * listen (no certificate marked for HTTPS, or TLS terminated outside CoreMail).
+ * listen (no usable certificate, or TLS terminated outside CoreMail).
  */
 export function httpsProbeTarget(state: { active: boolean; port: number }): ProbeTarget | null {
   if (!state.active || !Number.isInteger(state.port) || state.port <= 0 || state.port >= 65536) return null;
