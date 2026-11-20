@@ -39,8 +39,10 @@ export function createSmtpServer(config: SmtpSessionConfig, implicitTls = false,
       log.debug({ ip, err }, 'Pre-session socket error');
     });
 
-    // 0a. 10.5: permanent block list (plaintext listeners; 465 is refused on the raw socket below)
-    if (guard.isBlocked(ip)) {
+    // 0a. 10.5: permanent block list (plaintext listeners; 465 is refused on the raw socket below).
+    //     10.5 review: inbound MX (port 25, no AUTH required) applies manual entries only —
+    //     an automatic repeat-offender entry must never bounce mail with a permanent 554.
+    if (guard.isBlocked(ip, config.requireAuth ? 'client' : 'mx')) {
       if (socket.writable) socket.write(SMTP_BLOCKED_REPLY);
       socket.end();
       setTimeout(() => socket.destroy(), 2000).unref();
@@ -128,7 +130,7 @@ export function createSmtpServer(config: SmtpSessionConfig, implicitTls = false,
     server = tls.createServer(tlsServerOptions(config.tls, config.allowLegacyTls === true), onConnection);
     // 10.5: a blocked IP is dropped on the raw TCP socket — before the TLS handshake.
     server.on('connection', (raw: net.Socket) => {
-      if (!guard.isBlocked(raw.remoteAddress)) return;
+      if (!guard.isBlocked(raw.remoteAddress, config.requireAuth ? 'client' : 'mx')) return;
       raw.destroy();
       guard.refused(raw.remoteAddress, 'smtp', 'blocked', { port: raw.localPort ?? 0 });
     });

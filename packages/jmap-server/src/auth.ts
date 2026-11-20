@@ -19,7 +19,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import { verifyAccessToken, createLogger, CredentialCache } from '@coremail/core';
 import {
-  prisma, verifyMailCredentials, clientIpFromRequest, isProtocolAllowed,
+  prisma, verifyMailCredentials, clientIpInfoFromRequest, isProtocolAllowed,
 } from '@coremail/storage';
 import { isAccessTokenRevokedShared, mfaEnrolmentRefusal } from '@coremail/storage/auth';
 import type { JmapUser } from './types.js';
@@ -108,12 +108,13 @@ export async function authenticateBearer(token: string): Promise<JmapUser | null
  * check (MFA → app passwords only, shared lockout). Failures and lockouts are
  * not cached; `error` (database down) is reported as AuthUnavailableError.
  */
-export async function authenticateBasic(email: string, password: string, ip?: string): Promise<JmapUser | null> {
+export async function authenticateBasic(email: string, password: string, ip?: string, ipTrusted = true): Promise<JmapUser | null> {
   const startedAt = Date.now();
   const hit = basicCache.get(email, password);
   if (hit) return { ...hit, ...(hit.auth ? { auth: { ...hit.auth, startedAt } } : {}) };
 
-  const result = await verifyMailCredentials(email, password, { ip, protocol: 'jmap' });
+  // 10.5 review: an unverified forwarded IP is counted, never escalated or learned
+  const result = await verifyMailCredentials(email, password, { ip, ipTrusted, protocol: 'jmap' });
   if (result.status === 'error') throw new AuthUnavailableError('temporary');
   if (result.status === 'locked') throw new AuthUnavailableError('locked', result.retryAfterSec);
   if (result.status === 'protocol_disabled') throw new JmapDisabledError(result.userId);
@@ -135,18 +136,18 @@ export async function authenticateBasic(email: string, password: string, ip?: st
  * Throws AuthUnavailableError (lockout / temporary failure) and, 9.4,
  * JmapDisabledError when the account may not use JMAP.
  */
-export async function authenticateCredentials(header: string, tokenQuery: string | undefined, ip?: string): Promise<JmapUser | null> {
-  const user = await resolveCredentials(header, tokenQuery, ip);
+export async function authenticateCredentials(header: string, tokenQuery: string | undefined, ip?: string, ipTrusted = true): Promise<JmapUser | null> {
+  const user = await resolveCredentials(header, tokenQuery, ip, ipTrusted);
   return user ? assertJmapAllowed(user) : null;
 }
 
-async function resolveCredentials(header: string, tokenQuery: string | undefined, ip?: string): Promise<JmapUser | null> {
+async function resolveCredentials(header: string, tokenQuery: string | undefined, ip?: string, ipTrusted = true): Promise<JmapUser | null> {
   if (header.startsWith('Bearer ')) return authenticateBearer(header.slice(7).trim());
   if (header.startsWith('Basic ')) {
     const decoded = Buffer.from(header.slice(6), 'base64').toString('utf8');
     const idx = decoded.indexOf(':');
     if (idx === -1) return null;
-    return authenticateBasic(decoded.slice(0, idx), decoded.slice(idx + 1), ip);
+    return authenticateBasic(decoded.slice(0, idx), decoded.slice(idx + 1), ip, ipTrusted);
   }
   if (tokenQuery) return authenticateBearer(tokenQuery);
   return null;
@@ -155,10 +156,12 @@ async function resolveCredentials(header: string, tokenQuery: string | undefined
 /** Reads credentials from header or query and returns the user (or null). */
 export async function authenticateRequest(req: Request): Promise<JmapUser | null> {
   const q = req.query['access_token'] ?? req.query['token'];
+  // 10.5 review: the gateway marks a forwarded IP it could verify (IP_VERIFIED_HEADER)
+  const client = clientIpInfoFromRequest(req.socket?.remoteAddress, req.headers);
   return authenticateCredentials(
     req.get('Authorization') ?? '',
     typeof q === 'string' && q ? q : undefined,
-    clientIpFromRequest(req.socket?.remoteAddress, req.headers['x-forwarded-for']),
+    client.ip, client.trusted,
   );
 }
 

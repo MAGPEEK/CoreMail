@@ -142,7 +142,22 @@ test('http hardening config: defaults, env overrides, invalid values, timeout or
     headersTimeoutMs: 15000, requestTimeoutMs: 0, keepAliveTimeoutMs: 4000, maxRequestsPerSocket: 100,
     connectionsCheckingIntervalMs: 1000, maxConnections: 8000, maxConnectionsPerIp: 0, exemptCidrs: '10.0.0.0/8',
     tlsHandshakeTimeoutMs: 5000,
+    // 10.5 review defaults
+    maxConnectionsPerV6_56: 600, maxConnectionsPerV6_48: 1200, reservePercent: 20, heavyThreshold: 16, writeStallTimeoutMs: 60000,
   });
+  const review = hh.loadHttpHardeningConfig({
+    HTTP_MAX_CONNS_PER_V6_56: '100', HTTP_MAX_CONNS_PER_V6_48: '0', HTTP_CONN_RESERVE_PERCENT: '95',
+    HTTP_CONN_HEAVY_THRESHOLD: '4', HTTP_WRITE_STALL_TIMEOUT_MS: '200',
+  });
+  assert.equal(review.config.maxConnectionsPerV6_56, 100);
+  assert.equal(review.config.maxConnectionsPerV6_48, 0);
+  assert.equal(review.config.reservePercent, 90, 'capped');
+  assert.equal(review.config.heavyThreshold, 4);
+  assert.equal(review.config.writeStallTimeoutMs, 1000, 'at least 1 s');
+  assert.equal(review.warnings.length, 2);
+  assert.equal(hh.softTotalOf({ maxConnections: 4000, reservePercent: 20 }), 3200);
+  assert.equal(hh.softTotalOf({ maxConnections: 0, reservePercent: 20 }), 0);
+  assert.equal(hh.softTotalOf({ maxConnections: 4000, reservePercent: 0 }), 0);
   assert.deepEqual(env.warnings, []);
 
   const bad = hh.loadHttpHardeningConfig({ HTTP_MAX_CONNS: '-1', HTTP_HEADERS_TIMEOUT_MS: 'abc', HTTPS_HANDSHAKE_TIMEOUT_MS: '10' });
@@ -210,6 +225,132 @@ test('connection guard: per-IP cap, /64 sharing, exemptions, trusted proxy, tota
   // 0 disables a cap
   const off = new hh.HttpConnectionGuard({ maxPerIp: 0, maxTotal: 0, isExempt: () => false });
   for (let i = 0; i < 50; i++) assert.ok(off.acquire('203.0.113.7').ok);
+});
+
+test('10.5 review: IPv6 /56 and /48 aggregate caps — many /64s of one subscriber share a budget', () => {
+  assert.equal(hh.ipv6PrefixKey('2001:db8:1:2345::1', 56), '2001:db8:1:2300::/56');
+  assert.equal(hh.ipv6PrefixKey('2001:db8:1:2345::1', 48), '2001:db8:1::/48');
+  assert.equal(hh.ipv6PrefixKey('203.0.113.7', 48), null);
+  const g = new hh.HttpConnectionGuard({ maxPerIp: 2, maxTotal: 0, maxPerV6_56: 3, maxPerV6_48: 5, isExempt: () => false });
+  // 3 connections from 3 different /64s of one /56
+  for (const n of ['2300', '2301', '2302']) assert.ok(g.acquire(`2001:db8:1:${n}::1`).ok, n);
+  assert.deepEqual(g.acquire('2001:db8:1:23ff::1'), { ok: false, reason: 'per_prefix', limit: 3, key: '2001:db8:1:2300::/56' });
+  // another /56 of the same /48: 2 more, then the /48 cap
+  assert.ok(g.acquire('2001:db8:1:2400::1').ok && g.acquire('2001:db8:1:2401::1').ok);
+  assert.deepEqual(g.acquire('2001:db8:1:2500::1'), { ok: false, reason: 'per_prefix', limit: 5, key: '2001:db8:1::/48' });
+  // another /48 is unaffected; IPv4 has no prefix cap
+  assert.ok(g.acquire('2001:db8:2::1').ok);
+  for (let i = 0; i < 2; i++) assert.ok(g.acquire('203.0.113.7').ok);
+  // a trusted proxy peer and exempt IPs are not subject to the prefix caps
+  assert.ok(g.acquire('2001:db8:1:2600::1', false).ok);
+  const x = new hh.HttpConnectionGuard({ maxPerIp: 0, maxTotal: 0, maxPerV6_48: 1, isExempt: (ip) => ip.startsWith('2001:db8:9:') });
+  assert.ok(x.acquire('2001:db8:9::1').ok && x.acquire('2001:db8:9::2').ok);
+});
+
+test('10.5 review: near the global cap the heaviest sources are refused first, light clients still get in', () => {
+  // total 10, reserve from 8 on; heavy = 3 connections per IPv4 address / IPv6 /48
+  const g = new hh.HttpConnectionGuard({ maxPerIp: 100, maxTotal: 10, softTotal: 8, heavyThreshold: 3, isExempt: (ip) => ip === '198.51.100.99' });
+  const flood: Array<() => void> = [];
+  for (let i = 0; i < 5; i++) { const r = g.acquire('203.0.113.66'); assert.ok(r.ok); flood.push(r.release); }
+  for (let i = 0; i < 3; i++) { const r = g.acquire(`2001:db8:66:${i}::1`); assert.ok(r.ok); flood.push(r.release); }
+  assert.equal(g.count(), 8);
+  // the attacker (5 open) and the IPv6 /48 (3 open over three /64s) are heavy: refused in the reserve
+  assert.deepEqual(g.acquire('203.0.113.66'), { ok: false, reason: 'reserve', limit: 8, key: '203.0.113.66' });
+  assert.deepEqual(g.acquire('2001:db8:66:9::1'), { ok: false, reason: 'reserve', limit: 8, key: '2001:db8:66::/48' });
+  // a light client (nothing open) still gets one of the reserved slots; so does an exempt IP
+  assert.ok(g.acquire('192.0.2.10').ok);
+  assert.ok(g.acquire('198.51.100.99').ok);
+  // the hard cap applies to everybody
+  assert.deepEqual(g.acquire('192.0.2.11'), { ok: false, reason: 'total', limit: 10 });
+  // below the reserve heavy sources are admitted again
+  for (const r of flood.slice(0, 3)) r();
+  assert.ok(g.acquire('203.0.113.66').ok);
+  // createHttpConnectionGuard wires the reserve from the config
+  const { guard } = hh.createHttpConnectionGuard({ ...hh.HTTP_HARDENING_DEFAULTS, maxConnections: 10, reservePercent: 20, heavyThreshold: 2 });
+  for (let i = 0; i < 8; i++) assert.ok(guard.acquire('203.0.113.1').ok);
+  assert.equal(guard.acquire('203.0.113.1').ok, false, 'heavy source refused in the reserve');
+  assert.ok(guard.acquire('192.0.2.1').ok, 'a light client gets in');
+});
+
+test('10.5 review: a real client that stops reading a large response is cut; a silent long-poll is not', async (t) => {
+  const watcher = new hh.WriteStallWatcher(400);
+  const timer = setInterval(() => watcher.sweep(), 50);
+  const guard = new hh.HttpConnectionGuard({ maxPerIp: 0, maxTotal: 0, isExempt: () => false, bypassAll: () => false });
+  const config = { ...hh.HTTP_HARDENING_DEFAULTS, connectionsCheckingIntervalMs: 100 };
+  // some platforms (Windows loopback) take a whole 64 MB response into kernel buffers —
+  // then nothing is ever queued in the process and there is no stall to detect
+  let maxQueued = 0;
+  const server = http.createServer(hh.httpServerOptions(config), (req, res) => {
+    if (req.url === '/big') {
+      res.end(Buffer.alloc(64 * 1024 * 1024, 0x61));
+      const probe = setInterval(() => { maxQueued = Math.max(maxQueued, req.socket.destroyed ? 0 : req.socket.writableLength); }, 100);
+      setTimeout(() => clearInterval(probe), 1500).unref();
+      return;
+    }
+    setTimeout(() => res.end('pong'), 1500); // long-poll: nothing queued while waiting
+  });
+  hh.hardenHttpServer(server, { kind: 'http', guard, config, stallWatcher: watcher });
+  server.listen(0, '127.0.0.1');
+  await new Promise((r) => server.once('listening', r));
+  servers.push(server);
+  const port = (server.address() as AddressInfo).port;
+  try {
+    // the reader stops after the first chunk for 2 s (5× the stall timeout), then reads
+    // what is left: the server must have cut the response short
+    const total = 64 * 1024 * 1024;
+    const received = await new Promise<number>((resolve) => {
+      let n = 0;
+      const c = net.connect(port, '127.0.0.1', () => c.write('GET /big HTTP/1.1\r\nHost: x\r\n\r\n'));
+      c.on('data', (d: Buffer) => { n += d.length; });
+      c.once('data', () => { c.pause(); setTimeout(() => c.resume(), 2000); });
+      c.on('error', () => undefined);
+      c.on('close', () => resolve(n));
+      setTimeout(() => { c.destroy(); }, 20_000).unref(); // a hang fails the assertion below, not the run
+    });
+    if (received >= total && maxQueued === 0) {
+      t.diagnostic('the OS buffered the whole response — no write stall on this platform (Linux keeps it queued)');
+    } else {
+      assert.ok(received < total, `the stalled response was cut (${received} of ${total} bytes)`);
+    }
+    // the long-poll outlives the stall timeout
+    const r = await fetch(`http://127.0.0.1:${port}/poll`);
+    assert.equal(await r.text(), 'pong');
+  } finally {
+    clearInterval(timer);
+  }
+});
+
+test('10.5 review: write-stall watcher — queued bytes that do not move close the socket; idle and reading sockets stay', () => {
+  let now = 0;
+  const closed: string[] = [];
+  const w = new hh.WriteStallWatcher(1000, () => now, () => undefined);
+  type Fake = { name: string; writableLength: number; bytesWritten: number; destroyed: boolean; destroy(): void; once(e: 'close', fn: () => void): Fake };
+  const fake = (name: string): Fake => {
+    const s: Fake = {
+      name, writableLength: 0, bytesWritten: 0, destroyed: false,
+      destroy() { s.destroyed = true; closed.push(name); },
+      once() { return s; },
+    };
+    return s;
+  };
+  const idle = fake('idle');           // SSE between heartbeats / EAS Ping: nothing queued
+  const stuck = fake('stuck');         // a client that stopped reading
+  const slow = fake('slow');           // a slow client that keeps reading
+  for (const s of [idle, stuck, slow]) w.watch(s);
+  stuck.writableLength = 64_000; stuck.bytesWritten = 1_064_000;
+  slow.writableLength = 64_000; slow.bytesWritten = 1_064_000;
+  for (let t = 0; t <= 3000; t += 250) {
+    now = t;
+    // the slow client drains 1 KB per sample while the server writes 1 KB more
+    slow.bytesWritten += 1024; // delivered = bytesWritten - writableLength grows
+    w.sweep();
+  }
+  assert.deepEqual(closed, ['stuck']);
+  assert.equal(w.size, 2);
+  // a watcher with timeout 0 is off
+  const off = new hh.WriteStallWatcher(0);
+  off.watch(fake('x'));
+  assert.equal(off.size, 0);
 });
 
 test('createHttpConnectionGuard: HTTP_CONN_EXEMPT_CIDRS, invalid entries reported', () => {

@@ -15,12 +15,37 @@
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import {
-  prisma, loadMailFlowPolicy, saveMailFlowPolicy, parseSenderList, isMailAddress,
+  prisma, loadMailFlowPolicy, saveMailFlowPolicy, parseSenderList, isMailAddress, loadSendRateSettings,
   MAX_FLOW_SIZE_MB, MAX_FLOW_RECIPIENTS, MAX_SENDER_LIST_ENTRIES, MAX_FLOW_MESSAGES_PER_HOUR, MAX_FLOW_RECIPIENTS_PER_HOUR,
-  type MailFlowOwner, type MailFlowSettings,
+  type MailFlowOwner, type MailFlowSettings, type SendRateSettings,
 } from '@coremail/storage';
 import { audit, auditContext } from './audit.js';
 import { canManageAccount } from './rbac.js';
+import { isScoped } from './admin-scope.js';
+import { scopeOf } from '../middleware/admin-scope.js';
+
+/**
+ * 10.5 review: a domain-scoped admin may not raise a mailbox's hourly send rate
+ * above the global value (it would undo the organisation's spam brake for its
+ * own domain); organisation-wide admins may. Only values the patch SETS are
+ * checked (null = back to the global value is always allowed). Pure: the
+ * error text, or null.
+ */
+export function sendRateCapError(
+  patch: Pick<MailFlowPatch, 'maxMessagesPerHour' | 'maxRecipientsPerHour'>,
+  global: Pick<SendRateSettings, 'messagesPerHour' | 'recipientsPerHour'>,
+): string | null {
+  const over: string[] = [];
+  if (typeof patch.maxMessagesPerHour === 'number' && patch.maxMessagesPerHour > global.messagesPerHour) {
+    over.push(`höchstens ${global.messagesPerHour} Nachrichten pro Stunde`);
+  }
+  if (typeof patch.maxRecipientsPerHour === 'number' && patch.maxRecipientsPerHour > global.recipientsPerHour) {
+    over.push(`höchstens ${global.recipientsPerHour} Empfänger pro Stunde`);
+  }
+  return over.length
+    ? `Domänen-Administratoren dürfen das Sendelimit eines Postfachs nicht über den globalen Wert anheben (${over.join(', ')}). Das darf nur die Organisationsverwaltung.`
+    : null;
+}
 
 export type MailFlowKind = 'user' | 'shared';
 
@@ -130,6 +155,11 @@ export function putMailFlowHandler(kind: MailFlowKind) {
     }
     const parsed = parseMailFlowPatch(req.body, kind, target.addresses);
     if (!parsed.ok) { res.status(400).json({ error: parsed.error }); return; }
+    // 10.5 review: a domain-scoped admin caps the per-mailbox send rate at the global value
+    if (kind === 'user' && isScoped(scopeOf(req))) {
+      const capError = sendRateCapError(parsed.patch, await loadSendRateSettings());
+      if (capError) { res.status(400).json({ error: capError, code: 'SEND_RATE_ABOVE_GLOBAL' }); return; }
+    }
     const before = await loadMailFlowPolicy(target.owner);
     const after = await saveMailFlowPolicy(target.owner, { ...before, ...parsed.patch });
     const diff = mailFlowDiff(before, after);

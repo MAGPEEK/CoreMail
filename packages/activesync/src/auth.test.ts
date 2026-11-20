@@ -106,10 +106,10 @@ test('10.5: easDeviceIdOf reads the DeviceId of the plain and the base64 request
   assert.equal(easDeviceIdOf({ originalUrl: '/Microsoft-Server-ActiveSync?Cmd=Sync', url: '', get } as never), undefined);
 });
 
-test('10.5: a known device keeps syncing from a new network while strangers have locked the account', async () => {
-  const runWith = async (pw: string, ip: string, deviceId: string) => {
+test('10.5 review: a known device keeps syncing from its known network while strangers have locked the account — the DeviceId alone is not enough', async () => {
+  const runWith = async (pw: string, ip: string, deviceId: string, headers: Record<string, string> = {}) => {
     const req = {
-      headers: { authorization: `Basic ${Buffer.from(`mfa@example.com:${pw}`).toString('base64')}` },
+      headers: { authorization: `Basic ${Buffer.from(`mfa@example.com:${pw}`).toString('base64')}`, ...headers },
       socket: { remoteAddress: ip },
       originalUrl: `/Microsoft-Server-ActiveSync?Cmd=Ping&User=mfa&DeviceId=${deviceId}&DeviceType=iPhone`,
       url: '',
@@ -129,6 +129,12 @@ test('10.5: a known device keeps syncing from a new network while strangers have
   // strangers lock the account
   for (let i = 0; i < 3; i++) await runWith('guess', `198.51.100.${40 + i}`, 'X');
   assert.equal((await runWith('APP-PW', '198.18.7.7', 'OTHER-DEVICE')).status, 429);
-  // the known phone on a mobile network still works
-  assert.equal((await runWith('APP-PW', '198.18.7.8', 'PHONE-MFA')).next, true);
+  // the DeviceId is client-chosen: the known id from an unknown network is refused
+  assert.equal((await runWith('APP-PW', '198.18.7.8', 'PHONE-MFA')).status, 429);
+  // the known phone on its known network still works
+  assert.equal((await runWith('APP-PW', '192.0.2.77', 'PHONE-MFA')).next, true);
+  // a forwarded address the gateway did not verify never counts as the known network …
+  assert.equal((await runWith('APP-PW', '127.0.0.1', 'PHONE-MFA', { 'x-forwarded-for': '192.0.2.78' })).status, 429);
+  // … a verified one does
+  assert.equal((await runWith('APP-PW', '127.0.0.1', 'PHONE-MFA', { 'x-forwarded-for': '192.0.2.78', 'x-coremail-ip-verified': '1' })).next, true);
 });

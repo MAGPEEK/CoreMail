@@ -1,7 +1,7 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { patchSchema } from '../lib/zod-compat.js';
-import { prisma, getProductName, announceCalendarChange, announceUserEvent } from '@coremail/storage';
+import { prisma, getProductName, announceCalendarChange, announceUserEvent, consumeSendRate } from '@coremail/storage';
 import { requireAuth } from '../middleware/auth.js';
 import {
   canAccessCalendar,
@@ -153,10 +153,41 @@ function getOutboundQueue(): Queue {
   return _outboundQueue;
 }
 
+/** 10.5 review: the addresses an invitation / update / cancellation is mailed to (as sendInvitations). */
+export function invitationRecipientCount(attendees: unknown): number {
+  return attendeeEntries(attendees).filter((a) => typeof a['email'] === 'string' && a['email'].includes('@')).length;
+}
+
+/**
+ * 10.5 review: invitations, updates and cancellations are mail the acting
+ * user's account sends — every attendee counts against the user's hourly send
+ * rate (storage submission-rate.ts, shared with /mail/send, SMTP, ActiveSync,
+ * JMAP, MAPI; protocol `calendar`). Called BEFORE the change is stored: over
+ * the limit the request is answered 429 (Retry-After, code SEND_RATE_LIMITED,
+ * like /mail/send) and nothing changes. true = go ahead (also without attendees).
+ */
+async function invitationRateAllowed(req: Request, res: Response, attendees: unknown): Promise<boolean> {
+  const recipients = invitationRecipientCount(attendees);
+  if (recipients === 0) return true;
+  const rate = await consumeSendRate({
+    userId: req.apiUser!.userId, recipients, protocol: 'calendar', ...(req.ip ? { ipAddress: req.ip } : {}),
+  });
+  if (rate.allowed) return true;
+  res.setHeader('Retry-After', String(rate.retryAfterSec));
+  res.status(429).json({
+    error: rate.reason === 'blocked'
+      ? 'Der Versand ist für dieses Konto vorübergehend gesperrt'
+      : `Sendelimit erreicht: höchstens ${rate.limit} ${rate.reason === 'messages' ? 'Nachrichten' : 'Empfänger'} pro Stunde`,
+    code: 'SEND_RATE_LIMITED', reason: rate.reason, limit: rate.limit, retryAfter: rate.retryAfterSec,
+  });
+  return false;
+}
+
 /**
  * v3.18.25 A5: Sends iMIP invitations to all attendees (REQUEST or CANCEL).
  * Fire-and-forget — errors are logged but do not block the main path
- * (the event is already in the DB).
+ * (the event is already in the DB). 10.5 review: the caller has counted them
+ * against the send rate (invitationRateAllowed) before storing the change.
  */
 /** 9.4: time zone of a local organizer (Settings → Region), '' when unknown. */
 async function organizerTimeZone(email: string): Promise<string> {
@@ -1005,6 +1036,9 @@ calendarRouter.post('/events', async (req: Request, res: Response) => {
   }));
   const showAs: ShowAs = parsed.data.showAs ?? 'BUSY';
 
+  // 10.5 review: the invitations count against the send rate — refused before anything is stored
+  if (!(await invitationRateAllowed(req, res, attendeesJson))) return;
+
   const icalData = buildVCalendar({
     uid, summary, description, location, allDay, classification, showAs,
     start: range.start, end: range.end,
@@ -1078,7 +1112,7 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
   // invitation update in the organizer's name
   const organizerCopy = await isOrganizerCopy(event.organizer, { userId, email: req.apiUser!.email, calendarOwnerId: access.ownerId });
   if (occurrence) {
-    await updateOccurrence(res, event, occurrence, parsed.data, organizerCopy);
+    await updateOccurrence(req, res, event, occurrence, parsed.data, organizerCopy);
     return;
   }
 
@@ -1134,6 +1168,8 @@ calendarRouter.put('/events/:id', async (req: Request, res: Response) => {
     (attendees !== undefined && attendeeKey(newAttendees) !== attendeeKey(storedAttendees));
   const newSequence = event.sequence + (willSendUpdate ? 1 : 0);
   const attendeesChanged = attendees !== undefined;
+  // 10.5 review: the update mails count against the send rate — refused before anything is stored
+  if (willSendUpdate && organizerCopy && event.organizer && !(await invitationRateAllowed(req, res, newAttendees))) return;
 
   // 9.4: reminder (owner only — alarms are the calendar owner's) and show-as
   const currentAlarm = eventReminder(event.icalData);
@@ -1233,6 +1269,8 @@ calendarRouter.delete('/events/:id', async (req: Request, res: Response) => {
     const view = isSeriesOccurrence(event.icalData, occurrence) ? occurrenceView(event, occurrence) : null;
     const icalData = view ? excludeOccurrence(event.icalData, occurrence) : null;
     if (!view || !icalData) { res.status(404).json({ error: 'Occurrence not found' }); return; }
+    // 10.5 review: the cancellations count against the send rate — refused before anything changes
+    if (organizerCopy && event.organizer && !(await invitationRateAllowed(req, res, event.attendees))) return;
     const updated = await prisma.calendarEvent.update({ where: { id }, data: { icalData, sequence: event.sequence + 1 } });
     announceCalendarChange([event.calendarId], { action: 'update', ids: [id] });
     if (organizerCopy) void notifyAttendees(updated, 'CANCEL', { ...occurrenceFields(view, event), recurrenceId: occurrence });
@@ -1240,6 +1278,8 @@ calendarRouter.delete('/events/:id', async (req: Request, res: Response) => {
     return;
   }
 
+  // 10.5 review: the cancellations count against the send rate — refused before anything changes
+  if (organizerCopy && event.organizer && !(await invitationRateAllowed(req, res, event.attendees))) return;
   await prisma.calendarEvent.delete({ where: { id } });
   announceCalendarChange([event.calendarId], { action: 'delete', ids: [id] });
   // v3.18.25 A5: CANCEL mails to all attendees (with sequence+1)
@@ -1298,6 +1338,7 @@ function occurrenceFields(view: OccurrenceView, master: StoredEvent) {
  * only itself and notifies nobody.
  */
 async function updateOccurrence(
+  req: Request,
   res: Response,
   event: StoredEvent,
   occurrence: Date,
@@ -1324,6 +1365,8 @@ async function updateOccurrence(
     sequence,
   });
   if (!icalData) { res.status(404).json({ error: 'Occurrence not found' }); return; }
+  // 10.5 review: the update mails count against the send rate — refused before anything is stored
+  if (organizerCopy && event.organizer && !(await invitationRateAllowed(req, res, event.attendees))) return;
   const updated = await prisma.calendarEvent.update({ where: { id: event.id }, data: { icalData, sequence } });
   const changed = occurrenceView(updated, occurrence) ?? view;
   announceCalendarChange([event.calendarId], { action: 'update', ids: [event.id] });

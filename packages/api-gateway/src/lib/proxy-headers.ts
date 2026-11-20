@@ -17,7 +17,8 @@
  *    when that scheme is known (not behind an untrusted reverse proxy)
  */
 import type { IncomingMessage, IncomingHttpHeaders, ClientRequest } from 'node:http';
-import { PROTO_VERIFIED_HEADER } from '@coremail/core';
+import { IP_VERIFIED_HEADER, PROTO_VERIFIED_HEADER } from '@coremail/core';
+import { upgradeIpVerified, type TrustProxyKind } from './client-ip-trust.js';
 
 export type TrustFn = (addr: string, i: number) => boolean;
 
@@ -107,10 +108,17 @@ export function allowedClientHeader(name: string, value: string | string[] | und
   return v && allowed.has(v) ? v : undefined;
 }
 
-/** Rewrites the forwarding headers of a proxied request (see module comment). */
-export function applyUpstreamHeaders(proxyReq: ClientRequest, req: IncomingMessage, trust: TrustFn): void {
+/**
+ * Rewrites the forwarding headers of a proxied request (see module comment).
+ * 10.5 review: `trustKind` = how TRUST_PROXY names proxies (client-ip-trust.ts);
+ * the upstream gets IP_VERIFIED_HEADER when the forwarded client IP is the
+ * socket peer or came from an explicit TRUST_PROXY allow-list — internal
+ * services escalate (auto-block, known networks) only on such addresses.
+ */
+export function applyUpstreamHeaders(proxyReq: ClientRequest, req: IncomingMessage, trust: TrustFn, trustKind: TrustProxyKind = 'none'): void {
   // compute from the ORIGINAL request headers before anything is removed
   const ip = upstreamClientIp(req, trust);
+  const ipVerified = upgradeIpVerified(req, ip, trustKind);
   const proto = upstreamProto(req, trust);
   const protoVerified = upstreamProtoVerified(req, trust);
   const host = upstreamHost(req, trust);
@@ -122,6 +130,7 @@ export function applyUpstreamHeaders(proxyReq: ClientRequest, req: IncomingMessa
     if (v) proxyReq.setHeader(name, v);
   }
   proxyReq.setHeader('X-Forwarded-For', ip);
+  if (ipVerified) proxyReq.setHeader(IP_VERIFIED_HEADER, '1');
   proxyReq.setHeader('X-Forwarded-Proto', proto);
   if (protoVerified) proxyReq.setHeader(PROTO_VERIFIED_HEADER, '1');
   if (host) proxyReq.setHeader('X-Forwarded-Host', host);

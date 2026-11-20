@@ -358,7 +358,14 @@ async function deliverInbound(rawBuffer: Buffer, opts: StoreOptions): Promise<St
       source: outgoingSource, user: { id: user.id, email: user.email },
       originalFrom: opts.fromAddr, dedupKey: opts.deliveryKey, recipient: opts.rcptTo,
     });
-    for (const request of requests) await enqueueRuleForward(request);
+    let rateLimited = 0;
+    for (const request of requests) if ((await enqueueRuleForward(request)) === 'rate-limited') rateLimited++;
+    // 10.5 review: a forward skipped by the user's send rate never loses the mail —
+    // a "forward and delete" rule keeps the local copy then.
+    if (rateLimited > 0) {
+      trace.add('inbox-rules', 'warn', { forwardsSkippedSendRate: rateLimited, ...(ruleDiscard ? { keptLocally: true } : {}) });
+      ruleDiscard = false;
+    }
   }
 
   if (ruleDiscard) {

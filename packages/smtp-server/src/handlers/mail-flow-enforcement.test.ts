@@ -227,6 +227,37 @@ test('9.4 review: inbox-rule forwards and redirects of a decrypted S/MIME messag
   assert.equal(jobs[1]!['from'], 'a@x.test', 'redirect keeps the original envelope sender');
 });
 
+test('10.5 review: inbox-rule forwards count against the user\'s send rate; over the limit they are skipped (claim released)', async () => {
+  const raw = Buffer.from('From: a@x.test\r\nSubject: s\r\n\r\nx\r\n');
+  const jobs: unknown[] = [];
+  const released: string[] = [];
+  const rates: Array<{ userId: string; recipients: number; protocol: string }> = [];
+  let budget = 1;
+  const deps = {
+    claim: async () => true,
+    release: async (k: string) => { released.push(k); },
+    enqueue: async (j: unknown) => { jobs.push(j); },
+    consumeRate: async (req: { userId: string; recipients: number; protocol: 'rule' }) => {
+      rates.push(req);
+      return budget-- > 0 ? { allowed: true as const } : { allowed: false as const, reason: 'messages' as const, limit: 1, retryAfterSec: 60 };
+    },
+  };
+  const requests = inboxRuleForwardOpts(
+    [{ address: 'one@ext.test', mode: 'forward' }, { address: 'two@ext.test', mode: 'redirect' }],
+    { source: raw, user: { id: 'u1', email: 'bob@corp.test' }, originalFrom: 'a@x.test', dedupKey: 'k9', recipient: 'bob@corp.test' },
+  );
+  const statuses = [];
+  for (const r of requests) statuses.push(await enqueueRuleForward(r, deps));
+  assert.deepEqual(statuses, ['queued', 'rate-limited']);
+  assert.equal(jobs.length, 1);
+  assert.deepEqual(rates.map((r) => [r.userId, r.recipients, r.protocol]), [['u1', 1, 'rule'], ['u1', 1, 'rule']]);
+  assert.equal(released.length, 1, 'a skipped forward releases its dedup claim');
+  // the admin forwarding (MailFlowPolicy) is no account action: not counted
+  rates.length = 0;
+  assert.equal(await enqueueRuleForward({ rawBuffer: raw, toAddress: 'boss@ext.test', forwardingUser: { id: 'u1', email: 'bob@corp.test' }, mode: 'forward', originalFrom: 'a@x.test' }, deps), 'queued');
+  assert.equal(rates.length, 0);
+});
+
 test('9.4 review IDN: RCPT TO refuses a sender in either spelling of an internationalized reject-from entry', async () => {
   policyRow = { rejectFrom: ['bücher.example'] };
   assert.match(String(await inboundHandlers.onRcptTo('bob@corp.test', 'x@xn--bcher-kva.example', authUser)), /^550 5\.7\.1 /);

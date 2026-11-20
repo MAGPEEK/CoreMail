@@ -6,11 +6,13 @@
  *
  * The client IP is `req.ip` (TRUST_PROXY aware, like the rate limits and the
  * audit). Loopback, MAIL_AUTH_EXEMPT_CIDRS and the exceptions are never blocked
- * (ip-access.ts). WebSocket upgrades (/jmap/ws) use `upgradeBlocked()`.
+ * (ip-access.ts). WebSocket upgrades (/jmap/ws) use `upgradeBlocked()` with the
+ * same trust function (10.5 review).
  */
 import type { IncomingMessage } from 'node:http';
 import type { RequestHandler } from 'express';
 import { connectGuard, type ConnectGuard } from '@coremail/storage';
+import { upstreamClientIp, type TrustFn } from './proxy-headers.js';
 
 /** The protocol a request path belongs to (security events per protocol). */
 export function httpProtocolOf(path: string): string {
@@ -35,9 +37,16 @@ export function createIpBlocklistGuard(guard: Pick<ConnectGuard, 'isBlocked' | '
   };
 }
 
-/** WebSocket upgrades bypass Express: true when the peer is on the block list. */
-export function upgradeBlocked(req: IncomingMessage, guard: Pick<ConnectGuard, 'isBlocked' | 'refused'> = connectGuard): boolean {
-  const ip = req.socket?.remoteAddress;
+/**
+ * WebSocket upgrades bypass Express: true when the client is on the block
+ * list. 10.5 review: the client IP is derived with the SAME trust function as
+ * normal requests (TRUST_PROXY — behind a reverse proxy the socket peer is the
+ * proxy, the client is in X-Forwarded-For); without one, the socket peer.
+ */
+export function upgradeBlocked(
+  req: IncomingMessage, guard: Pick<ConnectGuard, 'isBlocked' | 'refused'> = connectGuard, trust?: TrustFn,
+): boolean {
+  const ip = trust ? upstreamClientIp(req, trust) : req.socket?.remoteAddress;
   if (!guard.isBlocked(ip)) return false;
   guard.refused(ip, httpProtocolOf(req.url ?? ''), 'blocked', { upgrade: true });
   return true;

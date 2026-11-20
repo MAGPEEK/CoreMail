@@ -6,7 +6,7 @@ import type { IncomingMessage, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { createLogger } from '@coremail/core';
-import { clientIpFromRequest } from '@coremail/storage';
+import { clientIpInfoFromRequest } from '@coremail/storage';
 import { authenticateCredentials, JmapDisabledError } from '../auth.js';
 import { isWsOriginAllowed } from '../cors.js';
 import { resolveAccounts } from '../accounts.js';
@@ -49,10 +49,9 @@ export function attachWebSocket(
       }
       let user: JmapUser | null;
       try {
-        user = await authenticateCredentials(
-          authorization ?? '', token,
-          clientIpFromRequest(req.socket.remoteAddress, req.headers['x-forwarded-for']),
-        );
+        // 10.5 review: the gateway marks a forwarded IP it could verify (IP_VERIFIED_HEADER)
+        const client = clientIpInfoFromRequest(req.socket.remoteAddress, req.headers);
+        user = await authenticateCredentials(authorization ?? '', token, client.ip, client.trusted);
       } catch (err) {
         if (!(err instanceof JmapDisabledError)) throw err;
         socket.write('HTTP/1.1 403 Forbidden\r\n\r\n'); // 9.4: JMAP switched off for the account

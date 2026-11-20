@@ -265,7 +265,7 @@ async function reloadServer(app: Application): Promise<void> {
       app(req, res);
     },
   );
-  hardenHttpServer(server, { kind: 'https', guard: hardening.guard, config: hardening.config });
+  hardenHttpServer(server, { kind: 'https', guard: hardening.guard, config: hardening.config, stallWatcher: hardening.stallWatcher });
 
   // v5.7.1: forward WebSocket upgrades (JMAP /jmap/ws) to the gateway handler
   server.on('upgrade', (req, socket, head) => {

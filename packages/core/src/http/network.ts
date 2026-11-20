@@ -56,6 +56,16 @@ const FORWARDED_HEADERS = ['x-forwarded-for', 'x-forwarded-proto', 'x-forwarded-
 export const PROTO_VERIFIED_HEADER = 'x-coremail-proto-verified';
 
 /**
+ * 10.5 review: set ("1") by the api-gateway when the client IP it forwards
+ * (X-Forwarded-For) is the socket peer or came from a proxy of an explicit
+ * TRUST_PROXY allow-list — the attack protection escalates only such
+ * addresses. Clients cannot send it (the gateway drops every X-CoreMail-*
+ * header). Same value as `IP_VERIFIED_HEADER` of @coremail/storage
+ * (mail-auth-core.ts has no runtime imports).
+ */
+export const IP_VERIFIED_HEADER = 'x-coremail-ip-verified';
+
+/**
  * Remove proxy headers from a request that reached us DIRECTLY from the
  * client (integrated TLS proxy). Whatever TRUST_PROXY says, these headers
  * can only be client-forged on that path.

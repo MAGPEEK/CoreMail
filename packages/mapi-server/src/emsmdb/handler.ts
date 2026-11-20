@@ -16,7 +16,7 @@
  */
 import type { Request, RequestHandler, Response } from 'express';
 import { createLogger, PROTO_VERIFIED_HEADER, type FixedWindowLimiter } from '@coremail/core';
-import { clientIpFromRequest, directoryIdFromLegacyDn, LEGACY_DN_PREFIX } from '@coremail/storage';
+import { clientIpInfoFromRequest, directoryIdFromLegacyDn, LEGACY_DN_PREFIX } from '@coremail/storage';
 import {
   clearCookie, CONTEXT_COOKIE, isCookieValue, readMapiHeaders, ResponseCode, SEQUENCE_COOKIE, setCookie,
   validateRequest, type Endpoint, type MapiRequestHeaders,
@@ -66,8 +66,11 @@ const EMPTY_EXECUTE = { flags: 0, ropBuffer: Buffer.alloc(0), maxRopOut: MAX_EXT
 const NO_ROPS = Buffer.from([0x02, 0x00]);
 
 export function transportOf(req: Request): TransportInfo {
+  // 10.5 review: the gateway marks a forwarded IP it could verify (IP_VERIFIED_HEADER)
+  const client = clientIpInfoFromRequest(req.socket?.remoteAddress, req.headers);
   return {
-    ip: clientIpFromRequest(req.socket?.remoteAddress, req.headers['x-forwarded-for']),
+    ip: client.ip,
+    ipTrusted: client.trusted,
     plainHttp: req.get(PROTO_VERIFIED_HEADER) === '1' && (req.get('x-forwarded-proto') ?? '').toLowerCase() === 'http',
   };
 }

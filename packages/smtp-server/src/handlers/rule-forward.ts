@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'crypto';
 import { createLogger, getRedisClient } from '@coremail/core';
-import { applyOutcomeToBuffer, RULE_FORWARDED_HEADER, type TransportOutcome } from '@coremail/storage';
+import { applyOutcomeToBuffer, consumeSendRate, RULE_FORWARDED_HEADER, type SendRateDecision, type TransportOutcome } from '@coremail/storage';
 import { enqueueOutbound, type OutboundJob } from '../outbound/queue.js';
 import { PARTIAL_DELIVERY_TTL_SEC } from './delivery.js';
 import { formatRfc5322Date, headerBounds } from './trace.js';
@@ -85,6 +85,7 @@ export function inboxRuleForwardOpts(
     originalFrom:   ctx.originalFrom,
     dedupKey:       ctx.dedupKey,
     recipient:      ctx.recipient,
+    countSendRate:  true, // 10.5 review: the user's own rules count against their send rate
   }));
 }
 
@@ -103,6 +104,12 @@ export interface RuleForwardOpts {
   dedupKey?:      string | undefined;
   /** Local recipient whose rule fired (part of the dedup key). */
   recipient?:     string | undefined;
+  /**
+   * 10.5 review: the forward counts against the forwarding user's hourly send
+   * rate (storage submission-rate.ts, protocol `rule`) — set for the user's own
+   * inbox rules; the admin forwarding (MailFlowPolicy) is an admin setting.
+   */
+  countSendRate?: boolean | undefined;
 }
 
 export interface RuleForwardDeps {
@@ -110,13 +117,19 @@ export interface RuleForwardDeps {
   claim(key: string): Promise<boolean>;
   release(key: string): Promise<void>;
   enqueue(job: OutboundJob): Promise<unknown>;
+  /** 10.5 review: the hourly send rate (counts when allowed). Absent = not limited (test deps). */
+  consumeRate?(req: { userId: string; recipients: number; protocol: 'rule' }): Promise<SendRateDecision>;
 }
 
 const defaultRuleForwardDeps: RuleForwardDeps = {
   claim: async (key) => (await getRedisClient().set(key, '1', 'EX', PARTIAL_DELIVERY_TTL_SEC, 'NX')) === 'OK',
   release: async (key) => { await getRedisClient().del(key); },
   enqueue: (job) => enqueueOutbound(job),
+  consumeRate: (req) => consumeSendRate(req),
 };
+
+/** 10.5 review: what happened to one forward request. */
+export type RuleForwardStatus = 'queued' | 'loop' | 'duplicate' | 'rate-limited';
 
 /** Pure: envelope sender and header fields of a rule forward/redirect. */
 export function buildRuleForward(opts: RuleForwardOpts, now = new Date()): { envelopeFrom: string; raw: Buffer } {
@@ -146,13 +159,13 @@ export function buildRuleForward(opts: RuleForwardOpts, now = new Date()): { env
  * In both cases the loop-protection header is set. Throws when the job cannot
  * be enqueued (the caller defers the SMTP transaction).
  */
-export async function enqueueRuleForward(opts: RuleForwardOpts, deps: RuleForwardDeps = defaultRuleForwardDeps): Promise<void> {
+export async function enqueueRuleForward(opts: RuleForwardOpts, deps: RuleForwardDeps = defaultRuleForwardDeps): Promise<RuleForwardStatus> {
   if (isRuleForwardedAlready(opts.rawBuffer)) {
     log.warn(
       { userId: opts.forwardingUser.id, to: opts.toAddress },
       'Loop protection: mail was already forwarded by a rule — skipping',
     );
-    return;
+    return 'loop';
   }
 
   // The forward is queued before the local copy is committed; when the store
@@ -170,7 +183,19 @@ export async function enqueueRuleForward(opts: RuleForwardOpts, deps: RuleForwar
     }
     if (!claimed) {
       log.info({ userId: opts.forwardingUser.id, to: opts.toAddress }, 'Rule forward already queued by an earlier attempt — skipping');
-      return;
+      return 'duplicate';
+    }
+  }
+
+  // 10.5 review: an inbox-rule forward is mail the user's account sends — it counts
+  // against the hourly send rate; over the limit it is skipped (the inbound delivery
+  // itself is never refused; the caller keeps a local copy).
+  if (opts.countSendRate && !opts.forwardingUser.shared && deps.consumeRate) {
+    const rate = await deps.consumeRate({ userId: opts.forwardingUser.id, recipients: 1, protocol: 'rule' });
+    if (!rate.allowed) {
+      if (claimKey) await deps.release(claimKey).catch(() => undefined);
+      log.warn({ userId: opts.forwardingUser.id, to: opts.toAddress, reason: rate.reason }, 'Rule forward skipped — send rate limit of the account reached');
+      return 'rate-limited';
     }
   }
 
@@ -196,4 +221,5 @@ export async function enqueueRuleForward(opts: RuleForwardOpts, deps: RuleForwar
     { userId: opts.forwardingUser.id, to: opts.toAddress, mode: opts.mode },
     'Rule forward enqueued',
   );
+  return 'queued';
 }

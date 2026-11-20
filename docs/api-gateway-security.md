@@ -292,6 +292,40 @@ It then sets the following from trusted values:
 - `X-Forwarded-For`: the client IP, per `TRUST_PROXY`
 - `X-Forwarded-Proto`: from the TLS socket, or from a trusted proxy
 - `X-Forwarded-Host`: the `Host` header, or a forwarded host from a trusted proxy
+- `X-CoreMail-Ip-Verified: 1` (10.5 review): only when that client IP is the
+  socket peer or came from a proxy of an explicit `TRUST_PROXY` allow-list —
+  see below
+
+## TRUST_PROXY and the attack protection (10.5 review)
+
+The client IP feeds the shared login lockout. Its **escalating** parts — the
+automatic block list entry of a repeat offender and the "known network" of the
+known-client exception (docs/attack-protection.md) — act only on a **verified**
+address: the socket peer itself, or an address taken from `X-Forwarded-For` of a
+proxy that `TRUST_PROXY` names **explicitly** (IPs, CIDRs, `loopback`,
+`linklocal`, `uniquelocal`). With a hop count (`TRUST_PROXY=1`) or `true` the
+gateway cannot tell a proxy from a client that reaches port 3000 directly, so a
+forwarded address is still counted and locked, but never escalated.
+
+The verdict is computed in `lib/client-ip-trust.ts`: the gateway drops a
+client-sent `X-CoreMail-Ip-Verified` and sets it for its own handlers (web/API
+login, MCP) and on every proxied request (ActiveSync, DAV, JMAP incl. the
+WebSocket upgrade, MAPI, Autodiscover, auth-service); the services read it
+together with `X-Forwarded-For` (`clientIpInfoFromRequest` in @coremail/storage).
+WebSocket upgrades are checked against the block list with the same trust
+function as normal requests.
+
+**Startup warnings** (log level warn):
+
+- `TRUST_PROXY=true` or a hop count — when port 3000 is published directly,
+  every client can choose its address in `X-Forwarded-For`.
+- `TRUST_PROXY` covers the Docker bridge gateway (`172.17.0.1`, or the first
+  host address of the container's own networks, e.g. `TRUST_PROXY=172.16.0.0/12`
+  or `uniquelocal`) — with a published port and the Docker userland proxy every
+  client connects from that address, so anyone can then set `X-Forwarded-For`.
+
+Recommended: `TRUST_PROXY` = the reverse proxy container's own address (or its
+CIDR on a dedicated proxy network), and port 3000 published only to the proxy.
 
 ## Connection limits and timeouts (10.5)
 
@@ -311,8 +345,13 @@ variables of the `coremail` container; restart the container after a change.
 | `HTTP_CONNECTIONS_CHECK_INTERVAL_MS` | `5000` | How often the header/request deadlines are checked (a slow client is cut between the timeout and timeout + interval). |
 | `HTTP_MAX_CONNS` | `4000` | Open connections of the gateway in total, HTTP and HTTPS together (`0` = off). |
 | `HTTP_MAX_CONNS_PER_IP` | `300` | Open connections per client IP; IPv6 clients are counted per /64 prefix (`0` = off). |
-| `HTTP_CONN_EXEMPT_CIDRS` | *(empty)* | Comma-separated IPs/CIDRs without the per-IP cap (the total still applies). Invalid entries are ignored and logged. |
+| `HTTP_CONN_EXEMPT_CIDRS` | *(empty)* | Comma-separated IPs/CIDRs without the per-IP / prefix caps and the reserve (the total still applies). Invalid entries are ignored and logged. |
 | `HTTPS_HANDSHAKE_TIMEOUT_MS` | `10000` | TLS handshake of the HTTPS proxy (min. 1000); a client that connects and never sends a ClientHello is dropped after this time. |
+| `HTTP_MAX_CONNS_PER_V6_56` | `600` | 10.5 review: open connections per IPv6 /56 — all /64s of the prefix together (`0` = off). |
+| `HTTP_MAX_CONNS_PER_V6_48` | `1200` | 10.5 review: open connections per IPv6 /48 (`0` = off). |
+| `HTTP_CONN_RESERVE_PERCENT` | `20` | 10.5 review: the last N % of `HTTP_MAX_CONNS` are kept for light clients (`0` = off, max. 90). |
+| `HTTP_CONN_HEAVY_THRESHOLD` | `16` | 10.5 review: inside that reserve a new connection is refused when its IPv4 address / IPv6 /48 already holds this many connections. |
+| `HTTP_WRITE_STALL_TIMEOUT_MS` | `60000` | 10.5 review: a connection whose queued response bytes have not moved for this long (the client stopped reading) is closed (`0` = off, min. 1000). |
 
 Invalid values fall back to the default (logged at start); the effective values
 are logged once as `HTTP connection hardening active`. The bundled Compose files
@@ -328,6 +367,17 @@ every 25 s), ActiveSync `Ping` (up to 59 minutes without a byte), MAPI
 upgrades (JMAP `/jmap/ws`) leave the HTTP parser after the `101`, so no HTTP
 timeout applies to them. There is deliberately no socket inactivity timeout
 (`server.timeout` stays `0`): a silent Ping must not be cut.
+
+**Slow readers (10.5 review).** A client that requests a large response and then
+stops reading would pin the queued bytes in memory and hold its slot forever.
+The write-stall watcher (`WriteStallWatcher`) samples every open connection
+(every `HTTP_WRITE_STALL_TIMEOUT_MS / 4`, at most 5 s) and closes one that has
+response bytes queued in the process **and** has not passed any of them on to
+the kernel for `HTTP_WRITE_STALL_TIMEOUT_MS`. Long-lived responses are not
+affected: SSE writes a heartbeat every 25 s that a reading client takes at
+once, an ActiveSync `Ping` / MAPI `NotificationWait` has nothing queued while it
+waits, and every byte a slow-but-reading client takes restarts the clock.
+Closed connections are logged at most once per minute (`write stall`).
 
 **Uploads.** The request timeout is a ceiling for the slowest legitimate upload.
 The largest bodies are a backup import (`BACKUP_IMPORT_MAX_BYTES`, 500 MiB), an
@@ -345,6 +395,20 @@ connection before the handshake. Refusals are logged as `HTTP connection
 refused — connection limit reached` at most once per minute per client key and
 reason (with the number of suppressed refusals). Loopback (container
 healthcheck, in-container CLI) bypasses both caps.
+
+**IPv6 prefixes and the reserve (10.5 review).** One IPv6 subscriber usually
+owns a /56 or /48 — 256 or 65 536 /64 budgets of `HTTP_MAX_CONNS_PER_IP` each,
+enough to fill the global cap alone. All /64s of a /56 and of a /48 therefore
+also share `HTTP_MAX_CONNS_PER_V6_56` / `HTTP_MAX_CONNS_PER_V6_48` (refusal
+reason `per_prefix`). And once the gateway holds `(100 − HTTP_CONN_RESERVE_PERCENT) %`
+of `HTTP_MAX_CONNS` (3200 of 4000 by default), a new connection is admitted only
+from a source that holds fewer than `HTTP_CONN_HEAVY_THRESHOLD` connections (an
+IPv4 address, an IPv6 /48): the heaviest sources are refused first (reason
+`reserve`), light clients — a phone, a browser — still get the remaining 20 %.
+A `TRUST_PROXY`-trusted peer on port 3000 and `HTTP_CONN_EXEMPT_CIDRS` are not
+subject to the prefix caps nor the reserve (only to the total). A distributed
+flood from many IPv4 addresses or many /48s can still fill the total; that needs
+filtering in front of the server.
 
 **Sizing (defaults).** Every ActiveSync phone keeps one Ping open, every browser
 one SSE stream plus up to six short keep-alive connections while loading. 500

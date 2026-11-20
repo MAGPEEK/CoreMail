@@ -182,7 +182,9 @@ export function loginOutcomeToHttp(o: LoginOutcome): { status: number; body: Rec
 export async function login(email: string, password: string, client: ClientInfo): Promise<LoginOutcome> {
   const normalized = email.trim().toLowerCase();
   const lockout = sharedLoginLockout();
-  const lock = await lockout.check(normalized, client.ip);
+  // 10.5 review: an unverified forwarded IP is counted, never escalated or learned
+  const hints = { ipTrusted: client.ipTrusted !== false };
+  const lock = await lockout.check(normalized, client.ip, hints);
   if (lock.locked) {
     log.warn({ email: normalized, ip: client.ip, scope: lock.scope }, 'Login refused — locked out');
     return { kind: 'locked', retryAfterSec: lock.retryAfterSec };
@@ -190,7 +192,7 @@ export async function login(email: string, password: string, client: ClientInfo)
 
   const user = await authenticatePassword(normalized, password);
   if (!user) {
-    await lockout.fail(normalized, client.ip);
+    await lockout.fail(normalized, client.ip, hints);
     log.warn({ email: normalized, ip: client.ip }, 'Login failed');
     return { kind: 'invalid' };
   }
@@ -220,7 +222,7 @@ export async function login(email: string, password: string, client: ClientInfo)
 
   const tokens = await issueSession(user, { ...client, mfaVerified: false });
   // 10.5: with the client IP the network becomes "known" for the account (known-client exception)
-  await lockout.success(normalized, client.ip);
+  await lockout.success(normalized, client.ip, { ...hints, admin: user.role !== 'USER' });
   log.info({ userId: user.id, source: user.source }, 'Login successful');
   return { kind: 'tokens', tokens, userId: user.id, source: user.source };
 }
@@ -256,7 +258,8 @@ export async function completeMfaLogin(
   const owner = await prisma.user.findUnique({ where: { id: challenge.userId }, select: { email: true } });
   const lockEmail = owner?.email.toLowerCase() ?? `user:${challenge.userId}`;
   const lockout = sharedLoginLockout();
-  const lock = await lockout.check(lockEmail, client.ip);
+  const hints = { ipTrusted: client.ipTrusted !== false };
+  const lock = await lockout.check(lockEmail, client.ip, hints);
   if (lock.locked) {
     log.warn({ userId: challenge.userId, ip: client.ip, scope: lock.scope }, 'MFA verify refused — locked out');
     return { kind: 'locked', retryAfterSec: lock.retryAfterSec };
@@ -277,7 +280,7 @@ export async function completeMfaLogin(
 
   if (!verified) {
     const exhausted = await registerMfaFailure(input.challengeToken, client.ip);
-    await lockout.fail(lockEmail, client.ip);
+    await lockout.fail(lockEmail, client.ip, hints);
     log.warn({ userId: challenge.userId, ip: client.ip, exhausted }, 'MFA verification failed');
     return { kind: 'mfa_failed', exhausted };
   }
@@ -293,7 +296,7 @@ export async function completeMfaLogin(
   if (await webLoginBlocked(user, client.surface)) return { kind: 'protocol_disabled' };
 
   const tokens = await issueSession(user, { ...client, mfaVerified: true });
-  await lockout.success(lockEmail, client.ip);
+  await lockout.success(lockEmail, client.ip, { ...hints, admin: user.role !== 'USER' });
   log.info({ userId: user.id }, 'MFA verified — login complete');
   return { kind: 'tokens', tokens, userId: user.id, source: 'mfa' };
 }

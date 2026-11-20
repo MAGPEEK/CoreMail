@@ -470,6 +470,35 @@ test('forced admin 2FA: a token from a session without MFA stops working', async
   }
 });
 
+test('10.5 review: "MFA für alle Benutzer erzwingen" — a token stops working after its owner\'s grace deadline', async () => {
+  const { invalidateMfaEnforcementCache } = await import('@coremail/storage/auth');
+  const t = await newToken('srv', 'read');
+  const owner = db['user']!.find((u) => u['id'] === 'srv')!;
+  const init = { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} };
+  settings['requireMfaForAllUsers'] = true;
+  settings['mfaEnforcementGraceDays'] = 7;
+  owner['mfaGraceStartedAt'] = new Date(Date.now() - 3 * 86_400_000);
+  invalidateMfaEnforcementCache();
+  try {
+    assert.equal((await post(t.token, init)).status, 200, 'within the grace period the token still works');
+    owner['mfaGraceStartedAt'] = new Date(Date.now() - 30 * 86_400_000);
+    invalidateMfaEnforcementCache();
+    const r = await post(t.token, init);
+    assert.equal(r.status, 403);
+    assert.equal(r.json['code'], 'MFA_ENROLMENT_REQUIRED');
+    // enrolling MFA makes the token usable again
+    db['userMfa']!.push({ id: 'mfa-srv', userId: 'srv', totpEnabled: true, webAuthnCredentials: [] });
+    invalidateMfaEnforcementCache();
+    assert.equal((await post(t.token, init)).status, 200);
+  } finally {
+    settings['requireMfaForAllUsers'] = false;
+    delete owner['mfaGraceStartedAt'];
+    const i = db['userMfa']!.findIndex((m) => m['id'] === 'mfa-srv');
+    if (i !== -1) db['userMfa']!.splice(i, 1);
+    invalidateMfaEnforcementCache();
+  }
+});
+
 test('IP allowlist: other client IPs get 404', async () => {
   const { token } = await newToken('org', 'read');
   assert.equal((await bcp('srv', 'PUT', '/mcp/settings', { allowedIps: ['10.0.0.0/8'] })).status, 200);

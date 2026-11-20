@@ -32,7 +32,11 @@ const db = { rules: [] as Row[], audits: [] as Row[], failCreate: false };
     },
     findMany: async () => db.rules,
   },
-  auditLog: { create: async (a: { data: Row }) => { db.audits.push(a.data); return a.data; } },
+  auditLog: {
+    create: async (a: { data: Row }) => { db.audits.push(a.data); return a.data; },
+    count: async (a: { where: { action: string; targetName: string } }) =>
+      db.audits.filter((r) => r['action'] === a.where.action && r['targetName'] === a.where.targetName).length,
+  },
 };
 // security events of the production recorder go here
 const sunk: Row[] = [];
@@ -150,6 +154,14 @@ describe('lockout event handler', () => {
     assert.equal(t5.blocked.length, 1);
   });
 
+  test('10.5 review: an IP lock from an unverified forwarding header is never escalated; IPv6 under its /64', async () => {
+    const { h, blocked } = handler();
+    await h({ ...lock(5), ipTrusted: false });
+    assert.equal(blocked.length, 0);
+    await h({ ...lock(5), ip: '2001:db8:1:2::9', ipLockId: '2001:db8:1:2::/64', ipTrusted: true });
+    assert.deepEqual(blocked, [{ ip: '2001:db8:1:2::/64', locks: 5 }]);
+  });
+
   test('refusals are recorded, known-client logins are not', async () => {
     const { h, recorded } = handler();
     await h({ kind: 'refused', scope: 'account', protocol: 'web', ip: '198.51.100.7', account: 'a@example.test', retryAfterSec: 30 });
@@ -159,8 +171,11 @@ describe('lockout event handler', () => {
 });
 
 describe('automatic block list entry (G)', () => {
+  const NO_REDIS = { redis: null, trustProxy: '' } as const;
+  const daysOf = (r: Row) => ((r['expiresAt'] as Date).getTime() - Date.now()) / 86_400_000;
+
   test('creates one entry with expiry, audit row and security event', async () => {
-    const ok = await ap.addAutoBlock('::ffff:198.51.100.7', 3, { ...SETTINGS, autoBlockDays: 30 });
+    const ok = await ap.addAutoBlock('::ffff:198.51.100.7', 3, { ...SETTINGS, autoBlockDays: 30 }, 'imap', NO_REDIS);
     assert.equal(ok, true);
     assert.equal(db.rules.length, 1);
     const r = db.rules[0]!;
@@ -168,27 +183,95 @@ describe('automatic block list entry (G)', () => {
     assert.equal(r['kind'], 'BLOCK');
     assert.equal(r['auto'], true);
     assert.equal(r['note'], ap.AUTO_BLOCK_NOTE);
-    const days = ((r['expiresAt'] as Date).getTime() - Date.now()) / 86_400_000;
-    assert.ok(days > 29.9 && days <= 30);
+    // 10.5 review: the first automatic entry lasts one day (escalating lifetime)
+    assert.ok(daysOf(r) > 0.99 && daysOf(r) <= 1, String(daysOf(r)));
     assert.equal(db.audits[0]!['action'], 'security.ip.autoblock');
     assert.equal(db.audits[0]!['actorEmail'], 'system');
     await new Promise((r2) => setImmediate(r2));
     assert.ok(sunk.some((e) => e['type'] === 'IP_AUTO_BLOCKED'));
     // second time: already on the list
-    assert.equal(await ap.addAutoBlock('198.51.100.7', 4, SETTINGS), false);
+    assert.equal(await ap.addAutoBlock('198.51.100.7', 4, SETTINGS, 'imap', NO_REDIS), false);
     assert.equal(db.rules.length, 1);
   });
 
-  test('0 days = permanent; exceptions are never blocked; a full list is respected; races are quiet', async () => {
-    assert.equal(await ap.addAutoBlock('198.51.100.8', 3, { ...SETTINGS, autoBlockDays: 0 }), true);
-    assert.equal(db.rules[0]!['expiresAt'], null);
+  test('10.5 review: escalating lifetime 1 d → 7 d → autoBlockDays (0 = permanent), capped by a shorter setting', async () => {
+    assert.deepEqual([0, 1, 2, 3].map((p) => ap.autoBlockLifetimeDays(p, 30)), [1, 7, 30, 30]);
+    assert.deepEqual([0, 1, 2].map((p) => ap.autoBlockLifetimeDays(p, 0)), [1, 7, 0]);
+    assert.deepEqual([0, 1, 2].map((p) => ap.autoBlockLifetimeDays(p, 3)), [1, 3, 3]);
+    const days: number[] = [];
+    for (let step = 0; step < 3; step++) {
+      db.rules = []; // the previous entry expired (purged)
+      assert.equal(await ap.addAutoBlock('198.51.100.30', 3, SETTINGS, 'smtp', NO_REDIS), true);
+      days.push(Math.round(daysOf(db.rules[0]!)));
+    }
+    assert.deepEqual(days, [1, 7, 30]);
+    db.rules = [];
+    assert.equal(await ap.addAutoBlock('198.51.100.30', 3, { ...SETTINGS, autoBlockDays: 0 }, 'smtp', NO_REDIS), true);
+    assert.equal(db.rules[0]!['expiresAt'], null, 'the last step is permanent with autoBlockDays 0');
+  });
+
+  test('exceptions are never blocked; a full list is respected; races are quiet', async () => {
     setIpAccessRulesForTests([{ kind: 'ALLOW', cidr: '203.0.113.0/24' }]);
-    assert.equal(await ap.addAutoBlock('203.0.113.9', 3, SETTINGS), false);
-    assert.equal(await ap.addAutoBlock('127.0.0.1', 3, SETTINGS), false);
+    assert.equal(await ap.addAutoBlock('203.0.113.9', 3, SETTINGS, 'imap', NO_REDIS), false);
+    assert.equal(await ap.addAutoBlock('127.0.0.1', 3, SETTINGS, 'imap', NO_REDIS), false);
     db.rules = Array.from({ length: ap.MAX_IP_RULES_PER_KIND }, (_, i) => ({ kind: 'BLOCK', cidr: `x${i}` }));
-    assert.equal(await ap.addAutoBlock('198.51.100.20', 3, SETTINGS), false);
+    assert.equal(await ap.addAutoBlock('198.51.100.20', 3, SETTINGS, 'imap', NO_REDIS), false);
     db.rules = []; db.failCreate = true;
-    assert.equal(await ap.addAutoBlock('198.51.100.21', 3, SETTINGS), false);
+    assert.equal(await ap.addAutoBlock('198.51.100.21', 3, SETTINGS, 'imap', NO_REDIS), false);
+  });
+
+  test('10.5 review: shared addresses are never auto-blocked (private, CGNAT, ULA, link-local, Docker gateway)', async () => {
+    for (const ip of ['10.0.0.5', '172.18.0.1', '172.17.0.1', '192.168.1.20', '100.64.12.1', '169.254.1.1', 'fd00::1', 'fe80::1', '::1']) {
+      assert.equal(await ap.autoBlockExemption(ap.lockIdOf('ip', ip)!, NO_REDIS), 'private', ip);
+      assert.equal(await ap.addAutoBlock(ip, 9, SETTINGS, 'imap', NO_REDIS), false, ip);
+    }
+    assert.equal(db.rules.length, 0);
+    // public addresses are not exempt for that reason
+    assert.equal(await ap.autoBlockExemption('198.51.100.7', NO_REDIS), null);
+    assert.equal(await ap.autoBlockExemption('172.32.0.1', NO_REDIS), null);
+  });
+
+  test('10.5 review: proxies TRUST_PROXY names explicitly are never auto-blocked (hop counts name nobody)', async () => {
+    assert.equal(await ap.autoBlockExemption('203.0.113.10', { redis: null, trustProxy: '203.0.113.10, loopback' }), 'trusted-proxy');
+    assert.equal(await ap.autoBlockExemption('203.0.113.77', { redis: null, trustProxy: '203.0.113.0/24' }), 'trusted-proxy');
+    assert.equal(await ap.autoBlockExemption('203.0.113.10', { redis: null, trustProxy: '1' }), null);
+    assert.equal(await ap.autoBlockExemption('203.0.113.10', { redis: null, trustProxy: 'true' }), null);
+    assert.equal(await ap.addAutoBlock('203.0.113.10', 3, SETTINGS, 'web', { redis: null, trustProxy: '203.0.113.10' }), false);
+  });
+
+  test('10.5 review: an IP with successful logins of ≥ 2 accounts or of an admin is never auto-blocked', async () => {
+    const redis = memRedis();
+    const acct = (e: string) => accountLockId(e);
+    await redis.set(LOCKOUT_KEYS.ipOk('198.51.100.40', acct('a@example.test')), 'u', 'EX', 3600);
+    assert.equal(await ap.autoBlockExemption('198.51.100.40', { redis: redis as never, trustProxy: '' }), null, 'one user account is not enough');
+    await redis.set(LOCKOUT_KEYS.ipOk('198.51.100.40', acct('b@example.test')), 'u', 'EX', 3600);
+    assert.equal(await ap.autoBlockExemption('198.51.100.40', { redis: redis as never, trustProxy: '' }), 'legitimate-logins');
+    await redis.set(LOCKOUT_KEYS.ipOk('2001:db8:9::/64', acct('admin@example.test')), 'a', 'EX', 3600);
+    assert.equal(await ap.autoBlockExemption('2001:db8:9::42', { redis: redis as never, trustProxy: '' }), 'legitimate-logins');
+    assert.equal(await ap.addAutoBlock('198.51.100.40', 3, SETTINGS, 'imap', { redis: redis as never, trustProxy: '' }), false);
+    assert.equal(await ap.addAutoBlock('198.51.100.41', 3, SETTINGS, 'imap', { redis: redis as never, trustProxy: '' }), true, 'its neighbour is blocked');
+  });
+
+  test('10.5 review: IPv6 offenders are blocked per /64', async () => {
+    assert.equal(await ap.addAutoBlock('2001:db8:7:8::1234', 3, SETTINGS, 'imap', NO_REDIS), true);
+    assert.equal(db.rules[0]!['cidr'], '2001:db8:7:8::/64');
+  });
+});
+
+describe('10.5 review: automatic entries never apply to inbound port 25', () => {
+  test('ipAccessVerdict(…, mx) ignores automatic entries, keeps manual ones', async () => {
+    const { ipAccessVerdict } = await import('./ip-access.js');
+    setIpAccessRulesForTests([
+      { kind: 'BLOCK', cidr: '198.51.100.7/32', auto: true },
+      { kind: 'BLOCK', cidr: '198.51.100.8/32', auto: false },
+    ]);
+    assert.equal(ipAccessVerdict('198.51.100.7'), 'block');
+    assert.equal(ipAccessVerdict('198.51.100.7', 'client'), 'block');
+    assert.equal(ipAccessVerdict('198.51.100.7', 'mx'), 'none');
+    assert.equal(ipAccessVerdict('198.51.100.8', 'mx'), 'block');
+    const { connectGuard } = await import('./connect-guard.js');
+    assert.equal(connectGuard.isBlocked('198.51.100.7', 'mx'), false);
+    assert.equal(connectGuard.isBlocked('198.51.100.7'), true);
   });
 });
 
@@ -328,6 +411,8 @@ describe('lock view and release', () => {
 
   test('lockIdOf validates IPs, account hashes and e-mails', () => {
     assert.equal(ap.lockIdOf('ip', '::ffff:192.0.2.1'), '192.0.2.1');
+    assert.equal(ap.lockIdOf('ip', '2001:db8:1:2::77'), '2001:db8:1:2::/64');
+    assert.equal(ap.lockIdOf('ip', '2001:db8:1:2::/64'), '2001:db8:1:2::/64');
     assert.equal(ap.lockIdOf('ip', 'nope'), null);
     assert.equal(ap.lockIdOf('account', 'Alice@Example.test'), accountLockId('alice@example.test'));
     assert.equal(ap.lockIdOf('account', 'a'.repeat(32).replace(/a/g, 'f')), 'f'.repeat(32));

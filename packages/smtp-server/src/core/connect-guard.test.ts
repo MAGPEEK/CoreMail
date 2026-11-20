@@ -96,3 +96,20 @@ test('implicit TLS (465): a blocked IP is dropped on the raw socket, before the 
   assert.equal(r2.secure, true);
   assert.match(r2.data, /^220 /);
 });
+
+test('10.5 review: port 25 asks for the mx surface (manual entries only), submission for the client surface', async () => {
+  const surfaces: string[] = [];
+  // blocked only on client surfaces — like an automatic repeat-offender entry
+  const autoOnly = {
+    isBlocked: (_ip: unknown, surface?: string) => { surfaces.push(surface ?? 'client'); return surface !== 'mx'; },
+    lockedFor: async () => 0,
+    refused: () => undefined,
+  };
+  const mx = await listen(createSmtpServer(config(), false, autoOnly).server);
+  const r = await collect(mx, false, 500);
+  assert.match(r.data, /^220 mx\.example\.test/, 'inbound mail is not refused by an automatic entry');
+  const sub = await listen(createSmtpServer({ ...config(), requireAuth: true }, false, autoOnly).server);
+  const r2 = await collect(sub, false);
+  assert.equal(r2.data, SMTP_BLOCKED_REPLY, 'submission (587) refuses the auto-blocked IP');
+  assert.deepEqual(surfaces, ['mx', 'client']);
+});

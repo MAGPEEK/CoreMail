@@ -120,6 +120,27 @@ test('sends once per sender within the window (rate limit), with RFC 3834 header
   assert.match(reply, /^From: Bob Builder <bob@local\.example>\r?$/m);
 });
 
+test('10.5 review: auto-replies count against the user\'s send rate; over the limit the reply is skipped', async () => {
+  const calls: Array<[string, boolean]> = [];
+  let budget = 1;
+  const d = deps({
+    sendRate: async (userId: string, commit: boolean) => {
+      calls.push([userId, commit]);
+      if (budget > 0) { if (commit) budget--; return { allowed: true }; }
+      return { allowed: false, reason: 'messages', limit: 1, retryAfterSec: 60 };
+    },
+  });
+  const ctx = { userId: 'u1', userEmail: 'bob@local.example', envelopeFrom: 'ann@ext.example', raw: ORIG, deliveredToJunk: false, now: NOW };
+  assert.equal(await sendAutoReplyIfNeeded(ctx, d), 'sent');
+  assert.deepEqual(calls, [['u1', false], ['u1', true]], 'checked first, counted once the reply is due');
+  // over the limit: skipped (never an error, never touching the delivery) — and the sender
+  // is not marked as answered, so a reply follows once the budget allows it again
+  assert.equal(await sendAutoReplyIfNeeded({ ...ctx, envelopeFrom: 'carl@ext.example' }, d), 'send rate limit');
+  assert.equal(d.sent.length, 1);
+  budget = 1;
+  assert.equal(await sendAutoReplyIfNeeded({ ...ctx, envelopeFrom: 'carl@ext.example' }, d), 'sent');
+});
+
 test('changing the out-of-office text restarts the window', async () => {
   let text = 'v1';
   const d = deps({ loadSettings: async () => ({ ...S, oofExternal: text }) });

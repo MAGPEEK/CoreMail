@@ -335,7 +335,12 @@ test('web access: the webmail client gets no session for an admin either (no red
   assert.equal(auth.sessionSurfaceOf(bcp), 'admin');
   assert.equal(auth.sessionSurfaceOf({}), 'admin', 'admin CLI (no browser header)');
   assert.deepEqual(auth.clientInfoOf({ ip: '203.0.113.7', headers: { ...mwa, 'user-agent': 'UA' } }),
-    { ip: '203.0.113.7', userAgent: 'UA', surface: 'webmail' });
+    { ip: '203.0.113.7', userAgent: 'UA', surface: 'webmail', ipTrusted: true });
+  // 10.5 review: req.ip from a forwarding header is trusted only with the gateway's mark
+  const fwd = { ip: '203.0.113.7', socket: { remoteAddress: '172.18.0.1' } };
+  assert.equal(auth.clientInfoOf({ ...fwd, headers: {} }).ipTrusted, false);
+  assert.equal(auth.clientInfoOf({ ...fwd, headers: { 'x-coremail-ip-verified': '1' } }).ipTrusted, true);
+  assert.equal(auth.clientInfoOf({ ip: '203.0.113.7', socket: { remoteAddress: '::ffff:203.0.113.7' }, headers: {} }).ipTrusted, true);
 
   await addUser('admin@one.test', 'd1', { role: 'SERVER_MANAGEMENT' });
   const viaBcp = { ip: '203.0.113.9', userAgent: 'test', surface: 'admin' as const };

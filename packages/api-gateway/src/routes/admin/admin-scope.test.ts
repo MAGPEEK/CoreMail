@@ -38,7 +38,7 @@ const db: Record<string, Row[]> = {
     user('coA', 'COMPLIANCE_MANAGEMENT', dA),
     user('voA', 'VIEW_ONLY_ORG', dA),
     user('adminA', 'SERVER_MANAGEMENT', dA), // an organisation-wide admin account inside dA
-    user('ua1', 'USER', dA),
+    user('ua1', 'USER', dA, { aliases: [] }),
     user('ub1', 'USER', dB),
   ],
   adminScope: ['hdA', 'rmA', 'hyA', 'coA', 'voA'].map((u) => ({ id: `sc-${u}`, userId: u, domainId: 'dA', domain: { id: 'dA', name: 'a.example' } })),
@@ -92,6 +92,16 @@ const models: Record<string, Record<string, (...a: unknown[]) => unknown>> = Obj
 );
 models['serverSettings'] = { findUnique: () => ({ ...settings }) };
 models['message'] = { aggregate: () => ({ _sum: { rawSize: 0 } }) };
+// 10.5 review: per-mailbox mail flow (send rate cap of scoped admins)
+const flowPolicies = new Map<string, Row>();
+models['mailFlowPolicy'] = {
+  findUnique: (a) => flowPolicies.get(String((a as { where: Row }).where['userId'])) ?? null,
+  upsert: (a) => {
+    const q = a as { where: Row; create: Row };
+    flowPolicies.set(String(q.where['userId']), q.create);
+    return q.create;
+  },
+};
 models['mailbox'] = { findUnique: (a) => ({ id: `mb-${String((a as { where: Row }).where['userId'])}` }) };
 models['mailboxDelegate']!['upsert'] = (a) => ({ id: 'del', ...(a as { create: Row }).create });
 // AdminScope rows embed their domain (the memory model has no relations)
@@ -191,6 +201,29 @@ test('mailboxes: list filtered, other domain = 404 like an unknown id, create on
     const r = await call('rmA', p.endsWith('defaults') ? 'PUT' : 'POST', p, p.endsWith('defaults') ? { quotaWarningPercent: 50 } : {});
     assert.deepEqual([r.status, r.json['code']], [403, 'SCOPE_ORG_ONLY'], p);
   }
+});
+
+test('10.5 review: a scoped admin cannot raise a mailbox send rate above the global value; organisation-wide admins can', async () => {
+  // global values: the defaults 200 messages / 1000 recipients per hour
+  const over = await call('rmA', 'PUT', '/mailboxes/ua1/mail-flow', { maxMessagesPerHour: 500 });
+  assert.equal(over.status, 400);
+  assert.equal(over.json['code'], 'SEND_RATE_ABOVE_GLOBAL');
+  assert.match(String(over.json['error']), /200 Nachrichten pro Stunde/);
+  const overR = await call('rmA', 'PUT', '/mailboxes/ua1/mail-flow', { maxRecipientsPerHour: 5000 });
+  assert.equal(overR.status, 400);
+  assert.match(String(overR.json['error']), /1000 Empfänger pro Stunde/);
+  assert.equal(flowPolicies.has('ua1'), false, 'nothing stored');
+  // at or below the global value, or back to the global one (null): allowed
+  const ok = await call('rmA', 'PUT', '/mailboxes/ua1/mail-flow', { maxMessagesPerHour: 200, maxRecipientsPerHour: null });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.json['maxMessagesPerHour'], 200);
+  // Organization Management may raise it
+  const org = await call('org', 'PUT', '/mailboxes/ua1/mail-flow', { maxMessagesPerHour: 500, maxRecipientsPerHour: 5000 });
+  assert.equal(org.status, 200);
+  assert.equal(org.json['maxMessagesPerHour'], 500);
+  // a scoped admin editing something else keeps the raised value (only values the patch sets are capped)
+  assert.equal((await call('rmA', 'PUT', '/mailboxes/ua1/mail-flow', { hiddenFromGal: true })).status, 200);
+  assert.equal(flowPolicies.get('ua1')?.['maxMessagesPerHour'], 500);
 });
 
 test('mailboxes: scoped admins cannot edit organisation-wide admin accounts or assign roles', async () => {

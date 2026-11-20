@@ -90,8 +90,9 @@ import { createMcpRouter } from './lib/mcp/handler.js';
 import { startMcpSettingsSubscriber } from './lib/mcp/settings.js';
 import { mcpLiveConnections } from './lib/mcp/sessions.js';
 import { hashMcpToken, looksLikeMcpToken } from '@coremail/storage/auth';
-import { startAttackProtection } from '@coremail/storage';
+import { startAttackProtection, connectGuard } from '@coremail/storage';
 import { createIpBlocklistGuard, upgradeBlocked } from './lib/ip-blocklist-guard.js';
+import { dockerGatewayCandidates, ipVerifiedMark, trustProxyKind, trustProxyWarnings } from './lib/client-ip-trust.js';
 import { startAttackProtectionWorker } from './lib/attack-protection-worker.js';
 
 const log = createLogger('api-gateway');
@@ -113,6 +114,13 @@ const PORT = parseInt(process.env['API_PORT'] ?? '3000', 10);
 // ("172.18.0.0/16", "loopback"). Requests through the integrated TLS proxy
 // never honour forwarded headers (stripped in tls-proxy.ts).
 app.set('trust proxy', parseTrustProxy(process.env['TRUST_PROXY']));
+// 10.5 review: only an address from the socket or from an EXPLICIT proxy allow-list
+// is escalated by the attack protection (lib/client-ip-trust.ts); a hop count / `true`
+// or a TRUST_PROXY that covers the Docker bridge gateway is warned about at start.
+const TRUST_KIND = trustProxyKind(process.env['TRUST_PROXY']);
+for (const w of trustProxyWarnings(process.env['TRUST_PROXY'], app.get('trust proxy fn') as TrustFn, dockerGatewayCandidates())) {
+  log.warn(w);
+}
 
 // ── Crash safety ──────────────────────────────────────────────────────────────
 // v6: async handler rejections → error middleware (not process death).
@@ -122,6 +130,10 @@ installAsyncErrorHandling(express);
 // SECURITY MIDDLEWARE STACK
 // Order is critical — do not change without reading the comments!
 // ═══════════════════════════════════════════════════════════════════════════════
+
+// 0. 10.5 review: client-sent X-CoreMail-Ip-Verified dropped; set when req.ip is
+//    verified (socket peer / explicit TRUST_PROXY list) — read by the web login lockout.
+app.use(ipVerifiedMark(TRUST_KIND));
 
 // 1. Request-ID — before everything else so that logs can be correlated
 app.use(requestId);
@@ -205,7 +217,7 @@ const JMAP_URL = process.env['JMAP_SERVICE_URL'] ?? 'http://localhost:3006';
  * (lib/proxy-headers.ts).
  */
 function setUpstreamForwardedFor(proxyReq: ClientRequest, req: IncomingMessage): void {
-  applyUpstreamHeaders(proxyReq, req, app.get('trust proxy fn') as TrustFn);
+  applyUpstreamHeaders(proxyReq, req, app.get('trust proxy fn') as TrustFn, TRUST_KIND);
 }
 
 function internalProxy(targetBase: string): express.RequestHandler {
@@ -592,12 +604,14 @@ async function start() {
     guard: hardening.guard,
     config: hardening.config,
     isTrustedProxyPeer: (ip) => trustFn(ip, 0),
+    stallWatcher: hardening.stallWatcher, // 10.5 review: slow readers
   });
   httpServer.listen(PORT);
   // v5.7.1: JMAP over WebSocket (RFC 8887) — pass upgrade requests through to the jmap-server
   httpServer.on('upgrade', (req, socket, head) => {
     if (hardening.guard.isRefused(req.socket)) { socket.destroy(); return; }
-    if (upgradeBlocked(req)) { socket.destroy(); return; } // 10.5: block list
+    // 10.5: block list — 10.5 review: the client IP with the same trust function as requests
+    if (upgradeBlocked(req, connectGuard, trustFn)) { socket.destroy(); return; }
     if (req.url?.startsWith('/jmap/ws') && jmapUpgrade) jmapUpgrade(req, socket as never, head);
     else socket.destroy();
   });
@@ -606,7 +620,8 @@ async function start() {
   // has been set in BCP → SSL/TLS → "Als HTTPS aktivieren".
   // Hot-reload on certificate activation via Redis (no restart needed).
   setTlsUpgradeHandler((req, socket, head) => {
-    if (upgradeBlocked(req)) socket.destroy(); // 10.5: block list
+    // 10.5: block list (the TLS proxy strips forwarding headers: the socket peer is the client)
+    if (upgradeBlocked(req, connectGuard, trustFn)) socket.destroy();
     else if (req.url?.startsWith('/jmap/ws') && jmapUpgrade) jmapUpgrade(req, socket as never, head);
     else socket.destroy();
   });

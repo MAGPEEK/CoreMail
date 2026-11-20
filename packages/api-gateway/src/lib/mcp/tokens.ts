@@ -15,7 +15,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { createLogger } from '@coremail/core';
 import { prisma } from '@coremail/storage';
 import {
-  generateMcpToken, hashMcpToken, isAccessTokenRevokedShared, looksLikeMcpToken, publishUserAuthChange,
+  generateMcpToken, hashMcpToken, isAccessTokenRevokedShared, looksLikeMcpToken, publishUserAuthChange, mfaEnrolmentRefusal,
 } from '@coremail/storage/auth';
 import { currentAdminState, adminMfaRefusal } from '../../middleware/auth.js';
 import { isAdminRole } from '../rbac.js';
@@ -54,7 +54,7 @@ export type McpTokenCheck =
   | { ok: true; token: VerifiedMcpToken }
   /** unknown / malformed: a guess (counted against the client IP); the rest: a known token that no longer works. */
   | { ok: false; reason: 'malformed' | 'unknown' | 'revoked' | 'expired' | 'inactive' | 'not-admin' }
-  | { ok: false; reason: 'mfa'; code: 'MFA_REQUIRED' | 'MFA_NOT_VERIFIED'; error: string };
+  | { ok: false; reason: 'mfa'; code: 'MFA_REQUIRED' | 'MFA_NOT_VERIFIED' | 'MFA_ENROLMENT_REQUIRED'; error: string };
 
 const equalHex = (a: string, b: string): boolean => {
   const x = Buffer.from(a, 'hex');
@@ -111,6 +111,15 @@ export async function verifyMcpToken(raw: string, ip: string): Promise<McpTokenC
   }
   const mfa = await adminMfaRefusal(user.id, row.mfaVerified);
   if (mfa) return { ok: false, reason: 'mfa', code: mfa.code, error: mfa.error };
+  // 10.5 review: "MFA für alle Benutzer erzwingen" applies to MCP tokens too — after the
+  // owner's grace deadline a token of an account without MFA stops working. The current
+  // enrolment decides (a long-lived token never stands in for a second factor); an
+  // unreadable state throws (the caller answers 503 — never "allowed").
+  const enrolment = await mfaEnrolmentRefusal(user.id, false);
+  if (enrolment?.status === 503) throw new Error('MFA enforcement state unavailable');
+  if (enrolment) {
+    return { ok: false, reason: 'mfa', code: 'MFA_ENROLMENT_REQUIRED', error: String(enrolment.body['error'] ?? 'MFA enrolment required') };
+  }
   touch(row.id, ip);
   return {
     ok: true,

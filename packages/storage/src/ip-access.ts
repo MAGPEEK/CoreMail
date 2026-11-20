@@ -6,6 +6,8 @@
  *  - BLOCK rules are refused on every protocol at connect: SMTP/IMAP/POP3 on the
  *    raw TCP socket before TLS (connect-guard.ts), every HTTP surface in the
  *    api-gateway (ActiveSync, DAV, JMAP, MAPI, Autodiscover, webmail, BCP, API).
+ *    10.5 review: automatic (repeat-offender) entries are not applied to inbound
+ *    mail on port 25 (surface `mx`) — only manual entries are.
  *  - ALLOW rules are never locked: they skip the per-IP lockout counter (merged
  *    with MAIL_AUTH_EXEMPT_CIDRS) and win over BLOCK. Loopback is always allowed.
  *  - Every service keeps the rules in memory: refreshed every 60 s and right
@@ -18,7 +20,7 @@
 import { BlockList, isIP } from 'node:net';
 import { createLogger, getRedisClient, peekRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 import { prisma } from './prisma/index.js';
-import { createExemptIpMatcher, formatIpv6Groups, ipv6Groups, isLoopbackIp, normalizeIp } from './mail-auth-core.js';
+import { compressIpv6Groups, createExemptIpMatcher, formatIpv6Groups, ipv6Groups, isLoopbackIp, normalizeIp } from './mail-auth-core.js';
 
 const log = createLogger('ip-access');
 
@@ -33,21 +35,9 @@ export interface ParsedCidr {
   family: 4 | 6;
 }
 
-/** RFC 5952 text of eight IPv6 groups (longest zero run → `::`). */
+/** RFC 5952 text of eight IPv6 groups (longest zero run → `::`); the lockout's ipLockIdOf uses the same text. */
 export function compressIpv6(groups: number[]): string {
-  let bestStart = -1; let bestLen = 0;
-  for (let i = 0; i < 8;) {
-    if (groups[i] !== 0) { i++; continue; }
-    let j = i;
-    while (j < 8 && groups[j] === 0) j++;
-    if (j - i > bestLen && j - i >= 2) { bestStart = i; bestLen = j - i; }
-    i = j;
-  }
-  const hex = groups.map((g) => g.toString(16));
-  if (bestStart === -1) return hex.join(':');
-  const head = hex.slice(0, bestStart).join(':');
-  const tail = hex.slice(bestStart + bestLen).join(':');
-  return `${head}::${tail}`;
+  return compressIpv6Groups(groups);
 }
 
 /**
@@ -100,40 +90,55 @@ export interface IpRule {
   kind: IpAccessKindName;
   cidr: string;
   expiresAt?: Date | string | null;
+  /** 10.5 review: an automatic (repeat-offender) entry — not applied to inbound MX (port 25). */
+  auto?: boolean | null;
 }
 
 export type IpVerdict = 'allow' | 'block' | 'none';
 
+/**
+ * 10.5 review: where a connection arrives. `mx` = inbound mail on port 25
+ * (other servers delivering mail): only manual BLOCK entries apply there — an
+ * automatic entry (shared address that tripped the login lockout) must never
+ * bounce legitimate mail with a permanent 554. Every other surface (client
+ * logins: submission, IMAP, POP3, HTTP) applies manual and automatic entries.
+ */
+export type IpAccessSurface = 'client' | 'mx';
+
 export interface IpAccessMatcher {
   /** ALLOW (wins) → 'allow', BLOCK → 'block', else 'none'. Loopback/env exemptions are NOT applied here. */
-  verdict(ip: string | null | undefined): IpVerdict;
+  verdict(ip: string | null | undefined, surface?: IpAccessSurface): IpVerdict;
   readonly blocks: number;
   readonly allows: number;
 }
 
 /** Builds the matcher of the active (not expired, parseable) rules. */
 export function buildIpAccessMatcher(rules: readonly IpRule[], now = Date.now()): IpAccessMatcher {
-  const block = new BlockList();
+  const manualBlock = new BlockList();
+  const autoBlock = new BlockList();
   const allow = new BlockList();
-  let blocks = 0; let allows = 0;
+  let blocks = 0; let allows = 0; let manualBlocks = 0;
   for (const r of rules) {
     if (r.expiresAt && new Date(r.expiresAt).getTime() <= now) continue;
     const c = parseCidr(r.cidr);
     if (!c) continue;
-    const list = r.kind === 'ALLOW' ? allow : block;
+    const list = r.kind === 'ALLOW' ? allow : r.auto === true ? autoBlock : manualBlock;
     const addr = c.family === 4 ? c.address : formatIpv6Groups(ipv6Groups(c.address)!);
     list.addSubnet(addr, c.prefix, c.family === 4 ? 'ipv4' : 'ipv6');
-    if (r.kind === 'ALLOW') allows++; else blocks++;
+    if (r.kind === 'ALLOW') allows++;
+    else { blocks++; if (r.auto !== true) manualBlocks++; }
   }
+  const autoBlocks = blocks - manualBlocks;
   return {
     blocks, allows,
-    verdict(rawIp) {
+    verdict(rawIp, surface = 'client') {
       const ip = normalizeIp(rawIp);
       const family = isIP(ip);
       if (family === 0) return 'none';
       const type = family === 4 ? 'ipv4' : 'ipv6';
       if (allows > 0 && allow.check(ip, type)) return 'allow';
-      if (blocks > 0 && block.check(ip, type)) return 'block';
+      if (manualBlocks > 0 && manualBlock.check(ip, type)) return 'block';
+      if (surface !== 'mx' && autoBlocks > 0 && autoBlock.check(ip, type)) return 'block';
       return 'none';
     },
   };
@@ -165,9 +170,9 @@ export async function refreshIpAccessRules(): Promise<boolean> {
       const now = new Date();
       const rows = await prisma.ipAccessRule.findMany({
         where: { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
-        select: { kind: true, cidr: true, expiresAt: true },
+        select: { kind: true, cidr: true, expiresAt: true, auto: true },
       });
-      state.matcher = buildIpAccessMatcher(rows.map((r) => ({ kind: r.kind as IpAccessKindName, cidr: r.cidr, expiresAt: r.expiresAt })));
+      state.matcher = buildIpAccessMatcher(rows.map((r) => ({ kind: r.kind as IpAccessKindName, cidr: r.cidr, expiresAt: r.expiresAt, auto: r.auto })));
       state.loadedAt = Date.now();
       return true;
     } catch (err) {
@@ -202,13 +207,14 @@ export function enableIpAccessRuntime(): void {
 /**
  * The connect-time verdict of a client IP: loopback, MAIL_AUTH_EXEMPT_CIDRS and
  * ALLOW rules → 'allow' (never refused, never IP-locked), BLOCK rules → 'block',
- * else 'none'. Synchronous (in-memory list).
+ * else 'none'. Synchronous (in-memory list). 10.5 review: on the `mx` surface
+ * (inbound port 25) automatic entries do not apply — manual ones do.
  */
-export function ipAccessVerdict(rawIp: string | null | undefined): IpVerdict {
+export function ipAccessVerdict(rawIp: string | null | undefined, surface: IpAccessSurface = 'client'): IpVerdict {
   const ip = normalizeIp(rawIp);
   if (!ip || isIP(ip) === 0) return 'none';
   if (isLoopbackIp(ip) || envExempt.isExempt(ip)) return 'allow';
-  return current().verdict(ip);
+  return current().verdict(ip, surface);
 }
 
 /** True when an ALLOW rule of the BCP list covers the IP (the lockout exemption). */
