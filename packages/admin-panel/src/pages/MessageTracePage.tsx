@@ -4,6 +4,7 @@ import { Search, Download, Loader2, ArrowRight, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { api, downloadFile } from '../api/client.js';
 import { useT } from '../i18n/useT.js';
+import { MessageTraceDetail } from '../components/MessageTraceDetail.js';
 
 interface TraceItem {
   id: string; timestamp: string; level: string; message: string;
@@ -51,6 +52,8 @@ export function MessageTracePage() {
   const [toDate, setToDate]       = useState('');
   const [page, setPage]           = useState(1);
   const [limit]                   = useState(100);
+  // 10.2: entry shown in the detail side panel
+  const [detailId, setDetailId]   = useState<string | null>(null);
   // The table follows the APPLIED filters (Search / Enter), not every keystroke.
   // datetime-local values are local time → sent as ISO instants.
   const currentFilters = () => {
@@ -242,7 +245,13 @@ export function MessageTracePage() {
                 {items.map(item => {
                   const m = item.metadata ?? {};
                   return (
-                    <tr key={item.id} className="hover:bg-surface-2 transition-colors">
+                    <tr key={item.id} tabIndex={0}
+                      title={t('mt_open_details')}
+                      aria-current={detailId === item.id ? 'true' : undefined}
+                      onClick={() => setDetailId(item.id)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' && e.target === e.currentTarget) { e.preventDefault(); setDetailId(item.id); } }}
+                      className={`cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-fg transition-colors ${
+                        detailId === item.id ? 'bg-accent/10' : 'hover:bg-surface-2'}`}>
                       <td className="px-4 py-3 text-xs text-fg-subtle whitespace-nowrap">
                         {new Date(item.timestamp).toLocaleString(lang === 'en' ? 'en-GB' : 'de-DE')}
                       </td>
@@ -291,6 +300,11 @@ export function MessageTracePage() {
           </>
         )}
       </div>
+
+      {detailId && (
+        <MessageTraceDetail id={detailId} onClose={() => setDetailId(null)} onOpen={setDetailId}
+          renderStatus={(s) => <StatusBadge status={s} lang={lang} />} />
+      )}
     </div>
   );
 }

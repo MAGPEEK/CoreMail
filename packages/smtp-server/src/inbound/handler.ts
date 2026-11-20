@@ -10,8 +10,10 @@
 import { createLogger } from '@coremail/core';
 import {
   prisma, stripHeaders, INTERNAL_MAIL_HEADERS, checkReceiveQuotaForAddress, recipientSenderRefusal, mailFlowForRecipient,
-  deliveryRefusal, headerFromAddress, type SenderAuth, type DeliveryFacts, type MailFlowSettings,
+  deliveryRefusal, headerFromAddress, createTraceRecorder, type SenderAuth, type DeliveryFacts, type MailFlowSettings,
 } from '@coremail/storage';
+import { filterDecisionStage, sessionStages, contentFilterStages, aliasStage } from '../handlers/trace-stages.js';
+import type { TraceNoteSink } from '../core/types.js';
 import { notifyLocalOutcomes } from '../handlers/local-notify.js';
 import crypto from 'crypto';
 import { storeInboundMessage, toLocalOutcome } from '../handlers/message.js';
@@ -63,8 +65,10 @@ export function asciiJson(value: unknown): string {
 
 // At connect time only the client IP is known → IP-based checks only
 // (DNSBL/DNSWL, GeoIP). Greylisting needs the full triple and runs at RCPT TO.
-async function onConnect(ip: string): Promise<boolean> {
+async function onConnect(ip: string, note?: TraceNoteSink): Promise<boolean> {
+  const at = new Date();
   const decision = await callConnectionFilter(SECURITY_FILTER_URL, { stage: 'connect', senderIp: ip });
+  note?.(filterDecisionStage('connection-check', decision, { at, ms: Date.now() - at.getTime() }));
   if (decision.kind === 'unavailable') {
     log.error({ ip, detail: decision.detail }, 'Security filter unavailable (connect stage) — failing open');
   } else if (decision.kind === 'block') {
@@ -73,12 +77,14 @@ async function onConnect(ip: string): Promise<boolean> {
   return connectionAllowed(decision);
 }
 
-async function greylistDecision(ip: string, from: string, rcpt: string): Promise<ConnectionFilterDecision> {
+async function greylistDecision(ip: string, from: string, rcpt: string, note?: TraceNoteSink): Promise<ConnectionFilterDecision> {
   // Addresses keep the case of their local-part (RFC 5321 §2.4) — the greylist
   // triple is case-insensitive.
+  const at = new Date();
   const decision = await callConnectionFilter(SECURITY_FILTER_URL, {
     stage: 'rcpt', senderIp: ip, mailFrom: from.toLowerCase(), rcptTo: rcpt.toLowerCase(),
   });
+  note?.(filterDecisionStage('recipient-check', decision, { at, ms: Date.now() - at.getTime(), recipient: rcpt }));
   if (decision.kind === 'unavailable') {
     log.error({ ip, from, rcpt, detail: decision.detail }, 'Security filter unavailable (greylisting) — failing open');
   } else if (decision.kind === 'block') {
@@ -105,6 +111,7 @@ async function onRcptTo(
   from: string,
   authUser: AuthUser | null,
   ip?: string,
+  note?: TraceNoteSink,
 ): Promise<string | null> {
   try {
     // Local delivery can be disabled globally via SmtpSettings.localDeliveryEnabled.
@@ -135,7 +142,7 @@ async function onRcptTo(
   // Greylisting with the real (IP, MAIL FROM, RCPT TO) triple — only for
   // existing recipients, never for authenticated sessions.
   if (ip && !authUser) {
-    return rcptReplyForDecision(await greylistDecision(ip, from, to));
+    return rcptReplyForDecision(await greylistDecision(ip, from, to, note));
   }
   return null;
 }
@@ -181,10 +188,14 @@ async function onMessage(
     throw new Error('552 5.3.4 Message too big for content inspection');
   }
 
+  // 10.2 message trace: session facts + connect/RCPT verdicts, then every stage below.
+  const trace = createTraceRecorder(sessionStages(ip, meta));
+
   // 1. Full content scan (SPF/DKIM/DMARC, blacklist, ClamAV, rspamd)
   // The real SMTP session: SPF/DMARC and rspamd evaluate MAIL FROM, HELO and IP.
   // ASCII-only JSON: an HTTP header value cannot carry raw UTF-8
   // (SMTPUTF8 addresses) — non-ASCII characters are \u-escaped.
+  const filterStart = new Date();
   const verdict = await callContentFilter(SECURITY_FILTER_URL, '/check/content', raw, asciiJson(filterContext({
     senderIp: ip,
     mailFrom: from,
@@ -198,6 +209,7 @@ async function onMessage(
     throw new Error('451 4.7.1 Content filter temporarily unavailable, try again later');
   }
   const filterResult = verdict.result;
+  trace.push(...contentFilterStages(filterResult, { at: filterStart, ms: Date.now() - filterStart.getTime() }));
 
   log.info(
     { action: filterResult.action, from, score: filterResult.spamScore },
@@ -206,6 +218,7 @@ async function onMessage(
 
   if (filterResult.action === 'reject') {
     const headers = extractRawHeaders(raw);
+    trace.add('delivery', 'fail', { outcome: 'rejected', reply: `550 5.7.1 ${filterResult.reason ?? 'Message rejected'}` });
     void prisma.systemLog.create({
       data: {
         level: 'WARN',
@@ -223,6 +236,7 @@ async function onMessage(
           spamScore: filterResult.spamScore !== undefined ? String(filterResult.spamScore) : '',
           reason: filterResult.reason ?? 'Message rejected',
           direction: 'INBOUND',
+          trace: trace.toJSON(),
         },
       },
     }).catch((err: unknown) => log.error({ err }, 'MAIL_FLOW log failed'));
@@ -255,6 +269,7 @@ async function onMessage(
         ...(filterResult.reason ? { filterReason: filterResult.reason } : {}),
       },
       ...(filterResult.spamScore !== undefined ? { spamScore: filterResult.spamScore } : {}),
+      trace: trace.stages(),
     });
     return;
   }
@@ -262,6 +277,8 @@ async function onMessage(
   // 2. Expand distribution groups → individual delivery addresses
   //    (IDN domains are mapped onto the configured spelling — v8.1).
   const { targets: deliveryAddresses, origins } = await expandRecipientsWithOrigins(to);
+  const aliases = aliasStage(origins);
+  if (aliases) trace.push(aliases);
 
   // 3. Split into local vs. external (Distribution groups may contain external
   //    members like "partner@kunde.com" — these need outbound forwarding, not
@@ -298,6 +315,7 @@ async function onMessage(
         toJunk: filterResult.junkFolder ?? false,
         senderAuth,
         ...(filterResult.spamScore !== undefined ? { spamScore: filterResult.spamScore } : {}),
+        trace: trace.stages(),
       });
       return toLocalOutcome(result);
     },

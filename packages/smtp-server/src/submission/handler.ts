@@ -10,8 +10,9 @@
 import { createLogger } from '@coremail/core';
 import {
   prisma, checkHeaderSenderIdentity, isSenderAddressAllowed, listAllowedSenderAddresses, checkSendQuota,
-  stripHeaders, INTERNAL_MAIL_HEADERS, checkUserSendLimits, afterForeignSend, type SendLimitVerdict,
+  stripHeaders, INTERNAL_MAIL_HEADERS, checkUserSendLimits, afterForeignSend, createTraceRecorder, type SendLimitVerdict,
 } from '@coremail/storage';
+import { sessionStages, aliasStage } from '../handlers/trace-stages.js';
 import { storeInboundMessage, toLocalOutcome } from '../handlers/message.js';
 import { expandRecipientsWithOrigins, isLocalDomainAddress } from '../handlers/expand.js';
 import { enqueueOutbound } from '../outbound/queue.js';
@@ -193,6 +194,13 @@ async function onMessage(
     ? await expandRecipientsWithOrigins(localRcpts)
     : { targets: [] as string[], origins: new Map<string, string[]>() };
 
+  // 10.2 message trace: session (port, TLS, AUTH user), sender checks, aliases.
+  const trace = createTraceRecorder(sessionStages(ip, meta));
+  trace.add('submission', 'ok', { authUser: authUser.email, senderAllowed: true, local: localRcpts.length, external: externalRcpts.length });
+  const aliases = aliasStage(origins);
+  if (aliases) trace.push(aliases);
+  const queueIds: string[] = [];
+
   // Local delivery (mailbox) + external delivery (outbound queue). 250 only
   // when both are done; a failure answers 451 and the client's retry skips
   // what was already delivered (no duplicates, no loss — RFC 5321 §6.1).
@@ -208,6 +216,7 @@ async function onMessage(
       const result = await storeInboundMessage(localRaw, {
         fromAddr: from, rcptTo: rcpt, toJunk: false, deliveryKey: txKey,
         senderAuth: { authenticatedSender: from },
+        trace: trace.stages(),
       });
       return toLocalOutcome(result);
     },
@@ -215,14 +224,17 @@ async function onMessage(
       // RFC 3461: the DSN request travels with the queue job (passed on to a
       // DSN-capable next hop, honoured by the queue's DSNs).
       const jobDsn = dsnForRecipients(meta?.envelope?.dsn, rcpts);
-      await enqueueOutbound({
-        messageId: crypto.randomUUID(),
+      const trackingId = crypto.randomUUID();
+      const jobId = await enqueueOutbound({
+        messageId: trackingId,
         from,
         to: rcpts,
         rawMessage: submittedRaw.toString('base64'),
         senderUserId: authUser.id,
         ...(jobDsn ? { dsn: jobDsn } : {}),
       });
+      queueIds.push(trackingId);
+      trace.add('queued', 'info', { trackingId, ...(jobId ? { jobId } : {}), recipients: rcpts.length });
     },
   });
 
@@ -257,6 +269,9 @@ async function onMessage(
         localCount: String(localRcpts.length),
         externalCount: String(externalRcpts.length),
         direction: 'OUTBOUND',
+        // 10.2 message trace: the queue rows of this submission carry these tracking ids
+        ...(queueIds.length ? { queueTrackingIds: queueIds.join(', ') } : {}),
+        trace: trace.toJSON(),
       },
     },
   }).catch((err: unknown) => log.error({ err }, 'MAIL_FLOW log failed'));

@@ -144,6 +144,43 @@ test('content pipeline: the note reaches the accepted result; a rspamd reject dr
   assert.equal(q.virusScan?.status, 'infected');
 });
 
+// 10.2 message trace: the content stage reports what each check found.
+test('content pipeline: the per-stage checks summary travels with every verdict', async () => {
+  const ctx = { senderIp: '203.0.113.9', mailFrom: 'a@b.example', rcptTo: 'u@local.example' };
+  const raw = Buffer.from('Subject: x\r\n\r\nbody');
+  const deps = (score: number, clam: ClamavResult) => ({
+    dnsbl: async () => ({ listed: false, whitelisted: false, hits: [], totalScore: 0, action: null }),
+    country: async () => ({ allowed: true }),
+    greylist: async () => ({ action: 'accept' as const }),
+    authenticate: async () => ({
+      spf: 'pass', dkim: 'pass', dmarc: 'pass', arc: 'none', summary: 'ok', spfDomain: 'b.example',
+      dkimDomains: ['b.example'], headerFromDomain: 'b.example', dmarcPolicy: 'reject', verifiedDomains: ['b.example'],
+    }),
+    blacklist: async () => ({ blocked: false }),
+    parse: async () => ({ attachments: [] }),
+    clamav: async () => clam,
+    rspamd: async () => ({ score }),
+    isLocalDomain: async () => false,
+    dnsblScore: async () => ({ score: 0, zones: [] }),
+  }) as never;
+  const cfg = buildPipelineConfig({ ...SEC, attachmentEnabled: true }, null, {});
+  const ok = await runContentChecks(raw, ctx, cfg, deps(1.5, { status: 'clean', clean: true }));
+  assert.equal(ok.checks?.auth?.spf, 'pass');
+  assert.equal(ok.checks?.auth?.spfDomain, 'b.example');
+  assert.deepEqual(ok.checks?.auth?.dkimDomains, ['b.example']);
+  assert.equal(ok.checks?.senderList, 'none');
+  assert.equal(ok.checks?.attachments, 'ok');
+  assert.equal(ok.checks?.virus?.status, 'clean');
+  assert.equal(ok.checks?.spam?.verdict, 'inbox');
+  assert.equal(ok.checks?.spam?.score, 1.5);
+  const q = await runContentChecks(raw, ctx, cfg, deps(1, infected('Eicar')));
+  assert.equal(q.action, 'quarantine');
+  assert.deepEqual([q.checks?.virus?.status, q.checks?.virus?.signature], ['infected', 'Eicar']);
+  assert.equal(q.checks?.spam, undefined, 'stages after the decision did not run');
+  const off = await runContentChecks(raw, ctx, buildPipelineConfig({ ...SEC, clamavEnabled: false, rspamdEnabled: false }, null, {}), deps(1, { status: 'clean', clean: true }));
+  assert.deepEqual([off.checks?.virus?.status, off.checks?.spam?.verdict, off.checks?.attachments], ['disabled', 'disabled', 'disabled']);
+});
+
 test('clamd VERSION / STATS parsing', () => {
   const v = parseClamdVersion('ClamAV 1.4.1/27450/Mon Nov 16 09:23:00 2026\0');
   assert.equal(v.engine, '1.4.1');

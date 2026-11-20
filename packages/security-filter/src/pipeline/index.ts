@@ -96,6 +96,32 @@ export interface PipelineResult {
   verifiedDomains?: string[];
   /** Set when the message was not scanned clean (see VirusScanNote). */
   virusScan?: VirusScanNote;
+  /**
+   * 10.2: per-stage summary of the content checks for the message trace
+   * (smtp-server records it in the MAIL_FLOW row). Only facts the stages
+   * computed anyway — never message content.
+   */
+  checks?: ContentChecks;
+}
+
+/** Per-stage summary of runContentChecks (10.2 message trace). Absent field = stage did not run. */
+export interface ContentChecks {
+  /** SPF / DKIM / DMARC / ARC verdicts with the evaluated domains. */
+  auth?: {
+    spf: string; spfDomain?: string; dkim: string; dkimDomains?: string[];
+    dmarc: string; dmarcPolicy?: string; headerFrom?: string; arc: string; arcSealer?: string;
+    /** Delivered to Junk because of the DMARC policy or a local-domain spoofing suspicion. */
+    junk?: 'dmarc' | 'local-spoof';
+    ms?: number;
+  };
+  /** Sender lists over every recipient: allow-listed (authenticated) sender, no verdict, or blocked. */
+  senderList?: 'allow' | 'none' | 'block';
+  /** Attachment filter: passed, blocked or switched off. */
+  attachments?: 'ok' | 'blocked' | 'disabled';
+  /** ClamAV: clean, a VirusScanNote status, or switched off. */
+  virus?: { status: 'clean' | 'disabled' | VirusScanNote['status']; signature?: string; reason?: string; ms?: number };
+  /** rspamd (+ SCORE_ONLY DNSBL weights): verdict and score, or switched off. */
+  spam?: { verdict: 'inbox' | 'junk' | 'reject' | 'allowlisted' | 'disabled'; score?: number; dnsblZones?: string[]; ms?: number };
 }
 
 export interface ConnectionContext {
@@ -500,9 +526,35 @@ export async function runContentChecks(
   config: PipelineConfig = {},
   deps: PipelineDeps = defaultDeps,
 ): Promise<PipelineResult> {
+  const checks: ContentChecks = {};
+  const result = await contentChecks(rawMessage, ctx, config, deps, checks);
+  return Object.keys(checks).length > 0 ? { ...result, checks } : result;
+}
+
+/** Pure: the trace summary of an authentication result (domains only, no message content). */
+export function authChecks(auth: AuthResult, ms: number, junk?: 'dmarc' | 'local-spoof'): NonNullable<ContentChecks['auth']> {
+  return {
+    spf: auth.spf, ...(auth.spfDomain ? { spfDomain: auth.spfDomain } : {}),
+    dkim: auth.dkim, ...(auth.dkimDomains?.length ? { dkimDomains: auth.dkimDomains.slice(0, 8) } : {}),
+    dmarc: auth.dmarc, ...(auth.dmarcPolicy ? { dmarcPolicy: auth.dmarcPolicy } : {}),
+    ...(auth.headerFromDomain ? { headerFrom: auth.headerFromDomain } : {}),
+    arc: auth.arc, ...(auth.arcSealer ? { arcSealer: auth.arcSealer } : {}),
+    ...(junk ? { junk } : {}),
+    ms,
+  };
+}
+
+async function contentChecks(
+  rawMessage: Buffer,
+  ctx: ConnectionContext,
+  config: PipelineConfig,
+  deps: PipelineDeps,
+  checks: ContentChecks,
+): Promise<PipelineResult> {
   const hostname = ctx.hostname || config.hostname || process.env['SMTP_HOSTNAME'] || 'mail.localhost';
 
   // ── Stage 2: SPF / DKIM / DMARC — on the real SMTP session data ─────────
+  const authStart = Date.now();
   const auth = await deps.authenticate(rawMessage, {
     ip: ctx.senderIp,
     helo: ctx.helo ?? '',
@@ -510,10 +562,11 @@ export async function runContentChecks(
     mta: hostname,
   });
   const authDecision = await decideAuthentication(auth, ctx, deps.isLocalDomain, deps.spoofOptions ?? spoofOptionsFor(config));
-  if (authDecision && 'action' in authDecision) return authDecision;
   const junk = authDecision !== null && 'junk' in authDecision ? authDecision : null;
+  checks.auth = authChecks(auth, Date.now() - authStart, junk?.cause);
+  if (authDecision && 'action' in authDecision) return authDecision;
 
-  const result = await runContentStages(rawMessage, ctx, config, deps, auth, hostname);
+  const result = await runContentStages(rawMessage, ctx, config, deps, auth, hostname, checks);
   if (result.action !== 'accept') return result;
   const authHeaders = (auth.authHeaders ?? '')
     + (junk?.spoofDomain ? localSpoofAuthHeader(hostname, junk.spoofDomain) : '');
@@ -535,22 +588,25 @@ async function runContentStages(
   deps: PipelineDeps,
   auth: AuthResult,
   hostname: string,
+  checks: ContentChecks = {},
 ): Promise<PipelineResult> {
   // ── Stage 3: Sender lists (every recipient; per-recipient blocks ran at RCPT TO) ──
   const senderList = await deps.blacklist(ctx.mailFrom, recipientsOf(ctx));
   if (senderList.blocked) {
+    checks.senderList = 'block';
     return { action: 'reject', reason: senderList.reason ?? 'Sender blocked' };
   }
   // An allow entry never trusts a forged sender: the envelope domain must be authenticated.
   const senderDomain = ctx.mailFrom ? addressDomain(ctx.mailFrom) : null;
   const allowlisted = senderList.allowed === true && !!senderDomain
     && isDomainAuthenticated(senderDomain, auth.verifiedDomains ?? []);
+  checks.senderList = allowlisted ? 'allow' : 'none';
 
-  const malware = await runMalwareStages(rawMessage, ctx, config, deps);
+  const malware = await runMalwareStages(rawMessage, ctx, config, deps, checks);
   if (malware.decision) return malware.decision;
   const virusNote = malware.note;
 
-  const result = await runSpamStage(rawMessage, ctx, config, deps, auth, hostname, allowlisted);
+  const result = await runSpamStage(rawMessage, ctx, config, deps, auth, hostname, allowlisted, checks);
   return virusNote && result.action !== 'reject' ? { ...result, virusScan: virusNote } : result;
 }
 
@@ -602,6 +658,7 @@ async function runMalwareStages(
   ctx: ConnectionContext,
   config: PipelineConfig,
   deps: Pick<PipelineDeps, 'parse' | 'clamav'>,
+  checks: ContentChecks = {},
 ): Promise<{ decision: PipelineResult | null; note?: VirusScanNote }> {
   // ── Stage 4a+b: Attachment filter (SecuritySettings.attachment*) ─────────
   if (config.attachmentEnabled !== false) {
@@ -610,6 +667,7 @@ async function runMalwareStages(
       parsed = await deps.parse(rawMessage);
     } catch (err) {
       log.error({ err }, 'MIME parsing failed');
+      checks.attachments = 'blocked';
       return { decision: { action: 'reject', reason: 'Invalid message format' } };
     }
     const attCheck = checkAttachments(parsed.attachments, {
@@ -617,19 +675,30 @@ async function runMalwareStages(
       ...(config.blockedExtensions !== undefined ? { blockedExtensions: config.blockedExtensions } : {}),
     });
     if (attCheck.blocked) {
+      checks.attachments = 'blocked';
       return { decision: { action: 'reject', reason: attCheck.reason ?? 'Attachment not allowed' } };
     }
+    checks.attachments = 'ok';
   } else {
+    checks.attachments = 'disabled';
     log.debug('Attachment filter skipped (disabled in settings)');
   }
 
   // ── Stage 4c: ClamAV antivirus ───────────────────────────────────────────
   if (config.clamavEnabled === false) {
+    checks.virus = { status: 'disabled' };
     log.debug('ClamAV scan skipped (disabled in settings)');
     return { decision: null };
   }
+  const scanStart = Date.now();
   const clamav = await scanWithPolicy(rawMessage, config, deps.clamav);
   const { decision, note } = evaluateClamav(clamav, config);
+  checks.virus = {
+    status: note?.status ?? (clamav.status === 'infected' ? 'infected' : 'clean'),
+    ...(note?.signature ? { signature: note.signature } : clamav.virusName ? { signature: clamav.virusName } : {}),
+    ...(note?.reason ? { reason: note.reason } : {}),
+    ms: Date.now() - scanStart,
+  };
   if (decision) {
     if (clamav.status === 'infected') log.warn({ virusName: clamav.virusName, mailFrom: ctx.mailFrom, action: decision.action }, 'Virus detected');
     else if (clamav.status === 'oversize') log.warn({ size: rawMessage.length, mailFrom: ctx.mailFrom }, 'Message too large for virus scanning — rejected (clamavOversizeAction=reject)');
@@ -656,9 +725,11 @@ async function runSpamStage(
   auth: AuthResult,
   hostname: string,
   allowlisted = false,
+  checks: ContentChecks = {},
 ): Promise<PipelineResult> {
   // ── Stage 4d: rspamd anti-spam (with the SMTP session data) ─────────────
   if (config.rspamdEnabled !== false) {
+    const spamStart = Date.now();
     const spam = await deps.rspamd(rawMessage, {
       ip: ctx.senderIp,
       ...(ctx.helo ? { helo: ctx.helo } : {}),
@@ -675,8 +746,14 @@ async function runSpamStage(
       : { score: 0, zones: [] };
     const score = spam.score + dnsbl.score;
     const scoreNote = dnsbl.score > 0 ? ` (DNSBL +${dnsbl.score}: ${dnsbl.zones.join(', ')})` : '';
+    const verdict = spamVerdict(score, config, allowlisted);
+    checks.spam = {
+      verdict: allowlisted ? 'allowlisted' : verdict, score,
+      ...(dnsbl.zones.length ? { dnsblZones: [...new Set(dnsbl.zones)].slice(0, 8) } : {}),
+      ms: Date.now() - spamStart,
+    };
 
-    switch (spamVerdict(score, config, allowlisted)) {
+    switch (verdict) {
       case 'reject':
         return { action: 'reject', reason: `Spam score too high: ${score.toFixed(2)}${scoreNote}`, spamScore: score };
       case 'junk':
@@ -694,6 +771,7 @@ async function runSpamStage(
   }
 
   // rspamd disabled — accept directly
+  checks.spam = { verdict: 'disabled' };
   log.debug('Rspamd scan skipped (disabled in settings)');
   return {
     action: 'accept',

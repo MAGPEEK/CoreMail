@@ -6,9 +6,11 @@ import {
   prisma, downloadBuffer, deleteObject, buildOutboundJobOptions, getOutboundJobOptions, loadQueueSettings, isExpiredInQueue,
   outboundRetryDelay, queueStartMs, receiptAddressOf, afterForeignSend, importanceMailOption, normalizeImportance,
   CRLF_STREAM_TRANSPORT, RULE_FORWARDED_HEADER,
-  normalizeSensitivity, sensitivityHeaders,
+  normalizeSensitivity, sensitivityHeaders, createTraceRecorder, traceStage,
+  type TraceRecorder, type TraceStage,
 } from '@coremail/storage';
 import { relayMessage, type RecipientFailure, type RelayResult, type DkimOptions, type RelayOptions } from './relay.js';
+import { relayStages } from '../handlers/trace-stages.js';
 import { extractSmtpCode, sendDsnBounce, sendSuccessDsn, rawSubjectAndId, type DsnOptions } from './dsn.js';
 import type { EnvelopeDsn } from '../core/dsn-params.js';
 import { domainVariants } from '../core/idn.js';
@@ -326,8 +328,20 @@ class TemporaryDeliveryError extends Error {
  *    kept for the final bounce
  *  - when every recipient failed permanently the job ends as a dead letter
  *    (UnrecoverableError) — the bounce has already been sent
+ *
+ * 10.2: `trace` (optional) records the local deliveries, the DKIM key, the
+ * MX lookup and remote replies of this attempt, and every DSN sent.
  */
-export async function deliverOutboundJob(job: OutboundJobLike, buffer: Buffer, deps: OutboundDeps): Promise<DeliverySummary> {
+export async function deliverOutboundJob(job: OutboundJobLike, buffer: Buffer, depsIn: OutboundDeps, trace?: TraceRecorder): Promise<DeliverySummary> {
+  const deps: OutboundDeps = trace
+    ? {
+      ...depsIn,
+      bounce: async (o) => {
+        await depsIn.bounce(o);
+        trace.add('dsn', 'info', { action: o.action ?? 'failed', to: o.originalFrom ? [o.originalFrom] : [], about: o.originalTo });
+      },
+    }
+    : depsIn;
   const data = job.data;
   const { from, to } = data;
   const delivered = new Set(data.deliveredRcpts ?? []);
@@ -455,6 +469,16 @@ export async function deliverOutboundJob(job: OutboundJobLike, buffer: Buffer, d
     }
     newlyBounced.push(...policyLocal);
   }
+  if (trace && finalLocal.length > 0) {
+    const refused = [...unknownLocal, ...fullLocal, ...policyLocal];
+    trace.add('local-delivery', refused.length === 0 ? 'ok' : refused.length === finalLocal.length ? 'fail' : 'warn', {
+      delivered: finalLocal.filter((r) => delivered.has(r) && !bounced.has(r)),
+      ...(unknownLocal.length ? { unknown: unknownLocal } : {}),
+      ...(fullLocal.length ? { overQuota: fullLocal } : {}),
+      ...(policyLocal.length ? { refusedByPolicy: policyLocal } : {}),
+    });
+  }
+
   // NOTIFY=SUCCESS: "delivered" for the local recipients as addressed (aliases
   // included) — judged on the persisted sets, so a retry never confirms a
   // recipient an earlier attempt bounced: every local target of the address
@@ -470,7 +494,11 @@ export async function deliverOutboundJob(job: OutboundJobLike, buffer: Buffer, d
   const pending = external.filter((r) => !delivered.has(r) && !bounced.has(r));
   let transient: RecipientFailure[] = [];
   if (pending.length > 0) {
-    const result = await deps.relay(buffer, from, pending, await deps.resolveDkim(data), data.dsn ? { dsn: data.dsn } : {});
+    const dkim = await deps.resolveDkim(data);
+    trace?.add('dkim', dkim.dkimDomain && dkim.dkimSelector && dkim.dkimPrivateKey ? 'ok' : 'warn',
+      dkim.dkimDomain && dkim.dkimSelector && dkim.dkimPrivateKey ? { domain: dkim.dkimDomain, selector: dkim.dkimSelector } : { signed: false });
+    const result = await deps.relay(buffer, from, pending, dkim, data.dsn ? { dsn: data.dsn } : {});
+    if (trace) trace.push(...relayStages(result.hops ?? []));
     for (const r of result.delivered) delivered.add(r);
     // NOTIFY=SUCCESS to a next hop without DSN support → "relayed" (RFC 3461 §6.2.6.2).
     const passedOn = new Set(result.dsnPassedOn ?? []);
@@ -700,6 +728,42 @@ export async function runForeignSendOnce(
   return true;
 }
 
+// ── 10.2 message trace of a queue attempt ────────────────────────────────────
+
+/** Pure: the `queued` stage of an attempt (enqueue time, job id, attempt number, hold). */
+export function queuedStage(job: Pick<OutboundJobLike, 'id' | 'attemptsMade' | 'timestamp' | 'opts' | 'data'>): TraceStage {
+  return traceStage('queued', 'info', {
+    jobId: String(job.id ?? ''),
+    attempt: job.attemptsMade + 1,
+    ...(job.opts.delay ? { heldMs: job.opts.delay } : {}),
+    ...(job.data.ruleForward || job.data.ruleRedirect ? { ruleForward: true } : {}),
+    ...(job.data.quarantineReleaseId ? { quarantineRelease: true } : {}),
+  }, job.timestamp ? { at: new Date(job.timestamp) } : {});
+}
+
+/** The stages of a failed attempt, keyed by the error the processor threw (read by handleFailedJob). */
+const attemptTraces = new WeakMap<object, { stages: TraceStage[]; headerMessageId?: string }>();
+
+/** Remembers the attempt's trace on the error (BullMQ hands the same error to the `failed` event). */
+export function withAttemptTrace<E>(err: E, trace: TraceRecorder, headerMessageId?: string | null): E {
+  if (err && typeof err === 'object') attemptTraces.set(err, { stages: trace.stages(), ...(headerMessageId ? { headerMessageId } : {}) });
+  return err;
+}
+
+/** The trace remembered for an error by withAttemptTrace, if any. */
+export function attemptTraceOf(err: unknown): { stages: TraceStage[]; headerMessageId?: string } | undefined {
+  return err && typeof err === 'object' ? attemptTraces.get(err) : undefined;
+}
+
+/** Pure: correlation keys of an outbound MAIL_FLOW row (queue job id, attempt, header Message-ID). */
+export function outboundTraceFields(job: Pick<OutboundJobLike, 'id' | 'attemptsMade'>, headerMessageId?: string | null, attemptsMadeIsFinal = false): Record<string, string> {
+  return {
+    ...(job.id ? { jobId: String(job.id) } : {}),
+    attempt: String(attemptsMadeIsFinal ? job.attemptsMade : job.attemptsMade + 1),
+    ...(headerMessageId ? { headerMessageId } : {}),
+  };
+}
+
 export function startOutboundWorker(): Worker<OutboundJob> {
   const worker = new Worker<OutboundJob>(
     QUEUE_NAME,
@@ -707,12 +771,14 @@ export function startOutboundWorker(): Worker<OutboundJob> {
       const { from, to, senderUserId } = job.data;
 
       log.info({ jobId: job.id, from, to, attempt: job.attemptsMade + 1 }, 'Delivery started');
+      // 10.2 message trace of this attempt (MAIL_FLOW row; failed attempts via handleFailedJob)
+      const trace = createTraceRecorder([queuedStage(job)]);
 
       // QueueSettings.outboundRetentionHours: give up on messages that stayed
       // too long in the queue (→ dead letter + DSN, no further retries).
       const queueSettings = await loadQueueSettings();
       if (isExpiredInQueue(job, queueSettings)) {
-        throw queueExpiredError(queueSettings.outboundRetentionHours);
+        throw withAttemptTrace(queueExpiredError(queueSettings.outboundRetentionHours), trace);
       }
 
       // ── Schedule-send: cancellation check ────────────────────────────────
@@ -751,7 +817,7 @@ export function startOutboundWorker(): Worker<OutboundJob> {
         const refused = await refuseRevokedSender(job, buffer, { ...defaultSendTimeSenderDeps, bounce: defaultOutboundDeps.bounce, hostname: defaultOutboundDeps.hostname });
         if (refused) {
           log.warn({ jobId: job.id, from, userId: senderUserId, reason: refused.message }, 'Held message not sent — sender rights revoked');
-          throw refused;
+          throw withAttemptTrace(refused, trace, rawSubjectAndId(buffer).messageId);
         }
       }
 
@@ -772,9 +838,18 @@ export function startOutboundWorker(): Worker<OutboundJob> {
           buffer = Buffer.from(await encryptMessageForRecipient(buffer, to[0]!));
           log.debug({ jobId: job.id }, 'S/MIME encryption applied');
         }
+        if (settings?.autoSign || (settings?.autoEncrypt && to.length === 1)) {
+          trace.add('smime', 'ok', { signed: settings?.autoSign === true, encrypted: settings?.autoEncrypt === true && to.length === 1 });
+        }
       }
 
-      const summary = await deliverOutboundJob(job, buffer, defaultOutboundDeps);
+      const headerMessageId = rawSubjectAndId(buffer).messageId ?? job.data.message?.messageId ?? undefined;
+      let summary: DeliverySummary;
+      try {
+        summary = await deliverOutboundJob(job, buffer, defaultOutboundDeps, trace);
+      } catch (err) {
+        throw withAttemptTrace(err, trace, headerMessageId);
+      }
 
       // ── MAIL_FLOW log ─────────────────────────────────────────────────────
       void prisma.systemLog.create({
@@ -796,6 +871,9 @@ export function startOutboundWorker(): Worker<OutboundJob> {
             externalRcpts: summary.external.join(', '),
             bouncedRcpts:  summary.bounced.join(', '),
             direction:     'OUTBOUND',
+            // 10.2 message trace: correlation keys + what this attempt did
+            ...outboundTraceFields(job, headerMessageId),
+            trace:         trace.toJSON(),
           },
         },
       }).catch((e: unknown) => log.error({ err: e }, 'MAIL_FLOW log failed'));
@@ -928,6 +1006,20 @@ export function handleFailedJob(
     }
   }
 
+  // 10.2 message trace: what this attempt did (remembered by the processor) + the outcome.
+  const attempt = attemptTraceOf(err);
+  const trace = createTraceRecorder(attempt?.stages ?? []);
+  if (final && bounceList.length > 0) {
+    trace.add('dsn', 'info', { action: 'failed', to: job.data.from ? [job.data.from] : [], about: bounceList.map((f) => f.rcpt) });
+  }
+  trace.add('queue-result', final ? 'fail' : 'warn', {
+    final,
+    reason: err.message,
+    ...(smtpCode !== null ? { code: smtpCode } : {}),
+    attempts: job.attemptsMade,
+    maxAttempts: attemptsMax,
+  });
+
   void prisma.systemLog.create({
     data: {
       level:    final ? 'ERROR' : 'WARN',
@@ -944,8 +1036,10 @@ export function handleFailedJob(
         messageId: job.data.messageId,
         reason:    err.message,
         smtpCode:  smtpCode !== null ? String(smtpCode) : '',
-        attempt:   String(job.attemptsMade),
         direction: 'OUTBOUND',
+        ...outboundTraceFields(job, attempt?.headerMessageId ?? job.data.message?.messageId, true),
+        attempt:   String(job.attemptsMade),
+        trace:     trace.toJSON(),
       },
     },
   }).catch(() => {});

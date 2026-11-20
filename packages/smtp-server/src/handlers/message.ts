@@ -1,4 +1,4 @@
-import { prisma, parseRawMessage, uploadBuffer, storeRawMessage, truncateBodyColumn, attachmentKey, applyMailRules, applyTransportRules, applyOutcomeToBuffer, processITipInbound, deliveredImportance, createMessage, deferMailboxChanges, createRulePatternBudget, ruleMessageStepBudget, checkReceiveQuota, recordDelivery, loadMailFlowPolicy, deliveryRefusal, headerFromAddress, addressVariants, type SenderAuth, type QuotaOwner, type MailFlowOwner, type TransportOutcome } from '@coremail/storage';
+import { prisma, parseRawMessage, uploadBuffer, storeRawMessage, truncateBodyColumn, attachmentKey, applyMailRules, applyTransportRules, applyOutcomeToBuffer, processITipInbound, deliveredImportance, createMessage, deferMailboxChanges, createRulePatternBudget, ruleMessageStepBudget, checkReceiveQuota, recordDelivery, loadMailFlowPolicy, deliveryRefusal, headerFromAddress, addressVariants, createTraceRecorder, type SenderAuth, type QuotaOwner, type MailFlowOwner, type TransportOutcome, type TraceStage } from '@coremail/storage';
 import type { LocalOutcome } from './delivery.js';
 import { getRedisClient, CHANNEL_MAIL_NEW, createLogger } from '@coremail/core';
 import { verifyIncomingSmime, decryptIncomingSmime } from '../smime/index.js';
@@ -6,6 +6,7 @@ import { enqueueRuleForward, isRuleForwardedAlready, planAdminForward, forwardSo
 import { handleTransportOutcome } from './transport-actions.js';
 import { sendAutoReplyIfNeeded } from './auto-reply.js';
 import { withReturnPath } from './trace.js';
+import { transportRuleDetail } from './trace-stages.js';
 // Journaling feature completely removed in v3.13.6
 
 const log = createLogger('smtp:message-handler');
@@ -39,6 +40,12 @@ export interface StoreOptions {
    * limit do not apply. Internal callers only — never derived from a header.
    */
   systemNotice?: boolean;
+  /**
+   * 10.2: message-trace stages of the steps before this delivery (session,
+   * content checks, aliases, queue). The MAIL_FLOW row adds the rule and
+   * delivery stages and stores them in `metadata.trace`.
+   */
+  trace?: readonly TraceStage[];
 }
 
 /**
@@ -66,6 +73,7 @@ export function storeInboundMessage(rawBuffer: Buffer, opts: StoreOptions): Prom
 }
 
 async function deliverInbound(rawBuffer: Buffer, opts: StoreOptions): Promise<StoreResult> {
+  const trace = createTraceRecorder(opts.trace ?? []);
   // Find recipient — can be a User (mailbox) or a SharedMailbox.
   // (Public folder path removed in v3.18.31 — feature completely removed)
   const [user, sharedMailbox] = await Promise.all([
@@ -163,6 +171,7 @@ async function deliverInbound(rawBuffer: Buffer, opts: StoreOptions): Promise<St
     });
     if (junkRule) {
       forceJunk = true;
+      trace.add('sender-list', 'warn', { verdict: 'user-junk', mailbox: opts.rcptTo });
       log.debug({ rcptTo: opts.rcptTo, fromAddr: opts.fromAddr }, 'USER-JUNK rule matched — delivering to Junk');
     }
   }
@@ -217,6 +226,9 @@ async function deliverInbound(rawBuffer: Buffer, opts: StoreOptions): Promise<St
       patternBudget,
       ...(opts.spamScore !== undefined ? { spamScore: opts.spamScore } : {}),
     });
+    if (transportOutcome.appliedRuleIds.length > 0) {
+      trace.add('transport-rules', transportOutcome.rejected || transportOutcome.quarantined ? 'fail' : 'info', transportRuleDetail(transportOutcome));
+    }
     // reject → DSN, quarantine → quarantine store, redirect/add/removeRecipient
     // → recipient set changes (handlers/transport-actions.ts).
     const decision = await handleTransportOutcome(transportOutcome, {
@@ -227,6 +239,7 @@ async function deliverInbound(rawBuffer: Buffer, opts: StoreOptions): Promise<St
       messageId: parsed.messageId ?? null,
       ...(opts.spamScore !== undefined ? { spamScore: opts.spamScore } : {}),
       ...(opts.quarantineRelease ? { quarantineRelease: true } : {}),
+      trace:     trace.stages(),
     });
     if (decision === 'stop') return 'stored';
     // If buffer modifications are needed: adjust buffer + re-parse
@@ -268,6 +281,7 @@ async function deliverInbound(rawBuffer: Buffer, opts: StoreOptions): Promise<St
       dedupKey:       opts.deliveryKey,
       recipient:      opts.rcptTo,
     });
+    trace.add('admin-forward', 'info', { to: adminForward.to, keepCopy: adminForward.keepCopy });
     if (!adminForward.keepCopy) {
       log.info({ rcptTo: opts.rcptTo, to: adminForward.to }, 'Admin forwarding without a local copy');
       return 'stored';
@@ -313,6 +327,14 @@ async function deliverInbound(rawBuffer: Buffer, opts: StoreOptions): Promise<St
       ruleForwards.push(...outcome.forwards);
 
       if (outcome.appliedRuleIds.length > 0) {
+        // 10.2 trace: counts and effects only (inbox rules are the user's own data)
+        trace.add('inbox-rules', 'info', {
+          applied: outcome.appliedRuleIds.length,
+          ...(outcome.targetFolderId || outcome.forceJunk || outcome.deleted === 'soft' ? { movedTo: mailbox.folders.find((f: { id: string; name: string }) => f.id === ruleFolderId)?.name ?? '' } : {}),
+          ...(outcome.forwards.length ? { forwards: outcome.forwards.length } : {}),
+          ...(outcome.copyTargets.length ? { copies: outcome.copyTargets.length } : {}),
+          ...(outcome.deleted === 'hard' ? { discarded: true } : {}),
+        });
         log.debug(
           { rcptTo: opts.rcptTo, ruleIds: outcome.appliedRuleIds, targetFolder: ruleFolderId, discarded: ruleDiscard },
           'Mail rules applied',
@@ -515,6 +537,16 @@ async function deliverInbound(rawBuffer: Buffer, opts: StoreOptions): Promise<St
   }
 
   // MAIL_FLOW — message flow tracing
+  const deliveredFolder = mailbox.folders.find((f: { id: string; name: string }) => f.id === ruleFolderId)?.name ?? folder.name;
+  trace.add('delivery', deliveredFolder === 'Junk' ? 'warn' : 'ok', {
+    outcome: 'stored',
+    mailbox: opts.rcptTo,
+    ...(ownerType === 'shared' ? { shared: true } : {}),
+    folder: deliveredFolder,
+    ...(copyMessageIds.length ? { copies: copyMessageIds.length } : {}),
+    ...(smimeDecrypted ? { smimeDecrypted: true } : {}),
+    ...(smimeHeader && !smimeDecrypted ? { smimeSigned: true } : {}),
+  });
   void prisma.systemLog.create({
     data: {
       level: 'INFO',
@@ -532,6 +564,9 @@ async function deliverInbound(rawBuffer: Buffer, opts: StoreOptions): Promise<St
         size: String(effectiveBuffer.length),
         spamScore: opts.spamScore !== undefined ? String(opts.spamScore) : '',
         direction: 'INBOUND',
+        // 10.2 message trace: the stored copy (Zustellweg) + what CoreMail did
+        storedMessageId: message.id,
+        trace: trace.toJSON(),
       },
     },
   }).catch((err: unknown) => log.error({ err }, 'MAIL_FLOW log failed'));

@@ -1,8 +1,12 @@
 /**
  * SMTP Core Types — RFC 5321 State Machine
  */
+import type { TraceStage } from '@coremail/storage';
 import type { BodyType } from './envelope.js';
 import type { EnvelopeDsn } from './dsn-params.js';
+
+/** 10.2: receives a check verdict (connection filter, greylisting) for the message trace. */
+export type TraceNoteSink = (stage: TraceStage) => void;
 
 /** `BDAT`: at least one non-LAST BDAT chunk of the transaction was received (RFC 3030). */
 export type SmtpState = 'INIT' | 'READY' | 'AUTH_WAIT' | 'MAIL' | 'RCPT' | 'DATA' | 'BDAT' | 'QUIT';
@@ -28,6 +32,8 @@ export interface Transaction {
   body: BodyType;
   /** RET / ENVID / per-recipient NOTIFY + ORCPT (RFC 3461). */
   dsn: EnvelopeDsn;
+  /** 10.2: RCPT-stage check verdicts of this transaction (message trace, capped). */
+  notes?: TraceStage[];
 }
 
 /** Envelope extension data of one transaction, handed to `onMessage` via `MessageMeta`. */
@@ -42,7 +48,7 @@ export interface MessageEnvelope {
 
 export interface SmtpHandlers {
   /** Return false to reject the connection with 421 */
-  onConnect(ip: string): Promise<boolean>;
+  onConnect(ip: string, note?: TraceNoteSink): Promise<boolean>;
   /** Return non-null string to reject MAIL FROM with that message */
   onMailFrom(from: string, ip: string, authUser: AuthUser | null): Promise<string | null>;
   /**
@@ -50,7 +56,7 @@ export interface SmtpHandlers {
    * `ip` (client address) is optional for backwards compatibility; when the
    * session passes it, port 25 runs greylisting here instead of after DATA.
    */
-  onRcptTo(to: string, from: string, authUser: AuthUser | null, ip?: string): Promise<string | null>;
+  onRcptTo(to: string, from: string, authUser: AuthUser | null, ip?: string, note?: TraceNoteSink): Promise<string | null>;
   /**
    * Called after DATA terminator — throw to signal temporary failure.
    * `meta` (session trace data for the `Received:` header) is optional for
@@ -74,6 +80,23 @@ export interface MessageMeta {
   sessionId: string;
   /** SMTPUTF8 / BODY / DSN parameters and the transfer mode (optional for other callers). */
   envelope?: MessageEnvelope;
+  /** 10.2: connection facts for the message trace (optional for other callers). */
+  connection?: MessageConnection;
+}
+
+/** Connection facts of the SMTP session a message arrived on (10.2 message trace). */
+export interface MessageConnection {
+  /** Local port of the listener (25, 465, 587, …). */
+  port?: number;
+  /** Negotiated TLS protocol and cipher; absent = no TLS. */
+  tlsVersion?: string;
+  tlsCipher?: string;
+  /** SMTP AUTH user of the session. */
+  authUser?: string;
+  /** ISO time the connection was accepted. */
+  connectedAt?: string;
+  /** Connect- and RCPT-stage check verdicts (connection filter, greylisting). */
+  notes?: TraceStage[];
 }
 
 /**

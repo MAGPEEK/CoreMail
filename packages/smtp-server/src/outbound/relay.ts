@@ -79,6 +79,67 @@ export interface RelayResult {
    * (RFC 3461 §5.2). Delivered recipients not listed here were "relayed".
    */
   dsnPassedOn?: string[];
+  /**
+   * 10.2 message trace: the route of this relay call — per recipient domain the
+   * MX records as resolved, then one entry per SMTP connection (host, address,
+   * TLS, remote reply). Facts of the lookups and sends that ran anyway.
+   */
+  hops?: RelayHop[];
+}
+
+/** One step of an outbound route (10.2 message trace). */
+export interface RelayHop {
+  mode: 'mx' | 'smarthost';
+  /** Recipient domain (MX mode). */
+  domain?: string;
+  /** MX records as resolved (empty = implicit MX: the domain itself). */
+  mx?: Array<{ exchange: string; priority: number }>;
+  /** MX lookup failure (NXDOMAIN, null MX, DNS error) — no connection follows. */
+  mxError?: string;
+  /** Host connected to (MX host or smarthost); absent for a lookup-only entry. */
+  host?: string;
+  /** IP address actually connected to (checked address or the socket's peer). */
+  address?: string;
+  port?: number;
+  /** Transport security of the connection, when known. */
+  tls?: 'starttls' | 'implicit' | 'none';
+  /** Remote reply code (null = network/DNS error). */
+  code?: number | null;
+  /** Remote reply text (one line, capped). */
+  response?: string;
+  delivered: number;
+  failed: number;
+  permanent?: boolean;
+  /** ISO start time and duration. */
+  at: string;
+  ms?: number;
+}
+
+/** What a send observed about its connection (peer address, TLS) — see nodemailerConnectionLogger. */
+export interface SendConnection {
+  address?: string;
+  port?: number;
+  tls?: 'starttls' | 'implicit' | 'none';
+}
+
+/**
+ * nodemailer `logger` that only records the connection facts nodemailer
+ * reports (peer address on connect, a STARTTLS upgrade) — nothing is logged.
+ * The transcript (debug) is never enabled.
+ */
+export function nodemailerConnectionLogger(conn: SendConnection): Record<'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal', (...args: unknown[]) => void> {
+  const noop = (): void => undefined;
+  return {
+    trace: noop, debug: noop, warn: noop, error: noop, fatal: noop,
+    info: (entry: unknown, message: unknown) => {
+      const e = (entry && typeof entry === 'object' ? entry : {}) as Record<string, unknown>;
+      if (e['tnx'] === 'network' && typeof e['remoteAddress'] === 'string') {
+        conn.address = e['remoteAddress'];
+        if (typeof e['remotePort'] === 'number') conn.port = e['remotePort'];
+      }
+      if (typeof message === 'string' && message.startsWith('Connection upgraded with STARTTLS')) conn.tls = 'starttls';
+    },
+  };
 }
 
 /** Per-message envelope extras for one relay call. */
@@ -309,9 +370,10 @@ let lastCertWarning = 0;
 function withCertificateHint(deps: RelayDeps, host: string): RelayDeps {
   return {
     ...deps,
-    send: async (options, envelope, raw) => {
+    // 10.2: the trace observer is passed on (the DSN argument is not passed here, unchanged).
+    send: async (options, envelope, raw, _dsn, observe) => {
       try {
-        return await deps.send(options, envelope, raw);
+        return await deps.send(options, envelope, raw, undefined, observe);
       } catch (err) {
         if (!isCertificateError(err)) throw err;
         const now = Date.now();
@@ -346,12 +408,13 @@ export function mxTransportOptions(host: string, heloName: string, dkimCfg?: NmD
 // ── Injectable I/O (tests) ────────────────────────────────────────────────────
 
 /** `ehlo`: the next hop's EHLO keywords (nodemailer reports them on success). */
-export interface SendInfo { accepted?: unknown[]; rejected?: unknown[]; rejectedErrors?: SmtpError[]; ehlo?: string[] }
+export interface SendInfo { accepted?: unknown[]; rejected?: unknown[]; rejectedErrors?: SmtpError[]; ehlo?: string[]; response?: string }
 
 export interface RelayDeps {
   config(): Promise<OutboundConfig>;
   resolveMx(domain: string): Promise<Array<{ exchange: string; priority: number }>>;
-  send(transportOptions: Record<string, unknown>, envelope: { from: string; to: string[] }, raw: Buffer, dsn?: NmDsn): Promise<SendInfo>;
+  /** `observe` (10.2 trace) receives the connection facts once the send ended (success or failure). */
+  send(transportOptions: Record<string, unknown>, envelope: { from: string; to: string[] }, raw: Buffer, dsn?: NmDsn, observe?: (c: SendConnection) => void): Promise<SendInfo>;
   /** A/AAAA of an MX host (SSRF check before connecting); absent = no check. */
   resolveHost?: (host: string) => Promise<string[]>;
   /**
@@ -388,10 +451,18 @@ const defaultRelayDeps: RelayDeps = {
   resolveMx: (domain) => dns.resolveMx(domain),
   resolveHost: async (host) => (await dns.lookup(host, { all: true, verbatim: true })).map((a) => a.address),
   probe: probeEhlo,
-  send: async (options, envelope, raw, dsn) => {
-    const transporter = nodemailer.createTransport(options as Parameters<typeof nodemailer.createTransport>[0]);
-    // `dsn`: nodemailer adds RET/ENVID/NOTIFY/ORCPT only when the next hop advertises DSN.
-    return await transporter.sendMail({ envelope, raw, ...(dsn ? { dsn } : {}) }) as SendInfo;
+  send: async (options, envelope, raw, dsn, observe) => {
+    const conn: SendConnection = { tls: options['secure'] === true ? 'implicit' : 'none' };
+    const transporter = nodemailer.createTransport({
+      ...options,
+      ...(observe ? { logger: nodemailerConnectionLogger(conn) } : {}),
+    } as Parameters<typeof nodemailer.createTransport>[0]);
+    try {
+      // `dsn`: nodemailer adds RET/ENVID/NOTIFY/ORCPT only when the next hop advertises DSN.
+      return await transporter.sendMail({ envelope, raw, ...(dsn ? { dsn } : {}) }) as SendInfo;
+    } finally {
+      observe?.(conn);
+    }
   },
 };
 
@@ -444,6 +515,7 @@ export async function relayMessage(
     delivered: r.delivered.map((w) => original.get(w) ?? w),
     failures: r.failures.map((f) => ({ ...f, rcpt: original.get(f.rcpt) ?? f.rcpt })),
     ...(r.dsnPassedOn ? { dsnPassedOn: r.dsnPassedOn.map((w) => original.get(w) ?? w) } : {}),
+    ...(r.hops ? { hops: r.hops } : {}),
   });
 
   const result: RelayResult = { delivered: [], failures: [] };
@@ -451,6 +523,7 @@ export async function relayMessage(
     result.delivered.push(...r.delivered);
     result.failures.push(...r.failures);
     if (r.dsnPassedOn?.length) (result.dsnPassedOn ??= []).push(...r.dsnPassedOn);
+    if (r.hops?.length) (result.hops ??= []).push(...r.hops.slice(0, Math.max(0, MAX_RELAY_HOPS - (result.hops?.length ?? 0))));
   };
 
   for (const group of dsnGroups(to, opts.dsn)) {
@@ -460,7 +533,8 @@ export async function relayMessage(
       needsUtf8: envelopeNeedsSmtputf8(wireFrom, rcpts),
     };
     if (cfg.mode === 'smarthost' && cfg.smarthostHost) {
-      const r = await sendAndCollect(withCertificateHint(deps, cfg.smarthostHost), smarthostTransportOptions(cfg, dkimCfg), wireFrom, rcpts, rawBuffer, extra);
+      const r = await sendAndCollect(withCertificateHint(deps, cfg.smarthostHost), smarthostTransportOptions(cfg, dkimCfg), wireFrom, rcpts, rawBuffer, extra,
+        { mode: 'smarthost', host: cfg.smarthostHost, port: cfg.smarthostPort });
       log.info({ smarthost: cfg.smarthostHost, port: cfg.smarthostPort, dkim: !!dkimCfg, delivered: r.delivered, failed: r.failures.length },
         'Delivered via smarthost');
       add(back(r));
@@ -480,6 +554,34 @@ interface SendExtra {
   needsUtf8?: boolean;
 }
 
+/** Most route entries one relay call reports (10.2 trace; many domains × MX hosts). */
+const MAX_RELAY_HOPS = 24;
+
+/** The connection part of a route entry, known before the send. */
+type HopBase = Pick<RelayHop, 'mode' | 'host'> & Partial<Pick<RelayHop, 'domain' | 'address' | 'port'>>;
+
+/** Pure: the route entry of one finished SMTP transaction. */
+export function hopOf(base: HopBase, r: Pick<RelayResult, 'delivered' | 'failures'>, conn: SendConnection, startedAt: Date, ms: number, response?: string): RelayHop {
+  const first = r.failures[0];
+  const address = base.address ?? conn.address;
+  const port = base.port ?? conn.port;
+  const reply = first ? first.message : response;
+  const code = first ? first.code : response && /^\d{3}/.test(response) ? Number(response.slice(0, 3)) : undefined;
+  return {
+    ...base,
+    ...(address ? { address } : {}),
+    ...(port !== undefined ? { port } : {}),
+    ...(conn.tls ? { tls: conn.tls } : {}),
+    ...(code !== undefined ? { code } : {}),
+    ...(reply ? { response: oneLine(reply).slice(0, 300) } : {}),
+    delivered: r.delivered.length,
+    failed: r.failures.length,
+    ...(r.failures.some((f) => f.permanent) ? { permanent: true } : {}),
+    at: startedAt.toISOString(),
+    ms,
+  };
+}
+
 /** One SMTP transaction; accepted/rejected recipients are taken from the reply. */
 async function sendAndCollect(
   deps: RelayDeps,
@@ -488,26 +590,32 @@ async function sendAndCollect(
   to: string[],
   raw: Buffer,
   extra: SendExtra = {},
+  hop?: HopBase,
 ): Promise<RelayResult> {
+  const startedAt = new Date();
+  let conn: SendConnection = {};
+  const withHop = (r: RelayResult, response?: string): RelayResult => (hop
+    ? { ...r, hops: [hopOf(hop, r, conn, startedAt, Date.now() - startedAt.getTime(), response)] }
+    : r);
   if (extra.needsUtf8 && deps.probe) {
     const ehlo = await deps.probe(options).catch(() => null);
     if (ehlo && !ehloHas(ehlo, 'SMTPUTF8')) {
       log.warn({ host: options['host'], to }, 'Next hop does not support SMTPUTF8 — UTF-8 envelope not sent');
-      return { delivered: [], failures: to.map((rcpt) => ({ rcpt, ...SMTPUTF8_UNSUPPORTED })) };
+      return withHop({ delivered: [], failures: to.map((rcpt) => ({ rcpt, ...SMTPUTF8_UNSUPPORTED })) });
     }
   }
   try {
-    const info = await deps.send(options, { from, to }, raw, extra.dsn);
+    const info = await deps.send(options, { from, to }, raw, extra.dsn, (c) => { conn = c; });
     const rejected = new Set((info.rejected ?? []).map(String));
     const errors = new Map((info.rejectedErrors ?? []).map((e) => [e.recipient ?? '', e] as const));
     const delivered = to.filter((r) => !rejected.has(r));
-    return {
+    return withHop({
       delivered,
       failures: to.filter((r) => rejected.has(r)).map((rcpt) => ({ rcpt, ...classifySmtpError(errors.get(rcpt) ?? new Error('Recipient rejected')) })),
       ...(extra.dsn && ehloHas(info.ehlo, 'DSN') ? { dsnPassedOn: delivered } : {}),
-    };
+    }, typeof info.response === 'string' ? info.response : undefined);
   } catch (err) {
-    return { delivered: [], failures: failuresFor(to, err) };
+    return withHop({ delivered: [], failures: failuresFor(to, err) });
   }
 }
 
@@ -591,9 +699,22 @@ async function deliverToDomain(
   dkimCfg: NmDkim | undefined,
   extra: SendExtra = {},
 ): Promise<RelayResult> {
-  const mx = await lookupMx(domain, deps.resolveMx);
+  // 10.2 trace: the records as resolved (captured from the lookup that runs anyway).
+  const lookupAt = new Date();
+  let records: Array<{ exchange: string; priority: number }> | undefined;
+  const mx = await lookupMx(domain, async (d) => {
+    const r = await deps.resolveMx(d);
+    records = [...r].sort((a, b) => a.priority - b.priority).slice(0, 10).map((x) => ({ exchange: x.exchange, priority: x.priority }));
+    return r;
+  });
+  const hops: RelayHop[] = [{
+    mode: 'mx', domain, ...(records ? { mx: records } : { mx: [] }),
+    ...(mx.kind === 'fail' ? { mxError: mx.failure.message, ...(mx.failure.permanent ? { permanent: true } : {}) } : {}),
+    delivered: 0, failed: mx.kind === 'fail' ? recipients.length : 0,
+    at: lookupAt.toISOString(), ms: Date.now() - lookupAt.getTime(),
+  }];
   if (mx.kind === 'fail') {
-    return { delivered: [], failures: recipients.map((rcpt) => ({ rcpt, ...mx.failure })) };
+    return { delivered: [], failures: recipients.map((rcpt) => ({ rcpt, ...mx.failure })), hops };
   }
 
   let last: RelayResult | null = null;
@@ -603,23 +724,29 @@ async function deliverToDomain(
     if (target.kind === 'fail') {
       log.warn({ domain, mx: host, reason: target.failure.message }, 'MX host refused');
       last = { delivered: [], failures: recipients.map((rcpt) => ({ rcpt, ...target.failure })) };
+      hops.push(hopOf({ mode: 'mx', domain, host }, last, {}, new Date(), 0));
       continue;
     }
     const options = mxTransportOptions(target.address ?? host, heloName, dkimCfg);
     if (target.address) options['tls'] = { ...(options['tls'] as object), servername: host };
-    const result = await sendAndCollect(deps, options, from, recipients, rawBuffer, extra);
+    const result = await sendAndCollect(deps, options, from, recipients, rawBuffer, extra,
+      { mode: 'mx', domain, host, port: 25, ...(target.address ? { address: target.address } : {}) });
+    hops.push(...(result.hops ?? []));
     // A permanent reply or a (partial) acceptance is authoritative. When
     // nothing was accepted and every failure is temporary (connection error,
     // 421 greeting, 4yz), the next MX is tried (§5.1).
     const tryNext = result.delivered.length === 0 && result.failures.every((f) => !f.permanent);
     if (!tryNext) {
       log.info({ domain, mx: host, dkim: !!dkimCfg, delivered: result.delivered, failed: result.failures.length }, 'Delivered via MX');
-      return result;
+      return { ...result, hops };
     }
     log.warn({ domain, mx: host, reason: result.failures[0]?.message }, 'MX delivery failed — trying next MX');
     last = result;
   }
-  return last ?? { delivered: [], failures: recipients.map((rcpt) => ({ rcpt, code: null, status: '4.4.1', message: `Delivery failed for ${domain}`, permanent: false })) };
+  return {
+    ...(last ?? { delivered: [], failures: recipients.map((rcpt) => ({ rcpt, code: null, status: '4.4.1', message: `Delivery failed for ${domain}`, permanent: false })) }),
+    hops,
+  };
 }
 
 // ── Helper functions ──────────────────────────────────────────────────────────

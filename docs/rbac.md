@@ -194,6 +194,7 @@ matrix already limits the route to ORGANIZATION_MANAGEMENT (never scoped) ·
 | `GET /audit-log/stats`, `GET /audit-log/anomalies` | org |
 | `POST /audit-log/verify-export` | unchanged (checks a file, returns no data) |
 | `GET /message-trace`, `GET /message-trace/export` (mail-flow log) | filter: sender or a recipient in the scope's domains (always the filtered scan, `TRACE_SCAN_LIMIT`); addresses of other domains redacted |
+| `GET /message-trace/:id` (10.2 detail) | by id: an entry whose sender and recipients are all outside the scope answers 404 like an unknown id; related entries are filtered the same way; the stored original for the delivery path is only read from a mailbox (user / Shared Mailbox) of the scope's domains; addresses of other domains redacted |
 | `/compliance/retention*` | org |
 
 ### dashboard
@@ -266,6 +267,7 @@ unredacted view).
 | `GET …/folder-permissions`, `GET/PUT …/folders/:folderId/permissions` (mailboxes, shared mailboxes) | folder-permission grantees (own and inherited entries) |
 | `GET /quarantine`, `GET /quarantine/:id` | other recipients (`details`), the sender, preview headers; `search` never matches a hidden sender |
 | `GET /message-trace`, `GET /message-trace/export` | metadata (sender, recipients, …) and message text; the sender / recipient / subject filters match the redacted row |
+| `GET /message-trace/:id` | the whole answer: metadata, message text, every processing stage detail, related entries, Received hops (`for`, …) and the Authentication-Results summary |
 | `GET /audit-log`, `/export.csv`, `/export.json`, `/export.pdf` | actor e-mail, target name, error text and every string, list element and key of `changes`; `actorEmail` / `searchText` filters run on the redacted entries over the newest 5000 entries of the scope (`truncated: true` in the list when the scan was capped) |
 
 **Audit log scope filter**: an entry belongs to the scope when its `targetId` is

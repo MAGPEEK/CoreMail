@@ -20,7 +20,7 @@
  */
 import crypto from 'crypto';
 import { createLogger, getRedisClient } from '@coremail/core';
-import { prisma, applyOutcomeToBuffer, type TransportOutcome } from '@coremail/storage';
+import { prisma, applyOutcomeToBuffer, type TransportOutcome, type TraceStage } from '@coremail/storage';
 import type { StoreResult } from './message.js';
 
 const log = createLogger('smtp:transport-actions');
@@ -35,6 +35,8 @@ export interface TransportActionContext {
   spamScore?: number;
   /** True when the message is re-injected by a quarantine release. */
   quarantineRelease?: boolean;
+  /** 10.2: message-trace stages so far — the quarantine row carries them. */
+  trace?: readonly TraceStage[];
 }
 
 export interface ExtraDeliveryOptions { skipTransportRules: true }
@@ -47,7 +49,7 @@ export interface TransportActionDeps {
   }) => Promise<void>;
   quarantine: (input: {
     raw: Buffer; from: string; recipients: string[]; reason: 'POLICY';
-    details: Record<string, unknown>; spamScore?: number;
+    details: Record<string, unknown>; spamScore?: number; trace?: readonly TraceStage[];
   }) => Promise<string>;
   /** Local delivery of an extra recipient (storeInboundMessage). */
   /** Returns the store result: an over-quota or unknown target is bounced, never dropped silently. */
@@ -155,6 +157,7 @@ export async function handleTransportOutcome(
       reason:     'POLICY',
       details:    { source: 'transport-rule', ruleIds: outcome.appliedRuleIds },
       ...(ctx.spamScore !== undefined ? { spamScore: ctx.spamScore } : {}),
+      ...(ctx.trace ? { trace: ctx.trace } : {}),
     });
     log.info({ rcptTo: ctx.rcptTo, from: ctx.fromAddr, quarantineId: id, ruleIds: outcome.appliedRuleIds },
       'Mail moved to quarantine by TransportRule');
