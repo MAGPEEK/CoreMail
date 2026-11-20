@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { PREVIEW_THEME_VARS, PREVIEW_TOKEN_NAMES, previewStyle } from './brandingPreview.ts';
+import { PREVIEW_THEME_VARS, PREVIEW_TOKEN_NAMES, previewLogo, previewStyle } from './brandingPreview.ts';
 import { contrastRatio, parseRgbChannels } from '../theme/contrast.ts';
 
 const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'theme', 'tokens.css'), 'utf8');
@@ -40,4 +40,11 @@ test('previewStyle: theme tokens + brand variables from the unsaved colours', ()
   const typing = previewStyle({ primaryColor: '#12', headerColor: 'x' }, false);
   assert.equal(typing['--header'], '0 120 212');
   assert.equal(typing['--color-accent'], '0 120 212');
+});
+
+test('previewLogo: dark logo only in dark mode, falls back to the logo; unsaved object URLs pass', () => {
+  assert.equal(previewLogo({ logoLight: 'blob:a', logoDark: null }, true), 'blob:a');
+  assert.equal(previewLogo({ logoLight: 'blob:a', logoDark: '/branding/assets/d.svg' }, true), '/branding/assets/d.svg');
+  assert.equal(previewLogo({ logoLight: 'blob:a', logoDark: '/branding/assets/d.svg' }, false), 'blob:a');
+  assert.equal(previewLogo({ logoLight: null, logoDark: null }, false), null);
 });

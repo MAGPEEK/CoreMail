@@ -14,7 +14,7 @@ the whole server.
 | Header colour | `#rrggbb` or none (= primary colour) | none |
 | Logo (light theme) | PNG, WebP, SVG — ≤ 512 KB, ≤ 4096 px | built-in logo |
 | Logo (dark theme) | PNG, WebP, SVG — ≤ 512 KB, ≤ 4096 px | light logo / built-in |
-| Favicon | PNG, WebP, SVG — ≤ 512 KB, square, ≤ 1024 px | logo, else built-in icon |
+| Favicon | PNG, WebP, SVG — ≤ 512 KB, square, ≤ 1024 px | derived from the light logo (see below), else built-in icon |
 | Login background | PNG, WebP, JPEG, SVG — ≤ 2 MB, ≤ 4096 px | none |
 | Login text | plain text, ≤ 280 characters | empty |
 | Footer links | max 5; label ≤ 40 characters; `https://` or `mailto:` only | none |
@@ -28,7 +28,22 @@ differs from "CoreMail", otherwise the organisation name as before; the Apple pr
 
 ## Where to set it
 
-- **BCP → Organisation → Branding** (live preview in light and dark mode).
+- **BCP → Organisation → Branding**. The form is grouped into cards: *Identität* (product name and
+  the one logo upload), *Farben* (primary colour, header colour, user accent colour), *Webmail*
+  (default background), *Anmeldeseite* (background image, welcome text, footer links, "Powered
+  by") and a collapsed *Erweitert* card for the optional overrides — a separate logo for the dark
+  mode and an own favicon. *Erweitert* opens by itself when one of them is set. The preview on the
+  right (below the form on narrower screens) switches between *Webmail* / *Anmeldeseite* and
+  *hell* / *dunkel*.
+- **One save for everything**: image changes are part of the unsaved draft like every other field.
+  A chosen file is only previewed in the browser and a removal only marked; the sticky bar at the
+  bottom shows the number of unsaved changes and offers *Speichern*, *Änderungen verwerfen* and
+  *Auf Standard zurücksetzen* (with a confirmation). *Speichern* first sends the image changes
+  (`POST` / `DELETE /assets/:slot`, one per changed slot), then the settings (`PUT /`) — the API has
+  no single request for both. A failed part does not stop the others; the bar names every part
+  that was not saved (for example an SVG refused as unsafe), and failed image changes stay in the
+  draft to retry or discard. Closing or reloading the tab with unsaved changes asks for
+  confirmation (the browser's own dialog; moving to another BCP page does not ask).
 - **CLI**: `coremail branding show | set | upload <slot> <file> | remove <slot> | reset` ([cli.md](cli.md)).
 - **Environment defaults** (optional): `BRANDING_NAME`, `BRANDING_COLOR` in `.env` (both compose
   files pass them through) or Helm `app.branding.name` / `app.branding.color`. They apply while
@@ -70,6 +85,24 @@ Public, no authentication (the login page needs it before sign-in):
   `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; sandbox`.
   Each gateway keeps the last 16 files (at most 8 MB) in memory, keyed by the content hash, so
   repeated requests (also with cache-busting query strings) do not read the object store.
+- `GET /branding/favicons/<sha256>-<64|180>.png` — the favicon (64 px) and the `apple-touch-icon`
+  (180 px) derived from the current PNG light logo while no own favicon is set (same headers as the
+  assets). Any other hash or size → 404.
+
+### Favicon from the logo
+
+One logo upload is enough: without an own favicon the favicon is derived from the light logo.
+
+| Light logo | Favicon |
+|---|---|
+| PNG | `/branding/favicons/<sha>-64.png` and `apple-touch-icon` `/branding/favicons/<sha>-180.png`: the logo scaled (aspect ratio kept) and centred in a transparent square — computed once by the gateway in pure JavaScript (`lib/branding/favicon.ts`, PNG codec `png.ts`) and kept in the asset cache. A PNG the codec cannot read (16-bit, interlaced, more than 2048 × 2048 px) is served unchanged under the same URLs. |
+| SVG | the sanitised SVG itself (there is no rasteriser in the stack, so no PNG fallback) |
+| WebP | the WebP itself (no WebP decoder in the stack) |
+| none | the built-in icon |
+
+An own favicon (BCP → Branding → Erweitert) always wins. The dark logo falls back to the light logo.
+The web clients compute the same URL when the branding changes at runtime (`faviconHref()` in
+`lib/branding.ts`).
 
 Admin (`/api/v1/admin/branding`, Bearer token):
 
@@ -146,7 +179,9 @@ already in it:
 <script id="cm-branding" type="application/json">{…public branding JSON…}</script>
 ```
 
-plus the product name as `<title>` and the favicon (else the light logo) as `<link rel="icon">`.
+plus the product name as `<title>` and the favicon (own favicon, else derived from the light logo —
+see "Favicon from the logo"; a PNG logo also adds `<link rel="apple-touch-icon">`) as
+`<link rel="icon">`.
 `--brand-primary` is the initial accent fill (`--color-accent` in `tokens.css`), so the first paint
 already uses the brand colour; the apps then apply the contrast-adjusted accent values.
 The JSON is escaped for a script context (`<`, `>`, `&`, U+2028/2029 as `\uXXXX`). The page is

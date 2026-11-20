@@ -308,6 +308,16 @@ test('html: no favicon/logo keeps the built-in icon; missing title / icon tags a
   const bcp = renderBrandedIndex('<html><head><meta charset="UTF-8" /></head><body></body></html>', { ...BRAND, assets: { ...BRAND.assets, favicon: `/branding/assets/${'c'.repeat(64)}.png` } });
   assert.match(bcp, /<title>Acme/);
   assert.match(bcp, /type="image\/png" href="\/branding\/assets\/c{64}\.png"/);
+  assert.doesNotMatch(bcp, /apple-touch-icon/, 'an own favicon is used as uploaded');
+  // a PNG logo without own favicon → derived square icon + apple-touch-icon, replaced on re-render
+  const pngLogo = { ...BRAND, assets: { ...BRAND.assets, logoLight: `/branding/assets/${'d'.repeat(64)}.png` } };
+  const derived = renderBrandedIndex(TEMPLATE, pngLogo);
+  assert.match(derived, /<link rel="icon" type="image\/png" sizes="64x64" href="\/branding\/favicons\/d{64}-64\.png" \/>/);
+  assert.match(derived, /<link rel="apple-touch-icon" type="image\/png" sizes="180x180" href="\/branding\/favicons\/d{64}-180\.png" \/>/);
+  assert.doesNotMatch(derived, /\/favicon\.svg/);
+  const again = renderBrandedIndex(derived, pngLogo);
+  assert.equal((again.match(/rel="icon"/g) ?? []).length, 1);
+  assert.equal((again.match(/rel="apple-touch-icon"/g) ?? []).length, 1);
   assert.equal(jsonForScript({ a: '</script>&' }), '{"a":"\\u003c/script\\u003e\\u0026"}');
 });
 

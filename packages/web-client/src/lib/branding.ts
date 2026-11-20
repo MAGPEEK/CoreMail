@@ -237,9 +237,21 @@ export function safeAssetUrl(value: unknown): string | null {
   return /^\/(?!\/)[A-Za-z0-9/._~%-]+(\?[A-Za-z0-9=&._-]*)?$/.test(value) && !value.includes('..') ? value : null;
 }
 
-/** Favicon: own favicon → light logo → built-in. */
+/** A PNG light logo becomes the square favicon the gateway derives from it. */
+const PNG_LOGO_RE = /^\/branding\/assets\/([0-9a-f]{64})\.png$/;
+
+/**
+ * Favicon: own favicon → derived from the light logo → built-in. Same rule as
+ * the gateway's index.html (api-gateway lib/branding/favicon.ts): a PNG logo
+ * → /branding/favicons/<sha>-64.png (square, padded), an SVG / WebP logo as is.
+ */
 export function faviconHref(assets: BrandingAssets): string {
-  return safeAssetUrl(assets.favicon) ?? safeAssetUrl(assets.logoLight) ?? BUILTIN_FAVICON;
+  const own = safeAssetUrl(assets.favicon);
+  if (own) return own;
+  const logo = safeAssetUrl(assets.logoLight);
+  const png = logo ? PNG_LOGO_RE.exec(logo) : null;
+  if (png) return `/branding/favicons/${png[1]}-64.png`;
+  return logo ?? BUILTIN_FAVICON;
 }
 
 /** Logo for the theme (dark logo only in dark mode and when set); null = built-in icon. */

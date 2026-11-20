@@ -9,11 +9,19 @@
  * (stored in the database or not). Saving sends only the fields the admin
  * changed, so a default that was never touched stays env-driven; "Standard
  * verwenden" sends `null` for a stored name / colour.
+ *
+ * Image changes are part of the same draft (one "Speichern"): a chosen file is
+ * kept in the browser (object-URL preview) and a removal is only marked; saving
+ * runs the image requests first (POST / DELETE /assets/:slot), then the PUT of
+ * the settings — the API has no request for both at once — and reports every
+ * part that failed (savePlan / saveSummary). Failed image changes stay in the
+ * draft so they can be retried or discarded.
  */
 import {
   DEFAULT_PRIMARY_COLOR, DEFAULT_PRODUCT_NAME, FOOTER_LINK_ERROR_TEXT, LOGIN_TEXT_MAX, PRODUCT_NAME_MAX,
   normalizeHex, parseBranding, validateFooterLinks,
-  type Branding, type FooterLink,
+  ASSET_SLOTS,
+  type AssetSlot, type Branding, type BrandingAssets, type FooterLink,
 } from './branding.ts';
 
 /** Fields whose default comes from the server environment. */
@@ -186,4 +194,111 @@ export function parseFieldError(body: unknown, fallback: string): { field: Draft
   const f = b['field'];
   const known: DraftField[] = ['productName', 'primaryColor', 'headerColor', 'loginText', 'footerLinks'];
   return { field: typeof f === 'string' && (known as string[]).includes(f) ? (f as DraftField) : null, message };
+}
+
+// ── Image changes in the draft ────────────────────────────────────────────────
+
+/** A pending image change of one slot: a chosen file (shown via its object URL) or a removal. */
+export type AssetChange = { kind: 'upload'; file: Blob; previewUrl: string } | { kind: 'remove' };
+export type AssetChanges = Partial<Record<AssetSlot, AssetChange>>;
+
+/** Names of the slots in messages (save summary, slot errors). */
+export const ASSET_SLOT_NAME: Record<AssetSlot, string> = {
+  logoLight: 'Logo',
+  logoDark: 'Logo für den dunklen Modus',
+  favicon: 'Favicon',
+  loginBackground: 'Hintergrundbild der Anmeldeseite',
+};
+
+/** A chosen file replaces whatever was pending for the slot. */
+export function withAssetUpload(changes: AssetChanges, slot: AssetSlot, file: Blob, previewUrl: string): AssetChanges {
+  return { ...changes, [slot]: { kind: 'upload', file, previewUrl } };
+}
+
+/**
+ * "Entfernen": a pending upload is dropped (the saved image shows again); a
+ * saved image is marked for removal; an empty slot stays unchanged.
+ */
+export function withAssetRemoved(changes: AssetChanges, slot: AssetSlot, saved: BrandingAssets): AssetChanges {
+  const next = { ...changes };
+  if (changes[slot]?.kind !== 'upload' && saved[slot]) next[slot] = { kind: 'remove' };
+  else delete next[slot];
+  return next;
+}
+
+/** The images as they look after saving (preview): uploads → their object URL, removals → null. */
+export function effectiveAssets(saved: BrandingAssets, changes: AssetChanges): BrandingAssets {
+  const out = { ...saved };
+  for (const slot of ASSET_SLOTS) {
+    const c = changes[slot];
+    if (c) out[slot] = c.kind === 'upload' ? c.previewUrl : null;
+  }
+  return out;
+}
+
+/** Object URLs of `prev` that `next` no longer uses (to revoke). */
+export function releasedPreviewUrls(prev: AssetChanges, next: AssetChanges): string[] {
+  const keep = new Set(Object.values(next).flatMap((c) => (c?.kind === 'upload' ? [c.previewUrl] : [])));
+  return Object.values(prev).flatMap((c) => (c?.kind === 'upload' && !keep.has(c.previewUrl) ? [c.previewUrl] : []));
+}
+
+/** Number of unsaved changes: every changed setting plus every pending image change. */
+export function changeCount(d: BrandingDraft, saved: AdminBranding, changes: AssetChanges): number {
+  return Object.keys(draftToBody(d, saved)).length + Object.keys(changes).length;
+}
+
+/** Status text of the action bar. */
+export function dirtyStatusText(count: number): string {
+  if (count === 0) return 'Alle Änderungen gespeichert';
+  return count === 1 ? '1 ungespeicherte Änderung' : `${count} ungespeicherte Änderungen`;
+}
+
+/** "Erweitert" starts open when one of its overrides (dark logo, own favicon) is set. */
+export function advancedHasOverride(assets: Pick<BrandingAssets, 'logoDark' | 'favicon'>): boolean {
+  return !!(assets.logoDark || assets.favicon);
+}
+
+export type SaveStep =
+  | { kind: 'upload'; slot: AssetSlot; file: Blob }
+  | { kind: 'remove'; slot: AssetSlot }
+  | { kind: 'settings'; body: Record<string, unknown> };
+
+/**
+ * Requests of one "Speichern", in order: image changes first (slot order),
+ * then the settings PUT when a setting changed. A failed request does not stop
+ * the others; saveSummary names every part that failed.
+ */
+export function savePlan(d: BrandingDraft, saved: AdminBranding, changes: AssetChanges): SaveStep[] {
+  const steps: SaveStep[] = [];
+  for (const slot of ASSET_SLOTS) {
+    const c = changes[slot];
+    if (c?.kind === 'upload') steps.push({ kind: 'upload', slot, file: c.file });
+    else if (c?.kind === 'remove') steps.push({ kind: 'remove', slot });
+  }
+  const body = draftToBody(d, saved);
+  if (Object.keys(body).length > 0) steps.push({ kind: 'settings', body });
+  return steps;
+}
+
+export interface StepResult { step: SaveStep; error: string | null }
+
+const stepName = (s: SaveStep) => (s.kind === 'settings' ? 'Einstellungen' : ASSET_SLOT_NAME[s.slot]);
+
+/**
+ * Outcome of a save for the page: the message (null when everything was
+ * saved), and which parts must stay in the draft.
+ */
+export function saveSummary(results: StepResult[]): {
+  ok: boolean; message: string | null; failedSlots: AssetSlot[]; settingsFailed: boolean;
+} {
+  const failed = results.filter((r) => r.error !== null);
+  const failedSlots = failed.flatMap((r) => (r.step.kind === 'settings' ? [] : [r.step.slot]));
+  const settingsFailed = failed.some((r) => r.step.kind === 'settings');
+  if (failed.length === 0) return { ok: true, message: null, failedSlots, settingsFailed };
+  const reasons = failed.map((r) => `${stepName(r.step)}: ${r.error}`).join(' · ');
+  const savedParts = results.filter((r) => r.error === null).map((r) => stepName(r.step));
+  const message = savedParts.length > 0
+    ? `Teilweise gespeichert (${savedParts.join(', ')}). Nicht gespeichert — ${reasons}`
+    : `Nicht gespeichert — ${reasons}`;
+  return { ok: false, message, failedSlots, settingsFailed };
 }

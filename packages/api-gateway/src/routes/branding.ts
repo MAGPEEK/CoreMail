@@ -4,6 +4,8 @@
  *   GET /api/v1/branding           public branding object (Cache-Control: no-cache)
  *   GET /branding/assets/<sha256>.<ext>   uploaded logo / favicon / login background
  *   GET /branding/app-icons/<sha256>-<192|512>.png   9.4: app icons scaled from the favicon
+ *   GET /branding/favicons/<sha256>-<64|180>.png     favicon / apple-touch-icon derived
+ *                                    from a PNG light logo (no own favicon; lib/branding/favicon.ts)
  *   GET /manifest.webmanifest       9.4: web app manifest of the webmail
  *
  * Assets are content-addressed (immutable cache) and served with nosniff and a
@@ -19,6 +21,8 @@ import { EXT_CONTENT_TYPE } from '../lib/branding/image.js';
 import { webManifest } from '../lib/branding/manifest.js';
 import { APP_ICON_FILE_RE, appIconSha, loadBrandingAsset, renderAppIcon } from '../lib/branding/app-icons.js';
 import { PngUnsupportedError } from '../lib/branding/png.js';
+import { DERIVED_FAVICON_FILE_RE } from '../lib/branding/favicon.js';
+import { renderDerivedFavicon } from '../lib/branding/favicon-render.js';
 
 const log = createLogger('branding');
 
@@ -80,6 +84,26 @@ brandingAppIconsRouter.get('/:file', async (req: Request, res: Response) => {
   } catch (err) {
     if (isNotFound(err) || err instanceof PngUnsupportedError) { res.status(404).json({ error: 'Not found' }); return; }
     log.warn({ err, file }, 'App icon could not be rendered');
+    res.status(503).json({ error: 'Icon temporarily unavailable' });
+    return;
+  }
+  if (!icon) { res.status(404).json({ error: 'Not found' }); return; }
+  setImageHeaders(res, 'image/png');
+  res.send(icon);
+});
+
+/** Favicon / apple-touch-icon derived from the current PNG light logo (lib/branding/favicon.ts). */
+export const brandingFaviconsRouter: RouterType = Router();
+
+brandingFaviconsRouter.get('/:file', async (req: Request, res: Response) => {
+  const file = req.params['file'] ?? '';
+  if (!DERIVED_FAVICON_FILE_RE.test(file)) { res.status(404).json({ error: 'Not found' }); return; }
+  let icon: Buffer | null;
+  try {
+    icon = await renderDerivedFavicon(file, await currentBranding());
+  } catch (err) {
+    if (isNotFound(err)) { res.status(404).json({ error: 'Not found' }); return; }
+    log.warn({ err, file }, 'Favicon could not be derived from the logo');
     res.status(503).json({ error: 'Icon temporarily unavailable' });
     return;
   }

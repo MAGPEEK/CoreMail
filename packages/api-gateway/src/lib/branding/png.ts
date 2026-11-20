@@ -7,6 +7,8 @@
  *                            (grey, RGB, palette incl. tRNS, grey+alpha, RGBA)
  *                            → RGBA; anything else → PngUnsupportedError
  *   resizeRgba(...)          area-average downscale (premultiplied alpha)
+ *   scaleRgba(...)           any target size: area average down, bilinear up
+ *                            (favicons derived from the logo, favicon.ts)
  *   encodePng(...)           8-bit RGBA PNG
  *
  * WebP and JPEG are not decoded (no pure-JS decoder without a new dependency);
@@ -134,14 +136,30 @@ export function decodePng(buf: Buffer, maxPixels = MAX_PIXELS): RgbaImage {
 /** Area-average downscale to size × size (the source must be square and at least that large). */
 export function resizeRgba(img: RgbaImage, size: number): RgbaImage {
   if (img.width !== img.height || img.width < size) throw new RangeError('resizeRgba: square source of at least the target size expected');
-  const scale = img.width / size;
-  const out = Buffer.alloc(size * size * 4);
-  for (let y = 0; y < size; y++) {
-    const y0 = y * scale;
-    const y1 = y0 + scale;
-    for (let x = 0; x < size; x++) {
-      const x0 = x * scale;
-      const x1 = x0 + scale;
+  return areaAverage(img, size, size);
+}
+
+/**
+ * Scales to width × height (premultiplied alpha): area average when shrinking,
+ * bilinear when enlarging. The target keeps the source's direction per axis
+ * (both smaller-or-equal, or both larger) — callers scale uniformly.
+ */
+export function scaleRgba(img: RgbaImage, width: number, height: number): RgbaImage {
+  if (!(width > 0) || !(height > 0)) throw new RangeError('scaleRgba: empty target');
+  if (width <= img.width && height <= img.height) return areaAverage(img, width, height);
+  return bilinear(img, width, height);
+}
+
+function areaAverage(img: RgbaImage, width: number, height: number): RgbaImage {
+  const scaleX = img.width / width;
+  const scaleY = img.height / height;
+  const out = Buffer.alloc(width * height * 4);
+  for (let y = 0; y < height; y++) {
+    const y0 = y * scaleY;
+    const y1 = y0 + scaleY;
+    for (let x = 0; x < width; x++) {
+      const x0 = x * scaleX;
+      const x1 = x0 + scaleX;
       let r = 0, g = 0, b = 0, a = 0, w = 0;
       for (let sy = Math.floor(y0); sy < Math.ceil(y1); sy++) {
         const wy = Math.min(sy + 1, y1) - Math.max(sy, y0);
@@ -153,12 +171,46 @@ export function resizeRgba(img: RgbaImage, size: number): RgbaImage {
           a += pa; w += weight;
         }
       }
-      const o = (y * size + x) * 4;
+      const o = (y * width + x) * 4;
       if (a > 0) { out[o] = Math.round(r / a); out[o + 1] = Math.round(g / a); out[o + 2] = Math.round(b / a); }
       out[o + 3] = Math.round(a / w);
     }
   }
-  return { width: size, height: size, data: out };
+  return { width, height, data: out };
+}
+
+/** Bilinear enlargement with premultiplied alpha (transparent edges do not darken the colour). */
+function bilinear(img: RgbaImage, width: number, height: number): RgbaImage {
+  const out = Buffer.alloc(width * height * 4);
+  const scaleX = img.width / width;
+  const scaleY = img.height / height;
+  const at = (x: number, y: number) => (y * img.width + x) * 4;
+  for (let y = 0; y < height; y++) {
+    const posY = Math.min(Math.max((y + 0.5) * scaleY - 0.5, 0), img.height - 1);
+    const y0 = Math.floor(posY);
+    const y1 = Math.min(y0 + 1, img.height - 1);
+    const fy = posY - y0;
+    for (let x = 0; x < width; x++) {
+      const posX = Math.min(Math.max((x + 0.5) * scaleX - 0.5, 0), img.width - 1);
+      const x0 = Math.floor(posX);
+      const x1 = Math.min(x0 + 1, img.width - 1);
+      const fx = posX - x0;
+      const corners: Array<[number, number]> = [
+        [at(x0, y0), (1 - fx) * (1 - fy)], [at(x1, y0), fx * (1 - fy)],
+        [at(x0, y1), (1 - fx) * fy], [at(x1, y1), fx * fy],
+      ];
+      let r = 0, g = 0, b = 0, a = 0;
+      for (const [s, w] of corners) {
+        const pa = img.data[s + 3]! * w;
+        r += img.data[s]! * pa; g += img.data[s + 1]! * pa; b += img.data[s + 2]! * pa;
+        a += pa;
+      }
+      const o = (y * width + x) * 4;
+      if (a > 0) { out[o] = Math.round(r / a); out[o + 1] = Math.round(g / a); out[o + 2] = Math.round(b / a); }
+      out[o + 3] = Math.round(a);
+    }
+  }
+  return { width, height, data: out };
 }
 
 const CRC_TABLE = (() => {

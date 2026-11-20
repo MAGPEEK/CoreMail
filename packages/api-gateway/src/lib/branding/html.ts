@@ -5,7 +5,8 @@
  *   <style id="cm-brand">:root{--brand-primary:R G B}</style>
  *   <script id="cm-branding" type="application/json">…public branding JSON…</script>
  * replaces `<title>` with the product name and the favicon `<link rel="icon">`
- * (favicon, else logoLight; the built-in icon stays when neither is set), so the
+ * (own favicon, else derived from the light logo — favicon.ts, with an
+ * `apple-touch-icon` for a PNG logo; the built-in icon stays when neither is set), so the
  * SPA renders branded before its first fetch (`--brand-primary` is the initial
  * `--color-accent` in the apps' tokens.css until the theme code applies the
  * contrast-adjusted values). The JSON is escaped for a script
@@ -13,7 +14,7 @@
  */
 import type { PublicBranding } from '@coremail/storage';
 import { rgbChannels } from './color.js';
-import { EXT_CONTENT_TYPE } from './image.js';
+import { faviconLinks } from './favicon.js';
 
 const escHtml = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -31,12 +32,7 @@ export function jsonForScript(value: unknown): string {
     .split(PS).join('\\u2029');
 }
 
-/** Favicon URL for the page: favicon, else logoLight, else null (keep the built-in icon). */
-export function faviconHref(b: PublicBranding): string | null {
-  return b.assets.favicon ?? b.assets.logoLight ?? null;
-}
-
-const ICON_LINK_RE = /<link\b[^>]*\brel\s*=\s*["']?(?:shortcut\s+)?icon["']?[^>]*>\s*/gi;
+const ICON_LINK_RE = /<link\b[^>]*\brel\s*=\s*["']?(?:(?:shortcut\s+)?icon|apple-touch-icon)["']?[^>]*>\s*/gi;
 const OWN_STYLE_RE = /<style\b[^>]*\bid\s*=\s*["']?cm-brand["']?[^>]*>[\s\S]*?<\/style>\s*/gi;
 const OWN_SCRIPT_RE = /<script\b[^>]*\bid\s*=\s*["']?cm-branding["']?[^>]*>[\s\S]*?<\/script>\s*/gi;
 const TITLE_RE = /<title\b[^>]*>[\s\S]*?<\/title>/i;
@@ -48,11 +44,11 @@ export function renderBrandedIndex(template: string, b: PublicBranding): string 
   const title = `<title>${escHtml(b.productName)}</title>`;
   html = TITLE_RE.test(html) ? html.replace(TITLE_RE, () => title) : injectHead(html, title);
 
-  const icon = faviconHref(b);
-  if (icon) {
-    const ext = icon.slice(icon.lastIndexOf('.') + 1);
-    const link = `<link rel="icon" type="${escHtml(EXT_CONTENT_TYPE[ext] ?? 'image/png')}" href="${escHtml(icon)}" />`;
-    html = injectHead(html.replace(ICON_LINK_RE, ''), link);
+  const links = faviconLinks(b.assets);
+  if (links.length > 0) {
+    const tags = links.map((l) =>
+      `<link rel="${l.rel}" type="${escHtml(l.type)}"${l.sizes ? ` sizes="${escHtml(l.sizes)}"` : ''} href="${escHtml(l.href)}" />`);
+    html = injectHead(html.replace(ICON_LINK_RE, ''), tags.join('\n'));
   }
 
   const parts: string[] = [];
