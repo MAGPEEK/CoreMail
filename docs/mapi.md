@@ -1,19 +1,19 @@
-# MAPI over HTTP (classic Outlook)
+# MAPI over HTTP
 
-Since 9.4 CoreMail serves MAPI over HTTP, the protocol classic Win32 Outlook uses for an account of
-the "Exchange" type. It is implemented from the public Microsoft Open Specifications
+Since 9.4 CoreMail serves MAPI over HTTP, the protocol Windows desktop mail programs use for a
+MAPI server account. It is implemented from the public Open Specifications
 (MS-OXCMAPIHTTP, MS-OXCRPC, MS-OXCROPS, MS-OXCDATA, MS-OXCSTOR, MS-OXCFOLD, MS-OXCTABL, MS-OXCMSG,
 MS-OXCPRPT, MS-OXCNOTIF, MS-OXNSPI, MS-OXOABK, MS-OXDSCLI, MS-OXPROPS) in the service
 `packages/mapi-server` (port 3007, loopback only). The api-gateway forwards `/mapi/*` to it.
 
 **Status:** the mailbox endpoint (`/mapi/emsmdb`: connect, log on, folders, tables, reading,
 composing, sending, notifications), the address book endpoint (`/mapi/nspi`) and the Autodiscover
-announcement (`mapiHttp` block) work, so classic Outlook can create an account of the "Exchange"
-type against CoreMail. Since 9.5 the mailbox endpoint also speaks incremental change
-synchronization (ICS, MS-OXCFXICS), the protocol of Outlook's cached mode (the OST file), see
+announcement (`mapiHttp` block) work, so a desktop client with MAPI over HTTP can create a MAPI
+account against CoreMail. Since 9.5 the mailbox endpoint also speaks incremental change
+synchronization (ICS, MS-OXCFXICS), the protocol of the client's cached mode (the OST file), see
 [Cached mode](#cached-mode-ics) and [Limits](#limits).
 
-## Set up classic Outlook
+## Set up a desktop client
 
 Prerequisites:
 
@@ -26,18 +26,18 @@ Prerequisites:
 3. **Autodiscover reachable** (DNS `autodiscover.<domain>` or the SRV record, see
    [autodiscover.md](autodiscover.md)).
 
-Then in Outlook: *File → Add account*, enter the address, *Connect*. Outlook asks Autodiscover
+Then in the mail program (in Outlook: *File → Add account*), enter the address, *Connect*. The client asks Autodiscover
 (with `X-MapiHttpCapability`), gets the `mapiHttp` block (mailbox and address book URLs, the
-account's LegacyDN) and creates an account of the "Exchange" type. It asks for the password once
+account's LegacyDN) and creates a MAPI over HTTP account. It asks for the password once
 (Windows security dialog, Basic authentication — tick *Remember my credentials*). Accounts with MFA
 enter an **app password** (Webmail → Einstellungen → Sicherheit), as on every mail protocol.
 
-Outlook turns *Use Cached Exchange Mode* on for new accounts and builds its OST through ICS
+The client turns cached mode on for new accounts and builds its OST through ICS
 (see [Cached mode](#cached-mode-ics)); online mode (*Account settings → Change*, cached mode off)
 works as well.
 
 With MAPI off for the account (or no trusted HTTPS), Autodiscover announces IMAP + SMTP as before
-and Outlook creates an IMAP account.
+and the client creates an IMAP account.
 
 ## Enable it
 
@@ -64,7 +64,7 @@ shared mail-protocol check (MFA accounts: app passwords, shared lockout, LDAP ve
 switch after the password). A request over a connection the gateway verified as plain HTTP is refused
 (403); `MAPI_ALLOW_PLAIN_HTTP=true` only for test setups. The challenge is
 `WWW-Authenticate: Basic realm="CoreMail"` — no `NTLM` or `Negotiate` is offered, and a request that
-sends one of them gets the Basic challenge again; Outlook then uses Basic (it asks for the password
+sends one of them gets the Basic challenge again; the client then uses Basic (it asks for the password
 once and can store it). Autodiscover uses the same rule (`Basic realm="CoreMail Autodiscover"`).
 
 Why no NTLM / Negotiate:
@@ -77,7 +77,7 @@ Why no NTLM / Negotiate:
   for the MAPI host. That belongs to a directory-integrated deployment (LDAP/AD connector) and is not
   part of 9.4; Negotiate is not announced.
 
-Consequence: Outlook shows a password prompt (Windows security dialog) instead of signing in with the
+Consequence: the client shows a password prompt (Windows security dialog) instead of signing in with the
 Windows account. Passwords only travel inside TLS.
 
 Successful checks are cached for up to 60 s per credential and dropped at once when the account's
@@ -90,13 +90,13 @@ Refusals before a session exists:
 
 | Situation | HTTP | X-ResponseCode | Notes |
 |-----------|------|----------------|-------|
-| No / wrong credentials, NTLM / Negotiate header | 401 + `WWW-Authenticate: Basic` | 8 Anonymous Not Allowed | the only answer that makes Outlook ask for the password |
+| No / wrong credentials, NTLM / Negotiate header | 401 + `WWW-Authenticate: Basic` | 8 Anonymous Not Allowed | the only answer that makes the client ask for the password |
 | MAPI switched off, plain HTTP | 403 | 11 No Privilege | |
 | Per-account request limit (`MAPI_RATE_LIMIT`), account locked by the shared mail-login lockout, temporary failure | 503 + `Retry-After` | 1 Unknown Failure | MS-OXCMAPIHTTP has no throttling code (2.2.3.3.3) and reserves non-200 statuses for authentication and exceptional conditions (2.2.2.2): throttling is a 5xx with `Retry-After`, never 401 (no password prompt) and never a misused X-ResponseCode |
 
 ## Autodiscover
 
-Autodiscover v1 (Outlook schema) adds the block below when **all** hold: the client sends
+Autodiscover v1 (mail account schema) adds the block below when **all** hold: the client sends
 `X-MapiHttpCapability` ≥ 1 (MS-OXDSCLI 3.2.5.1; version 1 is served), the account's `mapi` switch is
 on, a public host name is configured and HTTPS has a trusted certificate (see prerequisites). The
 IMAP / POP3 / SMTP blocks stay as before; `EXCH` / `EXPR` blocks are never sent.
@@ -128,7 +128,7 @@ domain level only, as every v2 answer). Details: [autodiscover.md](autodiscover.
 | Sessions | Mailbox: cookies `MapiContext` / `MapiSequence` (path `/mapi/`); address book: `NspiContext` / `NspiSequence` (path `/mapi/nspi`, created by `Bind`, ended by `Unbind`). The sequence cookie rotates per request (a replayed or concurrent request gets 15 "Invalid Sequence"); a session is bound to its endpoint and the credentials it was created with (else 10 "Context Not Found"; PING refreshes only the caller's own session); idle timeout 30 min (`MAPI_SESSION_IDLE_MS`); at most 16 sessions per account (both endpoints) across every MAPI server instance — a new session beyond it ends the least recently used one, wherever it lives (Redis index `mapi:user-ctx:<userId>`); a failure after `PROCESSING` still ends with `DONE` and X-ResponseCode 1 (a malformed address book body: 12) |
 | Execute | RPC_HEADER_EXT payloads, also XOR-obfuscated and LZ77/DIRECT2-compressed requests; an empty body or ROP buffer only fetches notifications; responses uncompressed; output limited to `MaxRopOut` and 32 KB, `RopBufferTooSmall` when a response does not fit |
 | Logon | Own mailbox; shared and delegated mailboxes the account may read (Essdn = their legacy DN), read-only ones refuse writes. Revoking the permission or delegation (or deactivating / deleting the owner) ends that logon in open sessions at once — its folders, tables, messages and synchronization contexts are released and no further notification of that mailbox arrives; a permission reduced to read-only applies to the next write |
-| Folders | Root, Top of Information Store, Outbox and the other special folders, the CoreMail folders below; open, create (subfolders `Parent.Name`), delete (mail moves to Deleted Items; default folders cannot be deleted), hierarchy tables (with depth). The default folders always carry the names Outlook expects — Inbox, Drafts, Sent Items, Deleted Items, Junk Email, Archive — whatever display name the folder row has (it depends on how the mailbox was created: admin API, setup wizard, older versions); they cannot be renamed over MAPI |
+| Folders | Root, Top of Information Store, Outbox and the other special folders, the CoreMail folders below; open, create (subfolders `Parent.Name`), delete (mail moves to Deleted Items; default folders cannot be deleted), hierarchy tables (with depth). The default folders always carry the names MAPI clients expect — Inbox, Drafts, Sent Items, Deleted Items, Junk Email, Archive — whatever display name the folder row has (it depends on how the mailbox was created: admin API, setup wizard, older versions); they cannot be renamed over MAPI |
 | Tables | `SetColumns`, `SortTable`, `Restrict` (and/or/not, content, property, compare, bitmask, size, exist), `QueryRows` (forward/backward), `SeekRow`, `QueryPosition` |
 | Messages | Open (recipients, subject), properties (specific/all, large values via streams), read flag, delete (tombstones, recoverable 30 days), move/copy (also between logons), attachments (table, open, create, save) |
 | Streams | Read the plain-text and HTML body and attachment data; write bodies and attachment data of new messages |
@@ -138,11 +138,11 @@ domain level only, as every v2 answer). Details: [autodiscover.md](autodiscover.
 | Notifications | `RopRegisterNotification` (whole store or one folder) and every open hierarchy / contents table (unless opened with `NoNotifications`) get events of every client and protocol (Redis `mailbox:changes`, [realtime.md](realtime.md)): **NewMail** for each message that appeared in a folder (not in Sent Items / Drafts; at most 50 per change), **ObjectModified** with the new total / unread counts of a changed folder, **TableModified / TableChanged** for tables showing the change (their snapshot is dropped, the client re-reads). `NotificationWait` returns at once when something is queued, else when an event arrives (typically within a second) or after 5 minutes; the next `Execute` carries the events as `RopNotify` (and `RopPending` when they do not all fit). One outstanding `NotificationWait` per session: a second one is answered at once with `ecRejected` (0x7EE, MS-OXCRPC 3.3.4.1); ending the session (Disconnect, idle timeout, credential change, MAPI switched off) ends a waiting request with EventPending 0. Up to 512 notifications are queued per session (newer replace older ones of the same object) |
 | Cached mode (ICS) | Download and upload of incremental change synchronization, see [Cached mode](#cached-mode-ics); `RopLongTermIdFromId` / `RopIdFromLongTermId` |
 | Address book code page | `Bind` names the session's 8-bit code page (`STAT.CodePage`): CP_WINUNICODE (1200) or a code page the server does not serve is refused with `InvalidCodepage` (0x8004011E) and no session. Strings requested as `PtypString8` are converted into the request STAT's code page, or the session's when the STAT asks for Unicode (MS-OXNSPI 3.1.4.3.3); characters the code page cannot represent become `?`. Served: the Windows and ISO single-byte code pages, 932 / 936 / 949 / 950, UTF-8 (65001), US-ASCII (20127) and CP_TELETEX (20261, ASCII) |
-| Address book | One container, the Global Address List (ContainerID 0, `GetSpecialTable` with version 1): the active users and Shared Mailboxes of the account's own domain (the GAL scope of every CoreMail directory lookup), sorted by display name. Entries are addressed as type `EX` with their legacy DN; `PidTagSmtpAddress` and `PidTagAddressBookProxyAddresses` carry the SMTP addresses (`SMTP:` primary, `smtp:` aliases). Minimal Entry IDs are derived from the directory id — stable across sessions and restarts. `QueryRows` (paged, STAT positioning incl. fractional), `SeekEntries` (display name), `UpdateStat`, `CompareMIds`, `ResortRestriction`, `GetMatches` (restriction filter, ANR on `PidTagAnr`, more matches than requested → `TableTooBig`), `ResolveNames` (ANR: an exact address or alias, else prefixes of the display name, its words and the local parts; MID_UNRESOLVED / MID_AMBIGUOUS / the entry's MID), `DNToMId`, `GetProps` (permanent or — `fEphID` — ephemeral EntryIDs), `GetPropList`, `QueryColumns`, `GetMailboxUrl` / `GetAddressBookUrl` (the announced URLs). Mailboxes hidden from the address list (mail flow policy) are not listed and never found by name, but a known DN still resolves (`DNToMId`) and the session may then read that entry by its MID (`GetProps`, `GetPropList`, explicit `QueryRows`) — Outlook needs its own entry even when hidden, and the own entry is always readable. A MID alone never reveals a hidden entry (MIDs are 31-bit and could be enumerated). Result bounds: at most 100 000 cells (rows × columns) per answer — paged reads (`QueryRows`, `SeekEntries`) return fewer rows, explicit MID lists, `GetMatches` and `ResolveNames` answer `TableTooBig`; at most 1000 names per `ResolveNames`, 256 nodes per `GetMatches` filter (else `TooComplex`). The sessions of one domain share one snapshot, reloaded after 60 s |
+| Address book | One container, the Global Address List (ContainerID 0, `GetSpecialTable` with version 1): the active users and Shared Mailboxes of the account's own domain (the GAL scope of every CoreMail directory lookup), sorted by display name. Entries are addressed as type `EX` with their legacy DN; `PidTagSmtpAddress` and `PidTagAddressBookProxyAddresses` carry the SMTP addresses (`SMTP:` primary, `smtp:` aliases). Minimal Entry IDs are derived from the directory id — stable across sessions and restarts. `QueryRows` (paged, STAT positioning incl. fractional), `SeekEntries` (display name), `UpdateStat`, `CompareMIds`, `ResortRestriction`, `GetMatches` (restriction filter, ANR on `PidTagAnr`, more matches than requested → `TableTooBig`), `ResolveNames` (ANR: an exact address or alias, else prefixes of the display name, its words and the local parts; MID_UNRESOLVED / MID_AMBIGUOUS / the entry's MID), `DNToMId`, `GetProps` (permanent or — `fEphID` — ephemeral EntryIDs), `GetPropList`, `QueryColumns`, `GetMailboxUrl` / `GetAddressBookUrl` (the announced URLs). Mailboxes hidden from the address list (mail flow policy) are not listed and never found by name, but a known DN still resolves (`DNToMId`) and the session may then read that entry by its MID (`GetProps`, `GetPropList`, explicit `QueryRows`) — the client needs its own entry even when hidden, and the own entry is always readable. A MID alone never reveals a hidden entry (MIDs are 31-bit and could be enumerated). Result bounds: at most 100 000 cells (rows × columns) per answer — paged reads (`QueryRows`, `SeekEntries`) return fewer rows, explicit MID lists, `GetMatches` and `ResolveNames` answer `TableTooBig`; at most 1000 names per `ResolveNames`, 256 nodes per `GetMatches` filter (else `TooComplex`). The sessions of one domain share one snapshot, reloaded after 60 s |
 
 ## Cached mode (ICS)
 
-Classic Outlook in cached mode keeps an OST file and synchronizes it with incremental change
+A desktop client in cached mode keeps an OST file and synchronizes it with incremental change
 synchronization (MS-OXCFXICS). The server keeps no per-client state: the client uploads its
 **ICS state** before each round and gets the new one at the end.
 
@@ -236,7 +236,7 @@ the server wins; no conflict resolve message, no last-writer-wins comparison).
 
 ## Limits
 
-- Cached mode: no folder associated information is stored (Outlook's view settings and similar
+- Cached mode: no folder associated information is stored (the client's view settings and similar
   configuration messages stay in its OST only; a new profile starts with defaults); no partial
   message changes, no progress elements (*Progress* flag), no RTF bodies (*BestBody* is the
   default: plain text and HTML as stored); the FastTransfer copy ROPs (`RopFastTransferSourceCopyTo`
@@ -245,13 +245,13 @@ the server wins; no conflict resolve message, no last-writer-wins comparison).
   messages other than the read state (categories, follow-up flags of the client) are not uploaded.
   Conflicts of message changes are resolved for the server version (no conflict resolve message);
   hierarchy changes have no conflict detection (the last change wins). A flag cleared by another
-  client (`\Answered`, `$Forwarded`, `\Draft`) keeps the old icon / draft state in Outlook until the
+  client (`\Answered`, `$Forwarded`, `\Draft`) keeps the old icon / draft state in the client until the
   message changes otherwise (the message store keeps no separate change number for flags).
-- Unknown ROPs fail the whole Execute with `ecRpcFormat` (as the specification requires) — Outlook
+- Unknown ROPs fail the whole Execute with `ecRpcFormat` (as the specification requires) — client
   operations that need further ROPs (rules, permissions, search folders, `ReadRecipients`,
   `GetPropertiesList`, bookmarks …) do not work yet.
 - The address book is read-only (`ModProps` / `ModLinkAtt` → NotSupported), has no address creation
-  or details templates (`GetTemplateInfo` → NotFound; Outlook shows its built-in details page) and no
+  or details templates (`GetTemplateInfo` → NotFound; the client shows its built-in details page) and no
   distribution lists.
 - Notifications carry no per-message ObjectCreated / ObjectDeleted / ObjectModified events: views
   refresh through TableChanged.
@@ -261,7 +261,7 @@ the server wins; no conflict resolve message, no last-writer-wins comparison).
 - Named property IDs are kept in memory (per mailbox, per service process).
 - Requests are limited per mail account (`MAPI_RATE_LIMIT` requests per `MAPI_RATE_WINDOW_SEC`, default
   3000 per 5 minutes; above it HTTP 503 with `Retry-After`). The api-gateway's global API limit (per user / per IP,
-  [api-gateway-security.md](api-gateway-security.md)) does not count `/mapi` (Outlook is chatty and clients often share a NAT address); password guessing stays
+  [api-gateway-security.md](api-gateway-security.md)) does not count `/mapi` (MAPI clients are chatty and often share a NAT address); password guessing stays
   bounded by the shared mail-login lockout.
 - Each session holds its open messages, attachments and streams in memory, at most
   `MAPI_SESSION_MEMORY_MB` (64) — beyond it writes fail (`STG_E_MEDIUMFULL` / `ecMAPIOOM`); a single

@@ -2,7 +2,7 @@
 
 CoreMail's SMTP server (`packages/smtp-server`) listens on port 25 (inbound MTA
 traffic), 587 (submission, STARTTLS) and 465 (submission, implicit TLS). Since
-v9.0 the EHLO response matches Exchange 2019:
+v9.0 the EHLO response announces:
 
 ```
 250-mail.example.com

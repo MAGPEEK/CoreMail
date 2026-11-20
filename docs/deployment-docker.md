@@ -55,7 +55,7 @@ The app container contains **all CoreMail services**, managed by `supervisord`:
 | autodiscover | 8081 | Autodiscover v1 + v2 |
 | caldav-server | 8082 | CalDAV + CardDAV |
 | backup-service | 3004 | MBOX/EML export + S3 backup |
-| activesync | 3005 | Exchange ActiveSync EAS 14.1 |
+| activesync | 3005 | ActiveSync EAS 14.1 |
 
 The `api-gateway` handles all HTTP routing without nginx:
 - `/` and `/bcp/` → static frontend bundles (MWA/BCP from `/app/www/`)
@@ -241,7 +241,7 @@ LOG_LEVEL=info                  # error | warn | info | debug
 # ─── Backup ──────────────────────────────────────────────────────────────────
 BACKUP_SCHEDULE=0 2 * * *       # daily at 02:00 UTC
 BACKUP_RETENTION_DAYS=30
-RETENTION_SCHEDULE=0 3 * * *    # Managed Folder Assistant, daily at 03:00 UTC
+RETENTION_SCHEDULE=0 3 * * *    # retention worker, daily at 03:00 UTC
 BACKUP_ENCRYPTION_KEY=<openssl rand -hex 32>   # backups are AES-256-GCM encrypted — keep a copy OFF the server
 
 # ─── Security (docs/deployment-security.md) ─────────────────────────────────
@@ -258,7 +258,7 @@ VAPID_PRIVATE_KEY=
 VAPID_SUBJECT=mailto:admin@example.com
 
 # ─── SMTP gateway mode — optional ────────────────────────────────────────────
-# Relay to an upstream MTA (Exchange on-prem, Postfix, Office 365 …)
+# Relay to an upstream MTA (on-premises or hosted mail server, Postfix …)
 GATEWAY_MODE=false
 # GATEWAY_UPSTREAM_HOST=smtp.intern.example.com
 # GATEWAY_UPSTREAM_PORT=25
@@ -543,7 +543,7 @@ docker exec coremail ss -tlnp
 | `supervisorctl status` shows FATAL | Process crashed | Read the logs: `docker exec coremail supervisorctl tail smtp-server` |
 | SMTP: "Connection refused" on port 25 | Port blocked by the provider | Contact the hosting provider and have port 25 unblocked |
 | Redis connection error | Wrong `REDIS_PASSWORD` | Check `.env`, restart the stack |
-| Outlook / iPhone: "certificate unknown" on IMAP/SMTP | A mail port serves the self-signed default or a certificate for another name | BCP → SSL/TLS → the status chips SMTP/IMAP/POP3 in the certificate list show (tooltip) which ports serve another certificate; assign SMTP/IMAP/POP3 to the trusted certificate for the public host name (**Jetzt zuweisen**). The client IP and the hint `client does not trust the served certificate` appear in the IMAP/SMTP/POP3 logs. See [certificates.md](certificates.md) |
+| Desktop client / iPhone: "certificate unknown" on IMAP/SMTP | A mail port serves the self-signed default or a certificate for another name | BCP → SSL/TLS → the status chips SMTP/IMAP/POP3 in the certificate list show (tooltip) which ports serve another certificate; assign SMTP/IMAP/POP3 to the trusted certificate for the public host name (**Jetzt zuweisen**). The client IP and the hint `client does not trust the served certificate` appear in the IMAP/SMTP/POP3 logs. See [certificates.md](certificates.md) |
 | Let's Encrypt certificate ends in "Error" | DNS, port 80, CAA or a rate limit — the message in BCP → SSL/TLS (expand the row) is what Let's Encrypt reported | BCP → SSL/TLS → Let's Encrypt → **Check prerequisites** (DNS, CAA, local token check and a real validation by the Let's Encrypt staging environment), fix the cause, then **Retry**. Host port 80 must be forwarded to the container's HTTP port (3000). The server does not need to reach its own public address. Use the staging switch for tests — production allows only 5 failed validations per host name and hour |
 
 ---

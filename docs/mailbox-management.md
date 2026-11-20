@@ -10,7 +10,7 @@ Three features for user mailboxes and Shared Mailboxes:
    mailbox that is not their own, from every client, with aggregation and a
    retention setting; the owner sees it in webmail Settings → Sicherheit.
 4. **Folder permissions** (w3) — a role on one folder for another user or for
-   everyone in the organisation, like a folder's "Permissions" in Outlook.
+   everyone in the organisation (a folder's "Berechtigungen").
 
 ## 1. Shared mailbox grants
 

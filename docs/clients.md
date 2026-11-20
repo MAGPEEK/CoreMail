@@ -17,8 +17,8 @@ same source as Autodiscover and the MWA page **Settings → External clients**.
 | Mechanism | URL | Used by | Auth |
 |-----------|-----|---------|------|
 | Mozilla autoconfig (ISPDB `config-v1.1.xml`) | `https://autoconfig.<domain>/mail/config-v1.1.xml?emailaddress=…` and `https://<domain>/.well-known/autoconfig/mail/config-v1.1.xml?emailaddress=…` | Thunderbird, Thunderbird for Android / K-9 Mail, FairEmail, Evolution, KMail, eM Client | none |
-| Autodiscover v1 (POX) | `https://autodiscover.<domain>/Autodiscover/Autodiscover.xml` | Outlook (IMAP/SMTP profile), ActiveSync clients | Basic |
-| Autodiscover v2 (JSON) | `https://autodiscover.<domain>/autodiscover/autodiscover.json/v1.0/<email>?Protocol=…` | Outlook 2019/2021/365 | none |
+| Autodiscover v1 (POX) | `https://autodiscover.<domain>/Autodiscover/Autodiscover.xml` | Windows desktop mail programs (IMAP/SMTP profile), ActiveSync clients | Basic |
+| Autodiscover v2 (JSON) | `https://autodiscover.<domain>/autodiscover/autodiscover.json/v1.0/<email>?Protocol=…` | newer Windows desktop mail programs | none |
 | RFC 6186 / RFC 8314 SRV records | `_submissions._tcp`, `_imaps._tcp`, … | Thunderbird (fallback), some mobile clients | — |
 | RFC 6764 CalDAV/CardDAV discovery | `_caldavs._tcp` / `_carddavs._tcp` SRV + TXT `path=/dav/`, `/.well-known/caldav`, `/.well-known/carddav` | Apple Calendar/Contacts, DAVx⁵, Thunderbird, eM Client | Basic |
 | Apple configuration profile (`.mobileconfig`) | MWA → Settings → External clients → "Profil für iPhone/iPad/Mac laden" (`GET /api/v1/user/apple-profile`) | iOS, iPadOS, macOS | MWA session |
@@ -57,7 +57,7 @@ same source as Autodiscover and the MWA page **Settings → External clients**.
   `fetch` + blob download.
 * Payloads: `com.apple.mail.managed` (IMAP + SMTP), `com.apple.caldav.account`,
   `com.apple.carddav.account` (principal URL `/dav/principals/<user id>/`).
-  `?type=eas` returns a single `com.apple.eas.account` payload (Exchange ActiveSync for
+  `?type=eas` returns a single `com.apple.eas.account` payload (ActiveSync for
   mail, calendar and contacts) — install only one of the two variants.
 * The account address is pre-filled; the profile contains **no password** — the device
   asks for it during installation (app password with MFA; the profile description says so).
@@ -85,13 +85,13 @@ same source as Autodiscover and the MWA page **Settings → External clients**.
 * Manual alternative: Settings → Mail → Accounts → Add Account → Other. Calendar and
   Contacts find the DAV server via the RFC 6764 SRV records / `/.well-known/caldav`.
 
-### Outlook (Windows, Mac)
+### Windows desktop mail programs (Autodiscover)
 
-* Outlook uses **IMAP + SMTP**; Autodiscover (v1/v2) answers with the IMAP/SMTP settings
+* Desktop mail programs that use Autodiscover get **IMAP + SMTP**; Autodiscover (v1/v2) answers with the IMAP/SMTP settings
   (`autodiscover.<domain>` CNAME or the `_autodiscover._tcp` SRV record).
-* Calendar/contacts: Outlook has no CalDAV/CardDAV support — use the free *Outlook CalDav
-  Synchronizer* plugin (guide in the MWA External clients page), or OWA.
-  Details: [autodiscover.md](autodiscover.md), [outlook-caldav.md](outlook-caldav.md).
+* Calendar/contacts: a client without CalDAV/CardDAV support needs a sync add-in (guide in the
+  MWA External clients page), or the MWA in the browser.
+  Details: [autodiscover.md](autodiscover.md), [desktop-caldav.md](desktop-caldav.md).
 * Old clients without TLS 1.2: [legacy-tls.md](legacy-tls.md). Scanners/printers that send
   without authentication: [device-relay.md](device-relay.md).
 
@@ -101,7 +101,7 @@ same source as Autodiscover and the MWA page **Settings → External clients**.
   as Thunderbird); FairEmail also tries the SRV records.
 * **DAVx⁵** (calendar + contacts): "Login with e-mail address" → finds the server via
   `_caldavs._tcp` / `_carddavs._tcp` SRV + TXT `path=/dav/` (RFC 6764).
-* **Exchange ActiveSync** clients (Gmail app, Samsung Mail, Nine): Autodiscover v1.
+* **ActiveSync** clients (Gmail app, Samsung Mail, Nine): Autodiscover v1.
 
 ### eM Client
 
@@ -123,8 +123,8 @@ port (443 unless an HTTPS port is configured). SRV values: `priority weight port
 | `_imaps._tcp` | SRV | `0 1 993 mail.example.com.` | IMAP, implicit TLS |
 | `_imap._tcp` | SRV | `0 1 143 mail.example.com.` | IMAP, STARTTLS |
 | `_pop3s._tcp` | SRV | `0 1 995 mail.example.com.` | POP3, implicit TLS |
-| `_autodiscover._tcp` | SRV | `0 0 443 mail.example.com.` | Outlook Autodiscover |
-| `autodiscover` | CNAME | `mail.example.com` | Outlook Autodiscover (required list) |
+| `_autodiscover._tcp` | SRV | `0 0 443 mail.example.com.` | Autodiscover |
+| `autodiscover` | CNAME | `mail.example.com` | Autodiscover (required list) |
 | `autoconfig` | CNAME (or A to the server IP) | `mail.example.com` | Mozilla autoconfig |
 | `_caldavs._tcp` | SRV | `0 1 443 mail.example.com.` | CalDAV (RFC 6764) |
 | `_caldavs._tcp` | TXT | `path=/dav/` | CalDAV context path |
@@ -137,4 +137,4 @@ Clients fetch Autodiscover and autoconfig over HTTPS. The certificate served by 
 integrated HTTPS proxy (or your reverse proxy) must cover **`mail.<domain>`,
 `autodiscover.<domain>` and `autoconfig.<domain>`** as SANs (BCP → SSL/TLS; the TLS proxy
 picks the certificate per SNI name). Without a matching certificate Thunderbird falls back
-to plain HTTP lookups or guessing, and Outlook shows a certificate warning.
+to plain HTTP lookups or guessing, and Autodiscover clients show a certificate warning.

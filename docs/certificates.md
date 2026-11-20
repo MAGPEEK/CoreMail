@@ -39,7 +39,7 @@ Every switch is written to the audit log as `certificate.protocol.switch` (who, 
 
 Before 9.3 the edit dialog only moved the `services` label: the BCP showed SMTP/IMAP/POP3 on a
 Let's Encrypt certificate while 993/465/587 kept serving the self-signed `CN=mail.localhost`
-certificate, and Outlook / iOS refused to connect ("certificate unknown").
+certificate, and desktop and iOS mail clients refused to connect ("certificate unknown").
 
 ### Startup reconciliation
 
@@ -67,7 +67,7 @@ meant until a trusted certificate exists.
 ## Let's Encrypt for the public host name
 
 The order form is prefilled with the public host name and the mail services. It offers
-`autodiscover.<domain>` and `autoconfig.<domain>` as additional names (Outlook / Thunderbird fetch
+`autodiscover.<domain>` and `autoconfig.<domain>` as additional names (Autodiscover / autoconfig clients fetch
 them over HTTPS); they are checked by default when their DNS points to this server
 (`GET /api/v1/admin/certificates/acme-suggestions`). **Check prerequisites** runs the DNS / CAA /
 port-80 checks for every selected name.

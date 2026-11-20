@@ -7,7 +7,7 @@ name: coremail
 #   NAS_HOSTNAME=192.168.1.100 bash scripts/synology-setup.sh
 #
 # Ports (no conflict with DSM):
-#   8080        — HTTP (OWA, ECP, API)
+#   8080        — HTTP (MWA, BCP, API)
 #                 DSM Application Portal: *.domain.de → localhost:8080
 #   25/465/587  — SMTP
 #   143/993     — IMAP

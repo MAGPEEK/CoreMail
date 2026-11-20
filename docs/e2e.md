@@ -225,7 +225,7 @@ draft created offline in Drafts (an ID from `RopGetLocalReplicaIds`, `ImportMess
 `SaveChangesMessage`) keeps that ID — `RopOpenMessage` opens it by it, a second import edits it,
 and with the collector's state merged in the next download sends neither back while the server
 holds exactly one (edited) draft under that ID (`offlineDraftRoundTrip` in the test client, also
-run by `app.test.ts`); a hierarchy synchronization lists the default folders under their Outlook
+run by `app.test.ts`); a hierarchy synchronization lists the default folders under their MAPI
 names (Inbox, Drafts, Sent Items, Deleted Items, Junk Email, Archive) and the Outbox directly below
 Top of Information Store. A (with a fresh logon) then creates a message in the Outbox (`SetProperties`, `ModifyRecipients`, `SubmitMessage`) that
 reaches B (IMAP search). The address book: `Bind`, `GetSpecialTable`, `QueryRows` (paged) lists A and

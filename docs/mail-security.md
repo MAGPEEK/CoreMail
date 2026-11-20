@@ -240,7 +240,7 @@ recommended `clamd.conf` limits: [antivirus.md](antivirus.md).
 
 Message expiry stays time-based through BCP → Queues →
 `outboundRetentionHours` (default 48 h). Since 9.0 a transient failure is
-retried for the whole window (Exchange-like): first after
+retried for the whole window: first after
 `retryBackoffDelaySec` (default 60 s), then after 5 min, 15 min and then every
 30 min; the last retry is pulled forward to the expiry moment, where the job
 ends with ONE final NDR (RFC 3464 `Action: failed`, `Status: 5.4.7`, the last
