@@ -6,6 +6,7 @@ import {
 } from '@coremail/core';
 import { createSelfSignedPem, selfSignedHostnameFor } from '../lib/protocol-cert-assign.js';
 import { isSetupRequired, verifySetupToken } from '../lib/setup-token.js';
+import { removeSetupTokenFile, secretsStatus } from '../lib/setup-secrets.js';
 import { deriveServerUrls } from '../lib/server-urls.js';
 import { generateDkimPrivateKey } from '../lib/dkim.js';
 
@@ -15,11 +16,14 @@ export const setupRouter: RouterType = Router();
 // GET /api/v1/setup/status
 // Public — setup is required only until it was completed once (persistent
 // flag, v6) — deleting all users does not reopen it.
+// 10.4: secretsFile = host-relative hint of the secrets file the container
+// loaded (null without one), secretsGenerated = CoreMail generated it. Never a
+// secret value.
 setupRouter.get('/status', async (_req: Request, res: Response) => {
   try {
     const setupRequired = await isSetupRequired();
     // v6: the wizard must ask for the one-time setup token (api-gateway log / SETUP_TOKEN)
-    res.json({ setupRequired, setupTokenRequired: setupRequired });
+    res.json({ setupRequired, setupTokenRequired: setupRequired, ...secretsStatus() });
   } catch (err) {
     log.error({ err }, 'setup status check failed');
     res.status(500).json({ error: 'Internal server error' });
@@ -193,6 +197,9 @@ setupRouter.post('/complete', async (req: Request, res: Response) => {
         });
       }
     }, { isolationLevel: 'Serializable' });
+
+    // 10.4: the one-time token is used up — remove <secrets>/setup-token.
+    await removeSetupTokenFile();
 
     // ── Auto self-signed cert ────────────────────────────────────────────────
     // Baseline self-signed cert for the public host name (9.3: mail.<domain>

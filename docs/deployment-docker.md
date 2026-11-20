@@ -113,6 +113,9 @@ JWT_SECRET=$(openssl rand -hex 32)
 PEPPER=$(openssl rand -hex 32)
 ```
 
+Since 10.4 the image can also generate all of these itself into a mounted
+`/secrets` directory — see [setup.md → Automatic secrets](setup.md#automatic-secrets).
+
 ### 3. Configure TLS
 
 **Option A — Integrated HTTPS proxy (recommended for VPS/dedicated servers):**

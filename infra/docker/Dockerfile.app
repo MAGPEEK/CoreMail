@@ -233,11 +233,17 @@ COPY infra/docker/schema-sync-classify.mjs /usr/local/lib/coremail/schema-sync-c
 # `docker exec coremail coremail-decrypt-backup --help` (docs/deployment-security.md).
 # Kept as .mjs behind a symlink: node resolves the link, so the file stays an ES module.
 COPY scripts/decrypt-backup.mjs /usr/local/lib/coremail/decrypt-backup.mjs
+# 10.4: secrets generator (entrypoint + standalone:
+# `docker run --rm -v ./secrets:/secrets magpeek/coremail-app coremail-init-secrets`).
+# The image deliberately has NO /secrets directory: secrets are generated only
+# into a mounted directory, never into the container layer (docs/setup.md).
+COPY infra/docker/init-secrets.mjs /usr/local/lib/coremail/init-secrets.mjs
 # Strip CR in case the build context comes from a Windows checkout with CRLF line
 # endings — a "#!/bin/sh\r" shebang makes tini fail with "No such file or directory".
-RUN sed -i 's/\r$//' /entrypoint.sh /etc/supervisord.conf /usr/local/bin/coremail-schema-sync /usr/local/lib/coremail/schema-sync-classify.mjs /usr/local/lib/coremail/decrypt-backup.mjs \
- && chmod +x /entrypoint.sh /usr/local/bin/coremail-schema-sync /usr/local/lib/coremail/decrypt-backup.mjs \
- && ln -sf /usr/local/lib/coremail/decrypt-backup.mjs /usr/local/bin/coremail-decrypt-backup
+RUN sed -i 's/\r$//' /entrypoint.sh /etc/supervisord.conf /usr/local/bin/coremail-schema-sync /usr/local/lib/coremail/schema-sync-classify.mjs /usr/local/lib/coremail/decrypt-backup.mjs /usr/local/lib/coremail/init-secrets.mjs \
+ && chmod +x /entrypoint.sh /usr/local/bin/coremail-schema-sync /usr/local/lib/coremail/decrypt-backup.mjs /usr/local/lib/coremail/init-secrets.mjs \
+ && ln -sf /usr/local/lib/coremail/decrypt-backup.mjs /usr/local/bin/coremail-decrypt-backup \
+ && ln -sf /usr/local/lib/coremail/init-secrets.mjs /usr/local/bin/coremail-init-secrets
 
 # ── Directories + permissions ─────────────────────────────────────────────────
 # All runtime directories belong to the node user (uid 1000, gid 1000).

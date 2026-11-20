@@ -1,11 +1,71 @@
 #!/bin/sh
 # CoreMail App Container — Entrypoint
+# 0. Secrets: create/extend /secrets/coremail.env (when /secrets is mounted) and
+#    load it — a non-empty variable from the environment always wins
 # 1. Wait for PostgreSQL (unlimited, with progress log every 10 s)
 # 2. Synchronize Prisma schema (db push) with retry logic
 # 3. Start supervisord
 set -e
 
 log() { echo "[entrypoint] $*"; }
+
+# ── 0. Secrets (10.4, docs/setup.md "Automatic secrets") ─────────────────────
+# With a mounted secrets directory (COREMAIL_SECRETS_DIR, default /secrets) the
+# image generates every secret itself: coremail-init-secrets creates
+# coremail.env on the first start and only appends missing keys later (never
+# overwrites). The directory is never created here — secrets in the container
+# layer would be lost with the container.
+SECRETS_DIR="${COREMAIL_SECRETS_DIR:-/secrets}"
+INIT_SECRETS="${COREMAIL_INIT_SECRETS:-/usr/local/bin/coremail-init-secrets}"
+if [ -d "${SECRETS_DIR}" ] || [ -L "${SECRETS_DIR}" ]; then
+  log "Secrets directory ${SECRETS_DIR} found — creating missing secrets"
+  rc=0
+  "${INIT_SECRETS}" --dir "${SECRETS_DIR}" --db-wait "${COREMAIL_SECRETS_DB_WAIT:-30}" || rc=$?
+  if [ "${rc}" -eq 2 ]; then
+    log "ERROR: ${SECRETS_DIR} is unsafe (see above) — not starting"
+    exit 1
+  elif [ "${rc}" -ne 0 ]; then
+    log "WARNING: could not write to ${SECRETS_DIR} (read-only?) — using what is there"
+  fi
+  # The api-gateway (user node) writes the one-time setup token there:
+  # group node + sticky bit — node can create and delete only its own files,
+  # never coremail.env or the password files (owned by root, 0600).
+  if [ "$(id -u)" = "0" ] && id node >/dev/null 2>&1 \
+     && [ "$(stat -c %u "${SECRETS_DIR}" 2>/dev/null)" != "$(id -u node)" ]; then
+    { chgrp "$(id -g node)" "${SECRETS_DIR}" && chmod 1770 "${SECRETS_DIR}"; } 2>/dev/null \
+      || log "WARNING: cannot let user node write ${SECRETS_DIR} — the setup token goes to the log instead"
+  fi
+fi
+# Load the secrets file + build DATABASE_URL / REDIS_URL from the passwords when
+# they are unset. Values are exported verbatim (never evaluated by the shell);
+# only CoreMail's secret keys are taken from the file.
+SECRETS_ENV=$("${INIT_SECRETS}" --export-env --dir "${SECRETS_DIR}") || {
+  log "ERROR: cannot load the secrets (see above) — not starting"
+  exit 1
+}
+while IFS= read -r SECRETS_LINE; do
+  SECRETS_KEY="${SECRETS_LINE%%=*}"
+  case "${SECRETS_KEY}" in
+    ''|[0-9]*|*[!A-Za-z0-9_]*) continue ;;
+  esac
+  export "${SECRETS_LINE}"
+done <<EOF
+${SECRETS_ENV}
+EOF
+unset SECRETS_ENV SECRETS_LINE SECRETS_KEY
+if [ "${COREMAIL_SECRETS_FILE_IN_USE:-false}" = "true" ]; then
+  log "Secrets loaded from ${SECRETS_DIR}/coremail.env (environment values take precedence)"
+fi
+MISSING=""
+[ -n "${JWT_SECRET:-}" ] || MISSING="${MISSING} JWT_SECRET"
+[ -n "${PEPPER:-}" ] || MISSING="${MISSING} PEPPER"
+[ -n "${DATABASE_URL:-}" ] || MISSING="${MISSING} DATABASE_URL(or POSTGRES_PASSWORD)"
+if [ -n "${MISSING}" ]; then
+  log "ERROR: missing:${MISSING}"
+  log "  Either mount a secrets directory at ${SECRETS_DIR} (CoreMail generates them:"
+  log "  -v ./secrets:${SECRETS_DIR}) or set them in .env (bash scripts/setup.sh)."
+  exit 1
+fi
 
 # ── 1. Wait for PostgreSQL connection ────────────────────────────────────────
 # DATABASE_URL format: postgresql://user:pass@host:port/db
