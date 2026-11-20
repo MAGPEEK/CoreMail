@@ -57,7 +57,7 @@ It is not built for large providers with thousands of mailboxes on one host.
 - **Sign-in:** two-factor authentication (TOTP, WebAuthn, backup codes), app passwords for mail apps, SSO via OIDC, LDAP / Active Directory, brute-force lockout.
 - **Certificates:** Let's Encrypt built in, with automatic renewal and a built-in HTTPS proxy.
 - **Backups:** encrypted mailbox and database backups with restore from the admin panel.
-- **Administration:** admin roles that can be limited to domains, audit log, message trace, queue management, per-domain and per-mailbox protocol switches, admin CLI `coremail`.
+- **Administration:** admin roles that can be limited to domains, audit log, message trace, queue management, per-domain and per-mailbox protocol switches, admin CLI `coremail`, and an MCP interface for AI assistants and MCP clients (off by default, [docs/mcp.md](docs/mcp.md)).
 - **Operation:** your own branding (name, colours, logo), Docker Compose variants from minimal to full, Helm chart for Kubernetes.
 
 ## Quick start
@@ -228,6 +228,7 @@ With `docker run`, pull the new tag, remove the `coremail` container and start i
 - [Certificates and Let's Encrypt](docs/certificates.md)
 - [Backup and restore](docs/backup.md)
 - [Admin roles](docs/rbac.md), [branding](docs/branding.md), [admin CLI](docs/cli.md)
+- [MCP interface for administrators](docs/mcp.md): manage the server with an MCP client
 - [Kubernetes Helm chart](infra/k8s/README.md)
 - [Version history](docs/version-history.md) and [changelog](CHANGELOG.md)
 - All documents: [docs/](docs/)

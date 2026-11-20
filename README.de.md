@@ -57,7 +57,7 @@ Nicht gedacht ist CoreMail für große Anbieter mit Tausenden Postfächern auf e
 - **Anmeldung:** Zwei-Faktor-Authentifizierung (TOTP, WebAuthn, Backup-Codes), App-Passwörter für Mail-Apps, SSO über OIDC, LDAP / Active Directory, Sperre bei Brute-Force-Versuchen.
 - **Zertifikate:** Let's Encrypt eingebaut, mit automatischer Verlängerung und eingebautem HTTPS-Proxy.
 - **Sicherungen:** verschlüsselte Postfach- und Datenbanksicherungen mit Wiederherstellung im Admin-Panel.
-- **Verwaltung:** Admin-Rollen, die sich auf Domains beschränken lassen, Audit-Log, Nachrichtenablaufverfolgung, Warteschlangen, Protokollschalter pro Domain und Postfach, Admin-CLI `coremail`.
+- **Verwaltung:** Admin-Rollen, die sich auf Domains beschränken lassen, Audit-Log, Nachrichtenablaufverfolgung, Warteschlangen, Protokollschalter pro Domain und Postfach, Admin-CLI `coremail` und eine MCP-Schnittstelle für KI-Assistenten und MCP-Clients (ab Werk aus, [docs/mcp.md](docs/mcp.md)).
 - **Betrieb:** eigenes Branding (Name, Farben, Logo), Docker-Compose-Varianten von minimal bis voll, Helm-Chart für Kubernetes.
 
 ## Schnellstart
@@ -228,6 +228,7 @@ Mit `docker run` ziehst du das neue Tag, entfernst den Container `coremail` und 
 - [Zertifikate und Let's Encrypt](docs/certificates.md)
 - [Sicherung und Wiederherstellung](docs/backup.md)
 - [Admin-Rollen](docs/rbac.md), [Branding](docs/branding.md), [Admin-CLI](docs/cli.md)
+- [MCP-Schnittstelle für Admins](docs/mcp.md): den Server mit einem MCP-Client verwalten
 - [Kubernetes-Helm-Chart](infra/k8s/README.md)
 - [Versionshistorie](docs/version-history.de.md) und [Changelog](CHANGELOG.md)
 - Alle Dokumente (englisch): [docs/](docs/)
