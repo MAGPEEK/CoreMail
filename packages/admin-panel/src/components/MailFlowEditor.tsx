@@ -103,6 +103,21 @@ export function MailFlowEditor({ path, kind }: {
             </>
           )}
         </div>
+        {kind === 'user' && (
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="field-label" htmlFor={field('mh')}>{t('mflow_max_msgs_hour')}</label>
+              <input id={field('mh')} className="input w-full" inputMode="numeric" value={form.maxMessagesPerHour}
+                aria-describedby={field('rh')} placeholder={t('mflow_limit_ph')} onChange={(e) => set({ maxMessagesPerHour: e.target.value })} />
+            </div>
+            <div>
+              <label className="field-label" htmlFor={field('rph')}>{t('mflow_max_rcpts_hour')}</label>
+              <input id={field('rph')} className="input w-full" inputMode="numeric" value={form.maxRecipientsPerHour}
+                aria-describedby={field('rh')} placeholder={t('mflow_limit_ph')} onChange={(e) => set({ maxRecipientsPerHour: e.target.value })} />
+            </div>
+            <p id={field('rh')} className="col-span-2 text-[11px] text-fg-subtle">{t('mflow_rate_hint')}</p>
+          </div>
+        )}
         {!result.ok && (
           <p className="text-xs text-danger-fg" role="alert">
             {result.field === 'forwardTo' ? t('mflow_invalid_forward') : t('mflow_invalid_limit')}

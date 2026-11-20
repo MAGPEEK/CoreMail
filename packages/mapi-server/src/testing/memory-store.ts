@@ -31,6 +31,8 @@ export class MemoryStore implements MailStore {
   readonly access = new Map<string, MailboxRef[]>();
   readonly directory = new Map<string, string>();
   limits: SubmissionLimits = { maxMessageBytes: 25 * 1024 * 1024, maxRecipients: 100 };
+  /** 10.5: true = the user's hourly send rate is reached (submit → rate-limited). */
+  rateLimited = false;
   /** Messages stored by importMessage (with their options). */
   readonly imported: Array<{ message: ComposedMessage; opts: ImportOptions }> = [];
   readonly replaced = new Map<string, Set<bigint>>();
@@ -213,6 +215,7 @@ export class MemoryStore implements MailStore {
     if (recipients > this.limits.maxRecipients) return { ok: false, reason: 'too-many-recipients' };
     const size = message.bodyText.length + message.bodyHtml.length + message.attachments.reduce((n, a) => n + a.content.length, 0);
     if (size > this.limits.maxMessageBytes) return { ok: false, reason: 'too-large' };
+    if (this.rateLimited) return { ok: false, reason: 'rate-limited' };
     this.sent.push({ user, mailbox, message, saveCopy: opts.saveCopy });
     if (opts.draft) await this.deleteMessages(mailbox, opts.draft.folderId, [opts.draft.uid]);
     return { ok: true, jobId: `job-${this.sent.length}` };

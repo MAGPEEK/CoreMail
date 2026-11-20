@@ -312,6 +312,8 @@ const SUBMIT_ERRORS = {
   'sender-not-allowed': Ec.AccessDenied,
   'over-quota': Ec.QuotaExceeded,
   'read-only': Ec.AccessDenied,
+  // 10.5: the hourly send rate (storage submission-rate.ts) is a submission quota
+  'rate-limited': Ec.QuotaExceeded,
 } as const;
 
 export const ropSubmitMessage = defineRop<SubmitReq>({

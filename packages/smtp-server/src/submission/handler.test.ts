@@ -10,6 +10,8 @@ process.env['JWT_SECRET'] ??= 'test-jwt-secret-0123456789abcdef0123456789';
 process.env['PEPPER'] ??= 'test-pepper-0123456789abcdef0123456789abcd';
 
 const PASSED = new Error('header check passed (delivery reached)');
+/** 10.5: send rate columns of the ServerSettings fake (empty = schema defaults). */
+let rateRow: Record<string, unknown> = {};
 
 (globalThis as unknown as { __prisma: unknown }).__prisma = {
   $on: () => undefined,
@@ -33,7 +35,7 @@ const PASSED = new Error('header check passed (delivery reached)');
         .map((r) => ({ sharedMailbox: { email: r.email, aliases: [] } }));
     },
   },
-  serverSettings: { findUnique: async () => ({ publicHostname: 'mail.corp.test' }) },
+  serverSettings: { findUnique: async () => ({ publicHostname: 'mail.corp.test', ...rateRow }) },
   mailFlowPolicy: { findUnique: async () => null },
   // First DB access after the header check → proves the message was accepted for delivery.
   domain: { findFirst: async () => { throw PASSED; } },
@@ -97,4 +99,35 @@ test('9.4 review: every internal header (rule-forward loop, draft, quarantine) i
   const head = stripSubmittedInternalHeaders(forged).toString().split('\r\n\r\n')[0]!;
   assert.doesNotMatch(head, /RuleForwarded|Draft-Pending|Quarantine-Released/i);
   assert.match(head, /^X-Coremail-Calendar-Method: REQUEST/m, 'informational headers no logic reads stay');
+});
+
+test('10.5: the per-user send rate refuses with 451 4.7.1 at DATA end and, once reached, at MAIL FROM', async () => {
+  const storage = await import('@coremail/storage');
+  const hits: unknown[] = [];
+  storage.setSendRateHooks({ onLimitHit: async (h) => { hits.push(h); } });
+  storage.resetSendRateState();
+  rateRow = { sendRateMessagesPerHour: 2, sendRateRecipientsPerHour: 3 };
+  storage.clearSendRateSettingsCache();
+  try {
+    const own = 'From: Bob <bob@corp.test>';
+    assert.equal(await submissionHandlers.onMailFrom('bob@corp.test', '192.0.2.1', user), null);
+    await assert.rejects(submit(own), (e) => e === PASSED);
+    // three more recipients than the hourly limit leaves room for (1 + 3 > 3): refused, not counted
+    await assert.rejects(
+      submissionHandlers.onMessage(raw(own), 'bob@corp.test', ['a@ext.test', 'b@ext.test', 'c@ext.test'], user, '192.0.2.1'),
+      /^Error: 451 4\.7\.1 Sending rate limit exceeded \(max 3 recipients per hour\)/,
+    );
+    await assert.rejects(submit(own), (e) => e === PASSED, 'the refused message was not counted');
+    await assert.rejects(submit(own), /^Error: 451 4\.7\.1 Sending rate limit exceeded \(max 2 messages per hour\)/);
+    assert.match(String(await submissionHandlers.onMailFrom('bob@corp.test', '192.0.2.1', user)), /^451 4\.7\.1 /, 'refused before the data transfer');
+    assert.equal(hits.length, 1, 'one report per user and hour');
+    const hit = hits[0] as { protocol: string; ipAddress: string };
+    assert.equal(hit.protocol, 'smtp');
+    assert.equal(hit.ipAddress, '192.0.2.1');
+  } finally {
+    rateRow = {};
+    storage.clearSendRateSettingsCache();
+    storage.resetSendRateState();
+    storage.setSendRateHooks(null);
+  }
 });

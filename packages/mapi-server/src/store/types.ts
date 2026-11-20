@@ -128,7 +128,7 @@ export class MailboxFullError extends Error {
 
 export type SubmitResult =
   | { ok: true; jobId: string }
-  | { ok: false; reason: 'no-recipients' | 'too-many-recipients' | 'too-large' | 'sender-not-allowed' | 'over-quota' | 'read-only' };
+  | { ok: false; reason: 'no-recipients' | 'too-many-recipients' | 'too-large' | 'sender-not-allowed' | 'over-quota' | 'read-only' | 'rate-limited' };
 
 /** Size and recipient limits of a message the user submits (storage submissionLimitsForUser: global + per mailbox). */
 export interface SubmissionLimits { maxMessageBytes: number; maxRecipients: number }

@@ -24,6 +24,10 @@ export interface MailFlowSettings {
   maxSendSizeMb: number | null;
   maxReceiveSizeMb: number | null;
   maxRecipients: number | null;
+  /** 10.5: outgoing messages per sliding hour (submission-rate.ts); null = global. */
+  maxMessagesPerHour: number | null;
+  /** 10.5: outgoing recipients per sliding hour (submission-rate.ts); null = global. */
+  maxRecipientsPerHour: number | null;
 }
 
 export const DEFAULT_MAIL_FLOW: Readonly<MailFlowSettings> = Object.freeze({
@@ -35,6 +39,8 @@ export const DEFAULT_MAIL_FLOW: Readonly<MailFlowSettings> = Object.freeze({
   maxSendSizeMb: null,
   maxReceiveSizeMb: null,
   maxRecipients: null,
+  maxMessagesPerHour: null,
+  maxRecipientsPerHour: null,
 });
 
 /** The mailbox a policy belongs to. */
@@ -45,6 +51,9 @@ export const MAX_SENDER_LIST_ENTRIES = 500;
 /** Upper bounds of the per-mailbox limits (sanity, not policy). */
 export const MAX_FLOW_SIZE_MB = 2048;
 export const MAX_FLOW_RECIPIENTS = 10_000;
+/** 10.5: upper bounds of the per-mailbox hourly send rate (sanity, not policy). */
+export const MAX_FLOW_MESSAGES_PER_HOUR = 100_000;
+export const MAX_FLOW_RECIPIENTS_PER_HOUR = 1_000_000;
 
 // Prisma filter for directory listings: pure module, shared with folder-grantees.ts.
 export { GAL_VISIBLE_WHERE } from './gal-visible.js';
@@ -63,6 +72,8 @@ export function mailFlowFromRow(row: Partial<MailFlowSettings> | null | undefine
     maxSendSizeMb: row.maxSendSizeMb ?? null,
     maxReceiveSizeMb: row.maxReceiveSizeMb ?? null,
     maxRecipients: row.maxRecipients ?? null,
+    maxMessagesPerHour: row.maxMessagesPerHour ?? null,
+    maxRecipientsPerHour: row.maxRecipientsPerHour ?? null,
   };
 }
 
@@ -223,6 +234,7 @@ export function headerFromAddress(raw: Buffer): string | null {
 const POLICY_SELECT = {
   hiddenFromGal: true, forwardTo: true, forwardKeepCopy: true, acceptFrom: true, rejectFrom: true,
   maxSendSizeMb: true, maxReceiveSizeMb: true, maxRecipients: true,
+  maxMessagesPerHour: true, maxRecipientsPerHour: true,
 } as const;
 
 function ownerWhere(owner: MailFlowOwner): { userId: string } | { sharedMailboxId: string } {

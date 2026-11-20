@@ -11,6 +11,7 @@ import { createLogger } from '@coremail/core';
 import {
   prisma, checkHeaderSenderIdentity, isSenderAddressAllowed, listAllowedSenderAddresses, checkSendQuota,
   stripHeaders, INTERNAL_MAIL_HEADERS, checkUserSendLimits, afterForeignSend, createTraceRecorder, type SendLimitVerdict,
+  consumeSendRate, peekSendRate, type SendRateDecision,
 } from '@coremail/storage';
 import { sessionStages, aliasStage } from '../handlers/trace-stages.js';
 import { storeInboundMessage, toLocalOutcome } from '../handlers/message.js';
@@ -59,6 +60,18 @@ export function submissionLimitReply(verdict: SendLimitVerdict): string | null {
 }
 
 /**
+ * Pure (10.5): the SMTP reply of a refused send rate (storage submission-rate.ts),
+ * or null — always temporary (451 4.7.1, RFC 3463 "delivery not authorized"
+ * with a 4yz class): the client keeps the message and retries later.
+ */
+export function sendRateReply(decision: SendRateDecision): string | null {
+  if (decision.allowed) return null;
+  return decision.reason === 'blocked'
+    ? `451 4.7.1 Sending temporarily suspended for this account, try again in ${decision.retryAfterSec} seconds`
+    : `451 4.7.1 Sending rate limit exceeded (max ${decision.limit} ${decision.reason} per hour), try again in ${decision.retryAfterSec} seconds`;
+}
+
+/**
  * Pure: removes every internal X-CoreMail-* header (storage INTERNAL_MAIL_HEADERS:
  * virus-scan verdict, rule-forward loop header, …) from a submitted message —
  * local and external recipients — before any rule or forward is evaluated.
@@ -81,7 +94,7 @@ async function onConnect(_ip: string): Promise<boolean> {
 
 async function onMailFrom(
   from: string,
-  _ip: string,
+  ip: string,
   authUser: AuthUser | null,
 ): Promise<string | null> {
   if (!authUser) {
@@ -105,6 +118,15 @@ async function onMailFrom(
   if (!quota.allowed) {
     log.info({ authed: authUser.email, usedBytes: quota.status.usedBytes }, 'SMTP submission refused: mailbox over its send quota');
     return quota.reply;
+  }
+
+  // 10.5: per-user send rate — refused early (no data transfer) when the account
+  // is blocked or already at its hourly message limit. Not counted here: the
+  // message is counted with its recipients at the end of DATA.
+  const rate = sendRateReply(await peekSendRate({ userId: authUser.id, recipients: 0, protocol: 'smtp', ipAddress: ip }));
+  if (rate) {
+    log.info({ authed: authUser.email, reply: rate }, 'SMTP submission refused at MAIL FROM: send rate limit');
+    return rate;
   }
 
   return null;
@@ -150,6 +172,13 @@ async function onMessage(
   if (limitReply) {
     log.info({ authed: authUser.email, reply: limitReply }, 'SMTP submission refused: per-mailbox send limit');
     throw new Error(limitReply);
+  }
+  // 10.5: per-user send rate (messages + recipients per hour, shared with every
+  // submission path) — counted here, after every other check; refused → 451 4.7.1.
+  const rateReply = sendRateReply(await consumeSendRate({ userId: authUser.id, recipients: to.length, protocol: 'smtp', ipAddress: ip }));
+  if (rateReply) {
+    log.info({ authed: authUser.email, reply: rateReply }, 'SMTP submission refused: send rate limit');
+    throw new Error(rateReply);
   }
 
   const hostname = meta?.hostname ?? await prisma.serverSettings.findUnique({

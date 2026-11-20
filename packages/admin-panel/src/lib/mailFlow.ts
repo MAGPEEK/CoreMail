@@ -16,6 +16,9 @@ export interface MailFlowView {
   /** User mailboxes only. */
   maxSendSizeMb?: number | null;
   maxRecipients?: number | null;
+  /** 10.5: hourly send rate (user mailboxes only). */
+  maxMessagesPerHour?: number | null;
+  maxRecipientsPerHour?: number | null;
 }
 
 export interface MailFlowForm {
@@ -27,9 +30,11 @@ export interface MailFlowForm {
   maxReceiveSizeMb: string;
   maxSendSizeMb: string;
   maxRecipients: string;
+  maxMessagesPerHour: string;
+  maxRecipientsPerHour: string;
 }
 
-export type MailFlowField = 'forwardTo' | 'maxReceiveSizeMb' | 'maxSendSizeMb' | 'maxRecipients';
+export type MailFlowField = 'forwardTo' | 'maxReceiveSizeMb' | 'maxSendSizeMb' | 'maxRecipients' | 'maxMessagesPerHour' | 'maxRecipientsPerHour';
 
 const num = (v: number | null | undefined): string => (v === null || v === undefined ? '' : String(v));
 
@@ -49,6 +54,8 @@ export function formFromView(v: MailFlowView): MailFlowForm {
     maxReceiveSizeMb: num(v.maxReceiveSizeMb),
     maxSendSizeMb: num(v.maxSendSizeMb),
     maxRecipients: num(v.maxRecipients),
+    maxMessagesPerHour: num(v.maxMessagesPerHour),
+    maxRecipientsPerHour: num(v.maxRecipientsPerHour),
   };
 }
 
@@ -72,7 +79,8 @@ export function patchFromForm(form: MailFlowForm, kind: MailFlowKind):
   const forwardTo = form.forwardTo.trim();
   if (forwardTo && !ADDRESS.test(forwardTo)) return { ok: false, field: 'forwardTo' };
   const limits: Array<[MailFlowField, string]> = kind === 'user'
-    ? [['maxReceiveSizeMb', form.maxReceiveSizeMb], ['maxSendSizeMb', form.maxSendSizeMb], ['maxRecipients', form.maxRecipients]]
+    ? [['maxReceiveSizeMb', form.maxReceiveSizeMb], ['maxSendSizeMb', form.maxSendSizeMb], ['maxRecipients', form.maxRecipients],
+      ['maxMessagesPerHour', form.maxMessagesPerHour], ['maxRecipientsPerHour', form.maxRecipientsPerHour]]
     : [['maxReceiveSizeMb', form.maxReceiveSizeMb]];
   const patch: Record<string, unknown> = {
     hiddenFromGal: form.hiddenFromGal,

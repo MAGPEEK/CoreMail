@@ -22,17 +22,22 @@ type Row = Record<string, unknown>;
 const users: Record<string, Row> = {
   u1: { id: 'u1', email: 'u1@ex.com', displayName: 'User One', domain: { name: 'ex.com', dkimPrivateKey: null, dkimSelector: null } },
   u2: { id: 'u2', email: 'u2@ex.com', displayName: 'User Two', domain: { name: 'ex.com', dkimPrivateKey: null, dkimSelector: null } },
+  u3: { id: 'u3', email: 'u3@ex.com', displayName: 'User Three', domain: { name: 'ex.com', dkimPrivateKey: null, dkimSelector: null } },
 };
 const mailboxes: Record<string, { id: string; userId: string; uidNext: number; highestModSeq: bigint }> = {
   mb1: { id: 'mb1', userId: 'u1', uidNext: 1, highestModSeq: 0n },
   mb2: { id: 'mb2', userId: 'u2', uidNext: 1, highestModSeq: 0n },
+  mb3: { id: 'mb3', userId: 'u3', uidNext: 1, highestModSeq: 0n },
 };
+const ratePolicies: Record<string, Row> = {};
 const folders: Array<Row & { id: string; name: string; mailboxId: string; totalCount: number }> = [
   { id: 'd1', name: 'Drafts', mailboxId: 'mb1', totalCount: 0 },
   { id: 's1', name: 'Sent', mailboxId: 'mb1', totalCount: 0 },
   { id: 'i1', name: 'INBOX', mailboxId: 'mb1', totalCount: 0 },
   { id: 'd2', name: 'Drafts', mailboxId: 'mb2', totalCount: 0 },
   { id: 's2', name: 'Sent', mailboxId: 'mb2', totalCount: 0 },
+  { id: 'd3', name: 'Drafts', mailboxId: 'mb3', totalCount: 0 },
+  { id: 's3', name: 'Sent', mailboxId: 'mb3', totalCount: 0 },
 ];
 const sharedPerms = [
   { userId: 'u1', permission: 'SEND_AS', sharedMailbox: { email: 'team@ex.com', displayName: 'Team', active: true } },
@@ -90,6 +95,8 @@ function applyData(target: Row, data: Row): void {
 
 installFakePrisma({
   user: { findUnique: (a) => users[(a as { where: { id: string } }).where.id] ?? null },
+  // 10.5: per-mailbox send rate overrides (MailFlowPolicy)
+  mailFlowPolicy: { findUnique: (a) => ratePolicies[String((a as { where: { userId?: string } }).where.userId)] ?? null },
   mailbox: {
     update: (a) => {
       const q = a as { where: { id: string }; data: Row };
@@ -493,6 +500,47 @@ test('send-from-draft shares the per-user send rate limit with /send', async () 
   const limited = await call('POST', `/drafts/${id}/send`, { user: 'u2', body: {} });
   assert.equal(limited.status, 429);
   assert.equal(messages.get(id)!['folderId'], 'd2');
+});
+
+test('10.5: hourly send rate (shared limiter) — /send and send-from-draft answer 429 SEND_RATE_LIMITED + Retry-After; counted per message with its recipients', async () => {
+  const storage = await import('@coremail/storage');
+  storage.resetSendRateState();
+  const hits: Row[] = [];
+  storage.setSendRateHooks({ onLimitHit: async (h) => { hits.push(h as unknown as Row); } });
+  ratePolicies['u3'] = { maxMessagesPerHour: 2, maxRecipientsPerHour: 3 };
+  try {
+    const before = jobs.size;
+    assert.equal((await call('POST', '/send', { user: 'u3', body: { to: ['a@x.test'], cc: ['b@x.test'], subject: 'one' } })).status, 200);
+    // 2 + 2 recipients > 3: refused (recipients), nothing queued, not counted
+    const tooMany = await call('POST', '/send', { user: 'u3', body: { to: ['c@x.test', 'd@x.test'], subject: 'two' } });
+    assert.equal(tooMany.status, 429);
+    assert.equal(tooMany.json['code'], 'SEND_RATE_LIMITED');
+    assert.equal(tooMany.json['reason'], 'recipients');
+    assert.equal(jobs.size, before + 1);
+    // a draft send counts like /send: the second message passes (2 + 1 ≤ 3) …
+    const d1 = await call('POST', '/drafts', { user: 'u3', body: { to: ['e@x.test'], subject: 'd1' } });
+    assert.equal((await call('POST', `/drafts/${String(d1.json['id'])}/send`, { user: 'u3', body: {} })).status, 200);
+    // … the third message is over the hourly message limit
+    const d2 = await call('POST', '/drafts', { user: 'u3', body: { to: ['f@x.test'], subject: 'd2' } });
+    const id2 = String(d2.json['id']);
+    const r = await fetch(`${base}/api/v1/mail/drafts/${id2}/send`, {
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${tok('u3')}` }, body: '{}',
+    });
+    assert.equal(r.status, 429);
+    assert.ok(Number(r.headers.get('retry-after')) >= 1, 'Retry-After header');
+    const body = await r.json() as Row;
+    assert.equal(body['reason'], 'messages');
+    assert.equal(body['limit'], 2);
+    assert.equal(messages.get(id2)!['folderId'], 'd3', 'the draft stays in Drafts');
+    assert.equal(jobs.size, before + 2);
+    assert.equal(hits.length, 1, 'one report per user and hour');
+    assert.equal(hits[0]!['protocol'], 'webmail');
+    assert.equal(hits[0]!['ipAddress'], '127.0.0.1');
+  } finally {
+    delete ratePolicies['u3'];
+    storage.setSendRateHooks(null);
+    storage.resetSendRateState();
+  }
 });
 
 // ── 8.1 review fixes ──────────────────────────────────────────────────────────

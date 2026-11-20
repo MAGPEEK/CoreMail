@@ -22,8 +22,8 @@ import {
   DEFAULT_FOLDERS, deleteFolderMovingMail, loadRawMessage, parseRawMessage, downloadBuffer, storeRawInFolder,
   expunge, modifyFlags, moveMessages, copyMessages, isMailboxWriteBlocked, checkSendQuota,
   listAllowedSenderAddresses, isSenderAddressAllowed, normalizeSenderAddress, buildRfc822FromFields, submissionLimitsForUser,
-  announceFolderListChange, deferMailboxChanges, recordMailboxAccess,
-  type RawSourceMessage, type MailboxAccessEvent, type MailboxAccessAction,
+  announceFolderListChange, deferMailboxChanges, recordMailboxAccess, consumeSendRate,
+  type RawSourceMessage, type MailboxAccessEvent, type MailboxAccessAction, type SendRateDecision,
 } from '@coremail/storage';
 import { enqueueRawOutbound, type RawOutboundJob } from './outbound.js';
 import { createRedisLocalIdStore, type LocalIdRedis, type LocalIdStore } from './local-ids.js';
@@ -146,7 +146,12 @@ export interface PrismaStoreDeps {
   audit: (event: MailboxAccessEvent) => Promise<unknown>;
   /** Client-assigned IDs of cached mode (Redis, shared by every instance). */
   localIds: LocalIdStore;
+  /** 10.5: hourly send rate of the user (counts when allowed). Default: storage consumeSendRate. */
+  sendRate?: (userId: string, recipients: number) => Promise<SendRateDecision>;
 }
+
+const defaultSendRate = (userId: string, recipients: number): Promise<SendRateDecision> =>
+  consumeSendRate({ userId, recipients, protocol: 'mapi' });
 
 export const defaultStoreDeps: PrismaStoreDeps = {
   enqueue: enqueueRawOutbound,
@@ -382,6 +387,13 @@ export function createPrismaStore(deps: PrismaStoreDeps = defaultStoreDeps): Mai
         : from === normalizeSenderAddress(mailbox.email) ? mailbox.displayName : '';
       const raw = buildMime(message, { address: from, name }, deps.now());
       if (raw.length > limits.maxMessageBytes) return { ok: false, reason: 'too-large' };
+      // 10.5: hourly send rate (shared with every submission path; counted here,
+      // after every other check — a refused message is not counted).
+      const rate = await (deps.sendRate ?? defaultSendRate)(user.userId, recipients.length);
+      if (!rate.allowed) {
+        log.info({ userId: user.userId, reason: rate.reason, limit: rate.limit }, 'MAPI submit refused: send rate limit');
+        return { ok: false, reason: 'rate-limited' };
+      }
       const jobId = `mapi-${randomUUID()}`;
       // A From: other than the user's own address may be a send as / on behalf of a
       // Shared Mailbox: the worker audits it and files the box's Sent copy — audit

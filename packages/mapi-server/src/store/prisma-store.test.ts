@@ -223,6 +223,32 @@ test('submit: the submission limits of the user apply (recipient count after de-
   assert.deepEqual(await store.submissionLimits(USER), limits);
 });
 
+test('10.5: submit refused by the hourly send rate (rate-limited → ecQuotaExceeded), counted with the de-duplicated recipients', async () => {
+  const counted: Array<[string, number]> = [];
+  let allow = false;
+  const limited = createPrismaStore({
+    enqueue: async (j) => { jobs.push(j); },
+    now: () => new Date('2026-11-17T09:00:00Z'),
+    sendAllowed: async () => true,
+    allowedSenders: async () => ['alice@example.test'],
+    writeBlocked: async () => false,
+    limits: async () => limits,
+    audit: async () => undefined,
+    localIds: createRedisLocalIdStore(() => redis, () => NOW_MS),
+    sendRate: async (u, n) => { counted.push([u, n]); return allow ? { allowed: true } : { allowed: false, reason: 'messages', limit: 200, retryAfterSec: 60 }; },
+  });
+  const msg = composed({ to: ['a@example.test', 'A@Example.test'], cc: ['b@example.test'], bcc: [] });
+  assert.deepEqual(await limited.submit(USER, OWN, msg, { saveCopy: true, draft: null }), { ok: false, reason: 'rate-limited' });
+  assert.equal(jobs.length, 0);
+  assert.deepEqual(counted, [['u1', 2]]);
+  // other refusals come first and are not counted
+  assert.deepEqual(await limited.submit(USER, OWN, composed({ to: [], bcc: [] }), { saveCopy: true, draft: null }), { ok: false, reason: 'no-recipients' });
+  assert.equal(counted.length, 1);
+  allow = true;
+  assert.equal((await limited.submit(USER, OWN, msg, { saveCopy: false, draft: null })).ok, true);
+  assert.equal(jobs.length, 1);
+});
+
 test('submit: queue job (envelope incl. Bcc, raw without Bcc), Sent copy, draft removed, MAIL_FLOW log', async () => {
   const draft = await store.saveDraft(OWN, 'drafts', composed(), null);
   const r = await store.submit(USER, OWN, composed({ cc: ['Carol@Example.test'] }), { saveCopy: true, draft });

@@ -3,8 +3,8 @@ import { prisma } from '@coremail/storage/prisma';
 import {
   listAllowedSenderAddresses, createMessage, setFlags, loadRawMessage, parseRawMessage, storeRawMessage,
   truncateBodyColumn, uploadBuffer, attachmentKey, checkSendQuota, maxOutgoingMessageBytes, deferMailboxChanges,
-  checkSubmissionLimits, afterForeignSend,
-  type RawSourceMessage, type SendLimitVerdict,
+  checkSubmissionLimits, afterForeignSend, consumeSendRate,
+  type RawSourceMessage, type SendLimitVerdict, type SendRateDecision,
 } from '@coremail/storage';
 import { createLogger, getRedisClient } from '@coremail/core';
 import { encodeWbxml, el, getChild, getText, type WbxmlElement } from '../wbxml.js';
@@ -46,7 +46,12 @@ export interface SendMailDeps {
   sendLimits?: (userId: string, sizeBytes: number, recipients: number) => Promise<SendLimitVerdict>;
   /** 9.4: audit + Shared Mailbox Sent copy of a send as / on behalf. Default: storage afterForeignSend. */
   afterSend?: (userId: string, plan: EasSubmissionPlan) => Promise<unknown>;
+  /** 10.5: hourly send rate of the user (counts when allowed). Default: storage consumeSendRate. */
+  sendRate?: (userId: string, recipients: number) => Promise<SendRateDecision>;
 }
+
+const defaultSendRate = (userId: string, recipients: number): Promise<SendRateDecision> =>
+  consumeSendRate({ userId, recipients, protocol: 'activesync' });
 
 const defaultSendLimits = (userId: string, size: number, rcpts: number): Promise<SendLimitVerdict> =>
   checkSubmissionLimits(userId, size, rcpts);
@@ -192,6 +197,9 @@ export function legacySendHttpStatus(status: string): number {
       return 413; // Request Entity Too Large — repeating the same message cannot succeed
     case EAS_SEND_STATUS.MAILBOX_QUOTA_EXCEEDED:
       return 507;
+    case EAS_SEND_STATUS.SERVER_ERROR_RETRY_LATER:
+      return 503; // 10.5 send rate: Service Unavailable — the device keeps the message and retries
+
     default:
       return 500;
   }
@@ -308,6 +316,17 @@ export async function submitCompose(
         log.info({ userId, command, key: idem.id }, 'EAS send retried (same ClientId / Message-ID) — not sent again');
         return EAS_SEND_STATUS.MESSAGE_PREVIOUSLY_SENT;
       }
+    }
+
+    // 10.5: hourly send rate (shared with every submission path). After the retry
+    // detection, so a retried message is not counted twice; a refusal releases the
+    // idempotency key so the device's later retry is sent.
+    const rate = await (deps.sendRate ?? defaultSendRate)(userId, plan.recipients.length);
+    if (!rate.allowed) {
+      log.info({ userId, command, reason: rate.reason, limit: rate.limit }, 'EAS send refused: send rate limit');
+      if (claimed && idem) await deps.releaseClientId(userId, idem.id).catch(() => undefined);
+      claimed = false;
+      return EAS_SEND_STATUS.SERVER_ERROR_RETRY_LATER;
     }
 
     // Enqueue first: only a queued mail is reported as sent.

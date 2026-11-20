@@ -12,7 +12,7 @@ are the secure choice.
 | `HTTPS_PUBLIC_PORT` | `443` | Port in the redirect URL (v9.0): the port clients reach, e.g. `8443` for a `8443:443` mapping. |
 | `AUDIT_EXPORT_SIGNING_KEY` | — | Optional dedicated key (≥ 32 characters) for audit export signatures (v9.0). Rotating it invalidates old signatures. |
 | `MAIL_SEND_RATE_LIMIT` | `30` | Messages per user and window via `POST /api/v1/mail/send` (`0` = off). Over the limit: `429` + `Retry-After`. |
-| `MAIL_SEND_RATE_WINDOW_SEC` | `60` | Window of the send rate limit. |
+| `MAIL_SEND_RATE_WINDOW_SEC` | `60` | Window of the send rate limit. Since 10.5 this burst limit (requests per minute) is complemented by the per-account hourly send rate of every submission path (messages + recipients per hour, BCP → SMTP & Routing → Sendelimit; `429` code `SEND_RATE_LIMITED`) — docs/mail-protocol-limits.md. |
 | `MAIL_SEND_MAX_RECIPIENTS` | `500` | Max. recipients (to + cc + bcc) per message. |
 | `IMAGE_PROXY_RATE_LIMIT` | `120` | Image proxy requests per user and window (`0` = off). |
 | `IMAGE_PROXY_RATE_WINDOW_SEC` | `60` | Window of the image proxy limit. |

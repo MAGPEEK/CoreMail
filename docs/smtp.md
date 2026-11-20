@@ -175,6 +175,15 @@ processed strictly in order, so they can be pipelined (RFC 2920). Chunk
 octets are read from the connection immediately, but each chunk is processed
 in order behind the commands before it.
 
+## Send rate per account (submission, 10.5)
+
+Ports 587/465 count every accepted message with its recipients against the
+account's hourly send rate (shared with webmail, ActiveSync, JMAP and MAPI;
+default 200 messages / 1000 recipients per hour, BCP → SMTP & Routing →
+Sendelimit). Over the limit: `451 4.7.1` at the end of DATA, and at `MAIL FROM`
+once the account is at its message limit or blocked — temporary, the client
+retries later. Details: docs/mail-protocol-limits.md.
+
 ## Tarpit (port 25)
 
 After 3 permanent (5yz) replies in an unauthenticated session, each further

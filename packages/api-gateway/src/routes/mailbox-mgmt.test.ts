@@ -124,6 +124,18 @@ test('mail flow validation: lists normalised, self-forward and junk refused, sen
   assert.equal('maxSendSizeMb' in mailFlowView(before, 'shared'), false);
 });
 
+test('10.5: per-mailbox hourly send rate — user mailboxes only, positive or null', () => {
+  assert.deepEqual(parseMailFlowPatch({ maxMessagesPerHour: 50, maxRecipientsPerHour: null }, 'user', []),
+    { ok: true, patch: { maxMessagesPerHour: 50, maxRecipientsPerHour: null } });
+  assert.equal(parseMailFlowPatch({ maxMessagesPerHour: 0 }, 'user', []).ok, false);
+  assert.equal(parseMailFlowPatch({ maxRecipientsPerHour: 1.5 }, 'user', []).ok, false);
+  assert.equal(parseMailFlowPatch({ maxMessagesPerHour: 5 }, 'shared', []).ok, false, 'send as a shared mailbox counts against the user');
+  const policy = storage.mailFlowFromRow({ maxMessagesPerHour: 5 });
+  assert.equal(policy.maxMessagesPerHour, 5);
+  assert.equal('maxMessagesPerHour' in mailFlowView(policy, 'shared'), false);
+  assert.equal(mailFlowView(policy, 'user').maxMessagesPerHour, 5);
+});
+
 test('PUT /admin/mailboxes/:id/mail-flow merges, stores and audits the diff; GET returns it', async () => {
   const r = await call('PUT', '/api/v1/admin/mailboxes/u1/mail-flow', { hiddenFromGal: true, rejectFrom: ['spam.test'] });
   assert.equal(r.status, 200, JSON.stringify(r.json));

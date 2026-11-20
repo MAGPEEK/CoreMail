@@ -51,6 +51,7 @@ export * from './legacy-dn.js';
 export * from './mapi-endpoints.js';
 export * from './store-raw.js';
 export * from './submission-limits.js';
+export * from './submission-rate.js';
 export * from './importance.js';
 export * from './idn.js';
 export * from './mime/crlf.js';

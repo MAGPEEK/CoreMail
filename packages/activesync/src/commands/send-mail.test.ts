@@ -195,6 +195,49 @@ test('9.4: per-mailbox send limits refuse before queueing (recipients 120, size 
   assert.equal(status(await handleSendMail(composeReq('SendMail', MIME), 'u1', 'SendMail', failing.d)), SENT, 'never fails a sent mail');
 });
 
+test('10.5: send rate reached → Status 111 ServerErrorRetryLater (14.x) / HTTP 503 (12.1), nothing queued, ClientId released', async () => {
+  const counted: Array<[string, number]> = [];
+  let allow = false;
+  const h = deps({
+    sendRate: async (u, n) => {
+      counted.push([u, n]);
+      return allow ? { allowed: true } : { allowed: false, reason: 'messages', limit: 200, retryAfterSec: 60 };
+    },
+  });
+  const req = composeReq('SendMail', MIME, clientId('rate-1'));
+  assert.equal(status(await handleSendMail(req, 'u1', 'SendMail', h.d)), '111');
+  assert.equal(h.jobs.length, 0);
+  assert.deepEqual(counted, [['u1', 1]], 'the plan\'s recipient count');
+  assert.equal(await handleLegacySendMail(MIME, { saveInSent: false }, 'u1', 'SendMail', h.d), 503);
+  assert.equal(legacySendHttpStatus('111'), 503);
+  // the refused ClientId was released: the device's retry is sent (not answered with 118)
+  allow = true;
+  assert.equal(status(await handleSendMail(req, 'u1', 'SendMail', h.d)), SENT);
+  assert.equal(h.jobs.length, 1);
+  // a retried, already sent ClientId is not counted again
+  assert.equal(status(await handleSendMail(req, 'u1', 'SendMail', h.d)), '118');
+  assert.equal(counted.length, 3);
+});
+
+test('10.5: the default limiter (storage, per-mailbox override) refuses the next message with 111', async () => {
+  const prisma = (globalThis as unknown as { __prisma: { mailFlowPolicy: { create(a: unknown): Promise<unknown>; deleteMany(a: unknown): Promise<unknown> } } }).__prisma;
+  storage.resetSendRateState();
+  const hits: unknown[] = [];
+  storage.setSendRateHooks({ onLimitHit: async (hit) => { hits.push(hit); } });
+  await prisma.mailFlowPolicy.create({ data: { id: 'mfp-rate', userId: 'u1', acceptFrom: [], rejectFrom: [], maxMessagesPerHour: 1 } });
+  try {
+    const h = deps();
+    assert.equal(status(await handleSendMail(composeReq('SendMail', MIME), 'u1', 'SendMail', h.d)), SENT);
+    assert.equal(status(await handleSendMail(composeReq('SendMail', MIME), 'u1', 'SendMail', h.d)), '111');
+    assert.equal(h.jobs.length, 1);
+    assert.equal((hits[0] as { protocol: string }).protocol, 'activesync');
+  } finally {
+    await prisma.mailFlowPolicy.deleteMany({ where: { id: 'mfp-rate' } });
+    storage.setSendRateHooks(null);
+    storage.resetSendRateState();
+  }
+});
+
 test('12.1 SendMail: raw MIME body queued byte-exact, HTTP 200 without body; SaveInSent from the request line', async () => {
   const saved = deps();
   assert.equal(await handleLegacySendMail(MIME, { saveInSent: true }, 'u1', 'SendMail', saved.d), 200);
