@@ -1,4 +1,12 @@
+{{- include "coremail.secrets.fill" . -}}
 CoreMail {{ .Chart.AppVersion }} — release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+{{- if .Values.__coremailSecretsGenerated }}
+
+SECRETS: empty secrets.* values were generated into Secret {{ include "coremail.secretName" . }}
+(kept on upgrade and on `helm uninstall`). BACK IT UP off the cluster now —
+without PEPPER no password works:
+     kubectl -n {{ .Release.Namespace }} get secret {{ include "coremail.secretName" . }} -o yaml > coremail-secrets.yaml
+{{- end }}
 
 1. Wait for the app (first start applies the database schema, ~1–2 min):
      kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "coremail.fullname" . }}

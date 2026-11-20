@@ -7,10 +7,12 @@
 //
 // Creates <dir>/coremail.env (default dir: $COREMAIL_SECRETS_DIR or /secrets)
 // with random secrets. An existing file is never rewritten: only keys that are
-// missing are appended. Also writes <dir>/postgres-password and
-// <dir>/redis-password (single line, no newline) for POSTGRES_PASSWORD_FILE and
-// the redis command line. All files are 0600, written atomically (temp file +
-// fsync + rename). Only key NAMES are printed, never values.
+// missing are appended. Also writes the single-value files (one line, no
+// newline) that the infrastructure containers of the Compose files read when
+// their variable is empty: <dir>/postgres-password (POSTGRES_PASSWORD_FILE,
+// pg-backup), <dir>/redis-password (redis), <dir>/minio-root-password (MinIO)
+// and <dir>/rspamd-controller-password (rspamd). All files are 0600, written
+// atomically (temp file + fsync + rename). Only key NAMES are printed, never values.
 //
 // Keys (docs/setup.md, "Automatic secrets"):
 //   always       JWT_SECRET, PEPPER (64 hex), POSTGRES_PASSWORD (+ the same value
@@ -61,6 +63,15 @@ import { fileURLToPath } from 'node:url';
 export const SECRETS_FILE = 'coremail.env';
 export const POSTGRES_PASSWORD_FILE = 'postgres-password';
 export const REDIS_PASSWORD_FILE = 'redis-password';
+export const MINIO_PASSWORD_FILE = 'minio-root-password';
+export const RSPAMD_PASSWORD_FILE = 'rspamd-controller-password';
+/** Single-value files (file name, key) for the infrastructure containers. */
+export const PASSWORD_FILES = [
+  [POSTGRES_PASSWORD_FILE, 'POSTGRES_PASSWORD'],
+  [REDIS_PASSWORD_FILE, 'REDIS_PASSWORD'],
+  [MINIO_PASSWORD_FILE, 'MINIO_ROOT_PASSWORD'],
+  [RSPAMD_PASSWORD_FILE, 'RSPAMD_CONTROLLER_PASSWORD'],
+];
 
 /** Generated for every installation (in this order). */
 export const ALWAYS_KEYS = [
@@ -505,8 +516,9 @@ export function initSecrets({ dir, env = process.env, probe, now = new Date(), d
     log(`  fresh installation: ${freshness.reason}`);
   }
 
-  // Single-value files for the database containers (POSTGRES_PASSWORD_FILE, redis).
-  for (const [name, key] of [[POSTGRES_PASSWORD_FILE, 'POSTGRES_PASSWORD'], [REDIS_PASSWORD_FILE, 'REDIS_PASSWORD']]) {
+  // Single-value files for the infrastructure containers (POSTGRES_PASSWORD_FILE,
+  // redis, MinIO, rspamd — the Compose files read them when the variable is empty).
+  for (const [name, key] of PASSWORD_FILES) {
     const want = value(key);
     if (!want) continue;
     const have = readSecretFile(join(dir, name));
@@ -582,9 +594,10 @@ const USAGE = `usage: coremail-init-secrets [--dir <dir>] [--db-wait <seconds>]
        coremail-init-secrets --export-env [--dir <dir>]   (internal: entrypoint)
 
 Creates <dir>/${SECRETS_FILE} (default dir: $COREMAIL_SECRETS_DIR or /secrets) with
-random secrets, appends missing keys to an existing file and writes
-<dir>/${POSTGRES_PASSWORD_FILE} + <dir>/${REDIS_PASSWORD_FILE}. Never overwrites a value;
-prints key names only.
+random secrets, appends missing keys to an existing file and writes the
+single-value files <dir>/${POSTGRES_PASSWORD_FILE}, <dir>/${REDIS_PASSWORD_FILE},
+<dir>/${MINIO_PASSWORD_FILE} and <dir>/${RSPAMD_PASSWORD_FILE}. Never overwrites a
+value; prints key names only.
 
   docker run --rm -v ./secrets:/secrets magpeek/coremail-app coremail-init-secrets
 

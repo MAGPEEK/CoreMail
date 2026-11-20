@@ -92,7 +92,14 @@ git clone https://github.com/MAGPEEK/CoreMail.git
 cd CoreMail
 ```
 
-### 2. Configuration
+### 2. Configuration (optional)
+
+Nothing is required: without a `.env` the one-shot service `coremail-init` generates
+`JWT_SECRET`, `PEPPER` and every database password into `infra/docker/secrets/` on the first
+start ([setup.md → Automatic secrets](setup.md#automatic-secrets)). **Back that directory up
+off the server.**
+
+To choose values yourself (they always win and are copied into `./secrets/`):
 
 ```bash
 bash scripts/setup.sh                      # standard; --variant minimal|full: docs/docker-compose.md
@@ -100,7 +107,7 @@ bash scripts/setup.sh                      # standard; --variant minimal|full: d
 cp .env.example .env
 ```
 
-Set the required fields in `.env`:
+and set, for example:
 
 ```bash
 # Generate strong passwords
@@ -113,8 +120,8 @@ JWT_SECRET=$(openssl rand -hex 32)
 PEPPER=$(openssl rand -hex 32)
 ```
 
-Since 10.4 the image can also generate all of these itself into a mounted
-`/secrets` directory — see [setup.md → Automatic secrets](setup.md#automatic-secrets).
+PostgreSQL takes `POSTGRES_PASSWORD` only when its volume is created — set it before the first
+start or leave it empty.
 
 ### 3. Configure TLS
 
@@ -163,8 +170,9 @@ docker compose -f infra/docker/docker-compose.yml logs -f
 ### 5. Run the setup wizard
 
 The setup wizard appears on the first visit to `http://<server>:3000/` (or `/bcp/`, which
-forwards to it). It asks for the one-time setup token (container log:
-`docker logs coremail 2>&1 | grep -i "setup token"`, or `SETUP_TOKEN` from the environment),
+forwards to it). It asks for the one-time setup token (10.4: `infra/docker/secrets/setup-token`, also
+`docker exec coremail cat /secrets/setup-token`; without a secrets directory the container
+log: `docker logs coremail 2>&1 | grep -i "setup token"`; or `SETUP_TOKEN` from the environment),
 then walks through mail domain and host name, the first administrator account, the backup of
 generated secrets, the DNS records with a live check, and the TLS certificate (Let's Encrypt,
 a reverse proxy, or later). Details: [setup-wizard.md](setup-wizard.md).
@@ -213,7 +221,11 @@ curl -X POST http://<server>:3000/api/v1/setup/complete \
 
 ## Configuration reference (.env)
 
-The complete `.env` file with all available variables:
+Since 10.4 the `.env` file is optional: every Compose variant starts without it and the
+one-shot service `coremail-init` generates the secrets into `./secrets/` next to the Compose
+file ([setup.md](setup.md#docker-compose-coremail-init)). A value set in `.env` always wins and
+is copied into `./secrets/`. Leave a secret empty to have it generated. The available
+variables (placeholders shown — never use them as they are):
 
 ```bash
 # ─── Security ────────────────────────────────────────────────────────────────
@@ -303,11 +315,12 @@ MAXMIND_LICENSE_KEY=
 
 | Variable | Description | Required |
 |----------|-------------|---------|
-| `JWT_SECRET` | JWT signing key (min. 32 characters) | Yes |
-| `PEPPER` | bcrypt pepper for password hashes (min. 32 characters) | Yes |
-| `POSTGRES_PASSWORD` | PostgreSQL database password | Yes |
-| `REDIS_PASSWORD` | Redis authentication password | Yes |
-| `MINIO_ROOT_PASSWORD` | MinIO administrator password (min. 8 characters) | Yes |
+| `JWT_SECRET` | JWT signing key (min. 32 characters) | No (generated into `./secrets/`) |
+| `PEPPER` | bcrypt pepper for password hashes (min. 32 characters) | No (generated) |
+| `POSTGRES_PASSWORD` | PostgreSQL database password | No (generated) |
+| `REDIS_PASSWORD` | Redis authentication password | No (generated) |
+| `MINIO_ROOT_PASSWORD` | MinIO administrator password (min. 8 characters) | No (generated) |
+| `COREMAIL_SECRETS_PATH` | Host directory of the generated secrets | No (`./secrets` next to the Compose file) |
 | `OBJECT_STORAGE` | Mail storage driver `filesystem` / `minio` / `s3` ([storage.md](storage.md)) | No (`minio`; setup.sh writes `filesystem`) |
 | `LOG_LEVEL` | `error` / `warn` / `info` / `debug` | No (`info`) |
 | `HTTPS_PROXY_ENABLED` | Enable the integrated TLS proxy | No (`true`) |
@@ -449,9 +462,8 @@ ssh admin@<NAS-IP>
 git clone https://github.com/MAGPEEK/CoreMail.git /volume1/docker/coremail
 cd /volume1/docker/coremail
 
-# Configuration
-cp .env.example .env
-# Adjust .env (passwords, HTTPS_PROXY_ENABLED=false if needed)
+# Configuration (optional — secrets are generated into /volume1/docker/coremail/secrets)
+# NAS_HOSTNAME=<NAS-IP> bash scripts/synology-setup.sh   (writes .env, creates the directories)
 
 # Start the Synology stack
 docker compose -f infra/docker/docker-compose.synology.yml up -d

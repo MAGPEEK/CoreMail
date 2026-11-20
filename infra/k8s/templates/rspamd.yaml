@@ -1,4 +1,5 @@
 {{- if .Values.rspamd.enabled }}
+{{- include "coremail.secrets.fill" . }}
 {{- $r := .Values.rspamd }}
 {{- $name := include "coremail.componentName" (dict "root" . "component" "rspamd") }}
 apiVersion: v1

@@ -14,6 +14,7 @@ time. The browser part of the first setup is described in
   - [Which value wins](#which-value-wins)
   - [Fresh or existing installation](#fresh-or-existing-installation)
   - [Database and Redis connection](#database-and-redis-connection)
+  - [Docker Compose: coremail-init](#docker-compose-coremail-init)
   - [Running the generator by hand](#running-the-generator-by-hand)
   - [Setup token](#setup-token)
   - [Safety rules](#safety-rules)
@@ -24,12 +25,22 @@ time. The browser part of the first setup is described in
 
 ## Automatic secrets
 
-Since 10.4 the app image can create every secret it needs by itself. Mount an
-empty directory at `/secrets` and start the container:
+Since 10.4 the app image can create every secret it needs by itself, and every
+Compose variant starts without a `.env`:
+
+```bash
+docker compose -f infra/docker/docker-compose.yml up -d
+# secrets: infra/docker/secrets/ (./secrets next to the Compose file)
+```
+
+The Compose files run the generator once in the one-shot service
+`coremail-init` before anything else starts
+([Docker Compose: coremail-init](#docker-compose-coremail-init)). Outside
+Compose, mount an empty directory at `/secrets`:
 
 ```bash
 mkdir -m 700 secrets
-# Compose: volumes: - ./secrets:/secrets
+# docker run … -v ./secrets:/secrets …
 ```
 
 On the first start the entrypoint runs `coremail-init-secrets`, which writes
@@ -52,10 +63,12 @@ as root). They are written atomically: temporary file, `fsync`, `rename`.
 |------|---------|---------|
 | `coremail.env` | `KEY=value` lines with a comment header | the CoreMail container |
 | `postgres-password` | `POSTGRES_PASSWORD`, one line, no newline | the PostgreSQL container (`POSTGRES_PASSWORD_FILE`) |
-| `redis-password` | `REDIS_PASSWORD`, one line, no newline | the Redis container (`--requirepass`) |
+| `redis-password` | `REDIS_PASSWORD`, one line, no newline | the Redis container (`--requirepass`, healthcheck) |
+| `minio-root-password` | `MINIO_ROOT_PASSWORD`, one line, no newline | the MinIO container |
+| `rspamd-controller-password` | `RSPAMD_CONTROLLER_PASSWORD`, one line, no newline | the rspamd container (controller password) |
 | `setup-token` | the one-time setup token, only while the setup is pending | you — see [Setup token](#setup-token) |
 
-`postgres-password` and `redis-password` are created when missing. If one of
+The single-value password files are created when missing. If one of
 them differs from the value in `coremail.env` later, a warning is printed and
 the file is left alone.
 
@@ -168,6 +181,41 @@ For the **bundled MinIO** the entrypoint also fills `MINIO_SECRET_KEY` /
 `MINIO_ROOT_USER` (default user `minioadmin`) — only when they are empty. An
 external S3 keeps its own keys.
 
+### Docker Compose: coremail-init
+
+All four Compose files (`docker-compose.yml`, `.minimal.yml`, `.full.yml`,
+`.synology.yml`) contain the one-shot service `coremail-init`: the same image
+as `coremail`, command `coremail-init-secrets`, `restart: "no"`. The other
+services wait for it with `condition: service_completed_successfully` — the
+generator never runs twice at the same time (the entrypoint of `coremail` runs
+it again afterwards and finds nothing to add).
+
+| | |
+|---|---|
+| Secrets directory | `./secrets` next to the Compose file (`infra/docker/secrets/` in the repository); Synology: `/volume1/docker/coremail/secrets`. `COREMAIL_SECRETS_PATH` in `.env` moves it. |
+| Environment | the `.env` values of all secret keys plus `DATABASE_URL` / `REDIS_URL` (`${VAR:-}`) — a value from `.env` is **copied** into the file, never replaced by a new one |
+| Privileges | no network (`network_mode: none`), read-only root file system, `no-new-privileges`, `cap_drop: [ALL]` plus `DAC_OVERRIDE`, `FOWNER` (write into a directory owned by the host user, tighten an empty Docker Desktop mount) and `NET_BIND_SERVICE` (only because the image's node binary carries it as a file capability — the kernel refuses to execute it otherwise) |
+
+Without network the database cannot be reached, so the
+[fresh-installation rule](#fresh-or-existing-installation) for a first start is
+"no earlier `coremail.env` and no `JWT_SECRET`/`PEPPER` in `.env`". A `.env`
+installation is therefore always treated as existing: `MFA_ENCRYPTION_KEY`,
+`BACKUP_ENCRYPTION_KEY`, `AUDIT_EXPORT_SIGNING_KEY` and the VAPID pair are not
+generated for it.
+
+How the other containers get their password — the `.env` value when set,
+otherwise the single-value file (secrets directory mounted read-only at
+`/run/coremail`):
+
+| Service | Mechanism |
+|---------|-----------|
+| `postgres` | `POSTGRES_PASSWORD_FILE=/run/coremail/postgres-password`. The file always holds `POSTGRES_PASSWORD` from `.env` when `.env` has it. PostgreSQL reads it only when its data directory is created; an existing database keeps its password. |
+| `redis` | `sh -c` wrapper: `REDIS_PASSWORD` or `redis-password`, then the image entrypoint (still switches to user `redis`); healthcheck with `REDISCLI_AUTH` |
+| `minio` | `sh -c` wrapper: `MINIO_ROOT_PASSWORD` or `minio-root-password`, then the image entrypoint |
+| `rspamd` | started as root only to read `rspamd-controller-password` when `RSPAMD_CONTROLLER_PASSWORD` is empty, then `setpriv` to `_rspamd` (11333), the image's own user |
+| `pg-backup` (full, profile `backup`) | `sh -c` wrapper: `POSTGRES_PASSWORD` or `postgres-password`; read-only capability `DAC_READ_SEARCH` |
+| `coremail` | mounts the directory at `/secrets`; the entrypoint loads `coremail.env` ([Which value wins](#which-value-wins)) and builds `DATABASE_URL` / `REDIS_URL` when `.env` has none |
+
 ### Running the generator by hand
 
 The generator is part of the image and can create the directory content before
@@ -199,7 +247,7 @@ constant time, valid once). With a secrets directory it is **also written to
 
 ```
 ════════════════════════════════════════════════════════════════════
-  CoreMail setup: open https://<host>/setup — token in ./secrets/setup-token
+  CoreMail setup: open http://<server>:3000/setup — token in ./secrets/setup-token
   (one-time setup token; a new one is written on every restart
   until the setup is done, then the file is deleted)
 ════════════════════════════════════════════════════════════════════
@@ -209,6 +257,13 @@ constant time, valid once). With a secrets directory it is **also written to
 cat ./secrets/setup-token          # on the host (owned by the container user node, uid 1000)
 docker exec coremail cat /secrets/setup-token
 ```
+
+The URL in the box is the one that answers on a fresh installation: plain HTTP
+(the integrated HTTPS proxy starts only once a certificate exists) on the
+published HTTP port `COREMAIL_PUBLIC_HTTP_PORT` (the Compose files set it:
+`3000`, Synology `8080`; default `3000`), with the public host name when one is
+configured, otherwise the placeholder `<server>`. Without a secrets directory the
+token is logged with the same URL.
 
 The file is replaced on every restart while the setup is pending and deleted
 when the setup completes (also at the next start if the setup was completed
@@ -258,8 +313,8 @@ anything in it:
 
 ### Backing up the secrets
 
-**Back up `coremail.env` off the server** (password manager, offline copy)
-right after the first start. Without `PEPPER` no password works; without
+**Back up `coremail.env` (with Compose: the whole `./secrets/` directory) off
+the server** (password manager, offline copy) right after the first start. Without `PEPPER` no password works; without
 `JWT_SECRET` + `PEPPER` (or `MFA_ENCRYPTION_KEY` / `BACKUP_ENCRYPTION_KEY`)
 enrolled two-factor logins, stored certificate keys and encrypted backups cannot
 be read. The files belong to root, so on the host:
@@ -277,7 +332,9 @@ rotation).
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `COREMAIL_SECRETS_DIR` | `/secrets` | secrets directory inside the container |
-| `COREMAIL_SECRETS_HOST_PATH` | `./secrets` | how the directory is named in messages and in `/api/v1/setup/status` |
+| `COREMAIL_SECRETS_HOST_PATH` | `./secrets` | how the directory is named in messages and in `/api/v1/setup/status` (the Compose files pass `COREMAIL_SECRETS_PATH`) |
+| `COREMAIL_PUBLIC_HTTP_PORT` | `3000` | published HTTP port named in the setup URL of the log |
+| `COREMAIL_SECRETS_PATH` | `./secrets` (Synology: `/volume1/docker/coremail/secrets`) | Compose only (`.env`): host directory of the secrets |
 | `COREMAIL_SECRETS_DB_WAIT` | `30` | seconds the entrypoint waits for the database before applying the "unreachable" rule |
 | `COREMAIL_DB_HOST` / `COREMAIL_DB_PORT` / `COREMAIL_DB_NAME` | `postgres` / `5432` / `coremail` | parts of a built `DATABASE_URL` |
 | `COREMAIL_DB_USER` | `coremail` | database role of a built `DATABASE_URL` |
@@ -286,5 +343,6 @@ rotation).
 Set by the entrypoint for the services (not meant to be set by hand):
 `COREMAIL_SECRETS_FILE_IN_USE`, `COREMAIL_SECRETS_GENERATED`.
 
-The Helm chart does not use this mechanism; its secrets come from the chart's
-Kubernetes Secret ([infra/k8s/README.md](../infra/k8s/README.md)).
+The Helm chart does not use this mechanism. Since chart 3.4 it generates empty
+`secrets.*` values itself — once, kept on upgrade through `lookup`, never
+regenerated for an existing release ([infra/k8s/README.md](../infra/k8s/README.md#generated-secrets)).

@@ -169,8 +169,72 @@ app.kubernetes.io/component: {{ .component }}
 {{- toJson $out }}
 {{- end }}
 
+{{/*
+Chart 3.4: generated secrets. Without secrets.existingSecret every empty
+secrets.* value is filled ONCE per render, in this order of precedence:
+  1. the value itself (values file / --set) — always wins
+  2. the key in the release's existing Secret (lookup) — upgrades keep it
+  3. a new random value — only when there is nothing to keep:
+       always       jwtSecret, pepper, postgresPassword, redisPassword,
+                    minioRootPassword (bundled/external MinIO only),
+                    rspamdControllerPassword
+       fresh only   mfaEncryptionKey, backupEncryptionKey — only on a first
+                    install (no existing Secret). An existing release derives
+                    them from JWT_SECRET + PEPPER; a new MFA key would make every
+                    enrolled TOTP secret unreadable.
+On `helm upgrade` an empty required value that is NOT in the existing Secret
+(or the Secret cannot be read: --dry-run=client, missing RBAC) fails instead of
+being generated — a new PEPPER would lock every user out.
+The values are written back into .Values.secrets so every template of this
+render (Secret, checksums, NOTES) sees the same ones.
+*/}}
+{{- define "coremail.secrets.fill" -}}
+{{- if and (not .Values.secrets.existingSecret) (not (hasKey .Values "__coremailSecretsFilled")) }}
+{{- $_ := set .Values "__coremailSecretsFilled" true }}
+{{- $s := .Values.secrets }}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace (include "coremail.secretName" .) | default dict }}
+{{- $data := get $existing "data" | default dict }}
+{{- $fresh := and .Release.IsInstall (not $data) }}
+{{- $minio := include "coremail.minio.host" . }}
+{{- /* value key, Secret key, generator (key|password), mode, needed
+       mode: data = tied to stored data (never generated on upgrade),
+             any  = may be generated whenever it is missing,
+             fresh = first install only */}}
+{{- $specs := list
+  (list "jwtSecret" "JWT_SECRET" "key" "data" true)
+  (list "pepper" "PEPPER" "key" "data" true)
+  (list "postgresPassword" "POSTGRES_PASSWORD" "password" "data" true)
+  (list "redisPassword" "REDIS_PASSWORD" "password" "data" true)
+  (list "minioRootPassword" "MINIO_ROOT_PASSWORD" "password" "data" (not (empty $minio)))
+  (list "rspamdControllerPassword" "RSPAMD_CONTROLLER_PASSWORD" "password" "any" true)
+  (list "mfaEncryptionKey" "MFA_ENCRYPTION_KEY" "key" "fresh" true)
+  (list "backupEncryptionKey" "BACKUP_ENCRYPTION_KEY" "key" "fresh" true) }}
+{{- range $spec := $specs }}
+{{- $k := index $spec 0 }}{{- $sk := index $spec 1 }}{{- $mode := index $spec 3 }}
+{{- if and (index $spec 4) (empty (get $s $k)) }}
+{{- $old := get $data $sk }}
+{{- /* key: 64 hex characters (sha256 of 64 random alphanumerics); password: 40 alphanumerics (URL-safe) */}}
+{{- $new := ternary (sha256sum (randAlphaNum 64)) (randAlphaNum 40) (eq (index $spec 2) "key") }}
+{{- if $old }}
+{{- $_ := set $s $k (b64dec $old) }}
+{{- else if or $fresh (eq $mode "any") }}
+{{- $_ := set $s $k $new }}
+{{- $_ := set $.Values "__coremailSecretsGenerated" true }}
+{{- else if eq $mode "data" }}
+{{- if $.Release.IsUpgrade }}
+{{- fail (printf "secrets.%s is empty and the existing Secret %s has no %s (or it cannot be read, e.g. --dry-run=client) — refusing to generate a new value on upgrade. Set secrets.%s (or secrets.existingSecret) to the value in use." $k (include "coremail.secretName" $) $sk $k) }}
+{{- end }}
+{{- $_ := set $s $k $new }}
+{{- $_ := set $.Values "__coremailSecretsGenerated" true }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+
 {{/* Fail-fast validation of values that the app or the datastores need */}}
 {{- define "coremail.validate" -}}
+{{- include "coremail.secrets.fill" . }}
 {{- $s := .Values.secrets }}
 {{- range $k, $v := $s }}
 {{- if and $v (not (kindIs "string" $v)) }}{{ fail (printf "secrets.%s must be a string — quote it in YAML or use --set-string (a digits-only value is parsed as a number and would be corrupted)" $k) }}{{ end }}
