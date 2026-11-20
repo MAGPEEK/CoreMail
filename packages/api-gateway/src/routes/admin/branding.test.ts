@@ -86,7 +86,8 @@ installFakePrisma({
 const express = (await import('express')).default;
 const core = await import('@coremail/core');
 const { adminBrandingRouter } = await import('./branding.js');
-const { brandingApiRouter, brandingAssetsRouter, ASSET_CSP } = await import('../branding.js');
+const { brandingApiRouter, brandingAssetsRouter, brandingFaviconsRouter, ASSET_CSP } = await import('../branding.js');
+const { encodePng, decodePng } = await import('../../lib/branding/png.js');
 const state = await import('../../lib/branding/state.js');
 const { fakePng: png } = await import('../../lib/branding/test-fixtures.js');
 const assetLock = await import('../../lib/branding/asset-lock.js');
@@ -103,6 +104,7 @@ before(async () => {
   app.use(express.json());
   app.use('/api/v1/branding', brandingApiRouter);
   app.use('/branding/assets', brandingAssetsRouter);
+  app.use('/branding/favicons', brandingFaviconsRouter);
   app.use('/api/v1/admin/branding', adminBrandingRouter);
   app.use(core.errorMiddleware({ error: () => undefined, warn: () => undefined }));
   server = app.listen(0, '127.0.0.1');
@@ -447,4 +449,25 @@ test('public assets: served from an in-memory cache keyed by the content hash; a
   await call('DELETE', `${A}/assets/logoLight`, { role: ORG });
   assert.equal((await call('GET', url)).status, 404, 'a removed asset is not served from the cache');
   assert.equal((await call('GET', `/branding/assets/${'1'.repeat(64)}.png`)).status, 404);
+});
+
+test('favicon derived from a PNG logo: square 64 / 180 px PNGs for the current logo, gone once an own favicon is set', async () => {
+  const data = Buffer.alloc(120 * 40 * 4);
+  for (let i = 0; i < 120 * 40; i++) data.set([200, 60, 10, 255], i * 4);
+  const logo = encodePng({ width: 120, height: 40, data });
+  assert.equal((await call('POST', `${A}/assets/logoLight`, { role: ORG, body: logo, type: 'image/png' })).status, 200);
+  const sha = createHash('sha256').update(logo).digest('hex');
+  const icon = await call('GET', `/branding/favicons/${sha}-64.png`);
+  assert.equal(icon.status, 200);
+  assert.equal(icon.headers.get('content-type'), 'image/png');
+  assert.equal(icon.headers.get('x-content-type-options'), 'nosniff');
+  assert.match(icon.headers.get('cache-control') ?? '', /immutable/);
+  const img = decodePng(icon.buf);
+  assert.deepEqual([img.width, img.height], [64, 64]);
+  assert.equal(img.data[3], 0, 'padding above the wide logo is transparent');
+  assert.equal(decodePng((await call('GET', `/branding/favicons/${sha}-180.png`)).buf).width, 180);
+  assert.equal((await call('GET', `/branding/favicons/${sha}-32.png`)).status, 404, 'no such size');
+  assert.equal((await call('GET', `/branding/favicons/${'2'.repeat(64)}-64.png`)).status, 404, 'not the current logo');
+  await call('POST', `${A}/assets/favicon`, { role: ORG, body: encodePng({ width: 32, height: 32, data: Buffer.alloc(32 * 32 * 4, 255) }), type: 'image/png' });
+  assert.equal((await call('GET', `/branding/favicons/${sha}-64.png`)).status, 404, 'an own favicon replaces the derived one');
 });

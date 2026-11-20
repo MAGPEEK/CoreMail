@@ -1,6 +1,6 @@
 /**
- * Live preview of the branding page (BCP): the light and the dark look side by
- * side, whatever theme the admin uses. The preview container gets the token
+ * Live preview of the branding page (BCP): the light or the dark look (switch
+ * in the preview), whatever theme the admin uses. The preview container gets the token
  * values of the theme it shows as inline CSS variables, so the ordinary token
  * classes (bg-surface, text-fg, bg-accent, bg-header …) inside it resolve to
  * that theme. brandingPreview.test.ts checks the values against tokens.css.
@@ -21,6 +21,15 @@ export const PREVIEW_THEME_VARS: Record<'light' | 'dark', Record<(typeof PREVIEW
     line: '50 56 67', 'line-strong': '122 130 145', scrim: '0 0 0',
   },
 };
+
+/**
+ * Logo shown in the preview: the dark logo in dark mode when set, else the
+ * logo (logoFor() of lib/branding.ts, without its URL filter, because unsaved
+ * images are `blob:` object URLs created by the page itself); null = built-in.
+ */
+export function previewLogo(assets: { logoLight: string | null; logoDark: string | null }, dark: boolean): string | null {
+  return (dark && assets.logoDark) || assets.logoLight || null;
+}
 
 /**
  * Inline style for a preview container: theme tokens + the brand variables

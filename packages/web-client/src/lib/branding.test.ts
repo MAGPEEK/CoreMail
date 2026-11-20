@@ -109,6 +109,11 @@ test('hex helpers', () => {
 test('favicon fallback chain: favicon → logoLight → built-in', () => {
   assert.equal(faviconHref({ ...noAssets, favicon: '/branding/assets/a.png', logoLight: '/branding/assets/b.svg' }), '/branding/assets/a.png');
   assert.equal(faviconHref({ ...noAssets, logoLight: '/branding/assets/b.svg' }), '/branding/assets/b.svg');
+  // a PNG logo → the square favicon the gateway derives from it; WebP / SVG logos as they are
+  const sha = 'a1'.repeat(32);
+  assert.equal(faviconHref({ ...noAssets, logoLight: `/branding/assets/${sha}.png` }), `/branding/favicons/${sha}-64.png`);
+  assert.equal(faviconHref({ ...noAssets, logoLight: `/branding/assets/${sha}.webp` }), `/branding/assets/${sha}.webp`);
+  assert.equal(faviconHref({ ...noAssets, favicon: `/branding/assets/${sha}.webp`, logoLight: `/branding/assets/${sha}.png` }), `/branding/assets/${sha}.webp`);
   assert.equal(faviconHref({ ...noAssets, logoDark: '/branding/assets/c.svg' }), BUILTIN_FAVICON);
   assert.equal(faviconHref(noAssets), BUILTIN_FAVICON);
   assert.equal(faviconHref({ ...noAssets, favicon: 'javascript:alert(1)' }), BUILTIN_FAVICON);

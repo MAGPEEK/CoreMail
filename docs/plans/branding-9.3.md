@@ -67,7 +67,9 @@ Public `GET /api/v1/branding` → `200`, `Cache-Control: no-cache`:
 ```
 - `primaryColor` / `headerColor`: `#rrggbb` lower-case or `null` (header: null = primary colour).
 - Asset URLs are `null` when unset; the frontend falls back to the built-in CoreMail logo / `/favicon.svg`.
-  The favicon falls back to `logoLight` when only a logo exists.
+  The favicon falls back to `logoLight` when only a logo exists (later: a PNG logo becomes a derived
+  square favicon `/branding/favicons/<sha>-64.png` + apple-touch-icon `-180.png`; the public
+  `assets.favicon` stays `null` — see docs/branding.md, "Favicon from the logo").
 - `footerLinks`: max 5, label ≤ 40 chars, `https://` or `mailto:` only.
 
 Admin (`requireRole` → ORGANIZATION_MANAGEMENT, audited `settings.branding.update`):

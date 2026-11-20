@@ -159,3 +159,74 @@ test('renderAppIcon: scales the current favicon once, refuses other hashes', asy
   assert.equal(await renderAppIcon(`${sha}-300.png`, b), null, 'no such size');
   assert.equal(await renderAppIcon(`${sha}-512.png`, branding(null)), null);
 });
+
+// ── Favicon derived from the logo (favicon.ts, favicon-render.ts) ─────────────
+
+const { faviconSource, faviconLinks, fitIntoSquare, deriveFaviconPng } = await import('./favicon.js');
+const { renderDerivedFavicon } = await import('./favicon-render.js');
+
+const logoBranding = (logoLight: string | null, favicon: string | null = null) => ({
+  ...branding(favicon), assets: { logoLight, logoDark: null, favicon, loginBackground: null },
+});
+
+/** w × h opaque blue logo. */
+function logoPng(w: number, h: number): Buffer {
+  const data = Buffer.alloc(w * h * 4);
+  for (let i = 0; i < w * h; i++) data.set([10, 120, 200, 255], i * 4);
+  return encodePng({ width: w, height: h, data });
+}
+
+test('favicon source: own favicon → PNG logo derived → SVG / WebP logo as is → built-in', () => {
+  const png = `/branding/assets/${sha}.png`;
+  const own = `/branding/assets/${'c'.repeat(64)}.svg`;
+  assert.deepEqual(faviconSource({ favicon: own, logoLight: png }), { kind: 'own', href: own });
+  assert.deepEqual(faviconSource({ favicon: null, logoLight: png }), { kind: 'logo-derived', sha });
+  assert.deepEqual(faviconSource({ favicon: null, logoLight: `/branding/assets/${sha}.svg` }), { kind: 'logo', href: `/branding/assets/${sha}.svg` });
+  assert.deepEqual(faviconSource({ favicon: null, logoLight: `/branding/assets/${sha}.webp` }), { kind: 'logo', href: `/branding/assets/${sha}.webp` });
+  assert.deepEqual(faviconSource({ favicon: null, logoLight: null }), { kind: 'builtin' });
+  assert.deepEqual(faviconSource({ favicon: null, logoLight: 'https://evil.example/x.png' }), { kind: 'builtin' });
+
+  assert.deepEqual(faviconLinks({ favicon: null, logoLight: png }), [
+    { rel: 'icon', type: 'image/png', sizes: '64x64', href: `/branding/favicons/${sha}-64.png` },
+    { rel: 'apple-touch-icon', type: 'image/png', sizes: '180x180', href: `/branding/favicons/${sha}-180.png` },
+  ]);
+  assert.deepEqual(faviconLinks({ favicon: null, logoLight: `/branding/assets/${sha}.svg` }),
+    [{ rel: 'icon', type: 'image/svg+xml', href: `/branding/assets/${sha}.svg` }]);
+  assert.deepEqual(faviconLinks({ favicon: own, logoLight: png }), [{ rel: 'icon', type: 'image/svg+xml', href: own }]);
+  assert.deepEqual(faviconLinks({ favicon: null, logoLight: null }), []);
+});
+
+test('fitIntoSquare: aspect ratio kept, centred on transparent padding, enlarged and shrunk', () => {
+  const icon = fitIntoSquare(decodePng(logoPng(120, 40)), 64);
+  assert.deepEqual([icon.width, icon.height], [64, 64]);
+  // 120×40 → 64×21 in the middle rows, above and below transparent
+  assert.deepEqual(px(icon, 32, 0), [0, 0, 0, 0]);
+  assert.deepEqual(px(icon, 32, 63), [0, 0, 0, 0]);
+  assert.deepEqual(px(icon, 32, 32), [10, 120, 200, 255]);
+  assert.deepEqual(px(icon, 0, 32), [10, 120, 200, 255], 'the long side fills the square');
+  const tall = fitIntoSquare(decodePng(logoPng(20, 60)), 180);
+  assert.deepEqual([tall.width, tall.height], [180, 180]);
+  assert.deepEqual(px(tall, 90, 90), [10, 120, 200, 255], 'enlarged without darkening');
+  assert.deepEqual(px(tall, 5, 90), [0, 0, 0, 0]);
+  assert.deepEqual(px(fitIntoSquare(decodePng(solid(64)), 64), 0, 0), [10, 120, 200, 255], 'a square logo of the right size is copied');
+  assert.equal(readPngHeader(deriveFaviconPng(logoPng(300, 100), 180))!.width, 180);
+});
+
+test('renderDerivedFavicon: only for the current PNG logo without own favicon; an unreadable PNG is served as is', async () => {
+  const sixteenBit = logoPng(50, 50);
+  sixteenBit[24] = 16; // IHDR bit depth → the codec refuses it
+  const other = 'e'.repeat(64);
+  const store = installStore({ [`branding/${sha}.png`]: logoPng(200, 50), [`branding/${other}.png`]: sixteenBit });
+  const b = logoBranding(`/branding/assets/${sha}.png`);
+  const [x, y] = await Promise.all([renderDerivedFavicon(`${sha}-64.png`, b), renderDerivedFavicon(`${sha}-64.png`, b)]);
+  assert.ok(x && y);
+  assert.equal(decodePng(x).width, 64);
+  assert.equal(store.reads.length, 1, 'one read for concurrent requests');
+  assert.equal(await renderDerivedFavicon(`${sha}-64.png`, b), x, 'cached');
+  assert.equal(decodePng((await renderDerivedFavicon(`${sha}-180.png`, b))!).width, 180);
+  assert.equal(await renderDerivedFavicon(`${sha}-32.png`, b), null, 'no such size');
+  assert.equal(await renderDerivedFavicon(`${'f'.repeat(64)}-64.png`, b), null, 'not the current logo');
+  assert.equal(await renderDerivedFavicon(`${sha}-64.png`, logoBranding(`/branding/assets/${sha}.png`, `/branding/assets/${'c'.repeat(64)}.png`)), null, 'own favicon wins');
+  assert.equal(await renderDerivedFavicon(`${sha}-64.png`, logoBranding(`/branding/assets/${sha}.svg`)), null, 'SVG logos are not derived');
+  assert.equal(await renderDerivedFavicon(`${other}-64.png`, logoBranding(`/branding/assets/${other}.png`)), sixteenBit, 'unreadable for the codec → the logo itself');
+});

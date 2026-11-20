@@ -1,8 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  applyDefault, applySuggestion, draftFrom, draftToBody, editDraft, isDraftDirty, parseAdminBranding, parseFieldError,
-  parseWarnings, validateDraft,
+  advancedHasOverride, applyDefault, applySuggestion, changeCount, dirtyStatusText, draftFrom, draftToBody, editDraft,
+  effectiveAssets, isDraftDirty, parseAdminBranding, parseFieldError, parseWarnings, releasedPreviewUrls, savePlan,
+  saveSummary, validateDraft, withAssetRemoved, withAssetUpload,
+  type AssetChanges, type SaveStep,
 } from './brandingForm.ts';
 import { DEFAULT_BRANDING } from './branding.ts';
 
@@ -141,4 +143,83 @@ test('10.1 Standard-Hintergrund: only a change is sent', () => {
   assert.deepEqual(draftToBody(d, saved), {});
   assert.deepEqual(draftToBody(editDraft(d, 'defaultBackground', 'builtin:forest'), saved), { defaultBackground: 'builtin:forest' });
   assert.equal(isDraftDirty(editDraft(d, 'defaultBackground', 'builtin:forest'), saved), true);
+});
+
+// ── Image changes in the draft ────────────────────────────────────────────────
+
+const withLogo = parseAdminBranding({
+  ...DEFAULT_BRANDING,
+  assets: { logoLight: `/branding/assets/${'a'.repeat(64)}.png`, logoDark: null, favicon: null, loginBackground: null },
+  explicit: { productName: false, primaryColor: false, headerColor: false },
+});
+const png = new Blob(['x'], { type: 'image/png' });
+
+test('images: upload / remove in the draft, preview assets, revoked object URLs', () => {
+  const saved = withLogo.branding.assets;
+  let c: AssetChanges = {};
+  c = withAssetUpload(c, 'favicon', png, 'blob:fav');
+  c = withAssetUpload(c, 'logoLight', png, 'blob:logo1');
+  const replaced = withAssetUpload(c, 'logoLight', png, 'blob:logo2');
+  assert.deepEqual(releasedPreviewUrls(c, replaced), ['blob:logo1'], 'a replaced file frees its object URL');
+  c = replaced;
+  assert.deepEqual(effectiveAssets(saved, c), { ...saved, logoLight: 'blob:logo2', favicon: 'blob:fav' });
+
+  // "Entfernen" on a pending upload drops it: the saved image shows again
+  const dropped = withAssetRemoved(c, 'logoLight', saved);
+  assert.equal(dropped.logoLight, undefined);
+  assert.deepEqual(releasedPreviewUrls(c, dropped), ['blob:logo2']);
+  // … then on the saved image marks it for removal
+  const removed = withAssetRemoved(dropped, 'logoLight', saved);
+  assert.deepEqual(removed.logoLight, { kind: 'remove' });
+  assert.equal(effectiveAssets(saved, removed).logoLight, null);
+  // an empty slot without a pending change stays unchanged
+  assert.deepEqual(withAssetRemoved({}, 'logoDark', saved), {});
+  assert.deepEqual(releasedPreviewUrls(c, {}).sort(), ['blob:fav', 'blob:logo2']);
+});
+
+test('images: dirty count includes image changes; status text', () => {
+  const d = draftFrom(withLogo);
+  assert.equal(changeCount(d, withLogo, {}), 0);
+  assert.equal(dirtyStatusText(0), 'Alle Änderungen gespeichert');
+  const c = withAssetRemoved(withAssetUpload({}, 'favicon', png, 'blob:f'), 'logoLight', withLogo.branding.assets);
+  assert.equal(changeCount(d, withLogo, c), 2);
+  assert.equal(changeCount(editDraft(d, 'loginText', 'Hallo'), withLogo, c), 3);
+  assert.equal(dirtyStatusText(1), '1 ungespeicherte Änderung');
+  assert.equal(dirtyStatusText(3), '3 ungespeicherte Änderungen');
+});
+
+test('"Erweitert" opens when a dark logo or an own favicon is set', () => {
+  assert.equal(advancedHasOverride({ logoDark: null, favicon: null }), false);
+  assert.equal(advancedHasOverride({ logoDark: '/branding/assets/x.svg', favicon: null }), true);
+  assert.equal(advancedHasOverride({ logoDark: null, favicon: '/branding/assets/x.png' }), true);
+});
+
+test('save plan: image requests first (slot order), then the settings PUT only when a setting changed', () => {
+  const d = draftFrom(withLogo);
+  assert.deepEqual(savePlan(d, withLogo, {}), []);
+  const c: AssetChanges = {
+    loginBackground: { kind: 'upload', file: png, previewUrl: 'blob:bg' },
+    logoLight: { kind: 'remove' },
+    favicon: { kind: 'upload', file: png, previewUrl: 'blob:f' },
+  };
+  const plan = savePlan(editDraft(d, 'loginText', 'Hallo'), withLogo, c);
+  assert.deepEqual(plan.map((s) => (s.kind === 'settings' ? 'settings' : `${s.kind}:${s.slot}`)),
+    ['remove:logoLight', 'upload:favicon', 'upload:loginBackground', 'settings']);
+  assert.deepEqual(plan[3], { kind: 'settings', body: { loginText: 'Hallo' } });
+  assert.deepEqual(savePlan(d, withLogo, c).map((s) => s.kind), ['remove', 'upload', 'upload'], 'no settings change → no PUT');
+});
+
+test('save summary: everything saved, partial failure, nothing saved', () => {
+  const up: SaveStep = { kind: 'upload', slot: 'logoLight', file: png };
+  const fav: SaveStep = { kind: 'upload', slot: 'favicon', file: png };
+  const settings: SaveStep = { kind: 'settings', body: { loginText: 'x' } };
+  assert.deepEqual(saveSummary([{ step: up, error: null }, { step: settings, error: null }]),
+    { ok: true, message: null, failedSlots: [], settingsFailed: false });
+  const partial = saveSummary([{ step: up, error: 'Die SVG-Datei enthält unsichere Inhalte' }, { step: fav, error: null }, { step: settings, error: null }]);
+  assert.equal(partial.ok, false);
+  assert.deepEqual(partial.failedSlots, ['logoLight']);
+  assert.equal(partial.settingsFailed, false);
+  assert.equal(partial.message, 'Teilweise gespeichert (Favicon, Einstellungen). Nicht gespeichert — Logo: Die SVG-Datei enthält unsichere Inhalte');
+  const none = saveSummary([{ step: settings, error: 'HTTP 500' }]);
+  assert.deepEqual([none.settingsFailed, none.message], [true, 'Nicht gespeichert — Einstellungen: HTTP 500']);
 });
