@@ -12,10 +12,15 @@
  *  - ServerSettings.setupCompletedAt is the persistent "setup done" flag:
  *    claimed atomically in the setup transaction, never cleared. Existing
  *    installations (users present, flag null) are backfilled at start.
+ *  - 10.4: with a mounted secrets directory (COREMAIL_SECRETS_DIR, default
+ *    /secrets) the generated token is ALSO written to <dir>/setup-token (0600)
+ *    and the log only names that file. The file is deleted when the setup is
+ *    completed (or found completed at start). Token checks are unchanged.
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { prisma } from '@coremail/storage';
 import { safeEqual } from '@coremail/core';
+import { removeSetupTokenFile, setupTokenFileBanner, writeSetupTokenFile } from './setup-secrets.js';
 
 export function hashSetupToken(token: string): string {
   return createHash('sha256').update(token, 'utf8').digest('hex');
@@ -63,6 +68,7 @@ export async function initSetupToken(log: Logger, env: NodeJS.ProcessEnv = proce
     if (s.setupTokenHash) {
       await prisma.serverSettings.update({ where: { id: 'singleton' }, data: { setupTokenHash: null } });
     }
+    await removeSetupTokenFile(env); // stale file of an earlier start
     return null;
   }
   const users = await prisma.user.count();
@@ -71,6 +77,7 @@ export async function initSetupToken(log: Logger, env: NodeJS.ProcessEnv = proce
     await prisma.serverSettings.update({
       where: { id: 'singleton' }, data: { setupCompletedAt: new Date(), setupTokenHash: null },
     });
+    await removeSetupTokenFile(env);
     log.info({}, 'Setup flag backfilled (users already exist)');
     return null;
   }
@@ -78,12 +85,20 @@ export async function initSetupToken(log: Logger, env: NodeJS.ProcessEnv = proce
   const fromEnv = envSetupToken(env);
   if (fromEnv) {
     await prisma.serverSettings.update({ where: { id: 'singleton' }, data: { setupTokenHash: hashSetupToken(fromEnv) } });
+    // A file from an earlier start would hold a token that no longer works.
+    await removeSetupTokenFile(env);
     log.warn({}, 'Initial setup pending — use the SETUP_TOKEN from the environment in the setup wizard');
     return null;
   }
 
   const token = randomBytes(24).toString('base64url');
   await prisma.serverSettings.update({ where: { id: 'singleton' }, data: { setupTokenHash: hashSetupToken(token) } });
+  // 10.4: a mounted secrets directory receives the token — then the log only
+  // names the file (logs are often shipped elsewhere; the file is 0600).
+  if (await writeSetupTokenFile(token, env)) {
+    log.warn({}, setupTokenFileBanner(env));
+    return token;
+  }
   log.warn(
     { setupToken: token },
     `\n════════════════════════════════════════════════════════════════════\n` +
