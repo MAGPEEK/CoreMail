@@ -26,14 +26,47 @@ setupRouter.get('/status', async (_req: Request, res: Response) => {
   }
 });
 
+/** The token a request presents: body `setupToken`, else header `X-Setup-Token`. */
+function presentedToken(req: Request): string | undefined {
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  return typeof body['setupToken'] === 'string' ? body['setupToken'] : req.get('X-Setup-Token');
+}
+
+// POST /api/v1/setup/verify-token
+// 10.4: lets the wizard check the one-time token on its first page instead of
+// after all forms are filled in. Public, same rate limit as /complete (every
+// POST under /api/v1/setup counts); answers only valid / invalid, changes
+// nothing and never returns the token. Closed once setup is complete (409).
+setupRouter.post('/verify-token', async (req: Request, res: Response) => {
+  if (!(await isSetupRequired())) {
+    res.status(409).json({ error: 'Setup already completed' });
+    return;
+  }
+  if (!(await verifySetupToken(presentedToken(req)))) {
+    log.warn({ ip: req.ip }, 'Setup token check with missing/invalid token');
+    res.status(403).json({ error: 'Invalid or missing setup token', code: 'SETUP_TOKEN_INVALID' });
+    return;
+  }
+  res.json({ valid: true });
+});
+
+// Host-name labels (letters, digits, hyphen; no leading/trailing hyphen), at least one dot.
+const HOSTNAME_RE = /^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$/;
+
 // POST /api/v1/setup/complete
 // Public, but requires the one-time setup token (body `setupToken` or header
 // `X-Setup-Token`) and succeeds at most once (atomic claim).
+// 10.4: optional `hostname` (public host name, default mail.<domain>),
+// `organizationName` (ServerSettings.orgName) and `displayName` (admin).
 const SetupSchema = z.object({
   domain:    z.string().trim().toLowerCase().pipe(
     z.string().min(3).regex(/^[a-z0-9.-]+\.[a-z]{2,}$/, 'Ungültige Domain (z.B. firma.de)')),
   email:     z.string().trim().toLowerCase().pipe(z.string().email()),
   password:  z.string().min(8, 'Passwort muss mindestens 8 Zeichen haben'),
+  hostname:  z.string().trim().toLowerCase().transform((h) => h.replace(/\.$/, '')).pipe(
+    z.string().regex(HOSTNAME_RE, 'Ungültiger Hostname (z.B. mail.firma.de)')).optional(),
+  organizationName: z.string().trim().max(200).optional(),
+  displayName:      z.string().trim().max(200).optional(),
   setupToken: z.string().optional(),
 });
 
@@ -45,7 +78,7 @@ setupRouter.post('/complete', async (req: Request, res: Response) => {
   }
 
   const body = (req.body ?? {}) as Record<string, unknown>;
-  const presented = typeof body['setupToken'] === 'string' ? body['setupToken'] : req.get('X-Setup-Token');
+  const presented = presentedToken(req);
   if (!(await verifySetupToken(presented))) {
     log.warn({ ip: req.ip }, 'Setup attempt with missing/invalid setup token');
     res.status(403).json({ error: 'Invalid or missing setup token', code: 'SETUP_TOKEN_INVALID' });
@@ -59,6 +92,9 @@ setupRouter.post('/complete', async (req: Request, res: Response) => {
   }
 
   const { domain, email, password } = parsed.data;
+  const hostname = parsed.data.hostname ?? `mail.${domain}`;
+  const orgName = parsed.data.organizationName || undefined;
+  const displayName = parsed.data.displayName || 'Administrator';
 
   // Email must match the domain
   const emailDomain = email.split('@')[1];
@@ -98,7 +134,8 @@ setupRouter.post('/complete', async (req: Request, res: Response) => {
       // setup domain immediately — otherwise the system stays stuck on the
       // unusable schema defaults `mail.local:8080` and Autodiscover
       // hands clients wrong URLs.
-      const newHostname = `mail.${domain}`;
+      // 10.4: the wizard may choose another host name (default mail.<domain>).
+      const newHostname = hostname;
       const derivedUrls = deriveServerUrls(newHostname, true, 443);
       await tx.serverSettings.upsert({
         where: { id: 'singleton' },
@@ -108,12 +145,14 @@ setupRouter.post('/complete', async (req: Request, res: Response) => {
           useHttps: true,
           httpPort: 443,
           ...derivedUrls,
+          ...(orgName ? { orgName } : {}),
         },
         update: {
           publicHostname: newHostname,
           useHttps: true,
           httpPort: 443,
           ...derivedUrls,
+          ...(orgName ? { orgName } : {}),
         },
       });
 
@@ -121,7 +160,7 @@ setupRouter.post('/complete', async (req: Request, res: Response) => {
       const user = await tx.user.create({
         data: {
           email,
-          displayName:  'Administrator',
+          displayName,
           passwordHash,
           role:         'ORGANIZATION_MANAGEMENT',
           domainId:     newDomain.id,
@@ -161,7 +200,7 @@ setupRouter.post('/complete', async (req: Request, res: Response) => {
     // admin assigns a real (LE/uploaded) cert later in BCP → SSL/TLS; a Let's
     // Encrypt certificate for the public host name takes over automatically.
     try {
-      const SELF_SIGNED_HOSTNAME = selfSignedHostnameFor(`mail.${domain}`);
+      const SELF_SIGNED_HOSTNAME = selfSignedHostnameFor(hostname);
 
       const { certPem, keyPem: plainKeyPem, expiresAt: tenYears } = await createSelfSignedPem([SELF_SIGNED_HOSTNAME], 3650);
       const keyPem = encryptPrivateKey(plainKeyPem); // stored encrypted at rest
@@ -203,8 +242,8 @@ setupRouter.post('/complete', async (req: Request, res: Response) => {
       log.warn({ err: certErr }, 'Auto self-signed cert creation failed (non-fatal)');
     }
 
-    log.info({ email, domain }, 'Initial setup completed — admin user created');
-    res.json({ success: true, email, message: 'Setup abgeschlossen. Du kannst dich jetzt anmelden.' });
+    log.info({ email, domain, hostname }, 'Initial setup completed — admin user created');
+    res.json({ success: true, email, domain, hostname, message: 'Setup abgeschlossen. Du kannst dich jetzt anmelden.' });
   }
   // Errors (409 claim conflict, Prisma P2034 serialization failure → 409,
   // anything else → 500) are handled by the shared error middleware.

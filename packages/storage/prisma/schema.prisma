@@ -1967,6 +1967,13 @@ model ServerSettings {
   setupCompletedAt DateTime?
   setupTokenHash   String?
 
+  // 10.4: certificate step of the setup wizard: "letsencrypt" | "proxy" (TLS ends
+  // at a reverse proxy) | "later"; null = never asked (installations before 10.4).
+  // "later" shows a hint on the BCP dashboard until a trusted certificate exists
+  // or an admin dismisses it (setupCertificateHintDismissedAt).
+  setupCertificateChoice          String?
+  setupCertificateHintDismissedAt DateTime?
+
   // v5.6.0: jwtPrivateKey/jwtPublicKey/jwtKeyId/jwtKeyCreated removed
   // (RS256 keys were for OAuth2/OIDC — completely out of the stack).
   // JWT back to HS256 + JWT_SECRET env variable.

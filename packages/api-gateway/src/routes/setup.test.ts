@@ -135,3 +135,62 @@ test('SETUP_TOKEN env replaces the generated token', async () => {
   assert.equal(await verifySetupToken('nope', env), false);
   assert.equal(await verifySetupToken(undefined, env), false);
 });
+
+// ── 10.4: wizard additions ──────────────────────────────────────────────────
+
+async function verify(b: unknown, headers: Record<string, string> = {}) {
+  const r = await fetch(`${base}/api/v1/setup/verify-token`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(b) });
+  return { status: r.status, text: await r.text() };
+}
+
+test('verify-token: missing / wrong token 403, right token 200, nothing changes', async () => {
+  const token = (await initSetupToken(quietLog))!;
+  const snapshot = JSON.stringify(settings);
+  assert.equal((await verify({})).status, 403);
+  assert.equal((await verify({ setupToken: 'wrong-token-wrong-token' })).status, 403);
+  const ok = await verify({ setupToken: token });
+  assert.equal(ok.status, 200);
+  assert.deepEqual(JSON.parse(ok.text), { valid: true });
+  assert.ok(!ok.text.includes(token), 'the token is never echoed');
+  assert.equal((await verify({}, { 'X-Setup-Token': token })).status, 200, 'header accepted');
+  assert.equal(JSON.stringify(settings), snapshot, 'verification is read-only (token stays usable)');
+  assert.equal(users.length, 0);
+  assert.equal((await complete(body(token))).status, 200, 'token still works for /complete');
+});
+
+test('verify-token is closed after completion (409), also for the old token', async () => {
+  const token = (await initSetupToken(quietLog))!;
+  assert.equal((await complete(body(token))).status, 200);
+  assert.equal((await verify({ setupToken: token })).status, 409);
+});
+
+test('complete: host name, organisation and admin name are stored', async () => {
+  const token = (await initSetupToken(quietLog))!;
+  const r = await complete({ ...body(token), hostname: 'MX1.Example.com.', organizationName: '  Example GmbH ', displayName: 'Erika Admin' });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.equal(settings['publicHostname'], 'mx1.example.com');
+  assert.equal(settings['imapHost'], 'mx1.example.com', 'derived URLs follow the host name');
+  assert.equal(settings['orgName'], 'Example GmbH');
+  assert.equal(users[0]!['displayName'], 'Erika Admin');
+  assert.equal(r.json['hostname'], 'mx1.example.com');
+  assert.equal(r.json['domain'], 'example.com');
+  const raw = JSON.stringify(r.json);
+  assert.ok(!raw.includes('supersecret1') && !raw.includes(token), 'no password / token in the answer');
+});
+
+test('complete: without host name → mail.<domain>, admin name defaults to Administrator', async () => {
+  const token = (await initSetupToken(quietLog))!;
+  assert.equal((await complete(body(token))).status, 200);
+  assert.equal(settings['publicHostname'], 'mail.example.com');
+  assert.equal(users[0]!['displayName'], 'Administrator');
+  assert.equal(settings['orgName'], undefined, 'organisation name untouched when not given');
+});
+
+test('complete: an invalid host name is refused before anything is written', async () => {
+  const token = (await initSetupToken(quietLog))!;
+  for (const hostname of ['localhost', 'mail_x.example.com', 'http://mail.example.com', '-a.example.com']) {
+    assert.equal((await complete({ ...body(token), hostname })).status, 400, hostname);
+  }
+  assert.equal(users.length, 0);
+  assert.equal(settings['setupCompletedAt'], undefined, 'setup not claimed');
+});

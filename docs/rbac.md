@@ -217,7 +217,9 @@ Every route of `/settings` (except the public `GET /settings/public`),
 `/sso`, `/servers`, `/services`, `/certificates`, `/queues`, `/logs`,
 `/backups` (incl. per-mailbox backups), `/connectors`, `/smtp-config`,
 `/storage`, `GET/PUT /protocol-access`, `/protocol-access/overview`,
-`GET/PUT /webmail-policies`, `PUT /mcp/settings`: **org**.
+`GET/PUT /webmail-policies`, `PUT /mcp/settings`, `/setup-state` (10.4: the setup wizard's
+certificate choice and the dashboard hint; area servers — read for the hint, write for the
+choice and "dismiss"): **org**.
 
 ### admin MCP interface (10.3, docs/mcp.md)
 
