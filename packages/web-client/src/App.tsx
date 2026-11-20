@@ -8,6 +8,7 @@ import { SsoCallbackPage } from './pages/SsoCallbackPage.js';
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage.js';
 import { ResetPasswordPage } from './pages/ResetPasswordPage.js';
 import { SetupPage } from './pages/SetupPage.js';
+import { loadResume } from './lib/setupWizard.js';
 import { MailPage } from './pages/MailPage.js';
 import { CalendarPage } from './pages/CalendarPage.js';
 import { ContactsPage } from './pages/ContactsPage.js';
@@ -150,12 +151,14 @@ function Layout({ children }: { children: React.ReactNode }) {
 // Checks on startup whether setup is required.
 // Acts as a TOP-LEVEL guard and blocks ALL routes (including /login, /forgot-password)
 // as long as setup is not complete.  After setup completion, a direct
-// call to /setup redirects back to /login.
+// call to /setup redirects back to /login — except in the tab that just ran
+// the wizard (10.4: resume marker), which continues with DNS / certificate.
 function SetupGuard({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [setupRequired, setSetupRequired] = useState<boolean | null>(null);
   const { productName } = useBranding();
+  const wizardRunning = location.pathname === '/setup' && loadResume() !== null;
 
   useEffect(() => {
     fetch('/api/v1/setup/status')
@@ -168,10 +171,10 @@ function SetupGuard({ children }: { children: React.ReactNode }) {
     if (setupRequired === null) return;
     if (setupRequired && location.pathname !== '/setup') {
       navigate('/setup', { replace: true });
-    } else if (!setupRequired && location.pathname === '/setup') {
+    } else if (!setupRequired && location.pathname === '/setup' && !wizardRunning) {
       navigate('/login', { replace: true });
     }
-  }, [setupRequired, location.pathname, navigate]);
+  }, [setupRequired, location.pathname, navigate, wizardRunning]);
 
   if (setupRequired === null) {
     return (
@@ -182,7 +185,7 @@ function SetupGuard({ children }: { children: React.ReactNode }) {
   }
   // Do not render wrong routes while the Navigate redirect is still in progress
   if (setupRequired && location.pathname !== '/setup') return null;
-  if (!setupRequired && location.pathname === '/setup') return null;
+  if (!setupRequired && location.pathname === '/setup' && !wizardRunning) return null;
   return <>{children}</>;
 }
 

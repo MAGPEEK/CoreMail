@@ -157,16 +157,24 @@ docker compose -f infra/docker/docker-compose.yml ps
 docker compose -f infra/docker/docker-compose.yml logs -f
 ```
 
-### 5. Create the first admin account
+### 5. Run the setup wizard
 
-The setup wizard appears on the first visit to `https://<hostname>/bcp/`.
+The setup wizard appears on the first visit to `http://<server>:3000/` (or `/bcp/`, which
+forwards to it). It asks for the one-time setup token (container log:
+`docker logs coremail 2>&1 | grep -i "setup token"`, or `SETUP_TOKEN` from the environment),
+then walks through mail domain and host name, the first administrator account, the backup of
+generated secrets, the DNS records with a live check, and the TLS certificate (Let's Encrypt,
+a reverse proxy, or later). Details: [setup-wizard.md](setup-wizard.md).
 
-Alternatively via API:
+Alternatively via API (domain + admin only; DNS and certificate then in the BCP):
 
 ```bash
-curl -k -X POST https://<hostname>/api/v1/admin/setup \
+curl -X POST http://<server>:3000/api/v1/setup/complete \
   -H 'Content-Type: application/json' \
+  -H 'X-Setup-Token: <token from the log>' \
   -d '{
+    "domain": "your-domain.com",
+    "hostname": "mail.your-domain.com",
     "email": "admin@your-domain.com",
     "password": "SecurePassword123!",
     "displayName": "Administrator"

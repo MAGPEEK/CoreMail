@@ -505,6 +505,11 @@ const de = {
 
   // ── Dashboard (DashboardPage) ─────────────────────────────────────────────
   dash_title:               'Systemübersicht',
+  // 10.4: reminder after the setup wizard's certificate step was postponed
+  dash_setup_cert_title:    'Zertifikat noch einrichten',
+  dash_setup_cert_text:     'Bei der Ersteinrichtung wurde das TLS-Zertifikat auf später verschoben. Bis ein vertrauenswürdiges Zertifikat aktiv ist, sehen Browser und Mail-Clients ein selbstsigniertes Zertifikat.',
+  dash_setup_cert_action:   'SSL/TLS öffnen',
+  dash_setup_cert_dismiss:  'Hinweis ausblenden',
   dash_last_update:         'Letzte Aktualisierung:',
   dash_auto_refresh:        'Auto-Refresh alle 30s',
   dash_refresh:             'Aktualisieren',
@@ -1885,6 +1890,11 @@ const en: { [K in keyof DE]: string } = {
 
   // ── Dashboard (DashboardPage) ─────────────────────────────────────────────
   dash_title:               'System Overview',
+  // 10.4: reminder after the setup wizard's certificate step was postponed
+  dash_setup_cert_title:    'Certificate still to be set up',
+  dash_setup_cert_text:     'The TLS certificate was postponed during the initial setup. Until a trusted certificate is active, browsers and mail clients see a self-signed certificate.',
+  dash_setup_cert_action:   'Open SSL/TLS',
+  dash_setup_cert_dismiss:  'Dismiss',
   dash_last_update:         'Last update:',
   dash_auto_refresh:        'Auto-refresh every 30 s',
   dash_refresh:             'Refresh',

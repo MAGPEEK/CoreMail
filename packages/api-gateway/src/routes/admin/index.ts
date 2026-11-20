@@ -39,6 +39,7 @@ import { adminBrandingRouter } from './branding.js';
 import { adminProtocolAccessRouter } from './protocol-access.js';
 import { adminWebmailPoliciesRouter } from './webmail-policies.js';
 import { adminMcpRouter } from './mcp.js';
+import { adminSetupStateRouter } from './setup-state.js';
 
 export const ADMIN_PREFIX = '/api/v1/admin';
 
@@ -82,6 +83,8 @@ export const ADMIN_MOUNTS: ReadonlyArray<readonly [string, Router]> = [
   ['/webmail-policies',     adminWebmailPoliciesRouter],
   // 10.3: admin MCP interface — switch + allowlist (area servers), own tokens (every admin role)
   ['/mcp',                  adminMcpRouter],
+  // 10.4: setup wizard follow-up (certificate choice + dashboard hint, area servers)
+  ['/setup-state',          adminSetupStateRouter],
 ];
 
 /** Admin endpoints that are intentionally public (no auth). */
