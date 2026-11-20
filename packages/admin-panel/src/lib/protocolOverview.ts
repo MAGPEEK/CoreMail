@@ -31,6 +31,7 @@ export type OverviewNoticeCode = 'port-open-access-limited';
 export interface OverviewNotice { code: OverviewNoticeCode; protocol: Protocol; ports: number[] }
 
 export interface HttpsState {
+  /** The integrated HTTPS server listens (also without a certificate marked isActiveHttps). */
   active: boolean;
   port: number;
   cert: { id: string; name: string; trusted: boolean } | null;

@@ -234,3 +234,35 @@ test('overview HTTPS cert: the certificate served for the public host name, not 
 
   assert.equal(await httpsCertWith([{ ...le, keyPem: 'enc:unreadable' }]), null, 'an unreadable key is not served');
 });
+
+// ── `https.active` = the HTTPS server listens, also without an isActiveHttps certificate ──
+
+test('overview HTTPS state: listening without isActiveHttps + trusted served cert → active, no mapi-https warning', async () => {
+  db.serverSettings.rows[0]!['publicHostname'] = 'mail.example.test';
+  const le = { name: 'le-mail', type: 'LETSENCRYPT', certPem: pem(['mail.example.test'], 'Test CA') };
+  const other = { name: 'le-other', type: 'LETSENCRYPT', certPem: pem(['other.example.test'], 'Test CA') };
+  const table = new FakeTable(() => ({ acmeStaging: false, status: 'ACTIVE', isActiveHttps: false, chainPem: null, keyPem: TEST_KEY_PEM }));
+  db['certificate'] = table;
+  for (const c of [other, le]) await table.create({ data: { domains: [], createdAt: new Date(), ...c } });
+  assert.equal((await call('PUT', '', 'srv', { mapi: 'on' })).status, 200);
+
+  const g = globalThis as { __httpsServerState?: { listening: boolean; port: number } };
+  const codesOf = (body: Record<string, any>) =>
+    (body['warnings'] as Array<Record<string, string>>).map((w) => `${w['protocol']}:${w['code']}`);
+  try {
+    g.__httpsServerState = { listening: true, port: 443 };
+    const on = await call('GET', '/overview', 'srv');
+    assert.equal(on.status, 200, JSON.stringify(on.body));
+    assert.equal(on.body['https'].active, true, 'the server listens → active, although no certificate is marked isActiveHttps');
+    assert.deepEqual([on.body['https'].cert?.name, on.body['https'].cert?.trusted], ['le-mail', true]);
+    assert.ok(!codesOf(on.body).includes('mapi:mapi-https'), codesOf(on.body).join(', '));
+
+    g.__httpsServerState = { listening: false, port: 443 };
+    const off = await call('GET', '/overview', 'srv');
+    assert.equal(off.body['https'].active, false, 'not listening → not active');
+    assert.ok(codesOf(off.body).includes('mapi:mapi-https'), codesOf(off.body).join(', '));
+  } finally {
+    delete g.__httpsServerState;
+    await call('PUT', '', 'srv', { mapi: 'off' });
+  }
+});

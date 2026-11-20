@@ -39,7 +39,7 @@ import {
 import {
   DEFAULT_PROBE_TARGETS, httpsProbeTarget, probeServedCert, servedCertProblem, type ProbeResult, type ProbeTarget,
 } from '../../lib/served-cert.js';
-import { httpsRedirectState } from '../../tls-proxy.js';
+import { httpsServerState } from '../../tls-proxy.js';
 import { auditContext } from '../../lib/audit.js';
 
 // Re-exported for server.ts (ACME HTTP-01 challenge endpoint) and older imports.
@@ -171,7 +171,8 @@ adminCertificatesRouter.get('/served', async (_req: Request, res: Response) => {
   const hostname = (settings?.publicHostname ?? '').trim().toLowerCase() || 'localhost';
   const targets = await servedProbeTargets();
   const timeoutMs = Math.min(Math.max(parseInt(process.env['SERVED_CERT_PROBE_TIMEOUT_MS'] ?? '4000', 10) || 4000, 500), 15_000);
-  const httpsTarget = httpsProbeTarget(httpsRedirectState());
+  const httpsServer = httpsServerState();
+  const httpsTarget = httpsProbeTarget({ active: httpsServer.listening, port: httpsServer.port });
   const [results, httpsResult] = await Promise.all([
     Promise.all(targets.map((t) => probeServedCert(t, hostname, { timeoutMs }))),
     httpsTarget ? probeServedCert(httpsTarget, hostname, { timeoutMs }) : Promise.resolve(null),

@@ -55,6 +55,7 @@ export interface OverviewPort {
 
 /** The integrated HTTPS server (port 443 by default) and the certificate it serves for the public host name (SNI). */
 export interface HttpsState {
+  /** The integrated HTTPS server listens (also without a certificate marked isActiveHttps). */
   active: boolean;
   port: number;
   cert: { id: string; name: string; trusted: boolean } | null;
