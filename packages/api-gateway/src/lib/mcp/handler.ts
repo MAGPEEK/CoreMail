@@ -84,7 +84,7 @@ function gate(req: Request, res: Response, next: NextFunction): void {
       res.status(403).json(rpcError(null, JSONRPC_ERRORS.SERVER_REFUSED, 'Forbidden: Origin not allowed'));
       return;
     }
-    const lockout = sharedLoginLockout();
+    const lockout = sharedLoginLockout('mcp'); // 10.5: events are reported as protocol 'mcp'
     const locked = await lockout.ipLockedFor(ip);
     if (locked > 0) {
       res.setHeader('Retry-After', String(locked));

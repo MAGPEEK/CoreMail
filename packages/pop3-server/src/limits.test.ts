@@ -14,7 +14,9 @@ process.env['LOG_LEVEL'] ??= 'error';
 (globalThis as Record<string, unknown>)['__prisma'] = { $on: () => undefined };
 
 const { ConnectionLimiter } = await import('@coremail/core');
-const { admitConnection, pop3ConnectionLimiter, DEFAULT_POP3_MAX_CONNS_PER_IP } = await import('./limits.js');
+const {
+  admitConnection, pop3ConnectionLimiter, DEFAULT_POP3_MAX_CONNS_PER_IP, refuseIfLocked, POP3_BLOCKED_REPLY, POP3_LOCKED_REPLY,
+} = await import('./limits.js');
 const { POP3Session } = await import('./session.js');
 const { selfSignedTestCert } = await import('./test-cert.js');
 const CERT = selfSignedTestCert();
@@ -91,6 +93,64 @@ test('an STLS handshake that never starts is cut off', async (t) => {
   await waitFor(() => c.data.includes('+OK Begin TLS'));
   // no ClientHello
   await Promise.race([c.closed, new Promise((_r, rej) => setTimeout(() => rej(new Error('still open')), 2000))]);
+});
+
+// ── 10.5 attack protection at connect (block list, locked IPs) ───────────────
+
+function fakeGuard(v: { blocked?: boolean; lockedSec?: number }) {
+  const refused: string[] = [];
+  return {
+    refused,
+    guard: {
+      isBlocked: () => v.blocked === true,
+      lockedFor: async () => v.lockedSec ?? 0,
+      refused: (_ip: unknown, protocol: string, reason: string) => { refused.push(`${protocol}:${reason}`); },
+    },
+  };
+}
+
+test('10.5: a blocked IP gets -ERR [SYS/PERM] access denied before the limiter counts it', async (t) => {
+  const limiter = new ConnectionLimiter({ maxPerIp: 10, maxTotal: 100 });
+  const g = fakeGuard({ blocked: true });
+  const server = net.createServer((raw) => { if (admitConnection(raw, false, limiter, g.guard)) raw.write('+OK ready\r\n'); });
+  const port = await listen(t, server);
+  const c = await open(port);
+  await c.closed;
+  assert.equal(c.data, POP3_BLOCKED_REPLY);
+  assert.equal(limiter.count(), 0);
+  assert.deepEqual(g.refused, ['pop3:blocked']);
+});
+
+test('10.5: a locked IP gets -ERR [SYS/TEMP] instead of the greeting; others are greeted', async (t) => {
+  for (const v of [{ lockedSec: 300 }, {}]) {
+    const g = fakeGuard(v);
+    const server = net.createServer((raw) => {
+      if (!admitConnection(raw, false, new ConnectionLimiter({ maxPerIp: 10, maxTotal: 100 }), g.guard)) return;
+      void refuseIfLocked(raw, false, g.guard).then((refused) => { if (!refused) raw.write('+OK ready\r\n'); });
+    });
+    const port = await listen(t, server);
+    const c = await open(port);
+    if (v.lockedSec) {
+      await c.closed;
+      assert.equal(c.data, POP3_LOCKED_REPLY);
+      assert.deepEqual(g.refused, ['pop3:locked']);
+    } else {
+      t.after(() => c.socket.destroy());
+      await waitFor(() => c.data.startsWith('+OK'));
+      assert.deepEqual(g.refused, []);
+    }
+  }
+});
+
+test('10.5: implicit TLS — a blocked IP is dropped before the handshake', async (t) => {
+  const g = fakeGuard({ blocked: true });
+  const server = tls.createServer({ ...CERT }, (s) => { s.write('+OK ready\r\n'); });
+  server.on('connection', (raw: net.Socket) => { admitConnection(raw, true, new ConnectionLimiter({ maxPerIp: 10, maxTotal: 10 }), g.guard); });
+  const port = await listen(t, server);
+  const c = await open(port, true);
+  await c.closed;
+  assert.equal(c.data, '');
+  assert.deepEqual(g.refused, ['pop3:blocked']);
 });
 
 test('v8.1 review: the default per-IP cap is 50 (NAT offices)', { skip: !!process.env['POP3_MAX_CONNS_PER_IP'] }, () => {

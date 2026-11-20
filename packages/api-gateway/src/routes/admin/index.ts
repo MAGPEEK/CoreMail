@@ -31,6 +31,7 @@ import { adminConnectorsRouter } from './connectors.js';
 import { adminOrganisationRouter } from './organisation.js';
 import { adminSecurityRouter } from './security.js';
 import { adminSecurityAttacksRouter } from './security-attacks.js';
+import { adminSecurityProtectionRouter } from './security-protection.js';
 import { adminSmtpConfigRouter } from './smtp-config.js';
 import { adminLdapRouter } from './ldap.js';
 import { adminSsoRouter } from './sso.js';
@@ -70,6 +71,8 @@ export const ADMIN_MOUNTS: ReadonlyArray<readonly [string, Router]> = [
   ['/organisation',         adminOrganisationRouter],
   ['/security',             adminSecurityRouter],
   ['/security/attacks',     adminSecurityAttacksRouter],
+  // 10.5: attack protection — locks, block list / exceptions, notifications (area hygiene, organisation-wide)
+  ['/security/protection',  adminSecurityProtectionRouter],
   ['/smtp-config',          adminSmtpConfigRouter],
   ['/ldap',                 adminLdapRouter],
   ['/sso',                  adminSsoRouter],

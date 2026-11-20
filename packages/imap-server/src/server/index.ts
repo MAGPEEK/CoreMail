@@ -26,6 +26,7 @@ import {
 } from '../commands/index.js';
 import { CommandReader, type LiteralDecision } from './command-reader.js';
 import type { ConnectionLimiter } from '@coremail/core';
+import { connectGuard, type ConnectGuard } from '@coremail/storage';
 import {
   imapConnectionLimiter, PRE_AUTH_MAX_LINE, PRE_AUTH_MAX_LITERAL, PRE_AUTH_IDLE_MS,
   POST_AUTH_IDLE_MS, TLS_HANDSHAKE_MS, isPeerDisconnect,
@@ -89,7 +90,13 @@ export interface ImapServerOptions {
   /** v8.1: timeouts (tests). */
   preAuthIdleMs?: number;
   tlsHandshakeMs?: number;
+  /** 10.5: block list + locked-IP check at connect (default: the shared guard of @coremail/storage). */
+  connectGuard?: ConnectGuard;
 }
+
+/** 10.5: answers to a refused connection on the plaintext listener (993: the socket is dropped). */
+export const IMAP_BLOCKED_BYE = '* BYE [UNAVAILABLE] Access denied\r\n';
+export const IMAP_LOCKED_BYE = '* BYE [UNAVAILABLE] Too many failed logins from your address, try again later\r\n';
 
 const preAuth = (session: ImapSession): boolean => session.state === 'NOT_AUTHENTICATED';
 
@@ -101,6 +108,7 @@ export function createImapServer(tlsConfig?: ImapTlsConfig, options: ImapServerO
   const preAuthIdleMs = options.preAuthIdleMs ?? PRE_AUTH_IDLE_MS;
   const tlsHandshakeMs = options.tlsHandshakeMs ?? TLS_HANDSHAKE_MS;
   const legacyTls = options.allowLegacyTls === true;
+  const guard = options.connectGuard ?? connectGuard;
   const onSocket = (socket: net.Socket): void => {
     const starttlsCert = (): ImapTlsConfig | null => (isImplicitTls ? null : options.starttls?.() ?? null);
     const session = createSession(socket, isImplicitTls, !!starttlsCert());
@@ -259,11 +267,41 @@ export function createImapServer(tlsConfig?: ImapTlsConfig, options: ImapServerO
   };
 
   /**
+   * 10.5: closes a refused connection — the plaintext listener answers with a
+   * BYE, the implicit-TLS listener (before the handshake) drops the socket.
+   */
+  const refuse = (raw: net.Socket, bye: string): void => {
+    if (!isImplicitTls) raw.end(bye);
+    else raw.destroy();
+    setTimeout(() => raw.destroy(), 2000).unref();
+  };
+
+  /**
+   * 10.5: an IP locked by the shared lockout is refused at connect (like SMTP);
+   * resolves true when the connection was refused. Never rejects (fail open).
+   */
+  const refuseIfLocked = async (raw: net.Socket): Promise<boolean> => {
+    const ttl = await guard.lockedFor(raw.remoteAddress).catch(() => 0);
+    if (ttl <= 0 || raw.destroyed) return false;
+    log.info({ ip: raw.remoteAddress, retryAfterSec: ttl }, 'IMAP connection rejected — IP is auth-locked');
+    refuse(raw, IMAP_LOCKED_BYE);
+    guard.refused(raw.remoteAddress, 'imap', 'locked', { retryAfterSec: ttl });
+    return true;
+  };
+
+  /**
    * v8.1: per-IP and global connection caps, checked on the raw TCP
    * connection (before the TLS handshake on port 993). The slot is released
    * when the TCP connection closes.
    */
   const admit = (raw: net.Socket): boolean => {
+    // 10.5: the permanent block list (BCP → Angriffsschutz) before anything else.
+    if (guard.isBlocked(raw.remoteAddress)) {
+      log.info({ ip: raw.remoteAddress }, 'IMAP connection rejected — IP is on the block list');
+      refuse(raw, IMAP_BLOCKED_BYE);
+      guard.refused(raw.remoteAddress, 'imap', 'blocked');
+      return false;
+    }
     const result = limiter.acquire(raw.remoteAddress);
     if (!result.ok) {
       log.warn({ ip: raw.remoteAddress, reason: result.reason, limit: result.limit }, 'IMAP connection rejected — connection limit reached');
@@ -282,13 +320,18 @@ export function createImapServer(tlsConfig?: ImapTlsConfig, options: ImapServerO
       { ...tlsServerOptions(tlsConfig, legacyTls), handshakeTimeout: tlsHandshakeMs },
       onSocket as (s: tls.TLSSocket) => void,
     );
-    server.on('connection', (raw: net.Socket) => { admit(raw); });
+    // 10.5: the lock check runs while the handshake proceeds; a locked IP's raw socket is dropped.
+    server.on('connection', (raw: net.Socket) => { if (admit(raw)) void refuseIfLocked(raw); });
     // 9.3: handshake failures on 993 (e.g. the client rejects the certificate)
     server.on('tlsClientError', (err: Error, s: tls.TLSSocket) => {
       logTlsSocketError(log, err, { service: 'IMAP', ip: s.remoteAddress, port: s.localPort });
     });
   } else {
-    server = net.createServer((raw) => { if (admit(raw)) onSocket(raw); });
+    server = net.createServer((raw) => {
+      if (!admit(raw)) return;
+      // 10.5: greeting only after the lock check (a paused socket buffers early input).
+      void refuseIfLocked(raw).then((refused) => { if (!refused && !raw.destroyed) onSocket(raw); });
+    });
   }
 
   // Subscribe to Redis for real-time IDLE push notifications

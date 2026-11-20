@@ -19,6 +19,7 @@ import { QueuesPage } from './pages/QueuesPage.js';
 import { LogsPage } from './pages/LogsPage.js';
 import { BackupsPage } from './pages/BackupsPage.js';
 import { ProtectionPage } from './pages/ProtectionPage.js';
+import { AttackProtectionPage } from './pages/AttackProtectionPage.js';
 import { ServersPage } from './pages/ServersPage.js';
 import { SettingsPage } from './pages/SettingsPage.js';
 import { CertificatesPage } from './pages/CertificatesPage.js';
@@ -250,6 +251,7 @@ createRoot(document.getElementById('root')!).render(
                   <Route path="/logs" element={<LogsPage />} />
                   <Route path="/backups" element={<BackupsPage />} />
                   <Route path="/protection" element={<ProtectionPage />} />
+                  <Route path="/attack-protection" element={<AttackProtectionPage />} />
                   <Route path="/servers" element={<ServersPage />} />
                   <Route path="/services" element={<ServicesPage />} />
                   <Route path="/services/:sub" element={<ServicesLegacyRedirect />} />

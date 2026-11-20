@@ -7,7 +7,7 @@ import {
   startAuthInvalidationSubscriber, onAuthInvalidation, resolveBindAddress, listenWithRecovery,
 } from '@coremail/core';
 import { namespaceConfig } from './commands/namespaces.js';
-import { connectDatabase, waitForObjectStorage, prisma, loadProtocolTls, selfSignedReplacement, selfSignedFallbackHostname, encryptPrivateKey, startWebmailPolicySubscriber } from '@coremail/storage';
+import { connectDatabase, waitForObjectStorage, prisma, loadProtocolTls, selfSignedReplacement, selfSignedFallbackHostname, encryptPrivateKey, startWebmailPolicySubscriber, startAttackProtection } from '@coremail/storage';
 import { applyAuthInvalidation, createImapServer, setImapHostname, setImapMaxMessageSize, type ImapTlsConfig } from './server/index.js';
 import { imapLiveSessions } from './session/live.js';
 import { invalidExemptEntries } from './server/limits.js';
@@ -305,6 +305,7 @@ async function main() {
   onAuthInvalidation((e) => applyAuthInvalidation(e));
   startAuthInvalidationSubscriber();
   startWebmailPolicySubscriber(); // 9.4: the app-password module switch applies to IMAP logins at once
+  startAttackProtection(); // 10.5: block list / locked IPs refused at connect (BCP → Angriffsschutz)
   const ns = namespaceConfig();
   log.info({ otherUsers: ns.otherUsers, shared: ns.shared, accessCacheMs: ns.cacheMs }, 'IMAP namespaces');
   // v7.1: refuses to open listeners while the object storage misses the referenced objects

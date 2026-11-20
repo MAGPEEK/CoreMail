@@ -113,6 +113,12 @@ export class LiveConnectionRegistry {
 // 9.4 protocol switches — covered by live-sessions.test.ts, not by these suites.
 export const PROTOCOL_ACCESS_CHANGE = 'protocol-access-change';
 export const CHANNEL_ADMIN_ATTACK = 'admin:attack';
+// 10.5 connect guard (block list / locked IPs) — g.connectGuard decides in tests, default: admit.
+export const connectGuard = {
+  isBlocked: (ip) => !!g.connectGuard?.isBlocked?.(ip),
+  lockedFor: async (ip) => (g.connectGuard?.lockedFor ? g.connectGuard.lockedFor(ip) : 0),
+  refused: () => {},
+};
 // 9.4 mailbox access audit — events are collected in globalThis.__coremailTest.accessAudit.
 export const recordMailboxAccess = async (event) => { (g.accessAudit ??= []).push(event); return true; };
 export const prisma = new Proxy({}, {

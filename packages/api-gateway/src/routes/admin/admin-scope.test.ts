@@ -317,7 +317,7 @@ test('sender lists: DOMAIN / USER entries of the scope only; GLOBAL and other do
 });
 
 test('hygiene: everything but sender lists and quarantine is organisation-wide only', async () => {
-  for (const p of ['/security/settings', '/security/capabilities', '/security/spoofing', '/security/attacks', '/transport-rules', '/security/dnsbl']) {
+  for (const p of ['/security/settings', '/security/capabilities', '/security/spoofing', '/security/attacks', '/transport-rules', '/security/dnsbl', '/security/protection/rules', '/security/protection/locks']) {
     const r = await call('hyA', 'GET', p);
     assert.deepEqual([r.status, r.json['code']], [403, 'SCOPE_ORG_ONLY'], p);
   }

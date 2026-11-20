@@ -71,7 +71,8 @@ async function isAuditEnabled(): Promise<boolean> {
 // 10.3: `mcp.` — every admin MCP tool call and every MCP token / switch change
 // (machine-driven admin access must always stay traceable).
 // 10.4.2: 'setup.secrets.' (setup wizard secrets download) and 'server.restart' (container restart from the BCP).
-export const ALWAYS_AUDIT = /^(settings\.|audit\.|audit-log\.|user\.role|mailbox(es)?\.delete|domains?\.delete|mcp\.|setup\.secrets\.|server\.restart)/i;
+// 10.5: attack protection — unlocks, block list / exception changes, its settings, automatic blocks.
+export const ALWAYS_AUDIT = /^(settings\.|audit\.|audit-log\.|user\.role|mailbox(es)?\.delete|domains?\.delete|mcp\.|setup\.secrets\.|server\.restart|security\.(lock|ip|ip-rule|protection)\.)/i;
 
 /**
  * Write an audit log entry asynchronously (fire-and-forget).

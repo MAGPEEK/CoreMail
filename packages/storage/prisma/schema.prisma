@@ -1600,11 +1600,64 @@ model AttackEvent {
   detail    Json?
   // Service that detected the attack
   service   String   @default("smtp")
+  // 10.5: login surface / protocol (smtp, imap, pop3, web, jmap, caldav, activesync,
+  // mapi, autodiscover, mcp, http) — null for events written before 10.5 (use `service`).
+  protocol  String?
 
   @@index([timestamp])
   @@index([ip, timestamp])
   @@index([type, timestamp])
+  @@index([protocol, timestamp])
   @@map("attack_events")
+}
+
+// ─────────────────────────────────────────────
+// 10.5 — Attack protection (BCP → Schutz → Angriffsschutz, docs/attack-protection.md)
+// ─────────────────────────────────────────────
+
+enum IpAccessKind {
+  BLOCK // refused on every protocol at connect (SMTP/IMAP/POP3 raw socket, HTTP gateway)
+  ALLOW // never locked: exempt from the per-IP lockout counter, wins over BLOCK
+}
+
+// Permanent IP block list and exceptions. Matched as CIDR; cached in every
+// service (60 s TTL + CHANNEL_SETTINGS_RELOAD {type:'ip-access'}).
+model IpAccessRule {
+  id        String       @id @default(cuid())
+  kind      IpAccessKind
+  // Normalised CIDR (network address/prefix), e.g. 203.0.113.0/24, 2001:db8::/48
+  cidr      String
+  note      String       @default("")
+  // true = added automatically (repeat offender: locked N times within 7 days)
+  auto      Boolean      @default(false)
+  // null = permanent; expired rules are ignored and purged
+  expiresAt DateTime?
+  // E-mail of the admin who added it; null for automatic entries
+  createdBy String?
+  createdAt DateTime     @default(now())
+
+  @@unique([kind, cidr])
+  @@index([kind])
+  @@map("ip_access_rules")
+}
+
+// Singleton (id "singleton"): notifications + repeat-offender escalation.
+model AttackProtectionSettings {
+  id                    String   @id @default("singleton")
+  // Mail to the admin address when IPs/accounts are locked (aggregated, max one per 15 min)
+  notifyEnabled         Boolean  @default(true)
+  // Recipient; empty = ServerSettings.adminEmail, else the Organization Management admins
+  notifyRecipient       String   @default("")
+  // Failed logins (all protocols) per 15 min that trigger a notice; 0 = off
+  failureAlertThreshold Int      @default(200)
+  // Repeat offenders: an IP locked autoBlockThreshold times within 7 days → block list
+  autoBlockEnabled      Boolean  @default(true)
+  autoBlockThreshold    Int      @default(3)
+  // Lifetime of an automatic block list entry in days; 0 = permanent
+  autoBlockDays         Int      @default(30)
+  updatedAt             DateTime @updatedAt
+
+  @@map("attack_protection_settings")
 }
 
 // ─────────────────────────────────────────────

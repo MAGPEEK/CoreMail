@@ -14,6 +14,15 @@ import { requireUnscoped } from '../../middleware/admin-scope.js';
 import { createLogger } from '@coremail/core';
 
 const log = createLogger('admin:security-attacks');
+
+/** 10.5: merges per-protocol counts (sorted by count, then name) — pure, tested. */
+export function mergeProtocolCounts(...lists: Array<Array<{ key: string; count: number }>>): Array<{ protocol: string; count: number }> {
+  const m = new Map<string, number>();
+  for (const list of lists) for (const { key, count } of list) m.set(key, (m.get(key) ?? 0) + count);
+  return [...m.entries()]
+    .map(([protocol, count]) => ({ protocol, count }))
+    .sort((a, b) => b.count - a.count || a.protocol.localeCompare(b.protocol));
+}
 export const adminSecurityAttacksRouter: RouterType = Router();
 adminSecurityAttacksRouter.use(requireArea('hygiene'), requireUnscoped); // 9.5: server-wide (connection IPs)
 
@@ -65,7 +74,7 @@ adminSecurityAttacksRouter.get('/summary', async (_req: Request, res: Response) 
   const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
   const since1h  = new Date(Date.now() -      60 * 60 * 1000);
 
-  const [total24h, total1h, byType, topIps, latestEvents] = await Promise.all([
+  const [total24h, total1h, byType, topIps, latestEvents, byProtocolRaw, byLegacyService] = await Promise.all([
     prisma.attackEvent.count({ where: { timestamp: { gte: since24h } } }),
     prisma.attackEvent.count({ where: { timestamp: { gte: since1h } } }),
     prisma.attackEvent.groupBy({
@@ -85,6 +94,18 @@ adminSecurityAttacksRouter.get('/summary', async (_req: Request, res: Response) 
       orderBy: { timestamp: 'desc' },
       take: 20,
     }),
+    // 10.5: per protocol (smtp, imap, pop3, web, jmap, caldav, activesync, mapi, mcp, autodiscover, http)
+    prisma.attackEvent.groupBy({
+      by: ['protocol'],
+      where: { timestamp: { gte: since24h }, protocol: { not: null } },
+      _count: { id: true },
+    }),
+    // events written before 10.5 carry the protocol in `service` only
+    prisma.attackEvent.groupBy({
+      by: ['service'],
+      where: { timestamp: { gte: since24h }, protocol: null },
+      _count: { id: true },
+    }),
   ]);
 
   res.json({
@@ -92,7 +113,11 @@ adminSecurityAttacksRouter.get('/summary', async (_req: Request, res: Response) 
     total1h,
     byType: byType.map((b) => ({ type: b.type, count: b._count.id })),
     topIps: topIps.map((b) => ({ ip: b.ip, count: b._count.id })),
-    latestEvents,
+    byProtocol: mergeProtocolCounts(
+      byProtocolRaw.map((b) => ({ key: b.protocol ?? 'unknown', count: b._count.id })),
+      byLegacyService.map((b) => ({ key: b.service, count: b._count.id })),
+    ),
+    latestEvents: latestEvents.map((e) => ({ ...e, protocol: e.protocol ?? e.service })),
     isUnderAttack: total1h >= 10, // heuristic: >= 10 events in 1h
   });
 });

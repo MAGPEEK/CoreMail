@@ -2,8 +2,24 @@ import type { Request, Response, NextFunction } from 'express';
 import { createLogger } from '@coremail/core/logger';
 import { verifyMailCredentials, clientIpFromRequest } from '@coremail/storage';
 import { sendEasDisabled, type EasCredentialInfo } from './live-sessions.js';
+import { parseRequestLine } from './request.js';
 
 const log = createLogger('activesync:auth');
+
+/** 10.5: the request's DeviceId (plain or base64 request line), undefined when absent. */
+export function easDeviceIdOf(req: Pick<Request, 'originalUrl' | 'url' | 'get'>): string | undefined {
+  try {
+    const url = req.originalUrl ?? req.url ?? '';
+    const q = url.indexOf('?');
+    if (q === -1) return undefined;
+    const parsed = parseRequestLine(url.slice(q + 1), (name) => req.get(name));
+    if (!parsed.ok) return undefined;
+    const id = parsed.line.deviceId;
+    return id && id !== 'unknown' ? id.slice(0, 128) : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export interface EasUser extends EasCredentialInfo {
   userId: string;
@@ -38,6 +54,9 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   const result = await verifyMailCredentials(login, password, {
     ip: clientIpFromRequest(req.socket?.remoteAddress, req.headers['x-forwarded-for']),
     protocol: 'activesync',
+    // 10.5: a device that logged in successfully before may still log in while
+    // the account is locked by failures from elsewhere (known-client exception).
+    deviceId: easDeviceIdOf(req),
   });
   if (result.status === 'locked') {
     res.setHeader('Retry-After', String(result.retryAfterSec));

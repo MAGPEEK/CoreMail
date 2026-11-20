@@ -20,6 +20,11 @@ export * from './message-store.js';
 export * from './folder-delete.js';
 export * from './quarantine.js';
 export * from './mail-auth.js';
+// 10.5 attack protection: block list / exceptions, connect guard, security events, lock admin
+export * from './ip-access.js';
+export * from './connect-guard.js';
+export * from './security-events.js';
+export * from './attack-protection.js';
 export * from './queue-options.js';
 export * from './provision-mailbox.js';
 export * from './itip-reply.js';

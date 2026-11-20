@@ -64,7 +64,7 @@ export function isScoped(scope: AdminScope): scope is Extract<AdminScope, { kind
  * docs/rbac.md): a scoped admin keeps the page's area for other pages but never
  * gets these (the API answers 403 SCOPE_ORG_ONLY).
  */
-export const UNSCOPED_ONLY_PATHS: readonly string[] = ['transport-rules', 'retention'];
+export const UNSCOPED_ONLY_PATHS: readonly string[] = ['transport-rules', 'retention', 'attack-protection'];
 
 /** Roles that can be limited to domains (mirror of SCOPABLE_ROLES in api-gateway lib/rbac.ts). */
 export const SCOPABLE_ROLES: readonly string[] = [
