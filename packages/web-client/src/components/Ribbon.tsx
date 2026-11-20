@@ -1,19 +1,16 @@
 /**
  * 10.2: the shared ribbon of the app pages (mail, calendar, contacts): a tab row
  * (ARIA tablist, automatic activation, ←/→ Home/End; contextual tabs after a
- * divider), right of it "Menüband: Vereinfacht / Klassisch" (`ribbon.layout`,
- * simplified forced below 1100 px) and the collapse chevron (`ribbon.collapsed`
+ * divider), right of it the collapse chevron (`ribbon.collapsed`
  * — choosing a tab opens a collapsed ribbon again). The panel is the shared
- * command bar (toolbar, roving focus, overflow "…"): one row of buttons
- * (simplified) or the taller groups with labels (classic). The page owns the
+ * command bar (toolbar, roving focus, overflow "…"): one row of buttons.
+ * 10.2: there is only this simplified layout. The page owns the
  * selected tab and the command groups of it; tab logic: lib/ribbon.ts.
  */
-import { useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
-import { ChevronDown, ChevronUp, LayoutTemplate } from 'lucide-react';
+import { useId, type KeyboardEvent, type ReactNode } from 'react';
+import { ChevronDown, ChevronUp } from 'lucide-react';
 import { CommandBar, type CommandGroup } from './CommandBar.js';
-import { ContextMenu } from './ContextMenu.js';
 import { usePreferences } from '../store/preferences.js';
-import { useLayoutMode } from '../hooks/useLayoutMode.js';
 import { tabKeyTarget } from '../lib/ribbon.js';
 import { useT } from '../i18n/useT.js';
 
@@ -38,53 +35,12 @@ interface Props<Id extends string> {
   children?: ReactNode;
 }
 
-/** "Menüband: Vereinfacht / Klassisch" (a menu with the two layouts). */
-function LayoutSwitch({ classicAllowed }: { classicAllowed: boolean }) {
-  const t = useT();
-  const layout = usePreferences((s) => s.prefs.ribbon.layout);
-  const update = usePreferences((s) => s.update);
-  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
-  const button = useRef<HTMLButtonElement>(null);
-  const shown = classicAllowed ? layout : 'simplified';
-  const label = `${t('ribbon_layout')}: ${t(shown === 'classic' ? 'ribbon_layout_classic' : 'ribbon_layout_simplified')}`;
-  return (
-    <>
-      <button
-        ref={button}
-        type="button"
-        aria-haspopup="menu"
-        aria-expanded={!!menu}
-        title={classicAllowed ? label : `${label} — ${t('ribbon_layout_forced')}`}
-        onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setMenu({ x: r.left, y: r.bottom + 2 }); }}
-        className="inline-flex items-center gap-1 h-8 px-2 rounded text-xs text-fg-muted hover:bg-surface-2 hover:text-fg whitespace-nowrap"
-      >
-        <LayoutTemplate size={14} aria-hidden="true" />
-        <span className="max-xl:sr-only">{label}</span>
-        <ChevronDown size={12} aria-hidden="true" />
-      </button>
-      {menu && (
-        <ContextMenu x={menu.x} y={menu.y} autoFocus onClose={() => { setMenu(null); button.current?.focus(); }} items={[
-          { label: t('ribbon_layout_simplified'), checked: shown === 'simplified', onClick: () => update({ ribbon: { layout: 'simplified' } }) },
-          {
-            label: t('ribbon_layout_classic'), checked: shown === 'classic',
-            ...(classicAllowed ? {} : { disabled: true, title: t('ribbon_layout_forced') }),
-            onClick: () => update({ ribbon: { layout: 'classic' } }),
-          },
-        ]} />
-      )}
-    </>
-  );
-}
-
 export function Ribbon<Id extends string>({ label, tabs, active, onSelect, groups, end, children }: Props<Id>) {
   const t = useT();
-  const mode = useLayoutMode();
   const baseId = useId();
   const ribbonPrefs = usePreferences((s) => s.prefs.ribbon);
   const update = usePreferences((s) => s.update);
 
-  const classicAllowed = mode === 'three';
-  const variant = classicAllowed && ribbonPrefs.layout === 'classic' ? 'ribbon' : 'inline';
   const collapsed = ribbonPrefs.collapsed;
   const ids = tabs.map((tab) => tab.id);
   const tabId = (id: Id) => `${baseId}-tab-${id}`;
@@ -136,7 +92,6 @@ export function Ribbon<Id extends string>({ label, tabs, active, onSelect, group
           {contextual.map(tabButton)}
         </div>
         <div className="ml-auto flex items-center gap-1 pb-0.5 shrink-0">
-          <LayoutSwitch classicAllowed={classicAllowed} />
           <button
             type="button"
             aria-expanded={!collapsed}
@@ -155,14 +110,13 @@ export function Ribbon<Id extends string>({ label, tabs, active, onSelect, group
         role="tabpanel"
         aria-labelledby={tabId(active)}
         hidden={collapsed}
-        className={`border-t border-line px-1 ${variant === 'ribbon' ? 'py-0.5' : 'py-1'}`}
+        className="border-t border-line px-1 py-1"
       >
         {!collapsed && (
           <CommandBar
-            key={`${active}:${variant}`}
+            key={active}
             label={`${label}: ${activeLabel}`}
             groups={groups}
-            variant={variant}
             className="flex-1"
             end={end ?? null}
           />

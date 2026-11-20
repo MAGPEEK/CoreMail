@@ -1,20 +1,16 @@
 /**
  * 10.1: the ribbon above the mail view — tab row "Start | Ansicht | Hilfe", plus
  * the contextual tabs "Nachricht | Einfügen | Text formatieren | Optionen" while
- * a draft is shown in the reading pane. Layout "Vereinfacht" (one row of
- * buttons, overflow "…") or "Klassisch" (taller groups with labels under the
- * icons), roaming preferences `ribbon.layout` / `ribbon.collapsed`.
- * Below 1100 px the simplified layout is forced; below 768 px there is no ribbon
+ * a draft is shown in the reading pane. One row of buttons (overflow "…"),
+ * roaming preference `ribbon.collapsed`. Below 768 px there is no ribbon
  * (the mail command bar of the narrow layout takes its place).
- * 10.2: the tab row, layouts and collapse are the shared components/Ribbon.tsx
- * (mail, calendar, contacts; the layout / collapse preferences apply to all three).
+ * 10.2: the tab row and collapse are the shared components/Ribbon.tsx (mail,
+ * calendar, contacts; the collapse preference applies to all three). Only the
+ * simplified layout exists — the classic one was removed in 10.2.
  * No imports — unit-tested with `node --test`.
  */
 
 export type RibbonTabId = 'start' | 'view' | 'help' | 'message' | 'insert' | 'format' | 'options';
-export type RibbonLayoutPref = 'simplified' | 'classic';
-/** What is drawn: no ribbon (narrow), or one of the layouts. */
-export type RibbonMode = 'none' | RibbonLayoutPref;
 
 export const BASE_TABS: readonly RibbonTabId[] = ['start', 'view', 'help'];
 export const COMPOSE_TABS: readonly RibbonTabId[] = ['message', 'insert', 'format', 'options'];
@@ -31,16 +27,6 @@ export const RIBBON_TAB_LABELS: Record<RibbonTabId, string> = {
 
 /** Screen-reader note when the contextual tabs appear. */
 export const COMPOSE_TABS_ANNOUNCEMENT = 'Registerkarten für Nachricht verfügbar';
-
-/** Narrowest viewport (px) with a ribbon, and with the classic layout. */
-export const RIBBON_MIN_WIDTH = 768;
-export const CLASSIC_MIN_WIDTH = 1100;
-
-export function ribbonMode(viewportWidth: number, pref: RibbonLayoutPref): RibbonMode {
-  if (viewportWidth < RIBBON_MIN_WIDTH) return 'none';
-  if (viewportWidth < CLASSIC_MIN_WIDTH) return 'simplified';
-  return pref === 'classic' ? 'classic' : 'simplified';
-}
 
 /** Tabs of the tab row; the contextual ones only while a draft is shown. */
 export function ribbonTabs(composeShown: boolean): RibbonTabId[] {

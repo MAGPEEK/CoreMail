@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  RIBBON_TAB_LABELS, latestReleasedVersion, newMenuItems, ribbonMode, ribbonTabs, selectableTab, tabAfterComposeChange, tabKeyTarget,
+  RIBBON_TAB_LABELS, latestReleasedVersion, newMenuItems, ribbonTabs, selectableTab, tabAfterComposeChange, tabKeyTarget,
 } from './ribbon.ts';
 import { ribbonMailStates, type RibbonMailContext } from './mailCommands.ts';
 import { translations } from '../i18n/translations.ts';
@@ -12,15 +12,6 @@ test('tab row: Start | Ansicht | Hilfe, plus Nachricht | Einfügen | Text format
   assert.deepEqual(ribbonTabs(false).map((id) => RIBBON_TAB_LABELS[id]), ['Start', 'Ansicht', 'Hilfe']);
   assert.deepEqual(ribbonTabs(true).map((id) => RIBBON_TAB_LABELS[id]),
     ['Start', 'Ansicht', 'Hilfe', 'Nachricht', 'Einfügen', 'Text formatieren', 'Optionen']);
-});
-
-test('layout: none below 768 px, simplified forced below 1100 px, else the preference', () => {
-  assert.equal(ribbonMode(375, 'classic'), 'none');
-  assert.equal(ribbonMode(767, 'simplified'), 'none');
-  assert.equal(ribbonMode(768, 'classic'), 'simplified');
-  assert.equal(ribbonMode(1099, 'classic'), 'simplified');
-  assert.equal(ribbonMode(1100, 'classic'), 'classic');
-  assert.equal(ribbonMode(1440, 'simplified'), 'simplified');
 });
 
 test('compose opens → Nachricht; another draft → Nachricht; last draft gone / mail selected → Start', () => {
