@@ -18,13 +18,13 @@ import { useT } from '../i18n/useT.js';
 import { usePermissions } from '../hooks/usePermissions.js';
 import { ApiError } from '../lib/errors.js';
 import {
-  EXPIRY_CHOICES, formatRemaining, looksLikeCidr, protocolLabel,
+  AUTO_REFRESH_MS, EXPIRY_CHOICES, eventsView, formatRemaining, lastRefreshedAt, looksLikeCidr, protocolLabel,
   type ActiveLockView, type IpRuleView, type LocksView, type ProtectionSettingsView, type RulesView,
 } from '../lib/attackProtection.js';
 
 type T = ReturnType<typeof useT>;
 
-interface AttackSummary { byProtocol?: Array<{ protocol: string; count: number }> }
+interface AttackSummary { byProtocol?: Array<{ protocol: string; count: number }>; total24h?: number }
 
 const fmt = (iso: string | null): string => (iso ? new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '—');
 
@@ -326,14 +326,23 @@ export function AttackProtectionPage() {
   const canWrite = can('hygiene', 'write');
   const [resetStrikes, setResetStrikes] = useState(false);
 
-  const locks = useQuery<LocksView>({ queryKey: ['ap-locks'], queryFn: () => api.get('/admin/security/protection/locks'), refetchInterval: 15_000 });
-  const rules = useQuery<RulesView>({ queryKey: ['ap-rules'], queryFn: () => api.get('/admin/security/protection/rules') });
-  const settings = useQuery<ProtectionSettingsView>({ queryKey: ['ap-settings'], queryFn: () => api.get('/admin/security/protection/settings') });
-  const summary = useQuery<AttackSummary>({ queryKey: ['attack-summary'], queryFn: () => api.get('/admin/security/attacks/summary'), refetchInterval: 30_000 });
+  // 10.6: every part of the page refreshes every 30 s; the button refreshes all of them at once
+  const locks = useQuery<LocksView>({ queryKey: ['ap-locks'], queryFn: () => api.get('/admin/security/protection/locks'), refetchInterval: AUTO_REFRESH_MS });
+  const rules = useQuery<RulesView>({ queryKey: ['ap-rules'], queryFn: () => api.get('/admin/security/protection/rules'), refetchInterval: AUTO_REFRESH_MS });
+  const settings = useQuery<ProtectionSettingsView>({ queryKey: ['ap-settings'], queryFn: () => api.get('/admin/security/protection/settings'), refetchInterval: AUTO_REFRESH_MS });
+  const summary = useQuery<AttackSummary>({ queryKey: ['attack-summary'], queryFn: () => api.get('/admin/security/attacks/summary'), refetchInterval: AUTO_REFRESH_MS });
+  const queries = [locks, rules, settings, summary];
+  const fetching = queries.some((q) => q.isFetching);
+  const refreshedAt = lastRefreshedAt(queries.map((q) => q.dataUpdatedAt));
+  const refreshAll = () => { for (const q of queries) void q.refetch(); };
 
   const unlock = useMutation({
     mutationFn: (l: ActiveLockView) => api.post('/admin/security/protection/locks/release', { scope: l.scope, id: l.id, resetStrikes }),
-    onSuccess: () => { toast.success(t('ap_unlocked')); void qc.invalidateQueries({ queryKey: ['ap-locks'] }); },
+    onSuccess: () => {
+      toast.success(t('ap_unlocked'));
+      void qc.invalidateQueries({ queryKey: ['ap-locks'] });
+      void qc.invalidateQueries({ queryKey: ['attack-summary'] });
+    },
     onError: (e: Error) => toast.error(e.message),
   });
   const addRule = useMutation({
@@ -360,6 +369,7 @@ export function AttackProtectionPage() {
   });
 
   const byProtocol = summary.data?.byProtocol ?? [];
+  const events = eventsView(summary.data, summary.isError);
   const r = rules.data;
 
   return (
@@ -368,13 +378,16 @@ export function AttackProtectionPage() {
         <div>
           <h1 className="text-xl font-semibold text-fg">{t('nav_attack_protection')}</h1>
           <p className="text-sm text-fg-muted mt-1">{t('ap_page_intro')}</p>
+          <p className="text-xs text-fg-subtle mt-1">
+            {t('ap_last_refresh')} {refreshedAt ? new Date(refreshedAt).toLocaleTimeString() : '—'} · {t('ap_auto_refresh')}
+          </p>
         </div>
         <button
-          type="button" aria-label={t('action_refresh')} title={t('action_refresh')}
-          onClick={() => { void locks.refetch(); void rules.refetch(); void settings.refetch(); void summary.refetch(); }}
+          type="button" aria-label={t('action_refresh')} title={t('action_refresh')} aria-busy={fetching}
+          onClick={refreshAll}
           className="p-2 text-fg-subtle border border-line-strong rounded hover:bg-surface-2"
         >
-          <RefreshCw size={13} />
+          <RefreshCw size={13} className={fetching ? 'animate-spin' : undefined} />
         </button>
       </div>
 
@@ -408,7 +421,11 @@ export function AttackProtectionPage() {
       {/* Events per protocol (24 h) */}
       <section className="bg-surface border border-line rounded p-5 space-y-3" aria-labelledby="ap-protocols">
         <h2 id="ap-protocols" className="text-sm font-semibold text-fg">{t('ap_protocols_title')}</h2>
-        {byProtocol.length === 0 ? (
+        {events === 'error' ? (
+          <p className="text-sm text-danger-fg">{(summary.error as Error).message}</p>
+        ) : events === 'loading' ? (
+          <p className="text-sm text-fg-subtle">…</p>
+        ) : events === 'empty' ? (
           <p className="text-sm text-fg-subtle">{t('ap_protocols_none')}</p>
         ) : (
           <div className="flex flex-wrap gap-2">

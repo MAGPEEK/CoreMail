@@ -6,9 +6,10 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
-import { setTestEnv } from '../test-support/fake-prisma.js';
+import { installFakePrisma, setTestEnv } from '../test-support/fake-prisma.js';
 
 setTestEnv();
+installFakePrisma(); // security.ts records rate-limit events through @coremail/storage (10.6)
 const express = (await import('express')).default;
 const { setupRateLimit } = await import('./security.js');
 

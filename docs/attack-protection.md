@@ -173,7 +173,14 @@ Manual entries keep their behaviour.
 event (`CHANNEL_ADMIN_ATTACK`). Sources: every failure (`AUTH_BRUTE_FORCE`),
 lock (`AUTH_LOCKOUT`) and refusal of a locked client (`AUTH_LOCKED`) of the
 shared lockout, connect-time block list refusals (`IP_BLOCKLIST`), automatic
-blocks (`IP_AUTO_BLOCKED`) and the SMTP connection limiter (`IP_RATE_LIMIT`).
+blocks (`IP_AUTO_BLOCKED`) and the connection / request limiters
+(`IP_RATE_LIMIT`): the SMTP connection limiter (protocol `smtp`), since 10.6
+the gateway's HTTP connection limits (`HTTP_MAX_CONNS*`, protocol `http`, one
+event per address and minute — `detail.suppressed` counts the refusals in
+between) and the strict login limiter of `/auth` (20 attempts / 15 min per
+address, protocol `web`). Before 10.6 a web brute force from one address showed
+20 failures and then nothing while it went on (the limiter answered 429 without
+an event), and an HTTP connection flood only reached the container log.
 
 Bounded: at most `SECURITY_EVENTS_PER_IP_PER_MIN` (10) events per client IP and
 minute (in the process and across processes via Redis `secevt:<ip>:<minute>`),
@@ -183,7 +190,18 @@ global one too (a flood of failures must never hide a lock); they have their own
 ceiling `SECURITY_EVENTS_IMPORTANT_PER_MIN` (10 × the global value). Loopback is not recorded. Rows older
 than `ATTACK_EVENT_RETENTION_DAYS` (90) are purged hourly. The dashboard widget
 and the page show the counts per protocol of the last 24 hours
-(`GET /admin/security/attacks/summary` → `byProtocol`).
+(`GET /admin/security/attacks/summary` → `byProtocol`). These are **recorded
+events**, not attempts: one address contributes at most 10 per minute across
+all protocols (a burst of 100 IMAP failures shows as about 10), while every
+lock is recorded. The lock list and its counters (`GET /locks`) are exact.
+
+The page (10.6) refreshes all its parts every 30 seconds and with the button at
+the top (the icon turns while loading), shows when the data was last refreshed
+(„Zuletzt aktualisiert …"), „Keine Angriffe in den letzten 24 h." when nothing
+was recorded and the error instead when the summary cannot be read. The
+dashboard's „Aktualisieren" also refreshes the attack widget (before 10.6 it
+refreshed only the dashboard data; the widget kept its state until its own
+30-second poll or a live event).
 
 ## Notifications
 
@@ -219,6 +237,20 @@ see [rbac.md](rbac.md).
 
 The `security.lock|ip|ip-rule|protection.*` actions are always audited, even
 with the audit log switched off (`ALWAYS_AUDIT`).
+
+## End-to-end check (10.6)
+
+The e2e step `attack` (`scripts/e2e/steps/attack.mjs`, [e2e.md](e2e.md)) runs the
+core path in every release gate: IMAP brute force on a fresh account → the
+account lock is listed (protocol IMAP, remaining time) and the events show up →
+„Entsperren" → the correct password works; a block list entry for a helper
+container on the stack network → IMAPS and HTTP refused (`403 IP_BLOCKED`,
+event `IP_BLOCKLIST`) → entry removed → admitted again.
+
+To exercise the escalation by hand, the attacker must not be private: attach
+the app container to an extra Docker network with a public-looking subnet
+(e.g. `203.0.113.0/24`) and attack from a second container on it — published
+ports arrive from the Docker bridge gateway (private, never auto-blocked).
 
 ## Testing the known-client rule by hand
 

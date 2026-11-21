@@ -386,6 +386,18 @@ test('refusal log is rate limited per key and reason', () => {
   assert.deepEqual(seen[1], { key: '203.0.113.7', suppressed: 4 });
 });
 
+test('10.6: a refused HTTP connection is recorded for the attack dashboard (IP_RATE_LIMIT / http)', () => {
+  const recorded: Array<Record<string, unknown>> = [];
+  hh.reportHttpRefusal({ ip: '203.0.113.7', key: '203.0.113.7', reason: 'per_ip', limit: 20, suppressed: 3, server: 'http' }, (e) => recorded.push(e as unknown as Record<string, unknown>));
+  hh.reportHttpRefusal({ ip: '2001:db8:1:2::5', key: '2001:db8:1:2::/64', reason: 'per_ip', limit: 20, suppressed: 0, server: 'https' }, (e) => recorded.push(e as unknown as Record<string, unknown>));
+  assert.deepEqual(recorded[0], {
+    type: 'IP_RATE_LIMIT', ip: '203.0.113.7', protocol: 'http',
+    detail: { reason: 'per_ip', limit: 20, server: 'http', suppressed: 3 },
+  });
+  assert.equal(recorded[1]!['protocol'], 'http');
+  assert.deepEqual((recorded[1]!['detail'] as Record<string, unknown>)['key'], '2001:db8:1:2::/64', 'IPv6: the /64 the cap counted is kept');
+});
+
 /** Hardened HTTP server with short test timeouts; loopback is NOT exempt here. */
 async function hardenedHttp(overrides: Partial<HardeningConfig> = {}) {
   const config = hh.normalizeTimeouts({

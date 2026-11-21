@@ -569,11 +569,18 @@ function AttackEventsWidget() {
 export function DashboardPage() {
   const t = useT();
   const chart = useChartTheme();
+  const queryClient = useQueryClient();
   const { data, isLoading, isError, error, refetch, dataUpdatedAt } = useQuery({
     queryKey: ['admin-dashboard'],
     queryFn:  () => api.get<DashboardData>('/admin/dashboard'),
     refetchInterval: 30_000,
   });
+  // 10.6: "Aktualisieren" also refreshes the attack widget (its own query) — before
+  // it only refetched the dashboard data and the widget kept its last state.
+  const refreshAll = () => {
+    void refetch();
+    void queryClient.invalidateQueries({ queryKey: ['attack-summary'] });
+  };
   const [showSettings, setShowSettings] = useState(false);
   const visible    = useDashboardStore((s) => s.visible);
   const order      = useDashboardStore((s) => s.order);
@@ -611,7 +618,7 @@ export function DashboardPage() {
         <div role="alert" className="flex items-center gap-3 bg-danger-bg border border-danger-line text-danger-fg rounded-lg px-4 py-3 text-sm">
           <XCircle size={16} className="shrink-0" />
           <span className="flex-1">{isError && error instanceof Error && error.message ? error.message : t('dash_loading')}</span>
-          <button onClick={() => void refetch()} className="btn-secondary text-xs">
+          <button onClick={refreshAll} className="btn-secondary text-xs">
             <RefreshCw size={13} /> {t('dash_refresh')}
           </button>
         </div>
@@ -648,7 +655,7 @@ export function DashboardPage() {
         </div>
         <div className="flex items-center gap-2 relative">
           <button
-            onClick={() => void refetch()}
+            onClick={refreshAll}
             className="btn-secondary text-xs"
             title={t('dash_refresh')}
           >

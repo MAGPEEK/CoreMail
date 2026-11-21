@@ -14,6 +14,7 @@ import type { Request, Response, NextFunction } from 'express';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { createLogger, isLoopbackAddress } from '@coremail/core';
+import { recordSecurityEvent } from '@coremail/storage';
 import { randomUUID } from 'node:crypto';
 
 const log = createLogger('api:security');
@@ -165,6 +166,9 @@ export function suspiciousInputGuard(req: Request, res: Response, next: NextFunc
  * Auth endpoints — max. 20 attempts per 15 minutes per IP.
  * Protects against brute-force attacks on login, MFA and password reset.
  * Token refresh/logout have their own limiter (authRefreshRateLimit).
+ * 10.6: every refused attempt is also recorded for the attack dashboard
+ * (IP_RATE_LIMIT / protocol web, sampled per IP) — before, a web brute force
+ * from one address showed 20 failures and then nothing while it went on.
  */
 export const authRateLimit = rateLimit({
   windowMs: 15 * 60 * 1_000,
@@ -174,6 +178,7 @@ export const authRateLimit = rateLimit({
   message: { error: 'Too many authentication attempts. Please try again in 15 minutes.' },
   handler(req, res, _next, options) {
     log.warn({ ip: req.ip }, 'Auth rate limit exceeded — possible brute force');
+    recordSecurityEvent({ type: 'IP_RATE_LIMIT', ip: req.ip, protocol: 'web', detail: { reason: 'auth_rate_limit', limit: 20, path: req.path.slice(0, 80) } });
     res.status(options.statusCode).json(options.message);
   },
 });

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { EXPIRY_CHOICES, formatRemaining, looksLikeCidr, protocolLabel, totalEvents } from './attackProtection.ts';
+import { AUTO_REFRESH_MS, EXPIRY_CHOICES, eventsView, formatRemaining, lastRefreshedAt, looksLikeCidr, protocolLabel, totalEvents } from './attackProtection.ts';
 
 test('protocolLabel: known protocols and fallbacks', () => {
   assert.equal(protocolLabel('imap'), 'IMAP');
@@ -31,4 +31,23 @@ test('expiry choices start with permanent; totals', () => {
   assert.equal(EXPIRY_CHOICES[0], null);
   assert.equal(totalEvents([{ protocol: 'imap', count: 2 }, { protocol: 'smtp', count: 3 }]), 5);
   assert.equal(totalEvents(undefined), 0);
+});
+
+test('10.6: last refresh = the newest successful fetch of the page queries', () => {
+  assert.equal(lastRefreshedAt([]), null);
+  assert.equal(lastRefreshedAt([0, undefined, 0]), null);
+  assert.equal(lastRefreshedAt([1000, 5000, 0, 3000]), 5000);
+  assert.equal(lastRefreshedAt([Number.NaN, 42]), 42);
+  assert.equal(AUTO_REFRESH_MS, 30_000);
+});
+
+test('10.6: events section — error, loading, empty state, list (an error is never "no attacks")', () => {
+  assert.equal(eventsView(undefined, true), 'error');
+  assert.equal(eventsView(undefined, false), 'loading');
+  assert.equal(eventsView({ byProtocol: [], total24h: 0 }, false), 'empty');
+  assert.equal(eventsView({ byProtocol: [] }, false), 'empty');
+  assert.equal(eventsView({ byProtocol: [{ protocol: 'imap', count: 3 }], total24h: 3 }, false), 'list');
+  assert.equal(eventsView({ byProtocol: [{ protocol: 'imap', count: 3 }] }, false), 'list');
+  // a failed refresh keeps showing the last data
+  assert.equal(eventsView({ byProtocol: [{ protocol: 'web', count: 1 }], total24h: 1 }, true), 'list');
 });
