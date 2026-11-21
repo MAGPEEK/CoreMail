@@ -13,6 +13,7 @@ export const STEP_LABEL: Record<WizardStepId, TranslationKey> = {
   domain: 'wiz_step_domain',
   admin: 'wiz_step_admin',
   secrets: 'wiz_step_secrets',
+  certificate: 'wiz_step_certificate',
   done: 'wiz_step_done',
 };
 

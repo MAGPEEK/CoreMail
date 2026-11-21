@@ -100,7 +100,15 @@ docker compose logs -f coremail   # first start: schema, then "CoreMail setup: o
    (`coremail-secrets-<host>-<date>.env`, possible only while the wizard runs and at most 24 h
    after the setup) and keep it off the server. Over plain HTTP the wizard warns to download it
    only on a local network; you can also copy `./secrets/coremail.env` yourself.
-4. The wizard has no DNS or certificate step: sign in to the admin panel
+4. **Zertifikat** (10.6, only when you typed a **public** host name, e.g. `mail.example.com`):
+   with the host name's A record pointing at the server and port 80 forwarded to it, the wizard
+   requests a Let's Encrypt certificate — enter the **contact e-mail for Let's Encrypt** (expiry
+   notices go there; prefilled with the admin address), accept the Let's Encrypt terms of service
+   and choose **Zertifikat anfordern**. The wizard checks DNS and port 80 first and shows each
+   check; the certificate then serves HTTPS, SMTP, IMAP and POP3. If a check fails, fix it and
+   choose **Erneut prüfen**, or **Später** — the dashboard card offers it again. With the local
+   default (`mail.example.local`) there is no certificate step.
+5. The wizard has no DNS step: sign in to the admin panel
    `http://<server-ip>:3000/bcp/` (after enrolling the second factor in the webmail). With the
    local domain the dashboard shows **Eigene Domain hinzufügen**:
    1. **Domains** → add your real domain (e.g. `example.com`) and enter the DNS records shown there;

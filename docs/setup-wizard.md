@@ -2,12 +2,15 @@
 
 A fresh installation (no setup completed, no user) sends every web request to the setup
 wizard at `/setup` (webmail; the BCP at `/bcp/` forwards there). The wizard creates the
-installation and the first administrator; DNS records and the TLS certificate are set up
-afterwards in the BCP (**Domains**, **Zertifikate** — the dashboard offers a one-click Let's
-Encrypt certificate, see [certificates.md](certificates.md#dashboard-card-zertifikat-einrichten)).
+installation and the first administrator; for a **public** host name it also obtains a Let's
+Encrypt certificate (10.6, step "Zertifikat" below). DNS records are set up afterwards in the BCP
+(**Domains**); a local host name keeps its self-signed certificate and the dashboard card
+([certificates.md](certificates.md#dashboard-card-zertifikat-einrichten)).
 Code: `packages/web-client/src/pages/SetupPage.tsx`, step logic
-`packages/web-client/src/lib/setupWizard.ts`, server `packages/api-gateway/src/routes/setup.ts`
-and `packages/api-gateway/src/routes/setup-followup.ts`.
+`packages/web-client/src/lib/setupWizard.ts` and `lib/setupCertificate.ts`, the certificate step
+`components/setup/CertificateStep.tsx`, server `packages/api-gateway/src/routes/setup.ts`
+and `packages/api-gateway/src/routes/setup-followup.ts` (+ `lib/setup-certificate.ts`,
+`lib/acme-order.ts`).
 
 ## Steps
 
@@ -18,9 +21,45 @@ and `packages/api-gateway/src/routes/setup-followup.ts`.
 | 3 | Admin-Konto | Name, address in the chosen domain (local part + fixed `@domain`, suggested `admin@example.local`), password with a strength meter (at least 8 characters, like the server). For a local domain an info box says that mail from outside cannot be delivered to that address (signing in works). Two-factor sign-in is explained, not set up here: the box says it is required for the BCP (10.5) and is set up in the webmail right after the wizard (Settings → Security; the last step links there). |
 | – | *Einrichten* | Leaving the admin step runs `POST /api/v1/setup/complete` and signs in with the new account through the normal `/auth/login` (refresh cookie, same lockout and audit rules as the login page). The password and the token are dropped from the page afterwards. |
 | 4 | Secrets sichern | Only when the status reports `secretsGenerated: true`. Button **Secrets herunterladen** downloads the secrets file as `coremail-secrets-<host>-<YYYY-MM-DD>.env` (`GET /api/v1/setup/secrets-download`, below). Next to it, when the page was not loaded over HTTPS (`secureConnection: false` in the status), one line: "Die Verbindung ist unverschlüsselt — lade die Datei nur im lokalen Netz herunter." — the download still works. The warning that no password works without the PEPPER stays, plus one line where the file lives on the server (`secretsFile`, default `./secrets/coremail.env`, next to the Compose file). No shell commands, never secret values on the page. "Weiter" only after the checkbox "Ich habe die Datei gesichert"; the checkbox may be ticked without downloading (some admins copy the file on the server themselves). |
-| 5 | Fertig | Summary (domain, host name, admin), the line "DNS-Einträge und Zertifikat richtest du im BCP unter Domains und Zertifikate ein" with both names linking to `/bcp/domains` and `/bcp/certificates`, an info box (10.5) "Das BCP öffnet sich erst, wenn die Zwei-Faktor-Anmeldung eingerichtet ist …", and links: webmail, BCP (new tab), mail client setup (Settings → External clients), two-factor sign-in. Reaching this step calls `POST /api/v1/setup/finish`, which closes the secrets download. |
+| 5 | Zertifikat | 10.6, only for a **public** host name (`showCertificateStep`: not `isLocalHostname` — `mail.example.local`, `.lan`, IPs, … skip it) and only with the admin session. See "Certificate step" below. |
+| 6 | Fertig | Summary (domain, host name, admin; "Zertifikat: Let's Encrypt (aktiv)" when the certificate step issued one), the line "DNS-Einträge und Zertifikat richtest du im BCP unter Domains und Zertifikate ein" with both names linking to `/bcp/domains` and `/bcp/certificates`, an info box (10.5) "Das BCP öffnet sich erst, wenn die Zwei-Faktor-Anmeldung eingerichtet ist …", and links: webmail, BCP (new tab), mail client setup (Settings → External clients), two-factor sign-in. Reaching this step calls `POST /api/v1/setup/finish`, which closes the secrets download. |
 
-"Schritt x von n" counts the shown steps (4 without, 5 with the secrets step).
+"Schritt x von n" counts the shown steps (4 to 6: the secrets and the certificate step are optional).
+Before the commit the typed host name decides whether the certificate step is counted; after it
+the stored decision (public host name and a working admin session).
+
+### Certificate step (10.6)
+
+For a public host name the wizard tries to obtain a Let's Encrypt certificate right after the
+admin step (and after "Secrets sichern" when shown):
+
+- **Names**: the host name plus `autodiscover.<domain>` / `autoconfig.<domain>` of the primary
+  domain **only when their DNS points to this server** — decided by the server with the same helper
+  as the certificates dialog and the dashboard card (`suggestAdditionalSans` →
+  `lib/acme-order.ts orderDomains`). A name that is left out is named with the reason.
+- **Kontakt-E-Mail für Let's Encrypt**: prefilled with `ServerSettings.adminEmail`, else the admin
+  address of the wizard; checked as an e-mail address (same rule as the server). The note says that
+  Let's Encrypt sends expiry notices there. Stored as `Certificate.acmeEmail` — the contact of
+  the ACME account registration (`mailto:`) and of every later renewal.
+- **Terms of service**: a required checkbox linking to the CA's current terms
+  (`meta.termsOfService` of the production ACME directory, cached for an hour; when the directory
+  cannot be read: `https://letsencrypt.org/repository/`). The server refuses an order without
+  `termsAccepted: true`.
+- **„Zertifikat anfordern“** runs the BCP pre-flight (DNS A/AAAA, IPv6, same address as the host
+  name, CAA, the validation file locally and over the public name, and the Let's Encrypt staging
+  test over port 80) and shows every check with its status and a plain explanation. Only when it
+  passes is the certificate ordered (production, with SMTP/IMAP/POP3 — the issuance assigns them,
+  `afterAcmeIssued`); the wizard shows the phases and polls the order. Once issued the server
+  also serves it on HTTPS (`activateHttpsCertificate`, the same as the dashboard card's last
+  step); the step reports done only when HTTPS serves it.
+- **Failure**: the reason in plain German (per failed check, or per classified ACME error code such
+  as `connection`, `dns`, `caa`, `rate-limited`), the server's message under "Technische
+  Details", plus **„Erneut prüfen“** (runs the pre-flight again; a failed order is retried on the
+  same certificate row and ACME account with the current names and contact) and **„Später“** (to
+  the summary — the BCP dashboard card stays until a trusted certificate covers the host name).
+  "Später" also works while Let's Encrypt validates; the order then finishes on the server.
+- **Local host names** (`example.local` default) have no certificate step — unchanged 10.5
+  behaviour (self-signed certificate, dashboard card "Eigene Domain hinzufügen").
 
 ### Local domain first (10.5)
 
@@ -64,10 +103,12 @@ typed in — the input checks are the same for public and private names.
 
 After the commit the wizard keeps a per-tab marker in `sessionStorage`
 (`coremail:setup-wizard`: step, domain, host name, address, whether the secrets step is part of
-the run and its checkbox — no password, no token, no secret). A reload of `/setup` in that tab
-resumes the post-commit step as long as the admin session is valid; otherwise it goes to the
-sign-in page. A marker of 10.4.0/10.4.1 (DNS or certificate step) resumes at the summary. Other
-tabs see a completed setup and are sent to `/login` as before.
+the run and its checkbox, 10.6: whether the certificate step is part of the run — no password,
+no token, no secret). A reload of `/setup` in that tab resumes the post-commit step as long as
+the admin session is valid; otherwise it goes to the sign-in page. A reload of the certificate step
+finds the running order again (`GET /setup/certificate/status`) and keeps waiting for it. A
+marker of 10.4.0/10.4.1 (DNS or certificate step, without `withCertificate`) resumes at the
+summary. Other tabs see a completed setup and are sent to `/login` as before.
 
 ## Server
 
@@ -78,6 +119,9 @@ tabs see a completed setup and are sent to `/login` as before.
 | `POST /api/v1/setup/complete` | setup token required; one atomic, one-time claim; optional fields `hostname`, `organizationName`, `displayName`; answers `{ success, email, domain, hostname }` | `409` |
 | `GET /api/v1/setup/secrets-download` | `401` (no session yet) | see below |
 | `POST /api/v1/setup/finish` | `401` | admin session (ORGANIZATION_MANAGEMENT); sets `ServerSettings.setupWizardFinishedAt` once (idempotent), deletes the staged copy; `204` |
+| `GET /api/v1/setup/certificate/status` | `401` | 10.6, see "Certificate endpoints" |
+| `POST /api/v1/setup/certificate/preflight` | `401` | 10.6 |
+| `POST /api/v1/setup/certificate/issue` | `401` | 10.6 |
 
 ### Secrets download
 
@@ -105,6 +149,35 @@ tabs see a completed setup and are sent to `/login` as before.
 - **Rate limit**: `/secrets-download` and `/finish` have their own limit (10 requests per hour
   and client IP, `setupFollowUpRateLimit`) and are mounted before the setup router, so they never
   use up the budget of `/verify-token` + `/complete` (5 POSTs per hour and client IP).
+
+### Certificate endpoints (10.6)
+
+`routes/setup-followup.ts`, same guard and window as the secrets download:
+`requireRoleInSetupWindow()` (ORGANIZATION_MANAGEMENT, organisation-wide, current role from the
+database, **without** the admin-MFA rule) and only while the setup window is open (completed,
+wizard not finished, ≤ 24 h) — otherwise `404`. The admin certificate API
+(`/api/v1/admin/certificates/*`) keeps the admin-MFA rule and answers `403 MFA_REQUIRED` to the
+wizard's session; these routes call the same functions instead (`lib/acme-order.ts`:
+`acmeSuggestions`, `preflightForServer`, `requestLetsEncryptCertificate`,
+`activateHttpsCertificate` → `lib/cert-renewal.ts startRenewal` → `lib/cert-acme.ts
+runAcmeIssuance`) — no second ACME implementation.
+
+| Endpoint | Answer |
+|---|---|
+| `GET /certificate/status` | `{ eligible, hostname, domains, sans, contactEmail, termsOfServiceUrl, termsOfServiceFromDirectory, certificate }`; `certificate` is the newest production Let's Encrypt order for the host name created after `setupCompletedAt` (`{ id, status, domains, lastError, lastErrorCode, httpsActive, protocolActive, expiresAt }`) or `null`. `?view=certificate` (polling) answers only `{ eligible, hostname, certificate }` without DNS look-ups. |
+| `POST /certificate/preflight` | `{ domains, report }` — the BCP pre-flight report incl. the staging test (`external`). `409 LOCAL_HOSTNAME` for a local / private host name. |
+| `POST /certificate/issue` | body `{ email, termsAccepted: true }` (`400 INVALID_EMAIL` / `400 TERMS_REQUIRED`, `409 LOCAL_HOSTNAME`). `202 { certificate }`: a new order (PENDING), a retry of a failed setup order (same row and ACME account, `409 BUSY` when its lock is held) or the running one. Idempotent: for an already issued setup certificate it only makes sure HTTPS serves it (`200`). Once the issuance succeeds the server assigns HTTPS by itself. |
+
+- **Audit** (always, also with the audit log off — `ALWAYS_AUDIT` `setup.certificate.`):
+  `setup.certificate.preflight` (names, result), `setup.certificate.issue` (names, contact
+  e-mail, retry), `setup.certificate.https` (HTTPS assignment after the issuance); refused
+  POSTs outside the window with `success: false`.
+- **Rate limits**: pre-flight and order 20 per hour and client IP (`setupCertificateRateLimit` —
+  each pre-flight runs a staging validation, failed validations count against Let's Encrypt's
+  limit of 5 per host name and hour); status 300 per 15 minutes (`setupCertificateStatusRateLimit`).
+- **Not verified live**: the unit tests run the real ACME code path against a fake CA (no
+  network); issuing from the real Let's Encrypt needs a public host name with DNS and port 80 —
+  see [certificates.md](certificates.md#setup-wizard-105--106).
 
 Schema (additive): `ServerSettings.setupWizardFinishedAt` (`DateTime?`). Installations whose setup
 flag is backfilled at start (users from before v6) get it together with `setupCompletedAt`, so
@@ -158,6 +231,18 @@ enrolled. The optional "MFA für alle Benutzer erzwingen" is described in
   make-primary replaces the local host name, keeps an explicit public one;
   `src/routes/admin/setup-state.test.ts` — the card for a local host name;
   `packages/admin-panel/src/lib/certificateCard.test.ts` — card variant.
+- (10.6) `packages/web-client/src/lib/setupWizard.test.ts` — certificate step order and visibility
+  (public vs. local host names), contact e-mail check and terms gating, resume marker;
+  `src/lib/setupCertificate.test.ts` — pre-flight before the order (nothing ordered when it
+  fails), the order body, done only once HTTPS serves it, failure reasons, HTTPS re-requested after
+  a restart, timeout.
+- (10.6) `packages/api-gateway/src/routes/setup-certificate.test.ts` — auth (401/403, the
+  wizard session without MFA works, the admin certificate API still answers `MFA_REQUIRED`),
+  window closed → 404 (audited), local host names → `LOCAL_HOSTNAME`, e-mail / terms validation,
+  names (autodiscover. when its DNS points here, not autoconfig. without DNS), the contact on the
+  ACME account registration, production directory, SMTP/IMAP/POP3 then HTTPS after the issuance,
+  audit, failure + retry on the same row, terms of service from the directory with fallback, rate
+  limits — fake CA, resolver and challenge serving.
 - `packages/api-gateway/src/routes/setup-followup.test.ts` — (10.5) the wizard session without
   MFA still downloads and finishes with `requireMfaForAdmins` on; session and role required, window
   (24 h, finished, not completed), absent file / symlink, headers, audit without content (also

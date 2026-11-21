@@ -23,15 +23,17 @@ import { createLogger } from '@coremail/core';
 import { requireArea } from '../../middleware/auth.js';
 
 import {
-  deriveCertStatus, isDefaultHostname, isPemCurrentlyValid, parseCertValidity,
+  deriveCertStatus, isPemCurrentlyValid, parseCertValidity,
   recomputeStatus, uncoveredDomains,
 } from '../../lib/cert-lifecycle.js';
 import {
   publishTlsReload, runAcmeIssuance,
-  storeAcmeChallenge, getAcmeChallenge, getChallengeServing, runAcmeValidationTest,
+  storeAcmeChallenge, getAcmeChallenge,
 } from '../../lib/cert-acme.js';
 import { lockedUntilText, startRenewal } from '../../lib/cert-renewal.js';
-import { lookupAddresses, runPreflight, suggestAdditionalSans } from '../../lib/acme-preflight.js';
+import {
+  acmeSuggestions, activateHttpsCertificate, preflightForServer, requestLetsEncryptCertificate,
+} from '../../lib/acme-order.js';
 import {
   assignProtocolCert, claimServices, createSelfSignedPem, fallbackToSelfSigned, hasMailService, holdsTrustedPem,
   isStagingCert, MAIL_SERVICES, protocolBlocker, withMailServices, type AssignResult, type ProtocolActor,
@@ -225,20 +227,8 @@ adminCertificatesRouter.get('/served', async (_req: Request, res: Response) => {
 // services are preselected, autodiscover.<domain> / autoconfig.<domain> are
 // offered as additional names (checked by default when their DNS points here).
 adminCertificatesRouter.get('/acme-suggestions', async (_req: Request, res: Response) => {
-  const settings = await prisma.serverSettings.findUnique({
-    where: { id: 'singleton' }, select: { publicHostname: true },
-  }).catch(() => null);
-  const hostname = (settings?.publicHostname ?? '').trim().toLowerCase();
-  if (!hostname || isDefaultHostname(hostname) || !hostname.includes('.')) {
-    res.json({ publicHostname: null, domain: null, sans: [], preselectServices: [] });
-    return;
-  }
-  const primary = await prisma.domain.findFirst({
-    where: { primary: true }, select: { name: true },
-  }).catch(() => null);
-  const domain = (primary?.name ?? hostname.split('.').slice(1).join('.')).toLowerCase();
-  const sans = await suggestAdditionalSans(hostname, domain).catch(() => []);
-  res.json({ publicHostname: hostname, domain, sans, preselectServices: [...MAIL_SERVICES] });
+  // 10.6: shared with the setup wizard's certificate step (lib/acme-order.ts).
+  res.json(await acmeSuggestions());
 });
 
 // ── GET / ─────────────────────────────────────────────────────────────────────
@@ -286,45 +276,14 @@ adminCertificatesRouter.post('/letsencrypt', async (req: Request, res: Response)
   const { name, domains, email, autoRenew, staging } = parsed.data;
   // 9.3: staging certificates are untrusted and never serve SMTP/IMAP/POP3.
   if (staging && hasMailService(parsed.data.services)) { res.status(400).json(STAGING_NO_MAIL); return; }
-  // One protocol certificate serves SMTP, IMAP and POP3 together.
-  const services = withMailServices(parsed.data.services, hasMailService(parsed.data.services));
 
-  // Create the certificate as PENDING right away (issuance runs async). The
-  // mail services stay on the current certificate until this one is issued —
-  // the issuance applies it (afterAcmeIssued), so nothing changes before a
-  // usable certificate exists.
-  const cert = await prisma.certificate.create({
-    data: {
-      name,
-      domains,
-      services,
-      type:        'LETSENCRYPT',
-      status:      'PENDING',
-      acmeEmail:   email,
-      acmeStaging: staging,
-      autoRenew,
-    },
-  });
-
-  log.info({ id: cert.id, domains, staging }, 'Let\'s Encrypt certificate requested');
-
-  // 9.2.x: same code path as retry/renewal — per-certificate lock, stored
-  // staging flag, ERROR with the CA's problem detail on failure.
-  try {
-    const started = await startRenewal(cert.id, 'issue');
-    if (!started.started) throw new Error(`issuance not started (${started.reason})`);
-  } catch (err) {
-    const msg = `Could not start the issuance: ${err instanceof Error ? err.message : String(err)}`;
-    log.error({ err, id: cert.id }, 'Failed to start ACME issuance');
-    await prisma.certificate.update({
-      where: { id: cert.id }, data: { status: 'ERROR', lastError: msg.slice(0, 1000), lastErrorCode: 'unknown' },
-    }).catch(() => undefined);
-    res.status(503).json({ error: msg, id: cert.id });
-    return;
-  }
+  // Created as PENDING right away (issuance runs async, same code path as
+  // retry/renewal); 10.6: shared with the setup wizard (lib/acme-order.ts).
+  const r = await requestLetsEncryptCertificate({ name, domains, email, services: parsed.data.services, autoRenew, staging });
+  if (!r.ok) { res.status(503).json({ error: r.error, id: r.id }); return; }
 
   res.status(202).json({
-    ...safe(cert as unknown as Record<string, unknown>),
+    ...safe(r.cert),
     message: 'Certificate issuance started. Check status for progress.',
   });
 });
@@ -346,20 +305,7 @@ adminCertificatesRouter.post('/preflight', async (req: Request, res: Response) =
     return;
   }
   const { domains, external } = parsed.data;
-  const settings = await prisma.serverSettings.findUnique({
-    where: { id: 'singleton' }, select: { publicHostname: true },
-  }).catch(() => null);
-  let serverHost: { hostname: string; ipv4: string[] } | null = null;
-  const hostname = settings?.publicHostname?.trim().toLowerCase() ?? '';
-  if (hostname && !isDefaultHostname(hostname)) {
-    const l = await lookupAddresses(hostname).catch(() => null);
-    if (l) serverHost = { hostname, ipv4: l.ipv4 };
-  }
-  const report = await runPreflight(domains, {
-    serving: getChallengeServing({ ttlSeconds: 120 }),
-    serverHost,
-    ...(external ? { external: (d: string[]) => runAcmeValidationTest(d) } : {}),
-  });
+  const report = await preflightForServer(domains, { external });
   log.info({ domains, ok: report.ok, external: report.external.status }, 'Let\'s Encrypt pre-flight check');
   res.json(report);
 });
@@ -650,34 +596,15 @@ adminCertificatesRouter.post('/:id/renew', async (req: Request, res: Response) =
 // Both can point to different certificates independently.
 adminCertificatesRouter.post('/:id/activate-https', async (req: Request, res: Response) => {
   const id = req.params['id'] ?? '';
-  const cert = await prisma.certificate.findUnique({
-    where: { id },
-    select: { id: true, name: true, status: true, certPem: true, keyPem: true },
-  });
-  if (!cert) { res.status(404).json({ error: 'Certificate not found' }); return; }
-  if (!cert.certPem || !cert.keyPem) {
-    res.status(400).json({ error: 'Certificate has no PEM data yet — wait for issuance to complete' });
+  // 10.6: shared with the setup wizard (lib/acme-order.ts) — HTTPS only, isActiveProtocol unchanged.
+  const r = await activateHttpsCertificate(id);
+  if (!r.ok) {
+    if (r.reason === 'not-found') { res.status(404).json({ error: 'Certificate not found' }); return; }
+    if (r.reason === 'no-pem') { res.status(400).json({ error: 'Certificate has no PEM data yet — wait for issuance to complete' }); return; }
+    // v6: usability is decided by the PEM validity, not by the DB status
+    res.status(400).json({ error: `Certificate is not currently valid (status "${r.status ?? ''}") — expired or not yet valid` });
     return;
   }
-  // v6: usability is decided by the PEM validity, not by the DB status — an
-  // EXPIRING / ERROR (failed renewal) cert with a still-valid PEM can be used.
-  if (!isPemCurrentlyValid(cert.certPem)) {
-    res.status(400).json({
-      error: `Certificate is not currently valid (status "${cert.status}") — expired or not yet valid`,
-    });
-    return;
-  }
-
-  // Activate HTTPS proxy only — isActiveProtocol stays unchanged
-  await prisma.$transaction([
-    prisma.certificate.updateMany({ data: { isActiveHttps: false } }),
-    prisma.certificate.update({ where: { id }, data: { isActiveHttps: true } }),
-  ]);
-
-  // Reload tls-proxy.ts (listens on coremail:tls:reload)
-  await publishTlsReload(id);
-
-  log.info({ id, name: cert.name }, 'Certificate activated for HTTPS proxy — protocol TLS unchanged');
   res.json({
     message: 'Certificate activated for HTTPS proxy (Port 443). To also protect SMTP/IMAP/POP3, use activate-protocol.',
     certId: id,

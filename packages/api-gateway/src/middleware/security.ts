@@ -257,6 +257,32 @@ export const setupFollowUpRateLimit = rateLimit({
 });
 
 /**
+ * 10.6: the setup wizard's certificate actions (POST /api/v1/setup/certificate/
+ * preflight and /issue) — 20 per hour and client IP. Each pre-flight runs a
+ * Let's Encrypt staging validation; each issuance may count against the CA's
+ * failed-validation limit (5 per host name and hour).
+ */
+export const setupCertificateRateLimit = rateLimit({
+  windowMs: 60 * 60 * 1_000,
+  max: 20,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'Too many certificate attempts.', code: 'RATE_LIMITED' },
+});
+
+/**
+ * 10.6: GET /api/v1/setup/certificate/status — the wizard polls it every few
+ * seconds while Let's Encrypt validates (up to 5 minutes): 300 per 15 minutes.
+ */
+export const setupCertificateStatusRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1_000,
+  max: 300,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'Too many requests.', code: 'RATE_LIMITED' },
+});
+
+/**
  * Admin mutations (POST/PUT/PATCH/DELETE on /api/v1/admin) —
  * 200 mutating requests per 15 minutes per IP.
  */

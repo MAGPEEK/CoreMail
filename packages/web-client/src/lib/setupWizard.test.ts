@@ -4,19 +4,53 @@ import {
   wizardSteps, commitStep, nextStep, previousStep, stepPosition, showTokenFileHint, secretsFilePath,
   isValidDomain, isValidHostname, defaultHostname, isValidLocalPart, passwordScore,
   blockReason, tokenNeedsCheck, completeBody, parseResume, insecureConnection, downloadFilename,
-  defaultSecretsFilename, DEFAULT_SECRETS_FILE, INITIAL_FORM, SUGGESTED_DOMAIN, isLocalDomain, type WizardForm,
+  defaultSecretsFilename, DEFAULT_SECRETS_FILE, INITIAL_FORM, SUGGESTED_DOMAIN, isLocalDomain, showCertificateStep,
+  type WizardForm,
 } from './setupWizard.ts';
 
 const form = (over: Partial<WizardForm> = {}): WizardForm => ({
   tokenRequired: true, token: 'tok-123', verifiedToken: 'tok-123',
   domain: 'example.com', hostname: 'mail.example.com', organizationName: 'Example GmbH', adminName: 'Erika',
   localPart: 'admin', password: 'correct-horse-9', confirm: 'correct-horse-9', secretsConfirmed: false,
+  acmeEmail: 'admin@example.com', acmeTermsAccepted: true,
   ...over,
 });
 
-test('steps: no DNS / certificate step; the secrets step shows only when the secrets were generated', () => {
+test('steps: no DNS step; the secrets step shows only when the secrets were generated', () => {
   assert.deepEqual(wizardSteps({ secretsGenerated: true }), ['welcome', 'domain', 'admin', 'secrets', 'done']);
   assert.deepEqual(wizardSteps({ secretsGenerated: false }), ['welcome', 'domain', 'admin', 'done']);
+});
+
+test('10.6: the certificate step follows the admin step and "Secrets sichern"; only when requested', () => {
+  assert.deepEqual(wizardSteps({ secretsGenerated: true, certificate: true }), ['welcome', 'domain', 'admin', 'secrets', 'certificate', 'done']);
+  assert.deepEqual(wizardSteps({ secretsGenerated: false, certificate: true }), ['welcome', 'domain', 'admin', 'certificate', 'done']);
+  assert.deepEqual(wizardSteps({ secretsGenerated: false, certificate: false }), ['welcome', 'domain', 'admin', 'done']);
+  const s = wizardSteps({ secretsGenerated: true, certificate: true });
+  assert.equal(commitStep(s), 'admin', 'the commit still happens when leaving the admin step');
+  assert.equal(nextStep(s, 'secrets'), 'certificate');
+  assert.equal(nextStep(s, 'certificate'), 'done');
+  assert.equal(previousStep(s, 'certificate', true), 'secrets');
+  assert.equal(previousStep(wizardSteps({ secretsGenerated: false, certificate: true }), 'certificate', true), null, 'no way back into the spent admin form');
+});
+
+test('10.6: certificate step visibility — public host names only (shared isLocalHostname)', () => {
+  for (const h of ['mail.firma.de', 'MAIL.Example.com', 'mx.example.org.']) assert.equal(showCertificateStep(h), true, h);
+  for (const h of ['mail.example.local', 'mail.firma.lan', 'mail.corp.internal', 'mail.home.arpa', 'mail.example.test',
+    'box.localdomain', '192.168.1.10', '10.0.0.1', 'localhost', 'mailserver', '', null, undefined]) {
+    assert.equal(showCertificateStep(h), false, String(h));
+  }
+  assert.equal(showCertificateStep(INITIAL_FORM.hostname), false, 'the example.local default has no certificate step');
+});
+
+test('10.6: "Zertifikat anfordern" needs a valid contact e-mail and the accepted terms', () => {
+  assert.equal(blockReason('certificate', form()), null);
+  for (const acmeEmail of ['', '  ', 'admin', 'admin@', '@example.com', 'a b@example.com', 'admin@example', 'a..b@example.com', `${'x'.repeat(250)}@example.com`]) {
+    assert.equal(blockReason('certificate', form({ acmeEmail })), 'acmeEmail', acmeEmail);
+  }
+  assert.equal(blockReason('certificate', form({ acmeEmail: ' user@domain.de ' })), null, 'surrounding spaces are trimmed');
+  assert.equal(blockReason('certificate', form({ acmeTermsAccepted: false })), 'acmeTerms');
+  assert.equal(blockReason('certificate', form({ acmeEmail: 'x', acmeTermsAccepted: false })), 'acmeEmail', 'the e-mail is checked first');
+  assert.equal(INITIAL_FORM.acmeTermsAccepted, false, 'the terms are never pre-accepted');
 });
 
 test('commit happens when leaving the admin step (the download needs the admin session)', () => {
@@ -126,6 +160,12 @@ test('complete body: normalised names, address in the domain, optional fields on
   assert.equal('organizationName' in b, false);
   assert.equal('displayName' in b, false);
   assert.equal('setupToken' in b, false);
+});
+
+test('10.6: a certificate marker with withCertificate resumes at the certificate step', () => {
+  assert.deepEqual(parseResume(JSON.stringify({ step: 'certificate', domain: 'firma.de', hostname: 'mail.firma.de', email: 'a@firma.de', withCertificate: true })),
+    { step: 'certificate', domain: 'firma.de', hostname: 'mail.firma.de', email: 'a@firma.de', withCertificate: true });
+  assert.equal(parseResume(JSON.stringify({ step: 'done', withCertificate: true }))?.withCertificate, true);
 });
 
 test('resume marker: post-commit steps only, older DNS / certificate markers resume at the summary, malformed input ignored', () => {
