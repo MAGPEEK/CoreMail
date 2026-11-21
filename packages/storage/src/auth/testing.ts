@@ -201,6 +201,7 @@ export interface FakePrisma {
   contact: FakeTable;
   adminScope: FakeTable;
   mcpToken: FakeTable;
+  mfaTrustedDevice: FakeTable;
   [k: string]: unknown;
 }
 
@@ -218,6 +219,11 @@ export function fakeProtocolPolicies(rows: Row[]): Record<string, unknown> {
     serverSettings: { findUnique: async () => null },
     // 9.4: the webmail module switches are checked with the same session (all defaults)
     webmailPolicy: { findMany: async () => [] },
+    // 10.6: the MFA policy check reads the account (override, role) and its factors on
+    // every request; unknown accounts are "satisfied" (refused elsewhere). Tests that
+    // model users spread their own `user` / `userMfa` after this.
+    user: { findUnique: async () => null },
+    userMfa: { findUnique: async () => null },
   };
 }
 
@@ -302,6 +308,10 @@ export function createFakePrisma(): FakePrisma {
   // 10.3: admin MCP tokens (revokeAllSessions revokes them)
   p.mcpToken = new FakeTable(() => ({
     mode: 'read', mfaVerified: false, lastUsedAt: null, lastUsedIp: null, createdAt: new Date(), revokedAt: null, revokedReason: null,
+  }), ['id', 'tokenHash'], { user: () => p.user });
+  // 10.6: remembered MFA devices (revokeAllSessions / mfa-change revoke them)
+  p.mfaTrustedDevice = new FakeTable(() => ({
+    createdAt: new Date(), lastUsedAt: null, userAgent: '', ipPrefix: '', revokedAt: null, revokedReason: null,
   }), ['id', 'tokenHash'], { user: () => p.user });
   return p;
 }

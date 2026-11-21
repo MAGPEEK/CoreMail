@@ -24,7 +24,8 @@ import { ComposeSettings } from '../components/settings/ComposeSettings.js';
 import { RegionalSettings } from '../components/settings/RegionalSettings.js';
 import { CalendarSettings } from '../components/settings/CalendarSettings.js';
 import { MailSortSettings } from '../components/settings/MailSortSettings.js';
-import { SessionsPanel, DevicesPanel, SmimeSettingsPanel } from '../components/settings/SecurityPanels.js';
+import { SessionsPanel, DevicesPanel, SmimeSettingsPanel, TrustedDevicesPanel } from '../components/settings/SecurityPanels.js';
+import { useMfaEnforcement } from '../hooks/useMfaEnforcement.js';
 import { NotificationsSection } from '../components/NotificationsSection.js';
 import { ViewKeyboardSettings } from '../components/ViewKeyboardSettings.js';
 import { format as fmtDate } from 'date-fns';
@@ -927,6 +928,10 @@ export function SecuritySection({ enrolmentOnly = false }: { enrolmentOnly?: boo
   // generated right after the confirmation (no second prompt).
   const setupPasswordRef = useRef<string>('');
 
+  // 10.6: policy "off" → no new factor is offered (enrolled ones stay and can be removed)
+  const t = useT();
+  const { data: enforcement } = useMfaEnforcement();
+  const enrolmentOffered = enforcement?.enrolmentOffered !== false;
   const { data: mfaStatus, isLoading: statusLoading } = useQuery<MfaStatus>({
     queryKey: ['mfa-status'],
     queryFn: () => authFetch<MfaStatus>('/auth/mfa/status'),
@@ -1115,8 +1120,13 @@ export function SecuritySection({ enrolmentOnly = false }: { enrolmentOnly?: boo
           )}
         </div>
 
+        {/* 10.6: policy "off" — no setup offered */}
+        {!enrolmentOffered && !mfaStatus?.totpEnabled && totpStep === 'idle' && (
+          <p className="text-xs text-fg-subtle">{t('mfa_not_offered')}</p>
+        )}
+
         {/* ── Status: inactive → start setup ── */}
-        {!mfaStatus?.totpEnabled && totpStep === 'idle' && (
+        {enrolmentOffered && !mfaStatus?.totpEnabled && totpStep === 'idle' && (
           <>
             <p className="text-xs text-fg-subtle">
               Schützen Sie Ihr Konto mit einer Authenticator-App (z.B. eine TOTP-App wie Aegis, FreeOTP oder Authy).
@@ -1286,7 +1296,9 @@ export function SecuritySection({ enrolmentOnly = false }: { enrolmentOnly?: boo
           Melden Sie sich mit einem Hardware-Schlüssel (z. B. YubiKey) oder einem Passkey Ihres Geräts an.
           Ein registrierter Schlüssel wird beim Login als zweiter Faktor abgefragt.
         </p>
-        {webauthnSupported() ? (
+        {!enrolmentOffered ? (
+          <p className="text-xs text-fg-subtle">{t('mfa_not_offered')}</p>
+        ) : webauthnSupported() ? (
           <div className="flex items-center gap-2 flex-wrap">
             <input
               value={keyName}
@@ -1314,6 +1326,8 @@ export function SecuritySection({ enrolmentOnly = false }: { enrolmentOnly?: boo
       <>
       <div className="space-y-8 border-t border-line pt-6">
         <SessionsPanel />
+        {/* 10.6: remembered MFA devices ("Gerät merken") */}
+        <TrustedDevicesPanel />
         <DevicesPanel />
         <SmimeSettingsPanel />
       </div>

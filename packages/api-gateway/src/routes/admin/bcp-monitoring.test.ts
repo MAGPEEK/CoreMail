@@ -134,7 +134,10 @@ test('global settings: partial update keeps omitted fields; field errors are nam
   upserts.length = 0;
   const r = await call('PUT', '/settings/security', 'ORGANIZATION_MANAGEMENT', { requireMfaForAdmins: true });
   assert.equal(r.status, 200);
-  assert.deepEqual(upserts[0]!['update'], { requireMfaForAdmins: true }, 'no defaults written for omitted fields');
+  // 10.6: the legacy switch also writes the new policy column (+ the activation time of the admin grace)
+  const { mfaAdminEnforcementSince, ...rest } = upserts[0]!['update'] as Row;
+  assert.deepEqual(rest, { requireMfaForAdmins: true, mfaAdminPolicy: 'REQUIRED' }, 'no defaults written for omitted fields');
+  assert.ok(mfaAdminEnforcementSince instanceof Date);
   const bad = await call('PUT', '/settings/security', 'ORGANIZATION_MANAGEMENT', { minPasswordLength: 4 });
   assert.equal(bad.status, 400);
   assert.match(String(bad.json['error']), /minPasswordLength/);

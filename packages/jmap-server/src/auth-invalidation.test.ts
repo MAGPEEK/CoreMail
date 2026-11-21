@@ -27,6 +27,7 @@ const pick = (where: Record<string, unknown> | undefined) => (s: { id: string; u
   $on: () => undefined,
   ...noProtocolPolicies(),
   user: {
+    findUnique: async () => null, // 10.6: the MFA policy lookup (unknown account → nothing enforced here)
     findFirst: async ({ where }: { where: { email?: string; id?: string; active?: boolean } }) => {
       lookups++;
       return users.find((u) => (where.email ? u.email === where.email : u.id === where.id)

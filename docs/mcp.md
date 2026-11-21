@@ -47,7 +47,7 @@ proxy (443). Use HTTPS — the token is a bearer credential.
 | Expiry | required, 1–365 days (default 90) |
 | Limit | 20 active tokens per admin |
 | Who | every admin role creates and revokes its **own** tokens; ORGANIZATION_MANAGEMENT sees (`?all=true`) and revokes every token |
-| 2FA | created through the admin guard: with `requireMfaForAdmins` on, only from an MFA-verified session; the token remembers it — switching `requireMfaForAdmins` on later stops tokens created without MFA (`403 MFA_NOT_VERIFIED`) |
+| 2FA | created through the admin guard: with `requireMfaForAdmins` on, only from an MFA-verified session; the token remembers it — switching `requireMfaForAdmins` on later stops tokens created without MFA (`403 MFA_NOT_VERIFIED`). 10.6: no admin MFA grace period for MCP — an admin without a factor gets `403 MFA_REQUIRED` for token use and creation while the admin rule applies (docs/mfa-policy.md) |
 
 A token stops working immediately when it
 

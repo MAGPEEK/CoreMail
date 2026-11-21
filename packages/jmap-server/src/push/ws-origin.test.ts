@@ -20,7 +20,7 @@ const user = {
 (globalThis as Record<string, unknown>)['__prisma'] = {
   $on: () => undefined,
   ...noProtocolPolicies(),
-  user: { findFirst: async () => user },
+  user: { findFirst: async () => user, findUnique: async () => null }, // 10.6: MFA policy lookup
   appPassword: { findMany: async () => [], update: async () => ({}) },
   domain: { findFirst: async () => ({ name: 'example.com' }) },
   serverSettings: { findUnique: async () => ({ jmapEnabled: true }) },

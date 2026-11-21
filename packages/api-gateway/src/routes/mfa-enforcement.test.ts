@@ -95,7 +95,8 @@ test('switch off (default): no gating, state "off"', async () => {
   await addUser('alice@example.com');
   const t = await login('alice@example.com');
   assert.equal((await call('GET', '/api/v1/mail/ping', t)).status, 200);
-  assert.deepEqual((await call('GET', '/api/v1/user/mfa-enforcement', t)).body, { state: 'off', canEnrol: true });
+  assert.deepEqual((await call('GET', '/api/v1/user/mfa-enforcement', t)).body,
+    { state: 'off', canEnrol: true, policy: 'optional', enrolmentOffered: true }); // 10.6: + effective policy
 });
 
 test('after the grace period: 403 MFA_ENROLMENT_REQUIRED everywhere except status and profile', async () => {

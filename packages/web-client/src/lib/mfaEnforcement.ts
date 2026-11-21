@@ -20,6 +20,12 @@ export interface MfaEnforcementInfo {
   deadline?: string;
   /** false for SSO-only accounts (no password to confirm an enrolment with). */
   canEnrol: boolean;
+  /** 10.6: effective MFA policy level of the account. */
+  policy?: 'required' | 'optional' | 'off';
+  /** 10.6: false while the policy is "off" — the webmail offers no new enrolment. */
+  enrolmentOffered?: boolean;
+  /** 10.6: the admin MFA rule (admin accounts): grace → dismissible prompt; never blocks the webmail. */
+  admin?: { state: 'satisfied' | 'grace' | 'required'; deadline?: string };
 }
 
 const DAY_MS = 86_400_000;
@@ -63,4 +69,27 @@ export function enrolmentRedirectTarget(pathname: string): string | null {
 /** The enrolment page offers "continue" once a factor is enrolled (TOTP or a security key). */
 export function hasEnrolledFactor(status: { totpEnabled?: boolean; webauthnCount?: number } | undefined | null): boolean {
   return status?.totpEnabled === true || (status?.webauthnCount ?? 0) > 0;
+}
+
+// ── 10.6: MFA policy model ────────────────────────────────────────────────────
+
+/** Local calendar day (YYYY-MM-DD) — "Später" hides the admin prompt for the rest of that day. */
+export function dayKey(now: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;
+}
+
+/**
+ * The admin MFA prompt of the app frame: during the admin grace period only,
+ * hidden for the rest of the day after "Später". Dismissing never moves the
+ * deadline (the admin API answers 403 MFA_REQUIRED afterwards; the webmail stays usable).
+ */
+export function adminPromptView(
+  info: MfaEnforcementInfo | undefined | null, dismissedDay: string | null, now: Date,
+): { daysLeft: number; deadline: Date } | null {
+  const admin = info?.admin;
+  if (!admin || admin.state !== 'grace') return null;
+  const daysLeft = graceDaysLeft(admin.deadline, now);
+  if (daysLeft === null || dismissedDay === dayKey(now)) return null;
+  return { daysLeft, deadline: new Date(Date.parse(admin.deadline!)) };
 }

@@ -1,7 +1,15 @@
 /**
  * 10.5: "MFA für alle Benutzer erzwingen" (ServerSettings.requireMfaForAllUsers).
  *
- * When the switch is on, an account without a second factor (TOTP or a
+ * 10.6: the switches became a policy model (mfa-policy.ts: per-user override >
+ * admin rule > policy for all users). This module enforces both kinds of
+ * "required": `all` (the rules below, unchanged) and `admin` (admin accounts
+ * under the admin rule or their own override: admin grace period of at most
+ * 14 days, then the admin API needs MFA — adminMfaEnforcementFor(); the webmail
+ * is not blocked by it). Per-user overrides have no stale check (the override
+ * route clears User.mfaGraceStartedAt, so a new override starts a new grace).
+ *
+ * When the policy is "required", an account without a second factor (TOTP or a
  * security key) gets a grace period of `mfaEnforcementGraceDays` days, counted
  * per user from the first check after the switch was turned on
  * (User.mfaGraceStartedAt; a value from before ServerSettings.mfaEnforcementSince
@@ -15,7 +23,7 @@
  *   - a session that was established with MFA (`mfaVerified`) — this includes
  *     SSO sessions whose IdP MFA (`amr`) CoreMail trusts (auth-sso oidc.ts:
  *     always for plain users unless the provider demands CoreMail MFA; for
- *     admin roles under requireMfaForAdmins only with
+ *     admin roles under the admin rule only with
  *     OIDC_TRUST_IDP_MFA_FOR_ADMINS=true).
  *
  * Mail protocols: accounts with MFA need app passwords anyway (mail-auth-core).
@@ -27,10 +35,13 @@
  * Caches: the policy 15 s per process (the settings route of this process calls
  * invalidateMfaEnforcementCache()), the per-user state 15 s, dropped on every
  * auth invalidation event of the user (enrolling / removing a factor publishes
- * `mfa-change`).
+ * `mfa-change`, an override change `mfa-policy-change`, a role change `role-change`).
  */
 import { createLogger, onAuthInvalidation } from '@coremail/core';
 import { prisma } from '../prisma/index.js';
+import {
+  invalidateMfaPolicyCache, loadMfaPolicySettings, resolveMfaPolicy, type ResolvedMfaPolicy,
+} from './mfa-policy.js';
 
 const log = createLogger('auth:mfa-enforcement');
 
@@ -100,13 +111,13 @@ export function mfaEnrolmentRequiredBody(deadline?: Date): Record<string, unknow
 
 // ── Database + caches ─────────────────────────────────────────────────────────
 
-let policyCache: { value: MfaEnforcementPolicy; expires: number } | null = null;
-
 interface UserState {
   enrolled: boolean;
   graceStartedAt: Date | null;
   /** The account can re-authenticate with a password (needed to enrol). */
   hasPassword: boolean;
+  role: string;
+  mfaPolicy: string | null;
 }
 const userCache = new Map<string, { state: UserState; expires: number }>();
 
@@ -114,31 +125,18 @@ onAuthInvalidation((e) => { userCache.delete(e.userId); });
 
 /** Drops the cached policy and per-user states of this process (settings save, tests). */
 export function invalidateMfaEnforcementCache(): void {
-  policyCache = null;
+  invalidateMfaPolicyCache();
   userCache.clear();
 }
 
-/** The current policy (cached 15 s). Throws on database errors. */
+/**
+ * The policy for all users as a 10.5 enforcement policy (cached 15 s) — the
+ * view of accounts that inherit the global policy. Throws on database errors.
+ */
 export async function loadMfaEnforcementPolicy(): Promise<MfaEnforcementPolicy> {
-  const now = Date.now();
-  if (policyCache && policyCache.expires > now) return policyCache.value;
-  const s = await prisma.serverSettings.findUnique({
-    where: { id: 'singleton' },
-    select: {
-      requireMfaForAllUsers: true, mfaEnforcementGraceDays: true,
-      mfaEnforcementSince: true, mfaEnforcementBlocksPrimaryPassword: true,
-    },
-  });
-  const value: MfaEnforcementPolicy = s?.requireMfaForAllUsers === true
-    ? {
-        enabled: true,
-        graceDays: typeof s.mfaEnforcementGraceDays === 'number' ? s.mfaEnforcementGraceDays : MFA_ENFORCEMENT_OFF.graceDays,
-        since: s.mfaEnforcementSince instanceof Date ? s.mfaEnforcementSince : null,
-        blocksPrimaryPassword: s.mfaEnforcementBlocksPrimaryPassword === true,
-      }
-    : MFA_ENFORCEMENT_OFF;
-  policyCache = { value, expires: now + CACHE_TTL_MS };
-  return value;
+  const s = await loadMfaPolicySettings();
+  if (s.users !== 'required') return MFA_ENFORCEMENT_OFF;
+  return { enabled: true, graceDays: s.graceDays, since: s.since, blocksPrimaryPassword: s.blocksPrimaryPassword };
 }
 
 async function loadUserState(userId: string): Promise<UserState | null> {
@@ -147,7 +145,7 @@ async function loadUserState(userId: string): Promise<UserState | null> {
   if (hit && hit.expires > now) return hit.state;
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { mfaGraceStartedAt: true, passwordHash: true, authSource: true },
+    select: { mfaGraceStartedAt: true, passwordHash: true, authSource: true, role: true, mfaPolicy: true },
   });
   if (!user) return null;
   const mfa = await prisma.userMfa.findUnique({
@@ -160,6 +158,8 @@ async function loadUserState(userId: string): Promise<UserState | null> {
     graceStartedAt: user.mfaGraceStartedAt instanceof Date ? user.mfaGraceStartedAt : null,
     // OIDC-only accounts have no password to confirm an enrolment with (reauth.ts)
     hasPassword: Boolean(user.passwordHash) || String(user.authSource) === 'LDAP',
+    role: typeof user.role === 'string' ? user.role : 'USER',
+    mfaPolicy: typeof user.mfaPolicy === 'string' ? user.mfaPolicy : null,
   };
   if (userCache.size > 10_000) userCache.clear();
   userCache.set(userId, { state, expires: now + CACHE_TTL_MS });
@@ -170,26 +170,17 @@ export interface MfaEnforcementResult {
   status: MfaEnforcementStatus;
   /** false for SSO-only accounts: they cannot confirm an enrolment with a password. */
   canEnrol: boolean;
+  /** 10.6: the resolved policy of the account (absent for a missing account). */
+  policy?: ResolvedMfaPolicy;
 }
 
-/**
- * Enforcement status of a user. `mfaVerified` = the session was established
- * with a second factor (never true on mail protocols). The first check of an
- * account without MFA after the switch was turned on starts its grace period
- * (stored). Throws on database errors (callers fail closed).
- */
-export async function mfaEnforcementFor(
-  userId: string,
-  opts: { mfaVerified?: boolean | undefined; now?: Date } = {},
-): Promise<MfaEnforcementResult> {
-  const policy = await loadMfaEnforcementPolicy();
-  if (!policy.enabled) return { status: { state: 'off' }, canEnrol: true };
-  const now = opts.now ?? new Date();
-  const user = await loadUserState(userId);
-  // A missing account is refused by the session checks themselves.
-  if (!user) return { status: { state: 'satisfied' }, canEnrol: false };
-  if (user.enrolled || opts.mfaVerified === true) return { status: { state: 'satisfied' }, canEnrol: user.hasPassword };
-
+/** The grace decision of `resolved` for an account without MFA; starts (stores) the grace period. */
+async function graceDecision(
+  userId: string, user: UserState, resolved: ResolvedMfaPolicy, now: Date,
+): Promise<MfaEnforcementStatus> {
+  const policy: MfaEnforcementPolicy = {
+    enabled: true, graceDays: resolved.graceDays, since: resolved.since, blocksPrimaryPassword: resolved.blocksPrimaryPassword,
+  };
   const { start, persist } = effectiveGraceStart(policy, user.graceStartedAt, now);
   if (persist) {
     const where = policy.since
@@ -197,12 +188,52 @@ export async function mfaEnforcementFor(
       : { id: userId, mfaGraceStartedAt: null };
     await prisma.user.updateMany({ where, data: { mfaGraceStartedAt: start } });
     user.graceStartedAt = start;
-    log.info({ userId, graceDays: policy.graceDays }, 'MFA enforcement: grace period started');
+    log.info({ userId, graceDays: policy.graceDays, kind: resolved.enforcement }, 'MFA enforcement: grace period started');
   }
-  return {
-    status: mfaEnforcementDecision(policy, { enrolled: false, mfaVerified: false, graceStart: start }, now),
-    canEnrol: user.hasPassword,
-  };
+  return mfaEnforcementDecision(policy, { enrolled: false, mfaVerified: false, graceStart: start }, now);
+}
+
+async function resolvedFor(userId: string): Promise<{ user: UserState; resolved: ResolvedMfaPolicy } | null> {
+  const [settings, user] = await Promise.all([loadMfaPolicySettings(), loadUserState(userId)]);
+  if (!user) return null;
+  return { user, resolved: resolveMfaPolicy(settings, { role: user.role, mfaPolicy: user.mfaPolicy }) };
+}
+
+/**
+ * Enforcement status of a user under the `all` kind (10.5 rules). `mfaVerified`
+ * = the session was established with a second factor (never true on mail
+ * protocols). Accounts whose resolved policy is not "required", or that fall
+ * under the admin rule instead, are `off` here. The first check of an account
+ * without MFA starts its grace period (stored). Throws on database errors
+ * (callers fail closed).
+ */
+export async function mfaEnforcementFor(
+  userId: string,
+  opts: { mfaVerified?: boolean | undefined; now?: Date } = {},
+): Promise<MfaEnforcementResult> {
+  const r = await resolvedFor(userId);
+  // A missing account is refused by the session checks themselves.
+  if (!r) return { status: { state: 'satisfied' }, canEnrol: false };
+  const { user, resolved } = r;
+  if (resolved.enforcement !== 'all') return { status: { state: 'off' }, canEnrol: user.hasPassword, policy: resolved };
+  if (user.enrolled || opts.mfaVerified === true) return { status: { state: 'satisfied' }, canEnrol: user.hasPassword, policy: resolved };
+  return { status: await graceDecision(userId, user, resolved, opts.now ?? new Date()), canEnrol: user.hasPassword, policy: resolved };
+}
+
+/**
+ * 10.6: status of the admin rule for an account (`admin` kind): `off` when it
+ * does not apply, `satisfied` once a factor is enrolled (whether the SESSION is
+ * MFA-verified is the caller's check), else `grace` until the admin grace
+ * period (≤ 14 days, from the first check) ends, then `required`. Starts the
+ * grace period. Throws on database errors.
+ */
+export async function adminMfaEnforcementFor(userId: string, opts: { now?: Date } = {}): Promise<MfaEnforcementResult> {
+  const r = await resolvedFor(userId);
+  if (!r) return { status: { state: 'off' }, canEnrol: false };
+  const { user, resolved } = r;
+  if (resolved.enforcement !== 'admin') return { status: { state: 'off' }, canEnrol: user.hasPassword, policy: resolved };
+  if (user.enrolled) return { status: { state: 'satisfied' }, canEnrol: user.hasPassword, policy: resolved };
+  return { status: await graceDecision(userId, user, resolved, opts.now ?? new Date()), canEnrol: user.hasPassword, policy: resolved };
 }
 
 /**
@@ -226,13 +257,15 @@ export async function mfaEnrolmentRefusal(
 
 /**
  * Mail protocols: true when the primary password (or a directory password) of
- * the user may no longer be used — enforcement on, the sub-option
- * mfaEnforcementBlocksPrimaryPassword on and the grace period over. Starts the
- * grace period like a web check. Throws on database errors.
+ * the user may no longer be used — `all` enforcement for the account, the
+ * sub-option mfaEnforcementBlocksPrimaryPassword on and the grace period over.
+ * Starts the grace period like a web check. Throws on database errors.
  */
 export async function mailPrimaryPasswordBlocked(userId: string, now?: Date): Promise<boolean> {
-  const policy = await loadMfaEnforcementPolicy();
-  if (!policy.enabled) return false;
-  const { status } = await mfaEnforcementFor(userId, now ? { now } : {});
-  return policy.blocksPrimaryPassword && status.state === 'required';
+  // the sub-option is global: without it (and without the global "required",
+  // whose mail logins start grace periods as in 10.5) nothing to look up per user
+  const s = await loadMfaPolicySettings();
+  if (!s.blocksPrimaryPassword && s.users !== 'required') return false;
+  const { status, policy } = await mfaEnforcementFor(userId, now ? { now } : {});
+  return policy?.blocksPrimaryPassword === true && status.state === 'required';
 }

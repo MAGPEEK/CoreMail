@@ -3,7 +3,7 @@ import { ArrowLeft, KeyRound } from 'lucide-react';
 import { verifyMfa, verifyMfaWebAuthn, startMfaWebAuthn, type MfaMethod } from '../api/client.js';
 import { ApiError } from '../lib/errors.js';
 import { webauthnAuthenticate, webauthnErrorMessage, webauthnSupported } from '../lib/webauthn.js';
-import { useT } from '../i18n/useT.js';
+import { fmt, useT } from '../i18n/useT.js';
 
 type Tokens = { accessToken: string; refreshToken: string };
 type Mode = 'totp' | 'backup' | 'webauthn';
@@ -18,6 +18,8 @@ interface Props {
   onSuccess: (tokens: Tokens) => Promise<void>;
   /** Back to the password step; `reason` is shown there (e.g. too many failed codes) */
   onBack: (reason?: string) => void;
+  /** 10.6: days this browser may be remembered after the MFA step (absent/0 = not offered). */
+  rememberDays?: number | undefined;
 }
 
 const EMPTY_DIGITS = ['', '', '', '', '', ''];
@@ -31,7 +33,7 @@ function cleanBackupCode(v: string): string {
  * Second login step: 6-digit TOTP, backup code (letters/digits/dashes) or a
  * WebAuthn security key, depending on the user's MFA setup.
  */
-export function MfaChallengeForm({ challengeToken, method, methods, email, onSuccess, onBack }: Props) {
+export function MfaChallengeForm({ challengeToken, method, methods, email, onSuccess, onBack, rememberDays }: Props) {
   const t = useT();
   const available: MfaMethod[] = methods && methods.length > 0
     ? methods
@@ -43,6 +45,8 @@ export function MfaChallengeForm({ challengeToken, method, methods, email, onSuc
   const [backupCode, setBackupCode] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [remember, setRemember] = useState(false);
+  const rememberOn = remember && (rememberDays ?? 0) > 0;
   const digitRefs = useRef<(HTMLInputElement | null)[]>([]);
   const backupRef = useRef<HTMLInputElement | null>(null);
 
@@ -77,14 +81,14 @@ export function MfaChallengeForm({ challengeToken, method, methods, email, onSuc
     if (mode === 'totp') {
       const code = digits.join('');
       if (code.length < 6) { setError(t('auth_mfa_enter_digits')); return; }
-      void run(() => verifyMfa(challengeToken, code), () => {
+      void run(() => verifyMfa(challengeToken, code, rememberOn), () => {
         setDigits(EMPTY_DIGITS);
         setTimeout(() => digitRefs.current[0]?.focus(), 50);
       });
     } else if (mode === 'backup') {
       const code = backupCode.trim();
       if (code.length < 6) { setError(t('auth_mfa_enter_backup')); return; }
-      void run(() => verifyMfa(challengeToken, code), () => backupRef.current?.select());
+      void run(() => verifyMfa(challengeToken, code, rememberOn), () => backupRef.current?.select());
     }
   };
 
@@ -93,7 +97,7 @@ export function MfaChallengeForm({ challengeToken, method, methods, email, onSuc
       try {
         const options = await startMfaWebAuthn(challengeToken);
         const assertion = await webauthnAuthenticate(options);
-        return await verifyMfaWebAuthn(challengeToken, assertion);
+        return await verifyMfaWebAuthn(challengeToken, assertion, rememberOn);
       } catch (err) {
         if (err instanceof ApiError) throw err;
         throw new Error(webauthnErrorMessage(err));
@@ -179,6 +183,13 @@ export function MfaChallengeForm({ challengeToken, method, methods, email, onSuc
         >
           <KeyRound size={15} /> {loading ? t('auth_mfa_waiting_key') : t('auth_mfa_sign_in_key')}
         </button>
+      )}
+
+      {(rememberDays ?? 0) > 0 && (
+        <label className="flex items-center justify-center gap-2 text-sm text-fg-muted">
+          <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+          {fmt(t('auth_mfa_remember'), { days: rememberDays ?? 0 })}
+        </label>
       )}
 
       {error && (

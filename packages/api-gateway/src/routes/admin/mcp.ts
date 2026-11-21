@@ -17,7 +17,7 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '@coremail/storage';
-import { requireArea } from '../../middleware/auth.js';
+import { requireArea, adminMfaRefusal } from '../../middleware/auth.js';
 import { scopeOf } from '../../middleware/admin-scope.js';
 import { isScoped } from '../../lib/admin-scope.js';
 import { allowedActions, allowedAreas, canAccess } from '../../lib/rbac.js';
@@ -157,6 +157,10 @@ adminMcpRouter.post('/tokens', anyAdmin, async (req: Request, res: Response) => 
     res.status(403).json({ error: 'This admin role has no write access — create a read token', code: 'FORBIDDEN_ROLE' });
     return;
   }
+  // 10.6: during the admin MFA grace period the admin API works, but a token created
+  // then could never be used (MCP tokens get no grace) — refuse with the usual code
+  const mfa = await adminMfaRefusal(actor.userId, actor.mfaVerified, { allowGrace: false });
+  if (mfa) { res.status(403).json(mfa); return; }
   const created = await createMcpToken(actor.userId, input, actor.mfaVerified === true);
   if (!created) {
     res.status(409).json({ error: `At most ${MCP_TOKENS_PER_ADMIN} active tokens per admin — revoke one first`, code: 'TOKEN_LIMIT' });

@@ -67,13 +67,18 @@ export async function run(state) {
   });
 
   // 10.5: a fresh installation requires MFA for admins (requireMfaForAdmins).
-  await check('setup: fresh installation requires MFA for admins (password-only session → 403 MFA_REQUIRED)', async () => {
+  // 10.6: the admin rule starts with an admin grace period (≤ 14 days): the admin API still
+  // works and names the deadline (X-CoreMail-Mfa-Grace-Until); afterwards 403 MFA_REQUIRED.
+  await check('setup: fresh installation requires MFA for admins (password-only session → admin grace period)', async () => {
     if (totpSecretOf(state.adminEmail)) return 'admin enrolled in an earlier run — skipped';
     const l = await http('POST', '/auth/login', { body: { email: state.adminEmail, password: c.admin } });
     assert(l.status === 200 && l.json?.accessToken, `login ${l.status} ${l.text.slice(0, 200)}`);
     const r = await http('GET', '/api/v1/admin/domains', { token: l.json.accessToken });
-    assert(r.status === 403 && r.json?.code === 'MFA_REQUIRED', `admin API without MFA → ${r.status} ${r.text.slice(0, 200)}`);
-    return '403 MFA_REQUIRED';
+    const until = r.headers?.get?.('x-coremail-mfa-grace-until') ?? r.headers?.['x-coremail-mfa-grace-until'];
+    assert(r.status === 200 && until, `admin API without MFA during the grace period → ${r.status} ${r.text.slice(0, 200)}`);
+    const st = await http('GET', '/api/v1/admin/mfa-status', { token: l.json.accessToken });
+    assert(st.status === 200 && st.json?.state === 'grace', `mfa-status → ${st.status} ${st.text.slice(0, 200)}`);
+    return `200 within the admin grace period (until ${until})`;
   });
   // The admin enrols TOTP and logs in with the second factor (lib.mjs session()).
   let tok;

@@ -76,6 +76,19 @@ POST   /auth/sessions/revoke-others     ends every session except the calling on
 Mobile devices (`GET/DELETE /api/v1/smime/devices`) and S/MIME processing
 (`GET/PUT /api/v1/smime/settings`) are shown in Settings → Sicherheit with their existing routes.
 
+10.6: "Gemerkte Geräte" — browsers that skip the MFA step ("Auf diesem Gerät für N Tage nicht
+mehr fragen", [mfa-policy.md](mfa-policy.md#gerät-merken)):
+
+```
+GET    /api/v1/user/trusted-devices        → { devices: [{ id, surface, userAgent, ipPrefix, createdAt, lastUsedAt, expiresAt }] }
+DELETE /api/v1/user/trusted-devices/:id    revokes one own device (404 for any other id)
+DELETE /api/v1/user/trusted-devices        revokes all → { revoked }
+```
+
+"Alle anderen Sitzungen beenden" and a password or MFA change revoke them too. While the MFA
+policy of the account is "Aus", Settings → Sicherheit shows a note instead of the TOTP /
+security-key setup (enrolled factors stay and can be removed).
+
 ### Read state and read receipts
 
 ```
@@ -290,6 +303,13 @@ people who have access to the same mailbox:
 The pre-9.4 form `/mail?mailbox=shared:<id>` is still understood and rewritten.
 
 ## MFA enforcement (10.5)
+
+> 10.6: these switches became the MFA policy model on BCP → Authentifizierung → Mehrstufige
+> Anmeldung (MFA) — policy for all users (Pflicht / Optional / Aus), admin rule (Pflicht with an
+> admin grace period of at most 14 days / Wie alle Benutzer), per-user exceptions and "Gerät
+> merken". The rules below are the "Pflicht" enforcement for users; see
+> [mfa-policy.md](mfa-policy.md) for the model, the admin rule and remembered devices. The
+> fields below are still written (in step with the new columns).
 
 Two server-wide switches in BCP → Einstellungen → Sicherheit (organisation area: only
 ORGANIZATION_MANAGEMENT may change them; every change is audited as

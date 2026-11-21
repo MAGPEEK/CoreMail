@@ -124,17 +124,19 @@ The flow after the wizard, without a dead end:
 1. The wizard's session (password only) still reaches the secrets download and `/setup/finish`
    (`requireRoleInSetupWindow()`: role checks as usual, no admin-MFA rule; both routes only work
    inside the setup window).
-2. The summary says the BCP opens only after the second factor is set up and links to
+2. The summary says the second factor is required for the BCP and links to
    Webmail → Settings → Security. The webmail is not affected by `requireMfaForAdmins`, so the
    admin enrols TOTP or a security key there (`/auth/mfa` is outside the admin API).
-3. Until then every admin API call answers `403 MFA_REQUIRED` and the BCP shows its MFA page
-   (`/bcp/mfa-required`: explanation, a link to the webmail's security settings, "Erneut prüfen",
-   sign-out).
+3. 10.6: the admin rule starts with an admin grace period (at most 14 days, default 14 —
+   docs/mfa-policy.md): until it ends the BCP works and shows a dismissible prompt
+   ("Jetzt einrichten" / "Später"; the webmail shows it too). After the deadline every admin API
+   call answers `403 MFA_REQUIRED` and the BCP shows its MFA page (`/bcp/mfa-required`:
+   explanation, a link to the webmail's security settings, "Erneut prüfen", sign-out).
 4. After the enrolment the BCP session is not MFA-verified (`403 MFA_NOT_VERIFIED`), so the BCP
    asks for a new sign-in, now with the second factor.
 
-The switch stays in BCP → Einstellungen → Sicherheit ("MFA für Administratoren"); every change of
-it is audited (`settings.mfa-policy.update`). With Webmail switched off for the admin account
+10.6: the switch is the admin rule on BCP → Authentifizierung → Mehrstufige Anmeldung (MFA)
+("Administratoren: Pflicht"); every change of it is audited (`settings.mfa-policy.update`). With Webmail switched off for the admin account
 (protocol switches) the webmail sign-in is refused — keep Webmail on for admins until they have
 enrolled. The optional "MFA für alle Benutzer erzwingen" is described in
 [user-settings.md](user-settings.md#mfa-enforcement-105).

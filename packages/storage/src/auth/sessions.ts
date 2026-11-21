@@ -28,6 +28,7 @@ import { sessionSurfaceOf } from './refresh-cookie.js';
 import type { IncomingHttpHeaders } from 'node:http';
 import { recordLastLogin } from './last-login.js';
 import { revokeMcpTokensOfUser } from './mcp-tokens.js';
+import { deviceSurfaceOf, revokeTrustedDevicesOfUser, type DeviceSurface } from './trusted-devices.js';
 import { IP_VERIFIED_HEADER, normalizeIp } from '../mail-auth-core.js';
 
 const log = createLogger('auth:sessions');
@@ -60,6 +61,12 @@ export interface ClientInfo {
    * escalates it or learns it as a known network. Default true.
    */
   ipTrusted?: boolean | undefined;
+  /**
+   * 10.6: the browser surface of the request ("Gerät merken" cookies):
+   * `webmail` / `bcp` for browser clients, null/absent for everything else
+   * (admin CLI, internal callers) — those never skip or remember MFA.
+   */
+  deviceSurface?: DeviceSurface | null | undefined;
 }
 
 /**
@@ -79,7 +86,10 @@ export function requestIpTrusted(req: { ip?: string | undefined; headers: Incomi
 /** The ClientInfo of an HTTP login / refresh / SSO request (Express request). */
 export function clientInfoOf(req: { ip?: string | undefined; headers: IncomingHttpHeaders; socket?: { remoteAddress?: string | undefined } | undefined }): ClientInfo {
   const ua = req.headers['user-agent'];
-  return { ip: req.ip ?? 'unknown', userAgent: ua ?? '', surface: sessionSurfaceOf(req.headers), ipTrusted: requestIpTrusted(req) };
+  return {
+    ip: req.ip ?? 'unknown', userAgent: ua ?? '', surface: sessionSurfaceOf(req.headers), ipTrusted: requestIpTrusted(req),
+    deviceSurface: deviceSurfaceOf(req.headers),
+  };
 }
 
 export function hashRefreshToken(token: string): string {
@@ -394,7 +404,7 @@ export interface RevokeAllOptions {
   reason: string;
 }
 
-export async function revokeAllSessions(userId: string, opts: RevokeAllOptions): Promise<{ sessions: number; appPasswords: number; mcpTokens: number }> {
+export async function revokeAllSessions(userId: string, opts: RevokeAllOptions): Promise<{ sessions: number; appPasswords: number; mcpTokens: number; trustedDevices: number }> {
   const where = opts.exceptSessionId ? { userId, NOT: { id: opts.exceptSessionId } } : { userId };
   const ids = (await prisma.session.findMany({ where, select: { id: true } })).map((s) => s.id);
   const sessions = (await prisma.session.deleteMany({ where })).count;
@@ -405,6 +415,8 @@ export async function revokeAllSessions(userId: string, opts: RevokeAllOptions):
   // deactivation, deletion, password reset / change, sign out everywhere).
   // Never throws; the api-gateway also rejects tokens older than the mark below.
   const mcpTokens = await revokeMcpTokensOfUser(userId, opts.reason);
+  // 10.6: and every remembered MFA device (never throws)
+  const trustedDevices = await revokeTrustedDevicesOfUser(userId, opts.reason);
 
   await storeSessionRevocations(ids);
   const now = Date.now();
@@ -427,7 +439,7 @@ export async function revokeAllSessions(userId: string, opts: RevokeAllOptions):
     // v7.1.0: live mail connections authenticated with an app password end too.
     ...(opts.appPasswords ? { appPasswordsRevoked: true } : {}),
   });
-  log.info({ userId, sessions, appPasswords, mcpTokens, reason: opts.reason }, 'All sessions revoked');
-  return { sessions, appPasswords, mcpTokens };
+  log.info({ userId, sessions, appPasswords, mcpTokens, trustedDevices, reason: opts.reason }, 'All sessions revoked');
+  return { sessions, appPasswords, mcpTokens, trustedDevices };
 }
 

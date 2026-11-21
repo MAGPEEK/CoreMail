@@ -15,7 +15,12 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { prisma, clearMessageSizeLimitCache, invalidateMailboxAccessAuditSettings } from '@coremail/storage';
-import { MFA_GRACE_DAYS_BOUNDS, invalidateMfaEnforcementCache } from '@coremail/storage/auth';
+import {
+  ADMIN_MFA_RULES, MFA_ADMIN_GRACE_MAX_DAYS, MFA_GRACE_DAYS_BOUNDS, MFA_POLICY_LEVELS, MFA_REMEMBER_DAYS_BOUNDS,
+  MFA_SETTINGS_SELECT, invalidateMfaEnforcementCache, legacySwitchesToPolicy, levelFromDb, mfaPolicyProblem,
+  mfaPolicySettingsFromRow, mfaPolicyWriteData, resolveMfaPolicy,
+  type AdminMfaRule, type MfaPolicyLevel, type MfaPolicySettings, type MfaSettingsRow,
+} from '@coremail/storage/auth';
 import { requireArea } from '../../middleware/auth.js';
 import { createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 import { audit, auditContext, invalidateAuditCache } from '../../lib/audit.js';
@@ -217,16 +222,17 @@ adminGlobalSettingsRouter.put('/security', async (req: Request, res: Response) =
   // logged via ALWAYS_AUDIT („audit.*" + „settings.*").
   const before = await prisma.serverSettings.findUnique({
     where: { id: 'singleton' },
-    select: {
-      auditLogEnabled: true, requireMfaForAdmins: true, requireMfaForAllUsers: true,
-      mfaEnforcementGraceDays: true, mfaEnforcementBlocksPrimaryPassword: true,
-    },
+    select: { auditLogEnabled: true, ...MFA_SETTINGS_SELECT },
   });
   const auditFlagChanged = parsed.data.auditLogEnabled !== undefined
     && (before?.auditLogEnabled ?? true) !== parsed.data.auditLogEnabled;
   // 10.5: MFA policy diff; switching the enforcement on starts new grace periods
-  const mfa = mfaPolicyChange(before, parsed.data, new Date());
-  const data = { ...definedOnly(parsed.data), ...(mfa.since ? { mfaEnforcementSince: mfa.since } : {}) };
+  const now = new Date();
+  const mfa = mfaPolicyChange(before, parsed.data, now);
+  // 10.6: the legacy switches also write the new policy columns (both forms stay in step)
+  const beforePolicy = mfaPolicySettingsFromRow(before as MfaSettingsRow | null);
+  const policyData = mfaPolicyWriteData(beforePolicy, legacySwitchesToPolicy(beforePolicy, parsed.data), now);
+  const data = { ...definedOnly(parsed.data), ...policyData, ...(mfa.since ? { mfaEnforcementSince: mfa.since } : {}) };
 
   const cfg = await prisma.serverSettings.upsert({
     where:  { id: 'singleton' },
@@ -275,6 +281,113 @@ adminGlobalSettingsRouter.put('/security', async (req: Request, res: Response) =
   log.info(parsed.data, 'Security policies updated');
   publishReload('security');
   res.json(settingsView(cfg));
+});
+
+// ── GET / PUT /api/v1/admin/settings/mfa-policy (10.6) ─────────────────────────
+// BCP → Authentifizierung → Mehrstufige Anmeldung (MFA). Area organisation
+// (read: SERVER_MANAGEMENT / VIEW_ONLY_ORG; write: ORGANIZATION_MANAGEMENT),
+// organisation-wide only (the area is UNSCOPED_ONLY). The answer also lists the
+// admin accounts with their override and enrolment state, so the page can warn
+// when an admin would end up without MFA. Per-user overrides: routes/admin/user-mfa.ts.
+
+export const MfaPolicySchema = z.object({
+  users:                 z.enum(MFA_POLICY_LEVELS as [MfaPolicyLevel, ...MfaPolicyLevel[]]),
+  admins:                z.enum(ADMIN_MFA_RULES as [AdminMfaRule, ...AdminMfaRule[]]),
+  graceDays:             z.number().int().min(MFA_GRACE_DAYS_BOUNDS[0]).max(MFA_GRACE_DAYS_BOUNDS[1]),
+  blocksPrimaryPassword: z.boolean(),
+  adminGraceDays:        z.number().int().min(0).max(MFA_ADMIN_GRACE_MAX_DAYS),
+  rememberDays:          z.number().int().min(MFA_REMEMBER_DAYS_BOUNDS[0]).max(MFA_REMEMBER_DAYS_BOUNDS[1]),
+  rememberDaysAdmins:    z.number().int().min(MFA_REMEMBER_DAYS_BOUNDS[0]).max(MFA_REMEMBER_DAYS_BOUNDS[1]),
+}).partial().strict();
+
+const POLICY_KEYS = ['users', 'admins', 'graceDays', 'blocksPrimaryPassword', 'adminGraceDays', 'rememberDays', 'rememberDaysAdmins'] as const;
+
+function policyView(s: MfaPolicySettings): Record<string, unknown> {
+  return Object.fromEntries(POLICY_KEYS.map((k) => [k, s[k]]));
+}
+
+/** Admin accounts with override, enrolment and effective level (for the "admin without MFA" warning). */
+async function adminAccounts(s: MfaPolicySettings): Promise<Array<Record<string, unknown>>> {
+  const admins = await prisma.user.findMany({
+    where: { role: { not: 'USER' }, active: true },
+    select: { id: true, email: true, displayName: true, role: true, mfaPolicy: true },
+    take: 500,
+  });
+  const ids = admins.map((a) => a.id);
+  const mfa = ids.length > 0
+    ? await prisma.userMfa.findMany({ where: { userId: { in: ids } }, select: { userId: true, totpEnabled: true, webAuthnCredentials: true } })
+    : [];
+  const enrolled = new Set(mfa.filter((m) => m.totpEnabled || (Array.isArray(m.webAuthnCredentials) && (m.webAuthnCredentials as unknown[]).length > 0))
+    .map((m) => m.userId));
+  return admins
+    .filter((a) => String(a.role) !== 'USER')
+    .map((a) => {
+      const r = resolveMfaPolicy(s, { role: String(a.role), mfaPolicy: a.mfaPolicy ?? null });
+      return {
+        id: a.id, email: a.email, displayName: a.displayName, role: a.role,
+        mfaPolicy: levelFromDb(a.mfaPolicy), enrolled: enrolled.has(a.id),
+        effective: { level: r.level, source: r.source },
+      };
+    });
+}
+
+async function mfaPolicyResponse(s: MfaPolicySettings): Promise<Record<string, unknown>> {
+  return {
+    policy: policyView(s),
+    bounds: {
+      graceDays: MFA_GRACE_DAYS_BOUNDS, adminGraceDays: [0, MFA_ADMIN_GRACE_MAX_DAYS], rememberDays: MFA_REMEMBER_DAYS_BOUNDS,
+    },
+    admins: await adminAccounts(s),
+  };
+}
+
+adminGlobalSettingsRouter.get('/mfa-policy', async (_req: Request, res: Response) => {
+  try {
+    const row = await prisma.serverSettings.findUnique({ where: { id: 'singleton' }, select: MFA_SETTINGS_SELECT });
+    res.json(await mfaPolicyResponse(mfaPolicySettingsFromRow(row as MfaSettingsRow | null)));
+  } catch (err) {
+    log.error({ err }, 'Failed to read the MFA policy');
+    res.status(500).json({ error: 'Einstellungen nicht verfügbar' });
+  }
+});
+
+adminGlobalSettingsRouter.put('/mfa-policy', async (req: Request, res: Response) => {
+  const parsed = MfaPolicySchema.safeParse(req.body ?? {});
+  if (!parsed.success) { invalid(res, parsed.error.issues); return; }
+  const row = await prisma.serverSettings.findUnique({ where: { id: 'singleton' }, select: MFA_SETTINGS_SELECT });
+  const before = mfaPolicySettingsFromRow(row as MfaSettingsRow | null);
+  const next = definedOnly(parsed.data) as Partial<MfaPolicySettings>;
+  const merged: MfaPolicySettings = { ...before, ...next };
+  const problem = mfaPolicyProblem(merged);
+  if (problem) { res.status(400).json({ error: `Ungültige Eingabe — ${problem}` }); return; }
+
+  const changes: Record<string, { from: string; to: string }> = {};
+  for (const k of POLICY_KEYS) {
+    if (next[k] !== undefined && next[k] !== before[k]) changes[k] = { from: String(before[k]), to: String(next[k]) };
+  }
+  const data = mfaPolicyWriteData(before, next, new Date());
+  const cfg = await prisma.serverSettings.upsert({
+    where: { id: 'singleton' },
+    create: { id: 'singleton', ...data },
+    update: data,
+    select: MFA_SETTINGS_SELECT,
+  });
+  invalidateMfaEnforcementCache(); // this process at once; other services within 15 s
+  if (Object.keys(changes).length > 0) {
+    const user = req.apiUser;
+    audit({
+      ...(user?.userId !== undefined ? { actorId: user.userId } : {}),
+      ...(user?.email !== undefined ? { actorEmail: user.email } : {}),
+      action: 'settings.mfa-policy.update',
+      targetType: 'settings',
+      targetId: 'mfa_policy',
+      changes,
+      ...auditContext(req),
+    });
+  }
+  log.info({ changes }, 'MFA policy updated');
+  publishReload('security');
+  res.json(await mfaPolicyResponse(mfaPolicySettingsFromRow(cfg as MfaSettingsRow)));
 });
 
 // ── PUT /api/v1/admin/settings/maintenance ────────────────────────────────────

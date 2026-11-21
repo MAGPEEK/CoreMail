@@ -42,6 +42,8 @@ import { LdapPage } from './pages/LdapPage.js';
 import { SsoPage } from './pages/SsoPage.js';
 import { BrandingPage } from './pages/BrandingPage.js';
 import { McpPage } from './pages/McpPage.js';
+import { MfaPolicyPage } from './pages/MfaPolicyPage.js';
+import { AdminMfaPrompt } from './components/AdminMfaPrompt.js';
 import { getToken, useSessionChecked } from './api/client.js';
 import { useAccessStore } from './store/access.js';
 import { firstAllowedPath } from './lib/adminAreas.js';
@@ -213,6 +215,8 @@ function AdminLayout({ children }: { children: React.ReactNode }) {
               <Lock size={13} aria-hidden="true" /> {t('perm_readonly_banner')}
             </div>
           )}
+          {/* 10.6: admin MFA grace period — dismissible prompt */}
+          {ready && <AdminMfaPrompt />}
           <ErrorBoundary key={location.pathname}>
             {/* Pages render only once the permissions are known: a forbidden
                 route shows the 403 page instead of firing API calls that fail. */}
@@ -278,6 +282,7 @@ createRoot(document.getElementById('root')!).render(
                   <Route path="/sso"         element={<SsoPage />} />
                   <Route path="/branding"    element={<BrandingPage />} />
                   <Route path="/mcp"         element={<McpPage />} />
+                  <Route path="/mfa"         element={<MfaPolicyPage />} />
                   <Route path="/" element={<HomeRedirect />} />
                 </Routes>
               </AdminLayout>

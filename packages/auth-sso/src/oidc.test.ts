@@ -20,6 +20,7 @@ const redis = createFakeRedis();
 const sso = await import('./index.js');
 const { FakeIdp } = await import('./testing.js');
 const core = await import('@coremail/core');
+const storageAuth = await import('@coremail/storage/auth');
 
 const BASE = 'https://mail.example.com';
 const CLIENT = { ip: '198.51.100.7', userAgent: 'test' };
@@ -34,6 +35,7 @@ beforeEach(async () => {
   for (const t of ['user', 'userMfa', 'session', 'domain', 'oidcProvider', 'mailbox', 'folder', 'calendar', 'serverSettings'] as const) db[t].rows = [];
   redis.store.clear();
   sso.invalidateOidcClient();
+  storageAuth.invalidateMfaEnforcementCache(); // 10.6: the MFA policy is cached 15 s
   domainId = (await db.domain.create({ data: { name: 'example.com' } }))['id'] as string;
   await db.domain.create({ data: { name: 'other.org' } });
   providerId = (await db.oidcProvider.create({

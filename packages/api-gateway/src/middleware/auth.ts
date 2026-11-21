@@ -2,7 +2,8 @@ import type { Request, Response, NextFunction } from 'express';
 import { verifyAccessToken, createLogger, onAuthInvalidation } from '@coremail/core';
 import { prisma } from '@coremail/storage';
 import {
-  isAccessTokenRevoked, isAccessTokenRevokedShared, mfaEnrolmentRefusal, webAccessRefusal, type WebSurface,
+  adminMfaEnforcementFor, isAccessTokenRevoked, isAccessTokenRevokedShared, mfaEnrolmentRefusal, webAccessRefusal,
+  type WebSurface,
 } from '@coremail/storage/auth';
 import {
   canAccess, hasAdminAction, isAdminRole, isReadMethod, isUnscopedOnlyArea, stricterRole,
@@ -249,40 +250,61 @@ function enforceWebmailSwitch(req: Request, res: Response, next: NextFunction): 
 const MFA_CHECKED = Symbol('adminMfaChecked');
 
 /**
- * Forced 2FA for admins (ServerSettings.requireMfaForAdmins):
- *   - no MFA enrolled            → 403 MFA_REQUIRED (setup lives under /auth/mfa,
- *                                  outside /admin — no chicken-and-egg lockout)
+ * Forced 2FA for admins (ServerSettings.requireMfaForAdmins; 10.6: the admin
+ * rule of the MFA policy model or the admin's own "required" override):
+ *   - no MFA enrolled            → 10.6: allowed during the admin grace period
+ *                                  (≤ 14 days, header X-CoreMail-Mfa-Grace-Until),
+ *                                  then 403 MFA_REQUIRED (setup lives under
+ *                                  /auth/mfa, outside /admin — no chicken-and-egg lockout)
  *   - enrolled, but this session was not established with MFA
  *                                → 403 MFA_NOT_VERIFIED (log in again)
  * v7.0.0: fails CLOSED on database errors (503) instead of letting admins through.
- * Runs at most once per request.
+ * Runs at most once per request. 10.3: the rule on its own is also used by the
+ * admin MCP endpoint for its tokens (without grace).
  */
+export interface AdminMfaRefusal {
+  error: string;
+  code: 'MFA_REQUIRED' | 'MFA_NOT_VERIFIED';
+  /** 10.6: end of the admin grace period that is over (MFA_REQUIRED after a grace period). */
+  deadline?: string;
+}
+
+/** 10.6: response header naming the end of the admin MFA grace period while it runs (ISO time). */
+export const ADMIN_MFA_GRACE_HEADER = 'X-CoreMail-Mfa-Grace-Until';
+
 /**
- * The forced-2FA rule on its own (10.3: also used by the admin MCP endpoint for
- * its tokens): null when the admin may go on, else the 403 body. Throws on
- * database errors (callers fail closed).
+ * 10.6: the admin rule (storage mfa-policy.ts: admin rule or the admin's own
+ * "required" override) with its grace period: an admin without a factor may
+ * use the admin API until the deadline (at most 14 days from the first check;
+ * `graceUntil` set — the BCP shows a prompt), afterwards 403 MFA_REQUIRED. An
+ * enrolled admin needs an MFA-verified session (MFA_NOT_VERIFIED) as before.
+ * `allowGrace: false` (MCP tokens) refuses during the grace period too.
+ * Throws on database errors (callers fail closed).
  */
+export async function adminMfaCheck(
+  userId: string, mfaVerified: boolean | undefined, opts: { allowGrace?: boolean } = {},
+): Promise<{ refusal: AdminMfaRefusal | null; graceUntil?: Date }> {
+  const { status } = await adminMfaEnforcementFor(userId);
+  switch (status.state) {
+    case 'off':
+      return { refusal: null };
+    case 'satisfied':
+      return mfaVerified
+        ? { refusal: null }
+        : { refusal: { error: 'This session was not verified with MFA — please log in again', code: 'MFA_NOT_VERIFIED' } };
+    case 'grace':
+      if (opts.allowGrace !== false) return { refusal: null, graceUntil: status.deadline };
+      return { refusal: { error: 'MFA is required for admin access', code: 'MFA_REQUIRED' } };
+    case 'required':
+      return { refusal: { error: 'MFA is required for admin access', code: 'MFA_REQUIRED', deadline: status.deadline.toISOString() } };
+  }
+}
+
+/** The forced-2FA answer alone (null = the admin may go on). Throws on database errors. */
 export async function adminMfaRefusal(
-  userId: string, mfaVerified: boolean | undefined,
-): Promise<{ error: string; code: 'MFA_REQUIRED' | 'MFA_NOT_VERIFIED' } | null> {
-  const settings = await prisma.serverSettings.findUnique({
-    where: { id: 'singleton' },
-    select: { requireMfaForAdmins: true },
-  });
-  if (!settings?.requireMfaForAdmins) return null;
-  const mfa = await prisma.userMfa.findFirst({
-    where: { userId },
-    select: { totpEnabled: true, webAuthnCredentials: true },
-  });
-  const hasWebauthn = Array.isArray(mfa?.webAuthnCredentials)
-    && (mfa.webAuthnCredentials as unknown[]).length > 0;
-  if (!(mfa?.totpEnabled || hasWebauthn)) {
-    return { error: 'MFA is required for admin access', code: 'MFA_REQUIRED' };
-  }
-  if (!mfaVerified) {
-    return { error: 'This session was not verified with MFA — please log in again', code: 'MFA_NOT_VERIFIED' };
-  }
-  return null;
+  userId: string, mfaVerified: boolean | undefined, opts: { allowGrace?: boolean } = {},
+): Promise<AdminMfaRefusal | null> {
+  return (await adminMfaCheck(userId, mfaVerified, opts)).refusal;
 }
 
 function enforceAdminMfa(req: Request, res: Response, next: NextFunction): void {
@@ -292,8 +314,9 @@ function enforceAdminMfa(req: Request, res: Response, next: NextFunction): void 
   const apiUser = req.apiUser!;
   void (async () => {
     try {
-      const refusal = await adminMfaRefusal(apiUser.userId, apiUser.mfaVerified);
+      const { refusal, graceUntil } = await adminMfaCheck(apiUser.userId, apiUser.mfaVerified);
       if (refusal) { res.status(403).json(refusal); return; }
+      if (graceUntil) res.setHeader(ADMIN_MFA_GRACE_HEADER, graceUntil.toISOString());
       next();
     } catch (err) {
       log.error({ err }, 'MFA enforcement check failed — denying admin access');

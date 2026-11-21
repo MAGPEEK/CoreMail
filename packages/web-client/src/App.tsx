@@ -17,6 +17,7 @@ import { NotesPage } from './pages/NotesPage.js';
 import { SettingsPage } from './pages/SettingsPage.js';
 import { MfaEnrolmentPage } from './pages/MfaEnrolmentPage.js';
 import { MfaGraceBanner } from './components/MfaGraceBanner.js';
+import { AdminMfaPromptBanner } from './components/AdminMfaPromptBanner.js';
 import { useMfaEnforcement } from './hooks/useMfaEnforcement.js';
 import { MFA_ENROLMENT_ROUTE, enforcementView } from './lib/mfaEnforcement.js';
 import { useAuthStore } from './store/auth.js';
@@ -151,6 +152,8 @@ function Layout({ children }: { children: React.ReactNode }) {
         Zum Inhalt springen
       </a>
       {mfaBanner && <MfaGraceBanner daysLeft={mfaBanner.daysLeft} deadline={mfaBanner.deadline} />}
+      {/* 10.6: admin MFA rule — dismissible prompt during the admin grace period */}
+      {!mfaBanner && <AdminMfaPromptBanner info={mfaEnforcement} />}
       <TopBar onSearch={handleSearch} />
       {/* App rail left (md+), bottom bar below md (column-reverse puts it last) */}
       {/* 10.1: the canvas below the top bar — plain, or the background picture (Einstellungen → Darstellung) */}
