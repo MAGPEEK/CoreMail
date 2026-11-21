@@ -115,6 +115,12 @@ test('ALWAYS_AUDIT covers the action names the middleware really writes', () => 
     assert.ok(ALWAYS_AUDIT.test(a), a);
   }
   assert.equal(ALWAYS_AUDIT.test('mailboxes.put'), false);
+  // 10.6 review: MFA overrides and remembered-device revocations are always audited
+  for (const a of ['mfa.policy.override', 'mfa.trusted-devices.revoke', 'user.mfa.trusted-device.revoke', 'user.mfa.trusted-devices.revoke']) {
+    assert.ok(ALWAYS_AUDIT.test(a), a);
+  }
+  assert.equal(ALWAYS_AUDIT.test('usermfa.x'), false, 'escaped dots');
+  assert.ok(ALWAYS_AUDIT.test('passkey.admin_recovery_issue') && ALWAYS_AUDIT.test('mailbox.mfa.reset'), 'existing alternatives kept');
 });
 
 test('message trace: filtered paging is consistent; dates validated', () => {

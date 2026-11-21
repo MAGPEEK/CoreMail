@@ -469,6 +469,63 @@ test('recovery link: single use, registers a passkey, revokes every session', as
   assert.deepEqual(await wa.recoveryRegistrationOptions('x'.repeat(43)), { error: 'PASSKEY_RECOVERY_INVALID' });
 });
 
+test('10.6 review: an OIDC-only account never signs in with a passkey (rules of the password login)', async () => {
+  wa.invalidateRpConfigCache();
+  const u = await addUser('oidc@example.com');
+  const a = await registerPasskey(u);
+  assert.equal(codeOf(await login(a)), 'tokens');
+  db.user.rows.find((r) => r['id'] === u['id'])!['authSource'] = 'OIDC';
+  assert.equal(codeOf(await login(a)), 'PASSKEYS_DISABLED');
+});
+
+test('10.6 review: removing a factor ends sessions — user: the other ones; admin remove-all / MFA reset: all', async () => {
+  wa.invalidateRpConfigCache();
+  const u = await addUser('rev@example.com');
+  const uid = String(u['id']);
+  const who = { id: uid, email: 'rev@example.com', role: 'USER' as const, domainId: 'dom1' };
+  await registerPasskey(u, soft(), 'One');
+  await registerPasskey(u, soft(), 'Two');
+  await registerPasskey(u, soft(), 'Three');
+  await auth.issueSession(who, { ...client(), mfaVerified: true });
+  await auth.issueSession(who, { ...client(), mfaVerified: true });
+  const current = String(db.session.rows[0]!['id']);
+  // the user removes one passkey: every other session ends, the current one stays
+  const ids = db.webAuthnCredential.rows.filter((r) => r['userId'] === uid).map((r) => String(r['id']));
+  assert.equal(await auth.deleteCredential(uid, ids[0]!, { id: uid, sessionId: current }), 'ok');
+  assert.deepEqual(db.session.rows.map((s) => s['id']), [current]);
+  // admin: removing one credential leaves the sessions alone
+  assert.equal(await auth.deleteCredential(uid, ids[1]!, { id: 'admin', admin: true }), 'ok');
+  assert.equal(db.session.rows.length, 1);
+  // admin remove-all: every session ends
+  await auth.issueSession(who, { ...client(), mfaVerified: true });
+  await auth.removeAllCredentials(uid, { allMfa: false, actor: { id: 'admin' } });
+  assert.equal(db.session.rows.length, 0);
+  // admin MFA reset: every session ends
+  await auth.issueSession(who, { ...client(), mfaVerified: true });
+  await auth.removeAllCredentials(uid, { allMfa: true, actor: { id: 'admin' } });
+  assert.equal(db.session.rows.length, 0);
+});
+
+test('10.6 review: account linking helpers — self-registered accounts are recognised (lookup errors fail closed); a link revokes credentials', async () => {
+  const u = await addUser('selfreg@example.com');
+  const uid = String(u['id']);
+  assert.equal(await auth.isSelfRegisteredAccount(uid), false);
+  await db.selfRegistration.create({ data: { userId: uid, domainId: 'dom1' } });
+  assert.equal(await auth.isSelfRegisteredAccount(uid), true);
+  const saved = db.selfRegistration.findUnique;
+  db.selfRegistration.findUnique = async () => { throw new Error('db down'); };
+  assert.equal(await auth.isSelfRegisteredAccount('other'), true, 'fail closed');
+  db.selfRegistration.findUnique = saved;
+  await auth.reportRefusedAccountLink({ id: uid, email: 'selfreg@example.com' }, 'oidc', '198.51.100.4');
+  assert.ok(audits.some((x) => x.action === 'auth.account-link.refused'));
+  // revokeOnAccountLink: sessions AND app passwords end
+  await auth.issueSession({ id: uid, email: 'selfreg@example.com', role: 'USER', domainId: 'dom1' }, { ...client(), mfaVerified: false });
+  await db.appPassword.create({ data: { userId: uid, name: 'phone', hash: 'x' } });
+  await auth.revokeOnAccountLink(uid, 'oidc');
+  assert.equal(db.session.rows.filter((s) => s['userId'] === uid).length, 0);
+  assert.equal(db.appPassword.rows.filter((s) => s['userId'] === uid).length, 0);
+});
+
 // ── Legacy migration ──────────────────────────────────────────────────────────
 
 const noLock = { acquire: async () => true, release: async () => undefined };
@@ -483,16 +540,31 @@ test('migration: legacy JSON → security_key rows (idempotent); duplicates skip
   await db.userMfa.create({ data: { userId: u1['id'], webAuthnCredentials: [k1.legacyJson('Old key'), { id: '!!', publicKey: 'x' }] } });
   await db.userMfa.create({ data: { userId: u2['id'], webAuthnCredentials: [shared.legacyJson('A')] } });
   await db.userMfa.create({ data: { userId: u3['id'], webAuthnCredentials: [shared.legacyJson('B')] } });
+  wa.resetMigrationAlertThrottle();
   const r1 = await wa.migrateLegacyWebAuthnCredentials({ lock: noLock });
-  assert.deepEqual(r1, { users: 3, migrated: 1, skipped: 0, duplicates: 2, invalid: 1 });
+  assert.deepEqual(r1, { users: 3, migrated: 1, skipped: 0, duplicates: 2, invalid: 1, pending: 3 });
   const row = db.webAuthnCredential.rows[0]!;
   assert.equal(row['kind'], 'security_key');
   assert.equal(row['userHandle'], null);
   assert.equal(row['algorithm'], -7);
   assert.ok(audits.some((x) => x.action === 'passkey.migration_duplicate'));
+  // 10.6 review: entries that cannot be copied are never dropped silently — the accounts stay
+  // un-migrated with exactly those entries, keep counting as MFA-enrolled and are alerted
+  assert.ok(audits.some((x) => x.action === 'passkey.migration_pending'));
+  const mfaOf = (u: Json) => db.userMfa.rows.find((m) => m['userId'] === u['id'])!;
+  assert.equal(mfaOf(u1)['webAuthnMigratedAt'], null);
+  assert.deepEqual(mfaOf(u1)['webAuthnCredentials'], [{ id: '!!', publicKey: 'x' }], 'the copied key left the JSON');
+  for (const u of [u2, u3]) {
+    assert.equal((mfaOf(u)['webAuthnCredentials'] as unknown[]).length, 1, 'the duplicate stays');
+    const f = await auth.getAuthFactors(String(u['id']));
+    assert.equal(f.enrolled, true, 'a duplicate legacy key still counts as a factor (fail closed)');
+    assert.equal(f.legacySecurityKeys, 1);
+  }
+  const f1 = await auth.getAuthFactors(String(u1['id']));
+  assert.equal(f1.securityKeys, 2, 'copied key + the unreadable one, never counted twice');
   const r2 = await wa.migrateLegacyWebAuthnCredentials({ lock: noLock });
   assert.equal(r2?.migrated, 0);
-  assert.equal(r2?.users, 0, 'every account is processed once');
+  assert.equal(r2?.pending, 3, 'still pending, nothing new copied');
   assert.equal(db.webAuthnCredential.rows.length, 1);
   assert.equal(await wa.migrateLegacyWebAuthnCredentials({ lock: { acquire: async () => false, release: async () => undefined } }), null);
   // the migrated key works as second factor (UV not required), never passwordless
@@ -512,4 +584,83 @@ test('migration: legacy JSON → security_key rows (idempotent); duplicates skip
   assert.equal(await auth.deleteCredential(uid, String(db.webAuthnCredential.rows[0]!['id']), { id: uid }), 'ok');
   await wa.migrateLegacyWebAuthnCredentials({ lock: noLock });
   assert.equal(db.webAuthnCredential.rows.length, 0);
+  // an admin MFA reset clears the pending entries: the account is then MFA-free
+  await auth.removeAllCredentials(uid, { allMfa: true, actor: { id: 'admin' } });
+  assert.equal((await auth.getAuthFactors(uid)).enrolled, false);
+  const r3 = await wa.migrateLegacyWebAuthnCredentials({ lock: noLock });
+  assert.equal(r3?.pending, 2, 'only the duplicate pair is left');
+});
+
+test('10.6 review: legacy keys not migrated yet count as MFA everywhere (factors, mail login, web login)', async () => {
+  wa.resetMigrationAlertThrottle();
+  const u = await addUser('pending@example.com');
+  const uid = String(u['id']);
+  const k = soft();
+  await db.userMfa.create({ data: { userId: uid, webAuthnCredentials: [k.legacyJson('Old key')] } });
+  // pure rule + DB reader: counted before the backfill ran
+  assert.equal(storage.authFactorsOf({ mfa: { webAuthnMigratedAt: null, webAuthnCredentials: [{ id: 'x' }] }, webauthnCredentials: [] }).enrolled, true);
+  assert.equal(storage.authFactorsOf({ mfa: { webAuthnMigratedAt: new Date(), webAuthnCredentials: [{ id: 'x' }] }, webauthnCredentials: [] }).enrolled, false, 'migrated: the table is the truth');
+  assert.equal(storage.authFactorsOf({ mfa: { webAuthnCredentials: [{ id: 'x' }] }, webauthnCredentials: [{ kind: 'security_key', credentialId: 'x' }] }).securityKeys, 1, 'not counted twice');
+  const f = await auth.getAuthFactors(uid);
+  assert.equal(f.enrolled, true);
+  assert.equal(f.legacySecurityKeys, 1);
+  assert.equal((await auth.getAuthFactorsMany([uid])).get(uid)?.enrolled, true);
+  // mail protocols: the primary password is refused (MFA accounts need app passwords)
+  // (a Prisma surface that honours the `mfa` select of mail-auth-core — the fake ignores selects)
+  let mfaSelect: Json = {};
+  const mailPrisma = {
+    user: {
+      findFirst: async (args: unknown) => {
+        const a = args as { where: Json; select: { mfa: { select: Json } } };
+        mfaSelect = a.select.mfa.select;
+        const row = db.user.rows.find((r) => r['email'] === a.where['email']);
+        if (!row) return null;
+        const m = db.userMfa.rows.find((r) => r['userId'] === row['id']);
+        return {
+          ...row, mailbox: null,
+          mfa: m ? Object.fromEntries(Object.keys(mfaSelect).map((k) => [k, m[k]])) : null,
+          webauthnCredentials: db.webAuthnCredential.rows.filter((c) => c['userId'] === row['id']),
+        };
+      },
+    },
+    appPassword: { findMany: async () => [], update: async () => ({}) },
+    domain: { findFirst: async () => null },
+  };
+  (globalThis as Record<string, unknown>)['__mailAuthRedis'] = null; // no lockout Redis for this check
+  storage.configureMailAuth({ prisma: mailPrisma, redis: null, onLockoutEvent: () => undefined });
+  const mail = await storage.verifyMailCredentials('pending@example.com', PW, { ip: '203.0.113.50', protocol: 'imap' });
+  delete (globalThis as Record<string, unknown>)['__mailAuthRedis'];
+  assert.ok('webAuthnMigratedAt' in mfaSelect && 'webAuthnCredentials' in mfaSelect, 'mail-auth-core selects the legacy columns');
+  assert.notEqual(mail.status, 'ok', 'primary password refused on mail protocols while the key is pending');
+  storage.configureMailAuth({ onLockoutEvent: () => undefined, limits: { accountMaxFailures: 3, ipMaxFailures: 50 } });
+  // web login: the second factor is asked; its options migrate the key on read (lock free)
+  const step1 = await auth.login('pending@example.com', PW, client());
+  assert.equal(step1.kind, 'mfa');
+  if (step1.kind !== 'mfa') return;
+  const opts = await wa.secondFactorOptions(uid, step1.challengeToken);
+  assert.ok(opts, 'migrated on read: the key is offered');
+  assert.equal(db.webAuthnCredential.rows.filter((r) => r['userId'] === uid).length, 1);
+  assert.ok(db.userMfa.rows.find((m) => m['userId'] === uid)!['webAuthnMigratedAt'] instanceof Date);
+  const ok = await auth.completeMfaLogin({ challengeToken: step1.challengeToken, webauthnResponse: k.assert(opts as unknown as Json, { uv: false }) }, client(), {
+    verifyWebAuthn: (userId, resp, token) => wa.verifySecondFactor(userId, resp, token),
+  });
+  assert.equal(ok.kind, 'tokens');
+});
+
+test('10.6 review: the start-up backfill is retried with backoff while the lock is busy or the run fails', async () => {
+  let tries = 0;
+  const lock = {
+    acquire: async () => { tries++; if (tries === 2) throw new Error('redis down'); return tries >= 3; },
+    release: async () => undefined,
+  };
+  const delays: number[] = [];
+  const run = wa.startLegacyWebAuthnMigration({
+    lock, delaysMs: [10, 20],
+    setTimer: (fn, ms) => { delays.push(ms); setImmediate(fn); },
+  });
+  const r = await run.done;
+  assert.equal(tries, 3);
+  assert.deepEqual(delays, [10, 20], 'busy, then failed, then done');
+  assert.equal(r.users, 0);
+  run.stop();
 });

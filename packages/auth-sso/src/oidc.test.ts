@@ -224,6 +224,29 @@ test('linking (v8.1): a LOCAL account is bound to the first IdP subject; another
   assert.ok((await flow(verifiedAlice)).cb.ok, 'the bound subject keeps working');
 });
 
+test('10.6 review: a self-registered account is never linked; the first link of a LOCAL account ends its sessions and app passwords', async () => {
+  db.selfRegistration.rows = [];
+  await db.oidcProvider.update({ where: { id: providerId }, data: { allowLinking: true } });
+  // an anonymous visitor registered the address before its owner arrived via the IdP
+  const squat = await db.user.create({ data: { email: 'alice@example.com', authSource: 'LOCAL', passwordHash: 'h', domainId } });
+  await db.selfRegistration.create({ data: { userId: squat['id'], domainId, status: 'IMMEDIATE' } });
+  assert.equal(((await flow(verifiedAlice)).cb as { error?: string }).error, 'account_not_linked');
+  assert.equal(db.user.rows.find((r) => r['id'] === squat['id'])!['oidcSubject'] ?? null, null, 'never bound');
+
+  // a normal LOCAL account: the first link voids sessions + app passwords issued before
+  const bob = await db.user.create({ data: { email: 'bob@example.com', authSource: 'LOCAL', passwordHash: 'h', domainId } });
+  await db.session.create({ data: { userId: bob['id'], tokenHash: 'old', expiresAt: new Date(Date.now() + 1e6) } });
+  await db.appPassword.create({ data: { userId: bob['id'], name: 'phone', hash: 'h' } });
+  const asBob = { sub: 'sub-bob', claims: { email: 'bob@example.com', email_verified: true } };
+  assert.ok((await flow(asBob)).cb.ok);
+  assert.equal(db.session.rows.filter((r) => r['userId'] === bob['id']).length, 0);
+  assert.equal(db.appPassword.rows.filter((r) => r['userId'] === bob['id']).length, 0);
+  // later sign-ins of the bound subject do not revoke again
+  await db.appPassword.create({ data: { userId: bob['id'], name: 'phone 2', hash: 'h' } });
+  assert.ok((await flow(asBob)).cb.ok);
+  assert.equal(db.appPassword.rows.filter((r) => r['userId'] === bob['id']).length, 1);
+});
+
 test('linking (v8.1): an LDAP account keeps its directory id; the IdP binding is the oidcSubject column', async () => {
   await db.oidcProvider.update({ where: { id: providerId }, data: { allowLinking: true } });
   const u = await db.user.create({ data: { email: 'alice@example.com', authSource: 'LDAP', externalId: 'ldap:guid-1', domainId } });

@@ -73,12 +73,29 @@ test('decision: off, satisfied by enrolment or an MFA session, grace until the d
 test('grace start: the stored start counts only for the current activation', () => {
   const now = new Date('2026-11-20T00:00:00Z');
   const p = policy({ since: new Date('2026-11-15T00:00:00Z') });
-  assert.deepEqual(me.effectiveGraceStart(p, null, now), { start: now, persist: true });
+  const since = p.since;
+  assert.deepEqual(me.effectiveGraceStart(p, null, now), { start: now, persist: true, staleBefore: since });
   const fresh = new Date('2026-11-16T00:00:00Z');
-  assert.deepEqual(me.effectiveGraceStart(p, fresh, now), { start: fresh, persist: false });
-  assert.deepEqual(me.effectiveGraceStart(p, new Date('2026-11-01T00:00:00Z'), now), { start: now, persist: true },
+  assert.deepEqual(me.effectiveGraceStart(p, fresh, now), { start: fresh, persist: false, staleBefore: since });
+  assert.deepEqual(me.effectiveGraceStart(p, new Date('2026-11-01T00:00:00Z'), now), { start: now, persist: true, staleBefore: since },
     'a start from an earlier activation is stale');
   assert.equal(me.graceDeadline({ graceDays: 500 }, now).getTime(), now.getTime() + 90 * DAY, 'capped at the upper bound');
+});
+
+test('10.6 review: admin grace cooldown — a run-out grace is not restarted within 30 days of its end', () => {
+  const now = new Date('2026-11-20T00:00:00Z');
+  const p = { since: new Date('2026-11-19T00:00:00Z'), graceDays: 14 };
+  const cool = { cooldownDays: me.MFA_ADMIN_GRACE_RESTART_COOLDOWN_DAYS };
+  // grace started 20 days ago, ended 6 days ago: switching the admin rule off/on does not restart it
+  const recent = new Date(now.getTime() - 20 * DAY);
+  const r1 = me.effectiveGraceStart(p, recent, now, cool);
+  assert.equal(r1.persist, false);
+  assert.equal(r1.start.getTime(), recent.getTime());
+  // ended more than 30 days ago (started 50 days ago): a new activation may start a new one
+  const old = new Date(now.getTime() - 50 * DAY);
+  const r2 = me.effectiveGraceStart(p, old, now, cool);
+  assert.equal(r2.persist, true);
+  assert.equal(r2.staleBefore!.getTime(), now.getTime() - 44 * DAY);
 });
 
 test('refusal body carries the distinct code and the deadline', () => {

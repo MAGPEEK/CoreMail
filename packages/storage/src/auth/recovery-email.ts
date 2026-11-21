@@ -12,8 +12,8 @@
  *    (confirmation, notice to the old address + own mailbox) and audits.
  */
 import { createHash, randomBytes } from 'node:crypto';
-import { domainToASCII } from 'node:url';
 import { prisma } from '../prisma/index.js';
+import { canonicalDomain, domainVariants } from '../idn.js';
 
 /** Validity of the confirmation link (24 h). */
 export const RECOVERY_CONFIRM_TTL = 24 * 60 * 60;
@@ -36,24 +36,41 @@ const EMPTY: RecoveryEmailState = { address: null, verifiedAt: null, pendingAddr
 // Deliberately strict: one @, a dotted domain, no spaces / quotes / brackets.
 const ADDRESS_RE = /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[^\s@"<>()[\],;:\\]+\.[^\s@"<>()[\],;:\\]+$/;
 
-/** Pure: canonical form of a recovery address (trimmed, lower-case, IDN domain as ASCII) or null. */
+/**
+ * Pure: canonical form of a recovery address or null — trimmed, lower-case,
+ * 10.6 review: trailing dot(s) of the domain stripped (`example.com.` is
+ * `example.com`) and the domain as A-label via the shared IDN helper (idn.ts),
+ * so the "not hosted here" check and the stored value see the same domain.
+ */
 export function normalizeRecoveryAddress(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
   const s = raw.trim();
-  if (s.length < 3 || s.length > 254 || !ADDRESS_RE.test(s)) return null;
+  if (s.length < 3 || s.length > 254) return null;
   const at = s.lastIndexOf('@');
+  if (at <= 0) return null;
   const local = s.slice(0, at);
-  const domain = domainToASCII(s.slice(at + 1).toLowerCase());
-  if (!domain || local.length > 64) return null;
-  return `${local.toLowerCase()}@${domain}`;
+  // the absolute form of a domain (trailing dot) names the same domain
+  const rawDomain = s.slice(at + 1).replace(/\.+$/, '');
+  if (!ADDRESS_RE.test(`${local}@${rawDomain}`)) return null;
+  const domain = canonicalDomain(rawDomain);
+  if (!domain || domain.endsWith('.') || !domain.includes('.') || local.length > 64) return null;
+  // a label that could not be converted (invalid IDN) is refused
+  if (/[^\x21-\x7e]/.test(domain)) return null;
+  const address = `${local.toLowerCase()}@${domain}`;
+  return address.length <= 254 ? address : null;
 }
 
-/** Is the address in a domain hosted on this server? A failed lookup counts as hosted (fail closed). */
+/**
+ * Is the address in a domain hosted on this server? The domain is normalised
+ * first (trailing dot, case, IDN in both spellings — the admin may have entered
+ * either). A failed lookup counts as hosted (fail closed).
+ */
 export async function isHostedAddress(address: string): Promise<boolean> {
-  const domain = address.slice(address.lastIndexOf('@') + 1).toLowerCase();
+  const domain = canonicalDomain(address.slice(address.lastIndexOf('@') + 1).replace(/\.+$/, ''));
+  if (!domain) return true;
   try {
     const hit = await prisma.domain.findFirst({
-      where: { name: { equals: domain, mode: 'insensitive' } },
+      where: { OR: domainVariants(domain).map((d) => ({ name: { equals: d, mode: 'insensitive' as const } })) },
       select: { id: true },
     });
     return hit !== null;

@@ -13,18 +13,23 @@
  * "passkey") or a second-factor security key (kind "security_key", also the
  * credentials migrated from the deprecated UserMfa.webAuthnCredentials JSON).
  * Backup codes alone are no factor (they only stand in for one).
+ *
+ * 10.6 review: pre-10.6 security keys whose copy from the deprecated JSON has
+ * not run yet (legacy-security-keys.ts) count as security keys too — fail
+ * closed until the backfill copied them (or an admin reset the account's MFA).
  */
+import { LEGACY_SECURITY_KEY_SELECT, pendingLegacySecurityKeyIds, type LegacySecurityKeyRow } from './legacy-security-keys.js';
 
 /** Prisma `select` on User that authFactorsOf() needs. */
 export const AUTH_FACTOR_SELECT = {
-  mfa: { select: { totpEnabled: true, backupCodes: true } },
-  webauthnCredentials: { select: { kind: true, backupState: true } },
+  mfa: { select: { totpEnabled: true, backupCodes: true, ...LEGACY_SECURITY_KEY_SELECT } },
+  webauthnCredentials: { select: { kind: true, backupState: true, credentialId: true } },
 } as const;
 
 /** The selected shape (also accepted from hand-written fakes). */
 export interface AuthFactorRow {
-  mfa?: { totpEnabled?: boolean | null; backupCodes?: readonly unknown[] | null } | null;
-  webauthnCredentials?: ReadonlyArray<{ kind?: string | null; backupState?: boolean | null }> | null;
+  mfa?: ({ totpEnabled?: boolean | null; backupCodes?: readonly unknown[] | null } & LegacySecurityKeyRow) | null;
+  webauthnCredentials?: ReadonlyArray<{ kind?: string | null; backupState?: boolean | null; credentialId?: string | null }> | null;
 }
 
 export interface AuthFactors {
@@ -35,8 +40,10 @@ export interface AuthFactors {
   passkeys: number;
   /** Passkeys whose backup state (BS) says they are synced. */
   syncedPasskeys: number;
-  /** Second-factor-only security keys (incl. migrated legacy keys). */
+  /** Second-factor-only security keys (incl. migrated legacy keys and legacySecurityKeys). */
   securityKeys: number;
+  /** 10.6 review: pre-10.6 keys still only in the deprecated JSON (not copied yet) — counted, fail closed. */
+  legacySecurityKeys: number;
   /** All WebAuthn credentials. */
   webauthn: number;
   /** At least one second factor (TOTP or any WebAuthn credential). */
@@ -44,7 +51,7 @@ export interface AuthFactors {
 }
 
 export const NO_AUTH_FACTORS: AuthFactors = Object.freeze({
-  totp: false, backupCodes: 0, passkeys: 0, syncedPasskeys: 0, securityKeys: 0, webauthn: 0, enrolled: false,
+  totp: false, backupCodes: 0, passkeys: 0, syncedPasskeys: 0, securityKeys: 0, legacySecurityKeys: 0, webauthn: 0, enrolled: false,
 });
 
 /** Counts the factors of a selected user row (pure). */
@@ -59,6 +66,9 @@ export function authFactorsOf(row: AuthFactorRow | null | undefined): AuthFactor
       if (c.backupState === true) syncedPasskeys++;
     }
   }
+  // entries already copied (same credential id) are not counted twice
+  const copied = new Set(creds.map((c) => c?.credentialId).filter((id): id is string => typeof id === 'string'));
+  const legacy = pendingLegacySecurityKeyIds(row.mfa).filter((id) => !copied.has(id)).length;
   const totp = row.mfa?.totpEnabled === true;
   const backupCodes = Array.isArray(row.mfa?.backupCodes) ? row.mfa!.backupCodes!.length : 0;
   return {
@@ -66,8 +76,9 @@ export function authFactorsOf(row: AuthFactorRow | null | undefined): AuthFactor
     backupCodes,
     passkeys,
     syncedPasskeys,
-    securityKeys: creds.length - passkeys,
-    webauthn: creds.length,
-    enrolled: totp || creds.length > 0,
+    securityKeys: creds.length - passkeys + legacy,
+    legacySecurityKeys: legacy,
+    webauthn: creds.length + legacy,
+    enrolled: totp || creds.length > 0 || legacy > 0,
   };
 }

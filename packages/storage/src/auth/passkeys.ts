@@ -16,6 +16,7 @@ import { notifySecurityEvent } from './notify.js';
 import { writeAuthAudit } from './auth-audit.js';
 import { getAuthFactors } from './factors.js';
 import { passkeyProviderName } from './passkey-providers.js';
+import { revokeAllSessions } from './sessions.js';
 
 const log = createLogger('auth:passkeys');
 
@@ -115,10 +116,12 @@ export type DeleteCredentialResult = 'ok' | 'not_found' | 'last_passkey';
  * Removes one credential of the user. A passkey-only account
  * (passwordLoginDisabled) keeps its last passkey (`last_passkey` → 409).
  * `actor` = who removed it (the user itself or an admin) for audit + notice.
+ * 10.6 review: removed by the user itself → every OTHER session of the user ends
+ * (`actor.sessionId` = the session that removed it and stays; without it all end).
  */
 export async function deleteCredential(
   userId: string, id: string,
-  actor: { id: string; email?: string | undefined; ip?: string | undefined; admin?: boolean },
+  actor: { id: string; email?: string | undefined; ip?: string | undefined; admin?: boolean; sessionId?: string | null | undefined },
 ): Promise<DeleteCredentialResult> {
   const row = await prisma.webAuthnCredential.findFirst({ where: { id, userId }, select: { id: true, kind: true, name: true } });
   if (!row) return 'not_found';
@@ -130,6 +133,12 @@ export async function deleteCredential(
   const r = await prisma.webAuthnCredential.deleteMany({ where: { id, userId } });
   if (r.count !== 1) return 'not_found';
   await publishUserAuthChange(userId, 'mfa-change');
+  if (!actor.admin) {
+    // 10.6 review: a removed factor may have been abused elsewhere — the other sessions end
+    await revokeAllSessions(userId, {
+      ...(actor.sessionId ? { exceptSessionId: actor.sessionId } : {}), reason: 'passkey-removed',
+    }).catch((err: unknown) => log.error({ err, userId }, 'Revoking the other sessions after a passkey removal failed'));
+  }
   await writeAuthAudit({
     action: actor.admin ? 'passkey.admin_remove' : 'passkey.remove',
     actorId: actor.id, actorEmail: actor.email, ipAddress: actor.ip,
@@ -168,6 +177,8 @@ export async function removeAllCredentials(
   }
   await prisma.user.updateMany({ where: { id: userId }, data: { passwordLoginDisabled: false } });
   await publishUserAuthChange(userId, 'mfa-change');
+  // 10.6 review: the user's sessions end (as documented above) — also MCP tokens and remembered devices
+  await revokeAllSessions(userId, { reason: opts.allMfa ? 'mfa-reset' : 'passkeys-removed' });
   await writeAuthAudit({
     action: opts.allMfa ? 'passkey.admin_reset_mfa' : 'passkey.admin_remove_all',
     actorId: opts.actor.id, actorEmail: opts.actor.email, ipAddress: opts.actor.ip,

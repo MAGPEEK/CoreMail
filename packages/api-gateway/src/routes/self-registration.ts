@@ -190,7 +190,9 @@ selfRegistrationRouter.post('/', async (req: Request, res: Response) => {
       const user = await tx.user.create({
         data: {
           email, displayName, passwordHash, domainId: domain.id,
-          // fixed: self-registered accounts are local USER accounts — never an admin role
+          // fixed: self-registered accounts are local USER accounts — never an admin role.
+          // 10.6 review: the SelfRegistration row below marks the account for good — it is
+          // never linked to an OIDC subject nor taken over by LDAP (storage auth/account-linking.ts)
           role: 'USER', authSource: 'LOCAL', active,
         },
         select: { id: true },

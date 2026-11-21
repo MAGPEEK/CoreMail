@@ -22,6 +22,10 @@
  *     accounts only with the per-provider `allowLinking` opt-in — and (v8.1)
  *     bound to the first IdP subject that linked them (durable column
  *     `User.oidcSubject`; externalId stays the LDAP id); another subject → `account_mismatch`
+ *   - 10.6 review: an account created by self-registration is NEVER linked
+ *     (`account_not_linked`, audited + security event — pre-takeover
+ *     protection, storage auth/account-linking.ts); the first link of a LOCAL
+ *     account ends all its sessions, app passwords, MCP tokens and remembered devices
  *   - unknown users are created + their mailbox provisioned with `autoProvision`
  *   - MFA: by default the IdP is trusted as second factor (no CoreMail MFA
  *     prompt). With `requireMfa` users with CoreMail MFA enrolled get the normal
@@ -36,7 +40,8 @@ import { Issuer, custom, generators, type Client, type IdTokenClaims } from 'ope
 import { createLogger } from '@coremail/core';
 import { prisma, ensureMailboxProvisioned } from '@coremail/storage';
 import {
-  authRedis, createMfaChallenge, getMfaState, issueSession, loadUserMfaPolicy, maintenanceBlock, webLoginBlocked,
+  authRedis, createMfaChallenge, getMfaState, isSelfRegisteredAccount, issueSession, loadUserMfaPolicy, maintenanceBlock,
+  reportRefusedAccountLink, revokeOnAccountLink, webLoginBlocked,
   type ClientInfo, type MfaMethod, type TokenPair,
 } from '@coremail/storage/auth';
 
@@ -231,6 +236,7 @@ export const SSO_LINK_PREFIX = 'auth:sso:link:';
 async function bindLinkedAccount(
   user: { id: string; externalId: string | null; oidcSubject: string | null },
   subject: string,
+  onNewLink: () => Promise<void> = async () => undefined,
 ): Promise<boolean> {
   if (user.oidcSubject) return user.oidcSubject === subject;
   const key = `${SSO_LINK_PREFIX}${user.id}`;
@@ -248,6 +254,8 @@ async function bindLinkedAccount(
   }
   if (legacyRedis) await authRedis().del(key).catch(() => undefined);
   log.info({ userId: user.id, migrated: bound !== subject || Boolean(legacyColumn ?? legacyRedis) }, 'SSO: linked account bound to the IdP subject');
+  // 10.6 review: a first link (not the migration of an older build's link) voids old credentials
+  if (!legacyColumn && !legacyRedis && bound === subject) await onNewLink();
   return bound === subject;
 }
 
@@ -326,6 +334,13 @@ export async function completeSsoCallback(
   });
   if (user) {
     if (!user.active) return { ok: false, error: 'account_inactive', target };
+    // 10.6 review: pre-takeover protection — a self-registered account is never linked
+    // (also an account linked by an older build: it keeps no SSO access)
+    const binds = user.authSource === 'OIDC' ? !user.externalId : p.allowLinking;
+    if (binds && await isSelfRegisteredAccount(user.id)) {
+      await reportRefusedAccountLink(user, 'oidc', client.ip);
+      return { ok: false, error: 'account_not_linked', target };
+    }
     if (user.authSource === 'OIDC') {
       if (user.externalId && user.externalId !== externalId) {
         log.warn({ providerId, email }, 'SSO: account is bound to another IdP subject');
@@ -335,7 +350,10 @@ export async function completeSsoCallback(
     } else if (!p.allowLinking) {
       log.warn({ providerId, email, authSource: user.authSource }, 'SSO: existing non-SSO account, linking disabled');
       return { ok: false, error: 'account_not_linked', target };
-    } else if (!(await bindLinkedAccount(user, externalId))) {
+    } else if (!(await bindLinkedAccount(user, externalId, async () => {
+      // a LOCAL account linked for the first time: everything issued before ends
+      if (user!.authSource === 'LOCAL') await revokeOnAccountLink(user!.id, 'oidc');
+    }))) {
       // v8.1: a linked LOCAL/LDAP account is bound to the first IdP subject that
       // used it — another subject with the same (verified) e-mail is refused.
       log.warn({ providerId, email, authSource: user.authSource }, 'SSO: linked account is bound to another IdP subject');

@@ -44,7 +44,13 @@ get no grace: while the admin rule applies, a token of an admin without MFA answ
 Grace starts: `User.mfaGraceStartedAt` (shared by both kinds — an account is under one kind at a
 time). A start older than the activation time is stale (new grace): `mfaEnforcementSince` (policy
 for all users switched to Pflicht), `mfaAdminEnforcementSince` (admin rule switched to Pflicht).
-Setting or changing a per-user exception clears the start (new grace period).
+10.6 review — a grace period is never restarted or extended by an exception: changing a per-user
+exception clears the start only for a plain USER account whose effective level moves from "not
+required" to "required"; an admin account keeps its earliest start. A run-out admin grace is not
+restarted within 30 days of its end (`MFA_ADMIN_GRACE_RESTART_COOLDOWN_DAYS`), even when the admin
+rule is switched off and on. Exceptions are never changed on the caller's own account
+(`403 MFA_POLICY_OWN_ACCOUNT`), need an MFA-verified acting session, and on admin accounts
+ORGANIZATION_MANAGEMENT (`403 FORBIDDEN_ROLE`).
 
 ### Passkeys (10.6)
 

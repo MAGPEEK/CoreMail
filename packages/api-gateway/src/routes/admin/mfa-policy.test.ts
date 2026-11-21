@@ -160,22 +160,61 @@ test('overrides: a scoped admin sees and changes only its domains (others 404); 
   assert.equal(db.user.rows.find((u) => u['id'] === 'ua')!['mfaPolicy'], null);
 });
 
-test('overrides: only organisation management may weaken an admin; others may keep or strengthen it', async () => {
+test('overrides: an admin account only by organisation management (also when strengthening)', async () => {
   await call('PUT', '/api/v1/admin/settings/mfa-policy', ORG(), { admins: 'required' });
   // help desk account in domain A: effective "required" (admin rule)
-  const weaken = await call('PUT', '/api/v1/admin/user-mfa/hd', RM(), { mfaPolicy: 'optional' });
-  assert.equal(weaken.status, 403);
-  assert.equal(weaken.body['code'], 'MFA_POLICY_WEAKEN_ADMIN');
-  assert.equal((await call('PUT', '/api/v1/admin/user-mfa/hd', RM(), { mfaPolicy: 'off' })).status, 403);
-  assert.equal((await call('PUT', '/api/v1/admin/user-mfa/hd', RM(), { mfaPolicy: 'required' })).status, 200, 'strengthening / keeping is fine');
+  for (const level of ['optional', 'off', 'required', 'inherit']) {
+    const r = await call('PUT', '/api/v1/admin/user-mfa/hd', RM(), { mfaPolicy: level });
+    assert.equal(r.status, 403, level);
+    assert.equal(r.body['code'], 'FORBIDDEN_ROLE', level);
+  }
   const org = await call('PUT', '/api/v1/admin/user-mfa/hd', ORG(), { mfaPolicy: 'optional' });
   assert.equal(org.status, 200);
   assert.equal(org.body['adminWithoutMfaRequirement'], true, 'the UI warns: admin without MFA requirement');
   // pure rule
   assert.equal(overrideChangeAllowed('RECIPIENT_MANAGEMENT', 'USER', 'required', 'off'), true);
-  assert.equal(overrideChangeAllowed('RECIPIENT_MANAGEMENT', 'HELP_DESK', 'optional', 'required'), true);
+  assert.equal(overrideChangeAllowed('RECIPIENT_MANAGEMENT', 'HELP_DESK', 'optional', 'required'), false, '10.6 review: canManageAccount');
   assert.equal(overrideChangeAllowed('RECIPIENT_MANAGEMENT', 'HELP_DESK', 'required', 'optional'), false);
   assert.equal(overrideChangeAllowed('ORGANIZATION_MANAGEMENT', 'HELP_DESK', 'required', 'off'), true);
+});
+
+test('10.6 review: own override refused; MFA-verified session required; an admin grace is never restarted by overrides', async () => {
+  await call('PUT', '/api/v1/admin/settings/mfa-policy', ORG(), { admins: 'required', adminGraceDays: 14 });
+  // own account — even for organisation management
+  const own = await call('PUT', '/api/v1/admin/user-mfa/org', ORG(), { mfaPolicy: 'optional' });
+  assert.equal(own.status, 403);
+  assert.equal(own.body['code'], 'MFA_POLICY_OWN_ACCOUNT');
+  const ownHd = await call('PUT', '/api/v1/admin/user-mfa/hd', HD(), { mfaPolicy: 'required' });
+  assert.equal(ownHd.status, 403);
+  // session without MFA
+  const unverified = core.signAccessToken({
+    sub: 'org', email: 'org@a.example', role: 'ORGANIZATION_MANAGEMENT', domainId: 'dA', sessionId: 's-org-2', mfaVerified: false,
+  });
+  const nv = await call('PUT', '/api/v1/admin/user-mfa/ua', unverified, { mfaPolicy: 'required' });
+  assert.equal(nv.status, 403);
+  assert.equal(nv.body['code'], 'MFA_NOT_VERIFIED');
+
+  // the help desk admin without MFA: grace started 20 days ago → ran out
+  const started = new Date(Date.now() - 20 * 86_400_000);
+  db.serverSettings.rows[0]!['mfaAdminEnforcementSince'] = new Date(Date.now() - 30 * 86_400_000);
+  db.user.rows.find((u) => u['id'] === 'hd')!['mfaGraceStartedAt'] = started;
+  sauth.invalidateMfaEnforcementCache();
+  // flipping the override required ↔ inherit ↔ required does not clear the start
+  for (const level of ['inherit', 'required', 'inherit', 'optional', 'required']) {
+    assert.equal((await call('PUT', '/api/v1/admin/user-mfa/hd', ORG(), { mfaPolicy: level })).status, 200, level);
+    assert.equal((db.user.rows.find((u) => u['id'] === 'hd')!['mfaGraceStartedAt'] as Date).getTime(), started.getTime(), level);
+  }
+  sauth.invalidateMfaEnforcementCache();
+  const status = await sauth.adminMfaEnforcementFor('hd');
+  assert.equal(status.status.state, 'required', 'the run-out grace still applies');
+  // even a re-activation of the admin rule does not restart it within the cooldown
+  await call('PUT', '/api/v1/admin/user-mfa/hd', ORG(), { mfaPolicy: 'inherit' });
+  db.serverSettings.rows[0]!['mfaAdminEnforcementSince'] = new Date();
+  sauth.invalidateMfaEnforcementCache();
+  assert.equal((await sauth.adminMfaEnforcementFor('hd')).status.state, 'required');
+  assert.equal((db.user.rows.find((u) => u['id'] === 'hd')!['mfaGraceStartedAt'] as Date).getTime(), started.getTime());
+  await tick();
+  assert.ok(auditRows.some((a) => a['action'] === 'mfa.policy.override' && a['targetId'] === 'hd'));
 });
 
 // ── Remembered devices ────────────────────────────────────────────────────────

@@ -32,4 +32,6 @@ export * from './passkey-policy.js';
 export * from './passkeys.js';
 export * from './passkey-providers.js';
 export * from './auth-audit.js';
+// 10.6 review: pre-takeover protection (self-registered accounts never linked / taken over)
+export * from './account-linking.js';
 export { takeOnce } from './redis.js';

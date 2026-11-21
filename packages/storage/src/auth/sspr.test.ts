@@ -131,6 +131,29 @@ test('plan (10.6 passkeys): passkey-only factors → no link; passkey-only accou
   assert.equal((await auth.redeemPasswordReset(raw, 'long-enough-password', 'ip', { mfaCode: 'h1' })).ok, false);
 });
 
+test('10.6 review: recovery addresses are normalised before the "not hosted here" check and storage', async () => {
+  const uid = await addUser('carol@example.com');
+  await db.domain.create({ data: { name: 'example.com' } });
+  await db.domain.create({ data: { name: 'bücher.example' } }); // entered as U-label by the admin
+  // trailing dot, case, whitespace, IDN → canonical A-label form
+  assert.equal(auth.normalizeRecoveryAddress(' Carol@Private.Example.NET. '), 'carol@private.example.net');
+  assert.equal(auth.normalizeRecoveryAddress('carol@private.example.net..'), 'carol@private.example.net');
+  assert.equal(auth.normalizeRecoveryAddress('Carol@Bücher.Example'), 'carol@xn--bcher-kva.example');
+  assert.equal(auth.normalizeRecoveryAddress('carol@.'), null);
+  assert.equal(auth.normalizeRecoveryAddress('carol@example.'), null, 'a single label stays invalid');
+  // every spelling of a hosted domain is refused
+  for (const a of ['bob@example.com.', 'bob@EXAMPLE.COM.', 'bob@bücher.example', 'bob@XN--BCHER-KVA.example', 'bob@xn--bcher-kva.example.']) {
+    assert.deepEqual(await auth.requestRecoveryEmail(uid, a), { ok: false, error: 'hosted_address' }, a);
+  }
+  assert.equal(await auth.isHostedAddress('bob@example.com.'), true);
+  assert.equal(await auth.isHostedAddress('bob@xn--bcher-kva.example'), true);
+  assert.equal(await auth.isHostedAddress('bob@elsewhere.example'), false);
+  // stored in the canonical form
+  const r = await auth.requestRecoveryEmail(uid, 'Carol@Private.Example.NET.');
+  assert.equal(r.ok, true);
+  assert.equal(db.recoveryEmail.rows[0]!['pendingAddress'], 'carol@private.example.net');
+});
+
 test('recovery address: validation, hosted domains refused, confirmation single use, change keeps old until confirmed', async () => {
   const uid = await addUser('alice@example.com');
   await db.domain.create({ data: { name: 'example.com' } });

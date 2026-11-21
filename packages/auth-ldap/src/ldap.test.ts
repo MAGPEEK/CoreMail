@@ -205,6 +205,34 @@ test('LOCAL account is never converted silently; opt-in takeover works', async (
   assert.deepEqual(await ldap.ldapAuthDecision('bob@example.com', 'bob-pw'), { ok: false, reason: 'local_account' });
 });
 
+test('10.6 review: a self-registered account is never taken over (login + sync); a takeover ends sessions AND app passwords', async () => {
+  db.selfRegistration.rows = [];
+  await db.ldapConfig.update({ where: { domainId }, data: { allowLocalTakeover: true } });
+  // pre-registered by an anonymous visitor before the directory owner arrived
+  const squat = await db.user.create({ data: { email: 'alice@example.com', authSource: 'LOCAL', passwordHash: 'x', domainId } });
+  await db.selfRegistration.create({ data: { userId: squat['id'], domainId, status: 'IMMEDIATE' } });
+  await db.session.create({ data: { userId: squat['id'], tokenHash: 'sq1', expiresAt: new Date(Date.now() + 1e6) } });
+  assert.deepEqual(await ldap.ldapAuthDecision('alice@example.com', 'alice-pw'), { ok: false, reason: 'local_account' });
+  assert.equal(binds.length, 0, 'the directory password is not even tried');
+  const s = db.user.rows.find((u) => u['id'] === squat['id'])!;
+  assert.equal(s['authSource'], 'LOCAL', 'not taken over');
+  assert.equal(db.session.rows.length, 1);
+  // sync: a conflict, never a takeover
+  const r = await ldap.syncLdapUsers(domainId);
+  assert.ok(r.conflicts.includes('alice@example.com'));
+  assert.equal(db.user.rows.find((u) => u['id'] === squat['id'])!['authSource'], 'LOCAL');
+
+  // a normal LOCAL account taken over: sessions AND app passwords end
+  directory.push(person('carol', 'carol@example.com', 'carol-pw'));
+  const bob = await db.user.create({ data: { email: 'carol@example.com', authSource: 'LOCAL', passwordHash: 'x', domainId } });
+  await db.session.create({ data: { userId: bob['id'], tokenHash: 'b1', expiresAt: new Date(Date.now() + 1e6) } });
+  await db.appPassword.create({ data: { userId: bob['id'], name: 'phone', hash: 'h' } });
+  const d = await ldap.ldapAuthDecision('carol@example.com', 'carol-pw');
+  assert.ok(d.ok && d.userId === bob['id'], JSON.stringify(d));
+  assert.equal(db.session.rows.filter((x) => x['userId'] === bob['id']).length, 0);
+  assert.equal(db.appPassword.rows.filter((x) => x['userId'] === bob['id']).length, 0);
+});
+
 test('takeover of a LOCAL account with a legacy SSO binding (externalId oidc:…) migrates it to oidcSubject', async () => {
   await db.ldapConfig.update({ where: { domainId }, data: { allowLocalTakeover: true } });
   // login takeover

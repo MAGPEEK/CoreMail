@@ -288,6 +288,7 @@ test('10.6: nothing reads the deprecated UserMfa.webAuthnCredentials JSON outsid
   const { readdirSync } = await import('node:fs');
   const ALLOWED = new Set([
     'packages/storage/src/auth/webauthn/migration.ts', // the one reader (backfill)
+    'packages/storage/src/legacy-security-keys.ts', // 10.6 review: un-migrated keys count as a factor (select + pure rule)
     'packages/storage/src/auth/passkeys.ts', // MFA reset writes [] (never reads)
     'packages/storage/src/auth/testing.ts', // fake defaults
   ]);

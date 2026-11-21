@@ -6,6 +6,9 @@
  *   (`active=false`, `deactivatedBySync=true`, sessions revoked).
  * - Only accounts with authSource LDAP are touched. A LOCAL account with the
  *   same mail is a conflict unless the admin enabled `allowLocalTakeover`.
+ *   10.6 review: a self-registered LOCAL account is always a conflict (never
+ *   taken over — audited + security event); a takeover ends every session and
+ *   app password of the account.
  * - Re-activates only accounts the sync itself deactivated (an admin's manual
  *   deactivation is respected).
  * - AD accounts with userAccountControl ACCOUNTDISABLE (0x2) count as disabled.
@@ -13,7 +16,7 @@
  */
 import { createLogger, getRedisClient } from '@coremail/core';
 import { prisma, ensureMailboxProvisioned } from '@coremail/storage';
-import { revokeAllSessions } from '@coremail/storage/auth';
+import { isSelfRegisteredAccount, reportRefusedAccountLink, revokeAllSessions, revokeOnAccountLink } from '@coremail/storage/auth';
 import { buildSyncFilter } from './filter.js';
 import {
   attrFirst, attrId, attrValues, mailAttr, nameAttr, serviceBind, toLdapSettings, uidAttr,
@@ -91,6 +94,12 @@ export async function syncLdapUsers(domainId: string): Promise<LdapSyncResult> {
 
     const takeover = existing.authSource === 'LOCAL' && s.allowLocalTakeover;
     if (existing.authSource !== 'LDAP' && !takeover) { result.conflicts.push(email); continue; }
+    // 10.6 review: pre-takeover protection — a self-registered account is never taken over
+    if (takeover && await isSelfRegisteredAccount(existing.id)) {
+      await reportRefusedAccountLink({ id: existing.id, email }, 'ldap-sync');
+      result.conflicts.push(email);
+      continue;
+    }
     // v8.1: an `oidc:` externalId (legacy SSO link) is no directory id — migrated below
     const { directoryId, migrate } = legacyOidcBinding(existing);
     if (directoryId && externalId && directoryId !== externalId) { result.conflicts.push(email); continue; }
@@ -110,7 +119,9 @@ export async function syncLdapUsers(domainId: string): Promise<LdapSyncResult> {
       await prisma.user.update({ where: { id: existing.id }, data });
       if (!deactivate && !('active' in data)) result.updated++;
     }
-    if (deactivate || takeover) await revokeAllSessions(existing.id, { reason: deactivate ? 'ldap-sync-disabled' : 'ldap-takeover' });
+    // 10.6 review: a takeover also ends the app passwords (revokeOnAccountLink)
+    if (takeover) await revokeOnAccountLink(existing.id, 'ldap-sync');
+    if (deactivate) await revokeAllSessions(existing.id, { reason: 'ldap-sync-disabled' });
     if (deactivate) result.deactivated++;
     if (!disabled) await ensureMailboxProvisioned(existing.id);
   }

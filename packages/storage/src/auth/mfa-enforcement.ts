@@ -6,8 +6,14 @@
  * "required": `all` (the rules below, unchanged) and `admin` (admin accounts
  * under the admin rule or their own override: admin grace period of at most
  * 14 days, then the admin API needs MFA — adminMfaEnforcementFor(); the webmail
- * is not blocked by it). Per-user overrides have no stale check (the override
- * route clears User.mfaGraceStartedAt, so a new override starts a new grace).
+ * is not blocked by it). Per-user overrides have no stale check.
+ *
+ * 10.6 review — a grace period is never extended or restarted by an override
+ * change: the override route clears User.mfaGraceStartedAt only for plain USER
+ * accounts moving from "not required" to "required"; an admin account keeps its
+ * earliest grace start (an admin flipping required ↔ inherit cannot buy another
+ * 14 days). The admin rule's own stale check (mfaAdminEnforcementSince) applies
+ * only once the old grace ended MFA_ADMIN_GRACE_RESTART_COOLDOWN_DAYS ago.
  *
  * When the policy is "required", an account without a second factor (TOTP or a
  * security key) gets a grace period of `mfaEnforcementGraceDays` days, counted
@@ -75,12 +81,32 @@ export type MfaEnforcementStatus =
 
 // ── Pure rules ────────────────────────────────────────────────────────────────
 
-/** Grace start to use: the stored one while it belongs to the current activation, else `now` (to be stored). */
+/**
+ * 10.6 review: an admin grace period that ran out is never restarted within
+ * this many days after its end — not even when the admin rule is switched off
+ * and on again (ServerSettings.mfaAdminEnforcementSince moves).
+ */
+export const MFA_ADMIN_GRACE_RESTART_COOLDOWN_DAYS = 30;
+
+/**
+ * Grace start to use: the stored one while it belongs to the current activation, else `now` (to be stored).
+ * `cooldownDays` (admin kind): a stored start older than `since` still counts until
+ * its grace period ended at least that many days ago — a grace is never restarted
+ * right after it ran out. Returns `staleBefore`: stored values older than this may be
+ * replaced (the conditional write uses it).
+ */
 export function effectiveGraceStart(
-  policy: Pick<MfaEnforcementPolicy, 'since'>, stored: Date | null, now: Date,
-): { start: Date; persist: boolean } {
-  if (stored && (!policy.since || stored.getTime() >= policy.since.getTime())) return { start: stored, persist: false };
-  return { start: now, persist: true };
+  policy: Pick<MfaEnforcementPolicy, 'since'> & Partial<Pick<MfaEnforcementPolicy, 'graceDays'>>,
+  stored: Date | null, now: Date, opts: { cooldownDays?: number } = {},
+): { start: Date; persist: boolean; staleBefore: Date | null } {
+  let staleBefore = policy.since;
+  if (staleBefore && opts.cooldownDays !== undefined) {
+    const grace = Math.min(Math.max(0, Math.floor(policy.graceDays ?? 0)), MFA_GRACE_DAYS_BOUNDS[1]);
+    const latestStale = new Date(now.getTime() - (grace + Math.max(0, opts.cooldownDays)) * DAY_MS);
+    if (latestStale.getTime() < staleBefore.getTime()) staleBefore = latestStale;
+  }
+  if (stored && (!staleBefore || stored.getTime() >= staleBefore.getTime())) return { start: stored, persist: false, staleBefore };
+  return { start: now, persist: true, staleBefore };
 }
 
 /** End of the grace period that started at `start`. */
@@ -177,10 +203,14 @@ async function graceDecision(
   const policy: MfaEnforcementPolicy = {
     enabled: true, graceDays: resolved.graceDays, since: resolved.since, blocksPrimaryPassword: resolved.blocksPrimaryPassword,
   };
-  const { start, persist } = effectiveGraceStart(policy, user.graceStartedAt, now);
+  // 10.6 review: the admin grace is never restarted right after it ran out (cooldown)
+  const { start, persist, staleBefore } = effectiveGraceStart(
+    policy, user.graceStartedAt, now,
+    resolved.enforcement === 'admin' ? { cooldownDays: MFA_ADMIN_GRACE_RESTART_COOLDOWN_DAYS } : {},
+  );
   if (persist) {
-    const where = policy.since
-      ? { id: userId, OR: [{ mfaGraceStartedAt: null }, { mfaGraceStartedAt: { lt: policy.since } }] }
+    const where = staleBefore
+      ? { id: userId, OR: [{ mfaGraceStartedAt: null }, { mfaGraceStartedAt: { lt: staleBefore } }] }
       : { id: userId, mfaGraceStartedAt: null };
     await prisma.user.updateMany({ where, data: { mfaGraceStartedAt: start } });
     user.graceStartedAt = start;

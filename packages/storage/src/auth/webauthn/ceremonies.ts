@@ -456,7 +456,10 @@ const secondFactorFlow = (mfaChallengeToken: string) => `mfa:${mfaChallengeToken
 
 /** Options for the second factor of a pending MFA login: every credential of the user, UV discouraged (G1). */
 export async function secondFactorOptions(userId: string, mfaChallengeToken: string): Promise<PublicKeyCredentialRequestOptionsJSON | null> {
-  const rows = await prisma.webAuthnCredential.findMany({ where: { userId }, select: { credentialId: true, transports: true } });
+  // 10.6 review: pre-10.6 keys not copied yet (they count as a factor) — migrate on read
+  // (dynamic import: migration.ts imports this module)
+  await (await import('./migration.js')).migrateLegacyKeysOnRead(userId);
+  const rows =await prisma.webAuthnCredential.findMany({ where: { userId }, select: { credentialId: true, transports: true } });
   if (rows.length === 0) return null;
   const rp = await getRpConfig();
   const publicKey = await generateAuthenticationOptions({
@@ -508,7 +511,7 @@ function loginError(status: number, code: string, error: string, extra: Record<s
  * does not apply — it protects passwords) → single-use challenge → credential
  * by id → kind passkey and the user handle of the response = the stored one =
  * User.webauthnUserId (§7.2) → signature, origin, RP ID, UV required, no
- * cross-origin → BE / counter → active, maintenance, Webmail switch, passkey
+ * cross-origin → BE / counter → active, not OIDC-only (10.6 review), maintenance, Webmail switch, passkey
  * policy → session (mfaVerified, authMethod "passkey") → account counter reset.
  * Failures that are not policy decisions count against the client IP.
  *
@@ -549,7 +552,7 @@ export async function completePasskeyLogin(flowId: unknown, rawResponse: unknown
   }
   const user = await prisma.user.findUnique({
     where: { id: row.userId },
-    select: { id: true, email: true, role: true, domainId: true, active: true, webauthnUserId: true },
+    select: { id: true, email: true, role: true, domainId: true, active: true, webauthnUserId: true, authSource: true },
   });
   const handle = response.response.userHandle;
   if (!user || !handle || handle !== row.userHandle || user.webauthnUserId !== row.userHandle) {
@@ -559,6 +562,11 @@ export async function completePasskeyLogin(flowId: unknown, rawResponse: unknown
   if (!checked.ok) return fail(401, checked.code, 'Passkey verification failed');
 
   if (!user.active) return loginError(401, 'PASSKEY_INVALID', 'Passkey verification failed');
+  // 10.6 review: the account rules of the password login — an OIDC-only account signs in
+  // through its IdP only (no passkey sign-in, like no password sign-in)
+  if (String(user.authSource) === 'OIDC') {
+    return loginError(403, 'PASSKEYS_DISABLED', 'Passkey sign-in is not enabled for this account');
+  }
   const blocked = await maintenanceBlock(user.role);
   if (blocked) return { kind: 'error', status: 503, body: { error: 'maintenance', message: blocked } };
   // the surface of the request that receives the session (its cookie: cm_rt or cm_rt_bcp)

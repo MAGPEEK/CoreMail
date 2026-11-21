@@ -37,7 +37,25 @@ idempotent; each account once — `UserMfa.webAuthnMigratedAt` — so a key remo
 re-imported). They stay second factor only; the webmail marks them and offers "Als Passkey neu
 registrieren". A credential id that more than one user had is skipped for **all** of them and
 alerted (error log + audit `passkey.migration_duplicate`). The JSON column itself is deprecated
-and stays until the next MAJOR release; nothing else reads it (repo-hygiene guard).
+and stays until the next MAJOR release; nothing else reads it but the backfill and the factor
+rule below (repo-hygiene guard).
+
+10.6 review — fail closed:
+
+- Until an account is migrated, its legacy keys **count as a second factor** everywhere
+  (storage `legacy-security-keys.ts`, used by `authFactorsOf()` / `getAuthFactors()` and the
+  mail-protocol check): web login asks for the second factor, mail protocols need app passwords,
+  MFA enforcement sees the account as enrolled.
+- The start-up backfill is **retried with backoff** (15 s … 15 min, forever) while its lock is
+  busy, Redis is unavailable or a run fails; the second-factor options of a login also run it
+  first for an account with pending keys (migrate on read).
+- An entry that **cannot be copied** (unreadable, or the same credential id at several users) is
+  never dropped silently: the account stays un-migrated with exactly these entries left in the
+  JSON (copied keys are removed from it, so they are never re-imported), keeps counting as
+  MFA-enrolled, and is alerted — error log, audit `passkey.migration_pending`, security event
+  `PASSKEY_MIGRATION_PENDING` on the attack dashboard (at most every 6 h per account and
+  process). The user signs in with TOTP / backup codes meanwhile; an administrator resolves it
+  with **MFA zurücksetzen** (clears the JSON) or by removing the duplicate.
 
 ## Relying Party
 
@@ -168,6 +186,15 @@ every session of the account is revoked, the user gets a security notice, both t
 redemption are audited. Admins can also remove one or every passkey of a mailbox, or reset every
 factor (passkeys, security keys, TOTP, backup codes).
 
+10.6 review: the recovery link and the MFA reset are account-recovery actions — only
+ORGANIZATION_MANAGEMENT may use them (`403 FORBIDDEN_ROLE` otherwise, also for plain user
+accounts), the acting session must be MFA-verified, and never for the caller's own account
+(`403 OWN_ACCOUNT`). Their security notice always goes to the user's mailbox **and** its confirmed
+recovery address (docs/password-reset.md). "Remove all passkeys" and the MFA reset end every
+session of the user; a user removing one of their own passkeys / security keys ends their other
+sessions. A passkey sign-in follows the account rules of the password sign-in: inactive accounts
+and OIDC-only accounts (`authSource OIDC`, `403 PASSKEYS_DISABLED`) cannot sign in with a passkey.
+
 ## Admin API
 
 | Route | Area / scope |
@@ -175,7 +202,8 @@ factor (passkeys, security keys, TOTP, backup codes).
 | `GET/PUT /admin/authentication/passkeys` | organisation (write ORGANIZATION_MANAGEMENT; read SERVER_MANAGEMENT, VIEW_ONLY_ORG), organisation-wide admins only; audit `settings.passkey-policy.update` |
 | `GET/PUT /admin/authentication/passkeys/domains/:id` | same |
 | `GET /admin/mailboxes/:id/passkeys` | recipients read, the user's domain in scope (else 404) |
-| `DELETE /admin/mailboxes/:id/passkeys[/:pid]`, `POST /:id/mfa-reset`, `POST /:id/passkey-recovery`, `PUT /:id/passkey-policy` | recipients write, in scope, admin accounts only by ORGANIZATION_MANAGEMENT (`FORBIDDEN_ROLE`), the acting session MFA-verified (`403 MFA_NOT_VERIFIED`); audited (`passkey.admin_*`, `mailbox.passkey-policy.update`, `mailbox.mfa.reset`) |
+| `DELETE /admin/mailboxes/:id/passkeys[/:pid]`, `PUT /:id/passkey-policy` | recipients write, in scope, admin accounts only by ORGANIZATION_MANAGEMENT (`FORBIDDEN_ROLE`), the acting session MFA-verified (`403 MFA_NOT_VERIFIED`); audited (`passkey.admin_*`, `mailbox.passkey-policy.update`) |
+| `POST /admin/mailboxes/:id/mfa-reset`, `POST /:id/passkey-recovery` | in scope, **ORGANIZATION_MANAGEMENT only** (`FORBIDDEN_ROLE`), the acting session MFA-verified, never the own account (`OWN_ACCOUNT`); notice to mailbox + confirmed recovery address; audited (`mailbox.mfa.reset`, `passkey.admin_recovery_issue`) |
 
 `PUT /admin/mailboxes/:id/passkey-policy { passkeys?: inherit|on|off, passwordLoginDisabled? }`.
 The route is named `passkey-policy` (not `auth-policy`) so it cannot collide with the per-user

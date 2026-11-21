@@ -7,7 +7,10 @@
  *      enabled LdapConfig
  *   3. an existing CoreMail account must have authSource LDAP — a LOCAL account
  *      is only taken over with the explicit `allowLocalTakeover` opt-in
- *      (OIDC accounts never); inactive accounts are refused
+ *      (OIDC accounts never); inactive accounts are refused. 10.6 review: an
+ *      account created by self-registration is never taken over (pre-takeover
+ *      protection — refused as `local_account`, audited + security event);
+ *      a takeover ends every session AND app password of the account
  *   4. bind with the service account, search the user with the configured
  *      filter (RFC 4515-escaped), exactly one entry required
  *   5. the directory `mail` attribute must equal the login e-mail
@@ -19,7 +22,9 @@ import { createLogger } from '@coremail/core';
 import {
   prisma, ensureMailboxProvisioned, registerExternalPasswordVerifier, type ExternalPasswordVerifier,
 } from '@coremail/storage';
-import { revokeAllSessions, type ExternalAuthenticator } from '@coremail/storage/auth';
+import {
+  isSelfRegisteredAccount, reportRefusedAccountLink, revokeOnAccountLink, type ExternalAuthenticator,
+} from '@coremail/storage/auth';
 import { buildUserFilter } from './filter.js';
 import {
   attrFirst, attrId, attrValues, isSizeLimitError, mailAttr, nameAttr, openClient, serviceBind, toLdapSettings, uidAttr,
@@ -76,13 +81,19 @@ export async function ldapAuthDecision(rawEmail: string, password: string): Prom
 
   const existing = await prisma.user.findUnique({
     where: { email },
-    select: { id: true, authSource: true, active: true, externalId: true, oidcSubject: true, displayName: true },
+    select: { id: true, email: true, authSource: true, active: true, externalId: true, oidcSubject: true, displayName: true },
   });
   if (existing) {
     if (existing.authSource !== 'LDAP' && !(existing.authSource === 'LOCAL' && settings.allowLocalTakeover)) {
       return { ok: false, reason: 'local_account' };
     }
     if (!existing.active) return { ok: false, reason: 'inactive' };
+    // 10.6 review: a self-registered account is never taken over (checked before any bind:
+    // no directory password is tried for it)
+    if (existing.authSource === 'LOCAL' && await isSelfRegisteredAccount(existing.id)) {
+      await reportRefusedAccountLink(existing, 'ldap-login');
+      return { ok: false, reason: 'local_account' };
+    }
   }
 
   let svc;
@@ -155,7 +166,8 @@ export async function ldapAuthDecision(rawEmail: string, password: string): Prom
     });
     if (takeover) {
       log.warn({ userId: existing.id, email }, 'LOCAL account taken over by LDAP (allowLocalTakeover)');
-      await revokeAllSessions(existing.id, { reason: 'ldap-takeover' }).catch(() => undefined);
+      // 10.6 review: sessions AND app passwords (+ MCP tokens, remembered devices)
+      await revokeOnAccountLink(existing.id, 'ldap-login');
     }
     await ensureMailboxProvisioned(existing.id).catch((err: unknown) => log.error({ err }, 'Mailbox provisioning failed'));
     return { ok: true, userId: existing.id, created: false };

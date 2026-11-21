@@ -219,6 +219,54 @@ test('mailbox: recovery link (shown once, fragment), passkey-only preconditions,
   assert.ok(auditRows.some((r) => r['action'] === 'mailbox.mfa.reset'));
 });
 
+test('10.6 review: MFA reset and recovery link — organisation management only, MFA-verified, never the own account; notice to mailbox + recovery address', async () => {
+  db.serverSettings.rows[0]!['passkeysEnabled'] = true;
+  sauth.invalidatePasskeyPolicyCache();
+  const { setResetMailer } = await import('../../lib/password-reset.js');
+  const mailed: string[] = [];
+  const notices: Array<{ userId: string; subject: string }> = [];
+  setResetMailer(async (m) => { mailed.push(`${m.to}|${m.subject}`); });
+  sauth.setSecurityNotifier(async (n) => { notices.push({ userId: n.userId, subject: n.subject }); });
+  try {
+    const org = await addUser('org@example.com', 'ORGANIZATION_MANAGEMENT');
+    const rcp = await addUser('rcp@example.com', 'RECIPIENT_MANAGEMENT');
+    const user = await addUser('u@example.com');
+    const uid = String(user['id']);
+    db.recoveryEmail.rows = [];
+    await db.recoveryEmail.create({ data: { userId: uid, address: 'u.private@elsewhere.example', verifiedAt: new Date() } });
+    for (const path of ['mfa-reset', 'passkey-recovery']) {
+      // a non-org admin, even for a plain user account
+      const r1 = await call('POST', `/api/v1/admin/mailboxes/${uid}/${path}`, await tokenOf(rcp));
+      assert.equal(r1.status, 403, path);
+      assert.equal(r1.body['code'], 'FORBIDDEN_ROLE', path);
+      // never the own account
+      const r2 = await call('POST', `/api/v1/admin/mailboxes/${String(org['id'])}/${path}`, await tokenOf(org));
+      assert.equal(r2.body['code'], 'OWN_ACCOUNT', path);
+      // an unverified session
+      const r3 = await call('POST', `/api/v1/admin/mailboxes/${uid}/${path}`, await tokenOf(org, false));
+      assert.equal(r3.body['code'], 'MFA_NOT_VERIFIED', path);
+    }
+    // the recovery link: notice to the mailbox AND the confirmed recovery address
+    const rec = await call('POST', `/api/v1/admin/mailboxes/${uid}/passkey-recovery`, await tokenOf(org));
+    assert.equal(rec.status, 200, JSON.stringify(rec.body));
+    await new Promise((r) => setTimeout(r, 30));
+    assert.ok(notices.some((n) => n.userId === uid && /recovery link/.test(n.subject)));
+    assert.ok(mailed.some((m) => m.startsWith('u.private@elsewhere.example|') && /recovery link/.test(m)));
+    // the MFA reset: user's sessions end, notice to mailbox + recovery address
+    await tokenOf(user);
+    assert.ok(db.session.rows.some((s) => s['userId'] === uid));
+    const reset = await call('POST', `/api/v1/admin/mailboxes/${uid}/mfa-reset`, await tokenOf(org));
+    assert.equal(reset.status, 200, JSON.stringify(reset.body));
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(db.session.rows.filter((s) => s['userId'] === uid).length, 0, 'every session of the user ends');
+    assert.ok(notices.some((n) => n.userId === uid && /reset/.test(n.subject)));
+    assert.ok(mailed.some((m) => m.startsWith('u.private@elsewhere.example|') && /reset/.test(m)));
+  } finally {
+    setResetMailer(null);
+    sauth.setSecurityNotifier(async () => undefined);
+  }
+});
+
 test('admin MFA rule: a passkey counts as enrolled factor (no grace prompt); a passkey session is MFA-verified', async () => {
   db.serverSettings.rows[0]!['requireMfaForAdmins'] = true;
   db.serverSettings.rows[0]!['passkeysEnabled'] = true;

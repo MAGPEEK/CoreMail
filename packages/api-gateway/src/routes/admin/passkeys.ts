@@ -22,6 +22,14 @@
  * ORGANIZATION_MANAGEMENT (canManageAccount); the acting admin's session must be
  * MFA-verified (403 MFA_NOT_VERIFIED); audited (`passkey.admin_*`,
  * `mailbox.passkey-policy.update`), and the user gets a security notice.
+ *
+ * 10.6 review — the account-recovery actions `POST /:id/mfa-reset` and
+ * `POST /:id/passkey-recovery` (they hand the account to whoever holds the
+ * password or the link): ORGANIZATION_MANAGEMENT only (403 FORBIDDEN_ROLE), the
+ * acting session MFA-verified, never the caller's own account (403
+ * OWN_ACCOUNT); the notice always goes to the user's mailbox AND to its
+ * confirmed recovery address. Both end the user's sessions (reset: storage
+ * removeAllCredentials; link: when it is used).
  */
 import { Router, type Router as RouterType, type Request, type Response, type NextFunction } from 'express';
 import { z } from 'zod';
@@ -38,6 +46,7 @@ import { canManageAccount } from '../../lib/rbac.js';
 import { requireUnscoped, scopeParam } from '../../middleware/admin-scope.js';
 import { audit, auditContext } from '../../lib/audit.js';
 import { publicBaseUrl } from '../sso.js';
+import { notifyAccountSecurity, notifyRecoveryAddress } from '../../lib/password-reset.js';
 
 const log = createLogger('admin:passkeys');
 
@@ -158,13 +167,27 @@ adminMailboxPasskeysRouter.use(requireArea('recipients'));
 adminMailboxPasskeysRouter.param('id', scopeParam('user'));
 const recipients = requireArea('recipients');
 
-/** Write guard: admin accounts only by ORGANIZATION_MANAGEMENT; the acting session must be MFA-verified. */
-async function loadTarget(req: Request, res: Response, write: boolean) {
+/**
+ * Write guard: admin accounts only by ORGANIZATION_MANAGEMENT; the acting session must be MFA-verified.
+ * `recovery` (10.6 review: MFA reset, recovery link): ORGANIZATION_MANAGEMENT only, never the own account.
+ */
+async function loadTarget(req: Request, res: Response, write: boolean | 'recovery') {
   const user = await prisma.user.findUnique({
     where: { id: String(req.params['id'] ?? '') },
     select: { id: true, email: true, role: true, domainId: true, authSource: true, passwordLoginDisabled: true },
   });
   if (!user) { res.status(404).json({ error: 'User not found' }); return null; }
+  if (write === 'recovery') {
+    const actor = req.apiUser!;
+    if (actor.role !== 'ORGANIZATION_MANAGEMENT') {
+      res.status(403).json({ error: 'Only Organization Management may reset the sign-in factors of an account', code: 'FORBIDDEN_ROLE' });
+      return null;
+    }
+    if (actor.userId === user.id) {
+      res.status(403).json({ error: 'Your own sign-in factors cannot be reset here — ask another administrator', code: 'OWN_ACCOUNT' });
+      return null;
+    }
+  }
   if (write) {
     const actor = req.apiUser!;
     if (actor.userId !== user.id && !canManageAccount(actor.role, user.role)) {
@@ -213,7 +236,7 @@ adminMailboxPasskeysRouter.delete('/:id/passkeys/:pid', recipients, guard(async 
 }));
 
 async function removeAll(req: Request, res: Response, allMfa: boolean): Promise<void> {
-  const user = await loadTarget(req, res, true);
+  const user = await loadTarget(req, res, allMfa ? 'recovery' : true);
   if (!user) return;
   const actor = req.apiUser!;
   const r = await removeAllCredentials(user.id, { allMfa, actor: { id: actor.userId, email: actor.email, ip: req.ip } });
@@ -223,6 +246,12 @@ async function removeAll(req: Request, res: Response, allMfa: boolean): Promise<
     changes: { credentials: r.credentials, totp: r.totp },
     ...auditContext(req),
   });
+  if (allMfa) {
+    // 10.6 review: the own mailbox got the notice (storage); the confirmed recovery address too
+    void notifyRecoveryAddress(user.id, 'Security notice: your sign-in factors were reset',
+      `An administrator removed all second factors (passkeys, security keys, authenticator app, backup codes) from your account ${user.email} ` +
+      `on ${new Date().toUTCString()} and signed out every session.\n\nIf you did not ask for it, inform your administrator.`);
+  }
   res.json({ ok: true, removed: r.credentials, totpReset: r.totp });
 }
 
@@ -230,7 +259,7 @@ adminMailboxPasskeysRouter.delete('/:id/passkeys', recipients, guard(async (req,
 adminMailboxPasskeysRouter.post('/:id/mfa-reset', recipients, guard(async (req, res) => removeAll(req, res, true)));
 
 adminMailboxPasskeysRouter.post('/:id/passkey-recovery', recipients, guard(async (req, res) => {
-  const user = await loadTarget(req, res, true);
+  const user = await loadTarget(req, res, 'recovery');
   if (!user) return;
   if (String(user.authSource) === 'OIDC' || !(await passkeysAllowedFor(user))) {
     res.status(409).json({ error: 'Passkeys are not enabled for this account', code: 'PASSKEYS_DISABLED' });
@@ -246,14 +275,11 @@ adminMailboxPasskeysRouter.post('/:id/passkey-recovery', recipients, guard(async
     changes: { expiresAt: expiresAt.toISOString() },
     ...auditContext(req),
   });
-  void notifySecurityEvent({
-    userId: user.id,
-    subject: 'Security notice: a passkey recovery link was created for your account',
-    bodyText:
-      `An administrator created a one-time link on ${new Date().toUTCString()} to register a new passkey for your account ` +
-      `(valid until ${expiresAt.toUTCString()}). Using it signs out every other session.\n\n` +
-      'If you did not ask for it, inform your administrator.',
-  });
+  // 10.6 review: always to the mailbox AND the confirmed recovery address
+  void notifyAccountSecurity(user.id, 'Security notice: a passkey recovery link was created for your account',
+    `An administrator created a one-time link on ${new Date().toUTCString()} to register a new passkey for your account ${user.email} ` +
+    `(valid until ${expiresAt.toUTCString()}). Using it signs out every other session.\n\n` +
+    'If you did not ask for it, inform your administrator.');
   res.set('Cache-Control', 'no-store').json({ url, expiresAt: expiresAt.toISOString() });
 }));
 

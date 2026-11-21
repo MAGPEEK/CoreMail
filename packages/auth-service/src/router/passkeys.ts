@@ -232,10 +232,11 @@ passkeyUserRouter.patch('/:id', authed(async (req, res, { userId }) => {
   res.json({ credential: row });
 }));
 
-passkeyUserRouter.delete('/:id', authed(async (req, res, { userId }) => {
+passkeyUserRouter.delete('/:id', authed(async (req, res, { userId, sessionId }) => {
   if (!(await requireReauth(req, res, userId))) return;
   const user = await accountOf(userId);
-  const r = await deleteCredential(userId, String(req.params['id'] ?? ''), { id: userId, email: user?.email, ip: req.ip });
+  // 10.6 review: the user's other sessions end; this one stays
+  const r = await deleteCredential(userId, String(req.params['id'] ?? ''), { id: userId, email: user?.email, ip: req.ip, sessionId });
   if (r === 'not_found') { res.status(404).json({ error: 'Not found' }); return; }
   if (r === 'last_passkey') {
     res.status(409).json({ error: 'The last passkey of a passkey-only account cannot be removed', code: 'LAST_PASSKEY' });

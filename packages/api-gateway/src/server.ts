@@ -94,7 +94,7 @@ import { createMcpRouter } from './lib/mcp/handler.js';
 import { startMcpSettingsSubscriber } from './lib/mcp/settings.js';
 import { mcpLiveConnections } from './lib/mcp/sessions.js';
 import { hashMcpToken, looksLikeMcpToken, startPasskeyPolicySubscriber } from '@coremail/storage/auth';
-import { migrateLegacyWebAuthnCredentials } from '@coremail/storage/auth/webauthn';
+import { startLegacyWebAuthnMigration } from '@coremail/storage/auth/webauthn';
 import { wellKnownWebauthn } from './lib/passkeys-well-known.js';
 import { startAttackProtection, connectGuard } from '@coremail/storage';
 import { createIpBlocklistGuard, upgradeBlocked } from './lib/ip-blocklist-guard.js';
@@ -610,10 +610,11 @@ async function start() {
   // v5.6.0: initJwtKeys() removed (RS256 keys were for OAuth2 — completely gone)
   getRedisClient();
   // 10.6: passkey policy changes of other instances; one-time backfill of the
-  // deprecated UserMfa.webAuthnCredentials JSON (idempotent, Redis lock)
+  // deprecated UserMfa.webAuthnCredentials JSON (idempotent, Redis lock). 10.6 review:
+  // retried with backoff while the lock is busy or a run fails; until an account is
+  // migrated its legacy keys count as MFA (fail closed, storage legacy-security-keys.ts)
   startPasskeyPolicySubscriber();
-  void migrateLegacyWebAuthnCredentials()
-    .catch((err) => log.error({ err }, 'Legacy security key migration failed — retried at the next start'));
+  startLegacyWebAuthnMigration();
   // v7.1 object storage: startup check (logged; /healthz reports it — the
   // gateway itself stays up so the admin API / migration remain reachable) and
   // the periodic expiry cleaner where no S3 lifecycle rules apply (filesystem

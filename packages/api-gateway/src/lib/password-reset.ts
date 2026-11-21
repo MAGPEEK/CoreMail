@@ -206,6 +206,28 @@ export async function notifyPasswordResetDone(userId: string, ip: string): Promi
   }
 }
 
+/**
+ * 10.6 review: a security notice to the CONFIRMED recovery address of the
+ * account only (the own mailbox gets its notice from the storage action).
+ * Never throws; no address → nothing sent.
+ */
+export async function notifyRecoveryAddress(userId: string, subject: string, text: string): Promise<void> {
+  try {
+    const rec = await getRecoveryEmailState(userId);
+    if (!rec.address) return;
+    const ctx = await mailContext();
+    await sendExternal(ctx, { to: rec.address, subject, text, html: `<pre style="font-family:system-ui,sans-serif;white-space:pre-wrap">${escapeHtml(text)}</pre>` });
+  } catch (err) {
+    log.error({ err, userId }, 'Failed to send the security notice to the recovery address');
+  }
+}
+
+/** 10.6 review: a security notice to the own mailbox AND the confirmed recovery address. Never throws. */
+export async function notifyAccountSecurity(userId: string, subject: string, text: string): Promise<void> {
+  await notifySecurityEvent({ userId, subject, bodyText: text });
+  await notifyRecoveryAddress(userId, subject, text);
+}
+
 // ── Recovery address mails ───────────────────────────────────────────────────
 
 /** Confirmation link to a newly entered recovery address. */

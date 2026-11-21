@@ -10,12 +10,19 @@
  *
  * Area recipients (write: RECIPIENT_MANAGEMENT; read: HELP_DESK, VIEW_ONLY_ORG).
  * Scope (9.5): a domain-scoped admin sees and changes only accounts of its
- * domains (other ids answer 404 like unknown ids). Admin accounts: only
- * ORGANIZATION_MANAGEMENT may weaken an admin's effective policy (required →
- * optional / off) or revoke an admin's devices; any other admin with write
- * access may only keep or strengthen it. Changing the override restarts the
- * account's grace period (User.mfaGraceStartedAt cleared) and publishes
- * `mfa-policy-change` (caches only — no session or connection ends).
+ * domains (other ids answer 404 like unknown ids).
+ *
+ * 10.6 review — override writes (PUT):
+ *   - never on the caller's own account (403 MFA_POLICY_OWN_ACCOUNT);
+ *   - the acting session must be MFA-verified (403 MFA_NOT_VERIFIED, the rule of
+ *     the other sensitive admin MFA routes, e.g. admin/passkeys.ts);
+ *   - an admin account (role ≠ USER) only by ORGANIZATION_MANAGEMENT
+ *     (canManageAccount → 403 FORBIDDEN_ROLE); devices of an admin likewise.
+ *   - a grace period that already started is never restarted or extended: the
+ *     grace start (User.mfaGraceStartedAt) of an admin account is never cleared;
+ *     a plain USER account gets a fresh grace only when its effective policy
+ *     moves from "not required" to "required".
+ * A change publishes `mfa-policy-change` (caches only — no session or connection ends).
  *
  *   GET    /api/v1/admin/mfa-status   (any admin role, own account) — the admin
  *          MFA rule state of the caller: { state, deadline?, canEnrol } for the
@@ -43,12 +50,27 @@ adminUserMfaRouter.param('id', scopeParam('user'));
 
 const isAdminRole = (role: string | null | undefined): boolean => !!role && role !== 'USER';
 
-/** Pure: may `actorRole` change the override of an account with `targetRole` from `before` to `after` (effective levels)? */
+/**
+ * Pure: may `actorRole` change the override of an account with `targetRole` from `before` to `after` (effective levels)?
+ * 10.6 review: admin accounts only by ORGANIZATION_MANAGEMENT (canManageAccount) — also when strengthening.
+ */
 export function overrideChangeAllowed(
   actorRole: string, targetRole: string, before: MfaPolicyLevel, after: MfaPolicyLevel,
 ): boolean {
-  if (!isAdminRole(targetRole) || actorRole === 'ORGANIZATION_MANAGEMENT') return true;
-  return !weakensMfaPolicy(before, after);
+  if (!isAdminRole(targetRole)) return true;
+  if (!canManageAccount(actorRole, targetRole)) return false;
+  return actorRole === 'ORGANIZATION_MANAGEMENT' || !weakensMfaPolicy(before, after);
+}
+
+/**
+ * Pure (10.6 review): the grace start to write with an override change — `null`
+ * (clear: a fresh grace period) only for a plain USER account whose effective
+ * policy moves from "not required" to "required"; otherwise `undefined` (keep
+ * it: a grace that already started is never restarted or extended).
+ */
+export function graceResetOnOverride(targetRole: string, before: MfaPolicyLevel, after: MfaPolicyLevel): null | undefined {
+  if (isAdminRole(targetRole)) return undefined;
+  return before !== 'required' && after === 'required' ? null : undefined;
 }
 
 async function enrolledSet(ids: string[]): Promise<Set<string>> {
@@ -138,8 +160,21 @@ adminUserMfaRouter.put('/:id', async (req: Request, res: Response) => {
   const parsed = OverrideBody.safeParse(req.body ?? {});
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request', details: parsed.error.issues }); return; }
   const actor = req.apiUser!;
+  // 10.6 review: never the own override (an admin could otherwise restart its own grace period)
+  if (actor.userId === id) {
+    res.status(403).json({ error: 'The MFA policy of your own account can only be changed by another administrator', code: 'MFA_POLICY_OWN_ACCOUNT' });
+    return;
+  }
+  if (actor.mfaVerified !== true) {
+    res.status(403).json({ error: 'This action needs a session verified with a second factor — please sign in again', code: 'MFA_NOT_VERIFIED' });
+    return;
+  }
   const u = await prisma.user.findUnique({ where: { id }, select: { id: true, email: true, role: true, mfaPolicy: true } });
   if (!u) { res.status(404).json({ error: 'Not found' }); return; }
+  if (!canManageAccount(actor.role, String(u.role))) {
+    res.status(403).json({ error: 'Only Organization Management may modify admin accounts', code: 'FORBIDDEN_ROLE' });
+    return;
+  }
   const settings = await loadMfaPolicySettings();
   const next = parsed.data.mfaPolicy === 'inherit' ? null : parsed.data.mfaPolicy;
   const before = resolveMfaPolicy(settings, { role: String(u.role), mfaPolicy: u.mfaPolicy ?? null });
@@ -153,9 +188,10 @@ adminUserMfaRouter.put('/:id', async (req: Request, res: Response) => {
   }
   const from = levelFromDb(u.mfaPolicy);
   if (from !== next) {
+    const grace = graceResetOnOverride(String(u.role), before.level, after.level);
     await prisma.user.update({
       where: { id },
-      data: { mfaPolicy: next ? levelToDb(next) : null, mfaGraceStartedAt: null },
+      data: { mfaPolicy: next ? levelToDb(next) : null, ...(grace === null ? { mfaGraceStartedAt: null } : {}) },
     });
     await publishUserAuthChange(id, 'mfa-policy-change');
     audit({

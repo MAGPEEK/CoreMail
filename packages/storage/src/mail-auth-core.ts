@@ -60,8 +60,9 @@
  */
 import { createHash } from 'node:crypto';
 import { BlockList, isIP } from 'node:net';
-// 10.6: pure module without imports (the shared "has MFA" rule)
+// 10.6: pure modules without database access (the shared "has MFA" rule)
 import { authFactorsOf } from './auth-factors.js';
+import { LEGACY_SECURITY_KEY_SELECT, type LegacySecurityKeyRow } from './legacy-security-keys.js';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -158,7 +159,8 @@ interface UserRow {
   active?: boolean;
   passwordHash?: string | null;
   authSource?: string | null;
-  mfa?: { totpEnabled?: boolean | null } | null;
+  /** 10.6 review: + the deprecated legacy key columns (pre-10.6 keys not copied yet count as MFA). */
+  mfa?: ({ totpEnabled?: boolean | null } & LegacySecurityKeyRow) | null;
   /** 10.6: WebAuthn credentials (passkeys / security keys) — only their presence matters here. */
   webauthnCredentials?: ReadonlyArray<{ kind?: string | null }> | null;
   mailbox?: { id: string } | null;
@@ -1006,7 +1008,8 @@ export function createMailCredentialVerifier(deps: MailAuthDeps): MailCredential
         select: {
           id: true, email: true, displayName: true, domainId: true, role: true, active: true,
           passwordHash: true, authSource: true,
-          mfa: { select: { totpEnabled: true } },
+          // 10.6 review: pre-10.6 security keys the backfill has not copied yet count as MFA (fail closed)
+          mfa: { select: { totpEnabled: true, ...LEGACY_SECURITY_KEY_SELECT } },
           // 10.6: one credential is enough to know MFA is enrolled (auth-factors.ts)
           webauthnCredentials: { select: { kind: true }, take: 1 },
           mailbox: { select: { id: true } },

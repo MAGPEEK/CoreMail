@@ -28,6 +28,11 @@ while anybody else can read it.
 A reset is **available** when the switch is on and at least one method is on. When both methods
 apply, the link goes to both (the own mailbox only while nobody else reads it).
 
+> **Note (10.6 review):** "nobody else reads it" covers delegates and folder permissions only. An
+> administrator with backup or restore access to the mailbox (system / mailbox backups, the backup
+> archive) can read a reset link delivered to the own mailbox. Where that matters, switch the
+> method **Eigenes Postfach** off and use confirmed recovery addresses only.
+
 Not covered by self-service reset (always, whatever the settings):
 
 - accounts from an LDAP directory or an SSO provider (`authSource ≠ LOCAL`) — their

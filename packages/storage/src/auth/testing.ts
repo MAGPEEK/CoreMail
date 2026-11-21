@@ -209,6 +209,7 @@ export interface FakePrisma {
   webAuthnCredential: FakeTable;
   passkeyRecoveryToken: FakeTable;
   passkeyPolicy: FakeTable;
+  selfRegistration: FakeTable;
   [k: string]: unknown;
 }
 
@@ -336,6 +337,8 @@ export function createFakePrisma(): FakePrisma {
   p.passkeyRecoveryToken = new FakeTable(() => ({ usedAt: null, createdById: null, createdAt: new Date() }), ['id', 'tokenHash']);
   p.passkeyPolicy = new FakeTable(() => ({ domainId: null, userId: null, passkeys: 'INHERIT', updatedAt: new Date() }), ['id', 'domainId', 'userId']);
   p['auditLog'] = new FakeTable(() => ({ success: true, createdAt: new Date() }));
+  // 10.6 review: self-registered accounts (never linked to OIDC / taken over by LDAP)
+  p.selfRegistration = new FakeTable(() => ({ status: 'PENDING', ipAddress: '', inviteId: null, createdAt: new Date() }), ['id', 'userId']);
   return p;
 }
 
