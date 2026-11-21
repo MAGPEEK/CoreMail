@@ -43,14 +43,14 @@ async function passkeySignIn(auth, overrides = {}) {
   return r;
 }
 
-async function ensureUser(admin, email, password) {
+async function ensureUser(admin, email, password, domainId) {
   const list = (await http('GET', '/api/v1/admin/mailboxes', { token: admin })).json ?? [];
   const found = list.find((u) => u.email === email);
   if (found) {
     await http('PUT', `/api/v1/admin/mailboxes/${found.id}`, { token: admin, body: { password } });
     return found.id;
   }
-  const r = await http('POST', '/api/v1/admin/mailboxes', { token: admin, body: { email, displayName: email.split('@')[0], password } });
+  const r = await http('POST', '/api/v1/admin/mailboxes', { token: admin, body: { email, displayName: email.split('@')[0], password, domainId } });
   assert(r.status === 201, `create ${email}: ${r.status} ${r.text.slice(0, 200)}`);
   return r.json.id;
 }
@@ -79,7 +79,7 @@ export async function run(state) {
     assert(g.status === 200, `policy ${g.status} ${g.text.slice(0, 200)}`);
     pk.initialEnabled ??= g.json.enabled;
     if (g.json.enabled) await http('PUT', '/api/v1/admin/authentication/passkeys', { token: admin, body: { enabled: false } });
-    userId = await ensureUser(admin, EMAIL, PW);
+    userId = await ensureUser(admin, EMAIL, PW, state.domainId);
     pk.userId = userId;
     token = await passwordLogin(EMAIL, PW);
     await waitFor(async () => (await http('GET', '/auth/passkey/status')).json?.enabled === false, { what: 'passkeys off' });
@@ -185,7 +185,7 @@ export async function run(state) {
   await check('passkeys: legacy JSON security key migrated at the gateway start — second factor only', async () => {
     if (!c.legacyKeyUser) setCred('legacyKeyUser', `Lk-${Math.random().toString(36).slice(2)}-e2e!`);
     const LPW = creds().legacyKeyUser;
-    const legacyId = await ensureUser(admin, LEGACY, LPW);
+    const legacyId = await ensureUser(admin, LEGACY, LPW, state.domainId);
     const key = new SoftAuthenticator({ rpId: rp.rpId, origin: rp.origin });
     const json = JSON.stringify([key.legacyJson('YubiKey (old)')]);
     psql(`INSERT INTO user_mfa (id, "userId", "webAuthnCredentials", "backupCodes") VALUES ('e2e-legacy-mfa', ${sqlString(legacyId)}, ${sqlString(json)}::jsonb, '{}')
