@@ -258,7 +258,7 @@ createRoot(document.getElementById('root')!).render(
                   <Route path="/backups" element={<BackupsPage />} />
                   <Route path="/protection" element={<ProtectionPage />} />
                   <Route path="/attack-protection" element={<AttackProtectionPage />} />
-                  <Route path="/authentication/password-reset" element={<SsprPage />} />
+                  <Route path="/password-reset" element={<SsprPage />} />
                   <Route path="/servers" element={<ServersPage />} />
                   <Route path="/services" element={<ServicesPage />} />
                   <Route path="/services/:sub" element={<ServicesLegacyRedirect />} />

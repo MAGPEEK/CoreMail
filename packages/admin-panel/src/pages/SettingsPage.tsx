@@ -328,7 +328,7 @@ export function SettingsPage() {
 
         {/* 10.6: self-service password reset moved to BCP → Authentifizierung → Passwort-Zurücksetzung */}
         <FieldGroup label={t('sspr_title')} hint={t('settings_sec_sspr_moved')}>
-          <Link to="/authentication/password-reset" className="text-sm text-accent-fg hover:underline">
+          <Link to="/password-reset" className="text-sm text-accent-fg hover:underline">
             {t('settings_sec_sspr_open')}
           </Link>
         </FieldGroup>

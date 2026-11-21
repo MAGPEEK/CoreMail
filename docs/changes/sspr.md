@@ -14,7 +14,7 @@ notes".
   force until then. Every change notifies the own mailbox and the previously confirmed address;
   at most 5 changes per hour. Confirmation page `/recovery-email/confirm`. New model
   `RecoveryEmail` (`recovery_emails`, additive).
-- **BCP → Authentifizierung → Passwort-Zurücksetzung** (`/authentication/password-reset`): master
+- **BCP → Authentifizierung → Passwort-Zurücksetzung** (`/password-reset`): master
   switch, methods „Wiederherstellungsadresse“ and „Eigenes Postfach“, „Auch Konten mit
   Administratorrolle zulassen“ (default off), number of accounts with a confirmed recovery
   address. API `GET/PUT /api/v1/admin/settings/password-reset` (area organisation, audited as

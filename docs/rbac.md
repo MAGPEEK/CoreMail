@@ -248,7 +248,7 @@ admin guard: an admin without a factor passes during the admin grace period (≤
 
 10.6: `GET/PUT /settings/password-reset` (self-service password reset — switch, methods,
 admin exclusion, counts; BCP → Authentifizierung → Passwort-Zurücksetzung, route
-`/authentication/password-reset`, page area organisation): **org** — organisation read
+`/password-reset`, page area organisation): **org** — organisation read
 (SERVER_MANAGEMENT, VIEW_ONLY_ORG) / write (ORGANIZATION_MANAGEMENT only); the counts are
 organisation-wide and never shown to a scoped admin. Every change is audited as
 `settings.password-reset.update` with a from/to diff (always logged). The user's own recovery

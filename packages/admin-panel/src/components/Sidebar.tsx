@@ -58,7 +58,7 @@ export function Sidebar() {
       groupKey: 'nav_group_auth',
       items: [
         { path: '/mfa',              labelKey: 'nav_mfa',              icon: KeyRound },
-        { path: '/authentication/password-reset', labelKey: 'nav_password_reset', icon: KeyRound },
+        { path: '/password-reset', labelKey: 'nav_password_reset', icon: KeyRound },
         { path: '/authentication/self-registration', labelKey: 'nav_self_registration', icon: UserPlus },
         { path: '/sso',              labelKey: 'nav_sso',              icon: Fingerprint },
         { path: '/ldap',             labelKey: 'nav_ldap',             icon: ServerCog },
