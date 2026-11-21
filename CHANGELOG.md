@@ -13,6 +13,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [10.6.1] — 2026-11-21 — Fix: Let's Encrypt certificate order
+
+### Fixed
+
+- **Let's Encrypt certificates could not be ordered in 10.6.0** (setup wizard step "Zertifikat" and BCP → SSL/TLS): the certificate request failed with "Cannot get schema for 'AlgorithmIdentifier' target". The passkey library and the ACME client each brought their own copy of the ASN.1 packages and share one provider registry, so the request was encoded with the wrong copy once the passkey code was loaded. The build now pins one copy (`@peculiar/asn1-*` overrides in `pnpm-workspace.yaml`); a regression test creates a certificate request after loading the passkey library.
+
+### Upgrade notes
+
+- Patch release, no configuration or schema change. After the update choose "Erneut prüfen" in the wizard or order the certificate in BCP → SSL/TLS.
+- Helm chart 3.6.1.
+
+---
+
 ## [10.6.0] — 2026-11-21 — Authentication: MFA policy, passkeys, password reset, self-registration
 
 ### Added

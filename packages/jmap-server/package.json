@@ -1,6 +1,6 @@
 {
   "name": "@coremail/jmap-server",
-  "version": "10.6.0",
+  "version": "10.6.1",
   "private": true,
   "type": "module",
   "main": "./dist/server.js",

@@ -1,6 +1,6 @@
 {
   "name": "coremail",
-  "version": "10.6.0",
+  "version": "10.6.1",
   "private": true,
   "packageManager": "pnpm@11.28.9",
   "description": "CoreMail — self-hosted open-source mail and groupware server",
