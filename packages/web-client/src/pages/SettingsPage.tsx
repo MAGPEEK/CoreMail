@@ -25,6 +25,7 @@ import { RegionalSettings } from '../components/settings/RegionalSettings.js';
 import { CalendarSettings } from '../components/settings/CalendarSettings.js';
 import { MailSortSettings } from '../components/settings/MailSortSettings.js';
 import { SessionsPanel, DevicesPanel, SmimeSettingsPanel } from '../components/settings/SecurityPanels.js';
+import { PasskeysPanel } from '../components/settings/PasskeysPanel.js';
 import { NotificationsSection } from '../components/NotificationsSection.js';
 import { ViewKeyboardSettings } from '../components/ViewKeyboardSettings.js';
 import { format as fmtDate } from 'date-fns';
@@ -873,6 +874,8 @@ type TotpStep = 'idle' | 'setup' | 'confirm' | 'done';
 interface MfaStatus {
   totpEnabled: boolean;
   webauthnCount: number;
+  /** 10.6: second-factor-only security keys (webauthnCount also counts passkeys) */
+  securityKeyCount?: number;
   backupCodesCount: number;
 }
 
@@ -1278,7 +1281,7 @@ export function SecuritySection({ enrolmentOnly = false }: { enrolmentOnly?: boo
           </div>
           {!statusLoading && (
             <span className="text-xs font-medium text-fg-muted bg-surface-3 px-2 py-0.5 rounded-full">
-              {mfaStatus?.webauthnCount ?? 0} registriert
+              {mfaStatus?.securityKeyCount ?? mfaStatus?.webauthnCount ?? 0} registriert
             </span>
           )}
         </div>
@@ -1308,6 +1311,9 @@ export function SecuritySection({ enrolmentOnly = false }: { enrolmentOnly?: boo
           <p className="text-xs text-warning-fg">Dieser Browser unterstützt kein WebAuthn (oder die Seite läuft nicht über HTTPS).</p>
         )}
       </div>
+
+      {/* 10.6: passkeys (also on the mandatory enrolment page — a passkey is a second factor) */}
+      <PasskeysPanel enrolmentOnly={enrolmentOnly} />
 
       {/* 9.4: sessions, mobile devices, S/MIME */}
       {!enrolmentOnly && (
