@@ -9,6 +9,7 @@ import { MfaChallengeForm } from '../components/MfaChallengeForm.js';
 import { SsoButtons } from '../components/SsoButtons.js';
 import { AuthShell, AuthBrandHeader } from '../components/AuthShell.js';
 import { useT } from '../i18n/useT.js';
+import { REGISTER_CONFIG_URL, parseRegisterConfig } from '../lib/selfRegistration.js';
 
 export function LoginPage() {
   const navigate = useNavigate();
@@ -34,6 +35,8 @@ export function LoginPage() {
   const [maintenanceMessage, setMaintenanceMessage] = useState('');
 
   const [selfServicePasswordReset, setSelfServicePasswordReset] = useState(true);
+  // 10.6: "Konto erstellen" only while self-registration is open (config answers 200)
+  const [registrationOpen, setRegistrationOpen] = useState(false);
 
   // Fetch maintenance status + public settings on load (no auth required)
   useEffect(() => {
@@ -50,6 +53,10 @@ export function LoginPage() {
       .then((d: { selfServicePasswordReset?: boolean }) => {
         setSelfServicePasswordReset(d.selfServicePasswordReset !== false);
       })
+      .catch(() => undefined);
+
+    fetch(REGISTER_CONFIG_URL, { headers: { Accept: 'application/json' } })
+      .then(async (r) => setRegistrationOpen(r.ok && parseRegisterConfig(await r.json()) !== null))
       .catch(() => undefined);
   }, []);
 
@@ -177,6 +184,13 @@ export function LoginPage() {
                   {t('auth_forgot_password')}
                 </Link>
               </div>
+            )}
+
+            {registrationOpen && (
+              <p className="text-center text-xs text-fg-muted">
+                {t('auth_register_prompt')}{' '}
+                <Link to="/register" className="text-accent-fg hover:underline">{t('auth_register_link')}</Link>
+              </p>
             )}
           </form>
         )}

@@ -186,6 +186,8 @@ model User {
   mcpTokens           McpToken[]
   // 10.6: browsers where the MFA step is skipped for a while ("Gerät merken")
   mfaTrustedDevices   MfaTrustedDevice[]
+  // 10.6: set when the account was created by self-registration (docs/self-registration.md)
+  selfRegistration    SelfRegistration?
   // 9.5: profile photo — content-addressed object key (profile-photos/<aa>/<sha256>.jpg,
   // a 512×512 JPEG re-encoded by the api-gateway); null = no photo (initials)
   photoKey            String?
@@ -225,6 +227,52 @@ model AdminScope {
   @@unique([userId, domainId])
   @@index([domainId])
   @@map("admin_scopes")
+}
+
+// ─────────────────────────────────────────────
+// Self-registration (10.6, docs/self-registration.md)
+// ─────────────────────────────────────────────
+
+// One row per account created through the public registration form
+// (api-gateway routes/self-registration.ts). status: PENDING (approval mode —
+// the account stays inactive until an admin approves it) | APPROVED (an admin
+// approved it) | IMMEDIATE (immediate mode — active at once). Rejecting a
+// registration deletes the account and, by cascade, this row.
+model SelfRegistration {
+  id        String    @id @default(cuid())
+  userId    String    @unique
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  domainId  String
+  status    String    @default("PENDING")
+  ipAddress String    @default("")
+  // invite code used (SelfRegistrationInvite.id), null without one
+  inviteId  String?
+  createdAt DateTime  @default(now())
+  decidedAt DateTime?
+  decidedBy String?
+
+  @@index([status, domainId])
+  @@map("self_registrations")
+}
+
+// Admin-generated invite codes for self-registration. Only sha256(code) is
+// stored; the code itself is shown once at creation. A code is usable while it
+// is not revoked, not expired and uses < maxUses.
+model SelfRegistrationInvite {
+  id          String    @id @default(cuid())
+  label       String    @default("")
+  codeHash    String    @unique
+  // last characters of the code, to tell codes apart in the BCP
+  codeHint    String    @default("")
+  expiresAt   DateTime?
+  maxUses     Int       @default(1)
+  uses        Int       @default(0)
+  revokedAt   DateTime?
+  createdById String?
+  createdBy   String    @default("")
+  createdAt   DateTime  @default(now())
+
+  @@map("self_registration_invites")
 }
 
 // ─────────────────────────────────────────────
@@ -2056,7 +2104,16 @@ model ServerSettings {
   // the api-gateway mailbox-access purger; other audit entries are never purged)
   mailboxAccessAuditEnabled       Boolean @default(true)
   mailboxAccessAuditRetentionDays Int     @default(180)
-  allowSelfRegistration      Boolean @default(false)
+  // 10.6: self-registration from the webmail login page (docs/self-registration.md).
+  // allowSelfRegistration = the switch (default off). selfRegistrationDomainIds:
+  // hosted domains open for registration (empty = registration impossible even
+  // when on). selfRegistrationMode: "approval" (account inactive until an admin
+  // approves it) | "immediate". selfRegistrationInviteOnly: an admin-generated
+  // invite code (SelfRegistrationInvite) is required.
+  allowSelfRegistration      Boolean  @default(false)
+  selfRegistrationDomainIds  String[] @default([])
+  selfRegistrationMode       String   @default("approval")
+  selfRegistrationInviteOnly Boolean  @default(false)
   // Allows users to reset their own password via an e-mail link
   selfServicePasswordReset   Boolean @default(true)
   // 9.4: API rate limit of the api-gateway (fixed window). Signed-in requests count

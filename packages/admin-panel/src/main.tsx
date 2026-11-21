@@ -44,6 +44,7 @@ import { BrandingPage } from './pages/BrandingPage.js';
 import { McpPage } from './pages/McpPage.js';
 import { MfaPolicyPage } from './pages/MfaPolicyPage.js';
 import { AdminMfaPrompt } from './components/AdminMfaPrompt.js';
+import { SelfRegistrationPage } from './pages/SelfRegistrationPage.js';
 import { getToken, useSessionChecked } from './api/client.js';
 import { useAccessStore } from './store/access.js';
 import { firstAllowedPath } from './lib/adminAreas.js';
@@ -283,6 +284,7 @@ createRoot(document.getElementById('root')!).render(
                   <Route path="/branding"    element={<BrandingPage />} />
                   <Route path="/mcp"         element={<McpPage />} />
                   <Route path="/mfa"         element={<MfaPolicyPage />} />
+                  <Route path="/authentication/self-registration" element={<SelfRegistrationPage />} />
                   <Route path="/" element={<HomeRedirect />} />
                 </Routes>
               </AdminLayout>

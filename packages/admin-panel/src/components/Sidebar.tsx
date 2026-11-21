@@ -5,7 +5,7 @@ import {
   ShieldAlert, ShieldBan, Search,
   ShieldHalf, Archive,
   ClipboardList, Activity, Info, Terminal,
-  Fingerprint, ServerCog, HardDriveDownload, Palette, Bot, KeyRound,
+  Fingerprint, ServerCog, HardDriveDownload, Palette, Bot, KeyRound, UserPlus,
 } from 'lucide-react';
 import { useT } from '../i18n/useT.js';
 import { usePermissions } from '../hooks/usePermissions.js';
@@ -60,6 +60,7 @@ export function Sidebar() {
         { path: '/mfa',              labelKey: 'nav_mfa',              icon: KeyRound },
         { path: '/sso',              labelKey: 'nav_sso',              icon: Fingerprint },
         { path: '/ldap',             labelKey: 'nav_ldap',             icon: ServerCog },
+        { path: '/authentication/self-registration', labelKey: 'nav_self_registration', icon: UserPlus },
       ],
     },
     {

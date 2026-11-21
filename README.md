@@ -123,6 +123,7 @@ Upgrading from an older version: read the [version history](docs/version-history
 - [Certificates and Let's Encrypt](docs/certificates.md)
 - [Backup and restore](docs/backup.md)
 - [Admin roles](docs/rbac.md), [branding](docs/branding.md), [admin CLI](docs/cli.md)
+- [Self-registration](docs/self-registration.md): users create their own mailbox (off by default)
 - [MCP interface for administrators](docs/mcp.md): manage the server with an MCP client
 - [Kubernetes Helm chart](infra/k8s/README.md)
 - [Version history](docs/version-history.md) and [changelog](CHANGELOG.md)

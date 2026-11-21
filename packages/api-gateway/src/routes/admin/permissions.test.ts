@@ -208,6 +208,8 @@ const MOUNT_AREAS: Record<string, { area: AdminArea | null; get: string; write?:
   // 10.6: per-user MFA overrides + remembered devices; the caller's own admin MFA state (every admin role)
   '/user-mfa':             { area: 'recipients',   get: '/', write: ['PUT', '/c0000000000000000000000x1'] },
   '/mfa-status':           { area: 'dashboard',    get: '/' },
+  // 10.6: self-registration (settings / invites org-wide, approvals scoped)
+  '/self-registration':    { area: 'recipients',   get: '/pending', write: ['PUT', '/settings'] },
 };
 const EXTRA_PROBES: Array<{ area: AdminArea | null; method: string; path: string }> = [
   { area: 'domains', method: 'GET', path: '/ems/accepted-domains' },

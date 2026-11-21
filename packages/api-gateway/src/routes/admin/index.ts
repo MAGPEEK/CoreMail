@@ -42,6 +42,7 @@ import { adminWebmailPoliciesRouter } from './webmail-policies.js';
 import { adminMcpRouter } from './mcp.js';
 import { adminSetupStateRouter } from './setup-state.js';
 import { adminUserMfaRouter, adminMfaStatusRouter } from './user-mfa.js';
+import { adminSelfRegistrationRouter } from './self-registration.js';
 
 export const ADMIN_PREFIX = '/api/v1/admin';
 
@@ -93,6 +94,8 @@ export const ADMIN_MOUNTS: ReadonlyArray<readonly [string, Router]> = [
   ['/user-mfa',             adminUserMfaRouter],
   // 10.6: the caller's own admin MFA rule state (any admin role, own account only)
   ['/mfa-status',           adminMfaStatusRouter],
+  // 10.6: self-registration — settings + invite codes (recipients, org-wide), pending approvals (recipients, scoped)
+  ['/self-registration',    adminSelfRegistrationRouter],
 ];
 
 /** Admin endpoints that are intentionally public (no auth). */
