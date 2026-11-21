@@ -249,7 +249,8 @@ authRouter.post('/forgot-password', async (req: Request, res: Response) => {
 
     // 3. Look up user (active LOCAL users only)
     const user = await prisma.user.findFirst({
-      where: { email: email.toLowerCase(), active: true, authSource: 'LOCAL' },
+      // 10.6: passkey-only accounts get no reset by mail (admin recovery link instead)
+      where: { email: email.toLowerCase(), active: true, authSource: 'LOCAL', passwordLoginDisabled: false },
       select: { id: true, email: true },
     });
 

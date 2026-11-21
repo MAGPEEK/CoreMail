@@ -32,7 +32,9 @@ installFakePrisma({
     },
   },
   serverSettings: { findUnique: () => ({ id: 'singleton', requireMfaForAdmins }) },
-  userMfa: { findFirst: () => ({ totpEnabled: true, webAuthnCredentials: [] }) },
+  // 10.6: the admin MFA rule reads the factors through getAuthFactors (userMfa + webAuthnCredential)
+  userMfa: { findUnique: () => ({ totpEnabled: true, backupCodes: [] }) },
+  webAuthnCredential: { findMany: () => [] },
 });
 
 const express = (await import('express')).default;
@@ -201,6 +203,8 @@ const MOUNT_AREAS: Record<string, { area: AdminArea | null; get: string; write?:
   '/mcp':                  { area: 'dashboard',    get: '/settings' },
   // 10.4.2: BCP dashboard card "Zertifikat einrichten" (state + dismiss)
   '/setup-state':          { area: 'servers',      get: '/', write: ['POST', '/certificate-hint/dismiss'] },
+  // 10.6: passkey policy (organisation area, organisation-wide admins only)
+  '/authentication/passkeys': { area: 'organisation', get: '/', write: ['PUT', '/'] },
 };
 const EXTRA_PROBES: Array<{ area: AdminArea | null; method: string; path: string }> = [
   { area: 'domains', method: 'GET', path: '/ems/accepted-domains' },
@@ -216,10 +220,15 @@ const EXTRA_PROBES: Array<{ area: AdminArea | null; method: string; path: string
   { area: 'recipients', method: 'PUT', path: '/webmail-policies/users/c0000000000000000000000x1' },
   // 10.3: the MCP switch + IP allowlist are server configuration
   { area: 'servers',    method: 'PUT', path: '/mcp/settings' },
+  // 10.6: passkeys of a mailbox — a second router on /mailboxes (area recipients)
+  { area: 'recipients', method: 'GET', path: '/mailboxes/c0000000000000000000000x1/passkeys' },
+  { area: 'recipients', method: 'PUT', path: '/mailboxes/c0000000000000000000000x1/passkey-policy' },
+  { area: 'recipients', method: 'POST', path: '/mailboxes/c0000000000000000000000x1/passkey-recovery' },
 ];
 
 test('every admin mount is in the area table', () => {
-  assert.deepEqual(ADMIN_MOUNTS.map(([p]) => p).sort(), Object.keys(MOUNT_AREAS).sort());
+  // 10.6: a mount path may carry several routers (/mailboxes: mailboxes + passkeys)
+  assert.deepEqual([...new Set(ADMIN_MOUNTS.map(([p]) => p))].sort(), Object.keys(MOUNT_AREAS).sort());
 });
 
 test('real admin routers admit exactly the roles ROLE_PERMISSIONS grants for their area', async () => {

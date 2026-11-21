@@ -93,8 +93,7 @@ authRouter.post('/mfa/verify', async (req: Request, res: Response) => {
       },
       clientInfoOf(req),
       {
-        verifyWebAuthn: (userId, response, token) =>
-          finishWebAuthnAuthentication(userId, response as Parameters<typeof finishWebAuthnAuthentication>[1], token),
+        verifyWebAuthn: (userId, response, token) => finishWebAuthnAuthentication(userId, response, token, req.ip),
       },
     );
     sendOutcome(req, res, outcome);

@@ -31,7 +31,9 @@ installFakePrisma({
       ? [{ domain: { id: 'd1', name: 'ex.com' } }] : [],
   },
   serverSettings: { findUnique: () => ({ id: 'singleton', requireMfaForAdmins: requireMfa }) },
-  userMfa: { findFirst: () => ({ totpEnabled: true, webAuthnCredentials: [] }) },
+  // 10.6: the admin MFA rule reads the factors through getAuthFactors (userMfa + webAuthnCredential)
+  userMfa: { findUnique: () => ({ totpEnabled: true, backupCodes: [] }) },
+  webAuthnCredential: { findMany: () => [] },
   auditLog: { create: () => ({}) },
 });
 

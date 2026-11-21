@@ -91,6 +91,8 @@ model Domain {
   webmailPolicy      WebmailPolicy?
   // 9.5: admin role assignments limited to this domain (AdminScope)
   adminScopes        AdminScope[]
+  // 10.6: passkey switch of the domain (none = inherited from the server)
+  passkeyPolicy      PasskeyPolicy?
   createdAt          DateTime             @default(now())
 
   @@map("domains")
@@ -164,6 +166,17 @@ model User {
   adminScopes         AdminScope[]
   // 10.3: personal tokens of the admin MCP interface (/mcp)
   mcpTokens           McpToken[]
+  // 10.6: passkeys / security keys (WebAuthn), src/auth/webauthn + src/auth/passkeys.ts.
+  // webauthnUserId = the stable random WebAuthn user handle (64 bytes, base64url;
+  // never personal data), created at the first passkey registration.
+  // passwordLoginDisabled = passkey-only account: the web login refuses the
+  // password (checked only after it was verified — no oracle); no password
+  // reset by mail. Set by an admin (PUT /admin/mailboxes/:id/passkey-policy).
+  webauthnUserId        String?                @unique
+  passwordLoginDisabled Boolean                @default(false)
+  webauthnCredentials   WebAuthnCredential[]
+  passkeyRecoveryTokens PasskeyRecoveryToken[]
+  passkeyPolicy         PasskeyPolicy?
   // 9.5: profile photo — content-addressed object key (profile-photos/<aa>/<sha256>.jpg,
   // a 512×512 JPEG re-encoded by the api-gateway); null = no photo (initials)
   photoKey            String?
@@ -408,6 +421,10 @@ model Session {
   ipAddress   String
   userAgent   String   @default("")
   mfaVerified Boolean  @default(false)
+  /// 10.6: how the session was established: "password" (password, optionally
+  /// with a second factor, SSO) or "passkey" (usernameless passkey sign-in with
+  /// user verification — counts as MFA, mfaVerified = true).
+  authMethod  String   @default("password")
   expiresAt   DateTime
   createdAt   DateTime @default(now())
   lastUsedAt  DateTime @default(now())
@@ -425,6 +442,9 @@ model UserMfa {
   totpEnabled         Boolean @default(false)
   /// v7.0.0: last accepted TOTP time step (unix/30) — replay protection
   totpLastUsedStep    Int?
+  /// DEPRECATED (10.6, removed with the next MAJOR): the pre-10.6 security keys
+  /// as a JSON array. Copied once into WebAuthnCredential (kind security_key) by
+  /// the startup backfill (src/auth/passkey-migration.ts) — nothing else reads it.
   webAuthnCredentials Json    @default("[]")
   backupCodes         String[]
   backupCodesUsed     Int     @default(0)
@@ -444,6 +464,82 @@ model AppPassword {
 
   @@index([userId])
   @@map("app_passwords")
+}
+
+// ─────────────────────────────────────────────
+// Passkeys / security keys (10.6) — docs/passkeys.md
+// ─────────────────────────────────────────────
+
+// One WebAuthn credential (W3C WebAuthn Level 3). kind "passkey" = registered
+// through /auth/passkeys (discoverable, user verification required — usable for
+// the usernameless sign-in, re-authentication and as a second factor);
+// "security_key" = second factor only (/auth/mfa/webauthn/* and credentials
+// migrated from UserMfa.webAuthnCredentials; userHandle null).
+// credentialId = base64url of the raw credential id (≤ 1023 bytes, unique across
+// all users, §7.1 steps 25/26). publicKey = COSE key bytes; algorithm = COSE alg
+// (-8 EdDSA, -7 ES256, -257 RS256). signCount is a BigInt — never serialised raw.
+// backupEligible null = unknown (migrated key; adopted at its first use).
+// Written only through src/auth/webauthn (ceremonies) and src/auth/passkeys.ts.
+model WebAuthnCredential {
+  id             String    @id @default(cuid())
+  userId         String
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  credentialId   String    @unique
+  publicKey      Bytes
+  algorithm      Int
+  signCount      BigInt    @default(0)
+  transports     String[]  @default([])
+  rpId           String
+  userHandle     String?
+  kind           String    @default("passkey")
+  discoverable   Boolean?
+  uvInitialized  Boolean   @default(false)
+  backupEligible Boolean?
+  backupState    Boolean   @default(false)
+  aaguid         String?
+  attestationFmt String    @default("none")
+  name           String
+  createdAt      DateTime  @default(now())
+  lastUsedAt     DateTime?
+  lastUsedIp     String?
+
+  @@index([userId])
+  @@map("webauthn_credentials")
+}
+
+// One-time passkey recovery link issued by an admin (POST
+// /admin/mailboxes/:id/passkey-recovery): only sha256(token) is stored, valid
+// 24 h, single use (usedAt). Redeeming it registers a new passkey and revokes
+// every session of the user. createdById = the issuing admin (no relation).
+model PasskeyRecoveryToken {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash   String    @unique
+  createdById String?
+  expiresAt   DateTime
+  usedAt      DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([userId])
+  @@map("passkey_recovery_tokens")
+}
+
+// Passkey switch of a domain or a user (exactly one of domainId / userId):
+// INHERIT takes the next broader level (user → domain → server =
+// ServerSettings.passkeysEnabled). Resolution: src/auth/passkey-policy.ts.
+// TODO(10.6 auth-policy): unify with the per-user MFA policy model once that
+// branch is merged.
+model PasskeyPolicy {
+  id        String         @id @default(cuid())
+  domainId  String?        @unique
+  domain    Domain?        @relation(fields: [domainId], references: [id], onDelete: Cascade)
+  userId    String?        @unique
+  user      User?          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  passkeys  ProtocolSwitch @default(INHERIT)
+  updatedAt DateTime       @updatedAt
+
+  @@map("passkey_policies")
 }
 
 model LdapConfig {
@@ -2028,6 +2124,20 @@ model ServerSettings {
   // mcpAllowedIps: client IPs / CIDR ranges allowed to reach /mcp (empty = all).
   mcpEnabled         Boolean  @default(false)
   mcpAllowedIps      String[] @default([])
+
+  // ── 10.6: passkeys (docs/passkeys.md, src/auth/passkey-policy.ts) ──
+  // passkeysEnabled: server level of the passkey switch (domain / user
+  // PasskeyPolicy rows override it). Default OFF on fresh and existing installs.
+  // passkeyPasswordlessEnabled: passkeys may also be used for the usernameless
+  // sign-in (off = only as second factor / re-authentication).
+  // passkeyRpId: the WebAuthn RP ID, frozen at the first passkey registration
+  // (null = not frozen yet → the public host name). WEBAUTHN_RP_ID overrides it.
+  // passkeyRelatedOrigins: further allowed origins (https://…), also announced
+  // in /.well-known/webauthn (Related Origin Requests, WebAuthn L3 §5.11).
+  passkeysEnabled            Boolean  @default(false)
+  passkeyPasswordlessEnabled Boolean  @default(true)
+  passkeyRpId                String?
+  passkeyRelatedOrigins      String[] @default([])
 
   // ── v9.0: mailbox quota defaults (ratios 1.9 / 2.0 / 2.3 GB) ──
   // Percent of the mailbox quota (= ProhibitSendReceiveQuota) at which the

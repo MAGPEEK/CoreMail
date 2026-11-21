@@ -10,6 +10,20 @@ export interface AuthRedis {
   del(key: string): Promise<number>;
   incr(key: string): Promise<number>;
   expire(key: string, seconds: number): Promise<unknown>;
+  /** 10.6: GETDEL (Redis ≥ 6.2) — single-use values (passkey challenges). Optional for older fakes. */
+  getdel?(key: string): Promise<string | null>;
+}
+
+/**
+ * 10.6: reads and deletes a key; the value is returned to exactly one caller
+ * (GETDEL, or GET + DEL where only the caller whose DEL removed the key wins).
+ */
+export async function takeOnce(key: string): Promise<string | null> {
+  const r = authRedis();
+  if (typeof r.getdel === 'function') return r.getdel(key);
+  const v = await r.get(key);
+  if (v === null) return null;
+  return (await r.del(key)) === 1 ? v : null;
 }
 
 declare global {

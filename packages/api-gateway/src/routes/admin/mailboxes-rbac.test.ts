@@ -52,7 +52,9 @@ installFakePrisma({
     update: (a) => { const q = a as { data: Row }; sharedUpdates.push(q.data); return { ...shared, ...q.data }; },
   },
   auditLog: { create: (a) => { auditRows.push((a as { data: Row }).data); return {}; } },
-  userMfa: { findFirst: () => ({ totpEnabled: true, webAuthnCredentials: [] }) },
+  // 10.6: the admin MFA rule reads the factors through getAuthFactors (userMfa + webAuthnCredential)
+  userMfa: { findUnique: () => ({ totpEnabled: true, backupCodes: [] }) },
+  webAuthnCredential: { findMany: () => [] },
 });
 
 const express = (await import('express')).default;

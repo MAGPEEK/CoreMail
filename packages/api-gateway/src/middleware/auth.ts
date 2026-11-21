@@ -2,7 +2,7 @@ import type { Request, Response, NextFunction } from 'express';
 import { verifyAccessToken, createLogger, onAuthInvalidation } from '@coremail/core';
 import { prisma } from '@coremail/storage';
 import {
-  isAccessTokenRevoked, isAccessTokenRevokedShared, mfaEnrolmentRefusal, webAccessRefusal, type WebSurface,
+  getAuthFactors, isAccessTokenRevoked, isAccessTokenRevokedShared, mfaEnrolmentRefusal, webAccessRefusal, type WebSurface,
 } from '@coremail/storage/auth';
 import {
   canAccess, hasAdminAction, isAdminRole, isReadMethod, isUnscopedOnlyArea, stricterRole,
@@ -270,13 +270,8 @@ export async function adminMfaRefusal(
     select: { requireMfaForAdmins: true },
   });
   if (!settings?.requireMfaForAdmins) return null;
-  const mfa = await prisma.userMfa.findFirst({
-    where: { userId },
-    select: { totpEnabled: true, webAuthnCredentials: true },
-  });
-  const hasWebauthn = Array.isArray(mfa?.webAuthnCredentials)
-    && (mfa.webAuthnCredentials as unknown[]).length > 0;
-  if (!(mfa?.totpEnabled || hasWebauthn)) {
+  // 10.6: central factor helper — TOTP, a passkey or a security key
+  if (!(await getAuthFactors(userId)).enrolled) {
     return { error: 'MFA is required for admin access', code: 'MFA_REQUIRED' };
   }
   if (!mfaVerified) {

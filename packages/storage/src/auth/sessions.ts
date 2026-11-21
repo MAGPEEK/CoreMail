@@ -100,7 +100,8 @@ function accessToken(user: SessionUser, sessionId: string, mfaVerified: boolean)
 /** Creates a session row and returns a fresh token pair. */
 export async function issueSession(
   user: SessionUser,
-  opts: ClientInfo & { mfaVerified: boolean },
+  /** 10.6: `authMethod` 'passkey' for the usernameless passkey sign-in (default 'password'). */
+  opts: ClientInfo & { mfaVerified: boolean; authMethod?: 'password' | 'passkey' | undefined },
 ): Promise<TokenPair> {
   const sessionId = randomUUID();
   const refreshToken = signRefreshToken(user.id, sessionId);
@@ -112,6 +113,7 @@ export async function issueSession(
       ipAddress: opts.ip,
       userAgent: opts.userAgent,
       mfaVerified: opts.mfaVerified,
+      ...(opts.authMethod ? { authMethod: opts.authMethod } : {}),
       expiresAt: new Date(Date.now() + config.JWT_REFRESH_TTL * 1000),
     },
   });

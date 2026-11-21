@@ -41,6 +41,7 @@ import { adminProtocolAccessRouter } from './protocol-access.js';
 import { adminWebmailPoliciesRouter } from './webmail-policies.js';
 import { adminMcpRouter } from './mcp.js';
 import { adminSetupStateRouter } from './setup-state.js';
+import { adminPasskeyPolicyRouter, adminMailboxPasskeysRouter } from './passkeys.js';
 
 export const ADMIN_PREFIX = '/api/v1/admin';
 
@@ -49,6 +50,9 @@ export const ADMIN_MOUNTS: ReadonlyArray<readonly [string, Router]> = [
   ['/dashboard',            adminDashboardRouter],
   ['/settings',             adminGlobalSettingsRouter],
   ['/mailboxes',            adminMailboxesRouter],
+  // 10.6: passkeys of a mailbox (/:id/passkeys, /:id/passkey-recovery, /:id/passkey-policy,
+  // /:id/mfa-reset) — area recipients, own router so the paths stay together
+  ['/mailboxes',            adminMailboxPasskeysRouter],
   // Alias router mounts on /admin itself — internal routes are /mailboxes/:id/aliases,
   // /shared-mailboxes/:id/aliases, /aliases, /aliases/:id (guards only those paths).
   ['',                      adminAliasesRouter],
@@ -88,6 +92,8 @@ export const ADMIN_MOUNTS: ReadonlyArray<readonly [string, Router]> = [
   ['/mcp',                  adminMcpRouter],
   // 10.4.2: BCP dashboard card "Zertifikat einrichten" (area servers)
   ['/setup-state',          adminSetupStateRouter],
+  // 10.6: passkey policy (area organisation, organisation-wide admins only)
+  ['/authentication/passkeys', adminPasskeyPolicyRouter],
 ];
 
 /** Admin endpoints that are intentionally public (no auth). */

@@ -31,6 +31,7 @@
  */
 import { createLogger, onAuthInvalidation } from '@coremail/core';
 import { prisma } from '../prisma/index.js';
+import { getAuthFactors } from './factors.js';
 
 const log = createLogger('auth:mfa-enforcement');
 
@@ -150,13 +151,10 @@ async function loadUserState(userId: string): Promise<UserState | null> {
     select: { mfaGraceStartedAt: true, passwordHash: true, authSource: true },
   });
   if (!user) return null;
-  const mfa = await prisma.userMfa.findUnique({
-    where: { userId },
-    select: { totpEnabled: true, webAuthnCredentials: true },
-  });
-  const webauthn = Array.isArray(mfa?.webAuthnCredentials) && (mfa.webAuthnCredentials as unknown[]).length > 0;
+  // 10.6: central factor helper — a passkey or security key counts like TOTP
+  const factors = await getAuthFactors(userId);
   const state: UserState = {
-    enrolled: mfa?.totpEnabled === true || webauthn,
+    enrolled: factors.enrolled,
     graceStartedAt: user.mfaGraceStartedAt instanceof Date ? user.mfaGraceStartedAt : null,
     // OIDC-only accounts have no password to confirm an enrolment with (reauth.ts)
     hasPassword: Boolean(user.passwordHash) || String(user.authSource) === 'LDAP',

@@ -51,10 +51,12 @@ export async function redeemPasswordReset(token: string, newPassword: string, ip
   const tokenHash = hashResetToken(token);
   const row = await prisma.passwordResetToken.findUnique({
     where: { tokenHash },
-    include: { user: { select: { id: true, active: true } } },
+    include: { user: { select: { id: true, active: true, passwordLoginDisabled: true } } },
   });
   if (!row || row.usedAt !== null || row.expiresAt.getTime() <= Date.now()) return { ok: false, reason: 'invalid' };
   if (!row.user.active) return { ok: false, reason: 'inactive' };
+  // 10.6: passkey-only accounts get no reset by mail (recovery: admin recovery link)
+  if ((row.user as { passwordLoginDisabled?: boolean }).passwordLoginDisabled === true) return { ok: false, reason: 'invalid' };
 
   const policy = await checkPasswordPolicy(newPassword);
   if (policy) return { ok: false, reason: 'policy', message: policy };

@@ -132,7 +132,8 @@ test('an enrolled factor (TOTP or security key) or an MFA-verified session satis
   await db.userMfa.create({ data: { userId: 'u1', totpEnabled: true } });
   me.invalidateMfaEnforcementCache();
   assert.equal((await me.mfaEnforcementFor('u1')).status.state, 'satisfied');
-  await db.userMfa.create({ data: { userId: 'u2', webAuthnCredentials: [{ id: 'k' }] } });
+  // 10.6: a passkey / security key row (the factor helper reads the table, not the JSON)
+  await db.webAuthnCredential.create({ data: { userId: 'u2', credentialId: 'k', kind: 'security_key' } });
   assert.equal((await me.mfaEnforcementFor('u2')).status.state, 'satisfied');
 });
 

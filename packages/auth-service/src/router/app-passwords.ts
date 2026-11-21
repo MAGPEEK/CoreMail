@@ -52,6 +52,9 @@ const CreateSchema = z.object({
   name: z.string().min(1).max(100),
   currentPassword: z.string().max(1024).optional(),
   mfaCode: z.string().max(64).optional(),
+  // 10.6: passkey re-authentication (POST /auth/passkeys/reauth/options)
+  webauthnFlowId: z.string().max(256).optional(),
+  webauthnResponse: z.unknown().optional(),
 });
 
 appPasswordRouter.post('/', async (req: Request, res: Response) => {
@@ -61,7 +64,10 @@ appPasswordRouter.post('/', async (req: Request, res: Response) => {
   const parsed = CreateSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Name required' }); return; }
 
-  const r = await verifyReauth(userId, { currentPassword: parsed.data.currentPassword, mfaCode: parsed.data.mfaCode });
+  const r = await verifyReauth(userId, {
+    currentPassword: parsed.data.currentPassword, mfaCode: parsed.data.mfaCode,
+    webauthnFlowId: parsed.data.webauthnFlowId, webauthnResponse: parsed.data.webauthnResponse,
+  });
   if (r !== 'ok') {
     const { status, body } = reauthErrorBody(r);
     log.warn({ userId, result: r }, 'App password creation rejected — re-authentication failed');

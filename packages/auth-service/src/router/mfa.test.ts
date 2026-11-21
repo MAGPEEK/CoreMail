@@ -39,7 +39,7 @@ before(async () => {
 after(() => { server.close(); });
 
 beforeEach(async () => {
-  for (const t of ['user', 'userMfa', 'session', 'appPassword', 'passwordResetToken', 'serverSettings'] as const) db[t].rows = [];
+  for (const t of ['user', 'userMfa', 'session', 'appPassword', 'passwordResetToken', 'serverSettings', 'webAuthnCredential'] as const) db[t].rows = [];
   redis.store.clear();
   await db.serverSettings.create({ data: { id: 'singleton', publicHostname: 'mail.example.org' } });
 });
@@ -88,7 +88,8 @@ test('TOTP setup / disable / backup codes / WebAuthn registration require re-aut
   const reg = await call('POST', '/auth/mfa/webauthn/register/start', { email: 'alice@example.com', mfaCode: (codes.body['codes'] as string[])[0] }, token);
   assert.equal(reg.status, 200, JSON.stringify(reg.body));
   assert.equal((reg.body['rp'] as { id: string }).id, 'mail.example.org', 'RP ID from publicHostname');
-  assert.ok(redis.store.has(`coremail:webauthn:reg:${id}`));
+  // 10.6: the registration challenge is a single-use auth:passkey:chal:* key
+  assert.ok([...redis.store.values()].some((e) => JSON.parse(e.v)['purpose'] === 'security_key_register' && JSON.parse(e.v)['userId'] === id));
 
   assert.equal((await call('DELETE', '/auth/mfa/totp', {}, token)).status, 403);
   assert.equal(db.userMfa.rows[0]!['totpEnabled'], true);
@@ -164,10 +165,9 @@ test('POST /auth/mfa/verify: attempt limit per challenge', async () => {
 
 test('POST /auth/mfa/webauthn/auth/start requires a valid MFA challengeToken (not a userId)', async () => {
   const { id } = await userWithSession();
-  await db.userMfa.upsert({
-    where: { userId: id },
-    create: { userId: id, webAuthnCredentials: [{ id: 'Y3JlZDE', publicKey: 'AAAA', counter: 0, name: 'key' }] },
-    update: {},
+  // 10.6: credentials live in the WebAuthnCredential table
+  await db.webAuthnCredential.create({
+    data: { userId: id, credentialId: 'Y3JlZDE', publicKey: Buffer.from('AAAA', 'base64'), algorithm: -7, rpId: 'mail.example.org', kind: 'security_key', name: 'key' },
   });
   assert.equal((await call('POST', '/auth/mfa/webauthn/auth/start', { userId: id })).status, 400);
   assert.equal((await call('POST', '/auth/mfa/webauthn/auth/start', { challengeToken: 'a'.repeat(64) })).status, 401);
@@ -178,11 +178,14 @@ test('POST /auth/mfa/webauthn/auth/start requires a valid MFA challengeToken (no
   const start = await call('POST', '/auth/mfa/webauthn/auth/start', { challengeToken: token });
   assert.equal(start.status, 200, JSON.stringify(start.body));
   assert.equal(start.body['rpId'], 'mail.example.org');
-  assert.ok(redis.store.has(`coremail:webauthn:auth:${token}`), 'authentication key bound to the challenge');
-  assert.ok(!redis.store.has(`coremail:webauthn:reg:${id}`), 'registration key untouched');
-  assert.ok(![...redis.store.keys()].includes(`coremail:webauthn:challenge:${id}`));
+  // 10.6: one single-use challenge under auth:passkey:chal:<sha256(flow)>, bound to the MFA challenge
+  const keys = [...redis.store.keys()].filter((k) => k.startsWith('auth:passkey:chal:'));
+  assert.equal(keys.length, 1);
+  assert.equal(JSON.parse(String(redis.store.get(keys[0]!)?.v))['purpose'], 'second_factor');
+  assert.equal(start.body['userVerification'], 'discouraged', 'G1: no user verification required for a second factor');
 
   // A TOTP-only challenge cannot start WebAuthn
+  db.webAuthnCredential.rows = [];
   db.userMfa.rows = [];
   await db.userMfa.create({ data: { userId: id, totpSecret: sauth.encryptMfaSecret('JBSWY3DPEHPK3PXP'), totpEnabled: true } });
   const ch2 = await call('POST', '/auth/login', { email: 'alice@example.com', password: PW });

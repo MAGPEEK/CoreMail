@@ -18,6 +18,8 @@ export const SECRET_FIELDS: ReadonlySet<string> = new Set([
   'totpsecret', 'backupcodes', 'webauthncredentials', 'mfasecret',
   'bindpassword', 'binddn_password', 'smtppassword', 'relaypassword', 'upstreampassword',
   'p256dhkey', 'authkey', 'vapidprivatekey', 'encryptionkey',
+  // 10.6: passkeys — WebAuthn public keys, user handles, recovery tokens
+  'publickey', 'webauthnuserid', 'userhandle', 'recoverytoken', 'recoveryurl',
 ]);
 
 export function isSecretField(key: string): boolean {

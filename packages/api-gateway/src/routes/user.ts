@@ -3,12 +3,12 @@ import { z } from 'zod';
 import { patchSchema } from '../lib/zod-compat.js';
 import { hashPassword, verifyPassword } from '@coremail/core';
 import {
-  prisma, expunge, countRegexConditions, MAX_REGEX_CONDITIONS_PER_USER, saveOofSettings, getQuotaStatus, hasMfa,
+  prisma, expunge, countRegexConditions, MAX_REGEX_CONDITIONS_PER_USER, saveOofSettings, getQuotaStatus,
   reservedFolderPrefix, reservedFolderNameError, effectiveProtocolAccess, MAILBOX_ACCESS_ACTION_PREFIX,
   profilePhotoInfo,
 } from '@coremail/storage';
 import { invalidRegexConditionMessage } from '../lib/rule-validation.js';
-import { checkPasswordPolicy, revokeAllSessions } from '@coremail/storage/auth';
+import { checkPasswordPolicy, getAuthFactors, revokeAllSessions } from '@coremail/storage/auth';
 import { protocolSubject, requireAuth } from '../middleware/auth.js';
 import { announceUserSettings } from '../lib/realtime.js';
 import { announceFolderListChange } from '@coremail/storage';
@@ -53,10 +53,8 @@ userRouter.get('/client-config', async (req: Request, res: Response) => {
       select: { id: true, name: true, isDefault: true },
       orderBy: [{ isDefault: 'desc' }, { sortOrder: 'asc' }, { name: 'asc' }],
     }) : Promise.resolve([]),
-    prisma.userMfa.findUnique({
-      where: { userId },
-      select: { totpEnabled: true, webAuthnCredentials: true },
-    }).catch(() => null),
+    // 10.6: central factor helper (TOTP, passkeys, security keys)
+    getAuthFactors(userId).catch(() => null),
   ]);
 
   const hostname = settings?.publicHostname ?? req.get('host') ?? 'mail.local';
@@ -69,8 +67,8 @@ userRouter.get('/client-config', async (req: Request, res: Response) => {
   // MFA active → CalDAV/CardDAV/IMAP/SMTP clients need an app password
   // (bearer token does not work in the clients, the normal password is
   // blocked by MFA).
-  // 8.1: webAuthnCredentials is a Json array — same rule as the mail login (hasMfa)
-  const mfaEnabled = hasMfa({ mfa });
+  // 10.6: same rule as the mail login (hasMfa) — a passkey counts as MFA
+  const mfaEnabled = mfa?.enrolled === true;
 
   res.json({
     user: {
