@@ -282,7 +282,7 @@ test('honeypot filled → 400 INVALID_FORM, nothing created, counted for the IP'
 
 test('form token: too fast, forged and missing are refused', async () => {
   await enable();
-  const fast = await call('POST', '/auth/register', form({ formToken: lib.issueFormToken() }));
+  const fast = await call('POST', '/auth/register', form({ formToken: lib.issueFormToken(Date.now() + 60_000) }));
   assert.equal(fast.body['code'], 'INVALID_FORM');
   assert.ok(securityEvents.some((e) => e.detail['reason'] === 'form-too-fast'));
   const forged = oldToken().replace(/.$/, (c) => (c === 'A' ? 'B' : 'A'));
