@@ -54,8 +54,9 @@ before(async () => {
 after(() => { server.close(); });
 
 beforeEach(() => {
-  for (const t of ['user', 'userMfa', 'session', 'appPassword', 'passwordResetToken', 'serverSettings'] as const) db[t].rows = [];
+  for (const t of ['user', 'userMfa', 'session', 'appPassword', 'passwordResetToken', 'serverSettings', 'mfaTrustedDevice'] as const) db[t].rows = [];
   redis.store.clear();
+  sauth.invalidateMfaEnforcementCache(); // 10.6: the MFA policy is cached 15 s
 });
 
 async function post(path: string, body: unknown, token?: string, method = 'POST') {
@@ -207,10 +208,24 @@ test('requireAdmin: requireMfaForAdmins needs enrolment AND an MFA-verified sess
   const t = await loginOk('admin@example.com');
   assert.equal((await ping(t.accessToken)).status, 200);
 
+  // 10.6: the admin rule starts with a grace period (default 14 days, at most 14):
+  // the admin API keeps working and names the deadline for the BCP prompt
   await db.serverSettings.create({ data: { id: 'singleton', requireMfaForAdmins: true } });
-  assert.equal((await ping(t.accessToken)).body['code'], 'MFA_REQUIRED');
+  sauth.invalidateMfaEnforcementCache();
+  const inGrace = await fetch(`${base}/api/v1/admin/ping`, { headers: { Authorization: `Bearer ${t.accessToken}` } });
+  assert.equal(inGrace.status, 200, 'within the admin grace period');
+  const until = Date.parse(inGrace.headers.get('x-coremail-mfa-grace-until') ?? '');
+  assert.ok(until > Date.now() + 13 * 86_400_000 && until <= Date.now() + 14 * 86_400_000, 'deadline ≤ 14 days ahead');
+  // after the grace period: the existing MFA_REQUIRED block
+  db.user.rows.find((u) => u['id'] === a['id'])!['mfaGraceStartedAt'] = new Date(Date.now() - 15 * 86_400_000);
+  sauth.invalidateMfaEnforcementCache();
+  const blocked = await ping(t.accessToken);
+  assert.equal(blocked.status, 403);
+  assert.equal(blocked.body['code'], 'MFA_REQUIRED');
+  assert.ok(typeof blocked.body['deadline'] === 'string', 'the passed deadline is named');
 
   await db.userMfa.create({ data: { userId: a['id'], totpSecret: sauth.encryptMfaSecret(SECRET), totpEnabled: true } });
+  sauth.invalidateMfaEnforcementCache();
   assert.equal((await ping(t.accessToken)).body['code'], 'MFA_NOT_VERIFIED');
 
   const ch = await post('/auth/login', { email: 'admin@example.com', password: PW });
@@ -227,11 +242,60 @@ test('requireAdmin: requireMfaForAdmins needs enrolment AND an MFA-verified sess
 
   const orig = db.serverSettings.findUnique;
   db.serverSettings.findUnique = async () => { throw new Error('db down'); };
+  sauth.invalidateMfaEnforcementCache();
   try {
     assert.equal((await ping(verified.tokens.accessToken)).status, 503);
   } finally {
     db.serverSettings.findUnique = orig;
   }
+});
+
+test('10.6 admin grace: 0 days blocks at once; an admin\'s own "required" override is capped at 14 days', async () => {
+  const a = await addUser('admin@example.com', { role: 'HELP_DESK' });
+  const t = await loginOk('admin@example.com');
+  const ping = (tok: string) => fetch(`${base}/api/v1/admin/ping`, { headers: { Authorization: `Bearer ${tok}` } });
+  await db.serverSettings.create({ data: { id: 'singleton', mfaAdminPolicy: 'REQUIRED', requireMfaForAdmins: true, mfaAdminGraceDays: 0 } });
+  sauth.invalidateMfaEnforcementCache();
+  assert.equal((await ping(t.accessToken)).status, 403);
+
+  db.serverSettings.rows = [];
+  await db.serverSettings.create({ data: { id: 'singleton', mfaAdminPolicy: 'AS_USERS', mfaAdminGraceDays: 14 } });
+  db.user.rows.find((u) => u['id'] === a['id'])!['mfaPolicy'] = 'REQUIRED';
+  db.user.rows.find((u) => u['id'] === a['id'])!['mfaGraceStartedAt'] = null;
+  sauth.invalidateMfaEnforcementCache();
+  const r = await ping(t.accessToken);
+  assert.equal(r.status, 200);
+  assert.ok(Date.parse(r.headers.get('x-coremail-mfa-grace-until') ?? '') <= Date.now() + 14 * 86_400_000);
+});
+
+test('10.6 remembered device: POST /auth/login with the device cookie of this browser skips the MFA step', async () => {
+  const u = await addUser('dev@example.com');
+  await db.userMfa.create({ data: { userId: u['id'], totpSecret: sauth.encryptMfaSecret(SECRET), totpEnabled: true } });
+  await db.serverSettings.create({ data: { id: 'singleton', mfaRememberDays: 30 } });
+  sauth.invalidateMfaEnforcementCache();
+  const web = { 'X-CoreMail-Client': 'web', Origin: base };
+  const loginWeb = (cookie?: string) => fetch(`${base}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...web, ...(cookie ? { Cookie: cookie } : {}) },
+    body: JSON.stringify({ email: 'dev@example.com', password: PW }),
+  }).then(async (r) => ({ status: r.status, body: (await r.json()) as Record<string, unknown>, setCookie: r.headers.getSetCookie() }));
+
+  const first = await loginWeb();
+  assert.equal(first.body['mfaRequired'], true);
+  assert.deepEqual(first.body['rememberDevice'], { days: 30 }, 'the MFA step offers remembering');
+  const done = await sauth.completeMfaLogin(
+    { challengeToken: String(first.body['challengeToken']), code: sauth.totpCode(SECRET), rememberDevice: true },
+    { ip: '127.0.0.1', userAgent: 't', surface: 'webmail', deviceSurface: 'webmail' },
+  );
+  if (done.kind !== 'tokens' || !done.trustedDevice) throw new Error('no device');
+  const skipped = await loginWeb(`cm_mfa_dev=${done.trustedDevice.token}`);
+  assert.equal(skipped.status, 200);
+  assert.ok(typeof skipped.body['accessToken'] === 'string', 'tokens without a challenge');
+  assert.equal(core.verifyAccessToken(String(skipped.body['accessToken']))!.mfaVerified, true);
+  // the BCP cookie name does not count for the webmail, and a revoked device stops working
+  assert.equal((await loginWeb(`cm_mfa_dev_bcp=${done.trustedDevice.token}`)).body['mfaRequired'], true);
+  await sauth.revokeAllSessions(String(u['id']), { reason: 'password-change' });
+  assert.equal((await loginWeb(`cm_mfa_dev=${done.trustedDevice.token}`)).body['mfaRequired'], true);
 });
 
 test('password reset: single use over HTTP', async () => {

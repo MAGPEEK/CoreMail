@@ -20,4 +20,6 @@ export * from './refresh-cookie.js';
 export * from './last-login.js';
 export * from './web-access.js';
 export * from './mfa-enforcement.js';
+export * from './mfa-policy.js';
+export * from './trusted-devices.js';
 export * from './mcp-tokens.js';

@@ -3,6 +3,7 @@
  *  - active sessions (web/BCP/CLI logins) with device, IP, last use; end one or all others
  *  - ActiveSync devices (GET/DELETE /smime/devices)
  *  - S/MIME processing options (GET/PUT /smime/settings)
+ *  - 10.6: remembered MFA devices (GET/DELETE /user/trusted-devices)
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Loader2, LogOut, Smartphone } from 'lucide-react';
@@ -12,6 +13,7 @@ import { useRegional } from '../../store/preferences.js';
 import { formatDateTime } from '../../lib/regionalFormat.js';
 import { describeUserAgent } from '../../lib/sessionDevice.js';
 import { CheckField, Group } from './controls.js';
+import { fmt, useT } from '../../i18n/useT.js';
 
 interface SessionRow {
   id: string;
@@ -37,6 +39,61 @@ interface SmimeSettings { autoSign: boolean; autoEncrypt: boolean; verifyIncomin
 function useWhen(): (iso: string | null) => string {
   const regional = useRegional();
   return (iso) => (iso ? formatDateTime(new Date(iso), regional) : '–');
+}
+
+interface TrustedDeviceRow {
+  id: string;
+  surface: string;
+  createdAt: string;
+  expiresAt: string;
+  lastUsedAt: string | null;
+  userAgent: string;
+  ipPrefix: string;
+}
+
+/** 10.6: browsers that skip the MFA step ("Auf diesem Gerät nicht mehr fragen"); revoke one or all. */
+export function TrustedDevicesPanel() {
+  const t = useT();
+  const qc = useQueryClient();
+  const when = useWhen();
+  const { data, isLoading } = useQuery({
+    queryKey: ['user-trusted-devices'],
+    queryFn: () => api.get<{ devices: TrustedDeviceRow[] }>('/user/trusted-devices'),
+  });
+  const done = (msg: string) => { toast.success(msg); void qc.invalidateQueries({ queryKey: ['user-trusted-devices'] }); };
+  const revoke = useMutation({ mutationFn: (id: string) => api.delete(`/user/trusted-devices/${encodeURIComponent(id)}`), onSuccess: () => done(t('mfa_devices_revoked')) });
+  const revokeAll = useMutation({ mutationFn: () => api.delete('/user/trusted-devices'), onSuccess: () => done(t('mfa_devices_revoked_all')) });
+  const devices = data?.devices ?? [];
+
+  return (
+    <Group title={t('mfa_devices_title')}>
+      <p className="text-xs text-fg-subtle">{t('mfa_devices_hint')}</p>
+      {isLoading ? <Loader2 size={16} className="animate-spin text-fg-subtle" /> : devices.length === 0 ? (
+        <p className="text-sm text-fg-subtle">{t('mfa_devices_none')}</p>
+      ) : (
+        <ul className="divide-y divide-line border border-line rounded-md">
+          {devices.map((d) => (
+            <li key={d.id} className="flex items-center gap-3 px-3 py-2 text-sm">
+              <div className="flex-1 min-w-0">
+                <p className="text-fg">{d.userAgent || '–'} · {t(d.surface === 'bcp' ? 'mfa_devices_bcp' : 'mfa_devices_webmail')}</p>
+                <p className="text-xs text-fg-subtle">
+                  {fmt(t('mfa_devices_meta'), { net: d.ipPrefix || '–', last: when(d.lastUsedAt ?? d.createdAt), until: when(d.expiresAt) })}
+                </p>
+              </div>
+              <button type="button" className="btn-ghost text-xs" disabled={revoke.isPending} onClick={() => revoke.mutate(d.id)}>
+                <LogOut size={13} /> {t('mfa_devices_revoke')}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {devices.length > 1 && (
+        <button type="button" className="btn-secondary text-xs" disabled={revokeAll.isPending} onClick={() => revokeAll.mutate()}>
+          {t('mfa_devices_revoke_all')}
+        </button>
+      )}
+    </Group>
+  );
 }
 
 export function SessionsPanel() {

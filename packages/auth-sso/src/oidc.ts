@@ -36,7 +36,7 @@ import { Issuer, custom, generators, type Client, type IdTokenClaims } from 'ope
 import { createLogger } from '@coremail/core';
 import { prisma, ensureMailboxProvisioned } from '@coremail/storage';
 import {
-  authRedis, createMfaChallenge, getMfaState, issueSession, maintenanceBlock, webLoginBlocked,
+  authRedis, createMfaChallenge, getMfaState, issueSession, loadUserMfaPolicy, maintenanceBlock, webLoginBlocked,
   type ClientInfo, type MfaMethod, type TokenPair,
 } from '@coremail/storage/auth';
 
@@ -251,9 +251,13 @@ async function bindLinkedAccount(
   return bound === subject;
 }
 
-async function requireMfaForAdmins(): Promise<boolean> {
-  const s = await prisma.serverSettings.findUnique({ where: { id: 'singleton' }, select: { requireMfaForAdmins: true } });
-  return s?.requireMfaForAdmins === true;
+/**
+ * Does the admin MFA rule apply to this account? 10.6: the MFA policy model
+ * (admin rule or the admin's own "required" override — storage mfa-policy.ts);
+ * equals requireMfaForAdmins for accounts without an override.
+ */
+async function adminMfaRuleApplies(userId: string): Promise<boolean> {
+  return (await loadUserMfaPolicy(userId))?.enforcement === 'admin';
 }
 
 function trustIdpMfaForAdmins(): boolean {
@@ -362,7 +366,7 @@ export async function completeSsoCallback(
   // IdP MFA for admins (OIDC_TRUST_IDP_MFA_FOR_ADMINS=true, default false).
   // Such admins get the CoreMail MFA challenge when enrolled; otherwise the
   // session stays unverified and the admin API answers MFA_NOT_VERIFIED.
-  const adminNeedsLocalMfa = user.role !== 'USER' && await requireMfaForAdmins()
+  const adminNeedsLocalMfa = user.role !== 'USER' && await adminMfaRuleApplies(user.id)
     && (p.requireMfa || !trustIdpMfaForAdmins());
   let outcome: ExchangeOutcome = { kind: 'session', userId: user.id, mfaVerified: idpMfa && !adminNeedsLocalMfa };
   if (p.requireMfa || adminNeedsLocalMfa) {

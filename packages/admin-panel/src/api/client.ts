@@ -375,7 +375,11 @@ export type MfaMethod = 'webauthn' | 'totp' | 'backup_code';
 
 export type LoginResult =
   | { accessToken: string; refreshToken?: string }
-  | { mfaRequired: true; challengeToken: string; method: string; methods?: MfaMethod[] };
+  | {
+    mfaRequired: true; challengeToken: string; method: string; methods?: MfaMethod[];
+    /** 10.6: the MFA step may offer remembering this browser for `days` days. */
+    rememberDevice?: { days: number };
+  };
 
 export async function loginAdmin(email: string, password: string): Promise<LoginResult> {
   const res = await fetch('/auth/login', {
@@ -429,14 +433,14 @@ async function postMfaVerify(body: Record<string, unknown>): Promise<string> {
   return data.accessToken;
 }
 
-/** TOTP code (6 digits) or backup code (XXXX-XXXX) → access token. */
-export function verifyMfaAdmin(challengeToken: string, code: string): Promise<string> {
-  return postMfaVerify({ challengeToken, code });
+/** TOTP code (6 digits) or backup code (XXXX-XXXX) → access token. 10.6: `rememberDevice` = "nicht mehr fragen". */
+export function verifyMfaAdmin(challengeToken: string, code: string, rememberDevice = false): Promise<string> {
+  return postMfaVerify({ challengeToken, code, ...(rememberDevice ? { rememberDevice: true } : {}) });
 }
 
 /** WebAuthn assertion → access token. */
-export function verifyMfaAdminWebAuthn(challengeToken: string, webauthnResponse: unknown): Promise<string> {
-  return postMfaVerify({ challengeToken, webauthnResponse });
+export function verifyMfaAdminWebAuthn(challengeToken: string, webauthnResponse: unknown, rememberDevice = false): Promise<string> {
+  return postMfaVerify({ challengeToken, webauthnResponse, ...(rememberDevice ? { rememberDevice: true } : {}) });
 }
 
 export async function startMfaWebAuthn(challengeToken: string): Promise<unknown> {

@@ -31,6 +31,8 @@ import {
 import { verifyUserTotp } from './totp.js';
 import { consumeBackupCode } from './backup-codes.js';
 import { sharedLoginLockout } from '../mail-auth.js';
+import { loadUserMfaPolicy } from './mfa-policy.js';
+import { checkTrustedDevice, issueTrustedDevice, type DeviceSurface } from './trusted-devices.js';
 
 const log = createLogger('auth:login');
 
@@ -147,9 +149,20 @@ export async function getMfaState(userId: string): Promise<MfaState> {
 
 // ── Outcomes ──────────────────────────────────────────────────────────────────
 
+/** 10.6: a remembered device issued by completeMfaLogin (the router sets the cookie). */
+export interface TrustedDeviceGrant {
+  surface: DeviceSurface;
+  token: string;
+  maxAgeSec: number;
+}
+
 export type LoginOutcome =
-  | { kind: 'tokens'; tokens: TokenPair; userId: string; source: string }
-  | { kind: 'mfa'; challengeToken: string; method: MfaChallengeData['method']; methods: MfaMethod[]; userId: string }
+  | { kind: 'tokens'; tokens: TokenPair; userId: string; source: string; trustedDevice?: TrustedDeviceGrant }
+  | {
+    kind: 'mfa'; challengeToken: string; method: MfaChallengeData['method']; methods: MfaMethod[]; userId: string;
+    /** 10.6: days the browser may be remembered after this MFA step (0 = not offered). */
+    rememberDays?: number;
+  }
   | { kind: 'invalid' }
   | { kind: 'locked'; retryAfterSec: number }
   | { kind: 'maintenance'; message: string }
@@ -162,7 +175,14 @@ export type LoginOutcome =
 export function loginOutcomeToHttp(o: LoginOutcome): { status: number; body: Record<string, unknown>; headers?: Record<string, string> } {
   switch (o.kind) {
     case 'tokens': return { status: 200, body: { ...o.tokens } };
-    case 'mfa': return { status: 200, body: { mfaRequired: true, challengeToken: o.challengeToken, method: o.method, methods: o.methods } };
+    case 'mfa': return {
+      status: 200,
+      body: {
+        mfaRequired: true, challengeToken: o.challengeToken, method: o.method, methods: o.methods,
+        // 10.6: the MFA step may offer "Auf diesem Gerät für N Tage nicht mehr fragen"
+        ...(o.rememberDays && o.rememberDays > 0 ? { rememberDevice: { days: o.rememberDays } } : {}),
+      },
+    };
     case 'invalid': return { status: 401, body: { error: 'Invalid credentials' } };
     case 'locked': return {
       status: 429,
@@ -178,8 +198,24 @@ export function loginOutcomeToHttp(o: LoginOutcome): { status: number; body: Rec
   }
 }
 
+/** "Gerät merken" days of an account for this client (0 = not offered: no browser surface, policy off, DB error). */
+async function rememberDaysFor(userId: string, surface: DeviceSurface | null | undefined): Promise<number> {
+  if (!surface) return 0;
+  try {
+    return (await loadUserMfaPolicy(userId))?.rememberDays ?? 0;
+  } catch (err) {
+    log.warn({ err, userId }, 'MFA policy not readable — device remembering not offered');
+    return 0;
+  }
+}
+
+export interface LoginOptions {
+  /** 10.6: raw token of the request's remembered-device cookie (readTrustedDeviceCookie). */
+  trustedDeviceToken?: string | null | undefined;
+}
+
 /** POST /auth/login */
-export async function login(email: string, password: string, client: ClientInfo): Promise<LoginOutcome> {
+export async function login(email: string, password: string, client: ClientInfo, opts: LoginOptions = {}): Promise<LoginOutcome> {
   const normalized = email.trim().toLowerCase();
   const lockout = sharedLoginLockout();
   // 10.5 review: an unverified forwarded IP is counted, never escalated or learned
@@ -210,6 +246,18 @@ export async function login(email: string, password: string, client: ClientInfo)
 
   const mfa = await getMfaState(user.id);
   if (mfa.enabled) {
+    const rememberDays = await rememberDaysFor(user.id, client.deviceSurface);
+    // 10.6: a remembered browser of THIS account and surface skips the challenge
+    if (rememberDays > 0 && client.deviceSurface && opts.trustedDeviceToken) {
+      const deviceId = await checkTrustedDevice(opts.trustedDeviceToken, user.id, client.deviceSurface, rememberDays)
+        .catch((err: unknown) => { log.warn({ err, userId: user.id }, 'Remembered-device check failed'); return null; });
+      if (deviceId) {
+        const tokens = await issueSession(user, { ...client, mfaVerified: true });
+        await lockout.success(normalized, client.ip, { ...hints, admin: user.role !== 'USER' });
+        log.info({ userId: user.id, deviceId, surface: client.deviceSurface }, 'Login successful — MFA step skipped (remembered device)');
+        return { kind: 'tokens', tokens, userId: user.id, source: 'trusted-device' };
+      }
+    }
     const method = mfa.webauthn ? 'webauthn' : 'totp';
     const methods: MfaMethod[] = [];
     if (mfa.webauthn) methods.push('webauthn');
@@ -217,7 +265,7 @@ export async function login(email: string, password: string, client: ClientInfo)
     if (mfa.backupCodes > 0) methods.push('backup_code');
     const challengeToken = await createMfaChallenge(user.id, method, methods);
     log.info({ userId: user.id, method }, 'MFA challenge issued');
-    return { kind: 'mfa', challengeToken, method, methods, userId: user.id };
+    return { kind: 'mfa', challengeToken, method, methods, userId: user.id, ...(rememberDays > 0 ? { rememberDays } : {}) };
   }
 
   const tokens = await issueSession(user, { ...client, mfaVerified: false });
@@ -234,6 +282,8 @@ export interface MfaVerifyInput {
   /** Deprecated alias of `code` for backup codes. */
   backupCode?: string;
   webauthnResponse?: unknown;
+  /** 10.6: "Auf diesem Gerät nicht mehr fragen" — honoured only when the policy allows it for a browser surface. */
+  rememberDevice?: boolean;
 }
 
 export type WebAuthnVerifier = (userId: string, response: unknown, challengeToken: string) => Promise<boolean>;
@@ -298,5 +348,18 @@ export async function completeMfaLogin(
   const tokens = await issueSession(user, { ...client, mfaVerified: true });
   await lockout.success(lockEmail, client.ip, { ...hints, admin: user.role !== 'USER' });
   log.info({ userId: user.id }, 'MFA verified — login complete');
-  return { kind: 'tokens', tokens, userId: user.id, source: 'mfa' };
+  // 10.6: remember this browser when asked and allowed (never fails the login)
+  let trustedDevice: TrustedDeviceGrant | undefined;
+  if (input.rememberDevice === true && client.deviceSurface) {
+    const days = await rememberDaysFor(user.id, client.deviceSurface);
+    if (days > 0) {
+      try {
+        const d = await issueTrustedDevice(user.id, client.deviceSurface, days, client);
+        trustedDevice = { surface: client.deviceSurface, token: d.token, maxAgeSec: d.maxAgeSec };
+      } catch (err) {
+        log.warn({ err, userId: user.id }, 'Could not remember the device');
+      }
+    }
+  }
+  return { kind: 'tokens', tokens, userId: user.id, source: 'mfa', ...(trustedDevice ? { trustedDevice } : {}) };
 }

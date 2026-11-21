@@ -31,12 +31,16 @@ installFakePrisma({
       ? [{ domain: { id: 'd1', name: 'ex.com' } }] : [],
   },
   serverSettings: { findUnique: () => ({ id: 'singleton', requireMfaForAdmins: requireMfa }) },
-  userMfa: { findFirst: () => ({ totpEnabled: true, webAuthnCredentials: [] }) },
+  userMfa: {
+    findFirst: () => ({ totpEnabled: true, webAuthnCredentials: [] }),
+    findUnique: () => ({ totpEnabled: true, webAuthnCredentials: [] }), // 10.6: the policy model reads findUnique
+  },
   auditLog: { create: () => ({}) },
 });
 
 const express = (await import('express')).default;
 const core = await import('@coremail/core');
+const storageAuth = await import('@coremail/storage/auth');
 const { adminServersRouter, setServerRestartDeps } = await import('./servers.js');
 const lib = await import('../../lib/server-restart.js');
 
@@ -57,6 +61,7 @@ let triggeredAt = 0;
 beforeEach(() => {
   events.length = 0; audits = []; auditFails = false; slotTaken = false; available = true;
   sentAt = 0; triggeredAt = 0; requireMfa = false;
+  storageAuth.invalidateMfaEnforcementCache(); // 10.6: the MFA policy is cached 15 s
   setServerRestartDeps({
     availability: () => (available ? { available: true } : { available: false, reason: 'not-supervised' }),
     claim: async () => { events.push('claim'); if (slotTaken) return { ok: false, retryAfterSec: 77 }; slotTaken = true; return { ok: true }; },
@@ -142,6 +147,7 @@ test('scoped admin (domain scope): 403', async () => {
 
 test('requireMfaForAdmins: a session without MFA → 403 MFA_NOT_VERIFIED', async () => {
   requireMfa = true;
+  storageAuth.invalidateMfaEnforcementCache();
   const r = await call('POST', 'ORGANIZATION_MANAGEMENT', { mfaVerified: false });
   assert.equal(r.status, 403);
   assert.equal(r.json['code'], 'MFA_NOT_VERIFIED');

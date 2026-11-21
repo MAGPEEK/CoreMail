@@ -28,6 +28,7 @@ export function LoginPage() {
   const [challengeToken, setChallengeToken] = useState('');
   const [mfaMethod, setMfaMethod]           = useState('totp');
   const [mfaMethods, setMfaMethods]         = useState<MfaMethod[] | undefined>(undefined);
+  const [rememberDays, setRememberDays]     = useState(0); // 10.6: "Gerät merken" offered by the server
 
   const [error, setError]     = useState(() => {
     const key = REASON_KEY[searchParams.get('reason') ?? ''];
@@ -46,6 +47,7 @@ export function LoginPage() {
         setChallengeToken(result.challengeToken);
         setMfaMethod(result.method);
         setMfaMethods(result.methods);
+        setRememberDays(result.rememberDevice?.days ?? 0);
         setStep('mfa');
       } else {
         setToken(result.accessToken);
@@ -112,6 +114,7 @@ export function LoginPage() {
         {step === 'mfa' && (
           <MfaChallengeForm
             challengeToken={challengeToken}
+            rememberDays={rememberDays}
             method={mfaMethod}
             methods={mfaMethods}
             email={email}

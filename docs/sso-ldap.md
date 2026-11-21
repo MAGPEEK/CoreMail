@@ -10,7 +10,7 @@ connection test). HTTP routes live in the api-gateway.
 
 ## OIDC single sign-on
 
-### Setup (BCP → SSO)
+### Setup (BCP → Authentifizierung → SSO)
 
 1. Create an app/client at the IdP (confidential client, authorization code flow).
 2. In the BCP add a provider: domain, display name, discovery URL, client ID and
@@ -85,7 +85,9 @@ Admins (v9.0): when `requireMfaForAdmins` is on, an account with an admin role
 (anything but `USER`) is **not** MFA verified through `amr` — the claim is the
 IdP's own statement. Such admins get the CoreMail MFA challenge when enrolled (even
 if the provider has `requireMfa` off); without CoreMail MFA the session stays
-unverified and the admin API answers `MFA_REQUIRED` / `MFA_NOT_VERIFIED`. Set
+unverified and the admin API answers `MFA_REQUIRED` (10.6: after the admin grace period,
+docs/mfa-policy.md) / `MFA_NOT_VERIFIED`. 10.6: "`requireMfaForAdmins` on" means the admin MFA
+rule of the policy model applies to the account (admin rule or the admin's own "Pflicht" exception). Set
 `OIDC_TRUST_IDP_MFA_FOR_ADMINS=true` (default `false`) to trust `amr` for admins
 again — only effective for providers with `requireMfa` off.
 
@@ -185,7 +187,7 @@ Mail protocols: `verifyLdapMailPassword(email, password)` resolves to
 
 ### Sync (`syncLdapUsers`)
 
-BCP → LDAP → Synchronisation ("Jetzt synchronisieren", `POST /api/v1/admin/ldap/:domainId/sync`)
+BCP → Authentifizierung → LDAP / Active Dir. → Synchronisation ("Jetzt synchronisieren", `POST /api/v1/admin/ldap/:domainId/sync`)
 and a scheduler in the api-gateway (`syncEnabled`, interval `syncIntervalMinutes`,
 default daily; Redis lock `ldap:sync:lock:<domainId>`, one run per domain).
 

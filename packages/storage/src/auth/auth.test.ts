@@ -232,7 +232,7 @@ test('revokeAllSessions: keeps the excepted session, marks older access tokens r
   await db.mcpToken.create({ data: { userId: uid, name: 'old', tokenHash: 'x', prefix: 'p', expiresAt: new Date(Date.now() + 1e9), revokedAt: new Date(0), revokedReason: 'owner' } });
   await db.mcpToken.create({ data: { userId: 'someone-else', name: 'other', tokenHash: 'y', prefix: 'p', expiresAt: new Date(Date.now() + 1e9) } });
   const res = await auth.revokeAllSessions(uid, { exceptSessionId: keep, reason: 'test' });
-  assert.deepEqual(res, { sessions: 1, appPasswords: 0, mcpTokens: 1 });
+  assert.deepEqual(res, { sessions: 1, appPasswords: 0, mcpTokens: 1, trustedDevices: 0 });
   const tokens = db.mcpToken.rows;
   assert.equal(tokens.find((t) => t['name'] === 'cli')!['revokedReason'], 'test');
   assert.equal(tokens.find((t) => t['name'] === 'old')!['revokedReason'], 'owner', 'an older revocation is kept');

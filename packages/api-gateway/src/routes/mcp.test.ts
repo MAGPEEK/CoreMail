@@ -459,7 +459,9 @@ test('forced admin 2FA: a token from a session without MFA stops working', async
   const noMfa = await newToken('org', 'read', false);
   const withMfa = await newToken('org', 'read', true);
   db['userMfa']!.push({ id: 'mfa-org', userId: 'org', totpEnabled: true, webAuthnCredentials: [] });
+  const { invalidateMfaEnforcementCache } = await import('@coremail/storage/auth');
   settings['requireMfaForAdmins'] = true;
+  invalidateMfaEnforcementCache(); // 10.6: the MFA policy is cached 15 s
   try {
     const r = await post(noMfa.token, { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} });
     assert.equal(r.status, 403);
@@ -467,6 +469,22 @@ test('forced admin 2FA: a token from a session without MFA stops working', async
     assert.equal((await post(withMfa.token, { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })).status, 200);
   } finally {
     settings['requireMfaForAdmins'] = false;
+    invalidateMfaEnforcementCache();
+  }
+});
+
+test('10.6: MCP tokens get no admin MFA grace period — a token of an admin without MFA stops working', async () => {
+  const { invalidateMfaEnforcementCache } = await import('@coremail/storage/auth');
+  const t = await newToken('srv', 'read', false);
+  settings['requireMfaForAdmins'] = true; // grace (14 days) for the BCP — not for MCP
+  invalidateMfaEnforcementCache();
+  try {
+    const r = await post(t.token, { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} });
+    assert.equal(r.status, 403);
+    assert.equal(r.json['code'], 'MFA_REQUIRED');
+  } finally {
+    settings['requireMfaForAdmins'] = false;
+    invalidateMfaEnforcementCache();
   }
 });
 

@@ -37,6 +37,8 @@ export type AuthInvalidationReason =
   | 'permission-change'
   /** 9.4: the user's effective protocol access changed (see PROTOCOL_ACCESS_CHANGE). */
   | 'protocol-access-change'
+  /** 10.6: the user's MFA policy override changed (no credential change; caches only). */
+  | 'mfa-policy-change'
   | (string & {});
 
 /**

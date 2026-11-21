@@ -33,6 +33,22 @@ enum UserRole {
   ORGANIZATION_MANAGEMENT
 }
 
+// 10.6: MFA policy level (src/auth/mfa-policy.ts). REQUIRED = the account must
+// enrol a second factor; OPTIONAL = the user decides; OFF = enrolment is not
+// offered (factors enrolled earlier keep working).
+enum MfaPolicy {
+  REQUIRED
+  OPTIONAL
+  OFF
+}
+
+// 10.6: MFA rule for administrator accounts: REQUIRED (with an admin grace
+// period of at most 14 days) or AS_USERS (the policy for all users applies).
+enum AdminMfaPolicy {
+  REQUIRED
+  AS_USERS
+}
+
 enum SharedMailboxPermType {
   FULL_ACCESS
   SEND_AS
@@ -128,6 +144,10 @@ model User {
   // ServerSettings.mfaEnforcementSince is stale (re-activation starts a new
   // grace period). src/auth/mfa-enforcement.ts.
   mfaGraceStartedAt DateTime?
+  // 10.6: per-user MFA policy override (null = inherit: admin rule, then the
+  // policy for all users). Precedence: this > admin rule > global
+  // (src/auth/mfa-policy.ts). Changing it restarts the grace period.
+  mfaPolicy       MfaPolicy?
   domain          Domain         @relation(fields: [domainId], references: [id])
   domainId        String
   mailbox         Mailbox?
@@ -164,6 +184,8 @@ model User {
   adminScopes         AdminScope[]
   // 10.3: personal tokens of the admin MCP interface (/mcp)
   mcpTokens           McpToken[]
+  // 10.6: browsers where the MFA step is skipped for a while ("Gerät merken")
+  mfaTrustedDevices   MfaTrustedDevice[]
   // 9.5: profile photo — content-addressed object key (profile-photos/<aa>/<sha256>.jpg,
   // a 512×512 JPEG re-encoded by the api-gateway); null = no photo (initials)
   photoKey            String?
@@ -236,6 +258,33 @@ model McpToken {
 
   @@index([userId])
   @@map("mcp_tokens")
+}
+
+// 10.6: "Auf diesem Gerät nicht mehr fragen" — a browser that completed the MFA
+// step may skip it for a while (src/auth/trusted-devices.ts). The raw device
+// token lives only in an HttpOnly cookie per surface (cm_mfa_dev /
+// cm_mfa_dev_bcp, Path=/auth); here its sha256. Revoked on password / MFA
+// changes, revoke-all-sessions, role change and deactivation.
+model MfaTrustedDevice {
+  id            String    @id @default(cuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash     String    @unique
+  /// "webmail" or "bcp"
+  surface       String
+  createdAt     DateTime  @default(now())
+  expiresAt     DateTime
+  lastUsedAt    DateTime?
+  /// short browser / OS summary ("Firefox · Windows")
+  userAgent     String    @default("")
+  /// network of the issuing request (IPv4 /24, IPv6 /48)
+  ipPrefix      String    @default("")
+  revokedAt     DateTime?
+  revokedReason String?
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("mfa_trusted_devices")
 }
 
 // ─────────────────────────────────────────────
@@ -1987,6 +2036,19 @@ model ServerSettings {
   mfaEnforcementGraceDays             Int       @default(7)
   mfaEnforcementSince                 DateTime?
   mfaEnforcementBlocksPrimaryPassword Boolean   @default(false)
+  // 10.6: MFA policy model (src/auth/mfa-policy.ts). null = derived from the
+  // legacy switches on read (requireMfaForAllUsers → REQUIRED / OPTIONAL,
+  // requireMfaForAdmins → REQUIRED / AS_USERS); every save writes both forms.
+  mfaUserPolicy                       MfaPolicy?
+  mfaAdminPolicy                      AdminMfaPolicy?
+  // 10.6: admin grace period (0–14 days) per admin from the first check after
+  // the admin rule applies; mfaAdminEnforcementSince = when it was switched on.
+  mfaAdminGraceDays                   Int       @default(14)
+  mfaAdminEnforcementSince            DateTime?
+  // 10.6: "Gerät merken" — days a browser may skip the MFA step (0 = off);
+  // admins have their own (shorter or off) value.
+  mfaRememberDays                     Int       @default(30)
+  mfaRememberDaysAdmins               Int       @default(0)
   // v3.18.30: audit log globally on/off. Default on. The toggle itself is audited.
   auditLogEnabled            Boolean @default(true)
   // 9.4: mailbox access audit (delegates / shared mailbox users; action prefix

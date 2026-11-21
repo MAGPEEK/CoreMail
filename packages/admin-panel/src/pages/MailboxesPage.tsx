@@ -12,6 +12,7 @@ import { MailboxAliasesSection } from '../components/MailboxAliasesSection.js';
 import { MailboxPhotoSection, type MailboxPhoto } from '../components/MailboxPhotoSection.js';
 import { ProtocolAccessEditor } from '../components/ProtocolAccessEditor.js';
 import { WebmailPolicyEditor } from '../components/WebmailPolicyEditor.js';
+import { MfaPolicyField } from '../components/MfaPolicyField.js';
 import { MailFlowEditor } from '../components/MailFlowEditor.js';
 import { EditPanel, ReportDirty, type EditPanelTab } from '../components/EditPanel.js';
 import { FolderPermissionsSection } from '../components/FolderPermissionsSection.js';
@@ -824,6 +825,10 @@ function UserEditPanel({ user, domains, onSave, isPending, onClose }:
               {!levelsValid && <p className="col-span-2 text-xs text-danger-fg" role="alert">{t('mbox_quota_invalid')}</p>}
             </div>
             {save}
+            {/* 10.6: per-user MFA exception + remembered devices (saved on change) */}
+            <div className="border-t border-line pt-4">
+              <MfaPolicyField userId={user.id} />
+            </div>
             <div className="border-t border-line pt-4">
               <MailboxAliasesSection
                 mailboxType="user"

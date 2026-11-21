@@ -8,12 +8,16 @@ import {
   publishAuthInvalidation, type AuthInvalidationEvent, type AuthInvalidationPublisher, type AuthInvalidationReason,
 } from '@coremail/core';
 import { authRedis } from './redis.js';
+import { revokeTrustedDevicesOfUser } from './trusted-devices.js';
 
 export async function publishUserAuthChange(
   userId: string,
   reason: AuthInvalidationReason,
   extra: Omit<AuthInvalidationEvent, 'userId' | 'reason'> = {},
 ): Promise<void> {
+  // 10.6: a factor added or removed (or new backup codes) ends every
+  // "remember this device" of the account (never throws)
+  if (reason === 'mfa-change') await revokeTrustedDevicesOfUser(userId, 'mfa-change');
   let redis: AuthInvalidationPublisher | null = null;
   try {
     redis = authRedis() as unknown as AuthInvalidationPublisher;

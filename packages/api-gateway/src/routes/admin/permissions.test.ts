@@ -32,13 +32,17 @@ installFakePrisma({
     },
   },
   serverSettings: { findUnique: () => ({ id: 'singleton', requireMfaForAdmins }) },
-  userMfa: { findFirst: () => ({ totpEnabled: true, webAuthnCredentials: [] }) },
+  userMfa: {
+    findFirst: () => ({ totpEnabled: true, webAuthnCredentials: [] }),
+    findUnique: () => ({ totpEnabled: true, webAuthnCredentials: [] }), // 10.6: the policy model reads findUnique
+  },
 });
 
 const express = (await import('express')).default;
 const core = await import('@coremail/core');
 const auth = await import('../../middleware/auth.js');
 const rbac = await import('../../lib/rbac.js');
+const storageAuth = await import('@coremail/storage/auth');
 const { ADMIN_MOUNTS, ADMIN_PREFIX } = await import('./index.js');
 const { adminMeRouter } = await import('./me.js');
 
@@ -201,6 +205,9 @@ const MOUNT_AREAS: Record<string, { area: AdminArea | null; get: string; write?:
   '/mcp':                  { area: 'dashboard',    get: '/settings' },
   // 10.4.2: BCP dashboard card "Zertifikat einrichten" (state + dismiss)
   '/setup-state':          { area: 'servers',      get: '/', write: ['POST', '/certificate-hint/dismiss'] },
+  // 10.6: per-user MFA overrides + remembered devices; the caller's own admin MFA state (every admin role)
+  '/user-mfa':             { area: 'recipients',   get: '/', write: ['PUT', '/c0000000000000000000000x1'] },
+  '/mfa-status':           { area: 'dashboard',    get: '/' },
 };
 const EXTRA_PROBES: Array<{ area: AdminArea | null; method: string; path: string }> = [
   { area: 'domains', method: 'GET', path: '/ems/accepted-domains' },
@@ -216,6 +223,10 @@ const EXTRA_PROBES: Array<{ area: AdminArea | null; method: string; path: string
   { area: 'recipients', method: 'PUT', path: '/webmail-policies/users/c0000000000000000000000x1' },
   // 10.3: the MCP switch + IP allowlist are server configuration
   { area: 'servers',    method: 'PUT', path: '/mcp/settings' },
+  // 10.6: MFA policy (organisation) and remembered-device revocation (recipients)
+  { area: 'organisation', method: 'GET', path: '/settings/mfa-policy' },
+  { area: 'organisation', method: 'PUT', path: '/settings/mfa-policy' },
+  { area: 'recipients', method: 'DELETE', path: '/user-mfa/c0000000000000000000000x1/trusted-devices' },
 ];
 
 test('every admin mount is in the area table', () => {
@@ -267,6 +278,7 @@ test('GET /me/permissions: USER → 403, anonymous → 401, mfaVerified reflects
 
 test('GET /me/permissions follows forced admin MFA like every admin route', async () => {
   requireMfaForAdmins = true;
+  storageAuth.invalidateMfaEnforcementCache(); // 10.6: the MFA policy is cached 15 s
   try {
     const r = await call('GET', '/api/v1/admin/me/permissions', 'SERVER_MANAGEMENT', { mfaVerified: false });
     assert.equal(r.status, 403);
@@ -274,6 +286,7 @@ test('GET /me/permissions follows forced admin MFA like every admin route', asyn
     assert.equal((await call('GET', '/api/v1/admin/me/permissions', 'SERVER_MANAGEMENT')).status, 200);
   } finally {
     requireMfaForAdmins = false;
+    storageAuth.invalidateMfaEnforcementCache();
   }
 });
 

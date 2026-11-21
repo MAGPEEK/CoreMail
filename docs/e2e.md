@@ -29,8 +29,10 @@ Test passwords are generated on first use into `$E2E_STATE_DIR/credentials.json`
 Do not put real passwords there.
 
 Admin MFA (10.5): a fresh installation requires MFA for admin roles
-(`requireMfaForAdmins`, set by the setup wizard). The `setup` step checks that a
-password-only admin session gets 403 `MFA_REQUIRED`; from then on `session()` in
+(`requireMfaForAdmins`, set by the setup wizard). The `setup` step checks (10.6) that a
+password-only admin session is inside the admin grace period (admin API 200 with
+`X-CoreMail-Mfa-Grace-Until`, `GET /api/v1/admin/mfa-status` → `grace`; 403 `MFA_REQUIRED` only after
+the deadline, docs/mfa-policy.md); from then on `session()` in
 `scripts/e2e/lib.mjs` enrols TOTP for every admin-role account on its first login
 (`/auth/mfa/totp/setup` + `/confirm`, secret in `credentials.json` `totp`) and logs it in
 with the second factor, so all admin API and admin CLI calls (`COREMAIL_TOKEN`) use

@@ -5,7 +5,7 @@ import {
   ShieldAlert, ShieldBan, Search,
   ShieldHalf, Archive,
   ClipboardList, Activity, Info, Terminal,
-  Fingerprint, ServerCog, HardDriveDownload, Palette, Bot,
+  Fingerprint, ServerCog, HardDriveDownload, Palette, Bot, KeyRound,
 } from 'lucide-react';
 import { useT } from '../i18n/useT.js';
 import { usePermissions } from '../hooks/usePermissions.js';
@@ -54,14 +54,21 @@ export function Sidebar() {
       ],
     },
     {
+      // 10.6: sign-in methods (a later "Passkeys" entry goes after MFA); routes unchanged
+      groupKey: 'nav_group_auth',
+      items: [
+        { path: '/mfa',              labelKey: 'nav_mfa',              icon: KeyRound },
+        { path: '/sso',              labelKey: 'nav_sso',              icon: Fingerprint },
+        { path: '/ldap',             labelKey: 'nav_ldap',             icon: ServerCog },
+      ],
+    },
+    {
       groupKey: 'nav_group_infra',
       items: [
         { path: '/services',         labelKey: 'nav_services',         icon: Server },
         { path: '/webmail-policies', labelKey: 'nav_webmail_policies', icon: LayoutGrid },
         { path: '/smtp-config',      labelKey: 'nav_smtp_config',      icon: Terminal },
         { path: '/certificates',     labelKey: 'nav_certificates',     icon: ShieldCheck },
-        { path: '/sso',              labelKey: 'nav_sso',              icon: Fingerprint },
-        { path: '/ldap',             labelKey: 'nav_ldap',             icon: ServerCog },
         { path: '/mcp',              labelKey: 'nav_mcp',              icon: Bot },
       ],
     },

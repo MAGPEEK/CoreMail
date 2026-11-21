@@ -39,6 +39,7 @@ import {
   protocolDisabledBody,
   clientInfoOf,
   sessionSurfaceOf,
+  readTrustedDeviceCookie,
   type TokenPair,
 } from '@coremail/storage/auth';
 import { emptyTrashAfterLogout } from '../lib/empty-folder.js';
@@ -129,7 +130,9 @@ authRouter.post('/login', async (req: Request, res: Response) => {
     return;
   }
   try {
-    const outcome = await login(parsed.data.email, parsed.data.password, clientInfoOf(req));
+    // 10.6: a remembered browser (cm_mfa_dev / cm_mfa_dev_bcp) may skip the MFA step
+    const outcome = await login(parsed.data.email, parsed.data.password, clientInfoOf(req),
+      { trustedDeviceToken: readTrustedDeviceCookie(req) });
     if (outcome.kind === 'tokens') { sendTokens(req, res, outcome.tokens); return; }
     const { status, body, headers } = loginOutcomeToHttp(outcome);
     if (headers) res.set(headers);

@@ -24,6 +24,8 @@ import {
   tokenPairResponse,
   protocolDisabledBody,
   clientInfoOf,
+  readTrustedDeviceCookie,
+  trustedDeviceCookieHeader,
   type LoginOutcome,
 } from '@coremail/storage/auth';
 import { finishWebAuthnAuthentication } from '../mfa/webauthn.js';
@@ -34,6 +36,11 @@ function sendOutcome(req: Request, res: Response, outcome: LoginOutcome): void {
   if (outcome.kind === 'tokens') {
     const r = tokenPairResponse(req, outcome.tokens);
     if (r.setCookie) res.append('Set-Cookie', r.setCookie);
+    // 10.6: "Gerät merken" — the device token only ever travels in its HttpOnly cookie
+    if (outcome.trustedDevice) {
+      const d = outcome.trustedDevice;
+      res.append('Set-Cookie', trustedDeviceCookieHeader(req, d.surface, d.token, d.maxAgeSec));
+    }
     res.json(r.body);
     return;
   }
@@ -54,6 +61,8 @@ const MfaVerifySchema = z.object({
   /** Deprecated alias for backup codes — use `code`. */
   backupCode: z.string().max(64).optional(),
   webauthnResponse: z.unknown().optional(),
+  /** 10.6: remember this browser (only honoured when the policy allows it). */
+  rememberDevice: z.boolean().optional(),
 });
 
 const RefreshSchema = z.object({
@@ -69,7 +78,8 @@ authRouter.post('/login', async (req: Request, res: Response) => {
     return;
   }
   try {
-    sendOutcome(req, res, await login(parsed.data.email, parsed.data.password, clientInfoOf(req)));
+    sendOutcome(req, res, await login(parsed.data.email, parsed.data.password, clientInfoOf(req),
+      { trustedDeviceToken: readTrustedDeviceCookie(req) }));
   } catch (err) {
     log.error({ err }, 'Login error');
     res.status(500).json({ error: 'Internal server error' });
@@ -82,11 +92,12 @@ authRouter.post('/mfa/verify', async (req: Request, res: Response) => {
     res.status(400).json({ error: 'Invalid request' });
     return;
   }
-  const { challengeToken, code, backupCode, webauthnResponse } = parsed.data;
+  const { challengeToken, code, backupCode, webauthnResponse, rememberDevice } = parsed.data;
   try {
     const outcome = await completeMfaLogin(
       {
         challengeToken,
+        ...(rememberDevice === true ? { rememberDevice: true } : {}),
         ...(code !== undefined ? { code } : {}),
         ...(backupCode !== undefined ? { backupCode } : {}),
         ...(webauthnResponse !== undefined ? { webauthnResponse } : {}),

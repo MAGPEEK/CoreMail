@@ -30,6 +30,7 @@ const policies: Array<Record<string, unknown>> = [];
   $on: () => undefined,
   ...fakeProtocolPolicies(policies),
   user: {
+    findUnique: async () => null, // 10.6: the MFA policy lookup (unknown account → nothing enforced here)
     findFirst: async ({ where }: { where: { email?: string; id?: string } }) =>
       users.find((u) => (where.email ? u.email === where.email : u.id === where.id)) ?? null,
   },

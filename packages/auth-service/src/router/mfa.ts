@@ -15,7 +15,7 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { z } from 'zod';
 import { createLogger } from '@coremail/core';
 import { prisma } from '@coremail/storage';
-import { verifyReauth, reauthErrorBody, getMfaChallenge } from '@coremail/storage/auth';
+import { verifyReauth, reauthErrorBody, getMfaChallenge, mfaEnrolmentOffered, MFA_NOT_OFFERED_CODE } from '@coremail/storage/auth';
 import {
   setupTotp,
   confirmTotp,
@@ -39,6 +39,17 @@ async function requireReauth(req: Request, res: Response, userId: string): Promi
   const { status, body: err } = reauthErrorBody(r);
   log.warn({ userId, path: req.path, result: r }, 'MFA change rejected — re-authentication failed');
   res.status(status).json(err);
+  return false;
+}
+
+/**
+ * 10.6: a NEW factor may only be enrolled while the account's MFA policy is not
+ * "off" (mfa-policy.ts). Factors enrolled earlier keep working and may be
+ * removed; backup codes of an enrolled account may be regenerated.
+ */
+async function requireEnrolmentOffered(res: Response, userId: string): Promise<boolean> {
+  if (await mfaEnrolmentOffered(userId)) return true;
+  res.status(403).json({ error: 'Two-factor authentication is not offered for this account', code: MFA_NOT_OFFERED_CODE });
   return false;
 }
 
@@ -75,6 +86,7 @@ mfaRouter.post('/totp/setup', authed(async (req, res, userId) => {
     res.status(409).json({ error: 'TOTP is already enabled — disable it first', code: 'TOTP_ALREADY_ENABLED' });
     return;
   }
+  if (!(await requireEnrolmentOffered(res, userId))) return;
   if (!(await requireReauth(req, res, userId))) return;
   const accountName = typeof req.body?.accountName === 'string' && req.body.accountName ? req.body.accountName : userId;
   res.json(await setupTotp(userId, 'CoreMail', accountName));
@@ -107,6 +119,7 @@ mfaRouter.post('/backup-codes/generate', authed(async (req, res, userId) => {
 mfaRouter.post('/webauthn/register/start', authed(async (req, res, userId) => {
   const parsed = z.object({ email: z.string().email() }).passthrough().safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Email required' }); return; }
+  if (!(await requireEnrolmentOffered(res, userId))) return;
   if (!(await requireReauth(req, res, userId))) return;
   res.json(await startWebAuthnRegistration(userId, parsed.data.email));
 }));

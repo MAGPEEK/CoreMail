@@ -16,12 +16,14 @@ interface Props {
   onSuccess: (accessToken: string) => void;
   /** Back to the password step; `reason` is shown there */
   onBack: (reason?: string) => void;
+  /** 10.6: days this browser may be remembered after the MFA step (absent/0 = not offered). */
+  rememberDays?: number | undefined;
 }
 
 const EMPTY_DIGITS = ['', '', '', '', '', ''];
 
 /** Second login step of the BCP: TOTP, backup code (XXXX-XXXX) or security key. */
-export function MfaChallengeForm({ challengeToken, method, methods, email, onSuccess, onBack }: Props) {
+export function MfaChallengeForm({ challengeToken, method, methods, email, onSuccess, onBack, rememberDays }: Props) {
   const t = useT();
   const available: MfaMethod[] = methods && methods.length > 0
     ? methods
@@ -33,6 +35,8 @@ export function MfaChallengeForm({ challengeToken, method, methods, email, onSuc
   const [backupCode, setBackupCode] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [remember, setRemember] = useState(false);
+  const rememberOn = remember && (rememberDays ?? 0) > 0;
   const digitRefs = useRef<(HTMLInputElement | null)[]>([]);
   const backupRef = useRef<HTMLInputElement | null>(null);
 
@@ -66,14 +70,14 @@ export function MfaChallengeForm({ challengeToken, method, methods, email, onSuc
     if (mode === 'totp') {
       const code = digits.join('');
       if (code.length < 6) { setError(t('auth_mfa_enter_digits')); return; }
-      void run(() => verifyMfaAdmin(challengeToken, code), () => {
+      void run(() => verifyMfaAdmin(challengeToken, code, rememberOn), () => {
         setDigits(EMPTY_DIGITS);
         setTimeout(() => digitRefs.current[0]?.focus(), 50);
       });
     } else if (mode === 'backup') {
       const code = backupCode.trim();
       if (code.length < 6) { setError(t('auth_mfa_enter_backup')); return; }
-      void run(() => verifyMfaAdmin(challengeToken, code), () => backupRef.current?.select());
+      void run(() => verifyMfaAdmin(challengeToken, code, rememberOn), () => backupRef.current?.select());
     }
   };
 
@@ -82,7 +86,7 @@ export function MfaChallengeForm({ challengeToken, method, methods, email, onSuc
       try {
         const options = await startMfaWebAuthn(challengeToken);
         const assertion = await webauthnAuthenticate(options);
-        return await verifyMfaAdminWebAuthn(challengeToken, assertion);
+        return await verifyMfaAdminWebAuthn(challengeToken, assertion, rememberOn);
       } catch (err) {
         if (err instanceof ApiError) throw err;
         throw new Error(webauthnErrorMessage(err));
@@ -161,6 +165,13 @@ export function MfaChallengeForm({ challengeToken, method, methods, email, onSuc
           className="btn-primary w-full justify-center py-2 disabled:opacity-60">
           <KeyRound size={15} /> {loading ? t('auth_mfa_waiting_key') : t('auth_mfa_sign_in_key')}
         </button>
+      )}
+
+      {(rememberDays ?? 0) > 0 && (
+        <label className="flex items-center justify-center gap-2 text-sm text-fg-muted">
+          <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+          {t('auth_mfa_remember').replace('{days}', String(rememberDays))}
+        </label>
       )}
 
       {error && (

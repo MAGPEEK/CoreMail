@@ -226,7 +226,22 @@ without the card, write for "Später"): **org**.
 `requireMfaForAllUsers`, `mfaEnforcementGraceDays`, `mfaEnforcementBlocksPrimaryPassword`):
 organisation write, i.e. ORGANIZATION_MANAGEMENT only (SERVER_MANAGEMENT / VIEW_ONLY_ORG read
 it); every change is audited as `settings.mfa-policy.update` with a from/to diff
-(docs/user-settings.md, "MFA enforcement").
+(docs/user-settings.md, "MFA enforcement"). 10.6: `GET/PUT /settings/mfa-policy` (the
+Authentifizierung page, docs/mfa-policy.md) — same area and audit action; the legacy fields of
+`PUT /settings/security` keep working and write the new columns too.
+
+### MFA exceptions and remembered devices (10.6, docs/mfa-policy.md)
+
+| Route | Decision |
+|---|---|
+| `GET /user-mfa`, `GET /user-mfa/:id` | recipients read (HELP_DESK, VIEW_ONLY_ORG, RECIPIENT_MANAGEMENT) → **scoped**: the list holds only accounts of the admin's domains; other ids `404` (`scopeParam('user')`) |
+| `PUT /user-mfa/:id` (per-user exception) | recipients write → **scoped**; an admin account's effective level may only be weakened (Pflicht → Optional / Aus) by ORGANIZATION_MANAGEMENT (`403 MFA_POLICY_WEAKEN_ADMIN`) — other admins, scoped or not, may keep or strengthen it; audit `mfa.policy.override` |
+| `DELETE /user-mfa/:id/trusted-devices` | recipients write → **scoped**; admin accounts ORGANIZATION_MANAGEMENT only (`canManageAccount`); audit `mfa.trusted-devices.revoke` |
+| `GET /mfa-status` | every admin role (`requireAdmin`), the caller's own state only → **personal** (no organisation data) |
+
+The admin MFA rule (admin rule of the policy or an admin's own "Pflicht" exception) runs in every
+admin guard: an admin without a factor passes during the admin grace period (≤ 14 days, header
+`X-CoreMail-Mfa-Grace-Until`), afterwards `403 MFA_REQUIRED`; MCP tokens get no grace.
 
 Outside `/api/v1/admin`: the setup wizard's `GET /api/v1/setup/secrets-download` and
 `POST /api/v1/setup/finish` (10.4.2, docs/setup-wizard.md) — `requireRoleInSetupWindow()`, i.e.

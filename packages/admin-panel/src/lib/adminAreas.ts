@@ -18,6 +18,9 @@ export const PATH_AREA: Record<string, AdminArea | null> = {
   'settings':         'organisation',
   'branding':         'organisation',
   'rbac':             'organisation',
+  // 10.6: Authentifizierung → Mehrstufige Anmeldung (policy = organisation settings;
+  // per-user exceptions on the page need recipients — scoped admins use the mailbox panel)
+  'mfa':              'organisation',
   'ldap':             'identity',
   'sso':              'identity',
   'servers':          'servers',

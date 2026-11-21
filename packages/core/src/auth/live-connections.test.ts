@@ -69,7 +69,7 @@ test('deactivation, deletion, admin revoke and unknown revoke-all reasons end ev
 });
 
 test('neutral events keep protocol connections', () => {
-  for (const reason of ['app-password-created', 'reactivated', 'role-change']) {
+  for (const reason of ['app-password-created', 'reactivated', 'role-change', 'mfa-policy-change']) {
     assert.equal(connectionAffected(ev(reason), conn('password')), false, reason);
   }
   // Role change revokes web sessions (revokeAllSessions) but keeps mail logins.

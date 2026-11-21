@@ -109,7 +109,8 @@ export async function verifyMcpToken(raw: string, ip: string): Promise<McpTokenC
     await revokeTokenRow(row.id, 'sessions-revoked').catch(() => undefined);
     return { ok: false, reason: 'revoked' };
   }
-  const mfa = await adminMfaRefusal(user.id, row.mfaVerified);
+  // 10.6: no admin grace period for MCP tokens (a long-lived token never stands in for MFA)
+  const mfa = await adminMfaRefusal(user.id, row.mfaVerified, { allowGrace: false });
   if (mfa) return { ok: false, reason: 'mfa', code: mfa.code, error: mfa.error };
   // 10.5 review: "MFA für alle Benutzer erzwingen" applies to MCP tokens too — after the
   // owner's grace deadline a token of an account without MFA stops working. The current

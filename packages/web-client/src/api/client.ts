@@ -300,7 +300,11 @@ export type MfaMethod = 'webauthn' | 'totp' | 'backup_code';
 
 export type LoginResult =
   | { accessToken: string; refreshToken: string }
-  | { mfaRequired: true; challengeToken: string; method: string; methods?: MfaMethod[] };
+  | {
+    mfaRequired: true; challengeToken: string; method: string; methods?: MfaMethod[];
+    /** 10.6: the MFA step may offer remembering this browser for `days` days. */
+    rememberDevice?: { days: number };
+  };
 
 /**
  * v8.1: `refreshToken` is '' for browser logins — the refresh token is set as
@@ -371,13 +375,14 @@ async function postMfaVerify(body: Record<string, unknown>): Promise<TokenPair> 
  * (XXXX-XXXX; the server ignores dashes/spaces/case).
  * Errors carry `code` MFA_INVALID_CODE / MFA_CHALLENGE_EXHAUSTED (→ back to login).
  */
-export function verifyMfa(challengeToken: string, code: string): Promise<TokenPair> {
-  return postMfaVerify({ challengeToken, code });
+export function verifyMfa(challengeToken: string, code: string, rememberDevice = false): Promise<TokenPair> {
+  // 10.6: rememberDevice = "Auf diesem Gerät nicht mehr fragen" (honoured only when the policy allows it)
+  return postMfaVerify({ challengeToken, code, ...(rememberDevice ? { rememberDevice: true } : {}) });
 }
 
 /** Completes the MFA step with a WebAuthn assertion (security key / passkey). */
-export function verifyMfaWebAuthn(challengeToken: string, webauthnResponse: unknown): Promise<TokenPair> {
-  return postMfaVerify({ challengeToken, webauthnResponse });
+export function verifyMfaWebAuthn(challengeToken: string, webauthnResponse: unknown, rememberDevice = false): Promise<TokenPair> {
+  return postMfaVerify({ challengeToken, webauthnResponse, ...(rememberDevice ? { rememberDevice: true } : {}) });
 }
 
 /** Fetches WebAuthn request options for the pending MFA challenge. */
