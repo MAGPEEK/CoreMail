@@ -2120,7 +2120,7 @@ model ServerSettings {
   // 10.6: "Gerät merken" — days a browser may skip the MFA step (0 = off);
   // admins have their own (shorter or off) value.
   mfaRememberDays                     Int       @default(30)
-  mfaRememberDaysAdmins               Int       @default(0)
+  mfaRememberDaysAdmins               Int       @default(30)
   // v3.18.30: audit log globally on/off. Default on. The toggle itself is audited.
   auditLogEnabled            Boolean @default(true)
   // 9.4: mailbox access audit (delegates / shared mailbox users; action prefix

@@ -72,7 +72,7 @@ MFA-verified. Never for mail protocols / app passwords, the admin CLI (no browse
 tokens or SSO sign-ins.
 
 Durations (`mfaRememberDays` for users, default 30; `mfaRememberDaysAdmins` for admin accounts,
-default 0 = off): off / 30 / 60 / 90 days / custom 1–365; the admin value never exceeds the users
+default 30): off / 30 / 60 / 90 days / custom 1–365; the admin value never exceeds the users
 value. Lowering a value shortens existing devices, 0 switches remembering off.
 
 Revoked by: `revokeAllSessions()` — password change or reset, "Alle anderen Sitzungen beenden" /

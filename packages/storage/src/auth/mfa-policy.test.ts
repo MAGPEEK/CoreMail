@@ -273,7 +273,7 @@ test('device: wrong surface, another account, non-browser clients and a missing 
   assert.equal(db.mfaTrustedDevice.rows.filter((r) => r['userId'] === 'u2').length, 0);
 });
 
-test('device: expiry, a lowered setting and "off" end the skip; admins use their own (default off) value', async () => {
+test('device: expiry, a lowered setting and "off" end the skip; admins use their own value (off when set to 0)', async () => {
   await settings({ mfaRememberDays: 30 });
   await addUser('u1');
   await enableTotp('u1');
@@ -291,10 +291,10 @@ test('device: expiry, a lowered setting and "off" end the skip; admins use their
   row['expiresAt'] = new Date(Date.now() - 1000);
   assert.equal((await auth.login('u1@one.test', PW, webmail, { trustedDeviceToken: token })).kind, 'mfa', 'expired');
 
-  // admins: default 0 → neither offered nor issued
+  // admins: their own value — set to 0 → neither offered nor issued (default is 30)
   await addUser('adm', { role: 'SERVER_MANAGEMENT' });
   await enableTotp('adm');
-  await settings({ mfaRememberDays: 30 });
+  await settings({ mfaRememberDays: 30, mfaRememberDaysAdmins: 0 });
   const o = await auth.login('adm@one.test', PW, bcp);
   assert.equal(o.kind === 'mfa' && o.rememberDays, undefined);
   if (o.kind !== 'mfa') throw new Error('no challenge');

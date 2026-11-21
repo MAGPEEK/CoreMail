@@ -61,7 +61,7 @@ export interface MfaPolicySettings {
 
 export const MFA_POLICY_DEFAULTS: MfaPolicySettings = Object.freeze({
   users: 'optional', admins: 'as_users', graceDays: 7, since: null, blocksPrimaryPassword: false,
-  adminGraceDays: MFA_ADMIN_GRACE_MAX_DAYS, adminSince: null, rememberDays: 30, rememberDaysAdmins: 0,
+  adminGraceDays: MFA_ADMIN_GRACE_MAX_DAYS, adminSince: null, rememberDays: 30, rememberDaysAdmins: 30,
 }) as MfaPolicySettings;
 
 /** The ServerSettings columns the policy is read from (all optional: older rows / fakes). */
@@ -125,7 +125,7 @@ export function mfaPolicySettingsFromRow(row: MfaSettingsRow | null | undefined)
     adminGraceDays: clampInt(row.mfaAdminGraceDays, 0, MFA_ADMIN_GRACE_MAX_DAYS, MFA_POLICY_DEFAULTS.adminGraceDays),
     adminSince: row.mfaAdminEnforcementSince instanceof Date ? row.mfaAdminEnforcementSince : null,
     rememberDays,
-    rememberDaysAdmins: Math.min(rememberDays, clampInt(row.mfaRememberDaysAdmins, 0, MFA_REMEMBER_DAYS_BOUNDS[1], 0)),
+    rememberDaysAdmins: Math.min(rememberDays, clampInt(row.mfaRememberDaysAdmins, 0, MFA_REMEMBER_DAYS_BOUNDS[1], 30)),
   };
 }
 

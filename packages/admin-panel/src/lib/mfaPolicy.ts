@@ -23,7 +23,7 @@ export interface MfaPolicyForm {
 
 export const MFA_POLICY_FORM_DEFAULTS: MfaPolicyForm = {
   users: 'optional', admins: 'as_users', graceDays: 7, blocksPrimaryPassword: false,
-  adminGraceDays: 14, rememberDays: 30, rememberDaysAdmins: 0,
+  adminGraceDays: 14, rememberDays: 30, rememberDaysAdmins: 30,
 };
 
 export const ADMIN_GRACE_MAX_DAYS = 14;

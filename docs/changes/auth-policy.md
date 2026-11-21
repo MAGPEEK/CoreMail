@@ -23,7 +23,7 @@ Changelog fragment for the `[10.6.0]` section (Keep a Changelog). Details: docs/
   the login answer). HttpOnly / SameSite=Strict / Secure-on-HTTPS cookie per surface
   (`cm_mfa_dev`, `cm_mfa_dev_bcp`, `Path=/auth`), hashed in the new table `MfaTrustedDevice`.
   Durations off / 30 / 60 / 90 / custom 1–365 days (users default 30, admins separately, default
-  off, never longer than users). Password sign-ins of browsers only — never mail protocols, app
+  30, never longer than users). Password sign-ins of browsers only — never mail protocols, app
   passwords, the admin CLI, MCP tokens or SSO. Revoked on password change / reset, MFA change,
   revoke-all-sessions, role / scope change, deactivation, deletion.
 - Webmail Settings → Sicherheit → **Gemerkte Geräte** (`GET/DELETE /api/v1/user/trusted-devices`);
