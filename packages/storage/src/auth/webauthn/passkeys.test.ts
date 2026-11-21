@@ -344,6 +344,15 @@ test('login: an ACCOUNT lock does not block a passkey sign-in, an IP lock does',
   // failed passkey attempts count against the client IP
   for (let i = 0; i < 5; i++) await login(soft(), {}, client('203.0.113.77'));
   assert.equal(codeOf(await login(a, {}, client('203.0.113.77'))), 'IP_LOCKED');
+  // the BCP block list (attack protection) applies as well
+  storage.setIpAccessRulesForTests([{ kind: 'BLOCK', cidr: '198.51.100.0/24' }]);
+  try {
+    const out = await login(a, {}, client('198.51.100.20'));
+    assert.equal(codeOf(out), 'IP_BLOCKED');
+    assert.equal(out.kind === 'error' && out.status, 403);
+  } finally {
+    storage.setIpAccessRulesForTests(null);
+  }
 });
 
 // ── Second factor, re-auth ────────────────────────────────────────────────────

@@ -216,13 +216,16 @@ export const authRouteRateLimit = (req: Request, res: Response, next: NextFuncti
  * password login budget. Failed assertions also count against the shared
  * per-IP lockout in the auth-service.
  */
-export const passkeyRateLimit = rateLimit({
+const passkeyFlowLimit = rateLimit({
   windowMs: 60 * 1_000,
   max: 20,
   standardHeaders: 'draft-7',
   legacyHeaders: false,
   message: { error: 'Too many passkey sign-in attempts. Please try again in a minute.', code: 'RATE_LIMITED' },
 });
+/** The public status (GET /auth/passkey/status, read by every login page load) is exempt. */
+export const passkeyRateLimit = (req: Request, res: Response, next: NextFunction): unknown =>
+  req.method === 'GET' && req.path === '/status' ? next() : passkeyFlowLimit(req, res, next);
 
 /**
  * SSO flow (v6.1) — start/callback/exchange: 60 per 15 minutes per IP (one

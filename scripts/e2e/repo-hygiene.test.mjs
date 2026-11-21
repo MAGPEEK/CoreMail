@@ -279,3 +279,54 @@ test('10.0: the room/equipment resource feature stays removed (schema, code, adm
   // the retirement list itself must keep naming the dropped tables
   assert.match(read('infra/docker/schema-sync-classify.mjs'), /resource_mailboxes:[\s\S]*resource_calendars:[\s\S]*resource_bookings:/);
 });
+
+test('10.6: nothing reads the deprecated UserMfa.webAuthnCredentials JSON outside the passkey backfill', async () => {
+  // Passkeys / security keys live in WebAuthnCredential; every "has MFA?" decision
+  // goes through getAuthFactors() / authFactorsOf() (storage). The JSON column stays
+  // (deprecated until the next MAJOR) for the startup backfill only; the MFA reset
+  // clears it. Test fakes may still carry the column.
+  const { readdirSync } = await import('node:fs');
+  const ALLOWED = new Set([
+    'packages/storage/src/auth/webauthn/migration.ts', // the one reader (backfill)
+    'packages/storage/src/auth/passkeys.ts', // MFA reset writes [] (never reads)
+    'packages/storage/src/auth/testing.ts', // fake defaults
+  ]);
+  const offenders = [];
+  // code only — comments may name the deprecated column
+  const code = (src) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+  const walk = (dir) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      if (e.name === 'node_modules' || e.name === 'dist') continue;
+      const p = join(dir, e.name);
+      const rel = p.slice(root.length + 1).replace(/\\/g, '/');
+      if (e.isDirectory()) walk(p);
+      else if (/\.(ts|tsx)$/.test(e.name) && !/\.test\.ts$/.test(e.name) && !ALLOWED.has(rel)
+        && /\bwebAuthnCredentials\b/.test(code(readFileSync(p, 'utf8')))) offenders.push(rel);
+    }
+  };
+  for (const pkg of readdirSync(join(root, 'packages'))) {
+    try { walk(join(root, 'packages', pkg, 'src')); } catch { /* package without src */ }
+  }
+  assert.deepEqual(offenders, []);
+});
+
+test('10.6: the WebAuthn library stays out of the mail services and @coremail/storage/auth', async () => {
+  const { readdirSync, existsSync } = await import('node:fs');
+  const MAIL = ['smtp-server', 'imap-server', 'pop3-server', 'jmap-server', 'caldav-server', 'activesync', 'mapi-server', 'autodiscover'];
+  const offenders = [];
+  const walk = (dir) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (/\.ts$/.test(e.name) && /@coremail\/storage\/auth\/webauthn|@simplewebauthn\//.test(readFileSync(p, 'utf8'))) offenders.push(p.slice(root.length + 1));
+    }
+  };
+  for (const pkg of MAIL) if (existsSync(join(root, 'packages', pkg, 'src'))) walk(join(root, 'packages', pkg, 'src'));
+  assert.deepEqual(offenders, []);
+  // the shared auth index never pulls in the ceremonies (its own subpath)
+  assert.doesNotMatch(read('packages/storage/src/auth/index.ts'), /['"]\.\/webauthn/);
+  assert.doesNotMatch(read('packages/storage/src/index.ts'), /auth\/webauthn/);
+  const pkgJson = JSON.parse(read('packages/storage/package.json'));
+  assert.equal(pkgJson.dependencies['@simplewebauthn/server'], '14.1.0', 'pinned exactly');
+  assert.equal(pkgJson.exports['./auth/webauthn'], './dist/auth/webauthn/index.js');
+});
