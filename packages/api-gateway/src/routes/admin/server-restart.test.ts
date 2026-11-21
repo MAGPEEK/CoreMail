@@ -31,10 +31,13 @@ installFakePrisma({
       ? [{ domain: { id: 'd1', name: 'ex.com' } }] : [],
   },
   serverSettings: { findUnique: () => ({ id: 'singleton', requireMfaForAdmins: requireMfa }) },
+  // 10.6: the policy model reads findUnique; the admin MFA rule reads the factors through
+  // getAuthFactors (userMfa + webAuthnCredential)
   userMfa: {
-    findFirst: () => ({ totpEnabled: true, webAuthnCredentials: [] }),
-    findUnique: () => ({ totpEnabled: true, webAuthnCredentials: [] }), // 10.6: the policy model reads findUnique
+    findFirst: () => ({ totpEnabled: true, backupCodes: [] }),
+    findUnique: () => ({ totpEnabled: true, backupCodes: [] }),
   },
+  webAuthnCredential: { findMany: () => [] },
   auditLog: { create: () => ({}) },
 });
 

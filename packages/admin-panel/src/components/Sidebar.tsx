@@ -54,10 +54,11 @@ export function Sidebar() {
       ],
     },
     {
-      // 10.6: sign-in methods + account self-service (a later "Passkeys" entry goes after MFA); routes unchanged
+      // 10.6: sign-in methods + account self-service (Passkeys right after MFA); routes unchanged
       groupKey: 'nav_group_auth',
       items: [
         { path: '/mfa',              labelKey: 'nav_mfa',              icon: KeyRound },
+        { path: '/passkeys',         labelKey: 'nav_passkeys',         icon: KeyRound },
         { path: '/password-reset', labelKey: 'nav_password_reset', icon: KeyRound },
         { path: '/authentication/self-registration', labelKey: 'nav_self_registration', icon: UserPlus },
         { path: '/sso',              labelKey: 'nav_sso',              icon: Fingerprint },

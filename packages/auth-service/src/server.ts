@@ -2,6 +2,7 @@ import {
   createLogger, installProcessGuards, resolveBindHost, initRuntimeLogLevel, startAuthInvalidationSubscriber,
 } from '@coremail/core';
 import { connectDatabase, startWebmailPolicySubscriber } from '@coremail/storage';
+import { startPasskeyPolicySubscriber } from '@coremail/storage/auth';
 import { createApp } from './app.js';
 
 const log = createLogger('auth-service');
@@ -14,6 +15,7 @@ async function main() {
   // v7.1.0: apply session revocations performed by other services in-process
   startAuthInvalidationSubscriber();
   startWebmailPolicySubscriber(); // 9.4: app-password module switch changes apply at once
+  startPasskeyPolicySubscriber(); // 10.6: BCP passkey switches apply at once
   // v5.6.0: initJwtKeys() removed — JWT back to HS256 (see core/auth/jwt.ts)
   const app = createApp();
   // v6: internal service — loopback by default (INTERNAL_BIND_HOST overrides)

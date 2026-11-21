@@ -60,6 +60,8 @@
  */
 import { createHash } from 'node:crypto';
 import { BlockList, isIP } from 'node:net';
+// 10.6: pure module without imports (the shared "has MFA" rule)
+import { authFactorsOf } from './auth-factors.js';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -156,7 +158,9 @@ interface UserRow {
   active?: boolean;
   passwordHash?: string | null;
   authSource?: string | null;
-  mfa?: { totpEnabled?: boolean | null; webAuthnCredentials?: unknown } | null;
+  mfa?: { totpEnabled?: boolean | null } | null;
+  /** 10.6: WebAuthn credentials (passkeys / security keys) — only their presence matters here. */
+  webauthnCredentials?: ReadonlyArray<{ kind?: string | null }> | null;
   mailbox?: { id: string } | null;
 }
 
@@ -595,12 +599,12 @@ export interface LockInfo {
 }
 
 
-export function hasMfa(user: Pick<UserRow, 'mfa'>): boolean {
-  const mfa = user.mfa;
-  if (!mfa) return false;
-  if (mfa.totpEnabled) return true;
-  const creds = mfa.webAuthnCredentials;
-  return Array.isArray(creds) && creds.length > 0;
+/**
+ * 10.6: TOTP or any WebAuthn credential (passkey or security key) — the shared
+ * rule of auth-factors.ts on the row selected below (`mfa` + `webauthnCredentials`).
+ */
+export function hasMfa(user: Pick<UserRow, 'mfa' | 'webauthnCredentials'>): boolean {
+  return authFactorsOf(user).enrolled;
 }
 
 /// ─── Shared lockout (mail protocols + web login, v8.1) ──────────────────────
@@ -1002,7 +1006,9 @@ export function createMailCredentialVerifier(deps: MailAuthDeps): MailCredential
         select: {
           id: true, email: true, displayName: true, domainId: true, role: true, active: true,
           passwordHash: true, authSource: true,
-          mfa: { select: { totpEnabled: true, webAuthnCredentials: true } },
+          mfa: { select: { totpEnabled: true } },
+          // 10.6: one credential is enough to know MFA is enrolled (auth-factors.ts)
+          webauthnCredentials: { select: { kind: true }, take: 1 },
           mailbox: { select: { id: true } },
         },
       }) as UserRow | null;

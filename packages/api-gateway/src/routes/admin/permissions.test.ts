@@ -32,10 +32,13 @@ installFakePrisma({
     },
   },
   serverSettings: { findUnique: () => ({ id: 'singleton', requireMfaForAdmins }) },
+  // 10.6: the policy model reads findUnique; the admin MFA rule reads the factors through
+  // getAuthFactors (userMfa + webAuthnCredential)
   userMfa: {
-    findFirst: () => ({ totpEnabled: true, webAuthnCredentials: [] }),
-    findUnique: () => ({ totpEnabled: true, webAuthnCredentials: [] }), // 10.6: the policy model reads findUnique
+    findFirst: () => ({ totpEnabled: true, backupCodes: [] }),
+    findUnique: () => ({ totpEnabled: true, backupCodes: [] }),
   },
+  webAuthnCredential: { findMany: () => [] },
 });
 
 const express = (await import('express')).default;
@@ -210,6 +213,8 @@ const MOUNT_AREAS: Record<string, { area: AdminArea | null; get: string; write?:
   '/mfa-status':           { area: 'dashboard',    get: '/' },
   // 10.6: self-registration (settings / invites org-wide, approvals scoped)
   '/self-registration':    { area: 'recipients',   get: '/pending', write: ['PUT', '/settings'] },
+  // 10.6: passkey policy (organisation area, organisation-wide admins only)
+  '/authentication/passkeys': { area: 'organisation', get: '/', write: ['PUT', '/'] },
 };
 const EXTRA_PROBES: Array<{ area: AdminArea | null; method: string; path: string }> = [
   { area: 'domains', method: 'GET', path: '/ems/accepted-domains' },
@@ -229,10 +234,15 @@ const EXTRA_PROBES: Array<{ area: AdminArea | null; method: string; path: string
   { area: 'organisation', method: 'GET', path: '/settings/mfa-policy' },
   { area: 'organisation', method: 'PUT', path: '/settings/mfa-policy' },
   { area: 'recipients', method: 'DELETE', path: '/user-mfa/c0000000000000000000000x1/trusted-devices' },
+  // 10.6: passkeys of a mailbox — a second router on /mailboxes (area recipients)
+  { area: 'recipients', method: 'GET', path: '/mailboxes/c0000000000000000000000x1/passkeys' },
+  { area: 'recipients', method: 'PUT', path: '/mailboxes/c0000000000000000000000x1/passkey-policy' },
+  { area: 'recipients', method: 'POST', path: '/mailboxes/c0000000000000000000000x1/passkey-recovery' },
 ];
 
 test('every admin mount is in the area table', () => {
-  assert.deepEqual(ADMIN_MOUNTS.map(([p]) => p).sort(), Object.keys(MOUNT_AREAS).sort());
+  // 10.6: a mount path may carry several routers (/mailboxes: mailboxes + passkeys)
+  assert.deepEqual([...new Set(ADMIN_MOUNTS.map(([p]) => p))].sort(), Object.keys(MOUNT_AREAS).sort());
 });
 
 test('real admin routers admit exactly the roles ROLE_PERMISSIONS grants for their area', async () => {

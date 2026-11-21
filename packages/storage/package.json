@@ -11,6 +11,8 @@
     "./mime": "./dist/mime/index.js",
     "./auth": "./dist/auth/index.js",
     "./auth/testing": "./dist/auth/testing.js",
+    "./auth/webauthn": "./dist/auth/webauthn/index.js",
+    "./auth/webauthn/testing": "./dist/auth/webauthn/soft-authenticator.js",
     "./queue-options": "./dist/queue-options.js",
     "./idn": "./dist/idn.js",
     "./file-types": "./dist/file-types.js",
@@ -30,6 +32,7 @@
   "dependencies": {
     "@coremail/core": "workspace:*",
     "@prisma/client": "^5.20.0",
+    "@simplewebauthn/server": "14.1.0",
     "mailparser": "^3.14.3",
     "minio": "^8.0.2",
     "nodemailer": "^10.5.0",

@@ -160,6 +160,8 @@ matrix already limits the route to ORGANIZATION_MANAGEMENT (never scoped) ·
 | `GET /mobile/devices` | filter (device user's domain) |
 | `GET /mobile/devices/:id`, `PATCH /:id/status`, `POST /:id/wipe`, `DELETE /:id` | 404; writes on a device of an admin account → `FORBIDDEN_ROLE` |
 | `GET/PUT /protocol-access/users/:id`, `GET/PUT /webmail-policies/users/:id` | 404 |
+| `GET /mailboxes/:id/passkeys` (10.6, docs/passkeys.md) | 404 (`router.param('id')` of the passkey router); recipients read (HELP_DESK, VIEW_ONLY_ORG included) |
+| `DELETE /mailboxes/:id/passkeys`, `DELETE /:id/passkeys/:pid`, `POST /:id/mfa-reset`, `POST /:id/passkey-recovery`, `PUT /:id/passkey-policy` (10.6) | 404; recipients write; admin accounts → `FORBIDDEN_ROLE` unless ORGANIZATION_MANAGEMENT; the acting session must be MFA-verified (`403 MFA_NOT_VERIFIED`, also without `requireMfaForAdmins`); always audited (`passkey.admin_*`, `mailbox.passkeys.remove-all`, `mailbox.mfa.reset`, `mailbox.passkey-policy.update`) |
 | `/ems/mailboxes…`, `/ems/mailbox-statistics` | org (cmdlet bridge addresses objects organisation-wide) |
 | `GET/PUT /self-registration/settings`, `GET/POST /self-registration/invites`, `DELETE /self-registration/invites/:inviteId` (10.6, docs/self-registration.md) | org (`requireUnscoped`: the switch, the allowed domains and the invite codes are server-wide); writes need recipients write |
 | `GET /self-registration/pending` (10.6) | filter (domain of the registered account); recipients read (HELP_DESK, VIEW_ONLY_ORG see the list) |
@@ -224,6 +226,13 @@ Every route of `/settings` (except the public `GET /settings/public`),
 `GET/PUT /webmail-policies`, `PUT /mcp/settings`, `/setup-state` (10.4.2: the dashboard card
 "Zertifikat einrichten"; area servers — read for the state, which read-only roles always get
 without the card, write for "Später"): **org**.
+
+10.6: `GET/PUT /authentication/passkeys` and `GET/PUT /authentication/passkeys/domains/:id`
+(passkey switch, sign-in without a password, related origins, domain level; docs/passkeys.md):
+area organisation + `requireUnscoped` → **org** (write ORGANIZATION_MANAGEMENT; read
+SERVER_MANAGEMENT, VIEW_ONLY_ORG); every change is audited as `settings.passkey-policy.update`
+(always logged). The per-user level is the mailbox route `PUT /mailboxes/:id/passkey-policy`
+(recipients, above).
 
 10.5: the MFA policy is part of `PUT /settings/security` (`requireMfaForAdmins`,
 `requireMfaForAllUsers`, `mfaEnforcementGraceDays`, `mfaEnforcementBlocksPrimaryPassword`):
@@ -294,6 +303,9 @@ certificate routes keep the admin-MFA rule.
   other domains' addresses in every detail view and export, no search oracle;
   `lib/admin-scope.test.ts` covers `addressRedactor`.
 - `cli/src/commands/role.test.ts`; e2e step `scopes` (docs/e2e.md).
+- `api-gateway/src/routes/admin/passkeys.test.ts` (10.6) — passkey policy (organisation,
+  unscoped), mailbox passkey routes (recipients read / write, MFA-verified acting admin, admin
+  accounts only by ORGANIZATION_MANAGEMENT); `permissions.test.ts` probes their areas.
 
 ## Addresses of other domains (redaction)
 

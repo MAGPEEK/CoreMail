@@ -6,6 +6,7 @@ import { authRouter } from './router/auth.js';
 import { mfaRouter } from './router/mfa.js';
 import { appPasswordRouter } from './router/app-passwords.js';
 import { sessionRouter } from './router/sessions.js';
+import { passkeyPublicRouter, passkeyUserRouter } from './router/passkeys.js';
 
 const log = createLogger('auth-service:http');
 
@@ -27,6 +28,9 @@ export function createApp(): Express {
   app.use('/auth/mfa', mfaRouter);
   app.use('/auth/app-passwords', appPasswordRouter);
   app.use('/auth/sessions', sessionRouter);
+  // 10.6: passkeys — public sign-in / recovery and the user's passkey management
+  app.use('/auth/passkey', passkeyPublicRouter);
+  app.use('/auth/passkeys', passkeyUserRouter);
 
   // v5.6.0: OAuth2/Modern Auth completely removed from the stack.
   // MFA-compatible mail client login via app passwords.

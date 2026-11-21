@@ -19,7 +19,9 @@ import {
 interface FakeUser {
   id: string; email: string; displayName: string; domainId: string; role: string; active: boolean;
   passwordHash: string | null; authSource: string;
-  mfa: { totpEnabled: boolean; webAuthnCredentials: unknown } | null;
+  mfa: { totpEnabled: boolean } | null;
+  // 10.6: WebAuthn credentials (passkeys / security keys) are a relation of the user
+  webauthnCredentials?: Array<{ kind: string }>;
   mailbox: { id: string } | null;
 }
 
@@ -28,9 +30,9 @@ function fixture() {
     { id: 'u-plain', email: 'plain@example.test', displayName: 'Plain', domainId: 'd1', role: 'USER', active: true,
       passwordHash: 'hash:secret', authSource: 'LOCAL', mfa: null, mailbox: { id: 'mb-plain' } },
     { id: 'u-totp', email: 'totp@example.test', displayName: 'Totp', domainId: 'd1', role: 'USER', active: true,
-      passwordHash: 'hash:secret', authSource: 'LOCAL', mfa: { totpEnabled: true, webAuthnCredentials: [] }, mailbox: null },
+      passwordHash: 'hash:secret', authSource: 'LOCAL', mfa: { totpEnabled: true }, mailbox: null },
     { id: 'u-webauthn', email: 'key@example.test', displayName: 'Key', domainId: 'd1', role: 'USER', active: true,
-      passwordHash: 'hash:secret', authSource: 'LOCAL', mfa: { totpEnabled: false, webAuthnCredentials: [{ id: 'c1' }] }, mailbox: null },
+      passwordHash: 'hash:secret', authSource: 'LOCAL', mfa: { totpEnabled: false }, webauthnCredentials: [{ kind: 'security_key' }], mailbox: null },
     { id: 'u-gone', email: 'gone@example.test', displayName: 'Gone', domainId: 'd1', role: 'USER', active: false,
       passwordHash: 'hash:secret', authSource: 'LOCAL', mfa: null, mailbox: null },
     { id: 'u-ldap', email: 'ldap@example.test', displayName: 'Ldap', domainId: 'd1', role: 'USER', active: true,

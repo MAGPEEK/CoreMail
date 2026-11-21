@@ -59,7 +59,7 @@ before(async () => {
 after(() => { server.close(); });
 
 beforeEach(async () => {
-  for (const t of ['user', 'userMfa', 'session', 'serverSettings', 'domain'] as const) db[t].rows = [];
+  for (const t of ['user', 'userMfa', 'session', 'serverSettings', 'domain', 'webAuthnCredential'] as const) db[t].rows = [];
   redis.store.clear();
   auditRows.length = 0;
   sauth.invalidateMfaEnforcementCache();
@@ -132,7 +132,8 @@ test('enrolled accounts are not gated; enrolment (mfa-change) lifts the gate at 
   await enforce();
   const t = await login('alice@example.com');
   assert.equal((await call('GET', '/api/v1/mail/ping', t)).status, 403);
-  await db.userMfa.create({ data: { userId: u['id'], webAuthnCredentials: [{ id: 'k' }] } });
+  // 10.6: a security key / passkey row (the factor helper reads the table)
+  await db.webAuthnCredential.create({ data: { userId: u['id'], credentialId: 'k', kind: 'security_key' } });
   await sauth.publishUserAuthChange(String(u['id']), 'mfa-change');
   assert.equal((await call('GET', '/api/v1/mail/ping', t)).status, 200, 'old session: enrolled is enough for the user rule');
 });

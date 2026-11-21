@@ -22,7 +22,9 @@ const ticketKv = new Map<string, string>();
 };
 
 const state = {
-  mfa: null as null | { totpEnabled: boolean; webAuthnCredentials: unknown },
+  mfa: null as null | { totpEnabled: boolean; backupCodes?: string[] },
+  // 10.6: passkeys / security keys are rows of webAuthnCredential
+  creds: [] as Array<{ kind: string; backupState?: boolean }>,
 };
 
 const fakeDb = installFakePrisma({
@@ -42,6 +44,7 @@ const fakeDb = installFakePrisma({
     }),
   },
   userMfa: { findUnique: () => state.mfa },
+  webAuthnCredential: { findMany: () => state.creds },
 });
 
 const express = (await import('express')).default;
@@ -181,7 +184,7 @@ test('payload UUIDs are stable per user and differ between users', async () => {
 });
 
 test('MFA on → the profile tells the user to use an app password', async () => {
-  state.mfa = { totpEnabled: true, webAuthnCredentials: null };
+  state.mfa = { totpEnabled: true };
   try {
     const root = parsePlist(await (await getProfile()).text()) as Record<string, PV>;
     assert.match(String(root['PayloadDescription']), /enter an app password/);
@@ -212,23 +215,25 @@ test('unknown user → 404', async () => {
   assert.equal((await getProfile('', tok('ghost'))).status, 404);
 });
 
-test('WebAuthn-only MFA (Json array) requires an app password — profile and client-config agree', async () => {
+test('WebAuthn-only MFA (a passkey or security key) requires an app password — profile and client-config agree', async () => {
   const clientConfig = async () => (await (await fetch(`${base}/api/v1/user/client-config`, {
     headers: { authorization: `Bearer ${tok('alice')}` },
   })).json() as { requiresAppPassword: boolean }).requiresAppPassword;
   try {
-    state.mfa = { totpEnabled: false, webAuthnCredentials: [{ id: 'cred-1', publicKey: 'x' }] };
-    const root = parsePlist(await (await getProfile()).text()) as Record<string, PV>;
-    assert.match(String(root['PayloadDescription']), /enter an app password/);
-    assert.equal(await clientConfig(), true);
-    // an empty array, or a legacy string value, is no MFA
-    for (const creds of [[], '[{"id":"x"}]']) {
-      state.mfa = { totpEnabled: false, webAuthnCredentials: creds };
-      assert.doesNotMatch(String((parsePlist(await (await getProfile()).text()) as Record<string, PV>)['PayloadDescription']), /enter an app password/);
-      assert.equal(await clientConfig(), false);
+    for (const kind of ['passkey', 'security_key']) {
+      state.mfa = { totpEnabled: false };
+      state.creds = [{ kind }];
+      const root = parsePlist(await (await getProfile()).text()) as Record<string, PV>;
+      assert.match(String(root['PayloadDescription']), /enter an app password/);
+      assert.equal(await clientConfig(), true);
     }
+    // no credential row is no MFA (10.6: the deprecated JSON column is never read)
+    state.creds = [];
+    assert.doesNotMatch(String((parsePlist(await (await getProfile()).text()) as Record<string, PV>)['PayloadDescription']), /enter an app password/);
+    assert.equal(await clientConfig(), false);
   } finally {
     state.mfa = null;
+    state.creds = [];
   }
 });
 

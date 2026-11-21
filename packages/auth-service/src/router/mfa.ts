@@ -15,7 +15,9 @@ import { Router, type Router as RouterType, type Request, type Response } from '
 import { z } from 'zod';
 import { createLogger } from '@coremail/core';
 import { prisma } from '@coremail/storage';
-import { verifyReauth, reauthErrorBody, getMfaChallenge, mfaEnrolmentOffered, MFA_NOT_OFFERED_CODE } from '@coremail/storage/auth';
+import {
+  verifyReauth, reauthErrorBody, getMfaChallenge, mfaEnrolmentOffered, MFA_NOT_OFFERED_CODE, getAuthFactors,
+} from '@coremail/storage/auth';
 import {
   setupTotp,
   confirmTotp,
@@ -32,9 +34,13 @@ const log = createLogger('auth:mfa-router');
 export const mfaRouter: RouterType = Router();
 
 /** Runs the re-auth check; sends the error response and returns false on failure. */
-async function requireReauth(req: Request, res: Response, userId: string): Promise<boolean> {
-  const body = (req.body ?? {}) as { currentPassword?: unknown; mfaCode?: unknown };
-  const r = await verifyReauth(userId, { currentPassword: body.currentPassword, mfaCode: body.mfaCode });
+export async function requireReauth(req: Request, res: Response, userId: string): Promise<boolean> {
+  const body = (req.body ?? {}) as { currentPassword?: unknown; mfaCode?: unknown; webauthnFlowId?: unknown; webauthnResponse?: unknown };
+  // 10.6: a passkey assertion (webauthnFlowId + webauthnResponse) is accepted as well
+  const r = await verifyReauth(userId, {
+    currentPassword: body.currentPassword, mfaCode: body.mfaCode,
+    webauthnFlowId: body.webauthnFlowId, webauthnResponse: body.webauthnResponse,
+  });
   if (r === 'ok') return true;
   const { status, body: err } = reauthErrorBody(r);
   log.warn({ userId, path: req.path, result: r }, 'MFA change rejected — re-authentication failed');
@@ -69,13 +75,16 @@ function authed(fn: Handler) {
 }
 
 // Status — which MFA methods are active for the current user?
+// 10.6: from the central factor helper; webauthnCount = security keys + passkeys.
 mfaRouter.get('/status', authed(async (_req, res, userId) => {
-  const mfa = await prisma.userMfa.findUnique({ where: { userId } });
+  const f = await getAuthFactors(userId);
   res.json({
-    totpEnabled:      mfa?.totpEnabled ?? false,
-    webauthnCount:    Array.isArray(mfa?.webAuthnCredentials) ? (mfa.webAuthnCredentials as unknown[]).length : 0,
+    totpEnabled:      f.totp,
+    webauthnCount:    f.webauthn,
+    passkeyCount:     f.passkeys,
+    securityKeyCount: f.securityKeys,
     // Used codes are removed from the array — the array length is what is left.
-    backupCodesCount: mfa?.backupCodes?.length ?? 0,
+    backupCodesCount: f.backupCodes,
   });
 }));
 
@@ -115,25 +124,27 @@ mfaRouter.post('/backup-codes/generate', authed(async (req, res, userId) => {
   res.json({ codes });
 }));
 
-// WebAuthn registration
+// WebAuthn registration — DEPRECATED (10.6, removed with the next MAJOR): registers a
+// second-factor-only security key into the WebAuthnCredential table (kind
+// security_key). New clients use /auth/passkeys/registration/*.
 mfaRouter.post('/webauthn/register/start', authed(async (req, res, userId) => {
+  res.set('Deprecation', 'true');
   const parsed = z.object({ email: z.string().email() }).passthrough().safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Email required' }); return; }
   if (!(await requireEnrolmentOffered(res, userId))) return;
   if (!(await requireReauth(req, res, userId))) return;
-  res.json(await startWebAuthnRegistration(userId, parsed.data.email));
+  // The account's own address, never the one in the body (it only names the key in the authenticator UI).
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { email: true, displayName: true } });
+  res.json(await startWebAuthnRegistration(userId, user?.email ?? parsed.data.email, user?.displayName ?? undefined));
 }));
 
 mfaRouter.post('/webauthn/register/finish', authed(async (req, res, userId) => {
-  const parsed = z.object({ response: z.unknown(), name: z.string().min(1).max(100) }).safeParse(req.body);
+  res.set('Deprecation', 'true');
+  const parsed = z.object({ response: z.unknown(), name: z.string().min(1).max(100) }).passthrough().safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: 'Invalid request' }); return; }
-  const ok = await finishWebAuthnRegistration(
-    userId,
-    parsed.data.response as Parameters<typeof finishWebAuthnRegistration>[1],
-    parsed.data.name,
-  );
-  if (!ok) { res.status(400).json({ error: 'WebAuthn registration failed' }); return; }
-  res.json({ ok: true });
+  const r = await finishWebAuthnRegistration(userId, parsed.data.response, parsed.data.name, req.ip);
+  if (!r.ok) { res.status(r.code === 'PASSKEY_DUPLICATE' ? 409 : 400).json({ error: 'WebAuthn registration failed', code: r.code }); return; }
+  res.json({ ok: true, credential: r.credential });
 }));
 
 // WebAuthn authentication start (second factor of a pending login).

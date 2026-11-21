@@ -20,9 +20,9 @@
 import { Router, type Router as RouterType, type Request, type Response, type NextFunction } from 'express';
 import { createHash } from 'node:crypto';
 import {
-  prisma, hasMfa, getProductName, brandDisplayName, effectiveProtocolAccess, DEFAULT_PRODUCT_NAME, type ProtocolAccess,
+  prisma, getProductName, brandDisplayName, effectiveProtocolAccess, DEFAULT_PRODUCT_NAME, type ProtocolAccess,
 } from '@coremail/storage';
-import { protocolDisabledBody } from '@coremail/storage/auth';
+import { getAuthFactors, protocolDisabledBody } from '@coremail/storage/auth';
 import { protocolSubject, requireAuth, requireTicketAuth } from '../middleware/auth.js';
 import { issueEventTicket } from '../lib/event-tickets.js';
 
@@ -284,16 +284,13 @@ appleProfileRouter.get('/', (req: Request, res: Response, next: NextFunction) =>
       },
     }),
     prisma.user.findUnique({ where: { id: userId }, select: { email: true, displayName: true } }),
-    prisma.userMfa.findUnique({
-      where: { userId },
-      select: { totpEnabled: true, webAuthnCredentials: true },
-    }).catch(() => null),
+    // 10.6: central factor helper (TOTP, passkeys, security keys)
+    getAuthFactors(userId).catch(() => null),
   ]);
   if (!user) { res.status(404).json({ error: 'User not found' }); return; }
 
-  // Same rule as GET /user/client-config and the mail-protocol login (hasMfa:
-  // webAuthnCredentials is a Json array, not a string)
-  const requiresAppPassword = hasMfa({ mfa });
+  // Same rule as GET /user/client-config and the mail-protocol login (hasMfa)
+  const requiresAppPassword = mfa?.enrolled === true;
   const hostname = settings?.publicHostname ?? 'mail.local';
   const useHttps = settings ? settings.useHttps : true;
 

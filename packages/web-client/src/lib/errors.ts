@@ -28,6 +28,10 @@ const CODE_MESSAGES: Record<string, string> = {
   REFRESH_INACTIVE:        'Sitzung abgelaufen',
   // 9.4: the Webmail protocol switch is off for the account
   PROTOCOL_DISABLED:       'Webmail ist für dieses Konto deaktiviert. Bitte wenden Sie sich an Ihren Administrator.',
+  // 10.6: passkeys
+  PASSWORD_LOGIN_DISABLED: 'Dieses Konto meldet sich nur mit Passkeys an.',
+  LAST_PASSKEY:            'Der letzte Passkey eines Kontos, das sich nur mit Passkeys anmeldet, kann nicht entfernt werden.',
+  PASSKEYS_DISABLED:       'Passkeys sind für dieses Konto nicht freigeschaltet.',
 };
 
 /**

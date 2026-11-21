@@ -13,7 +13,8 @@ import { randomUUID } from 'node:crypto';
 export type Row = Record<string, unknown>;
 
 function isPlainObject(v: unknown): v is Row {
-  return v !== null && typeof v === 'object' && !(v instanceof Date) && !Array.isArray(v);
+  // 10.6: byte columns (Buffer / Uint8Array — WebAuthn public keys) are values, not operators
+  return v !== null && typeof v === 'object' && !(v instanceof Date) && !Array.isArray(v) && !(v instanceof Uint8Array);
 }
 
 function eq(a: unknown, b: unknown): boolean {
@@ -205,6 +206,9 @@ export interface FakePrisma {
   recoveryEmail: FakeTable;
   mailboxDelegate: FakeTable;
   folderPermission: FakeTable;
+  webAuthnCredential: FakeTable;
+  passkeyRecoveryToken: FakeTable;
+  passkeyPolicy: FakeTable;
   [k: string]: unknown;
 }
 
@@ -275,7 +279,7 @@ export function createFakePrisma(): FakePrisma {
     role: 'USER', domainId: 'dom1', active: true, passwordHash: null, authSource: 'LOCAL', displayName: '',
   }), ['id', 'email']);
   p.userMfa = new FakeTable(() => ({
-    totpSecret: null, totpEnabled: false, totpLastUsedStep: null, webAuthnCredentials: [],
+    totpSecret: null, totpEnabled: false, totpLastUsedStep: null, webAuthnCredentials: [], webAuthnMigratedAt: null,
     backupCodes: [], backupCodesUsed: 0, emailOtpEnabled: false,
   }), ['id', 'userId']);
   p.session = new FakeTable(() => ({
@@ -323,6 +327,15 @@ export function createFakePrisma(): FakePrisma {
   }), ['id', 'userId', 'pendingTokenHash']);
   p.mailboxDelegate = new FakeTable(() => ({ autoMap: true, grantedAt: new Date(), grantedBy: 'admin' }));
   p.folderPermission = new FakeTable(() => ({ applyToSubfolders: false, grantedBy: 'admin', grantedAt: new Date() }));
+  // 10.6: passkeys / security keys, recovery links, passkey switches, audit rows
+  p.webAuthnCredential = new FakeTable(() => ({
+    signCount: 0n, transports: [], userHandle: null, kind: 'passkey', discoverable: null, uvInitialized: false,
+    backupEligible: null, backupState: false, aaguid: null, attestationFmt: 'none', createdAt: new Date(),
+    lastUsedAt: null, lastUsedIp: null,
+  }), ['id', 'credentialId'], { user: () => p.user });
+  p.passkeyRecoveryToken = new FakeTable(() => ({ usedAt: null, createdById: null, createdAt: new Date() }), ['id', 'tokenHash']);
+  p.passkeyPolicy = new FakeTable(() => ({ domainId: null, userId: null, passkeys: 'INHERIT', updatedAt: new Date() }), ['id', 'domainId', 'userId']);
+  p['auditLog'] = new FakeTable(() => ({ success: true, createdAt: new Date() }));
   return p;
 }
 
@@ -334,6 +347,12 @@ export class FakeRedis {
     return e;
   }
   async get(key: string) { return this.live(key)?.v ?? null; }
+  /** 10.6: GETDEL (single-use passkey challenges). */
+  async getdel(key: string) {
+    const v = this.live(key)?.v ?? null;
+    this.store.delete(key);
+    return v;
+  }
   async setex(key: string, s: number, v: string) { this.store.set(key, { v, exp: Date.now() + s * 1000 }); return 'OK'; }
   /** SET key value [EX seconds] (the mail-auth lockout uses the EX form). */
   async set(key: string, v: string, mode?: string, seconds?: number) {

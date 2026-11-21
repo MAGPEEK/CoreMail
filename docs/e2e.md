@@ -98,7 +98,7 @@ node scripts/e2e/run.mjs imap pop3       # single steps (state is kept in state.
 node --test scripts/e2e/repo-hygiene.test.mjs   # static regression checks (no stack needed)
 ```
 
-Steps: `setup users smtp imap pop3 jmap dav dav-tasks contacts eas eas-body eas-commands eas-legacy eas-pim rest webmail admin tls legacy-clients backup branding profile-photo mfa live protocols policies scopes mapi lockout attack restart storage schema-upgrade`.
+Steps: `setup users smtp imap pop3 jmap dav dav-tasks contacts eas eas-body eas-commands eas-legacy eas-pim rest webmail admin tls legacy-clients backup branding profile-photo mfa live protocols policies scopes mapi passkeys lockout attack restart storage schema-upgrade`.
 `attack` (10.6): a fresh account is locked by 11 wrong IMAPS logins (the 11th is refused as locked, the correct
 password too); `GET /api/v1/admin/security/protection/locks` lists the account lock (protocol `imap`, remaining
 time, 10 failures), the attack summary counts IMAP events and an `AUTH_LOCKOUT` event names the account; the
@@ -261,6 +261,22 @@ following empty `Execute` carries a RopNotify NewMail. Switch off → the runnin
 Connect get 403 and Autodiscover drops the mapiHttp block. A's switch is reset to inherit. The
 compose override sets `MAPI_ALLOW_PLAIN_HTTP=true` (the runner uses plain HTTP) and
 `MAPI_HTTPS_TRUSTED=true` (no CA certificate in the stack). See [mapi.md](mapi.md).
+`passkeys` (10.6, API level with the software authenticator `scripts/e2e/soft-authenticator.mjs`;
+the server cannot tell it from a browser, so it runs over the runner's plain HTTP with the
+origin the BCP page reports): passkeys are off by default (login options and registration
+`PASSKEYS_DISABLED`), the admin switches them on; `passkey@<E2E_DOMAIN>` registers one with
+re-authentication (UV=0 refused), `/auth/mfa/status` counts it and IMAP now refuses the primary
+password; the usernameless sign-in (flow cookie `cm_pk`) gives an MFA-verified session with
+`sessions.authMethod = passkey`; UV=0, an unknown credential, a foreign origin and a reused
+challenge are refused; wrong passwords lock the account and the passkey sign-in still works,
+failed passkey attempts lock the runner's IP and then the passkey sign-in answers `429 IP_LOCKED`
+(the locks are cleared); a legacy JSON key written into `user_mfa` by psql is migrated by the
+gateway restart into a `security_key` row — passwordless `PASSKEY_NOT_ELIGIBLE`, as second factor
+after the password accepted without UV; an admin recovery link registers a new passkey and ends
+every session (single use); passkey-only is refused for a legacy-key-only account, refuses the
+correct password with `403 PASSWORD_LOGIN_DISABLED` (wrong one `401`) and is switched off again;
+the admin removes every passkey (sign-in `PASSKEY_UNKNOWN`), the test users are deleted and the
+switch is restored. See [passkeys.md](passkeys.md).
 `setup` reads the one-time setup token from `/secrets/setup-token` in `coremail-e2e` (the
 secrets directory the container writes at its start) and falls back to `docker logs coremail-e2e`; with the
 file in use it also checks that the log names the file and never contains the token. Each run prints

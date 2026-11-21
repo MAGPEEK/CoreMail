@@ -11,6 +11,7 @@ import toast from 'react-hot-toast';
 import { MailboxAliasesSection } from '../components/MailboxAliasesSection.js';
 import { MailboxPhotoSection, type MailboxPhoto } from '../components/MailboxPhotoSection.js';
 import { ProtocolAccessEditor } from '../components/ProtocolAccessEditor.js';
+import { MailboxPasskeysSection } from '../components/MailboxPasskeysSection.js';
 import { WebmailPolicyEditor } from '../components/WebmailPolicyEditor.js';
 import { MfaPolicyField } from '../components/MfaPolicyField.js';
 import { MailFlowEditor } from '../components/MailFlowEditor.js';
@@ -849,6 +850,8 @@ function UserEditPanel({ user, domains, onSave, isPending, onClose }:
     { id: 'protocols', label: t('mbox_tab_protocols'), content: <ProtocolAccessEditor path={`/admin/protocol-access/users/${user.id}`} area="recipients" /> },
     // 9.4: webmail policies (user level)
     { id: 'webmail', label: t('mbox_tab_webmail'), content: <WebmailPolicyEditor path={`/admin/webmail-policies/users/${user.id}`} area="recipients" /> },
+    // 10.6: passkeys (list / remove, recovery link, per-user switch, passkey-only)
+    { id: 'passkeys', label: t('mbox_tab_passkeys'), content: <MailboxPasskeysSection userId={user.id} /> },
   ];
 
   return <EditPanel kind="mailbox" title={user.displayName} subtitle={user.email} tabs={tabs} onClose={onClose} />;

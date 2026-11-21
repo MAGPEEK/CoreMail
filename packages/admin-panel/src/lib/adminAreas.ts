@@ -22,6 +22,8 @@ export const PATH_AREA: Record<string, AdminArea | null> = {
   // per-user exceptions on the page need recipients — scoped admins use the mailbox panel)
   'mfa':              'organisation',
   'password-reset':   'organisation',
+  // 10.6: Authentifizierung → Passkeys (organisation-wide admins; write ORGANIZATION_MANAGEMENT)
+  'passkeys':         'organisation',
   'ldap':             'identity',
   'sso':              'identity',
   'servers':          'servers',

@@ -373,6 +373,28 @@ passwords keep working in every case — the enforcement never breaks an existin
 A mail-protocol login also starts the account's grace period, but such users never see the
 webmail banner: announce the change.
 
+## Passkeys (10.6)
+
+Einstellungen → Sicherheit → **Passkeys** (`components/settings/PasskeysPanel.tsx`, API
+`/auth/passkeys`, details in [passkeys.md](passkeys.md)):
+
+- list of the account's passkeys and security keys — name, synced or device-bound (from the
+  BE / BS flags), provider (known AAGUIDs only), added, last used; pre-10.6 security keys are
+  marked "Sicherheitsschlüssel (nur zweiter Faktor)" and offer "Als Passkey neu registrieren";
+- **add**: re-authentication with the current password or an existing passkey, then the
+  browser's passkey dialog; after the first second factor the panel says that mail programs now
+  need an app password (link to App-Passwörter);
+- **rename**, **remove** (re-authentication; the last passkey of a passkey-only account cannot be
+  removed — `409 LAST_PASSKEY`); a hint suggests a second passkey while there is only one;
+- only when passkeys are allowed for the account (server / domain / user switch); OIDC-only
+  accounts see a hint instead; a configuration without HTTPS / DNS name is reported.
+
+A passkey is a second factor: it satisfies "MFA für alle Benutzer erzwingen" (the panel is also
+on the mandatory enrolment page) and the admin MFA rule. The login page offers "Mit Passkey
+anmelden" and the passkeys in the e-mail autofill when the server allows the sign-in without a
+password. `GET /auth/mfa/status` reports `passkeyCount` and `securityKeyCount` besides
+`webauthnCount` (both).
+
 ## Not covered
 
 - Sorting by sender, subject or size uses the folder index and sorts the folder's rows in the

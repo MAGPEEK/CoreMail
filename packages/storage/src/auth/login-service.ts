@@ -33,6 +33,7 @@ import { consumeBackupCode } from './backup-codes.js';
 import { sharedLoginLockout } from '../mail-auth.js';
 import { loadUserMfaPolicy } from './mfa-policy.js';
 import { checkTrustedDevice, issueTrustedDevice, type DeviceSurface } from './trusted-devices.js';
+import { getAuthFactors } from './factors.js';
 
 const log = createLogger('auth:login');
 
@@ -136,15 +137,15 @@ export async function authenticatePassword(email: string, password: string): Pro
 export interface MfaState {
   enabled: boolean;
   totp: boolean;
+  /** Any WebAuthn credential (passkey or security key) — usable as second factor. */
   webauthn: boolean;
   backupCodes: number;
 }
 
+/** 10.6: from the central factor helper (factors.ts) — passkeys count as a second factor. */
 export async function getMfaState(userId: string): Promise<MfaState> {
-  const mfa = await prisma.userMfa.findUnique({ where: { userId } });
-  const webauthn = Array.isArray(mfa?.webAuthnCredentials) && (mfa!.webAuthnCredentials as unknown[]).length > 0;
-  const totp = mfa?.totpEnabled === true;
-  return { enabled: totp || webauthn, totp, webauthn, backupCodes: mfa?.backupCodes.length ?? 0 };
+  const f = await getAuthFactors(userId);
+  return { enabled: f.enrolled, totp: f.totp, webauthn: f.webauthn > 0, backupCodes: f.backupCodes };
 }
 
 // ── Outcomes ──────────────────────────────────────────────────────────────────
@@ -169,7 +170,9 @@ export type LoginOutcome =
   | { kind: 'mfa_failed'; exhausted: boolean }
   | { kind: 'mfa_ip_blocked' }
   /** 9.4: correct credentials, but Webmail is off for the account (web-access.ts). */
-  | { kind: 'protocol_disabled' };
+  | { kind: 'protocol_disabled' }
+  /** 10.6: correct password of a passkey-only account (User.passwordLoginDisabled). */
+  | { kind: 'password_login_disabled' };
 
 /** HTTP mapping shared by every router that exposes the login service. */
 export function loginOutcomeToHttp(o: LoginOutcome): { status: number; body: Record<string, unknown>; headers?: Record<string, string> } {
@@ -195,6 +198,10 @@ export function loginOutcomeToHttp(o: LoginOutcome): { status: number; body: Rec
       : { status: 401, body: { error: 'MFA verification failed', code: 'MFA_INVALID_CODE' } };
     case 'mfa_ip_blocked': return { status: 429, body: { error: 'Too many failed MFA attempts. Please try again later.' } };
     case 'protocol_disabled': return { status: 403, body: protocolDisabledBody('webmail') };
+    case 'password_login_disabled': return {
+      status: 403,
+      body: { error: 'This account signs in with a passkey only', code: 'PASSWORD_LOGIN_DISABLED' },
+    };
   }
 }
 
@@ -231,6 +238,13 @@ export async function login(email: string, password: string, client: ClientInfo,
     await lockout.fail(normalized, client.ip, hints);
     log.warn({ email: normalized, ip: client.ip }, 'Login failed');
     return { kind: 'invalid' };
+  }
+
+  // 10.6: passkey-only account — refused only now, after the password was verified (no oracle)
+  const flags = await prisma.user.findUnique({ where: { id: user.id }, select: { passwordLoginDisabled: true } });
+  if (flags?.passwordLoginDisabled === true) {
+    log.info({ userId: user.id }, 'Login refused — password sign-in is disabled for this passkey-only account');
+    return { kind: 'password_login_disabled' };
   }
 
   const blocked = await maintenanceBlock(user.role);

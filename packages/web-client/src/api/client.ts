@@ -326,7 +326,8 @@ export async function login(email: string, password: string): Promise<LoginResul
     if (body.code === 'ACCOUNT_LOCKED') {
       throw new Error('Zu viele fehlgeschlagene Anmeldeversuche. Bitte versuchen Sie es später erneut.');
     }
-    if (body.code === 'PROTOCOL_DISABLED') throw apiErrorFromBody(body, res.status); // 9.4: Webmail off
+    // 9.4: Webmail off; 10.6: passkey-only account (told only after a correct password)
+    if (body.code === 'PROTOCOL_DISABLED' || body.code === 'PASSWORD_LOGIN_DISABLED') throw apiErrorFromBody(body, res.status);
     throw new Error(body.error);
   }
   const data = await res.json() as LoginResult | { accessToken: string; refreshToken?: string };

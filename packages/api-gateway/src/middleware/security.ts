@@ -215,6 +215,24 @@ export const authRouteRateLimit = (req: Request, res: Response, next: NextFuncti
   REFRESH_PATHS.has(req.path) ? authRefreshRateLimit(req, res, next) : authRateLimit(req, res, next);
 
 /**
+ * 10.6: public passkey endpoints (/auth/passkey/login/*, /auth/passkey/recovery/*)
+ * — 20 requests per minute per IP. Own bucket: the login page renews its
+ * conditional-mediation options before they expire, which must not eat the
+ * password login budget. Failed assertions also count against the shared
+ * per-IP lockout in the auth-service.
+ */
+const passkeyFlowLimit = rateLimit({
+  windowMs: 60 * 1_000,
+  max: 20,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'Too many passkey sign-in attempts. Please try again in a minute.', code: 'RATE_LIMITED' },
+});
+/** The public status (GET /auth/passkey/status, read by every login page load) is exempt. */
+export const passkeyRateLimit = (req: Request, res: Response, next: NextFunction): unknown =>
+  req.method === 'GET' && req.path === '/status' ? next() : passkeyFlowLimit(req, res, next);
+
+/**
  * SSO flow (v6.1) — start/callback/exchange: 60 per 15 minutes per IP (one
  * login = 3 requests). The public provider list (GET /auth/sso/providers) is
  * exempt so the login page cannot lock users out.

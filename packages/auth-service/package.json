@@ -9,14 +9,12 @@
     "dev": "tsx watch src/server.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/server.js",
-    "test": "node --import tsx --test src/router/mfa.test.ts src/router/app-passwords.test.ts src/router/sessions.test.ts"
+    "test": "node --import tsx --test src/router/mfa.test.ts src/router/app-passwords.test.ts src/router/sessions.test.ts src/router/passkeys.test.ts"
   },
   "dependencies": {
     "@coremail/auth-ldap": "workspace:*",
     "@coremail/core": "workspace:*",
     "@coremail/storage": "workspace:*",
-    "@simplewebauthn/server": "^10.0.0",
-    "@simplewebauthn/types": "^12.0.0",
     "bcrypt": "^5.1.1",
     "express": "^4.22.3",
     "otpauth": "^9.3.6",

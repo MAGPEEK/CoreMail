@@ -30,6 +30,7 @@ import {
   setupRateLimit,
   adminMutationRateLimit,
   ssoRateLimit,
+  passkeyRateLimit,
 } from './middleware/security.js';
 
 import { mailRouter } from './routes/mail.js';
@@ -92,7 +93,9 @@ import { brandedIndexHtml, startBrandingSubscriber } from './lib/branding/state.
 import { createMcpRouter } from './lib/mcp/handler.js';
 import { startMcpSettingsSubscriber } from './lib/mcp/settings.js';
 import { mcpLiveConnections } from './lib/mcp/sessions.js';
-import { hashMcpToken, looksLikeMcpToken } from '@coremail/storage/auth';
+import { hashMcpToken, looksLikeMcpToken, startPasskeyPolicySubscriber } from '@coremail/storage/auth';
+import { migrateLegacyWebAuthnCredentials } from '@coremail/storage/auth/webauthn';
+import { wellKnownWebauthn } from './lib/passkeys-well-known.js';
 import { startAttackProtection, connectGuard } from '@coremail/storage';
 import { createIpBlocklistGuard, upgradeBlocked } from './lib/ip-blocklist-guard.js';
 import { dockerGatewayCandidates, ipVerifiedMark, trustProxyKind, trustProxyWarnings } from './lib/client-ip-trust.js';
@@ -195,6 +198,20 @@ app.get('/.well-known/acme-challenge/:token', async (req, res) => {
   const keyAuth = await getAcmeChallenge(token);
   if (!keyAuth) { res.status(404).send('Not found'); return; }
   res.type('text/plain').send(keyAuth);
+});
+
+// ── 10.6: WebAuthn Related Origin Requests (Level 3 §5.11) ────────────────────
+// Lists the further origins that may use this RP ID (BCP → Authentifizierung →
+// Passkeys). 404 while passkeys are off everywhere or no related origin is set.
+app.get('/.well-known/webauthn', async (_req, res) => {
+  try {
+    const body = await wellKnownWebauthn();
+    if (!body) { res.status(404).json({ error: 'Not found' }); return; }
+    res.set('Cache-Control', 'public, max-age=300').json(body);
+  } catch (err) {
+    log.warn({ err }, '/.well-known/webauthn failed');
+    res.status(503).json({ error: 'Temporarily unavailable' });
+  }
 });
 
 // ── Internal proxies — register BEFORE express.json()! ───────────────────────
@@ -322,6 +339,10 @@ const mfaRateLimit: express.RequestHandler = (req, res, next) =>
 app.use('/auth/mfa',           mfaRateLimit, authServiceProxy);
 app.use('/auth/app-passwords', authServiceProxy);
 app.use('/auth/sessions',      authServiceProxy);
+// 10.6: passkeys — public sign-in / recovery (own per-IP limiter) and the
+// signed-in user's passkey management (changes behind the auth limiter).
+app.use('/auth/passkey',       passkeyRateLimit, authServiceProxy);
+app.use('/auth/passkeys',      mfaRateLimit, authServiceProxy);
 
 // ── Admin MCP interface (10.3, docs/mcp.md) — before express.json(): own body
 // limit. Off (BCP → Infrastruktur → KI-Schnittstelle) → 404 like an unknown path.
@@ -588,6 +609,11 @@ async function start() {
     .catch((err) => log.warn({ err }, 'Mailbox counter migration failed — lazy per-mailbox check still applies'));
   // v5.6.0: initJwtKeys() removed (RS256 keys were for OAuth2 — completely gone)
   getRedisClient();
+  // 10.6: passkey policy changes of other instances; one-time backfill of the
+  // deprecated UserMfa.webAuthnCredentials JSON (idempotent, Redis lock)
+  startPasskeyPolicySubscriber();
+  void migrateLegacyWebAuthnCredentials()
+    .catch((err) => log.error({ err }, 'Legacy security key migration failed — retried at the next start'));
   // v7.1 object storage: startup check (logged; /healthz reports it — the
   // gateway itself stays up so the admin API / migration remain reachable) and
   // the periodic expiry cleaner where no S3 lifecycle rules apply (filesystem

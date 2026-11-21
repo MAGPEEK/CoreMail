@@ -61,13 +61,13 @@ export interface ResetTokenInfo {
 
 const INVALID: ResetTokenInfo = { valid: false, mfaRequired: false, methods: [] };
 
-interface TokenUser { id: string; active: boolean; role: string; authSource: string }
+interface TokenUser { id: string; active: boolean; role: string; authSource: string; passwordLoginDisabled: boolean }
 
 /** A live token row with its user, or null (unknown, used, expired, or the policy forbids it now). */
 async function liveToken(token: string): Promise<{ id: string; user: TokenUser } | null> {
   const row = await prisma.passwordResetToken.findUnique({
     where: { tokenHash: hashResetToken(token) },
-    include: { user: { select: { id: true, active: true, role: true, authSource: true } } },
+    include: { user: { select: { id: true, active: true, role: true, authSource: true, passwordLoginDisabled: true } } },
   });
   if (!row || row.usedAt !== null || row.expiresAt.getTime() <= Date.now() || !row.user) return null;
   return { id: row.id, user: row.user as TokenUser };
@@ -78,7 +78,8 @@ async function policyAllows(user: TokenUser): Promise<boolean> {
   const policy = await loadSsprPolicy();
   if (!ssprAvailable(policy)) return false;
   if (user.authSource !== 'LOCAL') return false;
-  // TODO(passkeys): also refuse User.passwordLoginDisabled once the column exists.
+  // 10.6 passkeys: a passkey-only account gets no password reset by mail (admin recovery link instead)
+  if (user.passwordLoginDisabled === true) return false;
   return ssprRoleAllowed(user.role, policy);
 }
 

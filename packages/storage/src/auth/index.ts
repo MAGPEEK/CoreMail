@@ -25,3 +25,11 @@ export * from './mfa-enforcement.js';
 export * from './mfa-policy.js';
 export * from './trusted-devices.js';
 export * from './mcp-tokens.js';
+// 10.6: passkeys — factor helper, policy, management, recovery links, audit.
+// The WebAuthn ceremonies are the separate subpath @coremail/storage/auth/webauthn.
+export * from './factors.js';
+export * from './passkey-policy.js';
+export * from './passkeys.js';
+export * from './passkey-providers.js';
+export * from './auth-audit.js';
+export { takeOnce } from './redis.js';

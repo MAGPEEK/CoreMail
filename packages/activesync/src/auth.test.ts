@@ -15,7 +15,7 @@ const users = [
   { id: 'u1', email: 'bob@example.com', active: true, displayName: 'Bob', domainId: 'd1', role: 'USER',
     passwordHash: 'hash:pw', authSource: 'LOCAL', mfa: null, mailbox: null },
   { id: 'u2', email: 'mfa@example.com', active: true, displayName: 'Mfa', domainId: 'd1', role: 'USER',
-    passwordHash: 'hash:pw', authSource: 'LOCAL', mfa: { totpEnabled: false, webAuthnCredentials: [{ id: 'k' }] }, mailbox: null },
+    passwordHash: 'hash:pw', authSource: 'LOCAL', mfa: { totpEnabled: false }, webauthnCredentials: [{ kind: 'security_key' }], mailbox: null }, // 10.6: a security key row
 ];
 (globalThis as Record<string, unknown>)['__prisma'] = {
   $on: () => undefined,
