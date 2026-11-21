@@ -8,7 +8,11 @@
  * download needs the admin session, so the commit happens when leaving the
  * admin step. Steps before the commit can not be revisited once setup is
  * complete; reaching "done" closes the download (POST /setup/finish), so there
- * is no way back from it either. DNS and the certificate are set up in the BCP.
+ * is no way back from it either. DNS is set up in the BCP.
+ *
+ * 10.6: for a public host name a certificate step follows the secrets step
+ * (Let's Encrypt, lib/setupCertificate.ts); local / private host names skip it
+ * and keep the self-signed certificate (the BCP dashboard card stays).
  *
  * 10.5 (local domain first): the domain step starts with the local domain
  * example.local (host name mail.example.local, following the domain while the
@@ -17,8 +21,9 @@
  * typed in; private suffixes (lib/localHostname.ts) pass the same checks.
  */
 import { isLocalHostname } from './localHostname.ts';
+import { certificateBlockReason, type CertBlockReason } from './setupCertificate.ts';
 
-export type WizardStepId = 'welcome' | 'domain' | 'admin' | 'secrets' | 'done';
+export type WizardStepId = 'welcome' | 'domain' | 'admin' | 'secrets' | 'certificate' | 'done';
 
 /** What GET /api/v1/setup/status answers (fields of newer servers optional). */
 export interface SetupStatus {
@@ -35,10 +40,27 @@ export interface SetupStatus {
 export interface WizardOptions {
   /** Show the "Secrets sichern" step (status.secretsGenerated). */
   secretsGenerated: boolean;
+  /** 10.6: show the "Zertifikat" step (a public host name — showCertificateStep). */
+  certificate?: boolean;
 }
 
 export function wizardSteps(opts: WizardOptions): WizardStepId[] {
-  return ['welcome', 'domain', 'admin', ...(opts.secretsGenerated ? ['secrets' as const] : []), 'done'];
+  return [
+    'welcome', 'domain', 'admin',
+    ...(opts.secretsGenerated ? ['secrets' as const] : []),
+    ...(opts.certificate ? ['certificate' as const] : []),
+    'done',
+  ];
+}
+
+/**
+ * 10.6: the certificate step shows only for a public host name — a local /
+ * private name or an IP address (lib/localHostname.ts, e.g. mail.example.local)
+ * keeps the self-signed certificate.
+ */
+export function showCertificateStep(hostname: string | null | undefined): boolean {
+  const h = normalizeHost(hostname ?? '');
+  return isValidHostname(h) && !isLocalHostname(h);
 }
 
 /** Steps that run before POST /setup/complete. */
@@ -183,6 +205,10 @@ export interface WizardForm {
   password: string;
   confirm: string;
   secretsConfirmed: boolean;
+  /** 10.6: contact e-mail of the Let's Encrypt account (default: the admin address). */
+  acmeEmail: string;
+  /** 10.6: the Let's Encrypt terms of service were accepted. */
+  acmeTermsAccepted: boolean;
 }
 
 /** 10.5: the form a new wizard starts with — example.local / mail.example.local, organisation empty, admin@<domain>. */
@@ -190,16 +216,20 @@ export const INITIAL_FORM: WizardForm = {
   tokenRequired: true, token: '', verifiedToken: null,
   domain: SUGGESTED_DOMAIN, hostname: defaultHostname(SUGGESTED_DOMAIN), organizationName: '',
   adminName: '', localPart: 'admin', password: '', confirm: '', secretsConfirmed: false,
+  acmeEmail: '', acmeTermsAccepted: false,
 };
 
 export type BlockReason =
-  | 'token' | 'domain' | 'hostname' | 'organization' | 'localPart' | 'passwordLength' | 'passwordMismatch' | 'secrets';
+  | 'token' | 'domain' | 'hostname' | 'organization' | 'localPart' | 'passwordLength' | 'passwordMismatch' | 'secrets'
+  | CertBlockReason;
 
 /**
  * Why "Weiter" is not allowed on a step (null = allowed). The welcome step is
  * passed by verifying the token, which the page does on "Weiter" — here it only
  * needs a non-empty token. The secrets step needs the checkbox (a download is
  * not required: some admins copy the file on the server themselves).
+ * 10.6: on the certificate step it gates "Zertifikat anfordern" (valid contact
+ * e-mail, terms of service accepted); "Später" never needs it.
  */
 export function blockReason(step: WizardStepId, f: WizardForm): BlockReason | null {
   switch (step) {
@@ -217,6 +247,8 @@ export function blockReason(step: WizardStepId, f: WizardForm): BlockReason | nu
       return null;
     case 'secrets':
       return f.secretsConfirmed ? null : 'secrets';
+    case 'certificate':
+      return certificateBlockReason(f);
     default:
       return null;
   }
@@ -246,7 +278,7 @@ export function completeBody(f: WizardForm): Record<string, string> {
 export const RESUME_KEY = 'coremail:setup-wizard';
 
 export interface ResumeState {
-  step: 'secrets' | 'done';
+  step: 'secrets' | 'certificate' | 'done';
   domain: string;
   hostname: string;
   email: string;
@@ -254,25 +286,30 @@ export interface ResumeState {
   withSecrets?: boolean;
   /** The secrets checkbox was ticked (kept across a reload of the secrets step). */
   secretsConfirmed?: boolean;
+  /** 10.6: the certificate step was part of this run. */
+  withCertificate?: boolean;
 }
 
 /**
  * Parses the sessionStorage marker; null when absent or malformed. Holds no
  * secrets. A marker of 10.4.0/10.4.1 (steps "dns" / "certificate") resumes at
- * the summary — those steps no longer exist.
+ * the summary — those steps no longer exist. 10.6: a "certificate" marker with
+ * `withCertificate` is the new certificate step and resumes there.
  */
 export function parseResume(raw: string | null | undefined): ResumeState | null {
   if (!raw) return null;
   try {
     const v = JSON.parse(raw) as Record<string, unknown>;
-    const legacy = v['step'] === 'dns' || v['step'] === 'certificate';
+    const withCertificate = v['withCertificate'] === true;
+    const legacy = v['step'] === 'dns' || (v['step'] === 'certificate' && !withCertificate);
     const step = legacy ? 'done' : v['step'];
-    if (step !== 'secrets' && step !== 'done') return null;
+    if (step !== 'secrets' && step !== 'certificate' && step !== 'done') return null;
     const str = (k: string) => (typeof v[k] === 'string' ? v[k] as string : '');
     return {
       step, domain: str('domain'), hostname: str('hostname'), email: str('email'),
       ...(v['withSecrets'] === true ? { withSecrets: true } : {}),
       ...(v['secretsConfirmed'] === true ? { secretsConfirmed: true } : {}),
+      ...(withCertificate ? { withCertificate: true } : {}),
     };
   } catch {
     return null;

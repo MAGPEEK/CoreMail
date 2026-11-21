@@ -76,9 +76,35 @@ When a Let's Encrypt certificate whose domains include the public host name is i
 mail protocols still use the self-signed default, it is assigned to SMTP/IMAP/POP3
 automatically — and activated for the HTTPS proxy when no trusted HTTPS certificate is active.
 
+## Setup wizard (10.5 → 10.6)
+
+10.6: for a **public** host name the setup wizard's step "Zertifikat" orders the Let's Encrypt
+certificate itself — the same flow as the dashboard card below (host name + `autodiscover.` /
+`autoconfig.` only when their DNS points here, pre-flight incl. the staging test, order with
+SMTP/IMAP/POP3, then HTTPS), plus the **ACME contact e-mail** (prefilled with
+`ServerSettings.adminEmail`, else the admin address; stored as `Certificate.acmeEmail`, the
+account contact for the registration and every renewal) and the required acceptance of the CA's
+terms of service (link from the ACME directory's `meta.termsOfService`). Because fresh
+installations require admin MFA, the wizard does not use `/api/v1/admin/certificates/*` (which
+answers `MFA_REQUIRED` to its session) but the setup-window routes
+`/api/v1/setup/certificate/{status,preflight,issue}` — admin session from the wizard, only until the
+wizard is finished and at most 24 h, rate limited, audited as `setup.certificate.*`. Both call the
+shared functions in `packages/api-gateway/src/lib/acme-order.ts` (also used by the admin routes
+`/acme-suggestions`, `/preflight`, `/letsencrypt`, `/:id/activate-https`). Details:
+[setup-wizard.md](setup-wizard.md#certificate-step-106).
+
+"Später" in the wizard, a failed order or a local host name leave the dashboard card in place.
+
+**Testing without the real CA**: the repository has no local ACME server (no pebble); the tests use
+the seams `globalThis.__acmeClientFactory` (fake CA, `src/test-support/fake-acme.ts`),
+`__acmeChallengeServing`, `__acmeResolver` and in-memory Redis/Prisma. An issuance from the real
+Let's Encrypt (production or staging) needs a public host name whose A record points at the server
+and port 80 forwarded to it — not verifiable on a development machine.
+
 ## Dashboard card „Zertifikat einrichten“
 
-10.4.2 (replaces the setup wizard's certificate step and its "later" hint). The BCP dashboard
+10.4.2 (replaced the 10.4 wizard's certificate step and its "later" hint; 10.6 brings a
+certificate step back to the wizard for public host names, see above). The BCP dashboard
 shows the card while **no trusted certificate covers the public host name** — "trusted" is the
 certificate the integrated HTTPS server serves for that name (`servedProxyCert`, SNI exact →
 wildcard → default) and `isTrustedHttpsCert` (CA-issued, not staging, currently valid, covers

@@ -233,7 +233,10 @@ Outside `/api/v1/admin`: the setup wizard's `GET /api/v1/setup/secrets-download`
 ORGANIZATION_MANAGEMENT only and never for a scoped admin: **org**. 10.5: this is
 `requireRole()` without the admin-MFA rule — fresh installations start with
 `requireMfaForAdmins` on and the wizard's session has no second factor yet; both routes only
-work inside the setup window.
+work inside the setup window. 10.6: the same decision (**org**, `requireRoleInSetupWindow()`,
+setup window only) for the wizard's certificate step `GET /api/v1/setup/certificate/status`,
+`POST /api/v1/setup/certificate/preflight` and `POST /api/v1/setup/certificate/issue`; the admin
+certificate routes keep the admin-MFA rule.
 
 | Route | Decision |
 |---|---|

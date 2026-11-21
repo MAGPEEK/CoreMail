@@ -72,7 +72,8 @@ async function isAuditEnabled(): Promise<boolean> {
 // (machine-driven admin access must always stay traceable).
 // 10.4.2: 'setup.secrets.' (setup wizard secrets download) and 'server.restart' (container restart from the BCP).
 // 10.5: attack protection — unlocks, block list / exception changes, its settings, automatic blocks.
-export const ALWAYS_AUDIT = /^(settings\.|audit\.|audit-log\.|user\.role|mailbox(es)?\.delete|domains?\.delete|mcp\.|setup\.secrets\.|server\.restart|security\.(lock|ip|ip-rule|protection)\.)/i;
+// 10.6: 'setup.certificate.' (setup wizard Let's Encrypt pre-flight / order / HTTPS assignment).
+export const ALWAYS_AUDIT = /^(settings\.|audit\.|audit-log\.|user\.role|mailbox(es)?\.delete|domains?\.delete|mcp\.|setup\.(secrets|certificate)\.|server\.restart|security\.(lock|ip|ip-rule|protection)\.)/i;
 
 /**
  * Write an audit log entry asynchronously (fire-and-forget).

@@ -7,10 +7,13 @@
  *     the BCP — enrolled in the webmail after the wizard, Settings → Security)
  *   ⟨POST /setup/complete, then sign-in with the new admin (normal /auth/login)⟩
  *   → [back up secrets — download, only when the installation generated them]
+ *   → [certificate — Let's Encrypt, only for a public host name (10.6)]
  *   → done (summary + links; POST /setup/finish closes the secrets download)
  *
- * 10.4.2: no DNS and no certificate step any more — both are set up in the BCP
- * (Domains, Zertifikate). Step logic lives in lib/setupWizard.ts. After the
+ * 10.4.2: no DNS step — DNS is set up in the BCP (Domains). 10.6: a public
+ * host name gets the certificate step (components/setup/CertificateStep.tsx,
+ * lib/setupCertificate.ts); a local one keeps the self-signed certificate and
+ * the BCP dashboard card. Step logic lives in lib/setupWizard.ts. After the
  * commit the steps before it are closed; a reload resumes at the post-commit
  * step from a per-tab marker (sessionStorage, no secrets) as long as the admin
  * session is valid.
@@ -27,10 +30,15 @@ import { AuthShell } from '../components/AuthShell.js';
 import {
   wizardSteps, commitStep, nextStep, previousStep, isPreCommit, blockReason, tokenNeedsCheck, completeBody,
   defaultHostname, normalizeHost, showTokenFileHint, secretsFilePath, insecureConnection, downloadFilename,
-  SECRETS_DOWNLOAD_PATH, loadResume, saveResume, clearResume, INITIAL_FORM, isLocalDomain,
+  SECRETS_DOWNLOAD_PATH, loadResume, saveResume, clearResume, INITIAL_FORM, isLocalDomain, showCertificateStep,
   type BlockReason, type SetupStatus, type WizardForm, type WizardStepId,
 } from '../lib/setupWizard.js';
+import {
+  CERT_STATUS_PATH, resumeState, runSetupCertificate, waitForCertificate,
+  type CertPhase, type CertResult, type CertificateStepInfo, type PreflightReport,
+} from '../lib/setupCertificate.js';
 import { Alert, Field, INPUT_CLASS, PasswordMeter, STEP_LABEL, WizardProgress } from '../components/setup/WizardParts.js';
+import { CertificateStep, isCertRunning } from '../components/setup/CertificateStep.js';
 
 const REASON_TEXT: Record<BlockReason, TranslationKey> = {
   token: 'wiz_err_token',
@@ -41,12 +49,15 @@ const REASON_TEXT: Record<BlockReason, TranslationKey> = {
   passwordLength: 'wiz_err_password_length',
   passwordMismatch: 'wiz_err_password_mismatch',
   secrets: 'wiz_err_secrets',
+  acmeEmail: 'wiz_err_acme_email',
+  acmeTerms: 'wiz_err_acme_terms',
 };
 
 /** Which field an error belongs to (aria-invalid + focus). */
 const REASON_FIELD: Record<BlockReason, string> = {
   token: 'wiz-token', domain: 'wiz-domain', hostname: 'wiz-hostname', organization: 'wiz-org',
   localPart: 'wiz-local', passwordLength: 'wiz-password', passwordMismatch: 'wiz-confirm', secrets: 'wiz-secrets-ok',
+  acmeEmail: 'wiz-acme-email', acmeTerms: 'wiz-acme-terms',
 };
 
 const BUTTON_PRIMARY =
@@ -261,12 +272,13 @@ function withLinks(text: string, links: Record<string, ReactNode>): ReactNode[] 
   });
 }
 
-function DoneStep({ summary }: { summary: Summary }) {
+function DoneStep({ summary, certificateIssued }: { summary: Summary; certificateIssued: boolean }) {
   const t = useT();
   const rows: Array<[string, string]> = [
     [t('wiz_summary_domain'), summary.domain],
     [t('wiz_summary_hostname'), summary.hostname],
     [t('wiz_summary_admin'), summary.email],
+    ...(certificateIssued ? [[t('wiz_summary_certificate'), t('wiz_summary_certificate_le')] as [string, string]] : []),
   ];
   const linkCls = 'flex items-center gap-2 rounded-lg border border-line px-3 py-2.5 text-sm text-fg hover:bg-surface-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-fg';
   const inlineLink = 'underline underline-offset-2 text-accent-fg hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-fg rounded';
@@ -342,11 +354,20 @@ export function SetupPage() {
   const [alreadyDone, setAlreadyDone] = useState(false);
   const [download, setDownload] = useState<DownloadState>({ kind: 'idle' });
   const [summary, setSummary] = useState<Summary>({ domain: '', hostname: '', email: '', sessionMissing: false });
+  // 10.6: certificate step (public host names only)
+  const [certStep, setCertStep] = useState(false);
+  const [certInfo, setCertInfo] = useState<CertificateStepInfo | null>(null);
+  const [certPhase, setCertPhase] = useState<CertPhase>('idle');
+  const [certReport, setCertReport] = useState<PreflightReport | null>(null);
+  const [certResult, setCertResult] = useState<CertResult | null>(null);
+  const certRun = useRef(0);
   const headingRef = useRef<HTMLHeadingElement | null>(null);
   const firstRender = useRef(true);
   const finishSent = useRef(false);
 
-  const steps = wizardSteps({ secretsGenerated: withSecrets });
+  // Before the commit the typed host name decides; after it the stored decision (needs the admin session).
+  const withCertificate = committed ? certStep : showCertificateStep(form.hostname);
+  const steps = wizardSteps({ secretsGenerated: withSecrets, certificate: withCertificate });
 
   // ── Start: status, or resume after a reload ─────────────────────────────────
   useEffect(() => {
@@ -365,10 +386,14 @@ export function SetupPage() {
           if (useAuthStore.getState().accessToken) {
             setStatus(s);
             setWithSecrets(resume.withSecrets === true);
+            setCertStep(resume.withCertificate === true);
             setCommitted(true);
             setSummary((p) => ({ ...p, domain: resume.domain, hostname: resume.hostname, email: resume.email }));
             if (resume.secretsConfirmed) setForm((f) => ({ ...f, secretsConfirmed: true }));
-            setStep(resume.step === 'secrets' && resume.withSecrets !== true ? 'done' : resume.step);
+            setStep(
+              (resume.step === 'secrets' && resume.withSecrets !== true) || (resume.step === 'certificate' && resume.withCertificate !== true)
+                ? 'done' : resume.step,
+            );
             setReady(true);
             return;
           }
@@ -397,11 +422,59 @@ export function SetupPage() {
   useEffect(() => {
     if (!committed || isPreCommit(step)) return;
     saveResume({
-      step: step as 'secrets' | 'done',
+      step: step as 'secrets' | 'certificate' | 'done',
       domain: summary.domain, hostname: summary.hostname, email: summary.email, withSecrets,
       ...(form.secretsConfirmed ? { secretsConfirmed: true } : {}),
+      ...(certStep ? { withCertificate: true } : {}),
     });
-  }, [committed, step, summary, withSecrets, form.secretsConfirmed]);
+  }, [committed, step, summary, withSecrets, form.secretsConfirmed, certStep]);
+
+  // 10.6: entering the certificate step loads the names, the contact default
+  // and the order a reload left running; a host name the server does not see
+  // as public skips the step.
+  useEffect(() => {
+    if (step !== 'certificate' || certInfo) return;
+    let cancelled = false;
+    void (async () => {
+      let info: CertificateStepInfo;
+      try {
+        info = await api.get<CertificateStepInfo>(CERT_STATUS_PATH);
+      } catch (err) {
+        if (cancelled) return;
+        const status = (err as { status?: number }).status;
+        setCertInfo({ eligible: true, hostname: summary.hostname, domains: [], sans: [], contactEmail: null, termsOfServiceUrl: '', certificate: null });
+        setCertPhase('failed');
+        setCertResult({ kind: 'error', reason: status === 404 ? 'window-closed' : status === 429 ? 'rate-limited' : 'failed', message: null });
+        return;
+      }
+      if (cancelled) return;
+      if (!info.eligible) { setCertStep(false); setStep('done'); return; }
+      setCertInfo(info);
+      setForm((f) => (f.acmeEmail ? f : { ...f, acmeEmail: info.contactEmail ?? summary.email }));
+      const state = resumeState(info.certificate);
+      if (state === 'done') { setCertPhase('done'); return; }
+      if (state === 'failed' && info.certificate) {
+        setCertPhase('failed');
+        setCertResult({ kind: 'issuance-failed', code: info.certificate.lastErrorCode, message: info.certificate.lastError, certificateId: info.certificate.id });
+        return;
+      }
+      if (state === 'running') {
+        const run = ++certRun.current;
+        const r = await waitForCertificate(api, {
+          email: info.contactEmail ?? summary.email,
+          onPhase: (p) => { if (certRun.current === run) setCertPhase(p); },
+          alive: () => certRun.current === run,
+        });
+        if (certRun.current === run) setCertResult(r);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [step, certInfo, summary.hostname, summary.email]);
+
+  // Leaving the certificate step stops polling (the order itself keeps running on the server).
+  useEffect(() => {
+    if (step !== 'certificate') certRun.current++;
+  }, [step]);
 
   // Reaching the summary closes the secrets download on the server (once).
   useEffect(() => {
@@ -503,12 +576,36 @@ export function SetupPage() {
     } catch { /* setup is done; the summary points to the sign-in page */ }
     // the password and the token are not kept after the commit
     setForm((f) => ({ ...f, password: '', confirm: '', token: '', verifiedToken: null }));
+    // 10.6: the certificate step needs the admin session (setup-window routes).
+    const hostname = data.hostname ?? body['hostname'] ?? '';
+    const certOn = signedIn && showCertificateStep(hostname);
+    setCertStep(certOn);
     setCommitted(true);
     setSummary({
-      domain: data.domain ?? body['domain'] ?? '', hostname: data.hostname ?? body['hostname'] ?? '', email,
+      domain: data.domain ?? body['domain'] ?? '', hostname, email,
       sessionMissing: !signedIn,
     });
-    go(nextStep(steps, step));
+    go(nextStep(wizardSteps({ secretsGenerated: withSecrets, certificate: certOn }), step));
+  };
+
+  // ── Certificate (10.6) ──────────────────────────────────────────────────────
+  const requestCertificate = async () => {
+    const run = ++certRun.current;
+    const alive = () => certRun.current === run;
+    setCertResult(null);
+    setCertReport(null);
+    const r = await runSetupCertificate(api, {
+      email: form.acmeEmail,
+      onPhase: (p) => { if (alive()) setCertPhase(p); },
+      onReport: (rep) => { if (alive()) setCertReport(rep); },
+      alive,
+    });
+    if (alive()) setCertResult(r);
+  };
+
+  const certLater = () => {
+    certRun.current++;
+    go(nextStep(steps, 'certificate'));
   };
 
   const onSubmit = async (e: FormEvent) => {
@@ -519,6 +616,11 @@ export function SetupPage() {
       setError(t(REASON_TEXT[reason]));
       setInvalidField(REASON_FIELD[reason]);
       document.getElementById(REASON_FIELD[reason])?.focus();
+      return;
+    }
+    if (step === 'certificate') {
+      if (certPhase === 'done') go(nextStep(steps, step));
+      else if (!isCertRunning(certPhase) && certInfo) void requestCertificate();
       return;
     }
     setBusy(true);
@@ -542,6 +644,7 @@ export function SetupPage() {
   }
 
   const back = previousStep(steps, step, committed);
+  const certRunning = isCertRunning(certPhase);
   const isCommitStep = !committed && step === commitStep(steps);
   const title = step === 'welcome' ? fmt(t('wiz_welcome_title'), { name: productName }) : t(STEP_LABEL[step]);
   const hasFormFooter = step !== 'done';
@@ -584,20 +687,38 @@ export function SetupPage() {
               invalid={invalidField === 'wiz-secrets-ok'} onDownload={() => void downloadSecrets()} onChange={patch}
             />
           )}
-          {step === 'done' && <DoneStep summary={summary} />}
+          {step === 'certificate' && (
+            <CertificateStep
+              info={certInfo} loading={!certInfo} form={form} invalidField={invalidField}
+              phase={certPhase} report={certReport} result={certResult} onChange={patch}
+            />
+          )}
+          {step === 'done' && <DoneStep summary={summary} certificateIssued={certStep && certPhase === 'done'} />}
 
           {isCommitStep && <p className="text-xs text-fg-subtle mt-4">{t('wiz_commit_hint')}</p>}
 
           {(hasFormFooter || back) && (
             <div className="mt-6 flex flex-wrap items-center justify-between gap-2">
-              <div>
+              <div className="flex flex-wrap gap-2">
                 {back && (
-                  <button type="button" onClick={() => go(back)} disabled={busy} className={BUTTON_SECONDARY}>
+                  <button type="button" onClick={() => go(back)} disabled={busy || certRunning} className={BUTTON_SECONDARY}>
                     {t('wiz_back')}
                   </button>
                 )}
+                {step === 'certificate' && certPhase !== 'done' && (
+                  <button type="button" onClick={certLater} disabled={certPhase === 'ordering'} className={BUTTON_SECONDARY}>
+                    {t('wiz_cert_later')}
+                  </button>
+                )}
               </div>
-              {hasFormFooter && (
+              {hasFormFooter && step === 'certificate' ? (
+                <button type="submit" disabled={certRunning || !certInfo} className={`${BUTTON_PRIMARY} inline-flex items-center gap-2`}>
+                  {certRunning && <Loader2 size={16} className="animate-spin" aria-hidden="true" />}
+                  {certPhase === 'done' ? t('wiz_next')
+                    : certRunning ? t('wiz_cert_requesting')
+                      : certPhase === 'failed' ? t('wiz_cert_retry') : t('wiz_cert_request')}
+                </button>
+              ) : hasFormFooter && (
                 <button type="submit" disabled={busy || alreadyDone} className={BUTTON_PRIMARY}>
                   {busy
                     ? (step === 'welcome' ? t('wiz_token_checking') : isCommitStep ? t('wiz_committing') : t('wiz_next'))

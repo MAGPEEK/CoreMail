@@ -173,6 +173,18 @@ export async function clearBackoff(r: RenewRedis, certId: string): Promise<void>
 
 // ── Start one renewal ─────────────────────────────────────────────────────────
 
+/** Runs started by this process: resolves true when the issuance succeeded, false when it failed. */
+const settledRuns = new Map<string, Promise<boolean>>();
+
+/**
+ * 10.6: the outcome of the ACME run this process started for `certId`, or null
+ * when none is running here (setup wizard: serve the new certificate on HTTPS
+ * once it is issued — routes/setup-followup.ts).
+ */
+export function renewalSettled(certId: string): Promise<boolean> | null {
+  return settledRuns.get(certId) ?? null;
+}
+
 export type StartRenewalResult =
   | { started: true }
   | {
@@ -252,17 +264,21 @@ export async function startRenewal(certId: string, trigger: 'manual' | 'schedule
 
   log.info({ certId, trigger, domains: cert.domains, staging: cert.acmeStaging },
     trigger === 'issue' ? 'Certificate issuance started' : 'Certificate renewal started');
-  void runAcmeIssuance(certId, cert.domains, acmeEmail, cert.autoRenew, cert.acmeStaging, {
+  const run = runAcmeIssuance(certId, cert.domains, acmeEmail, cert.autoRenew, cert.acmeStaging, {
     onSettled: release,
   })
     .then(async () => {
       await clearBackoff(r, certId).catch(() => {});
       log.info({ certId, trigger }, 'Certificate renewed');
+      return true;
     })
     .catch(async (err: unknown) => {
       const b = await recordRenewFailure(r, certId).catch(() => null);
       log.error({ err, certId, trigger, failures: b?.failures }, 'Certificate renewal failed — backing off');
+      return false;
     });
+  settledRuns.set(certId, run);
+  void run.then(() => { if (settledRuns.get(certId) === run) settledRuns.delete(certId); });
 
   return { started: true };
 }
