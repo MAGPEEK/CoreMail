@@ -285,7 +285,8 @@ test('form token: too fast, forged and missing are refused', async () => {
   const fast = await call('POST', '/auth/register', form({ formToken: lib.issueFormToken(Date.now() + 60_000) }));
   assert.equal(fast.body['code'], 'INVALID_FORM');
   assert.ok(securityEvents.some((e) => e.detail['reason'] === 'form-too-fast'));
-  const forged = oldToken().replace(/.$/, (c) => (c === 'A' ? 'B' : 'A'));
+  const old = oldToken(); const cut = old.lastIndexOf('.') + 1;
+  const forged = old.slice(0, cut) + (old[cut] === 'A' ? 'B' : 'A') + old.slice(cut + 1); // first signature char: never only padding bits
   assert.equal((await call('POST', '/auth/register', form({ formToken: forged }))).body['code'], 'INVALID_FORM');
   const expired = lib.issueFormToken(Date.now() - lib.FORM_TOKEN_TTL_MS - 1000);
   assert.equal((await call('POST', '/auth/register', form({ formToken: expired }))).body['code'], 'INVALID_FORM');
