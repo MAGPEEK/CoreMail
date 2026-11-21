@@ -31,6 +31,8 @@ export const PATH_AREA: Record<string, AdminArea | null> = {
   'smtp-config':      'servers',
   'mailboxes':        'recipients',
   'shared-mailboxes': 'recipients',
+  // 10.6: Authentifizierung → Selbstregistrierung (approvals are recipient management, scoped per domain)
+  'authentication':   'recipients',
   'domains':          'domains',
   'protection':       'hygiene',
   'attack-protection': 'hygiene', // 10.5: organisation-wide only (UNSCOPED_ONLY_PATHS)

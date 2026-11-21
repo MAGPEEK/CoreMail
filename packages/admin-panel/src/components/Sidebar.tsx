@@ -5,7 +5,7 @@ import {
   ShieldAlert, ShieldBan, Search,
   ShieldHalf, Archive,
   ClipboardList, Activity, Info, Terminal,
-  Fingerprint, ServerCog, HardDriveDownload, Palette, Bot,
+  Fingerprint, ServerCog, HardDriveDownload, Palette, Bot, UserPlus,
 } from 'lucide-react';
 import { useT } from '../i18n/useT.js';
 import { usePermissions } from '../hooks/usePermissions.js';
@@ -36,6 +36,13 @@ export function Sidebar() {
         { path: '/mailboxes',        labelKey: 'nav_mailboxes',        icon: Mail },
         { path: '/shared-mailboxes', labelKey: 'nav_shared_mailboxes', icon: Inbox },
         { path: '/domains',          labelKey: 'nav_domains',          icon: Globe },
+      ],
+    },
+    {
+      // 10.6: Authentifizierung (self-registration; further auth pages join this group)
+      groupKey: 'nav_group_authentication',
+      items: [
+        { path: '/authentication/self-registration', labelKey: 'nav_self_registration', icon: UserPlus },
       ],
     },
     {

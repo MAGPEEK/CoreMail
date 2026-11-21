@@ -6,6 +6,7 @@ import { LoginPage } from './pages/LoginPage.js';
 import { ComposePopoutPage } from './pages/ComposePopoutPage.js';
 import { SsoCallbackPage } from './pages/SsoCallbackPage.js';
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage.js';
+import { RegisterPage } from './pages/RegisterPage.js';
 import { ResetPasswordPage } from './pages/ResetPasswordPage.js';
 import { SetupPage } from './pages/SetupPage.js';
 import { loadResume } from './lib/setupWizard.js';
@@ -220,6 +221,7 @@ export function App() {
         <Route path="/login" element={<LoginPage />} />
         <Route path="/sso/callback" element={<SsoCallbackPage />} />
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+        <Route path="/register" element={<RegisterPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
         {/* OAuth2 consent route removed in v5.6.0 (OAuth2 dropped entirely) */}
         {/* 9.4: a draft in its own window (no app frame) */}

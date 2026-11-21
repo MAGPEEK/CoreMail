@@ -455,6 +455,8 @@ function AttackEventsWidget() {
     AUTH_LOCKED:      'Gesperrt abgewiesen',
     IP_BLOCKLIST:     'Sperrliste',
     IP_AUTO_BLOCKED:  'Auto-Sperrliste',
+    // 10.6 self-registration refusals
+    REGISTRATION_ABUSE: 'Registrierung',
   };
 
   if (isLoading || !data) {

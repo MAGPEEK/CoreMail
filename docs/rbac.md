@@ -161,6 +161,9 @@ matrix already limits the route to ORGANIZATION_MANAGEMENT (never scoped) ·
 | `GET /mobile/devices/:id`, `PATCH /:id/status`, `POST /:id/wipe`, `DELETE /:id` | 404; writes on a device of an admin account → `FORBIDDEN_ROLE` |
 | `GET/PUT /protocol-access/users/:id`, `GET/PUT /webmail-policies/users/:id` | 404 |
 | `/ems/mailboxes…`, `/ems/mailbox-statistics` | org (cmdlet bridge addresses objects organisation-wide) |
+| `GET/PUT /self-registration/settings`, `GET/POST /self-registration/invites`, `DELETE /self-registration/invites/:inviteId` (10.6, docs/self-registration.md) | org (`requireUnscoped`: the switch, the allowed domains and the invite codes are server-wide); writes need recipients write |
+| `GET /self-registration/pending` (10.6) | filter (domain of the registered account); recipients read (HELP_DESK, VIEW_ONLY_ORG see the list) |
+| `POST /self-registration/pending/:id/approve`, `/reject` (10.6) | 404 (`router.param('id')`, user id); recipients write; only an inactive-pending USER account is a registration (admin accounts → 404) |
 
 ### domains
 

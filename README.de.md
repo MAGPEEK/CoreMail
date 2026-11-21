@@ -123,6 +123,7 @@ Upgrade von einer älteren Version: lies vorher die [Versionshistorie](docs/vers
 - [Zertifikate und Let's Encrypt](docs/certificates.md)
 - [Sicherung und Wiederherstellung](docs/backup.md)
 - [Admin-Rollen](docs/rbac.md), [Branding](docs/branding.md), [Admin-CLI](docs/cli.md)
+- [Selbstregistrierung](docs/self-registration.md): Benutzer legen ihr Postfach selbst an (standardmäßig aus)
 - [MCP-Schnittstelle für Admins](docs/mcp.md): den Server mit einem MCP-Client verwalten
 - [Kubernetes-Helm-Chart](infra/k8s/README.md)
 - [Versionshistorie](docs/version-history.de.md) und [Changelog](CHANGELOG.md)

@@ -68,6 +68,7 @@ import { smimeRouter } from './routes/smime.js';
 import { setupRouter } from './routes/setup.js';
 import { setupFollowUpRouter } from './routes/setup-followup.js';
 import { authRouter } from './routes/auth.js';
+import { selfRegistrationRouter } from './routes/self-registration.js';
 import { ssoRouter } from './routes/sso.js';
 import { startLdapSyncScheduler } from '@coremail/auth-ldap';
 import { retentionTagsRouter } from './routes/retention-tags.js';
@@ -334,6 +335,11 @@ app.use(express.urlencoded({ extended: false, limit: '1mb' }));
 
 // ── SSO (OIDC) — v6.1: own limiter (one login = 3 requests), before /auth ────
 app.use('/auth/sso', ssoRateLimit, ssoRouter);
+
+// ── Self-registration (10.6, docs/self-registration.md) — own per-IP / global
+// budget and the shared web lockout inside the router; mounted before /auth so the
+// form's config request does not count against the login limiter. Off → 404.
+app.use('/auth/register', selfRegistrationRouter);
 
 // ── Auth — strict limiter on login/reset; refresh/logout own limiter (v8.1) ───
 app.use('/auth', authRouteRateLimit, authRouter);

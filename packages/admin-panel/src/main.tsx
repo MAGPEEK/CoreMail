@@ -42,6 +42,7 @@ import { LdapPage } from './pages/LdapPage.js';
 import { SsoPage } from './pages/SsoPage.js';
 import { BrandingPage } from './pages/BrandingPage.js';
 import { McpPage } from './pages/McpPage.js';
+import { SelfRegistrationPage } from './pages/SelfRegistrationPage.js';
 import { getToken, useSessionChecked } from './api/client.js';
 import { useAccessStore } from './store/access.js';
 import { firstAllowedPath } from './lib/adminAreas.js';
@@ -278,6 +279,7 @@ createRoot(document.getElementById('root')!).render(
                   <Route path="/sso"         element={<SsoPage />} />
                   <Route path="/branding"    element={<BrandingPage />} />
                   <Route path="/mcp"         element={<McpPage />} />
+                  <Route path="/authentication/self-registration" element={<SelfRegistrationPage />} />
                   <Route path="/" element={<HomeRedirect />} />
                 </Routes>
               </AdminLayout>

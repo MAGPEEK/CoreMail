@@ -201,6 +201,8 @@ const MOUNT_AREAS: Record<string, { area: AdminArea | null; get: string; write?:
   '/mcp':                  { area: 'dashboard',    get: '/settings' },
   // 10.4.2: BCP dashboard card "Zertifikat einrichten" (state + dismiss)
   '/setup-state':          { area: 'servers',      get: '/', write: ['POST', '/certificate-hint/dismiss'] },
+  // 10.6: self-registration (settings / invites org-wide, approvals scoped)
+  '/self-registration':    { area: 'recipients',   get: '/pending', write: ['PUT', '/settings'] },
 };
 const EXTRA_PROBES: Array<{ area: AdminArea | null; method: string; path: string }> = [
   { area: 'domains', method: 'GET', path: '/ems/accepted-domains' },

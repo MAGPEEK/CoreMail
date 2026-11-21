@@ -41,6 +41,7 @@ import { adminProtocolAccessRouter } from './protocol-access.js';
 import { adminWebmailPoliciesRouter } from './webmail-policies.js';
 import { adminMcpRouter } from './mcp.js';
 import { adminSetupStateRouter } from './setup-state.js';
+import { adminSelfRegistrationRouter } from './self-registration.js';
 
 export const ADMIN_PREFIX = '/api/v1/admin';
 
@@ -88,6 +89,8 @@ export const ADMIN_MOUNTS: ReadonlyArray<readonly [string, Router]> = [
   ['/mcp',                  adminMcpRouter],
   // 10.4.2: BCP dashboard card "Zertifikat einrichten" (area servers)
   ['/setup-state',          adminSetupStateRouter],
+  // 10.6: self-registration — settings + invite codes (recipients, org-wide), pending approvals (recipients, scoped)
+  ['/self-registration',    adminSelfRegistrationRouter],
 ];
 
 /** Admin endpoints that are intentionally public (no auth). */
