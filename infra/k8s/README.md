@@ -9,7 +9,7 @@ with a PVC) or an external endpoint.
 
 | | |
 |---|---|
-| Chart version | `3.3.0` (independent SemVer of the chart; 3.x = CoreMail 10.x, see "Upgrading to chart 3.0"; 2.x = 9.x values) |
+| Chart version | `3.6.1` (independent SemVer of the chart; 3.x = CoreMail 10.x, see "Upgrading to chart 3.0"; 2.x = 9.x values) |
 | App version | `10.6.1` → image `magpeek/coremail-app:10.6.1` |
 | Kubernetes | ≥ 1.25 |
 | Chart dependencies | none (installs without access to third-party chart repositories) |
