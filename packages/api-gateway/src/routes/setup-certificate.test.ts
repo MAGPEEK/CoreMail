@@ -201,7 +201,7 @@ beforeEach(() => {
   clock = new Date('2026-11-20T10:00:00Z');
   settings = {
     setupCompletedAt: new Date('2026-11-20T09:00:00Z'), setupWizardFinishedAt: null, publicHostname: 'mail.example.com',
-    requireMfaForAdmins: true, adminEmail: '',
+    requireMfaForAdmins: true, mfaAdminPolicy: 'REQUIRED', mfaAdminGraceDays: 0, adminEmail: '',
   };
   audits = [];
   certs.clear();
