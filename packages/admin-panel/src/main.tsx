@@ -42,6 +42,7 @@ import { LdapPage } from './pages/LdapPage.js';
 import { SsoPage } from './pages/SsoPage.js';
 import { BrandingPage } from './pages/BrandingPage.js';
 import { McpPage } from './pages/McpPage.js';
+import { SsprPage } from './pages/SsprPage.js';
 import { getToken, useSessionChecked } from './api/client.js';
 import { useAccessStore } from './store/access.js';
 import { firstAllowedPath } from './lib/adminAreas.js';
@@ -252,6 +253,7 @@ createRoot(document.getElementById('root')!).render(
                   <Route path="/backups" element={<BackupsPage />} />
                   <Route path="/protection" element={<ProtectionPage />} />
                   <Route path="/attack-protection" element={<AttackProtectionPage />} />
+                  <Route path="/authentication/password-reset" element={<SsprPage />} />
                   <Route path="/servers" element={<ServersPage />} />
                   <Route path="/services" element={<ServicesPage />} />
                   <Route path="/services/:sub" element={<ServicesLegacyRedirect />} />

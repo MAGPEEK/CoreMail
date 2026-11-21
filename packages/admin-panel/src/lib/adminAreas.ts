@@ -18,6 +18,8 @@ export const PATH_AREA: Record<string, AdminArea | null> = {
   'settings':         'organisation',
   'branding':         'organisation',
   'rbac':             'organisation',
+  // 10.6: BCP → Authentifizierung (password reset: GET/PUT /admin/settings/password-reset)
+  'authentication':   'organisation',
   'ldap':             'identity',
   'sso':              'identity',
   'servers':          'servers',

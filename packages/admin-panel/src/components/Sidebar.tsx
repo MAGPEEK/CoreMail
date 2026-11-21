@@ -5,7 +5,7 @@ import {
   ShieldAlert, ShieldBan, Search,
   ShieldHalf, Archive,
   ClipboardList, Activity, Info, Terminal,
-  Fingerprint, ServerCog, HardDriveDownload, Palette, Bot,
+  Fingerprint, ServerCog, HardDriveDownload, Palette, Bot, KeyRound,
 } from 'lucide-react';
 import { useT } from '../i18n/useT.js';
 import { usePermissions } from '../hooks/usePermissions.js';
@@ -51,6 +51,13 @@ export function Sidebar() {
         { path: '/protection',       labelKey: 'nav_protection',       icon: Shield },
         { path: '/attack-protection', labelKey: 'nav_attack_protection', icon: ShieldBan },
         { path: '/quarantine',       labelKey: 'nav_quarantine',       icon: ShieldAlert },
+      ],
+    },
+    // 10.6: authentication policies (password reset; the group is shared with branch auth-policy)
+    {
+      groupKey: 'nav_group_authentication',
+      items: [
+        { path: '/authentication/password-reset', labelKey: 'nav_password_reset', icon: KeyRound },
       ],
     },
     {

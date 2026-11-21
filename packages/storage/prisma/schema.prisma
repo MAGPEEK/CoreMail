@@ -152,6 +152,8 @@ model User {
   categories          Category[]
   aliases             EmailAlias[]        @relation("UserAliases")
   passwordResetTokens PasswordResetToken[]
+  // 10.6: external recovery address for self-service password reset (docs/password-reset.md)
+  recoveryEmail       RecoveryEmail?
   // 9.4: per-protocol access switches of the user (none = everything inherited)
   protocolPolicy      ProtocolPolicy?
   // 9.4: webmail feature switches + attachment/content policy of the user
@@ -377,6 +379,28 @@ model MailFlowPolicy {
 // ─────────────────────────────────────────────
 // Authentication
 // ─────────────────────────────────────────────
+
+// 10.6: external recovery address of an account (self-service password reset,
+// docs/password-reset.md). One row per user: `address` is the CONFIRMED address
+// (null until the first confirmation) — only a confirmed address ever receives a
+// reset link; `pending*` is a requested change waiting for the confirmation link
+// sent to the new address (token stored as sha256, single use). Written only
+// through storage auth/recovery-email.ts. Never an address of a domain hosted
+// on this server.
+model RecoveryEmail {
+  id               String    @id @default(cuid())
+  userId           String    @unique
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  address          String?
+  verifiedAt       DateTime?
+  pendingAddress   String?
+  pendingTokenHash String?   @unique
+  pendingExpiresAt DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@map("recovery_emails")
+}
 
 // Password reset token (self-service)
 // - Token is stored as a SHA-256 hash (never in plaintext)
@@ -1997,6 +2021,14 @@ model ServerSettings {
   allowSelfRegistration      Boolean @default(false)
   // Allows users to reset their own password via an e-mail link
   selfServicePasswordReset   Boolean @default(true)
+  // 10.6: self-service password reset methods (storage auth/sspr.ts,
+  // docs/password-reset.md): the confirmed external recovery address; the
+  // account's own mailbox (skipped automatically while anybody else can read
+  // it — delegates, folder read grants); accounts with an admin role
+  // (role ≠ USER) take part only when ssprAllowAdmins is on.
+  ssprRecoveryEmailEnabled   Boolean @default(true)
+  ssprOwnMailboxEnabled      Boolean @default(true)
+  ssprAllowAdmins            Boolean @default(false)
   // 9.4: API rate limit of the api-gateway (fixed window). Signed-in requests count
   // per user, anonymous ones per client IP; static assets and the live-event stream
   // are exempt. API_RATE_LIMIT_* environment variables override these columns.

@@ -75,6 +75,9 @@ POST   /auth/sessions/revoke-others     ends every session except the calling on
 
 Mobile devices (`GET/DELETE /api/v1/smime/devices`) and S/MIME processing
 (`GET/PUT /api/v1/smime/settings`) are shown in Settings → Sicherheit with their existing routes.
+10.6: the recovery address for self-service password reset
+(`GET/PUT/DELETE /api/v1/user/recovery-email`, re-authentication required) is the first panel
+there — docs/password-reset.md.
 
 ### Read state and read receipts
 

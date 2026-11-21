@@ -7,6 +7,7 @@ import { ComposePopoutPage } from './pages/ComposePopoutPage.js';
 import { SsoCallbackPage } from './pages/SsoCallbackPage.js';
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage.js';
 import { ResetPasswordPage } from './pages/ResetPasswordPage.js';
+import { RecoveryEmailConfirmPage } from './pages/RecoveryEmailConfirmPage.js';
 import { SetupPage } from './pages/SetupPage.js';
 import { loadResume } from './lib/setupWizard.js';
 import { MailPage } from './pages/MailPage.js';
@@ -221,6 +222,8 @@ export function App() {
         <Route path="/sso/callback" element={<SsoCallbackPage />} />
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
+        {/* 10.6: confirmation link of a recovery address (no session needed) */}
+        <Route path="/recovery-email/confirm" element={<RecoveryEmailConfirmPage />} />
         {/* OAuth2 consent route removed in v5.6.0 (OAuth2 dropped entirely) */}
         {/* 9.4: a draft in its own window (no app frame) */}
         <Route path={POPOUT_ROUTE} element={<AuthGuard><ComposePopoutPage /></AuthGuard>} />

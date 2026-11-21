@@ -1,24 +1,30 @@
+/**
+ * "Passwort vergessen?" — requests a reset link (10.6, docs/password-reset.md).
+ * The server answers identically for every address (no enumeration); the link
+ * goes to the confirmed recovery address and / or the own mailbox, as the
+ * administrator's policy allows.
+ */
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Mail, ArrowLeft, CheckCircle, KeyRound } from 'lucide-react';
 import { api } from '../api/client.js';
 import { AuthShell, AuthBrandHeader } from '../components/AuthShell.js';
+import { useT, fmt } from '../i18n/useT.js';
 
 export function ForgotPasswordPage() {
+  const t = useT();
   const [email, setEmail]       = useState('');
   const [loading, setLoading]   = useState(false);
   const [sent, setSent]         = useState(false);
   const [error, setError]       = useState('');
   const [allowed, setAllowed]   = useState(true);
 
-  // Load public settings (feature flag); the product name comes from the branding (9.3)
+  // 10.6: public availability flag (switch on and at least one method)
   useEffect(() => {
-    fetch('/api/v1/admin/settings/public')
+    fetch('/auth/password-reset/available')
       .then((r) => r.json())
-      .then((d: { selfServicePasswordReset?: boolean }) => {
-        if (d.selfServicePasswordReset === false) setAllowed(false);
-      })
-      .catch(() => { /* Fallback values remain */ });
+      .then((d: { enabled?: boolean }) => { if (d.enabled === false) setAllowed(false); })
+      .catch(() => { /* keep the form; the server decides */ });
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -30,18 +36,23 @@ export function ForgotPasswordPage() {
       setSent(true);
     } catch (err: unknown) {
       // Even on error: generic message (no user enumeration)
-      setError(err instanceof Error ? err.message : 'Fehler. Bitte versuchen Sie es erneut.');
+      setError(err instanceof Error ? err.message : t('sspr_error_generic'));
     } finally {
       setLoading(false);
     }
   };
 
+  const back = (
+    <Link to="/login" className="w-full flex items-center justify-center gap-1.5 text-sm text-fg-subtle hover:text-fg-muted py-1">
+      <ArrowLeft size={13} aria-hidden="true" /> {t('sspr_back_to_login')}
+    </Link>
+  );
+
   return (
     <AuthShell>
       <div className="bg-surface rounded-lg shadow-2xl p-8 w-full max-w-sm">
-        {/* Logo + product name (branding) */}
         <AuthBrandHeader
-          subtitle="Passwort zurücksetzen"
+          subtitle={t('sspr_forgot_title')}
           icon={
             <div className="w-10 h-10 bg-accent rounded-lg flex items-center justify-center">
               <KeyRound size={22} className="text-white" aria-hidden="true" />
@@ -51,46 +62,33 @@ export function ForgotPasswordPage() {
 
         {!allowed ? (
           <div className="text-center space-y-4">
-            <div className="bg-warning-bg border border-warning-line rounded-lg px-4 py-3 text-sm text-warning-fg">
-              Die selbstständige Passwort-Zurücksetzung ist deaktiviert.<br />
-              Bitte wenden Sie sich an Ihren Administrator.
+            <div role="status" className="bg-warning-bg border border-warning-line rounded-lg px-4 py-3 text-sm text-warning-fg">
+              {t('sspr_disabled')}
             </div>
-            <Link to="/login" className="flex items-center justify-center gap-1.5 text-sm text-fg-subtle hover:text-fg-muted py-1">
-              <ArrowLeft size={13} /> Zurück zur Anmeldung
-            </Link>
+            {back}
           </div>
         ) : sent ? (
-          /* Success view */
-          <div className="text-center space-y-4">
-            <CheckCircle size={48} className="mx-auto text-success-fg" />
-            <h2 className="font-semibold text-fg">E-Mail gesendet</h2>
-            <p className="text-sm text-fg-muted">
-              Falls <strong>{email}</strong> einem aktiven Konto entspricht, haben Sie in Kürze eine E-Mail mit einem Reset-Link erhalten.
-              Der Link ist <strong>15 Minuten</strong> gültig.
-            </p>
-            <p className="text-xs text-fg-subtle">
-              Keine E-Mail erhalten? Prüfen Sie Ihren Spam-Ordner oder wenden Sie sich an Ihren Administrator.
-            </p>
-            <Link to="/login" className="flex items-center justify-center gap-1.5 text-sm text-accent-fg hover:underline py-1">
-              <ArrowLeft size={13} /> Zurück zur Anmeldung
-            </Link>
+          <div className="text-center space-y-4" role="status" aria-live="polite">
+            <CheckCircle size={48} className="mx-auto text-success-fg" aria-hidden="true" />
+            <h2 className="font-semibold text-fg">{t('sspr_sent_title')}</h2>
+            <p className="text-sm text-fg-muted">{fmt(t('sspr_sent_text'), { email })}</p>
+            <p className="text-xs text-fg-subtle">{t('sspr_sent_hint')}</p>
+            {back}
           </div>
         ) : (
-          /* Form */
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <p className="text-sm text-fg-muted">
-              Geben Sie Ihre E-Mail-Adresse ein. Falls ein Konto existiert, erhalten Sie einen Link zum Zurücksetzen Ihres Passworts.
-            </p>
+          <form onSubmit={handleSubmit} className="space-y-4" noValidate={false}>
+            <p className="text-sm text-fg-muted">{t('sspr_forgot_intro')}</p>
             <div>
-              <label className="block text-sm font-medium text-fg-muted mb-1">E-Mail-Adresse</label>
+              <label htmlFor="sspr-email" className="block text-sm font-medium text-fg-muted mb-1">{t('sspr_email_label')}</label>
               <div className="relative">
-                <Mail size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-subtle" />
+                <Mail size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-subtle" aria-hidden="true" />
                 <input
+                  id="sspr-email"
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className="input pl-9"
-                  placeholder="benutzer@domain.com"
+                  placeholder={t('sspr_email_placeholder')}
                   required
                   autoComplete="email"
                   autoFocus
@@ -99,7 +97,7 @@ export function ForgotPasswordPage() {
             </div>
 
             {error && (
-              <div className="bg-danger-bg border border-danger-line rounded px-3 py-2 text-sm text-danger-fg">
+              <div role="alert" className="bg-danger-bg border border-danger-line rounded px-3 py-2 text-sm text-danger-fg">
                 {error}
               </div>
             )}
@@ -109,15 +107,9 @@ export function ForgotPasswordPage() {
               disabled={loading || !email}
               className="btn-primary w-full justify-center py-2 disabled:opacity-60"
             >
-              {loading ? 'Wird gesendet...' : 'Reset-Link anfordern'}
+              {loading ? t('sspr_sending') : t('sspr_send')}
             </button>
-
-            <Link
-              to="/login"
-              className="w-full flex items-center justify-center gap-1.5 text-sm text-fg-subtle hover:text-fg-muted py-1"
-            >
-              <ArrowLeft size={13} /> Zurück zur Anmeldung
-            </Link>
+            {back}
           </form>
         )}
       </div>

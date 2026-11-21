@@ -174,6 +174,10 @@ event (`CHANNEL_ADMIN_ATTACK`). Sources: every failure (`AUTH_BRUTE_FORCE`),
 lock (`AUTH_LOCKOUT`) and refusal of a locked client (`AUTH_LOCKED`) of the
 shared lockout, connect-time block list refusals (`IP_BLOCKLIST`), automatic
 blocks (`IP_AUTO_BLOCKED`) and the SMTP connection limiter (`IP_RATE_LIMIT`).
+10.6 self-service password reset (docs/password-reset.md, protocol `web`):
+`PASSWORD_RESET_RATE_LIMIT`, `PASSWORD_RESET_INVALID_TOKEN`, `PASSWORD_RESET_MFA_FAILED`,
+`RECOVERY_EMAIL_INVALID_TOKEN`; reset requests from blocked or locked client IPs are ignored
+silently.
 
 Bounded: at most `SECURITY_EVENTS_PER_IP_PER_MIN` (10) events per client IP and
 minute (in the process and across processes via Redis `secevt:<ip>:<minute>`),

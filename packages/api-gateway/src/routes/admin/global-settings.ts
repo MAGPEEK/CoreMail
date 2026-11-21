@@ -6,6 +6,7 @@
  * PUT  /api/v1/admin/settings/mail     — mail limits only
  * PUT  /api/v1/admin/settings/security — security policies only
  * PUT  /api/v1/admin/settings/maintenance — maintenance mode on/off
+ * GET/PUT /api/v1/admin/settings/password-reset — 10.6 self-service password reset
  *
  * Every PUT is a partial update: fields left out keep their stored value
  * (no schema defaults that would silently reset them). After a save the
@@ -15,7 +16,10 @@
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { prisma, clearMessageSizeLimitCache, invalidateMailboxAccessAuditSettings } from '@coremail/storage';
-import { MFA_GRACE_DAYS_BOUNDS, invalidateMfaEnforcementCache } from '@coremail/storage/auth';
+import {
+  MFA_GRACE_DAYS_BOUNDS, invalidateMfaEnforcementCache,
+  SSPR_SETTINGS_FIELDS, countVerifiedRecoveryEmails, ssprAvailable, ssprPolicyOf, type SsprPolicy,
+} from '@coremail/storage/auth';
 import { requireArea } from '../../middleware/auth.js';
 import { createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
 import { audit, auditContext, invalidateAuditCache } from '../../lib/audit.js';
@@ -47,7 +51,8 @@ adminGlobalSettingsRouter.get('/public', async (_req: Request, res: Response) =>
       inactivityTimeoutMinutes: cfg?.inactivityTimeoutMinutes ?? 30,
       maintenanceMode:          cfg?.maintenanceMode         ?? false,
       maintenanceMessage:       cfg?.maintenanceMessage      ?? '',
-      selfServicePasswordReset: cfg?.selfServicePasswordReset ?? true,
+      // 10.6: true only when a reset is possible at all (switch + at least one method)
+      selfServicePasswordReset: ssprAvailable(ssprPolicyOf(cfg)),
     });
   } catch {
     res.json({ orgName: 'CoreMail', logoUrl: '', language: 'de', inactivityTimeoutMinutes: 30, maintenanceMode: false, maintenanceMessage: '', selfServicePasswordReset: true });
@@ -275,6 +280,81 @@ adminGlobalSettingsRouter.put('/security', async (req: Request, res: Response) =
   log.info(parsed.data, 'Security policies updated');
   publishReload('security');
   res.json(settingsView(cfg));
+});
+
+// ── GET/PUT /api/v1/admin/settings/password-reset ─────────────────────────────
+// 10.6: self-service password reset (BCP → Authentifizierung → Passwort-
+// Zurücksetzung, docs/password-reset.md). Area organisation (read
+// SERVER_MANAGEMENT / VIEW_ONLY_ORG, write ORGANIZATION_MANAGEMENT),
+// organisation-wide only. Every change is audited as
+// `settings.password-reset.update` with a from/to diff (always logged).
+export const PasswordResetSchema = z.object({
+  enabled:       z.boolean(),
+  recoveryEmail: z.boolean(),
+  ownMailbox:    z.boolean(),
+  allowAdmins:   z.boolean(),
+}).partial().strict();
+
+/** Pure: the ServerSettings columns of a partial policy update. */
+export function passwordResetColumns(data: Partial<SsprPolicy>): Record<string, boolean> {
+  const out: Record<string, boolean> = {};
+  for (const k of Object.keys(SSPR_SETTINGS_FIELDS) as (keyof SsprPolicy)[]) {
+    const v = data[k];
+    if (v !== undefined) out[SSPR_SETTINGS_FIELDS[k]] = v;
+  }
+  return out;
+}
+
+async function passwordResetView(cfg: Parameters<typeof ssprPolicyOf>[0]): Promise<Record<string, unknown>> {
+  const policy = ssprPolicyOf(cfg);
+  const [usersWithRecoveryEmail, localUsers, adminAccounts] = await Promise.all([
+    countVerifiedRecoveryEmails().catch(() => null),
+    prisma.user.count({ where: { active: true, authSource: 'LOCAL' } }).catch(() => null),
+    prisma.user.count({ where: { active: true, authSource: 'LOCAL', NOT: { role: 'USER' } } }).catch(() => null),
+  ]);
+  return { ...policy, available: ssprAvailable(policy), stats: { usersWithRecoveryEmail, localUsers, adminAccounts } };
+}
+
+adminGlobalSettingsRouter.get('/password-reset', async (_req: Request, res: Response) => {
+  try {
+    const cfg = await prisma.serverSettings.findUnique({ where: { id: 'singleton' } });
+    res.json(await passwordResetView(cfg));
+  } catch (err) {
+    log.error({ err }, 'Failed to read the password reset settings');
+    res.status(500).json({ error: 'Einstellungen nicht verfügbar' });
+  }
+});
+
+adminGlobalSettingsRouter.put('/password-reset', async (req: Request, res: Response) => {
+  const parsed = PasswordResetSchema.safeParse(req.body);
+  if (!parsed.success) { invalid(res, parsed.error.issues); return; }
+  const data = definedOnly(parsed.data);
+  const before = ssprPolicyOf(await prisma.serverSettings.findUnique({ where: { id: 'singleton' } }));
+  const columns = passwordResetColumns(data);
+  const cfg = await prisma.serverSettings.upsert({
+    where:  { id: 'singleton' },
+    create: { id: 'singleton', ...columns },
+    update: columns,
+  });
+  const changes: Record<string, { from: string; to: string }> = {};
+  for (const k of Object.keys(data) as (keyof SsprPolicy)[]) {
+    if (data[k] !== undefined && before[k] !== data[k]) changes[k] = { from: String(before[k]), to: String(data[k]) };
+  }
+  if (Object.keys(changes).length > 0) {
+    const user = req.apiUser;
+    audit({
+      ...(user?.userId !== undefined ? { actorId: user.userId } : {}),
+      ...(user?.email !== undefined ? { actorEmail: user.email } : {}),
+      action: 'settings.password-reset.update',
+      targetType: 'settings',
+      targetId: 'password_reset',
+      changes,
+      ...auditContext(req),
+    });
+  }
+  log.info(data, 'Password reset settings updated');
+  publishReload('password-reset');
+  res.json(await passwordResetView(cfg));
 });
 
 // ── PUT /api/v1/admin/settings/maintenance ────────────────────────────────────
