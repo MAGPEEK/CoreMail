@@ -99,6 +99,13 @@ SSO accounts have no CoreMail password; mail clients use app passwords. Creating
 an app password (v9.0) needs re-authentication — SSO users confirm with a
 CoreMail TOTP or backup code (`mfaCode`).
 
+Passkeys (10.6, docs/passkeys.md): **OIDC-only accounts get no CoreMail passkeys** — they sign in
+at their identity provider, which may offer its own passkeys (`amr` then carries the method).
+The webmail's passkey panel shows a hint instead of the "add" button and the BCP mailbox dialog
+offers no recovery link for them. A LOCAL / LDAP account linked to a provider (`allowLinking`)
+may use passkeys like any LOCAL / LDAP account. Under `requireMfa` / admin MFA a passkey counts
+as an enrolled CoreMail factor: the challenge after the IdP accepts it (WebAuthn method).
+
 ## Web login hardening (v9.0)
 
 ### Shared lockout
@@ -182,6 +189,13 @@ loopback or `LDAP_ALLOW_INSECURE=true`.
 Mail protocols: `verifyLdapMailPassword(email, password)` resolves to
 `{ userId }` on success and `false` otherwise (never throws); register it with
 `registerExternalPasswordVerifier(verifyLdapMailPassword)` from `@coremail/storage`.
+
+Passkeys (10.6): LDAP accounts may register CoreMail passkeys (re-authentication with the
+directory password). The passkey sign-in does not bind against the directory: it checks that the
+CoreMail account is **active** — an account the sync deactivated (missing in / disabled in the
+directory) cannot sign in with a passkey either. Passkey-only (`passwordLoginDisabled`) refuses
+the directory password at the web login after it was verified; mail programs keep their app
+passwords. docs/passkeys.md.
 
 ### Sync (`syncLdapUsers`)
 

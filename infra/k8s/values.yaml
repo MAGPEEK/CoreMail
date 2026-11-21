@@ -101,9 +101,12 @@ app:
   # COREMAIL_PUBLIC_URL — public base URL (SSO redirect URIs). Empty = derived
   # from the server settings (BCP). Typically https://<ingress.host>
   publicUrl: ""
+  # Passkeys / security keys (docs/passkeys.md) — normally empty: the RP ID is
+  # frozen at the first passkey registration, the origins come from publicUrl /
+  # the server settings plus the related origins of the BCP page.
   webauthn:
-    rpId: ""              # WEBAUTHN_RP_ID   (default: publicHostname)
-    origin: ""            # WEBAUTHN_ORIGIN  (default: https://<publicHostname>)
+    rpId: ""              # WEBAUTHN_RP_ID   (default: frozen RP ID, else publicHostname)
+    origin: ""            # WEBAUTHN_ORIGIN  (comma-separated; default: public base URL incl. port)
   vapid:
     publicKey: ""         # private key → secrets.vapidPrivateKey
     subject: mailto:admin@example.com
