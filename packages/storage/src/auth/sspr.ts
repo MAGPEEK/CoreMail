@@ -21,6 +21,8 @@
  * Server level only (no per-domain override in 10.6).
  */
 import { prisma } from '../prisma/index.js';
+import { getAuthFactors } from './factors.js';
+import type { AuthFactors } from '../auth-factors.js';
 
 export interface SsprPolicy {
   /** Master switch (ServerSettings.selfServicePasswordReset). */
@@ -89,25 +91,22 @@ export interface ResetFactors {
   provable: boolean;
 }
 
-/** Pure: factors of a UserMfa row (null = none). */
-export function resetFactorsOf(mfa: { totpEnabled?: boolean | null; backupCodes?: unknown; webAuthnCredentials?: unknown } | null | undefined): ResetFactors {
-  const totp = mfa?.totpEnabled === true;
-  const backupCodes = Array.isArray(mfa?.backupCodes) && mfa.backupCodes.length > 0;
-  const webauthn = Array.isArray(mfa?.webAuthnCredentials) && mfa.webAuthnCredentials.length > 0;
+/**
+ * Pure: the reset view of the enrolled factors (auth-factors.ts). Passkeys and
+ * security keys count as a factor (`webauthn`); the reset page cannot verify
+ * them, so such an account resets only with TOTP or a backup code (`provable`)
+ * — an account with only passkeys / security keys is refused (`mfa_unprovable`).
+ */
+export function resetFactorsOf(f: Pick<AuthFactors, 'totp' | 'backupCodes' | 'webauthn'> | null | undefined): ResetFactors {
+  const totp = f?.totp === true;
+  const backupCodes = (f?.backupCodes ?? 0) > 0;
+  const webauthn = (f?.webauthn ?? 0) > 0;
   return { totp, backupCodes, webauthn, any: totp || backupCodes || webauthn, provable: totp || backupCodes };
 }
 
-/**
- * The enrolled factors of a user.
- * TODO(passkeys): replace with the central factor helper `getAuthFactors(userId)`
- * of branch `passkeys` once it is merged (passkeys then count as `webauthn`).
- */
+/** The enrolled factors of a user — 10.6: through the central factor helper getAuthFactors(). */
 export async function loadResetFactors(userId: string): Promise<ResetFactors> {
-  const mfa = await prisma.userMfa.findUnique({
-    where: { userId },
-    select: { totpEnabled: true, backupCodes: true, webAuthnCredentials: true },
-  });
-  return resetFactorsOf(mfa);
+  return resetFactorsOf(await getAuthFactors(userId));
 }
 
 // ── Own mailbox ──────────────────────────────────────────────────────────────
@@ -145,7 +144,7 @@ export type SsprRefusal =
   | 'external_directory'     // LDAP / OIDC account
   | 'admin_excluded'
   | 'password_login_disabled'
-  | 'mfa_unprovable'         // only security keys — the reset page cannot verify them
+  | 'mfa_unprovable'         // only passkeys / security keys — the reset page cannot verify them
   | 'no_channel';            // no confirmed recovery address and the own mailbox is skipped
 
 export interface SsprUser { id: string; email: string; role: string; displayName: string }
@@ -162,16 +161,15 @@ export async function planPasswordReset(email: string, policy: SsprPolicy): Prom
   if (!ssprAvailable(policy)) return { ok: false, reason: 'disabled' };
   const user = await prisma.user.findFirst({
     where: { email: email.trim().toLowerCase() },
-    select: { id: true, email: true, role: true, active: true, authSource: true, displayName: true },
+    select: { id: true, email: true, role: true, active: true, authSource: true, displayName: true, passwordLoginDisabled: true },
   });
   if (!user) return { ok: false, reason: 'not_found' };
   const id = user.id;
   if (!user.active) return { ok: false, reason: 'inactive', userId: id };
   if (user.authSource !== 'LOCAL') return { ok: false, reason: 'external_directory', userId: id };
   if (!ssprRoleAllowed(user.role, policy)) return { ok: false, reason: 'admin_excluded', userId: id };
-  // TODO(passkeys): refuse accounts with User.passwordLoginDisabled (passkey-only
-  // accounts get no mail reset) once branch `passkeys` adds the column:
-  //   if (user.passwordLoginDisabled) return { ok: false, reason: 'password_login_disabled', userId: id };
+  // 10.6 passkeys: a passkey-only account gets no reset by mail (admin recovery link instead)
+  if (user.passwordLoginDisabled === true) return { ok: false, reason: 'password_login_disabled', userId: id };
 
   const factors = await loadResetFactors(id);
   if (factors.any && !factors.provable) return { ok: false, reason: 'mfa_unprovable', userId: id };

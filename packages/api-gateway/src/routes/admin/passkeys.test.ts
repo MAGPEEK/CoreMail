@@ -84,7 +84,7 @@ async function call(method: string, path: string, token?: string, body?: unknown
     headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   });
-  return { status: r.status, body: (await r.json().catch(() => ({}))) as Json };
+  return { status: r.status, body: (await r.json().catch(() => ({}))) as Json, headers: r.headers };
 }
 
 async function addUser(email: string, role = 'USER', extra: Json = {}) {
@@ -219,16 +219,25 @@ test('mailbox: recovery link (shown once, fragment), passkey-only preconditions,
   assert.ok(auditRows.some((r) => r['action'] === 'mailbox.mfa.reset'));
 });
 
-test('admin MFA rule: a passkey counts as enrolled factor; a passkey session is MFA-verified', async () => {
+test('admin MFA rule: a passkey counts as enrolled factor (no grace prompt); a passkey session is MFA-verified', async () => {
   db.serverSettings.rows[0]!['requireMfaForAdmins'] = true;
   db.serverSettings.rows[0]!['passkeysEnabled'] = true;
+  sauth.invalidateMfaPolicyCache();
+  sauth.invalidateMfaEnforcementCache();
   const srv = await addUser('srv@example.com', 'SERVER_MANAGEMENT');
-  assert.equal((await call('GET', '/api/v1/admin/ping', await tokenOf(srv, false))).body['code'], 'MFA_REQUIRED');
+  // no factor: the admin grace period applies (admin API works, the grace header is set)
+  const grace = await call('GET', '/api/v1/admin/ping', await tokenOf(srv, false));
+  assert.equal(grace.status, 200, JSON.stringify(grace.body));
+  assert.ok(grace.headers.get('x-coremail-mfa-grace-until'), 'grace header without a factor');
   const a = await registerPasskey(srv);
+  await sauth.publishUserAuthChange(String(srv['id']), 'mfa-change'); // the per-user state cache (15 s)
+  // enrolled (a passkey): no grace any more — the session itself must be MFA-verified
   assert.equal((await call('GET', '/api/v1/admin/ping', await tokenOf(srv, false))).body['code'], 'MFA_NOT_VERIFIED');
   const opts = (await wa.passkeyLoginOptions('admin'))!;
   const out = await wa.completePasskeyLogin(opts.flowId, a.assert(opts.publicKey as unknown as Json), { ip: '203.0.113.9', userAgent: 't', surface: 'admin' });
   assert.equal(out.kind, 'tokens', JSON.stringify(out));
   if (out.kind !== 'tokens') return;
-  assert.equal((await call('GET', '/api/v1/admin/ping', out.tokens.accessToken)).status, 200);
+  const ok = await call('GET', '/api/v1/admin/ping', out.tokens.accessToken);
+  assert.equal(ok.status, 200);
+  assert.equal(ok.headers.get('x-coremail-mfa-grace-until'), null, 'no grace prompt for an admin with a passkey');
 });

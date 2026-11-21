@@ -3,7 +3,7 @@
 BCP → **Authentifizierung** → **Mehrstufige Anmeldung (MFA)** (`/bcp/mfa`). The sidebar group
 "Authentifizierung" holds *Mehrstufige Anmeldung (MFA)*, *SSO* and *LDAP / Active Dir.* (the
 last two moved there from "Infrastruktur"; their URLs `/bcp/sso` and `/bcp/ldap` are unchanged).
-A later "Passkeys" entry goes after MFA. The MFA switches that 10.5 kept in Einstellungen →
+*Passkeys* (docs/passkeys.md) follows right after MFA. The MFA switches that 10.5 kept in Einstellungen →
 Sicherheit live on this page now; the settings page links to it.
 
 Code: storage `src/auth/mfa-policy.ts` (model + resolution), `src/auth/mfa-enforcement.ts`
@@ -25,7 +25,7 @@ Three inputs; the most specific one wins:
 
 | Level | Meaning |
 |---|---|
-| Pflicht (`required`) | The account must enrol a second factor (TOTP or a security key) — after a grace period, see below. |
+| Pflicht (`required`) | The account must enrol a second factor (TOTP, a security key or a passkey) — after a grace period, see below. |
 | Optional (`optional`) | The user decides; enrolment is offered in Webmail → Einstellungen → Sicherheit. |
 | Aus (`off`) | Enrolment is **not offered**: the webmail shows a note instead of the setup buttons and `POST /auth/mfa/totp/setup` / `POST /auth/mfa/webauthn/register/start` answer `403 MFA_NOT_OFFERED`. Factors enrolled earlier **keep working** — the sign-in still asks for them, the user may remove them and regenerate backup codes. "Aus" never disables an enrolled factor. |
 
@@ -45,6 +45,22 @@ Grace starts: `User.mfaGraceStartedAt` (shared by both kinds — an account is u
 time). A start older than the activation time is stale (new grace): `mfaEnforcementSince` (policy
 for all users switched to Pflicht), `mfaAdminEnforcementSince` (admin rule switched to Pflicht).
 Setting or changing a per-user exception clears the start (new grace period).
+
+### Passkeys (10.6)
+
+Passkeys are governed by their **own** policy (BCP → Authentifizierung → Passkeys, server /
+domain / user switch — [passkeys.md](passkeys.md)), not by the MFA level:
+
+- A registered passkey (or security key) **is an enrolled factor** for every MFA rule: "Pflicht"
+  is satisfied, the admin rule asks for nothing more (no grace prompt), and an MFA-verified session
+  is required as usual — a usernameless passkey sign-in with user verification is one.
+- **"Aus" does not block passkeys**: with passkeys switched on for the account the user may
+  register passkeys (`/auth/passkeys/registration/*` never answers `MFA_NOT_OFFERED`) and sign in
+  with them. "Aus" only stops new TOTP / second-factor security-key enrolment
+  (`/auth/mfa/totp/setup`, the deprecated `/auth/mfa/webauthn/register/start`).
+- **"Gerät merken"** never applies to a passkey sign-in: it neither checks nor issues a
+  remembered-device token (it already is a multi-factor sign-in). After a password, a passkey used
+  as the second factor is an ordinary MFA step and may offer "Gerät merken" like TOTP.
 
 ### Backward compatibility
 

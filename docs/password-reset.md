@@ -33,10 +33,13 @@ Not covered by self-service reset (always, whatever the settings):
 - accounts from an LDAP directory or an SSO provider (`authSource ≠ LOCAL`) — their
   password belongs to the directory;
 - inactive accounts;
-- accounts whose only second factor is a security key (no TOTP, no backup codes): the reset page
-  cannot verify a security key yet, so such accounts get no link (the administrator resets them);
-- passkey-only accounts (`User.passwordLoginDisabled`, branch `passkeys`) — **TODO** until that
-  column exists (marked in storage `auth/sspr.ts` and `auth/password-reset.ts`).
+- accounts whose only second factors are passkeys or security keys (no TOTP, no backup codes):
+  the reset page cannot verify them, so such accounts get no link — refused like every other case
+  (same answer, refusal `mfa_unprovable`); the user adds TOTP or backup codes, or an administrator
+  issues a passkey recovery link ([passkeys.md](passkeys.md));
+- passkey-only accounts (`User.passwordLoginDisabled`, docs/passkeys.md): no link
+  (`password_login_disabled`), and a link issued earlier is refused at redemption — recovery is the
+  admin passkey recovery link.
 
 There is no per-domain override in 10.6; the policy is server-wide.
 
@@ -84,7 +87,8 @@ Single writer: storage `auth/recovery-email.ts`.
    asks for a second factor when `mfaRequired` (`methods`: `totp`, `backup_code`).
 3. `POST /auth/reset-password { token, newPassword, mfaCode? }`:
    - password policy first (a policy failure never burns the link or a backup code);
-   - accounts with any second factor (TOTP, backup codes, security keys) must send a TOTP code or a
+   - accounts with any second factor (TOTP, backup codes, passkeys, security keys — storage
+     `getAuthFactors()`) must send a TOTP code or a
      backup code. Missing → `400 MFA_REQUIRED`, wrong → `400 MFA_INVALID` (security event
      `PASSWORD_RESET_MFA_FAILED`, audit `auth.password-reset.mfa-failed`); **the link is not
      consumed**. After 5 wrong codes the link is burnt (`429 MFA_LOCKED`); wrong codes also count

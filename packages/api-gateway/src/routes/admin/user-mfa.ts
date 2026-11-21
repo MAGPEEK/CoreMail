@@ -26,7 +26,7 @@ import { z } from 'zod';
 import { createLogger } from '@coremail/core';
 import { prisma } from '@coremail/storage';
 import {
-  adminMfaEnforcementFor, levelFromDb, levelToDb, listTrustedDevices, loadMfaPolicySettings, publishUserAuthChange,
+  adminMfaEnforcementFor, getAuthFactorsMany, levelFromDb, levelToDb, listTrustedDevices, loadMfaPolicySettings, publishUserAuthChange,
   resolveMfaPolicy, revokeTrustedDevicesOfUser, weakensMfaPolicy, type MfaPolicyLevel,
 } from '@coremail/storage/auth';
 import { requireAdmin, requireArea } from '../../middleware/auth.js';
@@ -53,12 +53,9 @@ export function overrideChangeAllowed(
 
 async function enrolledSet(ids: string[]): Promise<Set<string>> {
   if (ids.length === 0) return new Set();
-  const rows = await prisma.userMfa.findMany({
-    where: { userId: { in: ids } }, select: { userId: true, totpEnabled: true, webAuthnCredentials: true },
-  });
-  return new Set(rows
-    .filter((m) => m.totpEnabled || (Array.isArray(m.webAuthnCredentials) && (m.webAuthnCredentials as unknown[]).length > 0))
-    .map((m) => m.userId));
+  // 10.6: the central factor rule (TOTP, passkeys, security keys — storage auth-factors.ts)
+  const factors = await getAuthFactorsMany(ids);
+  return new Set(ids.filter((id) => factors.get(id)?.enrolled === true));
 }
 
 const ListQuery = z.object({

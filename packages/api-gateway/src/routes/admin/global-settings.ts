@@ -21,7 +21,7 @@ import {
   MFA_SETTINGS_SELECT, invalidateMfaEnforcementCache, legacySwitchesToPolicy, levelFromDb, mfaPolicyProblem,
   mfaPolicySettingsFromRow, mfaPolicyWriteData, resolveMfaPolicy,
   type AdminMfaRule, type MfaPolicyLevel, type MfaPolicySettings, type MfaSettingsRow,
-  SSPR_SETTINGS_FIELDS, countVerifiedRecoveryEmails, ssprAvailable, ssprPolicyOf, type SsprPolicy,
+  SSPR_SETTINGS_FIELDS, countVerifiedRecoveryEmails, ssprAvailable, ssprPolicyOf, type SsprPolicy, getAuthFactorsMany,
 } from '@coremail/storage/auth';
 import { requireArea } from '../../middleware/auth.js';
 import { createLogger, getRedisClient, CHANNEL_SETTINGS_RELOAD } from '@coremail/core';
@@ -317,11 +317,9 @@ async function adminAccounts(s: MfaPolicySettings): Promise<Array<Record<string,
     take: 500,
   });
   const ids = admins.map((a) => a.id);
-  const mfa = ids.length > 0
-    ? await prisma.userMfa.findMany({ where: { userId: { in: ids } }, select: { userId: true, totpEnabled: true, webAuthnCredentials: true } })
-    : [];
-  const enrolled = new Set(mfa.filter((m) => m.totpEnabled || (Array.isArray(m.webAuthnCredentials) && (m.webAuthnCredentials as unknown[]).length > 0))
-    .map((m) => m.userId));
+  // 10.6: the central factor rule (TOTP, passkeys, security keys — storage auth-factors.ts)
+  const factors = await getAuthFactorsMany(ids);
+  const enrolled = new Set(ids.filter((id) => factors.get(id)?.enrolled === true));
   return admins
     .filter((a) => String(a.role) !== 'USER')
     .map((a) => {

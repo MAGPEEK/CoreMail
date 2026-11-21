@@ -28,7 +28,7 @@ const ON = { enabled: true, recoveryEmail: true, ownMailbox: true, allowAdmins: 
 
 beforeEach(() => {
   for (const t of ['user', 'userMfa', 'session', 'appPassword', 'passwordResetToken', 'serverSettings',
-    'domain', 'mailbox', 'recoveryEmail', 'mailboxDelegate', 'folderPermission'] as const) db[t].rows = [];
+    'domain', 'mailbox', 'recoveryEmail', 'mailboxDelegate', 'folderPermission', 'webAuthnCredential'] as const) db[t].rows = [];
   redis.store.clear();
 });
 
@@ -103,12 +103,32 @@ test('plan: an unconfirmed recovery address is never used; the method switches a
 
 test('plan: security-key-only accounts get no link (second proof impossible); TOTP → mfaRequired', async () => {
   const uid = await addUser('alice@example.com');
-  await db.userMfa.create({ data: { userId: uid, webAuthnCredentials: [{ id: 'k' }] } });
+  // 10.6: credentials are rows of WebAuthnCredential (getAuthFactors), not the deprecated JSON
+  await db.webAuthnCredential.create({ data: { userId: uid, credentialId: 'k', kind: 'security_key' } });
+  await db.userMfa.create({ data: { userId: uid } });
   assert.equal((await auth.planPasswordReset('alice@example.com', ON) as { reason: string }).reason, 'mfa_unprovable');
   await db.userMfa.update({ where: { userId: uid }, data: { totpEnabled: true, totpSecret: auth.encryptMfaSecret(SECRET) } });
   const p = await auth.planPasswordReset('alice@example.com', ON);
   assert.ok(p.ok);
   assert.equal(p.mfaRequired, true);
+});
+
+test('plan (10.6 passkeys): passkey-only factors → no link; passkey-only accounts never get one', async () => {
+  const uid = await addUser('pk@example.com');
+  await db.webAuthnCredential.create({ data: { userId: uid, credentialId: 'p1', kind: 'passkey', backupState: true } });
+  assert.equal((await auth.planPasswordReset('pk@example.com', ON) as { reason: string }).reason, 'mfa_unprovable');
+  // with backup codes the reset is possible (second proof: a backup code)
+  await db.userMfa.create({ data: { userId: uid, backupCodes: ['h1'] } });
+  const p = await auth.planPasswordReset('pk@example.com', ON);
+  assert.ok(p.ok);
+  assert.equal(p.mfaRequired, true);
+  // a link issued before the account became passkey-only is refused at redemption
+  const raw = await auth.createPasswordResetToken(uid, 'ip');
+  assert.equal((await auth.inspectResetToken(raw)).valid, true);
+  db.user.rows.find((u) => u['id'] === uid)!['passwordLoginDisabled'] = true;
+  assert.equal((await auth.planPasswordReset('pk@example.com', ON) as { reason: string }).reason, 'password_login_disabled');
+  assert.equal((await auth.inspectResetToken(raw)).valid, false);
+  assert.equal((await auth.redeemPasswordReset(raw, 'long-enough-password', 'ip', { mfaCode: 'h1' })).ok, false);
 });
 
 test('recovery address: validation, hosted domains refused, confirmation single use, change keeps old until confirmed', async () => {

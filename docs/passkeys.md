@@ -59,6 +59,17 @@ and stays until the next MAJOR release; nothing else reads it (repo-hygiene guar
   (-257). Library: `@simplewebauthn/server` **14.1.0**, pinned exactly, in the subpath
   `@coremail/storage/auth/webauthn` — the mail services never load it.
 
+## Interaction with the MFA policy, "Gerät merken" and password reset
+
+- The MFA policy (docs/mfa-policy.md) does **not** govern passkeys: MFA "Aus" neither blocks
+  passkey registration nor the passkey sign-in — only the passkey policy below does. A passkey is
+  an enrolled factor for every MFA rule ("Pflicht", the admin rule — no admin grace prompt).
+- A passkey sign-in never checks or issues a remembered-device ("Gerät merken") token
+  (storage `auth/trusted-devices.ts` is not involved).
+- Self-service password reset (docs/password-reset.md): passkeys count as factors, so the reset
+  needs a TOTP code or a backup code; an account with only passkeys / security keys is refused
+  uniformly (`mfa_unprovable`); passkey-only accounts never get a reset link.
+
 ## Policy
 
 | Level | Where | Values |

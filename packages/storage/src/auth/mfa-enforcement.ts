@@ -19,7 +19,7 @@
  * bearer: 403 MFA_ENROLMENT_REQUIRED for everything else).
  *
  * The requirement is satisfied by
- *   - an enrolled second factor (UserMfa: TOTP enabled or a WebAuthn credential), or
+ *   - an enrolled second factor (TOTP, a passkey or a security key — getAuthFactors), or
  *   - a session that was established with MFA (`mfaVerified`) — this includes
  *     SSO sessions whose IdP MFA (`amr`) CoreMail trusts (auth-sso oidc.ts:
  *     always for plain users unless the provider demands CoreMail MFA; for
@@ -113,7 +113,8 @@ export function mfaEnrolmentRequiredBody(deadline?: Date): Record<string, unknow
 // ── Database + caches ─────────────────────────────────────────────────────────
 
 interface UserState {
-  enrolled: boolean;
+  /** 10.6: read lazily (enrolledOf) — only when a rule applies to the account. */
+  enrolled?: boolean;
   graceStartedAt: Date | null;
   /** The account can re-authenticate with a password (needed to enrol). */
   hasPassword: boolean;
@@ -149,10 +150,7 @@ async function loadUserState(userId: string): Promise<UserState | null> {
     select: { mfaGraceStartedAt: true, passwordHash: true, authSource: true, role: true, mfaPolicy: true },
   });
   if (!user) return null;
-  // 10.6: central factor helper — a passkey or security key counts like TOTP
-  const factors = await getAuthFactors(userId);
   const state: UserState = {
-    enrolled: factors.enrolled,
     graceStartedAt: user.mfaGraceStartedAt instanceof Date ? user.mfaGraceStartedAt : null,
     // OIDC-only accounts have no password to confirm an enrolment with (reauth.ts)
     hasPassword: Boolean(user.passwordHash) || String(user.authSource) === 'LDAP',
@@ -191,6 +189,12 @@ async function graceDecision(
   return mfaEnforcementDecision(policy, { enrolled: false, mfaVerified: false, graceStart: start }, now);
 }
 
+/** 10.6: enrolled factor (central helper: TOTP, a passkey or a security key), read once per cached state. */
+async function enrolledOf(userId: string, user: UserState): Promise<boolean> {
+  if (user.enrolled === undefined) user.enrolled = (await getAuthFactors(userId)).enrolled;
+  return user.enrolled;
+}
+
 async function resolvedFor(userId: string): Promise<{ user: UserState; resolved: ResolvedMfaPolicy } | null> {
   const [settings, user] = await Promise.all([loadMfaPolicySettings(), loadUserState(userId)]);
   if (!user) return null;
@@ -214,7 +218,7 @@ export async function mfaEnforcementFor(
   if (!r) return { status: { state: 'satisfied' }, canEnrol: false };
   const { user, resolved } = r;
   if (resolved.enforcement !== 'all') return { status: { state: 'off' }, canEnrol: user.hasPassword, policy: resolved };
-  if (user.enrolled || opts.mfaVerified === true) return { status: { state: 'satisfied' }, canEnrol: user.hasPassword, policy: resolved };
+  if (opts.mfaVerified === true || await enrolledOf(userId, user)) return { status: { state: 'satisfied' }, canEnrol: user.hasPassword, policy: resolved };
   return { status: await graceDecision(userId, user, resolved, opts.now ?? new Date()), canEnrol: user.hasPassword, policy: resolved };
 }
 
@@ -230,7 +234,7 @@ export async function adminMfaEnforcementFor(userId: string, opts: { now?: Date 
   if (!r) return { status: { state: 'off' }, canEnrol: false };
   const { user, resolved } = r;
   if (resolved.enforcement !== 'admin') return { status: { state: 'off' }, canEnrol: user.hasPassword, policy: resolved };
-  if (user.enrolled) return { status: { state: 'satisfied' }, canEnrol: user.hasPassword, policy: resolved };
+  if (await enrolledOf(userId, user)) return { status: { state: 'satisfied' }, canEnrol: user.hasPassword, policy: resolved };
   return { status: await graceDecision(userId, user, resolved, opts.now ?? new Date()), canEnrol: user.hasPassword, policy: resolved };
 }
 

@@ -19,3 +19,23 @@ export async function getAuthFactors(userId: string): Promise<AuthFactors> {
   ]);
   return authFactorsOf({ mfa, webauthnCredentials });
 }
+
+/** The factors of many users in two queries (admin lists: "enrolled?" per account). Unknown ids → none. */
+export async function getAuthFactorsMany(userIds: readonly string[]): Promise<Map<string, AuthFactors>> {
+  const ids = [...new Set(userIds)];
+  const out = new Map<string, AuthFactors>();
+  if (ids.length === 0) return out;
+  const [mfa, creds] = await Promise.all([
+    prisma.userMfa.findMany({ where: { userId: { in: ids } }, select: { userId: true, totpEnabled: true, backupCodes: true } }),
+    prisma.webAuthnCredential.findMany({ where: { userId: { in: ids } }, select: { userId: true, kind: true, backupState: true } }),
+  ]);
+  const mfaBy = new Map(mfa.map((m) => [m.userId, m]));
+  const credsBy = new Map<string, Array<{ kind: string; backupState: boolean }>>();
+  for (const c of creds) {
+    const list = credsBy.get(c.userId) ?? [];
+    list.push(c);
+    credsBy.set(c.userId, list);
+  }
+  for (const id of ids) out.set(id, authFactorsOf({ mfa: mfaBy.get(id) ?? null, webauthnCredentials: credsBy.get(id) ?? [] }));
+  return out;
+}
