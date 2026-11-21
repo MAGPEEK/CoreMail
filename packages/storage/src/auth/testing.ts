@@ -202,6 +202,9 @@ export interface FakePrisma {
   adminScope: FakeTable;
   mcpToken: FakeTable;
   mfaTrustedDevice: FakeTable;
+  recoveryEmail: FakeTable;
+  mailboxDelegate: FakeTable;
+  folderPermission: FakeTable;
   [k: string]: unknown;
 }
 
@@ -313,6 +316,13 @@ export function createFakePrisma(): FakePrisma {
   p.mfaTrustedDevice = new FakeTable(() => ({
     createdAt: new Date(), lastUsedAt: null, userAgent: '', ipPrefix: '', revokedAt: null, revokedReason: null,
   }), ['id', 'tokenHash'], { user: () => p.user });
+  // 10.6: self-service password reset — recovery addresses and the readers of a mailbox
+  p.recoveryEmail = new FakeTable(() => ({
+    address: null, verifiedAt: null, pendingAddress: null, pendingTokenHash: null, pendingExpiresAt: null,
+    createdAt: new Date(), updatedAt: new Date(),
+  }), ['id', 'userId', 'pendingTokenHash']);
+  p.mailboxDelegate = new FakeTable(() => ({ autoMap: true, grantedAt: new Date(), grantedBy: 'admin' }));
+  p.folderPermission = new FakeTable(() => ({ applyToSubfolders: false, grantedBy: 'admin', grantedAt: new Date() }));
   return p;
 }
 

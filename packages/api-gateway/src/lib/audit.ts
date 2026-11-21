@@ -74,7 +74,8 @@ async function isAuditEnabled(): Promise<boolean> {
 // 10.5: attack protection — unlocks, block list / exception changes, its settings, automatic blocks.
 // 10.6: 'setup.certificate.' (setup wizard Let's Encrypt pre-flight / order / HTTPS assignment).
 // 10.6: 'auth.register.' (self-registration: account created by an anonymous visitor, admin approve / reject).
-export const ALWAYS_AUDIT = /^(settings\.|audit\.|audit-log\.|user\.role|mailbox(es)?\.delete|domains?\.delete|mcp\.|setup\.(secrets|certificate)\.|server\.restart|security\.(lock|ip|ip-rule|protection)\.|auth\.register\.)/i;
+// 10.6: 'auth.password-reset.' / 'auth.recovery-email.' (self-service password reset, docs/password-reset.md).
+export const ALWAYS_AUDIT = /^(settings\.|audit\.|audit-log\.|user\.role|mailbox(es)?\.delete|domains?\.delete|mcp\.|setup\.(secrets|certificate)\.|server\.restart|security\.(lock|ip|ip-rule|protection)\.|auth\.register\.|auth\.(password-reset|recovery-email)\.)/i;
 
 /**
  * Write an audit log entry asynchronously (fire-and-forget).

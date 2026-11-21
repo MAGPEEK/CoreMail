@@ -34,9 +34,9 @@ export function LoginPage() {
   const [maintenanceMode, setMaintenanceMode] = useState(false);
   const [maintenanceMessage, setMaintenanceMessage] = useState('');
 
-  const [selfServicePasswordReset, setSelfServicePasswordReset] = useState(true);
   // 10.6: "Konto erstellen" only while self-registration is open (config answers 200)
   const [registrationOpen, setRegistrationOpen] = useState(false);
+  const [selfServicePasswordReset, setSelfServicePasswordReset] = useState(false);
 
   // Fetch maintenance status + public settings on load (no auth required)
   useEffect(() => {
@@ -48,10 +48,10 @@ export function LoginPage() {
       })
       .catch(() => { /* ignore — no banner on network error */ });
 
-    fetch('/api/v1/admin/settings/public')
+    fetch('/auth/password-reset/available')
       .then((r) => r.json())
-      .then((d: { selfServicePasswordReset?: boolean }) => {
-        setSelfServicePasswordReset(d.selfServicePasswordReset !== false);
+      .then((d: { enabled?: boolean }) => {
+        setSelfServicePasswordReset(d.enabled === true);
       })
       .catch(() => undefined);
 

@@ -26,6 +26,7 @@ import { CalendarSettings } from '../components/settings/CalendarSettings.js';
 import { MailSortSettings } from '../components/settings/MailSortSettings.js';
 import { SessionsPanel, DevicesPanel, SmimeSettingsPanel, TrustedDevicesPanel } from '../components/settings/SecurityPanels.js';
 import { useMfaEnforcement } from '../hooks/useMfaEnforcement.js';
+import { RecoveryEmailPanel } from '../components/settings/RecoveryEmailPanel.js';
 import { NotificationsSection } from '../components/NotificationsSection.js';
 import { ViewKeyboardSettings } from '../components/ViewKeyboardSettings.js';
 import { format as fmtDate } from 'date-fns';
@@ -1325,6 +1326,8 @@ export function SecuritySection({ enrolmentOnly = false }: { enrolmentOnly?: boo
       {!enrolmentOnly && (
       <>
       <div className="space-y-8 border-t border-line pt-6">
+        {/* 10.6: external recovery address for "Passwort vergessen?" */}
+        <RecoveryEmailPanel />
         <SessionsPanel />
         {/* 10.6: remembered MFA devices ("Gerät merken") */}
         <TrustedDevicesPanel />

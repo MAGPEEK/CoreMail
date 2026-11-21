@@ -12,6 +12,13 @@
  *   POST /auth/logout         → { ok: true } — revokes the session of { refreshToken }
  *   POST /auth/mfa/verify     → proxied to the auth-service (same login service)
  *
+ * 10.6 self-service password reset (docs/password-reset.md):
+ *   POST /auth/forgot-password          → always 200 { ok: true } (work runs after the answer)
+ *   GET  /auth/password-reset/available → { enabled } (login page link)
+ *   POST /auth/reset-password/verify    → { valid, mfaRequired?, methods? }
+ *   POST /auth/reset-password           → { ok } | 400 INVALID_TOKEN / PASSWORD_POLICY / MFA_REQUIRED / MFA_INVALID | 429 MFA_LOCKED / RATE_LIMITED
+ *   POST /auth/recovery-email/confirm   → { ok } | 400 INVALID_TOKEN / HOSTED_ADDRESS
+ *
  * v8.1 browser clients (`X-CoreMail-Client: web`): the refresh token travels
  * only in the HttpOnly cookie cm_rt (BCP: cm_rt_bcp, `X-CoreMail-App: bcp`),
  * never in a body; /auth/refresh and /auth/logout accept the cookie when the
@@ -19,17 +26,17 @@
  */
 import { Router, type Router as RouterType, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { createTransport } from 'nodemailer';
-import { prisma, getProductName, brandDisplayName } from '@coremail/storage';
+import { recordSecurityEvent } from '@coremail/storage';
 import {
   login,
   loginOutcomeToHttp,
   rotateSession,
   revokeSessionByRefreshToken,
-  createPasswordResetToken,
   redeemPasswordReset,
-  isResetTokenValid,
-  RESET_TOKEN_TTL,
+  inspectResetToken,
+  loadSsprPolicy,
+  ssprAvailable,
+  confirmRecoveryEmail,
   registerAuthenticator,
   tokenPairResponse,
   readRefreshCookie,
@@ -43,8 +50,10 @@ import {
   type TokenPair,
 } from '@coremail/storage/auth';
 import { emptyTrashAfterLogout } from '../lib/empty-folder.js';
+import { audit } from '../lib/audit.js';
+import { requestPasswordReset, notifyPasswordResetDone, notifyRecoveryChange, maskAddress } from '../lib/password-reset.js';
 import { ldapAuthenticator } from '@coremail/auth-ldap';
-import { createLogger, getRedisClient, verifyRefreshToken } from '@coremail/core';
+import { createLogger, verifyRefreshToken } from '@coremail/core';
 
 const log = createLogger('api:auth');
 export const authRouter: RouterType = Router();
@@ -55,36 +64,6 @@ export const authRouter: RouterType = Router();
 // OIDC SSO has its own redirect flow (routes/sso.ts).
 registerAuthenticator(ldapAuthenticator());
 
-// Password reset: rate limit in Redis (3 requests per IP/email per hour)
-const RESET_RATE_PREFIX  = 'pwreset:rate:';
-const RESET_RATE_LIMIT   = 3;
-const RESET_RATE_WINDOW  = 3600; // 1 hour in seconds
-
-/** Sends an email via internal SMTP submission (localhost:587). */
-async function sendResetEmail(to: string, resetUrl: string): Promise<void> {
-  const settings = await prisma.serverSettings.findUnique({ where: { id: 'singleton' } });
-  const fromAddr = settings?.adminEmail?.trim() || `noreply@${settings?.publicHostname || 'mail.local'}`;
-  // 9.3: the branded product name (unbranded: the organisation name, as before)
-  const orgName  = brandDisplayName(await getProductName(), settings?.orgName);
-  const orgHtml  = orgName.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  const minutes  = Math.round(RESET_TOKEN_TTL / 60);
-
-  const transport = createTransport({
-    host: '127.0.0.1',
-    port: 587,
-    secure: false,
-    ignoreTLS: true, // internal, no TLS needed
-    tls: { rejectUnauthorized: false },
-  });
-
-  await transport.sendMail({
-    from: { name: orgName, address: fromAddr },
-    to,
-    subject: `${orgName} — Passwort zurücksetzen`,
-    text: `Guten Tag,\n\njemand (oder Sie selbst) hat eine Passwort-Zurücksetzung für Ihr Konto angefordert.\n\nKlicken Sie auf den folgenden Link, um ein neues Passwort zu setzen (gültig für ${minutes} Minuten):\n\n${resetUrl}\n\nFalls Sie diese Anfrage nicht gestellt haben, können Sie diese E-Mail ignorieren.\nIhr Konto ist weiterhin sicher.\n\n– ${orgName}`,
-    html: `<p>Guten Tag,</p><p>jemand (oder Sie selbst) hat eine Passwort-Zurücksetzung für Ihr Konto angefordert.</p><p><a href="${resetUrl}" style="display:inline-block;padding:10px 20px;background:#4f46e5;color:#fff;border-radius:6px;text-decoration:none;font-weight:bold;">Passwort zurücksetzen</a></p><p style="font-size:12px;color:#6b7280;">Dieser Link ist ${minutes} Minuten gültig. Falls Sie diese Anfrage nicht gestellt haben, können Sie diese E-Mail ignorieren.</p><p>– ${orgHtml}</p>`,
-  });
-}
 
 const LoginSchema = z.object({
   email:    z.string().email(),
@@ -204,95 +183,64 @@ authRouter.post('/logout', async (req: Request, res: Response) => {
 });
 
 // ── POST /auth/forgot-password ────────────────────────────────────────────────
-// Security principles:
-//   1. No user enumeration: the response is always identical (200 OK)
-//   2. Rate limit: max 3 requests per IP + email per hour (Redis)
-//   3. Token: crypto.randomBytes(32) = 256 bit entropy, stored as SHA-256 hash
+// Security principles (10.6, docs/password-reset.md):
+//   1. No user enumeration: the answer is always `200 { ok: true }`, sent BEFORE
+//      any lookup — neither body nor timing depends on the account; the work runs
+//      afterwards (lib/password-reset.ts requestPasswordReset)
+//   2. Rate limit: max 3 requests per IP and per e-mail per hour (Redis); hits are
+//      security events; blocked / locked client IPs are ignored silently
+//   3. Token: 256 bit, stored as SHA-256, 15 minutes, single use
 //   4. Earlier links stay valid until they expire (v7.0.0) — a reset request by
 //      an attacker cannot invalidate the victim's link
-//   5. Only active when ServerSettings.selfServicePasswordReset = true
-authRouter.post('/forgot-password', async (req: Request, res: Response) => {
-  const parsed = z.object({ email: z.string().email() }).safeParse(req.body);
-  if (!parsed.success) {
-    // Same response — no fingerprinting
-    res.json({ ok: true });
-    return;
-  }
-  const { email } = parsed.data;
-  const ip = req.ip ?? 'unknown';
+//   5. Policy (storage auth/sspr.ts): switch + methods (confirmed recovery address,
+//      own mailbox only while nobody else can read it), admins only when allowed,
+//      LOCAL accounts only
+const pendingResetWork = new Set<Promise<unknown>>();
 
-  // Always return the same response — no user enumeration possible
-  const ALWAYS_OK = () => res.json({ ok: true });
+/** Tests: resolves once every forgot-password request answered so far has been processed. */
+export async function settleForgotPasswordWork(): Promise<void> {
+  while (pendingResetWork.size > 0) await Promise.all([...pendingResetWork]);
+}
 
+authRouter.post('/forgot-password', (req: Request, res: Response) => {
+  // Always the same answer — no fingerprinting, no enumeration.
+  res.json({ ok: true });
+  const parsed = z.object({ email: z.string().email().max(320) }).safeParse(req.body);
+  if (!parsed.success) return;
+  const work = requestPasswordReset(parsed.data.email, req.ip ?? 'unknown', req.get('user-agent') ?? '');
+  pendingResetWork.add(work);
+  void work.finally(() => pendingResetWork.delete(work));
+});
+
+// ── GET /auth/password-reset/available ───────────────────────────────────────
+// 10.6: public — whether the login page offers "Passwort vergessen?" (the switch
+// is on and at least one method is enabled). A boolean only, nothing per account.
+authRouter.get('/password-reset/available', async (_req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'no-store');
   try {
-    // 1. Check feature flag
-    const settings = await prisma.serverSettings.findUnique({ where: { id: 'singleton' } });
-    if (settings?.selfServicePasswordReset === false) {
-      log.info({ email, ip }, 'Password reset disabled by admin');
-      ALWAYS_OK(); return;
-    }
-
-    // 2. Check rate limit (per IP + per email — both keys)
-    const redis = getRedisClient();
-    const rateKeyIp    = `${RESET_RATE_PREFIX}ip:${ip}`;
-    const rateKeyEmail = `${RESET_RATE_PREFIX}email:${email.toLowerCase()}`;
-
-    const [ipCount, emailCount] = await Promise.all([
-      redis.incr(rateKeyIp),
-      redis.incr(rateKeyEmail),
-    ]);
-    // Set TTL only on the first increment
-    if (ipCount === 1) await redis.expire(rateKeyIp, RESET_RATE_WINDOW);
-    if (emailCount === 1) await redis.expire(rateKeyEmail, RESET_RATE_WINDOW);
-
-    if (ipCount > RESET_RATE_LIMIT || emailCount > RESET_RATE_LIMIT) {
-      log.warn({ email, ip, ipCount, emailCount }, 'Password reset rate limit exceeded');
-      ALWAYS_OK(); return; // No error response — no enumeration
-    }
-
-    // 3. Look up user (active LOCAL users only)
-    const user = await prisma.user.findFirst({
-      where: { email: email.toLowerCase(), active: true, authSource: 'LOCAL' },
-      select: { id: true, email: true },
-    });
-
-    if (!user) {
-      log.info({ email }, 'Password reset: user not found or not local — silently ignored');
-      ALWAYS_OK(); return;
-    }
-
-    // 4. New token (earlier unexpired tokens remain valid)
-    const rawToken = await createPasswordResetToken(user.id, ip);
-
-    // 5. Build the reset URL
-    const base = settings?.useHttps
-      ? `https://${settings.publicHostname}`
-      : `http://${settings?.publicHostname ?? 'localhost'}:${settings?.httpPort ?? 3000}`;
-    const resetUrl = `${base}/reset-password?token=${rawToken}`;
-
-    // 6. Send email (fire-and-forget — log errors, but do not expose to the user)
-    sendResetEmail(user.email, resetUrl).catch((err) => {
-      log.error({ err, email: user.email }, 'Failed to send password reset email');
-    });
-
-    log.info({ userId: user.id, email: user.email }, 'Password reset token issued');
-    ALWAYS_OK();
-  } catch (err) {
-    log.error({ err, email, ip }, 'forgot-password error');
-    ALWAYS_OK(); // Even on error: leak no information
+    res.json({ enabled: ssprAvailable(await loadSsprPolicy()) });
+  } catch {
+    res.json({ enabled: false });
   }
 });
 
 // ── POST /auth/reset-password ─────────────────────────────────────────────────
-// Takes the plaintext token + new password and sets the password.
+// Takes the plaintext token + new password (+ 10.6 `mfaCode` for accounts with a
+// second factor: TOTP or backup code) and sets the password.
 //   1. Token is SHA-256 hashed and checked against the DB; single use
-//      (conditional update on usedAt IS NULL)
-//   2. Minimum length from ServerSettings.minPasswordLength
-//   3. All sessions AND app passwords of the user are revoked after the reset
+//      (conditional update on usedAt IS NULL); the SSPR policy is checked again
+//   2. Password policy (minimum length etc.) before the second factor
+//   3. Missing / wrong code → 400 MFA_REQUIRED / MFA_INVALID, the link stays
+//      usable; after 5 wrong codes it is burnt (429 MFA_LOCKED)
+//   4. All sessions AND app passwords are revoked; MFA stays; notices go to the
+//      own mailbox and the confirmed recovery address
 const ResetPasswordSchema = z.object({
   token:       z.string().min(32).max(128),
   newPassword: z.string().min(1).max(128),
+  mfaCode:     z.string().max(32).optional(),
 });
+
+const INVALID_LINK = 'Der Link ist ungültig oder abgelaufen. Bitte fordern Sie einen neuen an.';
 
 authRouter.post('/reset-password', async (req: Request, res: Response) => {
   const parsed = ResetPasswordSchema.safeParse(req.body);
@@ -301,13 +249,49 @@ authRouter.post('/reset-password', async (req: Request, res: Response) => {
     return;
   }
   const ip = req.ip ?? 'unknown';
+  const userAgent = req.get('user-agent') ?? '';
   try {
-    const r = await redeemPasswordReset(parsed.data.token, parsed.data.newPassword, ip);
-    if (r.ok) { res.json({ ok: true }); return; }
-    if (r.reason === 'policy') { res.status(400).json({ error: r.message }); return; }
-    if (r.reason === 'inactive') { res.status(400).json({ error: 'Dieses Konto ist deaktiviert.' }); return; }
-    log.warn({ ip }, 'Password reset: invalid or expired token');
-    res.status(400).json({ error: 'Der Link ist ungültig oder abgelaufen. Bitte fordern Sie einen neuen an.' });
+    const r = await redeemPasswordReset(parsed.data.token, parsed.data.newPassword, ip,
+      parsed.data.mfaCode !== undefined ? { mfaCode: parsed.data.mfaCode } : {});
+    if (r.ok) {
+      audit({ action: 'auth.password-reset.complete', targetType: 'user', targetId: r.userId, actorId: r.userId, ipAddress: ip, userAgent });
+      void notifyPasswordResetDone(r.userId, ip);
+      res.json({ ok: true });
+      return;
+    }
+    switch (r.reason) {
+      case 'policy':
+        res.status(400).json({ error: r.message, code: 'PASSWORD_POLICY' });
+        return;
+      case 'inactive':
+        res.status(400).json({ error: 'Dieses Konto ist deaktiviert.' });
+        return;
+      case 'mfa_rate_limited':
+        res.status(429).json({ error: 'Zu viele falsche Codes von dieser Adresse. Bitte versuchen Sie es später erneut.', code: 'RATE_LIMITED' });
+        return;
+      case 'mfa_required':
+        res.status(400).json({ error: 'Bitte geben Sie einen Code Ihrer Zwei-Faktor-Anmeldung ein.', code: 'MFA_REQUIRED' });
+        return;
+      case 'mfa_invalid':
+      case 'mfa_locked': {
+        const locked = r.reason === 'mfa_locked';
+        recordSecurityEvent({ type: 'PASSWORD_RESET_MFA_FAILED', ip, protocol: 'web', detail: { locked } });
+        audit({
+          action: 'auth.password-reset.mfa-failed', targetType: 'user', targetId: r.userId,
+          success: false, errorMsg: r.reason, ipAddress: ip, userAgent,
+        });
+        if (locked) {
+          res.status(429).json({ error: 'Zu viele falsche Codes. Bitte fordern Sie einen neuen Link an.', code: 'MFA_LOCKED' });
+        } else {
+          res.status(400).json({ error: 'Der Code ist falsch.', code: 'MFA_INVALID' });
+        }
+        return;
+      }
+      default:
+        log.warn({ ip }, 'Password reset: invalid or expired token');
+        recordSecurityEvent({ type: 'PASSWORD_RESET_INVALID_TOKEN', ip, protocol: 'web' });
+        res.status(400).json({ error: INVALID_LINK, code: 'INVALID_TOKEN' });
+    }
   } catch (err) {
     log.error({ err, ip }, 'reset-password error');
     res.status(500).json({ error: 'Interner Fehler. Bitte versuchen Sie es später erneut.' });
@@ -316,6 +300,8 @@ authRouter.post('/reset-password', async (req: Request, res: Response) => {
 
 // ── POST /auth/reset-password/verify ─────────────────────────────────────────
 // Checks whether a token is still valid (for frontend feedback before the form).
+// 10.6: also `mfaRequired` + `methods` (['totp', 'backup_code']) so the page can
+// ask for the second proof — only for the holder of a valid link.
 // v8.1: the token travels in the JSON body `{ token }` so it does not end up in
 // proxy/access logs. GET ?token= is kept for one release (deprecated).
 async function verifyResetToken(token: string, res: Response): Promise<void> {
@@ -324,7 +310,8 @@ async function verifyResetToken(token: string, res: Response): Promise<void> {
     return;
   }
   try {
-    res.json({ valid: await isResetTokenValid(token) });
+    const info = await inspectResetToken(token);
+    res.json(info.valid ? info : { valid: false });
   } catch {
     res.status(500).json({ valid: false });
   }
@@ -340,4 +327,32 @@ authRouter.get('/reset-password/verify', async (req: Request, res: Response) => 
   res.setHeader('Deprecation', 'true');
   res.setHeader('Link', '</auth/reset-password/verify>; rel="successor-version"');
   await verifyResetToken(typeof req.query['token'] === 'string' ? req.query['token'] : '', res);
+});
+
+// ── POST /auth/recovery-email/confirm ────────────────────────────────────────
+// 10.6: confirms a recovery address with the link mailed to it (public — the
+// link is opened wherever that mailbox is read). Single use, 24 h. The confirmed
+// address replaces the previous one; notices to the own mailbox + old address.
+authRouter.post('/recovery-email/confirm', async (req: Request, res: Response) => {
+  const body = (req.body ?? {}) as { token?: unknown };
+  const token = typeof body.token === 'string' ? body.token : '';
+  const ip = req.ip ?? 'unknown';
+  try {
+    const r = await confirmRecoveryEmail(token);
+    if (!r.ok) {
+      recordSecurityEvent({ type: 'RECOVERY_EMAIL_INVALID_TOKEN', ip, protocol: 'web' });
+      res.status(400).json({ error: 'Der Bestätigungslink ist ungültig oder abgelaufen.', code: r.reason === 'hosted_address' ? 'HOSTED_ADDRESS' : 'INVALID_TOKEN' });
+      return;
+    }
+    audit({
+      action: 'auth.recovery-email.confirm', targetType: 'user', targetId: r.userId, actorId: r.userId,
+      changes: { address: { from: maskAddress(r.previous), to: maskAddress(r.address) } },
+      ipAddress: ip, userAgent: req.get('user-agent') ?? '',
+    });
+    void notifyRecoveryChange(r.userId, 'confirmed', r.previous, r.address);
+    res.json({ ok: true });
+  } catch (err) {
+    log.error({ err, ip }, 'recovery-email confirm error');
+    res.status(500).json({ error: 'Interner Fehler. Bitte versuchen Sie es später erneut.' });
+  }
 });

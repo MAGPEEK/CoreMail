@@ -159,7 +159,6 @@ export function SettingsPage() {
   const [sec, setSec] = useState({
     minPasswordLength: 8,
     inactivityTimeoutMinutes: 30,
-    selfServicePasswordReset: true,
     auditLogEnabled: true,
     ...API_RATE_LIMIT_FORM_DEFAULTS,
     mailboxAccessAuditEnabled: true,
@@ -181,7 +180,6 @@ export function SettingsPage() {
     setMail({ maxMessageSizeMb: cfg.maxMessageSizeMb });
     setSec({ minPasswordLength: cfg.minPasswordLength,
              inactivityTimeoutMinutes: cfg.inactivityTimeoutMinutes,
-             selfServicePasswordReset: cfg.selfServicePasswordReset ?? true,
              auditLogEnabled: cfg.auditLogEnabled ?? true,
              ...rateLimitForm(cfg),
              mailboxAccessAuditEnabled: cfg.mailboxAccessAuditEnabled ?? true,
@@ -328,21 +326,11 @@ export function SettingsPage() {
           </Link>
         </FieldGroup>
 
-        <FieldGroup
-          label="Passwort-Selbstzurücksetzung"
-          hint="Erlaubt Benutzern, ihr Passwort eigenständig per E-Mail-Link zurückzusetzen (Vergessen-Funktion im Login)."
-        >
-          <Toggle
-            value={sec.selfServicePasswordReset}
-            onChange={(v) => updSec('selfServicePasswordReset', v)}
-            label={sec.selfServicePasswordReset ? 'Aktiviert — Benutzer können Passwort selbst zurücksetzen' : 'Deaktiviert — nur Administratoren können Passwörter zurücksetzen'}
-          />
-          {!sec.selfServicePasswordReset && (
-            <div className="flex items-center gap-2 mt-2 text-xs text-warning-fg bg-warning-bg border border-warning-line rounded px-3 py-2">
-              <AlertTriangle size={12} />
-              Der „Passwort vergessen?"-Link wird im Login-Formular ausgeblendet.
-            </div>
-          )}
+        {/* 10.6: self-service password reset moved to BCP → Authentifizierung → Passwort-Zurücksetzung */}
+        <FieldGroup label={t('sspr_title')} hint={t('settings_sec_sspr_moved')}>
+          <Link to="/authentication/password-reset" className="text-sm text-accent-fg hover:underline">
+            {t('settings_sec_sspr_open')}
+          </Link>
         </FieldGroup>
 
         <FieldGroup

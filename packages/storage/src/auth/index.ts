@@ -12,6 +12,8 @@ export * from './backup-codes.js';
 export * from './policy.js';
 export * from './reauth.js';
 export * from './password-reset.js';
+export * from './sspr.js';
+export * from './recovery-email.js';
 export * from './legacy-ldap.js';
 export { authRedis, type AuthRedis } from './redis.js';
 export * from './invalidation.js';

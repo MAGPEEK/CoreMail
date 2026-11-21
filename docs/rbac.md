@@ -246,6 +246,15 @@ The admin MFA rule (admin rule of the policy or an admin's own "Pflicht" excepti
 admin guard: an admin without a factor passes during the admin grace period (≤ 14 days, header
 `X-CoreMail-Mfa-Grace-Until`), afterwards `403 MFA_REQUIRED`; MCP tokens get no grace.
 
+10.6: `GET/PUT /settings/password-reset` (self-service password reset — switch, methods,
+admin exclusion, counts; BCP → Authentifizierung → Passwort-Zurücksetzung, route
+`/authentication/password-reset`, page area organisation): **org** — organisation read
+(SERVER_MANAGEMENT, VIEW_ONLY_ORG) / write (ORGANIZATION_MANAGEMENT only); the counts are
+organisation-wide and never shown to a scoped admin. Every change is audited as
+`settings.password-reset.update` with a from/to diff (always logged). The user's own recovery
+address (`/api/v1/user/recovery-email`) and the public reset routes under `/auth` are outside
+`/api/v1/admin` (docs/password-reset.md).
+
 Outside `/api/v1/admin`: the setup wizard's `GET /api/v1/setup/secrets-download` and
 `POST /api/v1/setup/finish` (10.4.2, docs/setup-wizard.md) — `requireRoleInSetupWindow()`, i.e.
 ORGANIZATION_MANAGEMENT only and never for a scoped admin: **org**. 10.5: this is

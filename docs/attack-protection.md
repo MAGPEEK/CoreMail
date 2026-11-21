@@ -181,6 +181,10 @@ between) and the strict login limiter of `/auth` (20 attempts / 15 min per
 address, protocol `web`). Before 10.6 a web brute force from one address showed
 20 failures and then nothing while it went on (the limiter answered 429 without
 an event), and an HTTP connection flood only reached the container log.
+10.6 self-service password reset (docs/password-reset.md, protocol `web`):
+`PASSWORD_RESET_RATE_LIMIT`, `PASSWORD_RESET_INVALID_TOKEN`, `PASSWORD_RESET_MFA_FAILED`,
+`RECOVERY_EMAIL_INVALID_TOKEN`; reset requests from blocked or locked client IPs are ignored
+silently.
 
 Bounded: at most `SECURITY_EVENTS_PER_IP_PER_MIN` (10) events per client IP and
 minute (in the process and across processes via Redis `secevt:<ip>:<minute>`),

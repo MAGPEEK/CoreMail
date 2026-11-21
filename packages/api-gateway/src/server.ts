@@ -47,6 +47,7 @@ import { userRouter } from './routes/user.js';
 import { userSettingsRouter } from './routes/user-settings.js';
 import { mfaEnforcementRouter } from './routes/mfa-enforcement.js';
 import { trustedDevicesRouter } from './routes/trusted-devices.js';
+import { recoveryEmailRouter } from './routes/recovery-email.js';
 import { userPolicyRouter } from './routes/user-policy.js';
 import { ownPhotoRouter, usersPhotoRouter } from './routes/profile-photo.js';
 import { userBackgroundRouter } from './routes/user-background.js';
@@ -454,6 +455,7 @@ app.use('/api/v1/user/background', userBackgroundRouter); // 10.1: own webmail b
 app.use('/api/v1/users',          usersPhotoRouter);   // 9.5: photos of the organisation (lookup, GET /:id/photo)
 app.use('/api/v1/user/mfa-enforcement', mfaEnforcementRouter); // 10.5: MFA enforcement state (allowed while enrolment is required)
 app.use('/api/v1/user/trusted-devices', trustedDevicesRouter); // 10.6: own remembered MFA devices (list / revoke)
+app.use('/api/v1/user/recovery-email', recoveryEmailRouter); // 10.6: recovery address for self-service password reset
 app.use('/api/v1/user',           userSettingsRouter); // 9.4: preferences, sessions, signatures
 app.use('/api/v1/user',           userPolicyRouter);   // 9.4: webmail features + trusted image senders
 app.use('/api/v1/user',           userRouter);
