@@ -13,6 +13,49 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [10.6.0] — 2026-11-21 — Authentication: MFA policy, passkeys, password reset, self-registration
+
+### Added
+
+- **BCP sidebar group "Authentifizierung"**: MFA, Passkeys, Passwort-Zurücksetzung, Selbstregistrierung, SSO and LDAP / Active Dir. (SSO and LDAP moved here; URLs unchanged).
+- **MFA policy** (BCP → Authentifizierung → MFA, docs/mfa-policy.md): all users *Pflicht / Optional / Aus*, admin rule *Pflicht / Wie alle Benutzer*, per-user exceptions *Erbt / Pflicht / Optional / Aus* (exception > admin rule > all users). *Aus* stops new enrolment only; enrolled factors keep working. API `/api/v1/admin/settings/mfa-policy`, `/api/v1/admin/user-mfa[/:id]`.
+- **Admin MFA grace period** (0–14 days, default 14): admins without a second factor keep the admin API until the deadline and see a dismissible prompt ("Jetzt einrichten" / "Später"); afterwards `403 MFA_REQUIRED`. MCP tokens get no grace.
+- **"Gerät merken"**: skip the MFA step on a known browser for 30 / 60 / 90 / custom days (default 30 for users and admins; admins never longer than users). HttpOnly cookie per surface, stored hashed (`mfa_trusted_devices`); browser password sign-ins only — never mail protocols, app passwords, CLI, MCP, SSO or passkeys. Revoked by password change/reset, MFA change, sign-out-everywhere, role/scope change, deactivation. Webmail → Sicherheit → Gemerkte Geräte.
+- **Passkeys** (WebAuthn Level 3, docs/passkeys.md): passwordless, usernameless sign-in with user verification in webmail and BCP (autofill + "Mit Passkey anmelden", incl. QR / other device); a passkey sign-in is multi-factor. Webmail passkey management (add with re-auth, rename, remove). BCP → Passkeys: server switch (**default off**), passwordless switch, RP ID / origins / HTTPS readiness, related origins (`/.well-known/webauthn`), domain and mailbox switches. Mailbox dialog: list/remove passkeys, MFA reset, one-time recovery link, passkey-only accounts. An account lock does not block a passkey sign-in; an IP lock and the block list do. Library `@simplewebauthn/server` 14.1.0 (pinned).
+- **Self-service password reset** (BCP → Authentifizierung → Passwort-Zurücksetzung, docs/password-reset.md): master switch, methods "Wiederherstellungsadresse" and "Eigenes Postfach", admins excluded by default. Users add a confirmed external **recovery address** in webmail → Sicherheit. Accounts with a second factor enter a TOTP or backup code on the reset page; the reset never removes MFA. Notices after a reset to the mailbox and the recovery address.
+- **Self-registration** (BCP → Authentifizierung → Selbstregistrierung, docs/self-registration.md): "Konto erstellen" on the webmail sign-in page, **off by default**; allowed domains, admin approval (default) or immediately active, optional invite codes (hashed, expiry, uses), pending list with approve/reject, admin notice. Reserved names refused, uniform answer for taken addresses, per-IP and global budgets, honeypot and minimum fill time, abuse counted in the attack protection. Accounts are always plain users.
+- **Setup wizard step "Zertifikat"** for a public host name: Let's Encrypt contact e-mail and terms checkbox, pre-flight checks with status, then the certificate is ordered and assigned to SMTP/IMAP/POP3 and HTTPS; local host names (e.g. `mail.example.local`) skip the step.
+- e2e steps `attack` and `passkeys`.
+
+### Changed
+
+- **Attack protection page**: loading indicator, "Zuletzt aktualisiert", every part refreshes every 30 s, empty and error states; the dashboard's "Aktualisieren" also refreshes the attack widget. HTTP connection floods and web-login brute force beyond the login limiter are now recorded and shown.
+- Admin MFA no longer blocks at once: up to 14 days of grace (fresh installations included).
+- One central factor check decides "has MFA" everywhere (web login, admin rule, enforcement, mail protocols); passkeys and security keys count as enrolled factors (mail programs then need app passwords).
+- Password reset: the answer is sent before any lookup; the own-mailbox link is written straight into the INBOX and skipped while others can read the mailbox; "Passwort vergessen?" is shown only when a reset is possible.
+- The MFA and password-reset switches moved from BCP → Einstellungen → Sicherheit to the new pages (existing values carried over).
+
+### Fixed
+
+- Security keys as second factor: keys without PIN work again (user verification), credential ids unique across users and length-checked, the external HTTPS port is part of the origin, every WebAuthn challenge is single use.
+
+### Security
+
+- Independent review of the release, all findings fixed: admin MFA grace can never be restarted or extended (own override refused, MFA-verified acting admin, admin accounts only by Organization Management); pre-10.6 security keys count as a factor until migrated (fail closed, migration retries, unreadable keys never dropped silently); self-registered accounts are never linked to OIDC or taken over by LDAP, and every link/takeover ends the account's sessions and app passwords; removing passkeys or resetting MFA ends sessions; MFA reset and recovery links only by Organization Management with notice to the user; `mfa.*` audit actions always logged; recovery addresses normalised before the "hosted here" check.
+
+### Deprecated
+
+- `UserMfa.webAuthnCredentials` (JSON) and `/auth/mfa/webauthn/register/*` — replaced by the passkey table and `/auth/passkeys/registration/*`; removed with the next MAJOR release.
+
+### Upgrade notes
+
+- Minor release, additive schema only (MFA policy columns, `mfa_trusted_devices`, passkey tables, `recovery_emails`, self-registration tables). Existing MFA settings are carried over; pre-10.6 security keys are copied into the new table at start-up.
+- Accounts with an administrator role no longer get password-reset links until "Auch Konten mit Administratorrolle zulassen" is on; users whose mailbox others can read need a recovery address.
+- Passkeys and self-registration stay off until an admin switches them on. Passkeys need HTTPS and a DNS host name.
+- Helm chart 3.6.0.
+
+---
+
 ## [10.5.0] — 2026-11-20 — Attack protection, send limits, MFA enforcement, local first domain
 
 ### Added

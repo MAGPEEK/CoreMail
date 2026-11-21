@@ -1,7 +1,7 @@
 name: coremail
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  CoreMail 10.5.0 — Docker Compose, standalone deployment file
+#  CoreMail 10.6.0 — Docker Compose, standalone deployment file
 #
 #  This one file is all a server needs — no repository checkout, no .env:
 #
@@ -60,7 +60,7 @@ services:
   #  then waits for PostgreSQL and Redis and starts the services.
   # ───────────────────────────────────────────────────────────────────────────
   coremail:
-    image: magpeek/coremail-app:${COREMAIL_VERSION:-10.5.0}
+    image: magpeek/coremail-app:${COREMAIL_VERSION:-10.6.0}
     container_name: coremail
     restart: unless-stopped
     environment:

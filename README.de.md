@@ -5,7 +5,7 @@
 <h1 align="center">CoreMail</h1>
 
 <p align="center">
-  <a href="https://github.com/MAGPEEK/CoreMail/releases"><img src="https://img.shields.io/badge/version-10.5.0-brightgreen.svg" alt="Version 10.5.0"></a>
+  <a href="https://github.com/MAGPEEK/CoreMail/releases"><img src="https://img.shields.io/badge/version-10.6.0-brightgreen.svg" alt="Version 10.6.0"></a>
   <a href="https://hub.docker.com/r/magpeek/coremail-app"><img src="https://img.shields.io/docker/pulls/magpeek/coremail-app.svg" alt="Docker Pulls"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="Lizenz: MIT"></a>
 </p>
