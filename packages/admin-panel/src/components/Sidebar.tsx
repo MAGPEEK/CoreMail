@@ -5,7 +5,7 @@ import {
   ShieldAlert, ShieldBan, Search,
   ShieldHalf, Archive,
   ClipboardList, Activity, Info, Terminal,
-  Fingerprint, ServerCog, HardDriveDownload, Palette, Bot,
+  Fingerprint, ServerCog, HardDriveDownload, Palette, Bot, KeyRound,
 } from 'lucide-react';
 import { useT } from '../i18n/useT.js';
 import { usePermissions } from '../hooks/usePermissions.js';
@@ -63,6 +63,13 @@ export function Sidebar() {
         { path: '/sso',              labelKey: 'nav_sso',              icon: Fingerprint },
         { path: '/ldap',             labelKey: 'nav_ldap',             icon: ServerCog },
         { path: '/mcp',              labelKey: 'nav_mcp',              icon: Bot },
+      ],
+    },
+    {
+      // 10.6: Authentifizierung — passkeys (the MFA policy page, SSO and LDAP join this group with the auth-policy work)
+      groupKey: 'nav_group_auth',
+      items: [
+        { path: '/passkeys',         labelKey: 'nav_passkeys',         icon: KeyRound },
       ],
     },
     {

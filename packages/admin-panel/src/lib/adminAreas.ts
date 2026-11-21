@@ -18,6 +18,8 @@ export const PATH_AREA: Record<string, AdminArea | null> = {
   'settings':         'organisation',
   'branding':         'organisation',
   'rbac':             'organisation',
+  // 10.6: Authentifizierung → Passkeys (organisation-wide admins; write ORGANIZATION_MANAGEMENT)
+  'passkeys':         'organisation',
   'ldap':             'identity',
   'sso':              'identity',
   'servers':          'servers',
