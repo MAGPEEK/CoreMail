@@ -4,8 +4,9 @@
  * createdAt }`) into WebAuthnCredential rows of kind "security_key" with
  * userHandle null (second factor only — never a passwordless sign-in).
  *
- * Idempotent: credentials that already have a row are skipped; runs at every
- * api-gateway start under a Redis lock. A credential id that appears for more
+ * Idempotent: each account is copied once (UserMfa.webAuthnMigratedAt — a key
+ * removed afterwards is never re-imported) and credentials that already have a
+ * row are skipped; runs at every api-gateway start under a Redis lock. A credential id that appears for more
  * than one user (§7.1 step 26 was never checked before 10.6, G3) is skipped for
  * ALL of them and alerted (error log + audit `passkey.migration_duplicate`).
  * The JSON column itself is left untouched (deprecated until the next MAJOR).
@@ -73,10 +74,15 @@ export async function migrateLegacyWebAuthnCredentials(opts: { lock?: MigrationL
   if (!(await lock.acquire())) return null;
   const result: MigrationResult = { users: 0, migrated: 0, skipped: 0, duplicates: 0, invalid: 0 };
   try {
+    // each account once (webAuthnMigratedAt): a key removed after the copy is never re-imported
     const rows = await prisma.userMfa.findMany({
-      where: { NOT: { webAuthnCredentials: { equals: [] } } },
+      where: { webAuthnMigratedAt: null, NOT: { webAuthnCredentials: { equals: [] } } },
       select: { userId: true, webAuthnCredentials: true },
     });
+    const markMigrated = async (): Promise<void> => {
+      const ids = rows.map((r) => r.userId);
+      if (ids.length) await prisma.userMfa.updateMany({ where: { userId: { in: ids }, webAuthnMigratedAt: null }, data: { webAuthnMigratedAt: new Date() } });
+    };
     const owners = new Map<string, Set<string>>();
     const parsed: Array<{ userId: string; cred: NonNullable<ReturnType<typeof parseLegacyCredential>> }> = [];
     for (const r of rows) {
@@ -92,7 +98,7 @@ export async function migrateLegacyWebAuthnCredentials(opts: { lock?: MigrationL
         owners.set(p.credentialId, set);
       }
     }
-    if (parsed.length === 0) return result;
+    if (parsed.length === 0) { await markMigrated(); return result; }
     const rp = await getRpConfig();
     const migratedUsers = new Set<string>();
     for (const { userId, cred } of parsed) {
@@ -139,6 +145,7 @@ export async function migrateLegacyWebAuthnCredentials(opts: { lock?: MigrationL
         changes: { users: [...users] }, success: false, errorMsg: 'credential id registered by several users',
       });
     }
+    await markMigrated();
     // mail-protocol credential caches must not keep a primary-password login of these users
     for (const userId of migratedUsers) await publishUserAuthChange(userId, 'mfa-change');
     if (result.migrated > 0 || result.duplicates > 0 || result.invalid > 0) {

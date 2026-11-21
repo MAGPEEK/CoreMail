@@ -33,7 +33,8 @@ or issues a "remember this device" token.
 
 Pre-10.6 security keys (`UserMfa.webAuthnCredentials` JSON) are copied once into the table as
 `security_key` with `userHandle = null` (startup backfill of the api-gateway, Redis lock,
-idempotent). They stay second factor only; the webmail marks them and offers "Als Passkey neu
+idempotent; each account once — `UserMfa.webAuthnMigratedAt` — so a key removed later is never
+re-imported). They stay second factor only; the webmail marks them and offers "Als Passkey neu
 registrieren". A credential id that more than one user had is skipped for **all** of them and
 alerted (error log + audit `passkey.migration_duplicate`). The JSON column itself is deprecated
 and stays until the next MAJOR release; nothing else reads it (repo-hygiene guard).
@@ -198,7 +199,8 @@ bytes), `publicKey` (COSE bytes), `algorithm`, `signCount` (BigInt — never ser
 `backupEligible` (null = unknown), `backupState`, `aaguid`, `attestationFmt`, `name`, `createdAt`,
 `lastUsedAt`, `lastUsedIp`. `PasskeyRecoveryToken`, `PasskeyPolicy`; `User.webauthnUserId` (random
 64 bytes, never personal data; `user.name` in the options is the e-mail address),
-`User.passwordLoginDisabled`, `Session.authMethod`, `ServerSettings.passkeysEnabled /
+`User.passwordLoginDisabled`, `Session.authMethod`, `UserMfa.webAuthnMigratedAt` (backfill marker),
+`ServerSettings.passkeysEnabled /
 passkeyPasswordlessEnabled / passkeyRpId / passkeyRelatedOrigins`.
 
 ## Environment

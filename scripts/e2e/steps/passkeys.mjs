@@ -189,7 +189,7 @@ export async function run(state) {
     const key = new SoftAuthenticator({ rpId: rp.rpId, origin: rp.origin });
     const json = JSON.stringify([key.legacyJson('YubiKey (old)')]);
     psql(`INSERT INTO user_mfa (id, "userId", "webAuthnCredentials", "backupCodes") VALUES ('e2e-legacy-mfa', ${sqlString(legacyId)}, ${sqlString(json)}::jsonb, '{}')
-          ON CONFLICT ("userId") DO UPDATE SET "webAuthnCredentials" = EXCLUDED."webAuthnCredentials"`);
+          ON CONFLICT ("userId") DO UPDATE SET "webAuthnCredentials" = EXCLUDED."webAuthnCredentials", "webAuthnMigratedAt" = NULL`);
     psql(`DELETE FROM webauthn_credentials WHERE "userId" = ${sqlString(legacyId)}`);
     await resetGatewayRateLimits(); // restarts the api-gateway → startup backfill
     let rows;

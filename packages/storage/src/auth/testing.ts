@@ -270,7 +270,7 @@ export function createFakePrisma(): FakePrisma {
     role: 'USER', domainId: 'dom1', active: true, passwordHash: null, authSource: 'LOCAL', displayName: '',
   }), ['id', 'email']);
   p.userMfa = new FakeTable(() => ({
-    totpSecret: null, totpEnabled: false, totpLastUsedStep: null, webAuthnCredentials: [],
+    totpSecret: null, totpEnabled: false, totpLastUsedStep: null, webAuthnCredentials: [], webAuthnMigratedAt: null,
     backupCodes: [], backupCodesUsed: 0, emailOtpEnabled: false,
   }), ['id', 'userId']);
   p.session = new FakeTable(() => ({

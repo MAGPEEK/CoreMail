@@ -446,6 +446,9 @@ model UserMfa {
   /// as a JSON array. Copied once into WebAuthnCredential (kind security_key) by
   /// the startup backfill (src/auth/passkey-migration.ts) — nothing else reads it.
   webAuthnCredentials Json    @default("[]")
+  /// 10.6: when the backfill copied webAuthnCredentials into WebAuthnCredential —
+  /// each account is copied once, so a key removed later is never re-imported.
+  webAuthnMigratedAt  DateTime?
   backupCodes         String[]
   backupCodesUsed     Int     @default(0)
   emailOtpEnabled     Boolean @default(false)

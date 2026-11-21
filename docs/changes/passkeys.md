@@ -32,7 +32,7 @@ it. Details: [docs/passkeys.md](../passkeys.md).
   `/api/v1/admin/mailboxes/:id/passkeys[/:pid]`, `…/mfa-reset`, `…/passkey-recovery`,
   `…/passkey-policy` (RBAC decisions in docs/rbac.md).
 - Schema (additive): `WebAuthnCredential`, `PasskeyRecoveryToken`, `PasskeyPolicy`,
-  `User.webauthnUserId`, `User.passwordLoginDisabled`, `Session.authMethod`,
+  `User.webauthnUserId`, `User.passwordLoginDisabled`, `Session.authMethod`, `UserMfa.webAuthnMigratedAt`,
   `ServerSettings.passkeysEnabled / passkeyPasswordlessEnabled / passkeyRpId /
   passkeyRelatedOrigins`. One-time startup backfill of the pre-10.6 security keys.
 - Dependency: `@simplewebauthn/server` **14.1.0** (pinned exactly; Node ≥ 22), in the new subpath

@@ -492,6 +492,7 @@ test('migration: legacy JSON → security_key rows (idempotent); duplicates skip
   assert.ok(audits.some((x) => x.action === 'passkey.migration_duplicate'));
   const r2 = await wa.migrateLegacyWebAuthnCredentials({ lock: noLock });
   assert.equal(r2?.migrated, 0);
+  assert.equal(r2?.users, 0, 'every account is processed once');
   assert.equal(db.webAuthnCredential.rows.length, 1);
   assert.equal(await wa.migrateLegacyWebAuthnCredentials({ lock: { acquire: async () => false, release: async () => undefined } }), null);
   // the migrated key works as second factor (UV not required), never passwordless
@@ -507,4 +508,8 @@ test('migration: legacy JSON → security_key rows (idempotent); duplicates skip
   assert.equal(ok.kind, 'tokens');
   // its unknown BE was adopted at first use
   assert.equal(db.webAuthnCredential.rows[0]!['backupEligible'], false);
+  // a removed migrated key is never re-imported from the (deprecated) JSON
+  assert.equal(await auth.deleteCredential(uid, String(db.webAuthnCredential.rows[0]!['id']), { id: uid }), 'ok');
+  await wa.migrateLegacyWebAuthnCredentials({ lock: noLock });
+  assert.equal(db.webAuthnCredential.rows.length, 0);
 });
