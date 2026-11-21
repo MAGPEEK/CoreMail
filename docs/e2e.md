@@ -96,7 +96,15 @@ node scripts/e2e/run.mjs imap pop3       # single steps (state is kept in state.
 node --test scripts/e2e/repo-hygiene.test.mjs   # static regression checks (no stack needed)
 ```
 
-Steps: `setup users smtp imap pop3 jmap dav dav-tasks contacts eas eas-body eas-commands eas-legacy eas-pim rest webmail admin tls legacy-clients backup branding profile-photo mfa live protocols policies scopes mapi lockout restart storage schema-upgrade`.
+Steps: `setup users smtp imap pop3 jmap dav dav-tasks contacts eas eas-body eas-commands eas-legacy eas-pim rest webmail admin tls legacy-clients backup branding profile-photo mfa live protocols policies scopes mapi lockout attack restart storage schema-upgrade`.
+`attack` (10.6): a fresh account is locked by 11 wrong IMAPS logins (the 11th is refused as locked, the correct
+password too); `GET /api/v1/admin/security/protection/locks` lists the account lock (protocol `imap`, remaining
+time, 10 failures), the attack summary counts IMAP events and an `AUTH_LOCKOUT` event names the account; the
+release ("Entsperren") removes it and the correct password works. Then a helper container (`E2E_IMAGE`, default
+`coremail-app:e2e`) on the stack network is admitted (IMAPS greeting, HTTP 200), a block list entry for its
+address refuses it on IMAPS and HTTP (`403 IP_BLOCKED`, event `IP_BLOCKLIST`), and after removing the entry it is
+admitted again. The account, the entry and the container are removed; the runner's own failure counter is reset.
+See [attack-protection.md](attack-protection.md).
 `eas-pim` (w3): a 14.1 device provisions and its FolderSync lists the default calendar (type 8),
 `tasks:default` (7) and `notes:default` (10); an event created over REST arrives in the calendar
 Sync with the event id as ServerId; a task added by the device (ClientId → ServerId) is a task over
@@ -268,7 +276,7 @@ Notes:
 - The `lockout` step clears the `mailauth:*` Redis keys afterwards.
 - Environment overrides: `E2E_HOST`, `E2E_*_PORT`, `E2E_CONTAINER`, `E2E_DOMAIN`
   (default `e2e.test`), `E2E_ENV_FILE`, `E2E_COMPOSE_PROJECT`, `E2E_STORAGE` (`minio` | `filesystem`),
-  `E2E_SCANNERS` (`deployed` default | `absent`).
+  `E2E_SCANNERS` (`deployed` default | `absent`), `E2E_IMAGE` (image of the `attack` step's helper container, default `coremail-app:e2e`).
 
 ## 4. Tear down
 

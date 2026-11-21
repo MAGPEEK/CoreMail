@@ -40,7 +40,7 @@ import type https from 'node:https';
 import type net from 'node:net';
 import { isIP } from 'node:net';
 import { createLogger } from '@coremail/core';
-import { createExemptIpMatcher, normalizeIp, isLoopbackIp } from '@coremail/storage';
+import { createExemptIpMatcher, normalizeIp, isLoopbackIp, recordSecurityEvent, type SecurityEventInput } from '@coremail/storage';
 
 const log = createLogger('http-hardening');
 
@@ -524,6 +524,24 @@ export function guardedRequestHandler(
   };
 }
 
+// ── Attack dashboard ──────────────────────────────────────────────────────────
+
+/**
+ * 10.6: a connection refused by the connection limits is logged AND recorded
+ * for the attack dashboard (BCP → Angriffsschutz, dashboard widget) as
+ * IP_RATE_LIMIT / protocol http — before, an HTTP connection flood only
+ * reached the container log. Called at most once per key + reason and
+ * minute (logRefusal's window; the refusals in between are in `suppressed`);
+ * the recorder samples per IP and skips loopback.
+ */
+export function reportHttpRefusal(info: RefusalInfo, record: (e: SecurityEventInput) => void = recordSecurityEvent): void {
+  log.warn(info, 'HTTP connection refused — connection limit reached');
+  record({
+    type: 'IP_RATE_LIMIT', ip: info.ip, protocol: 'http',
+    detail: { reason: info.reason, limit: info.limit, server: info.server, suppressed: info.suppressed, ...(info.key !== info.ip ? { key: info.key } : {}) },
+  });
+}
+
 // ── Process-wide instance (HTTP server + HTTPS proxy share one guard) ───────
 
 let shared: { config: HttpHardeningConfig; guard: HttpConnectionGuard; stallWatcher: WriteStallWatcher | undefined } | null = null;
@@ -533,7 +551,7 @@ export function httpHardening(): { config: HttpHardeningConfig; guard: HttpConne
   if (shared) return shared;
   const { config, warnings } = loadHttpHardeningConfig();
   for (const w of warnings) log.warn(w);
-  const { guard, invalidExempt } = createHttpConnectionGuard(config);
+  const { guard, invalidExempt } = createHttpConnectionGuard(config, { onRefused: (info) => reportHttpRefusal(info) });
   if (invalidExempt.length) log.warn({ invalid: invalidExempt }, 'HTTP_CONN_EXEMPT_CIDRS: invalid entries ignored');
   let stalls = 0;
   let lastStallLog = 0;

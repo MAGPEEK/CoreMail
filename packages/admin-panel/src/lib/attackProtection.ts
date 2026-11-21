@@ -112,3 +112,30 @@ export const EXPIRY_CHOICES: ReadonlyArray<number | null> = [null, 1, 7, 30, 90,
 export function totalEvents(byProtocol: ReadonlyArray<{ protocol: string; count: number }> | undefined): number {
   return (byProtocol ?? []).reduce((n, p) => n + p.count, 0);
 }
+
+/** 10.6: every query of the page is refreshed this often (and by the button). */
+export const AUTO_REFRESH_MS = 30_000;
+
+/**
+ * 10.6: when the page's data was last refreshed — the most recent successful
+ * fetch of its queries (TanStack `dataUpdatedAt`, 0 = never). null = nothing loaded yet.
+ */
+export function lastRefreshedAt(updatedAts: ReadonlyArray<number | undefined>): number | null {
+  const max = Math.max(0, ...updatedAts.map((t) => (typeof t === 'number' && Number.isFinite(t) ? t : 0)));
+  return max > 0 ? max : null;
+}
+
+/**
+ * 10.6: what the events section shows — the summary's error, "loading", the
+ * empty state ("Keine Angriffe in den letzten 24 h") or the per-protocol counts.
+ * An error is never shown as "no attacks".
+ */
+export function eventsView(
+  summary: { byProtocol?: ReadonlyArray<{ protocol: string; count: number }>; total24h?: number } | undefined,
+  isError: boolean,
+): 'error' | 'loading' | 'empty' | 'list' {
+  if (isError && !summary) return 'error';
+  if (!summary) return 'loading';
+  const total = typeof summary.total24h === 'number' ? summary.total24h : totalEvents(summary.byProtocol);
+  return total > 0 && (summary.byProtocol?.length ?? 0) > 0 ? 'list' : 'empty';
+}
