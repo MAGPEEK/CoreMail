@@ -10,6 +10,8 @@ import {
   dueReminders, markSeen, parseReminderMessage, reminderMessage, type ReminderFire, type ReminderSeen, type ReminderTask,
 } from '../lib/taskReminders.js';
 import { eventReminderItems, flagReminderItems } from '../lib/reminderSources.js';
+import { hintNotification, reminderHref } from '../lib/notifications.js';
+import { useNotifications } from '../store/notifications.js';
 
 // ── localStorage — persist reminders ───────────────────────────────────────────
 // Keys "taskId:reminderEpochMs" (lib/taskReminders.ts reminderKey): a popup fires
@@ -37,11 +39,14 @@ function escapeHtml(s: string): string {
 }
 
 function showToast(fire: Pick<ReminderFire, 'kind' | 'key' | 'subject'>): void {
+  const text = fire.kind === 'due' ? `⏰ Aufgabe fällig: ${fire.subject}` : `🔔 Erinnerung: ${fire.subject}`;
   if (fire.kind === 'due') {
-    toast(`⏰ Aufgabe fällig: ${fire.subject}`, { icon: '📋', duration: 8000, id: `due:${fire.key}` });
+    toast(text, { icon: '📋', duration: 8000, id: `due:${fire.key}` });
   } else {
     toast(`🔔 Erinnerung: ${fire.subject}`, { icon: '⏰', duration: 12_000, id: `rem:${fire.key}` });
   }
+  // 10.7: also listed in the bell panel of the rail (this session)
+  useNotifications.getState().add(hintNotification('reminder', `${fire.kind}:${fire.key}`, text, Date.now(), reminderHref(fire.key)));
 }
 
 async function sendReminderMail(subject: string, itemId: string): Promise<void> {

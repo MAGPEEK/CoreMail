@@ -6,11 +6,18 @@
 import type { ReactNode } from 'react';
 import { useDroppable, useDraggable } from '@dnd-kit/core';
 import {
-  Inbox, FileText, Send, Trash2, AlertTriangle, Archive, Folder, ChevronRight, ChevronDown, Clock,
+  Inbox, FileText, Send, Trash2, AlertTriangle, Archive, Folder, ChevronRight, ChevronDown, Clock, MoreHorizontal,
 } from 'lucide-react';
 import type { Folder as FolderType } from '../api/types.js';
 import { AnimatedCounter } from './AnimatedCounter.js';
 import { ROOT_KEY } from '../lib/folderTree.js';
+import { fmt, translate } from '../i18n/useT.js';
+
+/** Opens a folder's context menu at an element (the row's "…" button, or the row by keyboard). */
+function menuAt(el: HTMLElement, open: (e: React.MouseEvent) => void): void {
+  const r = el.getBoundingClientRect();
+  open({ preventDefault: () => undefined, clientX: r.left, clientY: r.bottom } as unknown as React.MouseEvent);
+}
 
 export const SYSTEM_ORDER = ['INBOX', 'Drafts', 'Sent', 'Trash', 'Junk', 'Archive'] as const;
 export const SYSTEM_SET = new Set(SYSTEM_ORDER as readonly string[]);
@@ -127,7 +134,7 @@ export function FolderItem({
   return (
     <div
       ref={setDropRef}
-      className={`relative rounded-sm transition-all duration-150 ${
+      className={`group/row relative rounded-sm transition-all duration-150 ${
         isOver ? 'ring-2 ring-accent-fg ring-inset bg-accent/15 scale-[1.02] animate-drop-pulse' : ''
       }`}
     >
@@ -143,6 +150,8 @@ export function FolderItem({
         onKeyDown={(e) => {
           // role="button": Enter / Space select like a click; arrows open/close subfolders
           if (e.target !== e.currentTarget) return;
+          // 10.7: the context-menu key / Shift+F10 open the folder menu (same as the row's "…")
+          if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) { e.preventDefault(); menuAt(e.currentTarget, onContextMenu); return; }
           if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select(); }
           else if (hasChildren && e.key === 'ArrowRight' && !expanded) { e.preventDefault(); onToggleExpand(); }
           else if (hasChildren && e.key === 'ArrowLeft' && expanded) { e.preventDefault(); onToggleExpand(); }
@@ -201,11 +210,24 @@ export function FolderItem({
           </span>
         )}
         {!noSelect && folder.unreadCount > 0 && (
-          <span className="ml-auto pl-1 shrink-0 tabular-nums" title={`${folder.unreadCount} ungelesen`}>
+          <span className="ml-auto pl-1 shrink-0 tabular-nums group-hover/row:invisible group-focus-within/row:invisible" title={`${folder.unreadCount} ungelesen`}>
             <AnimatedCounter value={folder.unreadCount} className="text-xs font-bold text-accent-fg" />
           </span>
         )}
       </div>
+      {/* 10.7: "…" on hover / focus — the same folder context menu as a right click (outside the
+          treeitem: a tree item holds no nested controls; keyboard: context-menu key / Shift+F10) */}
+      <button
+        type="button"
+        tabIndex={-1}
+        aria-label={fmt(translate('folder_more'), { folder: label })}
+        title={fmt(translate('folder_more'), { folder: label })}
+        onClick={(e) => { e.stopPropagation(); menuAt(e.currentTarget, onContextMenu); }}
+        onPointerDown={(e) => e.stopPropagation()}
+        className="absolute right-1 top-1/2 -translate-y-1/2 w-6 h-6 inline-flex items-center justify-center rounded text-fg-muted bg-surface-2 hover:bg-surface-3 hover:text-fg opacity-0 pointer-events-none group-hover/row:opacity-100 group-hover/row:pointer-events-auto group-focus-within/row:opacity-100 group-focus-within/row:pointer-events-auto transition-opacity"
+      >
+        <MoreHorizontal size={14} aria-hidden="true" />
+      </button>
     </div>
   );
 }

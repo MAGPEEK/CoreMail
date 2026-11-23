@@ -61,7 +61,7 @@ test('contrast.ts background lists match tokens.css', () => {
 });
 
 test('accent presets: white on accent >= 4.5:1, derived accent-fg >= 4.5:1 in both themes', () => {
-  const presets = ['0 120 212', '98 100 167', '16 124 16', '216 59 1', '0 133 117', '180 0 158'];
+  const presets = ['0 109 119', '0 120 212', '98 100 167', '16 124 16', '216 59 1', '0 133 117', '180 0 158'];
   for (const p of presets) {
     assert.ok(contrastRatio(WHITE, parseRgbChannels(p)) >= 4.5, `white on ${p}`);
     for (const isDark of [false, true]) {
@@ -77,9 +77,9 @@ test('accent presets: white on accent >= 4.5:1, derived accent-fg >= 4.5:1 in bo
 });
 
 test('initial accent fill = the brand colour injected by the gateway (--brand-primary), else the default', () => {
-  assert.ok(css.includes('  --color-accent: var(--brand-primary, 0 120 212);'));
+  assert.ok(css.includes('  --color-accent: var(--brand-primary, 0 109 119);'));
   // the text colour never depends on the raw brand colour (it stays contrast-checked above)
-  assert.ok(css.includes('  --color-accent-fg: 0 95 184;'));
+  assert.ok(css.includes('  --color-accent-fg: 0 109 119;'));
 });
 
 test('theme files are identical in web-client and admin-panel', () => {

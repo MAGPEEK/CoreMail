@@ -9,15 +9,15 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { MAIL_VIEW_COLUMN_CLASS, MAIL_VIEW_ROOT_CLASS, fillsFlexRow } from './mailLayout.ts';
+import { DRAFT_STRIP_CLASS, MAIL_VIEW_COLUMN_CLASS, MAIL_VIEW_ROOT_CLASS, draftStripPlace, fillsFlexRow } from './mailLayout.ts';
 
 const src = join(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (p: string) => readFileSync(join(src, p), 'utf8');
 
 test('mail view root fills the horizontal <main> and may shrink', () => {
   assert.ok(fillsFlexRow(MAIL_VIEW_ROOT_CLASS));
-  assert.ok(fillsFlexRow(MAIL_VIEW_COLUMN_CLASS), '9.4: the column holding the view + draft tab strip');
-  assert.match(read('pages/MailPage.tsx'), /className=\{MAIL_VIEW_COLUMN_CLASS\}[\s\S]*<DraftTabStrip \/>/);
+  assert.ok(fillsFlexRow(MAIL_VIEW_COLUMN_CLASS), '9.4: the column holding the mail view');
+  assert.match(read('pages/MailPage.tsx'), /className=\{MAIL_VIEW_COLUMN_CLASS\}/);
   assert.equal(fillsFlexRow('h-full flex flex-col bg-surface-2'), false, 'the 9.2 shared-mailbox root');
   assert.equal(fillsFlexRow('flex-1 overflow-hidden'), false, 'flex-1 alone keeps min-width:auto');
   // <main> is a horizontal flex row (App.tsx)
@@ -25,6 +25,27 @@ test('mail view root fills the horizontal <main> and may shrink', () => {
   // MailPage renders its root with the contract class
   const page = read('pages/MailPage.tsx');
   assert.match(page, /className=\{MAIL_VIEW_ROOT_CLASS\}/);
+});
+
+test('10.7: the draft tabs sit at the top of the content card, else above the list, never without drafts', () => {
+  assert.equal(draftStripPlace(0, ['folders', 'list', 'reader']), 'none');
+  assert.equal(draftStripPlace(2, ['folders', 'list', 'reader']), 'content');
+  assert.equal(draftStripPlace(1, ['folders', 'list', 'compose']), 'content');
+  assert.equal(draftStripPlace(1, ['compose']), 'content', 'single pane: the shown draft');
+  assert.equal(draftStripPlace(1, ['folders', 'list']), 'list', 'reading pane off');
+  assert.equal(draftStripPlace(1, ['list']), 'list', 'single pane: the list');
+  assert.equal(draftStripPlace(1, ['folders']), 'list');
+  const page = read('pages/MailPage.tsx');
+  assert.match(page, /const contentStrip = stripPlace === 'content' \? <DraftTabStrip \/> : null;/);
+  assert.match(page, /\{stripPlace === 'list' && <DraftTabStrip \/>\}/);
+  assert.match(DRAFT_STRIP_CLASS, /\bborder-b\b/, 'a tab row at the top of the card');
+});
+
+test('10.7: three cards with labelled regions; the folder card is a card like the others', () => {
+  const page = read('pages/MailPage.tsx');
+  assert.match(page, /<section aria-label=\{t\('mail_region_list'\)\}/);
+  assert.match(page, /<section key=\{selectedMessageId\} aria-label=\{t\('mail_region_content'\)\}/);
+  assert.match(page, /className=\{`h-full \$\{FOLDER_PANE_CLASS\}`\}/);
 });
 
 test('shared / delegated mailboxes open in the mail view (no separate page)', () => {

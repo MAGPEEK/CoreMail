@@ -18,7 +18,7 @@ export interface TargetMessage {
   flagStartAt: string | null;
   flagDueAt: string | null;
   flagReminderAt: string | null;
-  /** 10.1: what reply / forward of the ribbon need */
+  /** what reply / forward need (10.1) */
   subject: string;
   fromAddr: string;
   toAddrs: string[];

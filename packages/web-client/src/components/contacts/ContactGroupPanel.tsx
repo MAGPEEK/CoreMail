@@ -37,7 +37,7 @@ function MemberList({ members, onRemove }: { members: readonly GroupMember[]; on
   );
 }
 
-/** The commands (edit, delete, e-mail to the list) live in the ribbon (lib/contactsRibbon.ts). */
+/** The commands (edit, delete, e-mail to the list) live in the action row of the details card (lib/contactsCommands.ts). */
 export function ContactGroupDetails({ group }: { group: ContactGroupDetail }) {
   return (
     <div className="p-4 sm:p-6 max-w-2xl">

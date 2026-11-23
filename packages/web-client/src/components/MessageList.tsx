@@ -1,12 +1,22 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useDraggable } from '@dnd-kit/core';
+import toast from 'react-hot-toast';
 import {
   Paperclip, Pin, Archive, Trash2, Mail, MailOpen, Flag, FlagOff,
   Forward, Reply, ReplyAll, AlertOctagon, Clock, FolderInput, ShieldOff, Download, Code, Tag,
   Search, X, ListFilter, Settings, ShieldAlert, CalendarClock, CheckCircle2, ChevronDown,
+  RefreshCw, SlidersHorizontal, ArrowUp, ArrowDown,
 } from 'lucide-react';
+import { CommandBar, type CommandItem } from './CommandBar.js';
+import { SelectionBar } from './MailCommands.js';
+import { SearchOperatorsHelp } from './SearchOperatorsHelp.js';
+import { insertSearchToken } from '../lib/searchInput.js';
+import { GLOBAL_SEARCH_INPUT_ID, takeSearchFocusRequest } from '../hooks/useGlobalShortcuts.js';
+import { SORT_FIELD_LABEL, VIEW_MENU, listHeading, statusCount, toggledSortDir, type ViewMenuId } from '../lib/mailList.js';
+import type { SortDir, SortField } from '../lib/preferences.js';
+import type { Density, ReadingPane } from '../store/ui.js';
 import { RuleEditorModal } from './RuleEditorModal.js';
 import type { RulePreset } from '../api/rule-types.js';
 import { api, downloadFile, fetchText } from '../api/client.js';
@@ -46,7 +56,25 @@ const LIST_SEARCH_SUGGESTIONS_ID = 'msglist-search-suggestions';
 
 interface Props {
   folderId: string;
+  /** 10.7: control at the start of the header row (the folder drawer button in the two-column layout). */
+  leading?: ReactNode;
 }
+
+const READING_PANE: { value: ReadingPane; labelKey: 'mail_view_pane_right' | 'mail_view_pane_bottom' | 'mail_view_pane_off' }[] = [
+  { value: 'right', labelKey: 'mail_view_pane_right' },
+  { value: 'bottom', labelKey: 'mail_view_pane_bottom' },
+  { value: 'off', labelKey: 'mail_view_pane_off' },
+];
+const DENSITY: { value: Density; labelKey: 'mail_view_density_compact' | 'mail_view_density_normal' | 'mail_view_density_comfortable' }[] = [
+  { value: 'compact', labelKey: 'mail_view_density_compact' },
+  { value: 'normal', labelKey: 'mail_view_density_normal' },
+  { value: 'comfortable', labelKey: 'mail_view_density_comfortable' },
+];
+const SORT_FIELDS: readonly SortField[] = ['date', 'from', 'subject', 'size'];
+const SORT_DIRS: { value: SortDir; labelKey: 'view_sort_desc' | 'view_sort_asc' }[] = [
+  { value: 'desc', labelKey: 'view_sort_desc' },
+  { value: 'asc', labelKey: 'view_sort_asc' },
+];
 
 /** DOM id of a date group header row (10.1). */
 const groupRowId = (key: string) => `grp-row-${key}`;
@@ -237,6 +265,8 @@ function MessageRow({
           } group-hover:text-accent-fg group-hover:underline group-hover:underline-offset-2`}>
             {msg.subject || '(kein Betreff)'}
           </p>
+          {/* 10.7: third line — a one-line preview when the list API delivers one */}
+          {msg.preview && <p className="text-xs text-fg-subtle truncate mt-0.5">{msg.preview}</p>}
           {msg.categories && msg.categories.length > 0 && (
             <div className="flex flex-wrap gap-1 mt-1">
               {msg.categories.map((c) => (
@@ -323,12 +353,13 @@ function useDebounced<T>(value: T, ms: number): T {
   return v;
 }
 
-export function MessageList({ folderId }: Props) {
+export function MessageList({ folderId, leading }: Props) {
   const qc = useQueryClient();
   const { selectedMessageId, setSelectedMessage, selectedIds, toggleSelection, selectAll, clearSelection, filter, setFilter, openCompose } = useUiStore();
-  const { density } = useUiPrefs();
+  const { density, readingPane, setReadingPane, setDensity, setGroupByConversation } = useUiPrefs();
   const t = useT();
-  const { runWithUndo, deletePermanently, setState } = useMailActions();
+  const { runWithUndo, deletePermanently, setState, markFolderRead } = useMailActions();
+  const updatePrefs = usePreferences((s) => s.update);
   const followUp = useFollowUp();
   // 9.3: own, shared or delegated mailbox — same API shapes, different base
   const mailbox = useActiveMailbox();
@@ -351,7 +382,12 @@ export function MessageList({ folderId }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
 
-  // Global search from the TopBar navigates to /mail?q=… → run it as a mailbox-wide search
+  // 10.7: `/` pressed on another page opened the mail view — focus the search now
+  useEffect(() => {
+    if (takeSearchFocusRequest()) searchInputRef.current?.focus();
+  }, []);
+
+  // A deep link /mail?q=… (bookmarks, other pages) runs a mailbox-wide search ("Alle")
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const urlQuery = searchParams.get('q');
@@ -841,14 +877,76 @@ export function MessageList({ folderId }: Props) {
     setSearchText((s) => s.replace(raw, ' ').replace(/\s+/g, ' ').trim());
   };
 
+  // ── 10.7: header row of the list card — folder name, Sync, Ansicht ─────────
+  const sync = () => {
+    void Promise.all([
+      qc.refetchQueries({ queryKey: ['folders'] }),
+      qc.refetchQueries({ queryKey: ['messages', folderId] }),
+      searching ? qc.refetchQueries({ queryKey: ['messages', 'search'] }) : Promise.resolve(),
+    ]).then(() => toast.success(t('refresh_done'), { duration: 1500 }));
+  };
+  const markAllReadBlocked = readOnly ? t('mail_hint_read_only')
+    : !currentFolder ? t('mail_hint_no_folder')
+      : currentFolder.unreadCount === 0 ? t('mail_hint_no_unread') : null;
+  const markAll = () => {
+    void markFolderRead(folderId)
+      .then((n) => { toast.success(`${t('mark_all_read')}${n ? ` (${n})` : ''}`, { duration: 1500 }); })
+      .catch(toastError);
+  };
+  const viewEntries: Record<ViewMenuId, ContextMenuItem> = {
+    conversations: { label: t('view_cmd_conversations'), checked: groupByConversation, onClick: () => setGroupByConversation(!groupByConversation) },
+    sort: {
+      label: t('view_cmd_sort'), children: [
+        ...SORT_FIELDS.map((value): ContextMenuItem => ({ label: t(SORT_FIELD_LABEL[value]), checked: sortBy === value, onClick: () => updatePrefs({ view: { sortBy: value } }) })),
+        { type: 'divider' },
+        ...SORT_DIRS.map(({ value, labelKey }): ContextMenuItem => ({ label: t(labelKey), checked: sortDir === value, onClick: () => updatePrefs({ view: { sortDir: value } }) })),
+      ],
+    },
+    readingPane: {
+      label: t('list_view_reading_pane'),
+      children: READING_PANE.map(({ value, labelKey }): ContextMenuItem => ({ label: t(labelKey), checked: readingPane === value, onClick: () => setReadingPane(value) })),
+    },
+    density: {
+      label: t('view_cmd_density'),
+      children: DENSITY.map(({ value, labelKey }): ContextMenuItem => ({ label: t(labelKey), checked: density === value, onClick: () => setDensity(value) })),
+    },
+    markAllRead: {
+      label: t('mail_cmd_mark_all_read'),
+      ...(markAllReadBlocked ? { disabled: true, title: markAllReadBlocked } : { title: t('mail_cmd_mark_all_read_tip'), onClick: markAll }),
+    },
+    viewSettings: { label: t('list_view_more_settings'), icon: <Settings size={14} />, onClick: () => navigate('/settings#theme') },
+  };
+  const headerItems: CommandItem[] = [
+    { id: 'sync', label: t('view_cmd_sync'), tooltip: t('view_cmd_sync_tip'), icon: <RefreshCw size={15} />, iconOnly: true, onClick: sync },
+    {
+      id: 'view', label: t('list_view'), icon: <SlidersHorizontal size={15} />, iconOnly: true, placement: 'pinned',
+      menu: () => VIEW_MENU.flatMap((id): ContextMenuItem[] => [...(id === 'markAllRead' ? [{ type: 'divider' as const }] : []), viewEntries[id]]),
+    },
+  ];
+  const heading = listHeading(currentFolder ? (currentFolder.displayName ?? currentFolder.name) : null, searching && searchScope === 'all', t('list_search_all_heading'));
+  const insertOperator = (token: string) => insertSearchToken(searchText, token, setSearchText, () => searchInputRef.current);
+  const shownCount = statusCount(filter, totalCount, displayMessages.length);
+
   return (
     <div className="w-full h-full flex flex-col overflow-hidden">
-      {/* Search row */}
-      <div className="px-3 py-2 border-b border-line flex items-center gap-2 relative">
-        <div className="relative flex-1">
-          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-fg-subtle" />
+      {/* Header row: folder name + unread count, Sync, Ansicht */}
+      <div className="pl-3 pr-1.5 pt-2 pb-1 flex items-center gap-1.5 min-w-0 coremail-no-print">
+        {leading}
+        <h2 className="flex-1 min-w-0 truncate text-base font-semibold text-fg" title={heading}>
+          {heading}
+          {!searching && currentFolder && currentFolder.unreadCount > 0 && (
+            <span className="ml-2 text-xs font-medium text-accent-fg">{fmt(t('list_unread'), { count: currentFolder.unreadCount })}</span>
+          )}
+        </h2>
+        <CommandBar label={t('list_header_label')} groups={[{ id: 'list', items: headerItems }]} dividers={false} className="shrink-0" />
+      </div>
+      {/* Search row — the only search field of the webmail (`/`, /mail?q=) */}
+      <div role="search" className="px-3 py-1.5 flex items-center gap-1.5 relative">
+        <div className="relative flex-1 min-w-0">
+          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-fg-subtle" aria-hidden="true" />
           <input
             ref={searchInputRef}
+            id={GLOBAL_SEARCH_INPUT_ID}
             type="search"
             autoComplete="off"
             {...combo.inputAria}
@@ -862,7 +960,7 @@ export function MessageList({ folderId }: Props) {
             }}
             aria-label={t('search_placeholder')}
             aria-keyshortcuts="/"
-            className="w-full pl-7 pr-3 py-1 text-xs rounded border border-line-strong bg-surface outline-none focus:border-accent-fg [&::-webkit-search-cancel-button]:hidden"
+            className="w-full pl-7 pr-7 py-1.5 text-sm rounded-lg border border-line-strong bg-surface outline-none focus:border-accent-fg [&::-webkit-search-cancel-button]:hidden"
             placeholder={t('search_placeholder')}
           />
           {searchText && (
@@ -877,39 +975,47 @@ export function MessageList({ folderId }: Props) {
           )}
         </div>
         {/* Scope toggle */}
-        <div className="flex text-[10px] rounded border border-line-strong overflow-hidden shrink-0">
+        <div role="group" aria-label={t('list_search_scope')} className="flex text-[11px] rounded-md border border-line-strong overflow-hidden shrink-0">
           <button
+            type="button"
             onClick={() => setSearchScope('folder')}
-            className={`px-1.5 py-1 ${searchScope === 'folder' ? 'bg-accent text-white' : 'text-fg-muted hover:bg-surface-2'}`}
-            title="Diesen Ordner durchsuchen"
-          >Ordner</button>
+            aria-pressed={searchScope === 'folder'}
+            className={`px-2 py-1 ${searchScope === 'folder' ? 'bg-accent text-white' : 'text-fg-muted hover:bg-surface-2'}`}
+            title={t('list_scope_folder_tip')}
+          >{t('list_scope_folder')}</button>
           <button
+            type="button"
             onClick={() => setSearchScope('all')}
-            className={`px-1.5 py-1 ${searchScope === 'all' ? 'bg-accent text-white' : 'text-fg-muted hover:bg-surface-2'}`}
-            title="Gesamtes Postfach durchsuchen"
-          >Alle</button>
+            aria-pressed={searchScope === 'all'}
+            className={`px-2 py-1 ${searchScope === 'all' ? 'bg-accent text-white' : 'text-fg-muted hover:bg-surface-2'}`}
+            title={t('list_scope_all_tip')}
+          >{t('list_scope_all')}</button>
         </div>
+        <SearchOperatorsHelp onInsert={insertOperator} />
       </div>
       {chips.length > 0 && (
-        <div className="pt-2 border-b border-line">
+        <div className="pt-1">
           <SearchChips chips={chips} onRemove={(c) => removeChip(c.raw)} />
         </div>
       )}
-      <div className="px-3 py-2 border-b border-line flex items-center gap-2">
+      {/* Filter row — the selection bar takes its place while messages are checked */}
+      <div className="px-3 py-1.5 border-b border-line flex items-center gap-2 min-h-[2.75rem] coremail-no-print">
         <input
           type="checkbox"
           checked={allChecked}
           onChange={() => (allChecked ? clearSelection() : selectAll(orderedIds))}
-          className="rounded border-line-strong text-accent-fg focus:ring-accent-fg"
-          title="Alle auswählen"
+          className="rounded border-line-strong text-accent-fg focus:ring-accent-fg shrink-0"
+          aria-label={t('list_select_all')}
+          title={t('list_select_all')}
         />
-        <FilterTab value="all" label="Alle" active={filter === 'all'} onSelect={setFilter} />
-        <FilterTab value="unread" label="Ungelesen" active={filter === 'unread'} onSelect={setFilter} />
-        <FilterTab value="flagged" label="Markiert" active={filter === 'flagged'} onSelect={setFilter} />
-        <FilterTab value="attachments" label="Anhang" active={filter === 'attachments'} onSelect={setFilter} />
-        <span className="ml-auto text-xs text-fg-subtle" title={`${displayMessages.length} geladen von ${totalCount}`}>
-          <AnimatedCounter value={filter === 'all' ? totalCount : displayMessages.length} />
-        </span>
+        {selectedIds.size > 0 ? <SelectionBar /> : (
+          <div role="group" aria-label={t('list_filter_label')} className="flex items-center gap-1 min-w-0 flex-1 overflow-x-auto">
+            <FilterTab value="all" label="Alle" active={filter === 'all'} onSelect={setFilter} />
+            <FilterTab value="unread" label="Ungelesen" active={filter === 'unread'} onSelect={setFilter} />
+            <FilterTab value="flagged" label="Markiert" active={filter === 'flagged'} onSelect={setFilter} />
+            <FilterTab value="attachments" label="Anhang" active={filter === 'attachments'} onSelect={setFilter} />
+          </div>
+        )}
       </div>
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto">
@@ -991,6 +1097,24 @@ export function MessageList({ folderId }: Props) {
             </div>
           )
         )}
+      </div>
+
+      {/* Status line: count · selected, sort field + direction toggle */}
+      <div className="shrink-0 flex items-center gap-2 px-3 py-1 border-t border-line text-xs text-fg-subtle coremail-no-print">
+        <span className="min-w-0 truncate" title={`${displayMessages.length} / ${totalCount}`}>
+          <AnimatedCounter value={shownCount} /> {fmt(t('list_status_messages'), { count: '' }).trim()}
+          {selectedIds.size > 0 && <> · {fmt(t('list_status_selected'), { count: selectedIds.size })}</>}
+        </span>
+        <button
+          type="button"
+          onClick={() => updatePrefs({ view: { sortDir: toggledSortDir(sortDir) } })}
+          aria-label={fmt(t('list_sort_toggle'), { field: t(SORT_FIELD_LABEL[sortBy]) })}
+          title={fmt(t('list_sort_toggle'), { field: t(SORT_FIELD_LABEL[sortBy]) })}
+          className="ml-auto inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-fg-muted hover:bg-surface-2 hover:text-fg"
+        >
+          {t(SORT_FIELD_LABEL[sortBy])}
+          {sortDir === 'desc' ? <ArrowDown size={12} aria-hidden="true" /> : <ArrowUp size={12} aria-hidden="true" />}
+        </button>
       </div>
 
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />}

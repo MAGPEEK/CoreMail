@@ -1,8 +1,10 @@
 /**
  * Navigation row above the calendar grid: "Heute", previous / next and the month/year
- * label, which opens a date picker (MiniCalendar) to jump to any date.
+ * label, which opens a date picker (MiniCalendar) to jump to any date. 10.7: the
+ * toolbar row of the calendar card — the commands (components/CalendarToolbar.tsx)
+ * follow on the right (`end`), and on phones the calendar list button comes first.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { MiniCalendar } from '../MiniCalendar.js';
 
@@ -14,11 +16,15 @@ interface Props {
   onPrev: () => void;
   onNext: () => void;
   onJump: (d: Date) => void;
+  /** Content before "Heute" (the calendar list button on phones). */
+  start?: ReactNode;
+  /** The command toolbar on the right of the row. */
+  end?: ReactNode;
 }
 
 const NAV_BTN = 'inline-flex items-center justify-center min-h-8 min-w-8 rounded text-fg-muted hover:bg-surface-2 hover:text-fg';
 
-export function CalendarNavBar({ title, selectedDate, onToday, onPrev, onNext, onJump }: Props) {
+export function CalendarNavBar({ title, selectedDate, onToday, onPrev, onNext, onJump, start, end }: Props) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const labelRef = useRef<HTMLButtonElement>(null);
   const pickerRef = useRef<HTMLDivElement>(null);
@@ -40,7 +46,9 @@ export function CalendarNavBar({ title, selectedDate, onToday, onPrev, onNext, o
   }, [pickerOpen]);
 
   return (
-    <div role="group" aria-label="Kalendernavigation" className="relative flex items-center gap-1 px-3 py-2 border-b border-line coremail-no-print">
+    <div className="relative flex items-center gap-1 px-3 py-2 border-b border-line coremail-no-print min-w-0">
+      {start}
+      <div role="group" aria-label="Kalendernavigation" className="flex items-center gap-1 shrink-0">
       <button type="button" onClick={onToday} className="min-h-8 px-3 rounded border border-line text-sm font-medium text-fg hover:bg-surface-2">
         Heute
       </button>
@@ -52,10 +60,12 @@ export function CalendarNavBar({ title, selectedDate, onToday, onPrev, onNext, o
         onClick={() => setPickerOpen((o) => !o)}
         aria-haspopup="dialog"
         aria-expanded={pickerOpen}
-        className="ml-1 min-h-8 px-2 rounded text-base font-semibold text-fg hover:bg-surface-2"
+        className="ml-1 min-h-8 px-2 rounded text-base font-semibold text-fg hover:bg-surface-2 whitespace-nowrap"
       >
         {title}
       </button>
+      </div>
+      {end}
       {pickerOpen && (
         <div
           ref={pickerRef}

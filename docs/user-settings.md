@@ -19,7 +19,7 @@ and how each setting takes effect.
 | Out of office, rules, categories, inactivity timeout, hidden shared mailboxes | unchanged (own columns / tables) | server / webmail |
 | Profile photo (9.5) | `User.photoKey` + object store `profile-photos/` | webmail avatars of the organisation (see [Profile photo](#profile-photo)) |
 | Background (10.1): none / built-in / own picture | `preferences.appearance.background`; the picture in `User.backgroundKey` + object store `backgrounds/` | webmail canvas behind the panes (see [Background](#background)) |
-| Ribbon (10.1): collapsed (10.2: only the simplified ribbon exists; the former `layout` field was removed) | `preferences.ribbon` | webmail mail, calendar and contacts views (one shared ribbon) |
+| Ribbon (10.1): collapsed — **deprecated in 10.7** (the webmail has no ribbon any more; the value is still read tolerantly and accepted by PATCH, nothing uses it; removal only in a MAJOR) | `preferences.ribbon` | — (formerly the ribbon of the mail, calendar and contacts views) |
 | Favourite folders (10.1) | `preferences.folders.favorites` | webmail folder pane ("Favoriten") |
 | Panel widths, collapsed folder sections, expanded shared mailboxes | browser only | webmail (they depend on the screen) |
 
@@ -140,7 +140,7 @@ times of that zone and stored as UTC instants.
 The inserted signature is a block of its own in the compose body (`<div data-cm-signature>`).
 Changing the sender ("Von") replaces it with the new identity's default while it is still exactly
 as inserted — never after the user edited or removed it, and not in reopened drafts. The signature
-picker (compose ribbon **Einfügen → Signatur** and the "…" menu) inserts any named signature (or
+picker (the pen icon in the compose header) inserts any named signature (or
 removes it), also in plain-text format. The compose area itself: [compose.md](compose.md).
 
 ### Logout
@@ -201,7 +201,7 @@ Mustermann" → "EM", "Mustermann, Erika" → "EM", parenthesised parts ignored)
 no name → the first letter of the address' local part (`lib/initials.ts`). The colour still comes from
 the address.
 
-**Changes.** The own change announces the user event `settings` / `profile` (the top bar and own
+**Changes.** The own change announces the user event `settings` / `profile` (the avatar of the app rail and own
 messages update at once); other users get the new version with their next lookup (cached for five
 minutes) and revalidate the image by ETag.
 
@@ -282,17 +282,17 @@ Webmail (`components/templates/`, rules in `lib/mailTemplates.ts`):
 - **Neue E-Mail aus Vorlage** (`TemplatePickerDialog`): search, list, preview; "Verwenden" opens a
   new compose tab with subject, recipients and body (the default signature follows the body).
   The mail view wires it with `useTemplatePicker()` → `{ open, element }`
-  (`<MailRibbon onNewFromTemplate={templates.open} />` + `{templates.element}`): "E-Mail aus Vorlage"
-  in the menu of the ribbon's split button "Neue E-Mail" (E-Mail, E-Mail aus Vorlage, Ereignis; while a
-  shared or delegated mailbox is open a fourth entry "E-Mail aus dem eigenen Postfach").
+  (`<NewMailButton onNewFromTemplate={templates.open} />` + `{templates.element}`): "E-Mail aus Vorlage"
+  in the menu of the split button "Neue E-Mail" at the top of the folder card (E-Mail, E-Mail aus
+  Vorlage, Ereignis; while a shared or delegated mailbox is open a fourth entry "E-Mail aus dem
+  eigenen Postfach").
 - **Vorlagen verwalten** (`TemplateManagerDialog`): list + editor (name, subject, recipient fields,
   body with a small formatting bar), new / save / delete; asks before unsaved changes are lost.
   Reached from the picker and from Settings → Vorlagen.
 - Compose "…" menu: **Vorlage einfügen …** inserts the body at the cursor and fills subject and
   recipient fields only while they are empty; **Als Vorlage speichern …** saves subject, recipients
-  and the body without signature block and quoted original. While the ribbon shows the draft's
-  contextual tabs (the card then hides its "…" menu) the same two commands are in the ribbon:
-  **Einfügen → Vorlage einfügen …** and **Nachricht → Als Vorlage speichern …**.
+  and the body without signature block and quoted original. (10.7: the card always shows its "…"
+  menu — the former contextual ribbon tabs are gone.)
 
 ## Deep links
 

@@ -38,8 +38,8 @@ test('previewStyle: theme tokens + brand variables from the unsaved colours', ()
   assert.equal(custom['--header-fg'], '255 255 255');
   // invalid input while typing → defaults, never a broken style
   const typing = previewStyle({ primaryColor: '#12', headerColor: 'x' }, false);
-  assert.equal(typing['--header'], '0 120 212');
-  assert.equal(typing['--color-accent'], '0 120 212');
+  assert.equal(typing['--header'], '0 109 119');
+  assert.equal(typing['--color-accent'], '0 109 119');
 });
 
 test('previewLogo: dark logo only in dark mode, falls back to the logo; unsaved object URLs pass', () => {

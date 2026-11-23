@@ -1,6 +1,5 @@
 import { Routes, Route, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useEffect, useLayoutEffect, useState } from 'react';
-import { TopBar } from './components/TopBar.js';
 import { AppRail } from './components/AppRail.js';
 import { LoginPage } from './pages/LoginPage.js';
 import { ComposePopoutPage } from './pages/ComposePopoutPage.js';
@@ -44,7 +43,7 @@ import { brandCssVars, headerHex, resolveAccentChannels } from './lib/branding.j
 import { useBranding, useBrandingSync } from './hooks/useBranding.js';
 import { mailPageUrl, parseMailboxKey } from './lib/mailboxContext.js';
 import { useAppBackground } from './hooks/useAppBackground.js';
-import { APP_BODY_CLASS } from './lib/paneLayout.js';
+import { APP_BODY_CLASS, CANVAS_COLUMN_CLASS } from './lib/paneLayout.js';
 
 // ── Theme-Applier ─────────────────────────────────────────────────────────────
 function ThemeApplier() {
@@ -116,7 +115,6 @@ function MfaEnforcementGate({ children }: { children: React.ReactNode }) {
 
 function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
-  const navigate = useNavigate();
   // 9.4: roaming preferences (server copy, debounced writes)
   usePreferencesSync();
   useRealtime();
@@ -138,12 +136,6 @@ function Layout({ children }: { children: React.ReactNode }) {
   const { data: mfaEnforcement } = useMfaEnforcement();
   const mfaBanner = enforcementView(mfaEnforcement, new Date()).banner;
 
-  // MessageList picks up ?q= and runs a mailbox-wide server search
-  const handleSearch = (q: string) => {
-    const trimmed = q.trim();
-    if (trimmed) navigate(`/mail?q=${encodeURIComponent(trimmed)}`);
-  };
-
   return (
     <div className="h-full flex flex-col">
       {/* SC 2.4.1: bypass block — first focusable element, visible on focus */}
@@ -154,21 +146,24 @@ function Layout({ children }: { children: React.ReactNode }) {
       >
         Zum Inhalt springen
       </a>
-      {mfaBanner && <MfaGraceBanner daysLeft={mfaBanner.daysLeft} deadline={mfaBanner.deadline} />}
-      {/* 10.6: admin MFA rule — dismissible prompt during the admin grace period */}
-      {!mfaBanner && <AdminMfaPromptBanner info={mfaEnforcement} />}
-      <TopBar onSearch={handleSearch} />
-      {/* App rail left (md+), bottom bar below md (column-reverse puts it last) */}
-      {/* 10.1: the canvas below the top bar — plain, or the background picture (Einstellungen → Darstellung) */}
+      {/* 10.7: no top bar — the app body is the whole window: the app rail left (md+), a bottom bar
+          below md (column-reverse puts it last), beside it the canvas — plain, or the background
+          picture (Einstellungen → Darstellung) */}
       <div className={APP_BODY_CLASS} data-bg={background.imageUrl ? 'on' : 'off'}
         style={background.imageUrl ? { backgroundImage: `url("${background.imageUrl}")` } : undefined}>
         <AppRail />
-        <main id="main-content" tabIndex={-1} key={pageKey(location.pathname)} className="flex-1 flex min-h-0 min-w-0 overflow-hidden animate-page-in outline-none">
-          <ErrorBoundary resetKey={pageKey(location.pathname)}>
-            {/* 9.4: pages of a module the webmail policy switched off lead to the mail view */}
-            {pageDisabled ? <Navigate to="/mail" replace /> : children}
-          </ErrorBoundary>
-        </main>
+        <div className={CANVAS_COLUMN_CLASS}>
+          {/* MFA banners: a slim card at the top of the canvas */}
+          {mfaBanner && <MfaGraceBanner daysLeft={mfaBanner.daysLeft} deadline={mfaBanner.deadline} />}
+          {/* 10.6: admin MFA rule — dismissible prompt during the admin grace period */}
+          {!mfaBanner && <AdminMfaPromptBanner info={mfaEnforcement} />}
+          <main id="main-content" tabIndex={-1} key={pageKey(location.pathname)} className="flex-1 flex min-h-0 min-w-0 overflow-hidden animate-page-in outline-none">
+            <ErrorBoundary resetKey={pageKey(location.pathname)}>
+              {/* 9.4: pages of a module the webmail policy switched off lead to the mail view */}
+              {pageDisabled ? <Navigate to="/mail" replace /> : children}
+            </ErrorBoundary>
+          </main>
+        </div>
       </div>
       <ShortcutHelpDialog />
     </div>

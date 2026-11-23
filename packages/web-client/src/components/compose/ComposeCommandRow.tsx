@@ -162,10 +162,8 @@ function StatusText({ status, inWindow }: { status: ComposeStatusLine; inWindow:
   );
 }
 
-export function ComposeCommandRow({ state, actions, status, compact = false }: {
+export function ComposeCommandRow({ state, actions, status }: {
   state: ComposeCommandState; actions: ComposeCommandActions; status: ComposeStatusLine;
-  /** 10.1: the ribbon shows the compose commands — the card keeps only Senden, the status and close. */
-  compact?: boolean;
 }) {
   const t = useT();
   const header = headerItems(state, actions, t);
@@ -179,10 +177,8 @@ export function ComposeCommandRow({ state, actions, status, compact = false }: {
       onClick: actions.send,
       menu: () => sendMenu(state, actions, t),
     }] },
-    ...(compact ? [] : [
-      { id: 'edit', items: headerCommands(state.plainText, state.signatures.length > 0).map((id) => header[id]) },
-      { id: 'more', items: moreCommands(state, actions, t).map((item) => ({ ...item, placement: 'overflow' as const })) },
-    ]),
+    { id: 'edit', items: headerCommands(state.plainText, state.signatures.length > 0).map((id) => header[id]) },
+    { id: 'more', items: moreCommands(state, actions, t).map((item) => ({ ...item, placement: 'overflow' as const })) },
   ];
   return (
     <div className="flex items-center gap-2 px-4 py-3 border-b border-line bg-surface shrink-0">

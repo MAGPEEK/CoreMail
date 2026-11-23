@@ -21,7 +21,7 @@ import {
   ALL_CONTACTS_VIEW, categoryCounts, contactInfoLines, countLabel, filterByCategory, isOwnContact, primaryPhone, sortContacts, telHref,
   type ContactSortKey, type DirectoryEntry, type SidebarView,
 } from '../lib/contactsList.js';
-import { selectionFacts, type ContactsAction, type ContactsSelectionKind } from '../lib/contactsRibbon.js';
+import { selectionFacts, type ContactsAction, type ContactsSelectionKind } from '../lib/contactsCommands.js';
 import { useWebmailFeatures } from '../hooks/useWebmailFeatures.js';
 import type { ContextMenuItem } from '../components/ContextMenu.js';
 import { useCategoryDefs } from '../components/CategoryPicker.js';
@@ -29,11 +29,10 @@ import { ContactEditor } from '../components/contacts/ContactEditor.js';
 import { ContactAvatar, ContactDetails } from '../components/contacts/ContactDetails.js';
 import { ContactGroupDetails, ContactGroupEditor } from '../components/contacts/ContactGroupPanel.js';
 import { PaneCard } from '../components/PaneCard.js';
-import { ContactsRibbon } from '../components/contacts/ContactsRibbon.js';
+import { ContactDetailActions, ContactsNewButton, ContactsSortButton } from '../components/contacts/ContactsCommands.js';
 import { ContactsSidebar } from '../components/contacts/ContactsSidebar.js';
 import { EntryList, type EntryRow } from '../components/contacts/EntryList.js';
 import { DirectoryDetails } from '../components/contacts/DirectoryDetails.js';
-import { AboutDialog } from '../components/AboutDialog.js';
 
 type Selection = { kind: 'contact' | 'group' | 'directory'; id: string } | null;
 type Mode = 'view' | 'edit' | 'new';
@@ -53,7 +52,6 @@ export function ContactsPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const openCompose = useUiStore((s) => s.openCompose);
-  const setShortcutHelpOpen = useUiStore((s) => s.setShortcutHelpOpen);
   const authEmail = useAuthStore((s) => s.email);
   const { data: profile } = useOwnProfile();
   const ownAddress = authEmail || profile?.email || '';
@@ -66,7 +64,6 @@ export function ContactsPage() {
   const [newKind, setNewKind] = useState<'contact' | 'group'>('contact');
   const [sort, setSort] = useState<ContactSortKey>('given');
   const [pane, setPane] = useState<Pane>('list');
-  const [aboutOpen, setAboutOpen] = useState(false);
 
   // 9.4: /contacts/<id> shows the contact (shareable, back/forward)
   const linkedId = itemIdFromPath(location.pathname, '/contacts/');
@@ -238,14 +235,14 @@ export function ContactsPage() {
   };
   const cancel = () => { setMode('view'); if (!selection) setPane('list'); };
 
-  // ── Ribbon ──────────────────────────────────────────────────────────────────
+  // ── Commands ────────────────────────────────────────────────────────────────
   const directoryEntry = selection?.kind === 'directory' ? directoryEntries.find((e) => e.id === selection.id) ?? null : null;
   const loadedContact = contact && contact.id === contactId ? contact : null;
   const loadedGroup = group && group.id === groupId ? group : null;
   const contactForm = loadedContact ? formFromContact(loadedContact) : null;
   const contactAddress = contactForm?.emails.find((e) => e.value.trim())?.value ?? null;
   const kind: ContactsSelectionKind = selection?.kind ?? 'none';
-  const ribbonSelection = selectionFacts({
+  const commandSelection = selectionFacts({
     kind,
     editing: mode !== 'view',
     hasRecipients: kind === 'contact' ? !!contactAddress : kind === 'group' ? (loadedGroup?.members.length ?? 0) > 0 : !!directoryEntry,
@@ -266,12 +263,10 @@ export function ContactsPage() {
       else if (selection?.kind === 'directory' && directoryEntry) mailTo(directoryEntry.displayName, directoryEntry.email);
       else if (loadedContact && contactAddress) mailTo(loadedContact.displayName, contactAddress);
     },
-    call: () => { if (ribbonSelection.phone) window.location.href = telHref(ribbonSelection.phone); },
+    call: () => { if (commandSelection.phone) window.location.href = telHref(commandSelection.phone); },
     categorize: () => undefined, // opens its menu (categoryMenu)
     sortGiven: () => setSort('given'),
     sortFamily: () => setSort('family'),
-    shortcuts: () => setShortcutHelpOpen(true),
-    about: () => setAboutOpen(true),
   };
 
   const categoryMenu = (): ContextMenuItem[] => {
@@ -316,14 +311,10 @@ export function ContactsPage() {
   const show = (p: Pane) => (pane === p ? 'flex' : 'hidden md:flex');
   const searchLabel = view.kind === 'groups' ? 'Kontaktlisten durchsuchen' : view.kind === 'directory' ? 'Globales Adressbuch durchsuchen' : 'Kontakte durchsuchen';
   return (
-    <PageShell
-      title="Kontakte"
-      commandBar={<ContactsRibbon selection={ribbonSelection} handlers={handlers} sort={sort} categoryMenu={categoryMenu} />}
-      ribbon
-      bodyCard={false}
-      bodyClassName="md:gap-2"
-    >
+    // 10.7: no ribbon — "Neu" in the folder card, search + sort in the list header, the action row in the details
+    <PageShell title="Kontakte" header={false} bodyCard={false} bodyClassName="md:gap-2">
       <PaneCard label="Kontaktordner" className={`${show('nav')} flex-1 md:flex-none md:w-60 shrink-0`}>
+        <div className="shrink-0 px-2 pt-2 coremail-no-print"><ContactsNewButton handlers={handlers} /></div>
         <ContactsSidebar
           address={ownAddress} view={view} onView={changeView}
           contactCount={ownContacts.length} groupCount={groups?.length ?? 0} categories={categories}
@@ -340,6 +331,7 @@ export function ContactsPage() {
             <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-fg-subtle" aria-hidden="true" />
             <input value={search} onChange={(e) => setSearch(e.target.value)} className="input pl-8 text-xs" aria-label={searchLabel} placeholder="Suchen…" />
           </div>
+          {view.kind === 'contacts' && <ContactsSortButton sort={sort} handlers={handlers} />}
         </div>
         <EntryList label={viewTitle(view)} rows={rows} selectedId={selection?.kind === rowKind ? selection.id : null} onSelect={select} empty={emptyText} />
       </PaneCard>
@@ -350,10 +342,9 @@ export function ContactsPage() {
             <ArrowLeft size={14} aria-hidden="true" /> Zurück zur Liste
           </button>
         </div>
+        {mode === 'view' && selection && <ContactDetailActions selection={commandSelection} handlers={handlers} categoryMenu={categoryMenu} />}
         <div className="flex-1 overflow-y-auto">{renderPanel()}</div>
       </PaneCard>
-
-      {aboutOpen && <AboutDialog onClose={() => setAboutOpen(false)} />}
     </PageShell>
   );
 }

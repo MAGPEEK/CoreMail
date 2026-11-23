@@ -39,10 +39,10 @@ test('admin answer: defaults + explicit parsed; missing (older server) → store
   assert.deepEqual(saved.defaults, { productName: 'CoreMail', primaryColor: '#0078d4' });
   assert.deepEqual(saved.explicit, { productName: true, primaryColor: false, headerColor: false });
   const old = parseAdminBranding({ ...DEFAULT_BRANDING, headerColor: '#112233' });
-  assert.deepEqual(old.defaults, { productName: 'CoreMail', primaryColor: '#0078d4' });
+  assert.deepEqual(old.defaults, { productName: 'CoreMail', primaryColor: '#006d77' });
   assert.deepEqual(old.explicit, { productName: true, primaryColor: true, headerColor: true });
   const junk = parseAdminBranding({ ...DEFAULT_BRANDING, defaults: { productName: 'x'.repeat(41), primaryColor: 'red' }, explicit: { productName: 'yes' } });
-  assert.deepEqual(junk.defaults, { productName: 'CoreMail', primaryColor: '#0078d4' });
+  assert.deepEqual(junk.defaults, { productName: 'CoreMail', primaryColor: '#006d77' });
   assert.equal(junk.explicit.productName, true);
 });
 

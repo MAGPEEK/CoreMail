@@ -1,5 +1,5 @@
 /**
- * 10.1: short folder lists of the folder pane and the ribbon.
+ * 10.1: short folder lists of the folder pane and the "Verschieben" menus.
  *
  * Favourites ("Favoriten" at the top of the folder pane) are the roaming
  * preference `folders.favorites`: an entry is a folder id, or the name of a
@@ -8,7 +8,7 @@
  * the folders are known. Folders flagged as favourite before 10.1
  * (`Folder.isFavorite`) are shown after the list until they are removed.
  *
- * Recent folders ("Verschieben in" of the ribbon) are the last move targets of
+ * Recent folders (the "Verschieben" menus) are the last move targets of
  * this session, newest first.
  * No imports — unit-tested with `node --test`.
  */

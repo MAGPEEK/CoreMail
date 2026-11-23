@@ -11,7 +11,16 @@ import { useShortcutHandlers, useShortcutManager } from './useShortcuts.js';
 import { triggerLatestUndo } from '../components/UndoToast.js';
 import { undoLatestSend } from '../components/DelayedSendToast.js';
 
+/** 10.7: the search field of the mail list card — the only search field of the webmail. */
 export const GLOBAL_SEARCH_INPUT_ID = 'global-search-input';
+
+let searchFocusRequested = false;
+/** `/` on another page: the mail view opens and its list focuses the search once mounted. */
+export function takeSearchFocusRequest(): boolean {
+  const asked = searchFocusRequested;
+  searchFocusRequested = false;
+  return asked;
+}
 
 export function useGlobalShortcuts(): void {
   useShortcutManager();
@@ -39,9 +48,14 @@ export function useGlobalShortcuts(): void {
     undo: () => { if (!undoLatestSend()) triggerLatestUndo(); },
     search: () => {
       const el = document.getElementById(GLOBAL_SEARCH_INPUT_ID) as HTMLInputElement | null;
-      if (!el) return false;
-      el.focus();
-      el.select();
+      if (el) {
+        el.focus();
+        el.select();
+        return true;
+      }
+      // 10.7: the search lives in the mail list card — go there and focus it
+      searchFocusRequested = true;
+      navigate('/mail');
       return true;
     },
     'go.inbox': () => goFolder('INBOX'),

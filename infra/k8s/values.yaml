@@ -92,7 +92,7 @@ app:
   # Any other string is passed through verbatim ("", "1", "10.0.0.0/8", …).
   trustProxy: auto
 
-  # Branding defaults (CoreMail >= 9.3; empty = "CoreMail" / #0078d4). Used while
+  # Branding defaults (CoreMail >= 9.3; empty = "CoreMail" / #006d77). Used while
   # nothing is set in BCP → Organisation → Branding; the BCP values win.
   branding:
     name: ""              # BRANDING_NAME  — product name, 1–40 characters

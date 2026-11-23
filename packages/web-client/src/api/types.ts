@@ -61,6 +61,8 @@ export interface MessageSummary {
   rawSize: number;
   pinnedAt?: string | null;
   snoozeUntil?: string | null;
+  /** 10.7: one-line text preview for the third row of the list (optional; not every list endpoint sends it). */
+  preview?: string | null;
   // v3.18.6: rspamd score at delivery time. null = not scanned.
   // 0 = explicitly marked as ham (by the user via "Not spam")
   spamScore?: number | null;

@@ -6,10 +6,11 @@ Target: WCAG 2.2 AA. Colours only through the theme tokens (`theme-guard.test.ts
 
 | Landmark | Element |
 |---|---|
-| banner | top bar (`TopBar`) |
+| banner | — (10.7: no top bar; brand logo mark, bell, gear and avatar are in the app rail) |
 | navigation | app rail / bottom bar (`AppRail`), folder tree (`aria-label="Ordner"`) |
 | main | `<main id="main-content">` of the app frame |
-| complementary | folder pane (`aside`, "Postfachbereich"), calendar list ("Kalenderliste") |
+| complementary | folder card (`aside`, "Postfachbereich"), calendar list ("Kalenderliste") |
+| region | the mail view's cards: list ("Nachrichten"), content ("Lese- und Schreibbereich"); the compose card is a labelled region of its own |
 
 A "Zum Inhalt springen" link is the first focusable element and moves focus to `main`.
 
@@ -27,7 +28,10 @@ A "Zum Inhalt springen" link is the first focusable element and moves focus to `
 - **Reading pane**: single pane layout moves focus into the opened message and back onto its row on
   "back". Dialogs (`Modal`) trap focus and return it on close.
 - **Live regions**: toasts (undo send / delete / move, new mail) and the selection counter of the
-  command bar are `role="status"`; nothing is announced twice.
+  selection bar are `role="status"`; nothing is announced twice. The rail bell opens a non-modal
+  dialog ("Benachrichtigungen") that takes focus and returns it to the bell on Escape / close.
+- **Folder rows**: the "…" button (hover / focus) opens the folder context menu; from the keyboard
+  the context-menu key or Shift+F10 on a folder opens it (a tree item holds no nested tab stops).
 - Targets are at least 24 x 24 px (checkbox and flag of the list rows included); the focus ring is
   the global `:focus-visible` outline in the accent text token.
 
@@ -41,14 +45,15 @@ the compose window, nor while a dialog is open (`lib/shortcuts.ts`, tested).
 
 Gmail-compatible keys: `c` new, `r` reply, `a` reply all, `f` forward, `e` archive, `#` delete,
 `!` spam, `s` flag, `v` move, `j`/`k` next/previous, `o`/Enter open, `u` back, `x` select,
-`z` undo, `/` search, `g i` inbox, `g s` flagged, `g t` sent, `g d` drafts, `?` help.
+`z` undo, `/` search (the search field of the list card; on another page `/` opens the mail view
+and focuses it), `g i` inbox, `g s` flagged, `g t` sent, `g d` drafts, `?` help.
 
 ## Responsive layout
 
 | Width | Mail view | Navigation |
 |---|---|---|
-| below 768 px | one pane at a time: folders -> list -> message, back button, compose full screen | bottom bar |
-| 768 - 1099 px | list + message (or compose); folders in a drawer opened by the "Ordner" button | left rail |
+| below 768 px | one pane at a time: folders -> list -> message, back button, compose full screen; the selection bar, the list header (Sync, Ansicht incl. sort) and the reader "…" offer every command | bottom bar (bell and gear in the avatar menu) |
+| 768 - 1099 px | list + message (or compose); folders in a drawer opened by the button in the list header | left rail |
 | 1100 px and up | three panes, reading pane preference (right / bottom / off) respected | left rail |
 
 The state machine is `lib/layoutMode.ts`. The calendar starts in the day view below 768 px and hides

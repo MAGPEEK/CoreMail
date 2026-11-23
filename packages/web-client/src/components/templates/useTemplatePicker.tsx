@@ -1,10 +1,10 @@
 /**
  * 10.1: entry points of the mail templates.
  *
- * Ribbon wiring ("Neue E-Mail aus Vorlage", one line plus the element):
+ * Wiring of "Neue E-Mail aus Vorlage" (10.7: the "Neue E-Mail" split button of the folder card):
  *
  *   const templates = useTemplatePicker();
- *   <MailCommandBar … onNewFromTemplate={templates.open} />
+ *   <NewMailButton onNewFromTemplate={templates.open} />
  *   {templates.element}
  *
  * `open()` shows TemplatePickerDialog; "Verwenden" opens a new compose tab
@@ -46,7 +46,7 @@ export function useTemplateDialogs(mode: TemplatePickerMode, onUse: (template: M
   return { open: () => setPicker(true), element };
 }
 
-/** "Neue E-Mail aus Vorlage" for the ribbon (see the header comment). */
+/** "Neue E-Mail aus Vorlage" of the "Neue E-Mail" split button (see the header comment). */
 export function useTemplatePicker(): TemplateDialogs {
   return useTemplateDialogs('new', (tpl) => {
     useUiStore.getState().openCompose(composeFromTemplate(tpl, quoteMailHtml(tpl.bodyHtml)));

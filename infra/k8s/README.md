@@ -150,7 +150,7 @@ All values are documented in [`values.yaml`](values.yaml). The important ones:
 | `app.strategy.type` | `Recreate` | never two pods with schedulers during upgrades |
 | `app.trustProxy` | `auto` | see [TRUST_PROXY](#trust_proxy) |
 | `app.publicUrl` | `""` | `COREMAIL_PUBLIC_URL` (SSO redirect URIs) |
-| `app.branding.name`, `app.branding.color` | `""` ("CoreMail" / `#0078d4`) | `BRANDING_NAME`, `BRANDING_COLOR` — defaults until BCP → Organisation → Branding sets values (CoreMail >= 9.3, `docs/branding.md`) |
+| `app.branding.name`, `app.branding.color` | `""` ("CoreMail" / `#006d77`) | `BRANDING_NAME`, `BRANDING_COLOR` — defaults until BCP → Organisation → Branding sets values (CoreMail >= 9.3, `docs/branding.md`) |
 | `app.webauthn.*`, `app.vapid.*`, `app.jmapCorsOrigins`, `app.ldapAllowInsecure` | | map to `WEBAUTHN_*`, `VAPID_*`, `JMAP_CORS_ORIGINS`, `LDAP_ALLOW_INSECURE` |
 | `app.mailAuth.*` | app defaults | `MAIL_AUTH_*` brute-force limits; `exemptCidrs` → `MAIL_AUTH_EXEMPT_CIDRS`/`MAIL_CONN_EXEMPT_CIDRS` (`limitPrivateIps` was removed in chart 2.0) |
 | `app.deletedItemRetentionDays`, `app.quotaFullPermanent`, `app.httpRedirectHttps` | `""` (app defaults) | `DELETED_ITEM_RETENTION_DAYS`, `QUOTA_FULL_PERMANENT`, `HTTP_REDIRECT_HTTPS` (CoreMail >= 9.0) |

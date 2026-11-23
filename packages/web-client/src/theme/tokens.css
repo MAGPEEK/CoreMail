@@ -46,13 +46,15 @@
      --color-accent-fg is derived so that accent text/icons/focus rings keep 4.5:1.
      Until the app applies it, the fill starts with the brand primary colour that the gateway
      injects into index.html (style element "cm-brand": --brand-primary = R G B, 9.3);
-     without it, the built-in default. accent-fg keeps its fixed, contrast-checked default. */
-  --color-accent: var(--brand-primary, 0 120 212);
-  --color-accent-fg: 0 95 184;
-  /* webmail top bar: set at runtime from the branding header colour (lib/branding.ts headerColors).
+     without it, the built-in default (10.7: petrol #006d77). accent-fg keeps its fixed,
+     contrast-checked default. */
+  --color-accent: var(--brand-primary, 0 109 119);
+  --color-accent-fg: 0 109 119;
+  /* header colours: set at runtime from the branding header colour (lib/branding.ts headerColors);
+     10.7: the webmail shell has no top bar any more and does not use them.
      --header-fg is white when it reaches 4.5:1 on --header, else black; --header-overlay is its
      opposite, so hover/selected overlays (bg-header-overlay/NN) only raise the text contrast. */
-  --header: 0 120 212;
+  --header: 0 109 119;
   --header-fg: 255 255 255;
   --header-overlay: 0 0 0;
 }
@@ -86,5 +88,5 @@
   --info-fg: 147 188 255;
   --info-bg: 22 36 61;
   --info-line: 36 66 110;
-  --color-accent-fg: 112 181 255;
+  --color-accent-fg: 110 184 190;
 }

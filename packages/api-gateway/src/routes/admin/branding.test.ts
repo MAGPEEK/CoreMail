@@ -138,7 +138,7 @@ test('defaults: public and admin GET return the contract shape', async () => {
   assert.equal(pub.status, 200);
   assert.equal(pub.headers.get('cache-control'), 'no-cache');
   assert.deepEqual(pub.json, {
-    version: 0, productName: 'CoreMail', primaryColor: '#0078d4', headerColor: null,
+    version: 0, productName: 'CoreMail', primaryColor: '#006d77', headerColor: null,
     allowUserAccent: true, showPoweredBy: true, defaultBackground: 'none', loginText: '', footerLinks: [],
     assets: { logoLight: null, logoDark: null, favicon: null, loginBackground: null },
   });
@@ -146,7 +146,7 @@ test('defaults: public and admin GET return the contract shape', async () => {
   assert.equal(adm.status, 200);
   assert.deepEqual(adm.json, {
     ...pub.json,
-    defaults: { productName: 'CoreMail', primaryColor: '#0078d4' },
+    defaults: { productName: 'CoreMail', primaryColor: '#006d77' },
     explicit: { productName: false, primaryColor: false, headerColor: false },
   }, 'admin answer = public shape + defaults + explicit');
 });
@@ -346,7 +346,7 @@ test('reset: defaults restored, every asset removed, version still increments', 
   const r = await call('POST', `${A}/reset`, { role: ORG });
   assert.equal(r.status, 200);
   assert.equal(r.json['productName'], 'CoreMail');
-  assert.equal(r.json['primaryColor'], '#0078d4');
+  assert.equal(r.json['primaryColor'], '#006d77');
   assert.equal(r.json['showPoweredBy'], true);
   assert.deepEqual(r.json['footerLinks'], []);
   assert.deepEqual(r.json['assets'], { logoLight: null, logoDark: null, favicon: null, loginBackground: null });

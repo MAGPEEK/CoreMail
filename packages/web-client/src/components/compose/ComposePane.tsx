@@ -8,14 +8,13 @@
  * inventory and the model are in docs/compose.md. Esc saves and closes,
  * Ctrl/⌘+Enter sends.
  */
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { EditorContent } from '@tiptap/react';
 import { Paperclip } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { ComposeCommandRow, type ComposeCommandActions, type ComposeCommandState, type ComposeStatusLine } from './ComposeCommandRow.js';
 import { ComposeFormatBar } from './ComposeFormatBar.js';
-import { useComposeRibbon } from '../../store/composeRibbon.js';
 import { ON_PICTURE } from '../../lib/paneLayout.js';
 import { MessageOptionsDialog, type MessageOptions } from './MessageOptionsDialog.js';
 import { AccessibilityDialog } from './AccessibilityDialog.js';
@@ -84,10 +83,12 @@ interface Props {
   variant: ComposeVariant;
   /** Called after the compose was finished (the tab is gone). */
   onDone?: (outcome: ComposeOutcome) => void;
+  /** 10.7: the draft tab strip at the top of the card (inline only). */
+  tabStrip?: ReactNode;
 }
 
 const ROOT_CLASS: Record<ComposeVariant, string> = {
-  // >= 768 px: the card is the reading-pane card of the floating layout (10.1); < 768 px: full screen, above the top bar
+  // >= 768 px: the card is the content card of the floating layout (10.1); < 768 px: full screen, above the app rail
   // (z-50, later in the DOM); dialogs and menus stay above it
   inline: 'relative flex flex-col flex-1 min-w-0 min-h-0 max-md:bg-surface max-md:fixed max-md:inset-0 max-md:z-50',
   window: 'relative flex flex-col h-full min-h-0 bg-surface',
@@ -100,10 +101,10 @@ const CARD_CLASS: Record<ComposeVariant, string> = {
 };
 
 /** The compose area of one draft tab (nothing while the tab does not exist). */
-export function ComposePane({ tabKey, variant, onDone }: Props) {
+export function ComposePane({ tabKey, variant, onDone, tabStrip }: Props) {
   const tab = useUiStore((s) => s.compose.tabs.find((t) => t.key === tabKey));
   if (!tab) return null;
-  return <ComposeForm tab={tab} variant={variant} {...(onDone ? { onDone } : {})} />;
+  return <ComposeForm tab={tab} variant={variant} tabStrip={tabStrip} {...(onDone ? { onDone } : {})} />;
 }
 
 type ComposeDialog = { kind: 'options' } | { kind: 'a11y'; issues: A11yIssue[] };
@@ -127,7 +128,7 @@ function readFileAsDataUrl(file: File): Promise<string> {
   });
 }
 
-function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: ComposeVariant; onDone?: (o: ComposeOutcome) => void }) {
+function ComposeForm({ tab, variant, onDone, tabStrip }: { tab: ComposeTabEntry; variant: ComposeVariant; onDone?: (o: ComposeOutcome) => void; tabStrip?: ReactNode }) {
   const t = useT();
   const qc = useQueryClient();
   const ui = useUiStore;
@@ -724,23 +725,9 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
     emojiOpen: popover?.kind === 'emoji', formatBarShown, inWindow: variant === 'window',
   };
 
-  // 10.1: the ribbon's compose tabs run the same commands (store/composeRibbon.ts);
-  // published after every render, so toggles (Fett, Lesebestätigung …) stay current there
-  const ribbonCompact = useComposeRibbon((s) => variant === 'inline' && s.shownFor === tab.key);
-  useLayoutEffect(() => {
-    if (variant !== 'inline') return;
-    useComposeRibbon.getState().publish({
-      tabKey: tab.key, editor, defaultSize: composeTextDefaults(composePrefs).fontSize, state: commandState,
-      actions: {
-        ...commandActions,
-        openLink,
-        toggleRequestReceipt: () => { setRequestReceipt((v) => !v); touch(); },
-      },
-      requestReceipt, receiptVisible: receiptOption.visible,
-    });
-  });
-  useEffect(() => () => useComposeRibbon.getState().withdraw(tab.key), [tab.key]);
-
+  // 10.7: no ribbon — the card always shows its full header (Senden split, Anhängen, Bild,
+  // Signatur, "Aa", "…", pop-out, discard, close); every former ribbon command lives in the
+  // Senden menu, the "…" menu, the formatting bar or its flyout (lib/commandPlacement.ts).
   return (
     <section
       aria-label={fmt(t('compose_region'), { subject: subject.trim() || t('compose_new_message') })}
@@ -758,7 +745,8 @@ function ComposeForm({ tab, variant, onDone }: { tab: ComposeTabEntry; variant: 
       className={ROOT_CLASS[variant]}
     >
       <div className={CARD_CLASS[variant]}>
-        <ComposeCommandRow state={commandState} actions={commandActions} status={statusLine} compact={ribbonCompact} />
+        {variant === 'inline' && tabStrip}
+        <ComposeCommandRow state={commandState} actions={commandActions} status={statusLine} />
         <div className="flex-1 min-h-0 overflow-y-auto">
           <ComposeFields
             visibility={visibility}

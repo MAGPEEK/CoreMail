@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ShieldAlert } from 'lucide-react';
 import { fmt, useT } from '../i18n/useT.js';
+import { BANNER_CARD_CLASS } from '../lib/paneLayout.js';
 import { adminPromptView, dayKey, type MfaEnforcementInfo } from '../lib/mfaEnforcement.js';
 
 /**
@@ -31,7 +32,7 @@ export function AdminMfaPromptBanner({ info }: { info: MfaEnforcementInfo | unde
     setDismissed(key);
   };
   return (
-    <div role="status" className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 text-sm bg-warning-bg text-warning-fg border-b border-warning-line">
+    <div role="status" className={`flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 text-sm bg-warning-bg text-warning-fg ${BANNER_CARD_CLASS}`}>
       <ShieldAlert size={16} aria-hidden="true" className="shrink-0" />
       <span className="flex-1 min-w-0">{fmt(t('mfa_admin_prompt'), { date, days })}</span>
       <Link to="/settings#security" className="font-medium underline underline-offset-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-fg rounded">

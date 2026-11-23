@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback, type ReactNode } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   DndContext, DragOverlay, PointerSensor, useSensor, useSensors,
@@ -9,7 +9,7 @@ import toast from 'react-hot-toast';
 import { FolderTree } from '../components/FolderTree.js';
 import { MessageList } from '../components/MessageList.js';
 import { MessageReader } from '../components/MessageReader.js';
-import { MailRibbon } from '../components/MailRibbon.js';
+import { NewMailButton } from '../components/MailCommands.js';
 import { PageShell } from '../components/PageShell.js';
 import { ComposePane } from '../components/compose/ComposePane.js';
 import { DraftTabStrip } from '../components/compose/DraftTabStrip.js';
@@ -25,11 +25,12 @@ import {
   mailApiBase, foldersQueryKey, parseMailboxKey, isReadOnlyMailbox, READ_ONLY_HINT,
   type AccessibleMailboxEntry,
 } from '../lib/mailboxContext.js';
-import { MAIL_VIEW_COLUMN_CLASS, MAIL_VIEW_ROOT_CLASS } from '../lib/mailLayout.js';
+import { MAIL_VIEW_COLUMN_CLASS, MAIL_VIEW_ROOT_CLASS, draftStripPlace } from '../lib/mailLayout.js';
 import { FOLDER_PANE_CLASS, PANE_CARD_CLASS } from '../lib/paneLayout.js';
 import { defaultFolderOf } from '../lib/folderTree.js';
 import { backTarget, visibleMailPanes } from '../lib/layoutMode.js';
 import { useLayoutMode } from '../hooks/useLayoutMode.js';
+import { useT } from '../i18n/useT.js';
 
 // ── Persistent panel widths ───────────────────────────────────────────────────
 const PANEL_STORAGE_KEY = 'coremail:panel-widths';
@@ -108,7 +109,9 @@ export function MailPage() {
   const mailbox = useActiveMailbox();
   const { readingPane } = useUiPrefs();
   const composeKey = useUiStore((s) => s.compose.activeKey);
+  const openDrafts = useUiStore((s) => s.compose.tabs.length);
   const [activeDrag, setActiveDrag] = useState<ActiveDrag | null>(null);
+  const t = useT();
 
   // ── Panel widths (resizable) ─────────────────────────────────────────────────
   const [folderW, setFolderW] = useState(() => loadPanelWidths().folderW);
@@ -232,26 +235,41 @@ export function MailPage() {
   };
 
   // ── Reader-Panel (9.4: or the compose area of the shown draft) ────────────────
-  const composePanel = composeKey ? <ComposePane key={composeKey} tabKey={composeKey} variant="inline" /> : null;
-  // 10.1: the reading pane is a card of the floating layout (the compose card is its own)
-  const readerPanel = composePanel ?? (selectedMessageId && selectedIds.size === 0 ? (
-    <div key={selectedMessageId} className={`flex-1 animate-page-in flex flex-col min-w-0 min-h-0 ${PANE_CARD_CLASS}`}>
-      <MessageReader messageId={selectedMessageId} />
-    </div>
-  ) : (
-    <div className={`flex-1 flex min-w-0 min-h-0 ${PANE_CARD_CLASS}`}>
-      {selectedIds.size > 0
-        ? <div className="flex-1 flex items-center justify-center text-fg-subtle text-sm">{selectedIds.size} Nachrichten ausgewählt</div>
-        : readingPane !== 'off' ? <EmptyReader /> : null}
-    </div>
-  ));
-
   // ── 9.5: single / two pane layout below 1100 px ──────────────────────────────
   const hasMessage = !!selectedMessageId && selectedIds.size === 0;
   const panes = visibleMailPanes({
     mode, hasFolder: !!selectedFolderId, hasMessage, composeOpen: !!composeKey, foldersShown, readingPane,
   });
   const pane = panes[0] ?? 'list';
+
+  // 10.7: the open drafts are tabs at the top of the content card (else above the list)
+  const stripPlace = draftStripPlace(openDrafts, panes);
+  const contentStrip = stripPlace === 'content' ? <DraftTabStrip /> : null;
+  const composePanel = composeKey ? <ComposePane key={composeKey} tabKey={composeKey} variant="inline" tabStrip={contentStrip} /> : null;
+  // 10.1: the reading pane is a card of the floating layout (the compose card is its own)
+  const readerPanel = composePanel ?? (selectedMessageId && selectedIds.size === 0 ? (
+    <section key={selectedMessageId} aria-label={t('mail_region_content')} className={`flex-1 animate-page-in flex flex-col min-w-0 min-h-0 ${PANE_CARD_CLASS}`}>
+      {contentStrip}
+      <MessageReader messageId={selectedMessageId} />
+    </section>
+  ) : (
+    <section aria-label={t('mail_region_content')} className={`flex-1 flex flex-col min-w-0 min-h-0 ${PANE_CARD_CLASS}`}>
+      {contentStrip}
+      {selectedIds.size > 0
+        ? <div className="flex-1 flex items-center justify-center text-fg-subtle text-sm">{selectedIds.size} Nachrichten ausgewählt</div>
+        : readingPane !== 'off' ? <EmptyReader /> : null}
+    </section>
+  ));
+  /** The list card: header, search, filter / selection bar, rows, status line (MessageList). */
+  const listCard = (folderId: string, className: string, style?: React.CSSProperties, leading?: ReactNode) => (
+    <section aria-label={t('mail_region_list')} style={style} className={`relative flex flex-col min-h-0 ${PANE_CARD_CLASS} ${className}`}>
+      {stripPlace === 'list' && <DraftTabStrip />}
+      <div className="flex-1 min-h-0">
+        <MessageList folderId={folderId} {...(leading ? { leading } : {})} />
+      </div>
+    </section>
+  );
+  const folderTree = <FolderTree top={<NewMailButton onNewFromTemplate={templates.open} />} />;
   const narrowReaderRef = useRef<HTMLDivElement>(null);
   const lastOpenedRef = useRef<string | null>(null);
   if (selectedMessageId) lastOpenedRef.current = selectedMessageId;
@@ -292,25 +310,26 @@ export function MailPage() {
     else if (pane === 'list') setFoldersShown(true);
   };
   const backLabel = pane === 'reader' ? 'Zurück zur Nachrichtenliste' : 'Zurück zu den Ordnern';
-  const showFolderDrawerButton = mode === 'two';
   const showBackButton = mode === 'single' && backTarget(pane) !== null;
-
-  const narrowBar = (showBackButton || showFolderDrawerButton) ? (
-    <div className={`shrink-0 flex items-center gap-2 px-2 py-1 max-md:border-b ${PANE_CARD_CLASS} coremail-no-print`}>
-      {showBackButton ? (
-        <button type="button" onClick={goBack} aria-label={backLabel}
-          className="inline-flex items-center gap-1 min-h-[2rem] pr-3 pl-1 rounded text-sm font-medium text-accent-fg hover:bg-surface-2">
-          <ChevronLeft size={18} aria-hidden="true" />
-          {pane === 'reader' ? 'Nachrichten' : 'Ordner'}
-        </button>
-      ) : (
-        <button type="button" id="mail-folder-toggle" onClick={() => setFoldersShown((v) => !v)} aria-expanded={foldersShown}
-          aria-controls="mail-folder-drawer"
-          className="inline-flex items-center gap-1.5 min-h-[2rem] px-2 rounded text-sm font-medium text-accent-fg hover:bg-surface-2">
-          <PanelLeft size={16} aria-hidden="true" />
-          Ordner
-        </button>
-      )}
+  const backButton = (
+    <button type="button" onClick={goBack} aria-label={backLabel}
+      className="inline-flex items-center gap-1 min-h-[2rem] pr-2 pl-0.5 -ml-1.5 rounded text-sm font-medium text-accent-fg hover:bg-surface-2 shrink-0">
+      <ChevronLeft size={18} aria-hidden="true" />
+      {pane === 'reader' ? 'Nachrichten' : t('list_folders')}
+    </button>
+  );
+  // 10.7: two columns — the folder card is a drawer, opened from the list header
+  const drawerButton = (
+    <button type="button" id="mail-folder-toggle" onClick={() => setFoldersShown((v) => !v)} aria-expanded={foldersShown}
+      aria-controls="mail-folder-drawer" aria-label={t('list_folders')} title={t('list_folders')}
+      className="inline-flex items-center justify-center w-8 h-8 -ml-1.5 rounded text-accent-fg hover:bg-surface-2 shrink-0">
+      <PanelLeft size={16} aria-hidden="true" />
+    </button>
+  );
+  // single pane: the reader keeps a slim back row above its card (the list has the back button in its header)
+  const narrowBar = showBackButton && pane === 'reader' ? (
+    <div className={`shrink-0 flex items-center gap-2 px-3 py-1 max-md:border-b ${PANE_CARD_CLASS} coremail-no-print`}>
+      {backButton}
     </div>
   ) : null;
 
@@ -329,17 +348,13 @@ export function MailPage() {
 
   const narrowBody = (
     <>
-      {pane === 'folders' && <div {...pickProps} className={`flex-1 min-w-0 h-full ${FOLDER_PANE_CLASS}`}><FolderTree /></div>}
-      {pane === 'list' && selectedFolderId && mode === 'single' && (
-        <div className={`flex-1 min-w-0 h-full relative ${PANE_CARD_CLASS}`}><MessageList folderId={selectedFolderId} /></div>
-      )}
+      {pane === 'folders' && <div {...pickProps} className={`flex-1 min-w-0 h-full ${FOLDER_PANE_CLASS}`}>{folderTree}</div>}
+      {pane === 'list' && selectedFolderId && mode === 'single' && listCard(selectedFolderId, 'flex-1 min-w-0 h-full', undefined, showBackButton ? backButton : undefined)}
       {pane === 'reader' && mode === 'single' && <div ref={narrowReaderRef} role="region" aria-label="Nachricht" tabIndex={-1} className="flex flex-1 min-w-0 min-h-0 outline-none">{readerPanel}</div>}
       {pane === 'compose' && mode === 'single' && composePanel}
       {mode === 'two' && selectedFolderId && (
         <>
-          <div style={{ width: Math.min(listW, 320) }} className={`h-full shrink-0 relative ${PANE_CARD_CLASS}`}>
-            <MessageList folderId={selectedFolderId} />
-          </div>
+          {listCard(selectedFolderId, 'h-full shrink-0', { width: Math.min(listW, 320) }, drawerButton)}
           {(panes.includes('reader') || panes.includes('compose')) && <div className="w-2 shrink-0" aria-hidden="true" />}
           {panes.includes('reader') && readerPanel}
           {panes.includes('compose') && composePanel}
@@ -347,13 +362,18 @@ export function MailPage() {
       )}
       {mode === 'two' && !selectedFolderId && (panes.includes('compose')
         ? composePanel
-        : <div className={`flex-1 flex items-center justify-center text-fg-subtle text-sm ${PANE_CARD_CLASS}`}>Ordner auswählen</div>)}
+        : (
+          <div className={`flex-1 flex flex-col ${PANE_CARD_CLASS}`}>
+            <div className="p-2">{drawerButton}</div>
+            <div className="flex-1 flex items-center justify-center text-fg-subtle text-sm">Ordner auswählen</div>
+          </div>
+        ))}
       {mode === 'two' && foldersShown && (
         <>
           <div className="absolute inset-0 z-20 bg-scrim/40" onClick={() => setFoldersShown(false)} aria-hidden="true" />
           <div id="mail-folder-drawer" {...pickProps} className="absolute inset-y-0 left-0 z-30 w-72 max-w-[85%] shadow-xl bg-surface rounded-r-xl overflow-hidden"
             onKeyDown={(e) => { if (e.key === 'Escape') setFoldersShown(false); }}>
-            <FolderTree />
+            {folderTree}
           </div>
         </>
       )}
@@ -362,37 +382,33 @@ export function MailPage() {
 
   return (
     <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd} onDragCancel={() => setActiveDrag(null)}>
-      {/* 10.1: the ribbon (tab row + commands) is the command card; below 768 px the compact command bar */}
-      <PageShell title="Mail" ribbon={mode !== 'single'} commandBar={<MailRibbon onNewFromTemplate={templates.open} />} bodyCard={false}>
+      {/* 10.7: no ribbon, no header row — three cards: folders | list | content (read / compose) */}
+      <PageShell title="Mail" header={false} bodyCard={false}>
         <div className={MAIL_VIEW_COLUMN_CLASS}>
         {narrowBar}
         <div className={MAIL_VIEW_ROOT_CLASS}>
           {mode !== 'three' ? narrowBody : <>
 
-          {/* ── Folder pane (on the canvas; a translucent card over a picture) ── */}
+          {/* ── Folder card ("Neue E-Mail", favourites, folders, shared mailboxes, quota) ── */}
           <div style={{ width: folderW, flexShrink: 0 }} className={`h-full ${FOLDER_PANE_CLASS}`}>
-            <FolderTree />
+            {folderTree}
           </div>
 
           <ResizeHandle onResize={resizeFolder} />
 
-          {/* ── Message list + reader cards (a draft without reading pane / folder: the whole area) ── */}
+          {/* ── List + content cards (a draft without reading pane / folder: the whole area) ── */}
           {composePanel && (readingPane === 'off' || !selectedFolderId) ? composePanel : selectedFolderId ? (
             readingPane === 'bottom' ? (
               /* Reading pane at the bottom: list on top, reader below, 8 px apart */
               <div className="flex flex-col flex-1 min-w-0 gap-2">
-                <div style={{ width: '100%', height: '50%', flexShrink: 0 }} className={`relative ${PANE_CARD_CLASS}`}>
-                  <MessageList folderId={selectedFolderId} />
-                </div>
+                {listCard(selectedFolderId, 'shrink-0', { width: '100%', height: '50%' })}
                 {readerPanel}
               </div>
             ) : (
               /* Reading pane on the right (default) or off */
               <>
-                <div style={{ width: readingPane === 'off' ? undefined : listW, flexShrink: 0 }}
-                  className={`h-full relative ${readingPane === 'off' ? 'flex-1 min-w-0' : ''} ${PANE_CARD_CLASS}`}>
-                  <MessageList folderId={selectedFolderId} />
-                </div>
+                {listCard(selectedFolderId, `h-full shrink-0 ${readingPane === 'off' ? 'flex-1 min-w-0' : ''}`,
+                  readingPane === 'off' ? undefined : { width: listW })}
                 {readingPane !== 'off' && (
                   <>
                     <ResizeHandle onResize={resizeList} />
@@ -408,7 +424,6 @@ export function MailPage() {
           )}
           </>}
         </div>
-        <DraftTabStrip />
         </div>
       </PageShell>
       {templates.element}

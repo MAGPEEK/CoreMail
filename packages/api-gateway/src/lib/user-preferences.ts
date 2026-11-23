@@ -106,6 +106,9 @@ const FIELDS = {
   appearance: {
     background: z.string().regex(BACKGROUND).nullable(),
   },
+  // DEPRECATED (10.7): the webmail has no ribbon any more. `ribbon.collapsed` stays
+  // in the table (tolerant read, PATCH still accepted) so older clients and stored
+  // values keep working; nothing uses it. Remove only in the next MAJOR.
   ribbon: {
     collapsed: z.boolean(),
   },

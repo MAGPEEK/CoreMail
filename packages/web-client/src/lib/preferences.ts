@@ -49,7 +49,12 @@ export interface UserPreferences {
   signatures: { defaults: Record<string, SignatureDefaults> };
   /** 10.1: webmail background — none | custom | builtin:<id>; null = the organisation default (lib/backgroundPrefs.ts) */
   appearance: { background: string | null };
-  /** 10.1: the ribbon above the mail view */
+  /**
+   * 10.1: the ribbon above the mail view.
+   * @deprecated 10.7 — the webmail has no ribbon any more; the value is still read
+   * tolerantly and kept in the roaming table (api-gateway lib/user-preferences.ts), but
+   * nothing uses it. Do not drop it before the next MAJOR.
+   */
   ribbon: { collapsed: boolean };
   /** 10.1: favourite folders of the own mailbox — folder ids or default-folder names (lib/folderLists.ts) */
   folders: { favorites: string[] };
