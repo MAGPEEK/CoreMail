@@ -6,6 +6,7 @@ Highlights of each CoreMail release, newest first. Every change is listed in the
 
 ## Recent releases
 
+- **v10.7.0** — Webmail in three columns: app rail plus folder, list and content cards, no top bar or ribbon, notifications panel, petrol as default colour ([release notes](releases/v10.7.0.md)).
 - **v10.6.1** — Fix: Let's Encrypt certificates can be ordered again (setup wizard and BCP) ([release notes](releases/v10.6.1.md)).
 - **v10.6.0** — Authentication: MFA policy with per-user exceptions and admin grace, remember device, passkeys, self-service password reset with recovery address, self-registration, Let's Encrypt in the setup wizard ([release notes](releases/v10.6.0.md)).
 - **v10.5.0** — Attack protection (lock list with unlock, block list for all services, repeat-offender blocking, notifications), per-account send limits, hardened web server, MFA enforcement and a local first domain in the setup wizard ([release notes](releases/v10.5.0.md)).
@@ -38,6 +39,7 @@ Highlights of each CoreMail release, newest first. Every change is listed in the
 
 | Version | Highlights |
 |---------|-----------|
+| **v10.7.0** | **Webmail in three columns.** App rail with notifications, settings and profile; folder, list and content cards; selection bar, in-card toolbars for calendar and contacts, notifications panel, petrol default colour — [release notes](releases/v10.7.0.md) |
 | **v10.6.1** | **Fix.** Let's Encrypt certificate order works again with passkeys loaded (one copy of the ASN.1 libraries) — [release notes](releases/v10.6.1.md) |
 | **v10.6.0** | **Authentication.** BCP group Authentifizierung, MFA policy (all users / admins / per user, admin grace ≤ 14 days), remember device, passkeys (passwordless, off by default), password reset with recovery address and second factor, self-registration with approval and invite codes, wizard certificate step, attack-protection page fixes — [release notes](releases/v10.6.0.md) |
 | **v10.5.0** | **Attack protection.** Locked IPs/accounts with unlock, block and exception lists for all services, escalating auto-block, admin notifications, all protocols in the attack dashboard, send limit per account, HTTP timeouts and connection caps, MFA enforcement, setup wizard starts with example.local — [release notes](releases/v10.5.0.md) |

@@ -6,6 +6,7 @@ Die Höhepunkte jeder CoreMail-Version, neueste zuerst. Jede Änderung steht im 
 
 ## Letzte Versionen
 
+- **v10.7.0** — Webmail in drei Spalten: Symbolleiste links plus Ordner-, Listen- und Inhaltskarte, ohne Kopfleiste und Ribbon, Benachrichtigungen, Petrol als Standardfarbe ([Release-Notes](releases/v10.7.0.md)).
 - **v10.6.1** — Korrektur: Let's-Encrypt-Zertifikate lassen sich wieder anfordern (Einrichtungs-Assistent und BCP) ([Release-Notes](releases/v10.6.1.md)).
 - **v10.6.0** — Authentifizierung: MFA-Richtlinie mit Ausnahmen pro Benutzer und Frist für Admins, Gerät merken, Passkeys, Passwort-Zurücksetzung mit Wiederherstellungsadresse, Selbstregistrierung, Let's Encrypt im Einrichtungs-Assistenten ([Release-Notes](releases/v10.6.0.md)).
 - **v10.5.0** — Angriffsschutz (gesperrte IPs/Konten mit Entsperren, Sperrliste für alle Dienste, Sperre von Wiederholungstätern, Benachrichtigungen), Sendelimit pro Konto, gehärteter Webserver, MFA-Pflicht und eine lokale erste Domain im Einrichtungs-Assistenten ([Release-Notes](releases/v10.5.0.md)).
@@ -38,6 +39,7 @@ Die Höhepunkte jeder CoreMail-Version, neueste zuerst. Jede Änderung steht im 
 
 | Version | Highlights |
 |---------|-----------|
+| **v10.7.0** | **Webmail in drei Spalten.** Symbolleiste mit Benachrichtigungen, Einstellungen und Profil; Ordner-, Listen- und Inhaltskarte; Auswahlleiste, Werkzeugleisten in Kalender und Kontakten, Benachrichtigungen, Standardfarbe Petrol — [Release-Notes](releases/v10.7.0.md) |
 | **v10.6.1** | **Korrektur.** Let's-Encrypt-Zertifikate lassen sich mit geladenen Passkeys wieder anfordern (eine Kopie der ASN.1-Bibliotheken) — [Release-Notes](releases/v10.6.1.md) |
 | **v10.6.0** | **Authentifizierung.** BCP-Gruppe Authentifizierung, MFA-Richtlinie (alle / Admins / pro Benutzer, Admin-Frist ≤ 14 Tage), Gerät merken, Passkeys (ohne Passwort, standardmäßig aus), Passwort-Zurücksetzung mit Wiederherstellungsadresse und zweitem Faktor, Selbstregistrierung mit Freigabe und Einladungscodes, Zertifikatsschritt im Assistenten, Korrekturen am Angriffsschutz — [Release-Notes](releases/v10.6.0.md) |
 | **v10.5.0** | **Angriffsschutz.** Gesperrte IPs/Konten mit Entsperren, Sperr- und Ausnahmeliste für alle Dienste, stufenweise automatische Sperre, Admin-Benachrichtigungen, alle Protokolle im Angriffs-Dashboard, Sendelimit pro Konto, HTTP-Zeitlimits und Verbindungsgrenzen, MFA-Pflicht, Assistent startet mit example.local — [Release-Notes](releases/v10.5.0.md) |

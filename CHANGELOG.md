@@ -13,6 +13,33 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ---
 
+## [10.7.0] — 2026-11-23 — Webmail in three columns
+
+### Changed
+
+- **Webmail layout**: the top bar and every ribbon (mail, calendar, contacts, the compose contextual tabs) are gone. The window is the app rail plus three separate rounded cards with gaps — folders, message list, content (reading pane or compose). No function was removed; every former ribbon / top-bar command and its new place is listed in `packages/web-client/src/lib/commandPlacement.ts` and checked by a test. Background pictures, resizers, keyboard shortcuts, drag and drop, deep links, the compose pop-out and undo toasts are unchanged.
+- **App rail**: brand mark at the top, the apps, and at the bottom the notifications bell, settings and the avatar menu (Weiteres Postfach öffnen, Tastenkombinationen, Über CoreMail, Abmelden). Below 768 px the rail stays the bottom bar; bell and settings are in the avatar menu there.
+- **Folder card**: "Neue E-Mail" split button at the top; a "…" on every folder row opens the folder menu (also Shift+F10 / context-menu key).
+- **List card**: header with Sync and an "Ansicht" menu (conversations, sort, reading pane, density, mark all as read); the only search field (scope Ordner / Alle, suggestions, operator help; `/` focuses it, `/mail?q=` still works); the filter row becomes a selection bar while messages are checked (delete, archive, move, junk, read / unread, flag, categorize, pin, snooze, undo); a status line with count and sort toggle.
+- **Content card**: reader action row with "Antworten" emphasised, the other actions as icons and in "…"; open drafts are tabs at the top of the card; the compose card always shows its full header.
+- **Kalender and Kontakte**: one toolbar row inside the card instead of a ribbon; "Neuer Termin" / "Neu" in the left card.
+- **Default accent colour is petrol** (`#006d77`, WCAG 2.2 AA in light and dark) in the webmail, the BCP and as the server-side branding default; a colour set in BCP → Branding or by the user still wins.
+
+### Added
+
+- **Notifications panel** behind the rail bell: new mails, reminders and calendar shares of the session; a click opens the message.
+
+### Deprecated
+
+- Roaming preference `ribbon.collapsed`: still accepted, no longer used; removal with the next MAJOR release.
+
+### Upgrade notes
+
+- Minor release, no configuration or schema change. Installations without a saved branding colour switch from blue to petrol; set a colour in BCP → Branding to keep another one.
+- Helm chart 3.7.0.
+
+---
+
 ## [10.6.1] — 2026-11-21 — Fix: Let's Encrypt certificate order
 
 ### Fixed

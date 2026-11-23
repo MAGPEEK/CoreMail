@@ -349,7 +349,7 @@ docker run -d --name coremail --network coremail --restart unless-stopped \
   --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
   --cap-add SETUID --cap-add SETGID --cap-add KILL --cap-add NET_BIND_SERVICE \
   --sysctl net.ipv4.ip_unprivileged_port_start=0 \
-  magpeek/coremail-app:10.6.1
+  magpeek/coremail-app:10.7.0
 
 docker run -d --name coremail-postgres --network coremail --restart unless-stopped \
   -e POSTGRES_DB=coremail -e POSTGRES_USER=coremail \
@@ -398,7 +398,7 @@ docker create --name coremail --network coremail --restart unless-stopped \
   --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
   --cap-add SETUID --cap-add SETGID --cap-add KILL --cap-add NET_BIND_SERVICE \
   --sysctl net.ipv4.ip_unprivileged_port_start=0 \
-  magpeek/coremail-app:10.6.1
+  magpeek/coremail-app:10.7.0
 docker network connect --ip 10.253.253.2 coremail-rspamd coremail
 docker start coremail
 

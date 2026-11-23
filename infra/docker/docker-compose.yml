@@ -1,7 +1,7 @@
 name: coremail
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  CoreMail 10.6.1 — Docker Compose, variant STANDARD (production, single host)
+#  CoreMail 10.7.0 — Docker Compose, variant STANDARD (production, single host)
 #
 #  Variants (docs/docker-compose.md has the comparison table):
 #    docker-compose.minimal.yml   MINIMAL   coremail + postgres + redis (1–50 users)
@@ -60,7 +60,7 @@ services:
   #  a value from .env is copied, not generated), then waits for PostgreSQL.
   # ───────────────────────────────────────────────────────────────────────────
   coremail:
-    image: magpeek/coremail-app:${COREMAIL_VERSION:-10.6.1}
+    image: magpeek/coremail-app:${COREMAIL_VERSION:-10.7.0}
     # Use your own build instead of the Docker Hub image:
     # build:
     #   context: ../..

@@ -1,7 +1,7 @@
 name: coremail
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  CoreMail 10.6.1 — Docker Compose, variant MAXIMAL ("full")
+#  CoreMail 10.7.0 — Docker Compose, variant MAXIMAL ("full")
 #
 #  Variants (docs/docker-compose.md has the comparison table):
 #    docker-compose.minimal.yml   MINIMAL   coremail + postgres + redis
@@ -51,7 +51,7 @@ services:
   #  REST API, webmail, admin panel, admin CLI `coremail`)
   # ───────────────────────────────────────────────────────────────────────────
   coremail:
-    image: magpeek/coremail-app:${COREMAIL_VERSION:-10.6.1}
+    image: magpeek/coremail-app:${COREMAIL_VERSION:-10.7.0}
     container_name: coremail
     restart: unless-stopped
     environment:
