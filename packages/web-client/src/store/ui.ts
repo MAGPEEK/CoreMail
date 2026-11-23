@@ -100,7 +100,7 @@ interface UiState {
   /** 10.1: background tile hovered / focused in Settings → Darstellung (live preview), null = none */
   backgroundPreview: BackgroundChoice | null;
   setBackgroundPreview: (v: BackgroundChoice | null) => void;
-  /** 10.1: last move targets of this session (ribbon "Verschieben in"), newest first */
+  /** 10.1: last move targets of this session ("Verschieben" menus), newest first */
   recentMoveTargets: string[];
   noteMoveTarget: (folderId: string) => void;
   /** 10.1: collapsed date groups of the message list per folder (session only) */
@@ -289,6 +289,8 @@ export const useUiPrefs = create<UiPrefs>()(
 export type ThemeMode = 'light' | 'dark' | 'system';
 
 export const ACCENT_COLORS = [
+  // 10.7: petrol is the built-in default (lib/branding.ts DEFAULT_PRIMARY_COLOR)
+  { name: 'Petrol',         hex: '#006D77', rgb: '0 109 119'   },
   { name: 'Blau',           hex: '#0078D4', rgb: '0 120 212'   },
   { name: 'Lila',           hex: '#6264A7', rgb: '98 100 167'  },
   { name: 'Grün',           hex: '#107C10', rgb: '16 124 16'   },

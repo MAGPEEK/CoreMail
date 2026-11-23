@@ -10,7 +10,7 @@ the whole server.
 | Setting | Values | Default |
 |---|---|---|
 | Product name | 1–40 characters, no control characters | `BRANDING_NAME`, else `CoreMail` |
-| Primary colour | `#rrggbb` | `BRANDING_COLOR`, else `#0078d4` |
+| Primary colour | `#rrggbb` | `BRANDING_COLOR`, else `#006d77` |
 | Header colour | `#rrggbb` or none (= primary colour) | none |
 | Logo (light theme) | PNG, WebP, SVG — ≤ 512 KB, ≤ 4096 px | built-in logo |
 | Logo (dark theme) | PNG, WebP, SVG — ≤ 512 KB, ≤ 4096 px | light logo / built-in |
@@ -52,7 +52,7 @@ differs from "CoreMail", otherwise the organisation name as before; the Apple pr
 ### How environment defaults and BCP values interact
 
 Product name and primary colour are each either **stored** (set in the BCP or with the CLI) or
-**default** (nothing stored: `BRANDING_NAME` / `BRANDING_COLOR`, else `CoreMail` / `#0078d4`).
+**default** (nothing stored: `BRANDING_NAME` / `BRANDING_COLOR`, else `CoreMail` / `#006d77`).
 A default follows the environment: change `BRANDING_NAME`, restart, and every installation that
 never stored a name shows the new one.
 

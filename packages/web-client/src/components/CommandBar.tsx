@@ -1,5 +1,5 @@
 /**
- * Shared command bar (mail, reading pane, calendar, contacts, compose ribbon).
+ * Shared command bar (selection bar, reading pane, list header, calendar, contacts, compose).
  *
  * - role="toolbar" with roving focus (WAI-ARIA APG): one tab stop, ←/→ move between
  *   the controls, Home/End jump; disabled commands stay focusable (aria-disabled)
@@ -35,7 +35,8 @@ export interface CommandItem {
   keyshortcuts?: string | undefined;
   /** pinned = never in "…", overflow = always in "…", auto (default) = while it fits */
   placement?: CommandPlacement;
-  tone?: 'primary' | 'danger';
+  /** primary = accent fill; outline = 10.7 outlined primary (reader "Antworten"); danger = red text. */
+  tone?: 'primary' | 'outline' | 'danger';
   /** 10.1: a primary command that is ready (Senden with a valid recipient) gets a soft ring. */
   highlight?: boolean;
   /** The icon alone (the label is the accessible name and the tooltip; a dropdown shows no extra arrow). */
@@ -46,6 +47,8 @@ export interface CommandGroup {
   id: string;
   /** Accessible name of the group */
   title?: string;
+  /** 10.7: end = the group (and everything after it) sits at the right end of the bar. */
+  align?: 'end';
   items: CommandItem[];
 }
 
@@ -70,6 +73,9 @@ const DISABLED = 'aria-disabled:opacity-50 aria-disabled:cursor-not-allowed aria
 function toneClass(item: CommandItem): string {
   if (item.tone === 'primary') {
     return `bg-accent text-white hover:bg-accent-hover aria-disabled:hover:bg-accent transition-shadow ${item.highlight ? 'shadow-md ring-2 ring-accent/30' : ''}`;
+  }
+  if (item.tone === 'outline') {
+    return 'border border-accent-fg text-accent-fg font-medium hover:bg-accent/10 aria-disabled:hover:bg-transparent';
   }
   if (item.pressed) return 'bg-accent/10 text-accent-fg ring-1 ring-inset ring-accent/30';
   if (item.tone === 'danger') return 'text-danger-fg hover:bg-danger-bg aria-disabled:hover:bg-transparent';
@@ -199,7 +205,7 @@ function GroupBox({ group, first, dividers, children }: {
 }) {
   const border = first || !dividers ? '' : 'border-l border-line';
   return (
-    <div role="group" {...(group.title ? { 'aria-label': group.title } : {})} className={`${SHAPE.group} ${border}`} data-measure-group={group.id}>
+    <div role="group" {...(group.title ? { 'aria-label': group.title } : {})} className={`${SHAPE.group} ${border} ${group.align === 'end' ? 'ml-auto' : ''}`} data-measure-group={group.id}>
       {children}
     </div>
   );
@@ -221,24 +227,6 @@ export function commandMenuItem(item: CommandItem, anchor: () => HTMLElement): C
     ...(item.tooltip && item.tooltip !== item.label ? { title: item.tooltip } : {}),
     ...(item.tone === 'danger' ? { danger: true } : {}),
     ...(children ? { children } : { onClick: () => item.onClick?.(anchor()) }),
-  };
-}
-
-/**
- * A menu entry as a command (10.1: the ribbon shows entries of the compose
- * card's menus as buttons — same handlers): a submenu becomes a dropdown, a
- * checkable entry a toggle.
- */
-export function commandFromMenuItem(id: string, item: ContextMenuItem): CommandItem {
-  return {
-    id,
-    label: item.label ?? id,
-    ...(item.icon ? { icon: item.icon } : {}),
-    ...(item.children ? { menu: () => item.children! } : { onClick: () => item.onClick?.() }),
-    ...(item.disabled ? { disabled: true } : {}),
-    ...(item.checked !== undefined && !item.children ? { pressed: item.checked } : {}),
-    ...(item.title ? { tooltip: item.title } : {}),
-    ...(item.danger ? { tone: 'danger' as const } : {}),
   };
 }
 

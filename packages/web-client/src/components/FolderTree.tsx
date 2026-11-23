@@ -41,7 +41,7 @@ interface MenuState {
   items: ContextMenuItem[];
 }
 
-export function FolderTree() {
+export function FolderTree({ top }: { /** 10.7: content at the top of the folder card ("Neue E-Mail") */ top?: ReactNode } = {}) {
   const qc = useQueryClient();
   const t = useT();
   const lang = useLanguageStore((s) => s.lang);
@@ -359,6 +359,7 @@ export function FolderTree() {
 
   return (
     <aside aria-label="Postfachbereich" className="w-full h-full flex flex-col overflow-hidden">
+      {top && <div className="shrink-0 px-2 pt-2 pb-1 coremail-no-print">{top}</div>}
       <nav
         ref={navRef}
         aria-label="Ordner"

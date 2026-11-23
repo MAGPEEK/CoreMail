@@ -24,7 +24,9 @@ import { ContextMenu, type ContextMenuItem } from './ContextMenu.js';
 import { PromptDialog } from './PromptDialog.js';
 import { MiniCalendar } from './MiniCalendar.js';
 import { ShareCalendarDialog } from './ShareCalendarDialog.js';
+import { SplitButton } from './SplitButton.js';
 import { useT } from '../i18n/useT.js';
+import { useAriaKeys } from '../hooks/useShortcuts.js';
 import { readableTextOn } from '../lib/readableText.js';
 
 // ─── Icon-Map: Lucide-Icon-Name → Component ───────────────────────────────────
@@ -72,11 +74,15 @@ export function CalendarSidebar({
   calendars,
   selectedDate,
   onSelectDate,
+  onNewEvent,
 }: {
   calendars: Calendar[];
   selectedDate: Date;
   onSelectDate: (d: Date) => void;
+  /** 10.7: "Neuer Termin" at the top of the calendar list card. */
+  onNewEvent?: () => void;
 }) {
+  const ariaKeys = useAriaKeys();
   const qc = useQueryClient();
   const t = useT();
   const { hiddenCalendarIds, toggleCalendar, showOnlyCalendar } = useUiPrefs();
@@ -412,6 +418,11 @@ export function CalendarSidebar({
 
   return (
     <aside aria-label="Kalenderliste" className="w-60 max-w-full shrink-0 flex flex-col pt-2 pl-2">
+      {onNewEvent && (
+        <div className="pr-2 pb-2 coremail-no-print">
+          <SplitButton label={t('cal_new_event')} icon={<Plus size={16} />} onClick={onNewEvent} keyshortcuts={ariaKeys('calendar.new')} />
+        </div>
+      )}
       {/* Mini calendar at the top */}
       <MiniCalendar selectedDate={selectedDate} onSelectDate={onSelectDate} />
 

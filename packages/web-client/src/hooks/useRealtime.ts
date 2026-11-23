@@ -11,6 +11,9 @@ import { playChime } from '../lib/chime.js';
 import { currentPreferences } from '../store/preferences.js';
 import { refreshPreferencesFromServer } from './usePreferencesSync.js';
 import { tabRole } from '../lib/tabRole.js';
+import { hintNotification, mailNotification } from '../lib/notifications.js';
+import { useNotifications } from '../store/notifications.js';
+import { translate } from '../i18n/useT.js';
 
 const CHANNEL_NAME = 'coremail-realtime';
 
@@ -87,6 +90,16 @@ export function useRealtime() {
       if (how === 'sound') playChime();
       else if (how === 'toast' && plan.hint) {
         toast(plan.icon ? `${plan.icon} ${plan.hint}` : plan.hint, { duration: 4000 });
+      }
+      // 10.7: the bell panel of the rail lists what arrived this session (every tab keeps its own list)
+      const now = Date.now();
+      if (name === 'mail:new') {
+        const entry = mailNotification(data, now, {
+          unknownSender: translate('notifications_unknown_sender'), noSubject: translate('notifications_no_subject'),
+        });
+        if (entry) useNotifications.getState().add(entry);
+      } else if (name === 'calendar' && plan.hint) {
+        useNotifications.getState().add(hintNotification('calendar', `${now}`, plan.hint, now, '/calendar'));
       }
     };
 

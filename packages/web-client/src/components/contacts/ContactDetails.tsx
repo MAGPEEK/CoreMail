@@ -34,7 +34,7 @@ export function ContactAvatar({ name, email, className }: { name: string; email?
   );
 }
 
-/** The commands (edit, delete, e-mail, call) live in the ribbon (lib/contactsRibbon.ts). */
+/** The commands (edit, delete, e-mail, call) live in the action row of the details card (lib/contactsCommands.ts). */
 export function ContactDetails({ contact }: { contact: ContactDetail }) {
   const view = formFromContact(contact);
   const primary = view.emails[0]?.value;

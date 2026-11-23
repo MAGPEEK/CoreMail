@@ -1,4 +1,4 @@
-/** Read view of a global address book entry (name, address, domain). Mail via the ribbon. */
+/** Read view of a global address book entry (name, address, domain). Mail via the action row of the details card. */
 import { AtSign, Building2 } from 'lucide-react';
 import { ContactAvatar } from './ContactDetails.js';
 import type { DirectoryEntry } from '../../lib/contactsList.js';

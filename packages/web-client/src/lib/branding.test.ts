@@ -35,7 +35,7 @@ test('accent: brand primary is the default; user choice wins only when allowed',
   assert.equal(resolveAccentChannels({ ...brand, allowUserAccent: false }, '180 0 158'), '16 124 16');
   assert.equal(resolveAccentChannels(brand, 'garbage'), '16 124 16');
   assert.equal(resolveAccentChannels(brand, '300 0 0'), '16 124 16');
-  assert.equal(resolveAccentChannels({ primaryColor: 'nope', allowUserAccent: false }, null), '0 120 212');
+  assert.equal(resolveAccentChannels({ primaryColor: 'nope', allowUserAccent: false }, null), '0 109 119');
 });
 
 test('accent migration: old default = never chose (null), other presets stay explicit', () => {
@@ -72,13 +72,13 @@ test('brandCssVars: accent-fg readable on every surface, header text >= 4.5:1, b
       assert.equal(v['--header'], ch, 'the header shows the brand colour unchanged');
     }
   }
-  assert.equal(brandCssVars('junk', '#0078d4', false)['--color-accent'], '0 120 212');
+  assert.equal(brandCssVars('junk', '#0078d4', false)['--color-accent'], '0 109 119');
 });
 
 test('header text: white on dark colours, black on light ones; overlay is the opposite', () => {
   assert.deepEqual(headerColors('#0078d4'), { bg: '0 120 212', fg: '255 255 255', overlay: '0 0 0' });
   assert.deepEqual(headerColors('#ffeb3b'), { bg: '255 235 59', fg: '0 0 0', overlay: '255 255 255' });
-  assert.equal(headerColors('nonsense').bg, '0 120 212');
+  assert.equal(headerColors('nonsense').bg, '0 109 119');
   // hover/selected overlay (25 %) must not lower the text contrast
   for (const hex of ['#3a8fd0', '#7a7a7a', '#808080', '#5f9ea0', '#ff8c00']) {
     const h = headerColors(hex);
@@ -207,7 +207,7 @@ test('parseBranding: junk falls back to defaults, unsafe links/assets are droppe
     assets: { logoLight: 'https://evil.example/l.svg', favicon: '//evil/x', logoDark: 7 },
   });
   assert.equal(b.productName, 'CoreMail');
-  assert.equal(b.primaryColor, '#0078d4');
+  assert.equal(b.primaryColor, '#006d77');
   assert.equal(b.headerColor, null);
   assert.equal(b.allowUserAccent, true);
   assert.equal(b.showPoweredBy, true);

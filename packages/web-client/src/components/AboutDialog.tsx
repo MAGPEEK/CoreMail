@@ -1,9 +1,9 @@
-/** "Über CoreMail" of the ribbons' Hilfe tab (mail, calendar, contacts): product name and the released version (GET /changelog). */
+/** "Über CoreMail" of the profile menu (rail avatar): product name and the released version (GET /changelog). */
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api/client.js';
 import { Modal } from './Modal.js';
 import { useBranding } from '../hooks/useBranding.js';
-import { latestReleasedVersion } from '../lib/ribbon.js';
+import { latestReleasedVersion } from '../lib/shellMenus.js';
 import { fmt, useT } from '../i18n/useT.js';
 
 export function AboutDialog({ onClose }: { onClose: () => void }) {

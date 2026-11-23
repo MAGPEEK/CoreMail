@@ -14,9 +14,6 @@ export const PAGE_SHELL_CLASS = `flex flex-col flex-1 min-w-0 min-h-0 overflow-h
 /** Header row: page title + page actions (or the command bar); gutter: px-4, with a command bar px-2. */
 export const PAGE_HEADER_CLASS = `shrink-0 flex items-center gap-3 min-h-12 py-1.5 max-md:border-b bg-surface ${PANE_CARD_BASE}`;
 
-/** 10.1: header holding the mail ribbon (tab row + command panel, its own spacing). */
-export const PAGE_RIBBON_HEADER_CLASS = `shrink-0 flex flex-col max-md:border-b bg-surface ${PANE_CARD_BASE}`;
-
 export const PAGE_TITLE_CLASS = 'text-base font-semibold text-fg truncate';
 
 /** Area below the header: side panes + content side by side. */

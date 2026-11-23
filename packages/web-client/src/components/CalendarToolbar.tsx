@@ -1,52 +1,54 @@
 /**
- * Calendar ribbon: the pure ribbon data (lib/calendarRibbon.ts — tabs Start /
- * Ansicht / Hilfe) on the shared ribbon (components/Ribbon.tsx). Every command
- * goes through the page's dispatcher except the filter popover, which lives here.
+ * 10.7: the commands of the calendar card's toolbar row (right of Heute, ‹ ›
+ * and the period label): Tag / Arbeitswoche / Woche / Monat, Zeitskala, Filter,
+ * Tagesagenda, Freigeben, Drucken, "…" (Kalender-Einstellungen) — pure data in
+ * lib/calendarToolbar.ts on the shared command bar (roving focus, overflow "…").
+ * Every command goes through the page's dispatcher except the filter popover,
+ * which lives here. There is no calendar ribbon any more.
  */
 import { useEffect, useRef, useState, type ElementType, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import {
-  Plus, CalendarPlus, Mail, CalendarCheck, Calendar as CalDay, Briefcase, Columns3, LayoutGrid,
-  Filter, Share2, Printer, Clock, Settings, Keyboard, Info, ListTodo, Users, Sun, X,
+  Plus, Calendar as CalDay, Briefcase, Columns3, LayoutGrid, Filter, Share2, Printer, Clock, Settings, ListTodo, X,
 } from 'lucide-react';
-import type { CommandGroup, CommandItem } from './CommandBar.js';
-import { Ribbon } from './Ribbon.js';
+import { CommandBar, type CommandGroup, type CommandItem } from './CommandBar.js';
 import {
-  flattenRibbon, resolveRibbon, type CalendarAction, type CalendarViewId, type ResolvedCommand, type RibbonTabId,
-} from '../lib/calendarRibbon.js';
+  groupToolbar, resolveToolbar, type CalendarAction, type CalendarViewId, type ResolvedCommand,
+} from '../lib/calendarToolbar.js';
 import { useT } from '../i18n/useT.js';
 
 const ICONS: Record<string, ElementType> = {
-  Plus, CalendarPlus, Mail, CalendarCheck, Calendar: CalDay, Briefcase, Columns3, LayoutGrid,
-  Filter, Share2, Printer, Clock, Settings, Keyboard, Info, ListTodo, Users, Sun,
+  Plus, Calendar: CalDay, Briefcase, Columns3, LayoutGrid, Filter, Share2, Printer, Clock, Settings, ListTodo,
 };
 
-type RibbonDispatch = (action: CalendarAction, anchor?: HTMLElement) => void;
+type ToolbarDispatch = (action: CalendarAction, anchor?: HTMLElement) => void;
 
 const icon = (name: string, size: number, className?: string): ReactNode => {
   const Icon = ICONS[name];
   return Icon ? <Icon size={size} {...(className ? { className } : {})} aria-hidden="true" /> : null;
 };
 
-/** One resolved ribbon command as a command-bar item; `popoverOpen` marks the filter button's popover. */
-function toItem(c: ResolvedCommand, dispatch: RibbonDispatch, popoverOpen: boolean): CommandItem {
+/** The view buttons show their label; the tool buttons are icons with a tooltip. */
+const ICON_ONLY_GROUPS = new Set<ResolvedCommand['group']>(['scale', 'tools']);
+
+/** One resolved command as a command-bar item; `popoverOpen` marks the filter button's popover. */
+function toItem(c: ResolvedCommand, dispatch: ToolbarDispatch, popoverOpen: boolean): CommandItem {
   const { action, options } = c;
   const isNew = c.id === 'new';
   return {
     id: c.id,
     label: c.label,
-    icon: icon(c.icon, 20, isNew || (c.id === 'filter' && c.pressed) ? 'text-accent-fg' : undefined),
+    icon: icon(c.icon, 16, c.id === 'filter' && c.pressed ? 'text-accent-fg' : undefined),
     disabled: !c.enabled,
+    placement: c.placement,
+    ...(ICON_ONLY_GROUPS.has(c.group) ? { iconOnly: true } : {}),
+    ...(isNew ? { tone: 'primary' as const } : {}),
     ...(action === 'filter' ? { dialogOpen: popoverOpen } : {}),
     ...(c.tooltip ? { tooltip: c.tooltip } : {}),
     ...(c.pressed !== undefined ? { pressed: c.pressed } : {}),
-    ...(isNew ? { placement: 'pinned' as const } : {}),
     ...(action ? { onClick: (anchor: HTMLElement) => dispatch(action, anchor) } : {}),
     ...(options ? {
-      menu: () => options.flatMap((o) => [
-        ...(o.separatorBefore ? [{ type: 'divider' as const }] : []),
-        { label: o.label, icon: icon(o.icon, 14), onClick: () => dispatch(o.action) },
-      ]),
+      menu: () => options.map((o) => ({ label: o.label, icon: icon(o.icon, 14), onClick: () => dispatch(o.action) })),
     } : {}),
   };
 }
@@ -79,13 +81,14 @@ interface Props {
   hasOwnCalendar: boolean;
   slotMinutes: number;
   agendaOpen: boolean;
-  /** Every ribbon command except the filter popover (owned here) goes through the page. */
+  /** Phone layout: "Neuer Termin" joins the row (the calendar list is a sheet there). */
+  compact: boolean;
+  /** Every command except the filter popover (owned here) goes through the page. */
   onAction: (action: CalendarAction) => void;
 }
 
-export function CalendarToolbar({ view, filters, onFiltersChange, hasOwnCalendar, slotMinutes, agendaOpen, onAction }: Props) {
+export function CalendarToolbar({ view, filters, onFiltersChange, hasOwnCalendar, slotMinutes, agendaOpen, compact, onAction }: Props) {
   const t = useT();
-  const [tab, setTab] = useState<RibbonTabId>('start');
   const [filterOpen, setFilterOpen] = useState<{ x: number; y: number; trigger: HTMLElement } | null>(null);
   const filterRef = useRef<HTMLDivElement>(null);
   const filterIsOpen = filterOpen !== null;
@@ -108,24 +111,25 @@ export function CalendarToolbar({ view, filters, onFiltersChange, hasOwnCalendar
 
   const resetFilters = () => onFiltersChange({ ...FILTER_DEFAULT });
 
-  const dispatch: RibbonDispatch = (action, anchor) => {
+  const dispatch: ToolbarDispatch = (action, anchor) => {
     if (action === 'filter' && anchor) {
       const r = anchor.getBoundingClientRect();
-      setFilterOpen({ x: Math.max(8, r.right - 340), y: r.bottom + 4, trigger: anchor });
+      setFilterOpen({ x: Math.max(8, Math.min(r.right - 340, window.innerWidth - 348)), y: r.bottom + 4, trigger: anchor });
     } else onAction(action);
   };
-  const tabs = resolveRibbon({ view, activeFilters: filterCount, hasOwnCalendar, slotMinutes, agendaOpen, aboutAvailable: true });
-  const activeTab = tabs.find((x) => x.id === tab) ?? tabs[0]!;
-  const groups: CommandGroup[] = flattenRibbon([activeTab]).map(({ group, commands }) => ({
+  const commands = resolveToolbar({ view, activeFilters: filterCount, hasOwnCalendar, slotMinutes, agendaOpen, compact });
+  // right-aligned in the row (the first group carries the push)
+  const groups: CommandGroup[] = groupToolbar(commands).map(({ group, commands: list }, i) => ({
     id: group,
-    title: group,
-    items: commands.map((c) => toItem(c, dispatch, filterIsOpen)),
+    ...(i === 0 ? { align: 'end' as const } : {}),
+    items: list.map((c) => toItem(c, dispatch, filterIsOpen)),
   }));
 
   return (
-    <Ribbon label={t('ribbon_label')} tabs={tabs} active={activeTab.id} onSelect={setTab} groups={groups}>
+    <>
+      <CommandBar label={t('cal_toolbar_label')} groups={groups} className="flex-1 min-w-0" />
 
-      {/* 10.1: in <body> — the floating header card may blur a background picture (traps fixed children) */}
+      {/* in <body> — the card may blur a background picture (traps fixed children) */}
       {filterOpen && createPortal(
         <>
           <div className="fixed inset-0 z-[90]" onClick={closeFilter} />
@@ -171,6 +175,6 @@ export function CalendarToolbar({ view, filters, onFiltersChange, hasOwnCalendar
         </>,
         document.body,
       )}
-    </Ribbon>
+    </>
   );
 }

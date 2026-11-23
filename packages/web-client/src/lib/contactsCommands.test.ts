@@ -1,24 +1,19 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  NEW_MENU, RIBBON_COMMANDS, RIBBON_TABS, commandById, commandsOf, selectionFacts,
-} from './contactsRibbon.ts';
+import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+import { CONTACT_COMMANDS, NEW_MENU, commandById, commandsIn, selectionFacts } from './contactsCommands.ts';
 
 const contact = selectionFacts({ kind: 'contact', hasRecipients: true, phone: '+49 30 123', categoriesAvailable: true });
 
-test('tabs are Start / Ansicht / Hilfe and every group command exists once', () => {
-  assert.deepEqual(RIBBON_TABS.map((t) => t.label), ['Start', 'Ansicht', 'Hilfe']);
-  const ids = RIBBON_TABS.flatMap((t) => t.groups.flatMap((g) => g.commandIds));
-  assert.equal(new Set(ids).size, ids.length);
-  assert.deepEqual([...ids].sort(), RIBBON_COMMANDS.map((c) => c.id).sort());
-  for (const t of RIBBON_TABS) for (const g of t.groups) for (const c of commandsOf(g)) assert.equal(c.group, g.id);
-});
-
-test('start tab offers exactly the existing functions', () => {
-  const start = RIBBON_TABS[0]!;
-  assert.deepEqual(start.groups.flatMap((g) => commandsOf(g)).map((c) => c.action),
-    ['newContact', 'edit', 'delete', 'mail', 'call', 'categorize']);
+test('each card shows its commands: "Neu" in the folder card, sort in the list header, the action row in the details', () => {
+  assert.deepEqual(commandsIn('sidebar').map((c) => c.action), ['newContact']);
   assert.deepEqual(NEW_MENU.map((m) => m.action), ['newContact', 'newGroup']);
+  assert.deepEqual(commandsIn('list').map((c) => c.action), ['sortGiven', 'sortFamily']);
+  assert.deepEqual(commandsIn('detail').map((c) => c.label), ['Bearbeiten', 'E-Mail', 'Anrufen', 'Kategorisieren', 'Löschen']);
+  const ids = CONTACT_COMMANDS.map((c) => c.id);
+  assert.equal(new Set(ids).size, ids.length);
 });
 
 test('without selection only item-less commands are enabled', () => {
@@ -62,10 +57,12 @@ test('an open editor pauses the item commands', () => {
 });
 
 test('categorize is disabled when the category module is off', () => {
-  const r = commandById('categorize').enabled({ ...contact, categoriesAvailable: false });
-  assert.equal(r.enabled, false);
+  assert.equal(commandById('categorize').enabled({ ...contact, categoriesAvailable: false }).enabled, false);
 });
 
-test('unknown command id throws', () => {
+test('unknown command id throws; the contacts ribbon is gone', () => {
   assert.throws(() => commandById('nope'));
+  const src = join(dirname(fileURLToPath(import.meta.url)), '..');
+  assert.equal(existsSync(join(src, 'lib/contactsRibbon.ts')), false);
+  assert.equal(existsSync(join(src, 'components/contacts/ContactsRibbon.tsx')), false);
 });

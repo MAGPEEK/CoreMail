@@ -17,15 +17,14 @@ import itLocale from '@fullcalendar/core/locales/it';
 import type { DateSelectArg, DatesSetArg, EventClickArg } from '@fullcalendar/core';
 import { api } from '../api/client.js';
 import type { Calendar, CalendarEvent, Task } from '../api/types.js';
-import { useUiPrefs, useUiStore } from '../store/ui.js';
+import { useUiPrefs } from '../store/ui.js';
 import { useLanguageStore } from '../store/language.js';
 import { useT } from '../i18n/useT.js';
 import { CalendarSidebar } from '../components/CalendarSidebar.js';
 import { CalendarNavBar } from '../components/calendar/CalendarNavBar.js';
 import { PaneCard } from '../components/PaneCard.js';
-import { AboutDialog } from '../components/AboutDialog.js';
 import { FOLDER_PANE_CLASS } from '../lib/paneLayout.js';
-import { parseAction, type CalendarAction } from '../lib/calendarRibbon.js';
+import { parseAction, type CalendarAction } from '../lib/calendarToolbar.js';
 import {
   CalendarToolbar,
   FILTER_DEFAULT,
@@ -65,7 +64,6 @@ export function CalendarPage() {
   // 9.4: Settings → Kalender (work week, week start, time grid)
   const calPrefs = usePreferences((s) => s.prefs.calendar);
   const updatePrefs = usePreferences((s) => s.update);
-  const setShortcutHelpOpen = useUiStore((s) => s.setShortcutHelpOpen);
   // 9.4: the grid shows wall-clock times of the chosen zone (Settings → Region)
   const regionalTimeZone = useRegional().timeZone;
   const fcTimeZone = calendarTimeZone(regionalTimeZone);
@@ -83,7 +81,6 @@ export function CalendarPage() {
   const [occurrenceChoice, setOccurrenceChoice] = useState<{ eventId: string; occurrence: string; summary: string } | null>(null);
   const [agendaOpen, setAgendaOpen] = useState(false);
   const [shareDialogOpen, setShareDialogOpen] = useState(false);
-  const [aboutOpen, setAboutOpen] = useState(false);
   // 9.5: a phone starts in the day view (the month grid does not fit 320 px)
   const compactScreen = useLayoutMode() === 'single';
   const [calendarListOpen, setCalendarListOpen] = useState(false);
@@ -272,20 +269,20 @@ export function CalendarPage() {
     }, 500);
   };
 
-  /** One dispatcher for every ribbon command (lib/calendarRibbon.ts); the filter popover lives in the toolbar. */
-  const runRibbonAction = (action: CalendarAction) => {
+  const newEvent = () => setEventDialog({ mode: 'create', defaults: { calendarId: defaultWritableCalId } });
+
+  /** One dispatcher for every toolbar command (lib/calendarToolbar.ts); the filter popover lives in the toolbar. */
+  const runToolbarAction = (action: CalendarAction) => {
     const parsed = parseAction(action);
     if (parsed.kind === 'view') { changeView(parsed.view); return; }
     if (parsed.kind === 'slot') { updatePrefs({ calendar: { slotMinutes: parsed.minutes } }); return; }
     switch (parsed.action) {
-      case 'new-event': setEventDialog({ mode: 'create', defaults: { calendarId: defaultWritableCalId } }); break;
+      case 'new-event': newEvent(); break;
       case 'today': handleSelectDate(new Date()); break;
       case 'share': shareCalendar(); break;
       case 'print': printCalendar(); break;
       case 'agenda': setAgendaOpen((o) => !o); break;
       case 'settings': navigate('/settings#calendar'); break;
-      case 'shortcuts': setShortcutHelpOpen(true); break;
-      case 'about': setAboutOpen(true); break;
       case 'filter': break;
     }
   };
@@ -293,49 +290,22 @@ export function CalendarPage() {
   const fcApi = () => calendarRef.current?.getApi();
 
   return (
-    <PageShell
-      title="Kalender"
-      ribbon
-      bodyCard={false}
-      bodyClassName="md:gap-2"
-      commandBar={
-        <CalendarToolbar
-          view={view}
-          filters={filters}
-          onFiltersChange={setFilters}
-          hasOwnCalendar={ownedCalendars.length > 0}
-          slotMinutes={calPrefs.slotMinutes}
-          agendaOpen={agendaOpen}
-          onAction={runRibbonAction}
-        />
-      }
-    >
-      {/* Calendar list on the canvas like the mail folder pane (a translucent card over a picture) */}
+    // 10.7: no ribbon — card 1: "Neuer Termin", mini calendar, calendar list; the grid card has its own toolbar row
+    <PageShell title="Kalender" header={false} bodyCard={false} bodyClassName="md:gap-2">
       {!compactScreen && (
         <div className={`shrink-0 flex ${FOLDER_PANE_CLASS}`}>
           <CalendarSidebar
             calendars={calendars ?? []}
             selectedDate={selectedDate}
             onSelectDate={handleSelectDate}
+            onNewEvent={newEvent}
           />
         </div>
       )}
 
-      {/* Main area: navigation row + FullCalendar in a card on the canvas */}
+      {/* Main area: toolbar row + FullCalendar in a card on the canvas */}
       <div className="flex-1 min-w-0 min-h-0 flex flex-col overflow-auto">
       <PaneCard label="Kalenderraster" className="flex-1 min-h-[26rem]">
-        {compactScreen && (
-          <button
-            type="button"
-            id="calendar-list-toggle"
-            onClick={() => setCalendarListOpen(true)}
-            aria-haspopup="dialog"
-            className="self-start m-1 inline-flex items-center gap-1.5 min-h-[2rem] px-2 rounded text-sm font-medium text-accent-fg hover:bg-surface-2"
-          >
-            <PanelLeft size={16} aria-hidden="true" />
-            Kalender
-          </button>
-        )}
         <CalendarNavBar
           title={gridTitle}
           selectedDate={selectedDate}
@@ -343,6 +313,31 @@ export function CalendarPage() {
           onPrev={() => fcApi()?.prev()}
           onNext={() => fcApi()?.next()}
           onJump={handleSelectDate}
+          start={compactScreen ? (
+            <button
+              type="button"
+              id="calendar-list-toggle"
+              onClick={() => setCalendarListOpen(true)}
+              aria-haspopup="dialog"
+              aria-label="Kalender"
+              title="Kalender"
+              className="inline-flex items-center justify-center w-8 h-8 rounded text-accent-fg hover:bg-surface-2 shrink-0"
+            >
+              <PanelLeft size={16} aria-hidden="true" />
+            </button>
+          ) : undefined}
+          end={(
+            <CalendarToolbar
+              view={view}
+              filters={filters}
+              onFiltersChange={setFilters}
+              hasOwnCalendar={ownedCalendars.length > 0}
+              slotMinutes={calPrefs.slotMinutes}
+              agendaOpen={agendaOpen}
+              compact={compactScreen}
+              onAction={runToolbarAction}
+            />
+          )}
         />
         <div className="flex-1 min-h-0 p-2">
         <FullCalendar
@@ -392,6 +387,7 @@ export function CalendarPage() {
             calendars={calendars ?? []}
             selectedDate={selectedDate}
             onSelectDate={(d) => { handleSelectDate(d); setCalendarListOpen(false); }}
+            onNewEvent={() => { setCalendarListOpen(false); newEvent(); }}
           />
         </Modal>
       )}
@@ -448,7 +444,6 @@ export function CalendarPage() {
         );
       })()}
 
-      {aboutOpen && <AboutDialog onClose={() => setAboutOpen(false)} />}
     </PageShell>
   );
 }

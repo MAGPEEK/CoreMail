@@ -55,9 +55,12 @@ export type AssetSlot = keyof BrandingAssets;
 export const ASSET_SLOTS: readonly AssetSlot[] = ['logoLight', 'logoDark', 'favicon', 'loginBackground'];
 
 export const DEFAULT_PRODUCT_NAME = 'CoreMail';
-export const DEFAULT_PRIMARY_COLOR = '#0078d4';
-/** Accent channels of the old per-user default (blue). */
-export const DEFAULT_ACCENT_RGB = '0 120 212';
+/** 10.7: petrol (white text 6.1:1 on it, itself 5.0:1 as text on every light surface). */
+export const DEFAULT_PRIMARY_COLOR = '#006d77';
+/** Accent channels of the default primary colour. */
+export const DEFAULT_ACCENT_RGB = '0 109 119';
+/** Accent channels of the old (pre-9.3) per-user default (blue) — read as "never chose" by the migration. */
+export const LEGACY_DEFAULT_ACCENT_RGB = '0 120 212';
 /** Built-in favicon (web-client/public/favicon.svg, served at the site root). */
 export const BUILTIN_FAVICON = '/favicon.svg';
 
@@ -175,7 +178,7 @@ export function migrateThemeState(persisted: unknown, version: number): Record<s
   const s = (persisted && typeof persisted === 'object' ? { ...(persisted as Record<string, unknown>) } : {});
   if (version < 1) {
     const raw = s['accentRgb'];
-    s['accentRgb'] = isValidChannels(raw) && raw.trim() !== DEFAULT_ACCENT_RGB ? raw.trim() : null;
+    s['accentRgb'] = isValidChannels(raw) && raw.trim() !== LEGACY_DEFAULT_ACCENT_RGB ? raw.trim() : null;
   } else if (s['accentRgb'] !== null && !isValidChannels(s['accentRgb'])) {
     s['accentRgb'] = null;
   }

@@ -2,7 +2,7 @@
 
 Since 9.4 the webmail writes mails in the reading pane (inline), like the big web mail clients do:
 new mail, reply, reply all and forward open in place of the reader, several drafts can be open at
-the same time (tab strip at the bottom of the mail view) and a draft can move into a window of its
+the same time (10.7: draft tabs at the top of the content card) and a draft can move into a window of its
 own. The floating box at the bottom right of the screen (pre-9.4) is gone.
 
 This page lists every function of the old compose window (nothing may get lost), then describes the
@@ -23,7 +23,7 @@ now.
 | 5 | **An** with autocomplete: comma-separated text, `/contacts?q=` from 1 character (220 ms debounce), max. 8 suggestions (initial, name, address, company), ↑/↓, Enter/Tab picks, Esc closes, outside click closes | Recipient pills (`RecipientField`): typed text becomes a pill on `,` `;` Enter Tab or blur, pasted lists are split, duplicates dropped, invalid addresses marked; same suggestions as an ARIA combobox |
 | 6 | **CC** / **BCC** text buttons right of the An row; Cc shown for reply all with Cc, Bcc hidden by default; the revealed field gets focus | "Cc" / "Bcc" buttons right of the An row, same rules, field gets focus |
 | 7 | **Betreff**; reply adds "Re: ", forward "Fwd: " unless the subject already starts with Re:/Fwd:/AW:/WG: | Unchanged (`lib/composeQuote.ts subjectFor`) |
-| 8 | Formatting toolbar (hidden in plain-text format): undo/redo, paragraph style (Normal, Überschrift 1–3, Codeblock), font (8), bold/italic/underline/strike, text colour (24 + remove), highlight (12 + remove), link (prompt; http/https/mailto only, empty removes), align left/centre/right/justify, bullet/numbered list, indent −/+, quote, inline code, horizontal line, clear formatting | Formatting toolbar below the body + its chevron flyout (all of these plus font size steps, superscript/subscript, text direction, table, image); emoji, image and date/time in the action bar (the 9.4 ribbon tabs were replaced by the refine) |
+| 8 | Formatting toolbar (hidden in plain-text format): undo/redo, paragraph style (Normal, Überschrift 1–3, Codeblock), font (8), bold/italic/underline/strike, text colour (24 + remove), highlight (12 + remove), link (prompt; http/https/mailto only, empty removes), align left/centre/right/justify, bullet/numbered list, indent −/+, quote, inline code, horizontal line, clear formatting | Formatting toolbar below the body + its chevron flyout (all of these plus font size steps, superscript/subscript, text direction, table, image); emoji, image and date/time in the action bar (10.7: there is no ribbon; `lib/commandPlacement.ts` lists where each former ribbon command lives) |
 | 9 | Editor: Tiptap StarterKit, underline, link (no open on click), text align, text style, colour, highlight (multicolour), font family, font size, inline images incl. data: URIs, signature block | Unchanged (`hooks/useComposeEditor.ts`) plus the quote marker; paste of an image file inserts it |
 | 10 | Body start: empty line, signature block (default per identity and kind new/reply), quoted original — reply: "Am <date> schrieb <from>:", forward: "Weitergeleitete Nachricht von <from>"; original sanitised (`quoteMailHtml`), text originals escaped; caret at the start; default font/size of Settings → Verfassen | Quote header block **Von / Gesendet / An / Cc / Betreff** below a separator line (`lib/composeQuote.ts`); long reply quotes are folded behind "…" |
 | 11 | Signature swap on a sender change while the block is unchanged (`mayAutoSwapSignature`); signature picker (named signatures, "Keine Signatur"), also in plain-text format | Unchanged; picker **Signatur einfügen** in the action bar |
@@ -57,7 +57,7 @@ sign/encrypt (S/MIME is applied by the server from Settings → S/MIME).
 
 - **Inline**: new mail, reply, reply all, forward and "Entwurf bearbeiten" open in the reading pane
   (reading pane off: in place of the message list). Opening a mail in the list, or another draft,
-  minimises the current draft into the **tab strip** at the bottom of the mail view. Opened from
+  minimises the current draft into the **tab strip** (10.7: a tab row at the top of the content card — above the reading pane or the shown draft; with the reading pane off above the message list). Opened from
   another page (keyboard `n`/Ctrl+N outside the mail view, undo send), the webmail switches to Mail.
 - **Tab strip**: one tab per open draft (subject or "(Kein Betreff)"); a click shows it, ✕ saves
   and closes it. Each draft keeps its fields, attachments and its autosave across switches.
@@ -87,7 +87,11 @@ sign/encrypt (S/MIME is applied by the server from Settings → S/MIME).
 ### Compose area
 
 Top to bottom (since the 9.4 refine — the ribbon tabs Nachricht / Einfügen / Format are gone; every
-one of their commands is in one of the bars below):
+one of their commands is in one of the bars below). 10.7: the webmail has no ribbon at all any more —
+the contextual tabs of 10.1 (Nachricht / Einfügen / Text formatieren / Optionen) are gone and the card
+always shows its full header (Senden split, Anhängen, Bild, Signatur, "Aa", "…", pop-out, Verwerfen,
+Schließen); "Lesebestätigung anfordern" is in Senden → Nachrichtenoptionen. The open drafts are tabs
+at the top of the card (`DraftTabStrip`, `lib/mailLayout.ts` `draftStripPlace`).
 
 1. **Command row** (toolbar): **Senden** (icon + text), **Anhängen** (split: Datei anhängen / Bild
    einfügen), **Verwerfen**, "…"; on the right **In neuem Fenster öffnen** (not in the own window)

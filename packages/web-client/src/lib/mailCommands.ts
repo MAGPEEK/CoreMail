@@ -11,9 +11,9 @@ import type { TranslationKey } from '../i18n/translations.ts';
 /** Translate function of the active language (useT() in components). */
 export type Translate = (key: TranslationKey) => string;
 
-/** Command bar order = overflow priority (the tail goes to "…" first). */
+/** Every mail command with an enablement state (mailCommandStates). */
 export const MAIL_COMMAND_ORDER = [
-  'new', 'delete', 'archive', 'move', 'junk', 'flag', 'read', 'categorize', 'pin', 'undo', 'view',
+  'new', 'delete', 'archive', 'move', 'junk', 'flag', 'read', 'categorize', 'pin', 'snooze', 'undo', 'view',
 ] as const;
 export type MailCommandId = typeof MAIL_COMMAND_ORDER[number];
 
@@ -103,15 +103,43 @@ export function mailCommandStates(ctx: MailCommandContext, t: Translate): Record
     pin: selection.allPinned
       ? state(t('mail_cmd_unpin'), t('mail_cmd_unpin_tip'), write)
       : state(t('mail_cmd_pin'), t('mail_cmd_pin_tip'), write),
+    // snooze is personal (own mailbox only), like categories
+    snooze: state(t('reader_snooze'), t('reader_snooze'), personal),
     undo: state(t('mail_cmd_undo'), t('mail_cmd_undo_tip'), null),
     view: state(t('mail_cmd_view'), t('mail_cmd_view_tip'), null),
   };
 }
 
-// ── 10.1: further commands of the ribbon's Start tab ────────────────────────
-export type RibbonMailCommandId = 'reply' | 'replyAll' | 'forward' | 'deletePermanent' | 'markAllRead' | 'print';
+// ── 10.7: where the mail commands live (three-column layout) ─────────────────
+/**
+ * The selection bar of the list card (shown instead of the filter row while
+ * messages are checked), in order. Overflow priority: the tail goes to "…" first.
+ * "Auswahl aufheben" follows outside the toolbar.
+ */
+export const SELECTION_BAR = [
+  'delete', 'archive', 'move', 'junk', 'read', 'flag', 'categorize', 'pin', 'snooze', 'undo',
+] as const;
+export type SelectionBarId = typeof SELECTION_BAR[number];
 
-export interface RibbonMailContext extends MailCommandContext {
+/** Entries of the selection bar's split / dropdown menus (besides the main action). */
+export const SELECTION_BAR_MENUS: Readonly<Partial<Record<SelectionBarId, readonly string[]>>> = {
+  delete: ['deletePermanent'],
+  move: ['recentFolders', 'moveOther'],
+  flag: ['followUp'],
+  categorize: ['manageCategories'],
+  snooze: ['snooze1h', 'snooze3h', 'snoozeTomorrow', 'snoozeMonday'],
+};
+
+/** Reader action row, left: the answers (Antworten is the outlined primary). */
+export const READER_PRIMARY = ['reply', 'replyAll', 'forward'] as const;
+/** Reader action row, right: icon buttons; everything else is in the "…" menu (readerOverflowActions). */
+export const READER_ICONS = ['archive', 'move', 'categorize', 'flag', 'delete'] as const;
+export type ReaderIconId = typeof READER_ICONS[number];
+
+// ── 10.1: further commands (reply, mark all read, print …) ──────────────────
+export type ExtraMailCommandId = 'reply' | 'replyAll' | 'forward' | 'deletePermanent' | 'markAllRead' | 'print';
+
+export interface ExtraMailContext extends MailCommandContext {
   /** A folder is shown (not only a search over the mailbox). */
   hasFolder: boolean;
   /** Unread messages of the shown folder. */
@@ -121,11 +149,11 @@ export interface RibbonMailContext extends MailCommandContext {
 }
 
 /**
- * Enablement of the Start-tab commands that the classic command bar does not
- * have. Reply / forward act on exactly one message; "Alle als gelesen markieren"
- * on the shown folder; "Drucken" on the open message (the reading pane prints).
+ * Enablement of the further commands. Reply / forward act on exactly one
+ * message; "Alle als gelesen markieren" on the shown folder (Ansicht menu of the
+ * list card); "Drucken" on the open message (the reading pane prints).
  */
-export function ribbonMailStates(ctx: RibbonMailContext, t: Translate): Record<RibbonMailCommandId, CommandState> {
+export function extraMailStates(ctx: ExtraMailContext, t: Translate): Record<ExtraMailCommandId, CommandState> {
   const { selection, readOnly } = ctx;
   const one = selection.count === 1 ? null : t('mail_hint_one_message');
   const write = readOnly ? t('mail_hint_read_only') : selection.count === 0 ? t('mail_hint_no_selection') : null;
@@ -161,8 +189,7 @@ export function nextCategoryIds(current: readonly string[], categoryId: string, 
 
 // ── Reading pane "…" menu ───────────────────────────────────────────────────
 export type ReaderActionId =
-  | 'print' | 'source' | 'eml' | 'rule' | 'read' | 'flag' | 'pin' | 'snooze'
-  | 'move' | 'archive' | 'junk' | 'delete';
+  | 'print' | 'source' | 'eml' | 'rule' | 'read' | 'pin' | 'snooze' | 'junk' | 'undo';
 
 export interface ReaderActionContext {
   readOnly: boolean;
@@ -184,25 +211,53 @@ export interface ReaderAction {
 }
 
 /**
- * Entries of the reading-pane "…" menu (Antworten / Allen antworten / Weiterleiten
- * stay as buttons). Own-only entries (rules, snooze) are left out in foreign
- * mailboxes, write entries are disabled with the read-only reason.
+ * Entries of the reading-pane "…" menu (10.7): Gelesen / Ungelesen, Anheften,
+ * Zurückstellen, Junk / Kein Junk — Drucken, Quelltext, Als EML herunterladen,
+ * Regel erstellen — Rückgängig. Antworten / Allen antworten / Weiterleiten and
+ * the icons Archivieren, Verschieben, Kategorisieren, Markieren, Löschen are
+ * buttons of the action row (READER_PRIMARY, READER_ICONS). Own-only entries
+ * (rules, snooze) are left out in foreign mailboxes, write entries are disabled
+ * with the read-only reason.
  */
 export function readerOverflowActions(ctx: ReaderActionContext, t: Translate): ReaderAction[] {
   const w = (a: ReaderAction): ReaderAction => (ctx.readOnly ? { ...a, enabled: false, tooltip: t('mail_hint_read_only') } : a);
   const own = (a: ReaderAction): ReaderAction[] => (ctx.foreign ? [] : [a]);
   return [
-    { id: 'print', label: t('reader_print'), enabled: true },
+    w({ id: 'read', label: t(ctx.isRead ? 'mail_cmd_mark_unread' : 'mail_cmd_mark_read'), enabled: true }),
+    w({ id: 'pin', label: t(ctx.isPinned ? 'mail_cmd_unpin' : 'mail_cmd_pin'), enabled: true }),
+    ...own({ id: 'snooze', label: t('reader_snooze'), enabled: true }),
+    w({ id: 'junk', label: t(ctx.isJunkFolder ? 'mail_cmd_not_junk' : 'mail_cmd_mark_junk'), enabled: true }),
+    { id: 'print', label: t('reader_print'), enabled: true, groupStart: true },
     { id: 'source', label: t('reader_source'), enabled: true },
     { id: 'eml', label: t('reader_eml'), enabled: true },
     ...own({ id: 'rule', label: t('reader_rule'), enabled: true }),
-    w({ id: 'read', label: t(ctx.isRead ? 'mail_cmd_mark_unread' : 'mail_cmd_mark_read'), enabled: true, groupStart: true }),
-    w({ id: 'flag', label: t(ctx.isFlagged ? 'mail_cmd_unflag' : 'mail_cmd_flag'), enabled: true }),
-    w({ id: 'pin', label: t(ctx.isPinned ? 'mail_cmd_unpin' : 'mail_cmd_pin'), enabled: true }),
-    ...own({ id: 'snooze', label: t('reader_snooze'), enabled: true }),
-    w({ id: 'move', label: t('reader_move'), enabled: true, groupStart: true }),
-    w({ id: 'archive', label: t('mail_cmd_archive'), enabled: true }),
-    w({ id: 'junk', label: t(ctx.isJunkFolder ? 'mail_cmd_not_junk' : 'mail_cmd_mark_junk'), enabled: true }),
-    w({ id: 'delete', label: t('mail_cmd_delete'), enabled: true, danger: true }),
+    { id: 'undo', label: t('mail_cmd_undo'), enabled: true, groupStart: true },
   ];
 }
+
+/** Labels and enablement of the reader's icon buttons (one wording with the selection bar). */
+export function readerIconStates(ctx: ReaderActionContext, t: Translate): Record<ReaderIconId, CommandState> {
+  const w = (label: string, tooltip = label): CommandState => state(label, tooltip, ctx.readOnly ? t('mail_hint_read_only') : null);
+  return {
+    archive: w(t('mail_cmd_archive'), t('mail_cmd_archive_tip')),
+    move: w(t('mail_cmd_move'), t('mail_cmd_move_tip')),
+    categorize: state(t('mail_cmd_categorize'), t('mail_cmd_categorize_tip'), ctx.foreign ? t('mail_hint_own_only') : null),
+    flag: ctx.isFlagged ? w(t('mail_cmd_unflag')) : w(t('mail_cmd_flag'), t('mail_cmd_flag_tip')),
+    delete: w(t('mail_cmd_delete'), t('mail_cmd_delete_tip')),
+  };
+}
+
+// ── "Neue E-Mail" split button (top of the folder card) ──────────────────────
+/**
+ * Items of the "Neue E-Mail" split menu, in order: E-Mail, E-Mail aus Vorlage (only when a
+ * template source exists), Ereignis — and, only while a shared / delegated mailbox is open,
+ * "E-Mail aus dem eigenen Postfach" as the last entry.
+ */
+export type NewItemId = 'mail' | 'template' | 'event' | 'ownMail';
+export function newMenuItems(hasTemplates: boolean, foreignMailbox = false): NewItemId[] {
+  const items: NewItemId[] = hasTemplates ? ['mail', 'template', 'event'] : ['mail', 'event'];
+  return foreignMailbox ? [...items, 'ownMail'] : items;
+}
+
+/** Every item the "Neue E-Mail" menu can offer (with a template source, in a foreign mailbox). */
+export const NEW_MENU_ALL: readonly NewItemId[] = newMenuItems(true, true);

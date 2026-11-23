@@ -1,8 +1,9 @@
 /**
  * Item model of the app rail (left icon bar; a bottom bar below 768 px, the
  * Tailwind `md` breakpoint). Icons are mapped by id in components/AppRail.tsx,
- * labels come from the i18n table. Settings are not on the rail — they live behind
- * the gear in the header. Only type imports — unit-tested with `node --test`.
+ * labels come from the i18n table. Settings are not an app entry — 10.7: the gear
+ * sits at the bottom of the rail (lib/shellMenus.ts RAIL_BOTTOM). Only type
+ * imports — unit-tested with `node --test`.
  */
 import type { TranslationKey } from '../i18n/translations.ts';
 
@@ -23,11 +24,11 @@ export const RAIL_ITEMS: readonly RailItem[] = Object.freeze([
   { id: 'notes', labelKey: 'rail_notes', path: '/notes' },
 ] as const);
 
-/** Pages reached from the header, not from the rail: no rail entry is current there. */
+/** Pages that are not an app (settings: the gear at the bottom of the rail): no app entry is current there. */
 const NOT_ON_RAIL = new Set(['/settings']);
 
 /**
- * App of a route path (`aria-current="page"`); null for header pages (settings),
+ * App of a route path (`aria-current="page"`); null for non-app pages (settings),
  * unknown paths (and `/`) belong to mail.
  */
 export function activeAppForPath(pathname: string): AppId | null {

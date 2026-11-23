@@ -5,7 +5,7 @@
  * give the environment defaults), `toPublicBranding()` maps a row to the shape of
  * `GET /api/v1/branding` (docs/plans/branding-9.3.md, "API contract"). Defaults
  * when nothing is stored: BRANDING_NAME / BRANDING_COLOR, else "CoreMail" /
- * #0078d4 (the built-in accent of the web client). `ServerSettings.orgName` stays
+ * #006d77 (10.7: petrol, the built-in accent of the web client). `ServerSettings.orgName` stays
  * the organisation name; the product name is what the UI and system texts show.
  *
  * Validation rules shared by the admin API and the environment defaults live
@@ -15,7 +15,7 @@ import { prisma } from './prisma/index.js';
 import { normalizeDefaultBackground, type DefaultBackground } from './user-background.js';
 
 export const DEFAULT_PRODUCT_NAME = 'CoreMail';
-export const DEFAULT_PRIMARY_COLOR = '#0078d4';
+export const DEFAULT_PRIMARY_COLOR = '#006d77';
 export const BRANDING_ASSET_SLOTS = ['logoLight', 'logoDark', 'favicon', 'loginBackground'] as const;
 export type BrandingAssetSlot = typeof BRANDING_ASSET_SLOTS[number];
 
@@ -147,7 +147,7 @@ export function normalizeFooterLinks(v: unknown): BrandingFooterLink[] | { error
 
 export interface BrandingDefaults { productName: string; primaryColor: string }
 
-/** BRANDING_NAME / BRANDING_COLOR when valid, else "CoreMail" / #0078d4. */
+/** BRANDING_NAME / BRANDING_COLOR when valid, else "CoreMail" / #006d77. */
 export function brandingDefaults(env: Record<string, string | undefined> = process.env): BrandingDefaults {
   return {
     productName: normalizeProductName(env['BRANDING_NAME']) ?? DEFAULT_PRODUCT_NAME,

@@ -32,7 +32,9 @@ test('the floating compose window is gone; compose lives in the mail view', () =
   assert.match(app, /useComposeRouting\(\);/);
   assert.match(app, /usePopoutBridge\(\);/);
   const page = read('pages/MailPage.tsx');
-  assert.match(page, /<ComposePane key=\{composeKey\} tabKey=\{composeKey\} variant="inline" \/>/);
+  assert.match(page, /<ComposePane key=\{composeKey\} tabKey=\{composeKey\} variant="inline" tabStrip=\{contentStrip\} \/>/);
+  // 10.7: the draft tabs sit at the top of the compose card
+  assert.match(read('components/compose/ComposePane.tsx'), /\{variant === 'inline' && tabStrip\}\s*<ComposeCommandRow/);
   assert.match(page, /const readerPanel = composePanel \?\?/, 'the shown draft takes the reading pane');
   for (const f of allComposeSources) assert.doesNotMatch(read(f), /fixed bottom-0 right-4/, f);
   for (const f of ['store/ui.ts', 'components/DelayedSendToast.tsx', 'hooks/useGlobalShortcuts.ts']) {

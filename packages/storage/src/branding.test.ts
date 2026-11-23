@@ -17,11 +17,11 @@ const b = await import('./branding.js');
 
 const SHA = 'a'.repeat(64);
 
-test('defaults: CoreMail / #0078d4, overridable by valid BRANDING_NAME / BRANDING_COLOR', () => {
-  assert.deepEqual(b.brandingDefaults({}), { productName: 'CoreMail', primaryColor: '#0078d4' });
+test('defaults: CoreMail / #006d77, overridable by valid BRANDING_NAME / BRANDING_COLOR', () => {
+  assert.deepEqual(b.brandingDefaults({}), { productName: 'CoreMail', primaryColor: '#006d77' });
   assert.deepEqual(b.brandingDefaults({ BRANDING_NAME: '  Acme Mail ', BRANDING_COLOR: '#AA0011' }), { productName: 'Acme Mail', primaryColor: '#aa0011' });
-  assert.deepEqual(b.brandingDefaults({ BRANDING_NAME: 'x'.repeat(41), BRANDING_COLOR: 'red' }), { productName: 'CoreMail', primaryColor: '#0078d4' });
-  assert.deepEqual(b.brandingDefaults({ BRANDING_NAME: 'a\nb', BRANDING_COLOR: '#12345' }), { productName: 'CoreMail', primaryColor: '#0078d4' });
+  assert.deepEqual(b.brandingDefaults({ BRANDING_NAME: 'x'.repeat(41), BRANDING_COLOR: 'red' }), { productName: 'CoreMail', primaryColor: '#006d77' });
+  assert.deepEqual(b.brandingDefaults({ BRANDING_NAME: 'a\nb', BRANDING_COLOR: '#12345' }), { productName: 'CoreMail', primaryColor: '#006d77' });
 });
 
 test('validators', () => {
@@ -118,7 +118,7 @@ test('asset URLs only for content-addressed branding keys', () => {
 
 test('toPublicBranding: contract shape, defaults for null fields, invalid stored values ignored', () => {
   assert.deepEqual(b.toPublicBranding(null, {}), {
-    version: 0, productName: 'CoreMail', primaryColor: '#0078d4', headerColor: null,
+    version: 0, productName: 'CoreMail', primaryColor: '#006d77', headerColor: null,
     allowUserAccent: true, showPoweredBy: true, defaultBackground: 'none', loginText: '', footerLinks: [],
     assets: { logoLight: null, logoDark: null, favicon: null, loginBackground: null },
   });

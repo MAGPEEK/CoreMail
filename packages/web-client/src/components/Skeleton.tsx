@@ -90,8 +90,8 @@ function CaughtUpIllustration() {
         className="fill-surface stroke-line" strokeWidth="2" strokeLinejoin="round" />
       <path d="M22 50 H46 a4 4 0 0 1 4 4 a16 8 0 0 0 32 0 a4 4 0 0 1 4 -4 H110"
         className="stroke-line" strokeWidth="2" strokeLinejoin="round" />
-      <circle cx="66" cy="32" r="18" style={{ fill: 'rgb(var(--color-accent, 0 120 212) / 0.12)' }} />
-      <path d="M57 32 l6 6 l12 -12" style={{ stroke: 'rgb(var(--color-accent, 0 120 212))' }}
+      <circle cx="66" cy="32" r="18" style={{ fill: 'rgb(var(--color-accent, 0 109 119) / 0.12)' }} />
+      <path d="M57 32 l6 6 l12 -12" style={{ stroke: 'rgb(var(--color-accent, 0 109 119))' }}
         strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
       <circle cx="104" cy="16" r="3" className="fill-warning-fg" />
       <circle cx="24" cy="24" r="2" className="fill-info-fg" />

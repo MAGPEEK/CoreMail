@@ -13,7 +13,7 @@
  */
 import type { PublicBranding } from '@coremail/storage';
 
-const FALLBACK_THEME = '#0078d4';
+const FALLBACK_THEME = '#006d77';
 export const APP_ICON_SIZES = [192, 512] as const;
 export const APP_ICON_URL_PREFIX = '/branding/app-icons/';
 

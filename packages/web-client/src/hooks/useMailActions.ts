@@ -125,7 +125,7 @@ export function useMailActions() {
       return false;
     }
     invalidate();
-    // 10.1: the ribbon's "Verschieben in" offers the last targets first
+    // the "Verschieben" menus (selection bar, reader) offer the last targets first
     if (action === 'move' && targetFolderId) useUiStore.getState().noteMoveTarget(targetFolderId);
     // Undo is only offered after the server confirmed the action
     const inboxId = folderIdByName('INBOX', ref);
@@ -169,7 +169,7 @@ export function useMailActions() {
 
   /**
    * "Alle als gelesen markieren" of a folder of the shown mailbox (folder pane
-   * menu, ribbon): the unread messages of its first 500 are marked read.
+   * menu, Ansicht menu of the list): the unread messages of its first 500 are marked read.
    * Returns how many changed.
    */
   const markFolderRead = useCallback(async (folderId: string): Promise<number> => {
