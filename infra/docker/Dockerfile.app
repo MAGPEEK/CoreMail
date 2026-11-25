@@ -1,8 +1,9 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # CoreMail — Monolithic App Container  (magpeek/coremail-app)
 #
-# Contains all Node.js services, nginx (reverse proxy + static files)
-# and all frontend bundles in a single container.
+# Contains all Node.js services and all frontend bundles in a single container.
+# There is no nginx: the api-gateway serves the frontends and routes HTTP, and
+# its integrated HTTPS server (HTTP/1.1) terminates TLS on 443.
 # Process manager: supervisord
 #
 # Build (from the repo root):
@@ -10,7 +11,7 @@
 #                -t magpeek/coremail-app:0.9.0 .
 #
 # Internal ports (all on localhost):
-#   80/443  nginx (HTTP/HTTPS)
+#   80/443  api-gateway (HTTP redirect / integrated HTTPS server)
 #   25/465/587  SMTP
 #   143/993     IMAP
 #   110/995     POP3

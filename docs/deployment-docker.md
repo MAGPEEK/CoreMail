@@ -135,25 +135,16 @@ CoreMail terminates TLS itself on port 443. Port `"443:443"` is already mapped i
 
 **Mail ports (SMTP/IMAP/POP3):** assigning the services SMTP/IMAP/POP3 to a certificate in BCP → SSL/TLS applies it to 25/465/587/993/143/995/110 immediately (9.3); the SSL/TLS page shows per service whether the certificate is really served. A Let's Encrypt certificate for the public host name is assigned automatically while the mail ports still use the self-signed default. Details: [certificates.md](certificates.md).
 
-```env
-# .env — default, can be omitted
-HTTPS_PROXY_ENABLED=true
-```
+The HTTPS server is always part of CoreMail; it listens on 443 as soon as a certificate is
+active for HTTPS. It speaks HTTP/1.1 (no HTTP/2) and contains no nginx. The setup creates a
+self-signed certificate for the host name, so nothing else is needed for a first test.
 
 **Option B — External reverse proxy (Traefik, Caddy, nginx, DSM):**
 
-```env
-# .env
-HTTPS_PROXY_ENABLED=false
-```
-
-Comment out the line `"443:443"` in `infra/docker/docker-compose.yml`. CoreMail is then reachable only on port 3000 (HTTP) — the reverse proxy handles TLS.
-
-**Self-signed certificate for development:**
-
-```bash
-bash scripts/gen-dev-certs.sh
-```
+Remove the port lines `"80:3000"` and `"443:443"` in `infra/docker/docker-compose.yml` and
+keep only `3000:3000`. CoreMail is then reachable on port 3000 (HTTP) and the reverse proxy
+handles TLS; set `TRUST_PROXY` to the proxy's address. Keep that proxy up to date — security
+fixes in the proxy (for example nginx's HTTP/2 module) are not covered by CoreMail updates.
 
 ### 4. Start the stack
 
